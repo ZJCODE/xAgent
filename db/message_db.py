@@ -100,3 +100,13 @@ class MessageDB:
         """
         key = self._make_key(user_id, session_id)
         self.r.expire(key, ttl)
+
+    def clear_history(self, user_id: str, session_id: Optional[str] = None):
+        """
+        清空消息历史。
+        Args:
+            user_id (str): 用户 ID。
+            session_id (str, optional): 会话 ID。
+        """
+        key = self._make_key(user_id, session_id)
+        self.r.delete(key)

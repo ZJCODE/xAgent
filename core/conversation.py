@@ -43,6 +43,13 @@ class Session:
             return self.message_db.get_messages(self.user_id, self.session_id, count)
         key = (self.user_id, self.session_id)
         return Session._local_messages[key][-count:]
+    
+    def clear_history(self):
+        if self.message_db:
+            self.message_db.clear_history(self.user_id, self.session_id)
+        else:
+            key = (self.user_id, self.session_id)
+            Session._local_messages[key] = []
 
 class Agent:
     """
@@ -96,6 +103,7 @@ if __name__ == "__main__":
     print("DB Session Example:")
     agent = Agent()
     session = Session(user_id="user1", session_id="session1", message_db=MessageDB())
+    session.clear_history()  # 清空历史以便测试
     user_msg = "You can call me Jun."
     reply = agent.chat(user_msg, session)
     user_msg = "Hello, how are you?"
@@ -108,6 +116,7 @@ if __name__ == "__main__":
 
     agent2 = Agent()
     session2 = Session(user_id="user2", session_id="session2", message_db=MessageDB())
+    session2.clear_history()  # 清空历史以便测试
     user_msg = "Do you know who I am?"
     reply = agent2.chat(user_msg, session2)
     print("Session 2 history:")
@@ -119,6 +128,7 @@ if __name__ == "__main__":
     print("\nLocal Session Example:")
     agent = Agent()
     session = Session(user_id="user1")
+    session.clear_history()  # 清空历史以便测试
     user_msg = "You can call me Jun."
     reply = agent.chat(user_msg, session)
     user_msg = "Hello, how are you?"
@@ -131,6 +141,7 @@ if __name__ == "__main__":
 
     agent2 = Agent()
     session2 = Session(user_id="user2")
+    session2.clear_history()  # 清空历史以便测试
     user_msg = "Do you know who I am?"
     reply = agent2.chat(user_msg, session2)
     print("Session 2 history:")
