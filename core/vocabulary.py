@@ -70,7 +70,53 @@ class VocabularyService:
         if save:
             self.db.save_vocabulary(vocab_record)
         return vocab_record
-    
+
+    @observe()
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    def get_vocabulary(self, user_id: str, n: int = 10, exclude_known: bool = False) -> list[VocabularyRecord]:
+        """
+        多路召回，返回用户最需要复习的N个词汇。
+        分层采样，优先覆盖不同难度，保证推荐词汇难度分布多样。
+        :param user_id: 用户ID
+        :param n: 返回数量N
+        :param exclude_known: 是否排除已知词汇
+        :return: VocabularyRecord列表
+        """
+        all_words = self.db.get_all_words_by_user(user_id, exclude_known=exclude_known)
+        if not all_words:
+            return []
+        if n == -1:
+            return all_words
+        now = time.time()
+        # 计算优先级分数
+        def score(v: VocabularyRecord):
+            familiarity_score = 10 - (v.familiarity or 0)
+            last_reviewed = v.last_reviewed_timestamp or v.update_timestamp or v.create_timestamp or 0
+            time_since_review = now - last_reviewed
+            return familiarity_score * 2 + time_since_review / (60*60*24)
+
+        # 分层采样，优先覆盖不同难度
+        difficulty_buckets = defaultdict(list)
+        for v in all_words:
+            difficulty_buckets[str(v.difficulty_level)].append(v)
+
+        # 每层先取1个，剩余按优先级补齐
+        selected = []
+        # 先保证每个难度层至少有一个
+        for bucket in difficulty_buckets.values():
+            if bucket:
+                bucket_sorted = sorted(bucket, key=score, reverse=True)
+                selected.append(bucket_sorted[0])
+        # 如果还不够n个，按优先级补齐
+        if len(selected) < n:
+            # 剩余未选中的词
+            selected_ids = set(id(v) for v in selected)
+            remaining = [v for v in all_words if id(v) not in selected_ids]
+            remaining_sorted = sorted(remaining, key=score, reverse=True)
+            selected += remaining_sorted[:n-len(selected)]
+        # 最终只返回n个
+        return selected[:n]
+
     @observe()
     def _llm_lookup_word(self, word: str) -> BaseVocabularyRecord:
         """
@@ -111,50 +157,6 @@ class VocabularyService:
             return None
         w = word.strip().lower()
         return w if w else None
-    
-    @observe()
-    def get_vocabulary(self, user_id: str, n: int = 10, exclude_known: bool = False) -> list[VocabularyRecord]:
-        """
-        多路召回，返回用户最需要复习的N个词汇。
-        分层采样，优先覆盖不同难度，保证推荐词汇难度分布多样。
-        :param user_id: 用户ID
-        :param n: 返回数量N
-        :return: VocabularyRecord列表
-        """
-        all_words = self.db.get_all_words_by_user(user_id, exclude_known=exclude_known)
-        if not all_words:
-            return []
-        if n == -1:
-            return all_words
-        now = time.time()
-        # 计算优先级分数
-        def score(v: VocabularyRecord):
-            familiarity_score = 10 - (v.familiarity or 0)
-            last_reviewed = v.last_reviewed_timestamp or v.update_timestamp or v.create_timestamp or 0
-            time_since_review = now - last_reviewed
-            return familiarity_score * 2 + time_since_review / (60*60*24)
-
-        # 分层采样，优先覆盖不同难度
-        difficulty_buckets = defaultdict(list)
-        for v in all_words:
-            difficulty_buckets[str(v.difficulty_level)].append(v)
-
-        # 每层先取1个，剩余按优先级补齐
-        selected = []
-        # 先保证每个难度层至少有一个
-        for bucket in difficulty_buckets.values():
-            if bucket:
-                bucket_sorted = sorted(bucket, key=score, reverse=True)
-                selected.append(bucket_sorted[0])
-        # 如果还不够n个，按优先级补齐
-        if len(selected) < n:
-            # 剩余未选中的词
-            selected_ids = set(id(v) for v in selected)
-            remaining = [v for v in all_words if id(v) not in selected_ids]
-            remaining_sorted = sorted(remaining, key=score, reverse=True)
-            selected += remaining_sorted[:n-len(selected)]
-        # 最终只返回n个
-        return selected[:n]
 
 if __name__ == "__main__":
     # Example usage
