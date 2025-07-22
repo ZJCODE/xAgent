@@ -9,7 +9,6 @@ from langfuse.openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pydantic import ValidationError
 
-
 from schemas.vocabulary import BaseVocabularyRecord,VocabularyRecord
 from db.vocabulary_db import VocabularyDB
 
@@ -23,6 +22,16 @@ logging.basicConfig(
 )
 
 class VocabularyService:
+    """
+    VocabularyService
+    -------------------
+    用户词汇服务，负责单词查询、缓存、存储与推荐等功能。
+    主要功能：
+    - 查询单词详细信息（优先缓存/数据库，缺失时调用 LLM）
+    - 保存和获取用户词汇记录
+    - 推荐用户需要复习的词汇列表（分层采样，难度多样）
+    - 支持熟悉度调整、extra 字段扩展等
+    """
 
     DEFAULT_USER_ID = "anonymous"
 
@@ -37,16 +46,18 @@ class VocabularyService:
             "Always include the word's definition, example sentences, and specify the difficulty level in your response."
             )
 
-    def __init__(self,
-                 model: str = DEFAULT_MODEL,
-                 client: OpenAI = None,
-                 db: VocabularyDB = None,
-                 ):
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        client: OpenAI = None,
+        db: VocabularyDB = None,
+    ):
         """
-        初始化 VocabularyService 服务。
-        :param model: 使用的 LLM 模型名称
-        :param client: OpenAI 客户端实例
-        :param db: 词汇数据库实例
+        初始化 VocabularyService 实例，配置 LLM、数据库和日志。
+        Args:
+            model (str): 使用的 LLM 模型名称
+            client (OpenAI, 可选): OpenAI 客户端实例
+            db (VocabularyDB, 可选): 词汇数据库实例
         """
         self.client = client or OpenAI()
         self.model = model
@@ -57,20 +68,27 @@ class VocabularyService:
     
     @observe()
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-    def lookup_word(self, word: str, user_id: str = None, 
-                    cache: bool = True, **kwargs) -> BaseVocabularyRecord | VocabularyRecord:
-        self.logger.info("Looking up word: '%s' for user: %s (cache=%s)", word, user_id, cache)
+    def lookup_word(
+        self, 
+        word: str, 
+        user_id: str = None, 
+        cache: bool = True, 
+        **kwargs
+    ) -> BaseVocabularyRecord | VocabularyRecord:
         """
         查询单词详细信息。
-        优先从缓存/数据库获取，若无则调用 LLM 查询。
-        可选：保存结果到数据库。
-        
-        :param word: 要查询的单词
-        :param user_id: 用户ID（用于个性化存储）
-        :param cache: 是否优先查缓存/数据库
-        :param kwargs: 额外字段，存入 extra 字段
-        :return: BaseVocabularyRecord 或 VocabularyRecord
+        优先从缓存/数据库获取，若无则调用 LLM 查询，并保存结果到数据库。
+        Args:
+            word (str): 要查询的单词
+            user_id (str, 可选): 用户ID（用于个性化存储）
+            cache (bool): 是否优先查缓存/数据库
+            kwargs: 额外字段，存入 extra 字段
+        Returns:
+            BaseVocabularyRecord 或 VocabularyRecord
+        Raises:
+            ValueError: 单词为空或无效
         """
+        self.logger.info("Looking up word: '%s' for user: %s (cache=%s)", word, user_id, cache)
         user_id = user_id or self.DEFAULT_USER_ID
         word = self._preprocess_word(word)
         if not word or not word.strip():
@@ -88,17 +106,23 @@ class VocabularyService:
 
     @observe()
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-    def get_vocabulary(self, user_id: str, n: int = 10, exclude_known: bool = False) -> list[VocabularyRecord]:
-        self.logger.info("Fetching vocabulary for user: %s, n=%d, exclude_known=%s", user_id, n, exclude_known)
+    def get_vocabulary(
+        self, 
+        user_id: str, 
+        n: int = 10, 
+        exclude_known: bool = False
+    ) -> list[VocabularyRecord]:
         """
         获取用户最需要复习的 N 个词汇。
         多路召回，分层采样，优先覆盖不同难度，保证推荐词汇难度分布多样。
-        
-        :param user_id: 用户ID
-        :param n: 返回数量N，-1表示返回全部
-        :param exclude_known: 是否排除已掌握词汇
-        :return: VocabularyRecord 列表
+        Args:
+            user_id (str): 用户ID
+            n (int): 返回数量N，-1表示返回全部
+            exclude_known (bool): 是否排除已掌握词汇
+        Returns:
+            list[VocabularyRecord]: 推荐词汇列表
         """
+        self.logger.info("Fetching vocabulary for user: %s, n=%d, exclude_known=%s", user_id, n, exclude_known)
         all_words = self.db.get_all_words_by_user(user_id, exclude_known=exclude_known)
         if not all_words:
             self.logger.info("No vocabulary found for user: %s", user_id)
@@ -135,12 +159,14 @@ class VocabularyService:
 
     @observe()
     def _llm_lookup_word(self, word: str) -> BaseVocabularyRecord:
-        self.logger.info("Calling LLM for word: '%s'", word)
         """
         调用 LLM 查询单词详细信息。
-        :param word: 要查询的单词
-        :return: BaseVocabularyRecord
+        Args:
+            word (str): 要查询的单词
+        Returns:
+            BaseVocabularyRecord
         """
+        self.logger.info("Calling LLM for word: '%s'", word)
         completion = self.client.chat.completions.parse(
             model=self.model,
             messages=[
@@ -155,10 +181,14 @@ class VocabularyService:
     def _create_vocabulary_record(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> VocabularyRecord:
         """
         构造 VocabularyRecord 记录（带用户信息和时间戳）。
-        :param user_id: 用户ID
-        :param record: 基础词汇记录
-        :param kwargs: 额外字段，存入 extra
-        :return: VocabularyRecord
+        Args:
+            user_id (str): 用户ID
+            record (BaseVocabularyRecord): 基础词汇记录
+            kwargs: 额外字段，存入 extra
+        Returns:
+            VocabularyRecord
+        Raises:
+            ValidationError: 字段校验失败
         """
         now = time.time()
         data = record.model_dump()
@@ -177,8 +207,10 @@ class VocabularyService:
     def _preprocess_word(self, word: str) -> str:
         """
         单词预处理（去除首尾空格并小写）。
-        :param word: 原始单词
-        :return: 处理后的单词，若为空返回 None
+        Args:
+            word (str): 原始单词
+        Returns:
+            str: 处理后的单词，若为空返回 None
         """
         if not word:
             return None
