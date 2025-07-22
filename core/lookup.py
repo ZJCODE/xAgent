@@ -28,6 +28,7 @@ class VocabularyService:
             "For 'Intermediate', provide more detail and moderately complex examples. "
             "For 'Advanced', give in-depth explanations and sophisticated example sentences. "
             "Always include the word's definition, example sentences, and specify the difficulty level in your response."
+            "Make sure word in lowercase, and all extra fields are strings."
         )
 
     def __init__(self,
@@ -60,7 +61,7 @@ class VocabularyService:
             save = True
         word = self._preprocess_word(word)
 
-        if word is None:
+        if not word or not word.strip():
             raise ValueError("Word cannot be empty or None")
 
         if cache:

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from tenacity import RetryError
 from core.lookup import VocabularyService
 from schemas.vocabulary import BaseVocabularyRecord, VocabularyRecord
 
@@ -14,7 +15,7 @@ class LookupRequest(BaseModel):
     # 允许额外参数
     extra: dict = {}
 
-@router.post("/lookup", response_model=BaseVocabularyRecord)
+@router.post("/lookup", response_model=VocabularyRecord)
 def lookup_word_api(request: LookupRequest):
     try:
         result = service.lookup_word(
@@ -27,5 +28,10 @@ def lookup_word_api(request: LookupRequest):
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except RetryError as e:
+        last_exc = e.last_attempt.exception()
+        if isinstance(last_exc, ValueError):
+            raise HTTPException(status_code=400, detail=str(last_exc))
+        raise HTTPException(status_code=500, detail="Internal server error")
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
