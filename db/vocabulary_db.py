@@ -81,10 +81,9 @@ class VocabularyDB:
         :return: VocabularyRecord 列表
         """
         pattern = f"{self.VOCAB_PREFIX}:{user_id}:*"
-        keys = self.client.keys(pattern)
         result = []
-        for key in keys:
-            value = self.client.get(key)  # 直接用 bytes key
+        for key in self.client.scan_iter(pattern):
+            value = self.client.get(key)
             if value:
                 vocab = VocabularyRecord.model_validate_json(value)
                 if exclude_known and getattr(vocab, "familiarity", None) == 10:
@@ -137,7 +136,7 @@ class VocabularyDB:
         :return: None
         """
         pattern = f"{self.VOCAB_PREFIX}:*"
-        keys = self.client.keys(pattern)
+        keys = list(self.client.scan_iter(pattern))
         if keys:
             self.client.delete(*keys)
         return True
