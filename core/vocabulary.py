@@ -50,8 +50,9 @@ class VocabularyService:
         Look up a word using the LLM. Optionally save the result to the database if save=True and user_id is provided.
         If save=True and the word already exists for the user, return the existing record from the database.
         :param word: Word to look up
-        :param user_id: User ID (required if save=True)
+        :param user_id: User ID for whom to save the record
         :param save: Whether to save the result to the database
+        :param cache: Whether to check the cache for existing records before querying the LLM
         :param kwargs: Additional fields to store in the record's extra field if saving
         :return: BaseVocabularyRecord (or VocabularyRecord if saved)
         """
