@@ -48,9 +48,15 @@ class Agent:
     """
     负责与大模型交互，生成回复。
     """
-    def __init__(self, model: str = "gpt-4.1"):
-        self.client = OpenAI()
+
+    DEFAULT_MODEL = "gpt-4o-mini"
+
+    def __init__(self, 
+                 model: str = DEFAULT_MODEL,
+                 client: OpenAI = None):
+        
         self.model = model
+        self.client = client or OpenAI()
 
     @observe()
     def chat(

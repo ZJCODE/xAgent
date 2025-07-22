@@ -59,8 +59,8 @@ class VocabularyService:
             client (OpenAI, 可选): OpenAI 客户端实例
             db (VocabularyDB, 可选): 词汇数据库实例
         """
-        self.client = client or OpenAI()
         self.model = model
+        self.client = client or OpenAI()
         self.db = db or VocabularyDB(os.environ.get("REDIS_URL"))
         self.system_message = self.SYSTEM_MESSAGE
         self.logger = logging.getLogger(self.__class__.__name__)
