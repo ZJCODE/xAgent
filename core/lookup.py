@@ -39,7 +39,7 @@ class VocabularyService:
     
     @observe()
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-    def lookup_word(self, word: str, user_id: str = None, save: bool = False, **kwargs) -> BaseVocabularyRecord:
+    def lookup_word(self, word: str, user_id: str = None, save: bool = False, cache: bool = True, **kwargs) -> BaseVocabularyRecord:
         """
         Look up a word using the LLM. Optionally save the result to the database if save=True and user_id is provided.
         If save=True and the word already exists for the user, return the existing record from the database.
@@ -49,15 +49,16 @@ class VocabularyService:
         :param kwargs: Additional fields to store in the record's extra field if saving
         :return: BaseVocabularyRecord (or VocabularyRecord if saved)
         """
-        if save and not user_id:
-            raise ValueError("user_id is required when save=True to avoid anonymous data.")
 
         word = self._preprocess_word(word)
 
         if word is None:
             raise ValueError("Word cannot be empty or None")
 
-        if user_id:
+        if save and not user_id:
+            raise ValueError("user_id is required when save=True to avoid anonymous data.")
+
+        if cache and user_id:
             existing = self.db.get_vocabulary(user_id, word)
             if existing:
                 return existing
@@ -84,10 +85,12 @@ class VocabularyService:
 
         record = completion.choices[0].message.parsed
 
-        if save and user_id:
-            vocab_record = self._create_vocabulary_record(user_id, record, **kwargs)
-            self.db.save_vocabulary(vocab_record)
-            return vocab_record
+        if user_id:
+            record = self._create_vocabulary_record(user_id, record, **kwargs)
+
+        if save:
+            self.db.save_vocabulary(record)
+
         return record
     
     def _create_vocabulary_record(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> VocabularyRecord:
@@ -128,13 +131,3 @@ class VocabularyService:
         """
         word = self._preprocess_word(word)
         return self.db.get_vocabulary(user_id, word)
-
-
-if __name__ == "__main__":
-    service = VocabularyService()
-    record = service.lookup_word("instance")
-    print(json.dumps(record.model_dump(), ensure_ascii=False, indent=2))
-    record = service.lookup_word("instance", user_id="user123", save=True, tag="test")
-    print(json.dumps(record.model_dump(), ensure_ascii=False, indent=2))
-    record = service.lookup_word("Instance", user_id="user123")
-    print(json.dumps(record.model_dump(), ensure_ascii=False, indent=2))
