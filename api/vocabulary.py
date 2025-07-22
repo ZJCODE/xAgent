@@ -10,7 +10,6 @@ service = VocabularyService()
 class LookupRequest(BaseModel):
     word: str
     user_id: str | None = None
-    save: bool = True
     cache: bool = True  # 是否使用缓存
 
 
@@ -25,7 +24,6 @@ def lookup_word_api(request: LookupRequest):
         result = service.lookup_word(
             word=request.word,
             user_id=request.user_id,
-            save=request.save,
             cache=request.cache
         )
         return result

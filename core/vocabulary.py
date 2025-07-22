@@ -49,7 +49,7 @@ class VocabularyService:
     @observe()
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def lookup_word(self, word: str, user_id: str = None, 
-                    save: bool = True, cache: bool = True, **kwargs) -> BaseVocabularyRecord | VocabularyRecord:
+                    cache: bool = True, **kwargs) -> BaseVocabularyRecord | VocabularyRecord:
         """
         查询单词详细信息。
         优先从缓存/数据库获取，若无则调用 LLM 查询。
@@ -57,14 +57,12 @@ class VocabularyService:
         
         :param word: 要查询的单词
         :param user_id: 用户ID（用于个性化存储）
-        :param save: 是否保存结果到数据库
         :param cache: 是否优先查缓存/数据库
         :param kwargs: 额外字段，存入 extra 字段
         :return: BaseVocabularyRecord 或 VocabularyRecord
         """
         if not user_id:
             user_id = self.DEFAULT_USER_ID
-            save = True
         word = self._preprocess_word(word)
         if not word or not word.strip():
             raise ValueError("Word cannot be empty or None")
@@ -74,7 +72,7 @@ class VocabularyService:
                 return existing
         record = self._llm_lookup_word(word)
         vocab_record = self._create_vocabulary_record(user_id, record, **kwargs)
-        if save:
+        if self.db:
             self.db.save_vocabulary(vocab_record)
         return vocab_record
 
