@@ -18,8 +18,8 @@ class BaseVocabularyRecord(BaseModel):
 
 class VocabularyRecord(BaseVocabularyRecord):
     user_id: str = Field(..., description="用户ID")
-    create_timestamp: float = Field(..., description="创建时间戳")
-    update_timestamp: float = Field(..., description="最后更新时间戳")
+    create_timestamp: Optional[float] = Field(default=None, description="创建时间戳")
+    update_timestamp: Optional[float] = Field(default=None, description="最后更新时间戳")
     last_reviewed_timestamp: Optional[float] = Field(default=None, description="上次复习时间戳")
     familiarity: int = Field(0, ge=0, le=10, description="词汇熟悉度，0-10")
     extra: Optional[Dict[str, str]] = Field(default=None, description="扩展字段，可存储额外信息")

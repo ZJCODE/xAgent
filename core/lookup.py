@@ -1,11 +1,14 @@
 import os
 import json
+from tkinter.messagebox import NO
 from dotenv import load_dotenv
 import time
 
 from langfuse import observe
 from langfuse.openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
+from pydantic import ValidationError
+
 
 from schemas.vocabulary import BaseVocabularyRecord,VocabularyRecord
 from db.vocabulary_db import VocabularyDB
@@ -14,6 +17,8 @@ from db.vocabulary_db import VocabularyDB
 load_dotenv(override=True)
 
 class VocabularyService:
+
+    DEFAULT_USER_ID = "anonymous"
 
     DEFAULT_MODEL = "gpt-4o-mini"
 
@@ -49,16 +54,16 @@ class VocabularyService:
         :param kwargs: Additional fields to store in the record's extra field if saving
         :return: BaseVocabularyRecord (or VocabularyRecord if saved)
         """
-
+        
+        if not user_id:
+            user_id = self.DEFAULT_USER_ID
+            save = True
         word = self._preprocess_word(word)
 
         if word is None:
             raise ValueError("Word cannot be empty or None")
 
-        if save and not user_id:
-            raise ValueError("user_id is required when save=True to avoid anonymous data.")
-
-        if cache and user_id:
+        if cache:
             existing = self.db.get_vocabulary(user_id, word)
             if existing:
                 return existing
@@ -84,9 +89,7 @@ class VocabularyService:
         )
 
         record = completion.choices[0].message.parsed
-
-        if user_id:
-            record = self._create_vocabulary_record(user_id, record, **kwargs)
+        record = self._create_vocabulary_record(user_id, record, **kwargs)
 
         if save:
             self.db.save_vocabulary(record)
@@ -94,20 +97,18 @@ class VocabularyService:
         return record
     
     def _create_vocabulary_record(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> VocabularyRecord:
-        """
-        Transform a BaseVocabularyRecord into a VocabularyRecord with additional user-specific fields.
-        :param user_id: User ID
-        :param record: BaseVocabularyRecord instance
-        :param kwargs: Additional fields to store in the record's extra field
-        :return: VocabularyRecord instance
-        """
         now = time.time()
         data = record.model_dump()
         data["user_id"] = user_id
-        data["create_timestamp"] = now
-        data["update_timestamp"] = now
-        data["extra"] = kwargs if kwargs else {}
-        return VocabularyRecord.model_validate(data)
+        if user_id != self.DEFAULT_USER_ID:
+            data["create_timestamp"] = now
+            data["update_timestamp"] = now
+            data["extra"] = kwargs if kwargs else {}
+        try:
+            return VocabularyRecord.model_validate(data)
+        except ValidationError as e:
+            print("ValidationError:", e)
+            raise
     
     def _preprocess_word(self, word: str) -> str:
         """
@@ -131,3 +132,13 @@ class VocabularyService:
         """
         word = self._preprocess_word(word)
         return self.db.get_vocabulary(user_id, word)
+    
+
+if __name__ == "__main__":
+    # Example usage
+    service = VocabularyService()
+    try:
+        record = service.lookup_word("apple")
+        print(json.dumps(record.model_dump(), indent=2, ensure_ascii=False))
+    except Exception as e:
+        print(f"Error: {e}")
