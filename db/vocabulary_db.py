@@ -83,17 +83,6 @@ class VocabularyDB:
                 result.append(VocabularyRecord.model_validate_json(value))
         return result
 
-    def get_words_by_user_and_time(self, user_id: str, start_ts: float, end_ts: float) -> list[VocabularyRecord]:
-        """
-        获取指定用户在指定时间范围内创建的词汇记录。
-        :param user_id: 用户 ID
-        :param start_ts: 起始时间戳
-        :param end_ts: 结束时间戳
-        :return: VocabularyRecord 列表
-        """
-        all_words = self.get_all_words_by_user(user_id)
-        return [v for v in all_words if start_ts <= v.create_timestamp <= end_ts]
-
     def update_familiarity(self, user_id: str, word: str, delta: int) -> VocabularyRecord | None:
         """
         调整指定单词的熟悉度（加/减），范围限定在 0-10。
@@ -133,16 +122,6 @@ class VocabularyDB:
         self.save_vocabulary(vocab)
         return vocab
 
-    def get_words_by_difficulty(self, user_id: str, difficulty_level: DifficultyLevel) -> list[VocabularyRecord]:
-        """
-        获取指定用户指定难度级别的所有词汇记录。
-        :param user_id: 用户 ID
-        :param difficulty_level: 难度级别
-        :return: VocabularyRecord 列表
-        """
-        all_words = self.get_all_words_by_user(user_id)
-        return [v for v in all_words if v.difficulty_level == difficulty_level]
-    
     def clear_all(self) -> None:
         """
         清空数据库中的所有词汇记录。

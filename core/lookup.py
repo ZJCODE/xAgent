@@ -112,6 +112,7 @@ class VocabularyService:
         w = word.strip().lower()
         return w if w else None
     
+    @observe()
     def get_vocabulary(self, user_id: str, n: int = 10) -> list[VocabularyRecord]:
         """
         多路召回，返回用户最需要复习的N个词汇。
