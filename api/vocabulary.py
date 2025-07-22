@@ -12,8 +12,6 @@ class LookupRequest(BaseModel):
     user_id: str | None = None
     save: bool = True
     cache: bool = True  # 是否使用缓存
-    # 允许额外参数
-    extra: dict = {}
 
 
 class GetVocabularyRequest(BaseModel):
@@ -28,8 +26,7 @@ def lookup_word_api(request: LookupRequest):
             word=request.word,
             user_id=request.user_id,
             save=request.save,
-            cache=request.cache,
-            **request.extra
+            cache=request.cache
         )
         return result
     except ValueError as e:
