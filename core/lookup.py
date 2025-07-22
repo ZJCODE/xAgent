@@ -44,7 +44,8 @@ class VocabularyService:
     
     @observe()
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-    def lookup_word(self, word: str, user_id: str = None, save: bool = False, cache: bool = True, **kwargs) -> BaseVocabularyRecord:
+    def lookup_word(self, word: str, user_id: str = None, 
+                    save: bool = False, cache: bool = True, **kwargs) -> BaseVocabularyRecord | VocabularyRecord:
         """
         Look up a word using the LLM. Optionally save the result to the database if save=True and user_id is provided.
         If save=True and the word already exists for the user, return the existing record from the database.
@@ -89,21 +90,20 @@ class VocabularyService:
         )
 
         record = completion.choices[0].message.parsed
-        record = self._create_vocabulary_record(user_id, record, **kwargs)
+        vocab_record = self._create_vocabulary_record(user_id, record, **kwargs)
 
         if save:
-            self.db.save_vocabulary(record)
+            self.db.save_vocabulary(vocab_record)
 
-        return record
+        return vocab_record
     
     def _create_vocabulary_record(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> VocabularyRecord:
         now = time.time()
         data = record.model_dump()
         data["user_id"] = user_id
-        if user_id != self.DEFAULT_USER_ID:
-            data["create_timestamp"] = now
-            data["update_timestamp"] = now
-            data["extra"] = kwargs if kwargs else {}
+        data["create_timestamp"] = now
+        data["update_timestamp"] = now
+        data["extra"] = kwargs if kwargs else {}
         try:
             return VocabularyRecord.model_validate(data)
         except ValidationError as e:

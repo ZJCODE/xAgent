@@ -39,7 +39,6 @@ class VocabularyDB:
         :param vocab: VocabularyRecord 实例
         :return: 操作是否成功（总是 True）
         """
-        import time
         vocab.update_timestamp = time.time()
         key = self._make_key(vocab.user_id, vocab.word)
         value = vocab.model_dump_json()

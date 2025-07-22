@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from core.lookup import VocabularyService
 from schemas.vocabulary import BaseVocabularyRecord, VocabularyRecord
