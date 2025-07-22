@@ -11,29 +11,15 @@ class DifficultyLevel(str, Enum):
 
 class BaseVocabularyRecord(BaseModel):
     """基础词汇记录模型"""
-    word: str = Field(..., description="用户查询的词汇")
-    explanation: str = Field(..., description="词汇的解释")
-    example_sentences: List[str] = Field(default_factory=list, description="例句列表")
-    difficulty_level: DifficultyLevel = Field(default=DifficultyLevel.INTERMEDIATE, description="词汇难度级别")
+    word: str = Field(..., description="The vocabulary word")
+    explanation: str = Field(..., description="The explanation of the word")
+    example_sentences: List[str] = Field(default_factory=list, description="The example sentences")
+    difficulty_level: DifficultyLevel = Field(default=DifficultyLevel.INTERMEDIATE, description="The difficulty level of the word")
 
 class VocabularyRecord(BaseVocabularyRecord):
-    user_id: str = Field(..., description="用户ID")
-    create_timestamp: Optional[float] = Field(default=None, description="创建时间戳")
-    update_timestamp: Optional[float] = Field(default=None, description="最后更新时间戳")
-    last_reviewed_timestamp: Optional[float] = Field(default=None, description="上次复习时间戳")
-    familiarity: int = Field(0, ge=0, le=10, description="词汇熟悉度，0-10")
-    extra: Optional[Dict[str, str]] = Field(default=None, description="扩展字段，可存储额外信息")
-
-# 示例：
-# VocabularyRecord(
-#     word="apple",
-#     explanation="A fruit",
-#     user_id="user123",
-#     create_timestamp=1633072800,
-#     last_reviewed_timestamp=1633159200,
-#     familiarity=5,
-#     difficulty_level=DifficultyLevel.BEGINNER,
-#     example_sentences=["I eat an apple every day.", "The apple is red and sweet."],
-#     image_url="https://example.com/apple.jpg",
-#     extra={"part_of_speech": "noun","image_url": "https://example.com/apple.jpg"}
-# )
+    user_id: str = Field(..., description="The user ID")
+    create_timestamp: Optional[float] = Field(default=None, description="The creation timestamp")
+    update_timestamp: Optional[float] = Field(default=None, description="The last update timestamp")
+    last_reviewed_timestamp: Optional[float] = Field(default=None, description="The last reviewed timestamp")
+    familiarity: int = Field(0, ge=0, le=10, description="The familiarity level of the word, from 0 to 10")
+    extra: Optional[Dict[str, str]] = Field(default=None, description="The extra fields for storing additional information")

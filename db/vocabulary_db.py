@@ -31,7 +31,7 @@ class VocabularyDB:
         :param word: 单词
         :return: Redis key 字符串
         """
-        return f"{self.VOCAB_PREFIX}:{user_id}:{word}"
+        return f"{self.VOCAB_PREFIX}:{user_id.lower()}:{word.lower()}"
 
     def save_vocabulary(self, vocab: VocabularyRecord) -> bool:
         """
