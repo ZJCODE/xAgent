@@ -62,7 +62,7 @@ class VocabularyService:
         if not word or not word.strip():
             raise ValueError("Word cannot be empty or None")
         if cache:
-            existing = self.db.get_vocabulary(user_id, word)
+            existing = self.db.get_vocabulary(user_id, word, reduce_familiarity=True)
             if existing:
                 return existing
         record = self._llm_lookup_word(word)
@@ -113,7 +113,7 @@ class VocabularyService:
         return w if w else None
     
     @observe()
-    def get_vocabulary(self, user_id: str, n: int = 10) -> list[VocabularyRecord]:
+    def get_vocabulary(self, user_id: str, n: int = 10, exclude_known: bool = False) -> list[VocabularyRecord]:
         """
         多路召回，返回用户最需要复习的N个词汇。
         分层采样，优先覆盖不同难度，保证推荐词汇难度分布多样。
@@ -121,9 +121,11 @@ class VocabularyService:
         :param n: 返回数量N
         :return: VocabularyRecord列表
         """
-        all_words = self.db.get_all_words_by_user(user_id)
+        all_words = self.db.get_all_words_by_user(user_id, exclude_known=exclude_known)
         if not all_words:
             return []
+        if n == -1:
+            return all_words
         now = time.time()
         # 计算优先级分数
         def score(v: VocabularyRecord):

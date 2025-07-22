@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from tenacity import RetryError
-from core.lookup import VocabularyService
+from core.vocabulary import VocabularyService
 from schemas.vocabulary import BaseVocabularyRecord, VocabularyRecord
 
 router = APIRouter()
@@ -14,6 +14,12 @@ class LookupRequest(BaseModel):
     cache: bool = True  # 是否使用缓存
     # 允许额外参数
     extra: dict = {}
+
+
+class GetVocabularyRequest(BaseModel):
+    user_id: str
+    n: int = 10
+    exclude_known: bool = False
 
 @router.post("/lookup", response_model=VocabularyRecord)
 def lookup_word_api(request: LookupRequest):
@@ -33,5 +39,15 @@ def lookup_word_api(request: LookupRequest):
         if isinstance(last_exc, ValueError):
             raise HTTPException(status_code=400, detail=str(last_exc))
         raise HTTPException(status_code=500, detail="Internal server error")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# 新增 get_vocabulary 接口
+@router.post("/get_vocabulary", response_model=list[VocabularyRecord])
+def get_vocabulary_api(request: GetVocabularyRequest):
+    try:
+        result = service.get_vocabulary(user_id=request.user_id, n=request.n, exclude_known=request.exclude_known)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")

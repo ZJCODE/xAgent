@@ -45,7 +45,7 @@ class VocabularyDB:
         self.client.set(key, value)
         return True
 
-    def get_vocabulary(self, user_id: str, word: str) -> VocabularyRecord | None:
+    def get_vocabulary(self, user_id: str, word: str, reduce_familiarity: bool = False) -> VocabularyRecord | None:
         """
         获取指定用户的某个单词的词汇记录。
         :param user_id: 用户 ID
@@ -55,7 +55,12 @@ class VocabularyDB:
         key = self._make_key(user_id, word)
         value = self.client.get(key)
         if value:
-            return VocabularyRecord.model_validate_json(value)
+            vocab = VocabularyRecord.model_validate_json(value)
+            if reduce_familiarity:
+                vocab.familiarity = max(0, vocab.familiarity - 1)
+                vocab.update_timestamp = time.time()
+                self.client.set(key, vocab.model_dump_json())  # 更新时间戳
+            return vocab
         return None
 
     def delete_vocabulary(self, user_id: str, word: str) -> int:
@@ -68,10 +73,11 @@ class VocabularyDB:
         key = self._make_key(user_id, word)
         return self.client.delete(key)
 
-    def get_all_words_by_user(self, user_id: str) -> list[VocabularyRecord]:
+    def get_all_words_by_user(self, user_id: str, exclude_known: bool = False) -> list[VocabularyRecord]:
         """
         获取指定用户的所有词汇记录。
         :param user_id: 用户 ID
+        :param exclude_known: 是否排除熟悉度为 10 的已掌握单词
         :return: VocabularyRecord 列表
         """
         pattern = f"{self.VOCAB_PREFIX}:{user_id}:*"
@@ -80,7 +86,10 @@ class VocabularyDB:
         for key in keys:
             value = self.client.get(key)  # 直接用 bytes key
             if value:
-                result.append(VocabularyRecord.model_validate_json(value))
+                vocab = VocabularyRecord.model_validate_json(value)
+                if exclude_known and getattr(vocab, "familiarity", None) == 10:
+                    continue
+                result.append(vocab)
         return result
 
     def update_familiarity(self, user_id: str, word: str, delta: int) -> VocabularyRecord | None:
