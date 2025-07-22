@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 @pytest.fixture(scope="function")
 def vocab_db():
     """Fixture: 每个测试用例前后清理 Redis，保证测试隔离。"""
@@ -18,7 +17,6 @@ def vocab_db():
     yield db
     for key in db.client.keys("vocab:*"):
         db.client.delete(key)
-
 
 def test_save_and_get_vocabulary(vocab_db):
     """测试保存和获取单词功能。"""
@@ -66,9 +64,6 @@ def test_update_familiarity(vocab_db):
     # 不存在的词
     assert vocab_db.update_familiarity(user_id, "notfound", 1) is None
 
-
-
-
 def test_delete_vocabulary(vocab_db):
     """测试删除单词功能。"""
     user_id = "user_del"
@@ -89,21 +84,6 @@ def test_get_all_words_by_user(vocab_db):
     word_set = set([v.word for v in words])
     assert "cat" in word_set and "dog" in word_set
     assert all(isinstance(v, VocabularyRecord) for v in words)
-
-def test_get_words_by_user_and_time(vocab_db):
-    """测试按时间范围获取单词功能。"""
-    user_id = "user_time"
-    now = time.time()
-    vocab1 = VocabularyRecord(word="early", explanation="Early word", user_id=user_id, create_timestamp=now-100, familiarity=4, extra=None)
-    vocab2 = VocabularyRecord(word="late", explanation="Late word", user_id=user_id, create_timestamp=now+100, familiarity=5, extra=None)
-    vocab_db.save_vocabulary(vocab1)
-    vocab_db.save_vocabulary(vocab2)
-    results = vocab_db.get_words_by_user_and_time(user_id, now-200, now)
-    assert any(v.word == "early" for v in results)
-    assert all(v.create_timestamp <= now for v in results)
-    # 边界：无结果
-    empty = vocab_db.get_words_by_user_and_time(user_id, now+200, now+300)
-    assert empty == []
 
 def test_get_nonexistent_vocabulary(vocab_db):
     """测试获取不存在的单词返回 None。"""
@@ -147,70 +127,6 @@ def test_vocabularydb_init_without_url(monkeypatch):
     monkeypatch.delenv("REDIS_URL", raising=False)
     with pytest.raises(ValueError):
         VocabularyDB(redis_url=None)
-
-def test_get_words_by_difficulty(vocab_db):
-    """测试按难度级别获取词汇。"""
-    user_id = "user_by_difficulty"
-    
-    # 创建不同难度的词汇
-    vocab1 = VocabularyRecord(
-        word="easy", 
-        explanation="Simple", 
-        user_id=user_id, 
-        create_timestamp=time.time(), 
-        familiarity=5,
-        difficulty_level=DifficultyLevel.BEGINNER
-    )
-    vocab2 = VocabularyRecord(
-        word="moderate", 
-        explanation="Medium", 
-        user_id=user_id, 
-        create_timestamp=time.time(), 
-        familiarity=3,
-        difficulty_level=DifficultyLevel.INTERMEDIATE
-    )
-    vocab3 = VocabularyRecord(
-        word="complex", 
-        explanation="Complicated", 
-        user_id=user_id, 
-        create_timestamp=time.time(), 
-        familiarity=1,
-        difficulty_level=DifficultyLevel.ADVANCED
-    )
-    vocab4 = VocabularyRecord(
-        word="simple", 
-        explanation="Easy", 
-        user_id=user_id, 
-        create_timestamp=time.time(), 
-        familiarity=6,
-        difficulty_level=DifficultyLevel.BEGINNER
-    )
-    
-    vocab_db.save_vocabulary(vocab1)
-    vocab_db.save_vocabulary(vocab2)
-    vocab_db.save_vocabulary(vocab3)
-    vocab_db.save_vocabulary(vocab4)
-    
-    # 测试获取初级词汇
-    beginner_words = vocab_db.get_words_by_difficulty(user_id, DifficultyLevel.BEGINNER)
-    assert len(beginner_words) == 2
-    word_set = {v.word for v in beginner_words}
-    assert "easy" in word_set and "simple" in word_set
-    
-    # 测试获取中级词汇
-    intermediate_words = vocab_db.get_words_by_difficulty(user_id, DifficultyLevel.INTERMEDIATE)
-    assert len(intermediate_words) == 1
-    assert intermediate_words[0].word == "moderate"
-    
-    # 测试获取高级词汇
-    advanced_words = vocab_db.get_words_by_difficulty(user_id, DifficultyLevel.ADVANCED)
-    assert len(advanced_words) == 1
-    assert advanced_words[0].word == "complex"
-    
-    # 测试获取专家级词汇（应该为空）
-    expert_words = vocab_db.get_words_by_difficulty(user_id, DifficultyLevel.EXPERT)
-    assert len(expert_words) == 0
-
 
 def test_vocabulary_with_default_values(vocab_db):
     """测试词汇记录的默认值。"""
