@@ -1,4 +1,5 @@
 import os
+import logging
 from dotenv import load_dotenv
 import time
 from collections import defaultdict
@@ -14,6 +15,12 @@ from db.vocabulary_db import VocabularyDB
 
 
 load_dotenv(override=True)
+
+# 日志系统初始化
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 
 class VocabularyService:
 
@@ -45,11 +52,14 @@ class VocabularyService:
         self.model = model
         self.db = db or VocabularyDB(os.environ.get("REDIS_URL"))
         self.system_message = self.SYSTEM_MESSAGE
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.info("VocabularyService initialized with model: %s", self.model)
     
     @observe()
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def lookup_word(self, word: str, user_id: str = None, 
                     cache: bool = True, **kwargs) -> BaseVocabularyRecord | VocabularyRecord:
+        self.logger.info("Looking up word: '%s' for user: %s (cache=%s)", word, user_id, cache)
         """
         查询单词详细信息。
         优先从缓存/数据库获取，若无则调用 LLM 查询。
@@ -68,15 +78,18 @@ class VocabularyService:
         if cache:
             existing = self.db.get_vocabulary(user_id, word, reduce_familiarity=True)
             if existing:
+                self.logger.info("Cache hit for word: '%s' (user: %s)", word, user_id)
                 return existing
         record = self._llm_lookup_word(word)
         vocab_record = self._create_vocabulary_record(user_id, record, **kwargs)
         self.db.save_vocabulary(vocab_record)
+        self.logger.info("Word '%s' saved to DB for user: %s", word, user_id)
         return vocab_record
 
     @observe()
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def get_vocabulary(self, user_id: str, n: int = 10, exclude_known: bool = False) -> list[VocabularyRecord]:
+        self.logger.info("Fetching vocabulary for user: %s, n=%d, exclude_known=%s", user_id, n, exclude_known)
         """
         获取用户最需要复习的 N 个词汇。
         多路召回，分层采样，优先覆盖不同难度，保证推荐词汇难度分布多样。
@@ -88,6 +101,7 @@ class VocabularyService:
         """
         all_words = self.db.get_all_words_by_user(user_id, exclude_known=exclude_known)
         if not all_words:
+            self.logger.info("No vocabulary found for user: %s", user_id)
             return []
         if n == -1:
             return all_words
@@ -116,10 +130,12 @@ class VocabularyService:
             remaining = [v for v in all_words if id(v) not in selected_ids]
             remaining_sorted = sorted(remaining, key=score, reverse=True)
             selected += remaining_sorted[:n-len(selected)]
+        self.logger.info("Returning %d vocabulary records for user: %s", len(selected[:n]), user_id)
         return selected[:n]
 
     @observe()
     def _llm_lookup_word(self, word: str) -> BaseVocabularyRecord:
+        self.logger.info("Calling LLM for word: '%s'", word)
         """
         调用 LLM 查询单词详细信息。
         :param word: 要查询的单词
@@ -133,6 +149,7 @@ class VocabularyService:
             ],
             response_format=BaseVocabularyRecord,
         )
+        self.logger.info("LLM lookup completed for word: '%s'", word)
         return completion.choices[0].message.parsed
     
     def _create_vocabulary_record(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> VocabularyRecord:
@@ -150,9 +167,11 @@ class VocabularyService:
         data["update_timestamp"] = now
         data["extra"] = kwargs if kwargs else {}
         try:
-            return VocabularyRecord.model_validate(data)
+            vocab_record = VocabularyRecord.model_validate(data)
+            self.logger.info("VocabularyRecord created for word: '%s' (user: %s)", data.get("word"), user_id)
+            return vocab_record
         except ValidationError as e:
-            print("ValidationError:", e)
+            self.logger.error("ValidationError for word: '%s' (user: %s): %s", data.get("word"), user_id, e)
             raise
     
     def _preprocess_word(self, word: str) -> str:
@@ -181,4 +200,4 @@ if __name__ == "__main__":
         print("Total words:", len(words))
 
     except Exception as e:
-        print(f"Error: {e}")
+        logging.error("Error: %s", e)
