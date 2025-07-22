@@ -36,7 +36,12 @@ class VocabularyService:
                  client: OpenAI = None,
                  db: VocabularyDB = None,
                  ):
-
+        """
+        初始化 VocabularyService 服务。
+        :param model: 使用的 LLM 模型名称
+        :param client: OpenAI 客户端实例
+        :param db: 词汇数据库实例
+        """
         self.client = client or OpenAI()
         self.model = model
         self.db = db or VocabularyDB(os.environ.get("REDIS_URL"))
@@ -47,14 +52,16 @@ class VocabularyService:
     def lookup_word(self, word: str, user_id: str = None, 
                     save: bool = True, cache: bool = True, **kwargs) -> BaseVocabularyRecord | VocabularyRecord:
         """
-        Look up a word using the LLM. Optionally save the result to the database if save=True and user_id is provided.
-        If save=True and the word already exists for the user, return the existing record from the database.
-        :param word: Word to look up
-        :param user_id: User ID for whom to save the record
-        :param save: Whether to save the result to the database
-        :param cache: Whether to check the cache for existing records before querying the LLM
-        :param kwargs: Additional fields to store in the record's extra field if saving
-        :return: BaseVocabularyRecord (or VocabularyRecord if saved)
+        查询单词详细信息。
+        优先从缓存/数据库获取，若无则调用 LLM 查询。
+        可选：保存结果到数据库。
+        
+        :param word: 要查询的单词
+        :param user_id: 用户ID（用于个性化存储）
+        :param save: 是否保存结果到数据库
+        :param cache: 是否优先查缓存/数据库
+        :param kwargs: 额外字段，存入 extra 字段
+        :return: BaseVocabularyRecord 或 VocabularyRecord
         """
         if not user_id:
             user_id = self.DEFAULT_USER_ID
@@ -76,12 +83,13 @@ class VocabularyService:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def get_vocabulary(self, user_id: str, n: int = 10, exclude_known: bool = False) -> list[VocabularyRecord]:
         """
-        多路召回，返回用户最需要复习的N个词汇。
-        分层采样，优先覆盖不同难度，保证推荐词汇难度分布多样。
+        获取用户最需要复习的 N 个词汇。
+        多路召回，分层采样，优先覆盖不同难度，保证推荐词汇难度分布多样。
+        
         :param user_id: 用户ID
-        :param n: 返回数量N
-        :param exclude_known: 是否排除已知词汇
-        :return: VocabularyRecord列表
+        :param n: 返回数量N，-1表示返回全部
+        :param exclude_known: 是否排除已掌握词汇
+        :return: VocabularyRecord 列表
         """
         all_words = self.db.get_all_words_by_user(user_id, exclude_known=exclude_known)
         if not all_words:
@@ -103,26 +111,23 @@ class VocabularyService:
 
         # 每层先取1个，剩余按优先级补齐
         selected = []
-        # 先保证每个难度层至少有一个
         for bucket in difficulty_buckets.values():
             if bucket:
                 bucket_sorted = sorted(bucket, key=score, reverse=True)
                 selected.append(bucket_sorted[0])
         # 如果还不够n个，按优先级补齐
         if len(selected) < n:
-            # 剩余未选中的词
             selected_ids = set(id(v) for v in selected)
             remaining = [v for v in all_words if id(v) not in selected_ids]
             remaining_sorted = sorted(remaining, key=score, reverse=True)
             selected += remaining_sorted[:n-len(selected)]
-        # 最终只返回n个
         return selected[:n]
 
     @observe()
     def _llm_lookup_word(self, word: str) -> BaseVocabularyRecord:
         """
-        Query the LLM to get the vocabulary record for the given word.
-        :param word: Word to look up
+        调用 LLM 查询单词详细信息。
+        :param word: 要查询的单词
         :return: BaseVocabularyRecord
         """
         completion = self.client.chat.completions.parse(
@@ -136,6 +141,13 @@ class VocabularyService:
         return completion.choices[0].message.parsed
     
     def _create_vocabulary_record(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> VocabularyRecord:
+        """
+        构造 VocabularyRecord 记录（带用户信息和时间戳）。
+        :param user_id: 用户ID
+        :param record: 基础词汇记录
+        :param kwargs: 额外字段，存入 extra
+        :return: VocabularyRecord
+        """
         now = time.time()
         data = record.model_dump()
         data["user_id"] = user_id
@@ -150,9 +162,9 @@ class VocabularyService:
     
     def _preprocess_word(self, word: str) -> str:
         """
-        Preprocess the word for lookup, e.g., stripping whitespace.
-        :param word: Word to preprocess
-        :return: Preprocessed word or None if empty
+        单词预处理（去除首尾空格并小写）。
+        :param word: 原始单词
+        :return: 处理后的单词，若为空返回 None
         """
         if not word:
             return None
