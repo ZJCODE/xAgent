@@ -1,7 +1,7 @@
 import os
 import pytest
 import time
-from schemas.vocabulary import VocabularyRecord
+from schemas.vocabulary import VocabularyRecord, DifficultyLevel
 from db.vocabulary_db import VocabularyDB
 from dotenv import load_dotenv
 
@@ -24,7 +24,16 @@ def test_save_and_get_vocabulary(vocab_db):
     """测试保存和获取单词功能。"""
     user_id = "user123"
     ts = time.time()
-    vocab = VocabularyRecord(word="apple", explanation="A fruit", user_id=user_id, create_timestamp=ts, familiarity=3, extra={"part_of_speech": "noun"})
+    vocab = VocabularyRecord(
+        word="apple", 
+        explanation="A fruit", 
+        user_id=user_id, 
+        create_timestamp=ts, 
+        familiarity=3, 
+        difficulty_level=DifficultyLevel.BEGINNER,
+        example_sentences=["I eat an apple.", "The apple is red."],
+        extra={"part_of_speech": "noun"}
+    )
     assert vocab_db.save_vocabulary(vocab) is True
     result = vocab_db.get_vocabulary(user_id, "apple")
     assert isinstance(result, VocabularyRecord)
@@ -34,6 +43,8 @@ def test_save_and_get_vocabulary(vocab_db):
     assert abs(result.create_timestamp - ts) < 1  # 时间戳误差容忍1秒
     assert result.extra["part_of_speech"] == "noun"
     assert result.familiarity == 3
+    assert result.difficulty_level == DifficultyLevel.BEGINNER
+    assert result.example_sentences == ["I eat an apple.", "The apple is red."]
 
 def test_update_familiarity(vocab_db):
     """测试熟悉度增减和边界。"""
@@ -163,3 +174,171 @@ def test_vocabularydb_init_without_url(monkeypatch):
     monkeypatch.delenv("REDIS_URL", raising=False)
     with pytest.raises(ValueError):
         VocabularyDB(redis_url=None)
+
+
+def test_set_difficulty_level(vocab_db):
+    """测试设置词汇难度级别。"""
+    user_id = "user_difficulty"
+    vocab = VocabularyRecord(
+        word="challenge", 
+        explanation="A difficult task", 
+        user_id=user_id, 
+        create_timestamp=time.time(), 
+        familiarity=2
+    )
+    vocab_db.save_vocabulary(vocab)
+    
+    # 测试设置难度级别
+    updated = vocab_db.set_difficulty_level(user_id, "challenge", DifficultyLevel.ADVANCED)
+    assert updated is not None
+    assert updated.difficulty_level == DifficultyLevel.ADVANCED
+    
+    # 验证数据库中的记录已更新
+    result = vocab_db.get_vocabulary(user_id, "challenge")
+    assert result.difficulty_level == DifficultyLevel.ADVANCED
+    
+    # 测试不存在的词
+    assert vocab_db.set_difficulty_level(user_id, "notfound", DifficultyLevel.EXPERT) is None
+
+
+def test_set_example_sentences(vocab_db):
+    """测试设置例句列表。"""
+    user_id = "user_examples"
+    vocab = VocabularyRecord(
+        word="example", 
+        explanation="A sample", 
+        user_id=user_id, 
+        create_timestamp=time.time(), 
+        familiarity=3,
+        example_sentences=["This is an example."]
+    )
+    vocab_db.save_vocabulary(vocab)
+    
+    # 测试覆盖模式
+    new_sentences = ["Here's a new example.", "Another example here."]
+    updated = vocab_db.set_example_sentences(user_id, "example", new_sentences, mode="overwrite")
+    assert updated is not None
+    assert updated.example_sentences == new_sentences
+    
+    # 测试追加模式
+    additional_sentences = ["Third example.", "Fourth example."]
+    updated = vocab_db.set_example_sentences(user_id, "example", additional_sentences, mode="add")
+    assert updated is not None
+    expected = new_sentences + additional_sentences
+    assert updated.example_sentences == expected
+    
+    # 测试不存在的词
+    assert vocab_db.set_example_sentences(user_id, "notfound", ["test"]) is None
+
+
+def test_add_example_sentence(vocab_db):
+    """测试添加单个例句。"""
+    user_id = "user_add_example"
+    vocab = VocabularyRecord(
+        word="sentence", 
+        explanation="A group of words", 
+        user_id=user_id, 
+        create_timestamp=time.time(), 
+        familiarity=4,
+        example_sentences=["This is a sentence."]
+    )
+    vocab_db.save_vocabulary(vocab)
+    
+    # 添加新例句
+    new_sentence = "Here's another sentence."
+    updated = vocab_db.add_example_sentence(user_id, "sentence", new_sentence)
+    assert updated is not None
+    assert new_sentence in updated.example_sentences
+    assert len(updated.example_sentences) == 2
+    
+    # 尝试添加重复例句（应该不会重复添加）
+    updated = vocab_db.add_example_sentence(user_id, "sentence", new_sentence)
+    assert updated is not None
+    assert len(updated.example_sentences) == 2  # 长度不变
+    
+    # 测试不存在的词
+    assert vocab_db.add_example_sentence(user_id, "notfound", "test sentence") is None
+
+
+def test_get_words_by_difficulty(vocab_db):
+    """测试按难度级别获取词汇。"""
+    user_id = "user_by_difficulty"
+    
+    # 创建不同难度的词汇
+    vocab1 = VocabularyRecord(
+        word="easy", 
+        explanation="Simple", 
+        user_id=user_id, 
+        create_timestamp=time.time(), 
+        familiarity=5,
+        difficulty_level=DifficultyLevel.BEGINNER
+    )
+    vocab2 = VocabularyRecord(
+        word="moderate", 
+        explanation="Medium", 
+        user_id=user_id, 
+        create_timestamp=time.time(), 
+        familiarity=3,
+        difficulty_level=DifficultyLevel.INTERMEDIATE
+    )
+    vocab3 = VocabularyRecord(
+        word="complex", 
+        explanation="Complicated", 
+        user_id=user_id, 
+        create_timestamp=time.time(), 
+        familiarity=1,
+        difficulty_level=DifficultyLevel.ADVANCED
+    )
+    vocab4 = VocabularyRecord(
+        word="simple", 
+        explanation="Easy", 
+        user_id=user_id, 
+        create_timestamp=time.time(), 
+        familiarity=6,
+        difficulty_level=DifficultyLevel.BEGINNER
+    )
+    
+    vocab_db.save_vocabulary(vocab1)
+    vocab_db.save_vocabulary(vocab2)
+    vocab_db.save_vocabulary(vocab3)
+    vocab_db.save_vocabulary(vocab4)
+    
+    # 测试获取初级词汇
+    beginner_words = vocab_db.get_words_by_difficulty(user_id, DifficultyLevel.BEGINNER)
+    assert len(beginner_words) == 2
+    word_set = {v.word for v in beginner_words}
+    assert "easy" in word_set and "simple" in word_set
+    
+    # 测试获取中级词汇
+    intermediate_words = vocab_db.get_words_by_difficulty(user_id, DifficultyLevel.INTERMEDIATE)
+    assert len(intermediate_words) == 1
+    assert intermediate_words[0].word == "moderate"
+    
+    # 测试获取高级词汇
+    advanced_words = vocab_db.get_words_by_difficulty(user_id, DifficultyLevel.ADVANCED)
+    assert len(advanced_words) == 1
+    assert advanced_words[0].word == "complex"
+    
+    # 测试获取专家级词汇（应该为空）
+    expert_words = vocab_db.get_words_by_difficulty(user_id, DifficultyLevel.EXPERT)
+    assert len(expert_words) == 0
+
+
+def test_vocabulary_with_default_values(vocab_db):
+    """测试词汇记录的默认值。"""
+    user_id = "user_defaults"
+    vocab = VocabularyRecord(
+        word="default", 
+        explanation="Test default values", 
+        user_id=user_id, 
+        create_timestamp=time.time()
+    )
+    vocab_db.save_vocabulary(vocab)
+    
+    result = vocab_db.get_vocabulary(user_id, "default")
+    assert result is not None
+    assert result.familiarity == 0  # 默认值
+    assert result.difficulty_level == DifficultyLevel.INTERMEDIATE  # 默认值
+    assert result.example_sentences == []  # 默认值
+    assert result.image_url is None  # 默认值
+    assert result.extra is None  # 默认值
