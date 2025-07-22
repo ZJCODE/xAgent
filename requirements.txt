@@ -3,4 +3,6 @@ uvicorn
 pydantic
 redis
 pytest
-dotenv
+langfuse
+python-dotenv
+openai

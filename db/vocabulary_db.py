@@ -123,21 +123,6 @@ class VocabularyDB:
         self.save_vocabulary(vocab)
         return vocab
     
-    def set_image_url(self, user_id: str, word: str, image_url: str) -> VocabularyRecord | None:
-        """
-        单独设置指定单词的 image_url 字段。
-        :param user_id: 用户 ID
-        :param word: 单词
-        :param image_url: 图片链接
-        :return: 更新后的 VocabularyRecord 或 None
-        """
-        vocab = self.get_vocabulary(user_id, word)
-        if not vocab:
-            return None
-        vocab.image_url = image_url
-        self.save_vocabulary(vocab)
-        return vocab
-
     def set_extra(self, user_id: str, word: str, extra: dict[str, str], mode: str = "overwrite") -> VocabularyRecord | None:
         """
         设置指定单词的 extra 字段。

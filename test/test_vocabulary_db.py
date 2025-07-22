@@ -125,18 +125,6 @@ def test_get_nonexistent_vocabulary(vocab_db):
     result = vocab_db.get_vocabulary("user123", "nonexistent")
     assert result is None
 
-def test_set_image_url(vocab_db):
-    """测试 set_image_url 方法。"""
-    user_id = "user_img"
-    vocab = VocabularyRecord(word="imgword", explanation="img", user_id=user_id, create_timestamp=0, familiarity=1, extra=None)
-    vocab_db.save_vocabulary(vocab)
-    url = "http://example.com/img.png"
-    updated = vocab_db.set_image_url(user_id, "imgword", url)
-    assert updated is not None
-    assert updated.image_url == url
-    # 不存在的词
-    assert vocab_db.set_image_url(user_id, "notfound", url) is None
-
 def test_set_extra_overwrite_and_add(vocab_db):
     """测试 set_extra 的 add/overwrite 模式。"""
     user_id = "user_extra"
@@ -340,5 +328,4 @@ def test_vocabulary_with_default_values(vocab_db):
     assert result.familiarity == 0  # 默认值
     assert result.difficulty_level == DifficultyLevel.INTERMEDIATE  # 默认值
     assert result.example_sentences == []  # 默认值
-    assert result.image_url is None  # 默认值
     assert result.extra is None  # 默认值
