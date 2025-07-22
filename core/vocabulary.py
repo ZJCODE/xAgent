@@ -61,8 +61,7 @@ class VocabularyService:
         :param kwargs: 额外字段，存入 extra 字段
         :return: BaseVocabularyRecord 或 VocabularyRecord
         """
-        if not user_id:
-            user_id = self.DEFAULT_USER_ID
+        user_id = user_id or self.DEFAULT_USER_ID
         word = self._preprocess_word(word)
         if not word or not word.strip():
             raise ValueError("Word cannot be empty or None")
@@ -72,8 +71,7 @@ class VocabularyService:
                 return existing
         record = self._llm_lookup_word(word)
         vocab_record = self._create_vocabulary_record(user_id, record, **kwargs)
-        if self.db:
-            self.db.save_vocabulary(vocab_record)
+        self.db.save_vocabulary(vocab_record)
         return vocab_record
 
     @observe()

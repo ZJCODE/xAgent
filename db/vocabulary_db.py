@@ -22,8 +22,12 @@ class VocabularyDB:
         url = redis_url or os.environ.get("REDIS_URL")
         if not url:
             raise ValueError("REDIS_URL not set in environment or not provided as argument")
-        self.client: redis.Redis = redis.Redis.from_url(url)
-
+        try:
+            self.client: redis.Redis = redis.Redis.from_url(url)
+            self.client.ping()
+        except Exception as e:
+            raise ConnectionError(f"Failed to connect to Redis at {url}: {e}")
+        
     def _make_key(self, user_id: str, word: str) -> str:
         """
         生成 Redis key，格式为 'vocab:<user_id>:<word>'。
