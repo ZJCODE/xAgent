@@ -10,7 +10,7 @@ service = VocabularyService()
 class LookupRequest(BaseModel):
     word: str
     user_id: str | None = None
-    save: bool = False
+    save: bool = True
     cache: bool = True  # 是否使用缓存
     # 允许额外参数
     extra: dict = {}
