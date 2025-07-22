@@ -28,8 +28,7 @@ class VocabularyService:
             "For 'Intermediate', provide more detail and moderately complex examples. "
             "For 'Advanced', give in-depth explanations and sophisticated example sentences. "
             "Always include the word's definition, example sentences, and specify the difficulty level in your response."
-            "Make sure word in lowercase, and all extra fields are strings."
-        )
+            )
 
     def __init__(self,
                  model: str = DEFAULT_MODEL,
@@ -55,31 +54,29 @@ class VocabularyService:
         :param kwargs: Additional fields to store in the record's extra field if saving
         :return: BaseVocabularyRecord (or VocabularyRecord if saved)
         """
-        
         if not user_id:
             user_id = self.DEFAULT_USER_ID
             save = True
         word = self._preprocess_word(word)
-
         if not word or not word.strip():
             raise ValueError("Word cannot be empty or None")
-
         if cache:
             existing = self.db.get_vocabulary(user_id, word)
             if existing:
                 return existing
-
-        # Responses do not support langfuse tracing for now
-        # response = self.client.responses.parse(
-        #     model=self.model,
-        #     input=[
-        #         {"role": "system", "content": self.system_message},
-        #         {"role": "user", "content": word}
-        #     ],
-        #     text_format=BaseVocabularyRecord,
-        # )
-        # record = response.output_parsed
-
+        record = self._llm_lookup_word(word)
+        vocab_record = self._create_vocabulary_record(user_id, record, **kwargs)
+        if save:
+            self.db.save_vocabulary(vocab_record)
+        return vocab_record
+    
+    @observe()
+    def _llm_lookup_word(self, word: str) -> BaseVocabularyRecord:
+        """
+        Query the LLM to get the vocabulary record for the given word.
+        :param word: Word to look up
+        :return: BaseVocabularyRecord
+        """
         completion = self.client.chat.completions.parse(
             model=self.model,
             messages=[
@@ -88,14 +85,7 @@ class VocabularyService:
             ],
             response_format=BaseVocabularyRecord,
         )
-
-        record = completion.choices[0].message.parsed
-        vocab_record = self._create_vocabulary_record(user_id, record, **kwargs)
-
-        if save:
-            self.db.save_vocabulary(vocab_record)
-
-        return vocab_record
+        return completion.choices[0].message.parsed
     
     def _create_vocabulary_record(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> VocabularyRecord:
         now = time.time()
@@ -121,7 +111,6 @@ class VocabularyService:
         w = word.strip().lower()
         return w if w else None
 
-    @observe()
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def get_vocabulary(self, user_id: str, word: str) -> VocabularyRecord:
         """
@@ -138,7 +127,7 @@ if __name__ == "__main__":
     # Example usage
     service = VocabularyService()
     try:
-        record = service.lookup_word("apple")
+        record = service.lookup_word("apple",cache=False)
         print(json.dumps(record.model_dump(), indent=2, ensure_ascii=False))
         record = service.lookup_word("apple", user_id="user123", save=True, part_of_speech="noun")
         print(json.dumps(record.model_dump(), indent=2, ensure_ascii=False))

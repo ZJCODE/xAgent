@@ -142,3 +142,14 @@ class VocabularyDB:
         """
         all_words = self.get_all_words_by_user(user_id)
         return [v for v in all_words if v.difficulty_level == difficulty_level]
+    
+    def clear_all(self) -> None:
+        """
+        清空数据库中的所有词汇记录。
+        :return: None
+        """
+        pattern = f"{self.VOCAB_PREFIX}:*"
+        keys = self.client.keys(pattern)
+        if keys:
+            self.client.delete(*keys)
+        return True
