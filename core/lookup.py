@@ -1,6 +1,5 @@
 import os
 import json
-from tkinter.messagebox import NO
 from dotenv import load_dotenv
 import time
 
@@ -139,6 +138,8 @@ if __name__ == "__main__":
     service = VocabularyService()
     try:
         record = service.lookup_word("apple")
+        print(json.dumps(record.model_dump(), indent=2, ensure_ascii=False))
+        record = service.lookup_word("apple", user_id="user123", save=True, part_of_speech="noun")
         print(json.dumps(record.model_dump(), indent=2, ensure_ascii=False))
     except Exception as e:
         print(f"Error: {e}")
