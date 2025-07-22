@@ -85,12 +85,12 @@ class VocabularyService:
         record = completion.choices[0].message.parsed
 
         if save and user_id:
-            vocab_record = self._transform_record(user_id, record, **kwargs)
+            vocab_record = self._create_vocabulary_record(user_id, record, **kwargs)
             self.db.save_vocabulary(vocab_record)
             return vocab_record
         return record
     
-    def _transform_record(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> VocabularyRecord:
+    def _create_vocabulary_record(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> VocabularyRecord:
         """
         Transform a BaseVocabularyRecord into a VocabularyRecord with additional user-specific fields.
         :param user_id: User ID
