@@ -1,9 +1,11 @@
+import os
 import json
 from dotenv import load_dotenv
 import time
 
 from langfuse import observe
 from langfuse.openai import OpenAI
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from schemas.vocabulary import BaseVocabularyRecord,VocabularyRecord
 from db.vocabulary_db import VocabularyDB
@@ -12,13 +14,10 @@ from db.vocabulary_db import VocabularyDB
 load_dotenv(override=True)
 
 class VocabularyService:
-    def __init__(self,
-                 model: str = "gpt-4o-mini",
-                 db: VocabularyDB = None):
-        self.client = OpenAI()
-        self.db = db or VocabularyDB()
-        self.model = model
-        self.system_message = (
+
+    DEFAULT_MODEL = "gpt-4o-mini"
+
+    SYSTEM_MESSAGE = (
             "You are a helpful vocabulary assistant. "
             "When explaining a word, tailor your explanation, examples, and details according to the word's difficulty level: "
             "For 'Beginner', use simple language and basic examples. "
@@ -26,49 +25,77 @@ class VocabularyService:
             "For 'Advanced', give in-depth explanations and sophisticated example sentences. "
             "Always include the word's definition, example sentences, and specify the difficulty level in your response."
         )
+
+    def __init__(self,
+                 model: str = DEFAULT_MODEL,
+                 client: OpenAI = None,
+                 db: VocabularyDB = None,
+                 ):
+
+        self.client = client or OpenAI()
+        self.model = model
+        self.db = db or VocabularyDB(os.environ.get("REDIS_URL"))
+        self.system_message = self.SYSTEM_MESSAGE
+    
     @observe()
-    def lookup_word(self, word: str) -> BaseVocabularyRecord:
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    def lookup_word(self, word: str, user_id: str = None, save: bool = False, **kwargs) -> BaseVocabularyRecord:
+        """
+        Look up a word using the LLM. Optionally save the result to the database if save=True and user_id is provided.
+        :param word: Word to look up
+        :param user_id: User ID (required if save=True)
+        :param save: Whether to save the result to the database
+        :param kwargs: Additional fields to store in the record's extra field if saving
+        :return: BaseVocabularyRecord (or VocabularyRecord if saved)
+        """
         response = self.client.responses.parse(
             model=self.model,
             input=[
                 {"role": "system", "content": self.system_message},
                 {"role": "user", "content": word}
-                ],
+            ],
             text_format=BaseVocabularyRecord,
         )
         record = response.output_parsed
+        if save:
+            if not user_id:
+                raise ValueError("user_id must be provided if save=True")
+            vocab_record = self._transform_record(user_id, record, **kwargs)
+            self.db.save_vocabulary(vocab_record)
+            return vocab_record
         return record
     
-    @observe()
-    def save_vocabulary(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> bool:
+    def _transform_record(self, user_id: str, record: BaseVocabularyRecord, **kwargs) -> VocabularyRecord:
         """
-        Save or update a vocabulary record for a user.
+        Transform a BaseVocabularyRecord into a VocabularyRecord with additional user-specific fields.
         :param user_id: User ID
-        :param record: VocabularyRecord instance
+        :param record: BaseVocabularyRecord instance
         :param kwargs: Additional fields to store in the record's extra field
-        :return: True if successful
+        :return: VocabularyRecord instance
         """
+        now = time.time()
         data = record.model_dump()
         data["user_id"] = user_id
-        data["create_timestamp"] = time.time()
-        if kwargs:
-            data["extra"] = kwargs
-        vocab_record = VocabularyRecord.model_validate(data)
-        return self.db.save_vocabulary(vocab_record)
+        data["create_timestamp"] = now
+        data["update_timestamp"] = now
+        data["extra"] = kwargs if kwargs else {}
+        return VocabularyRecord.model_validate(data)
+    
+    @observe()
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    def get_vocabulary(self, user_id: str, word: str) -> VocabularyRecord:
+        """
+        Retrieve a vocabulary record for a specific user and word.
+        :param user_id: User ID
+        :param word: Word to look up
+        :return: VocabularyRecord instance or None if not found
+        """
+        return self.db.get_vocabulary(user_id, word)
 
 
 if __name__ == "__main__":
     service = VocabularyService()
     record = service.lookup_word("crunchy")
     print(json.dumps(record.model_dump(), ensure_ascii=False, indent=2))
-    service.save_vocabulary(
-        user_id="user123",
-        record=record
-    )
-    service.save_vocabulary(
-        user_id="user123_extra",
-        record=record,
-        part_of_speech="adjective",
-        usage="common in describing food texture",
-        image_url="http://example.com/crunchy.png"
-    )
+    record = service.lookup_word("crunchy", user_id="user123", save=True, tag="test")
+    print(json.dumps(record.model_dump(), ensure_ascii=False, indent=2))

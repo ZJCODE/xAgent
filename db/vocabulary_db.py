@@ -1,8 +1,8 @@
 import os
+import time
 import redis
 from schemas.vocabulary import VocabularyRecord, DifficultyLevel
 from dotenv import load_dotenv
-from typing import List
 
 load_dotenv(override=True)
 
@@ -35,10 +35,12 @@ class VocabularyDB:
 
     def save_vocabulary(self, vocab: VocabularyRecord) -> bool:
         """
-        保存或更新一个词汇记录到 Redis。
+        保存或更新一个词汇记录到 Redis，并更新时间。
         :param vocab: VocabularyRecord 实例
         :return: 操作是否成功（总是 True）
         """
+        import time
+        vocab.update_timestamp = time.time()
         key = self._make_key(vocab.user_id, vocab.word)
         value = vocab.model_dump_json()
         self.client.set(key, value)
@@ -105,24 +107,10 @@ class VocabularyDB:
         if not vocab:
             return None
         vocab.familiarity = max(0, min(10, vocab.familiarity + delta))
+        vocab.update_timestamp = time.time()
         self.save_vocabulary(vocab)
         return vocab
 
-    def set_familiarity(self, user_id: str, word: str, value: int) -> VocabularyRecord | None:
-        """
-        直接设置指定单词的熟悉度，范围限定在 0-10。
-        :param user_id: 用户 ID
-        :param word: 单词
-        :param value: 熟悉度（0-10）
-        :return: 更新后的 VocabularyRecord 或 None
-        """
-        vocab = self.get_vocabulary(user_id, word)
-        if not vocab:
-            return None
-        vocab.familiarity = max(0, min(10, value))
-        self.save_vocabulary(vocab)
-        return vocab
-    
     def set_extra(self, user_id: str, word: str, extra: dict[str, str], mode: str = "overwrite") -> VocabularyRecord | None:
         """
         设置指定单词的 extra 字段。
@@ -142,57 +130,8 @@ class VocabularyDB:
                 vocab.extra.update(extra)
         else:  # overwrite
             vocab.extra = extra.copy()
+        vocab.update_timestamp = time.time()
         self.save_vocabulary(vocab)
-        return vocab
-
-    def set_difficulty_level(self, user_id: str, word: str, difficulty_level: DifficultyLevel) -> VocabularyRecord | None:
-        """
-        设置指定单词的难度级别。
-        :param user_id: 用户 ID
-        :param word: 单词
-        :param difficulty_level: 难度级别
-        :return: 更新后的 VocabularyRecord 或 None
-        """
-        vocab = self.get_vocabulary(user_id, word)
-        if not vocab:
-            return None
-        vocab.difficulty_level = difficulty_level
-        self.save_vocabulary(vocab)
-        return vocab
-
-    def set_example_sentences(self, user_id: str, word: str, example_sentences: List[str], mode: str = "overwrite") -> VocabularyRecord | None:
-        """
-        设置指定单词的例句列表。
-        :param user_id: 用户 ID
-        :param word: 单词
-        :param example_sentences: 例句列表
-        :param mode: 'overwrite'（完全覆盖）或 'add'（追加）
-        :return: 更新后的 VocabularyRecord 或 None
-        """
-        vocab = self.get_vocabulary(user_id, word)
-        if not vocab:
-            return None
-        if mode == "add":
-            vocab.example_sentences.extend(example_sentences)
-        else:  # overwrite
-            vocab.example_sentences = example_sentences.copy()
-        self.save_vocabulary(vocab)
-        return vocab
-
-    def add_example_sentence(self, user_id: str, word: str, sentence: str) -> VocabularyRecord | None:
-        """
-        为指定单词添加一个例句。
-        :param user_id: 用户 ID
-        :param word: 单词
-        :param sentence: 例句
-        :return: 更新后的 VocabularyRecord 或 None
-        """
-        vocab = self.get_vocabulary(user_id, word)
-        if not vocab:
-            return None
-        if sentence not in vocab.example_sentences:
-            vocab.example_sentences.append(sentence)
-            self.save_vocabulary(vocab)
         return vocab
 
     def get_words_by_difficulty(self, user_id: str, difficulty_level: DifficultyLevel) -> list[VocabularyRecord]:

@@ -66,22 +66,7 @@ def test_update_familiarity(vocab_db):
     # 不存在的词
     assert vocab_db.update_familiarity(user_id, "notfound", 1) is None
 
-def test_set_familiarity(vocab_db):
-    """测试设置熟悉度功能和边界。"""
-    user_id = "user_setfam"
-    vocab = VocabularyRecord(word="setword", explanation="set", user_id=user_id, create_timestamp=0, familiarity=2, extra=None)
-    vocab_db.save_vocabulary(vocab)
-    # 正常设置
-    updated = vocab_db.set_familiarity(user_id, "setword", 7)
-    assert updated.familiarity == 7
-    # 超过上限
-    updated = vocab_db.set_familiarity(user_id, "setword", 20)
-    assert updated.familiarity == 10
-    # 低于下限
-    updated = vocab_db.set_familiarity(user_id, "setword", -5)
-    assert updated.familiarity == 0
-    # 不存在的词
-    assert vocab_db.set_familiarity(user_id, "notfound", 5) is None
+
 
 
 def test_delete_vocabulary(vocab_db):
@@ -162,91 +147,6 @@ def test_vocabularydb_init_without_url(monkeypatch):
     monkeypatch.delenv("REDIS_URL", raising=False)
     with pytest.raises(ValueError):
         VocabularyDB(redis_url=None)
-
-
-def test_set_difficulty_level(vocab_db):
-    """测试设置词汇难度级别。"""
-    user_id = "user_difficulty"
-    vocab = VocabularyRecord(
-        word="challenge", 
-        explanation="A difficult task", 
-        user_id=user_id, 
-        create_timestamp=time.time(), 
-        familiarity=2
-    )
-    vocab_db.save_vocabulary(vocab)
-    
-    # 测试设置难度级别
-    updated = vocab_db.set_difficulty_level(user_id, "challenge", DifficultyLevel.ADVANCED)
-    assert updated is not None
-    assert updated.difficulty_level == DifficultyLevel.ADVANCED
-    
-    # 验证数据库中的记录已更新
-    result = vocab_db.get_vocabulary(user_id, "challenge")
-    assert result.difficulty_level == DifficultyLevel.ADVANCED
-    
-    # 测试不存在的词
-    assert vocab_db.set_difficulty_level(user_id, "notfound", DifficultyLevel.EXPERT) is None
-
-
-def test_set_example_sentences(vocab_db):
-    """测试设置例句列表。"""
-    user_id = "user_examples"
-    vocab = VocabularyRecord(
-        word="example", 
-        explanation="A sample", 
-        user_id=user_id, 
-        create_timestamp=time.time(), 
-        familiarity=3,
-        example_sentences=["This is an example."]
-    )
-    vocab_db.save_vocabulary(vocab)
-    
-    # 测试覆盖模式
-    new_sentences = ["Here's a new example.", "Another example here."]
-    updated = vocab_db.set_example_sentences(user_id, "example", new_sentences, mode="overwrite")
-    assert updated is not None
-    assert updated.example_sentences == new_sentences
-    
-    # 测试追加模式
-    additional_sentences = ["Third example.", "Fourth example."]
-    updated = vocab_db.set_example_sentences(user_id, "example", additional_sentences, mode="add")
-    assert updated is not None
-    expected = new_sentences + additional_sentences
-    assert updated.example_sentences == expected
-    
-    # 测试不存在的词
-    assert vocab_db.set_example_sentences(user_id, "notfound", ["test"]) is None
-
-
-def test_add_example_sentence(vocab_db):
-    """测试添加单个例句。"""
-    user_id = "user_add_example"
-    vocab = VocabularyRecord(
-        word="sentence", 
-        explanation="A group of words", 
-        user_id=user_id, 
-        create_timestamp=time.time(), 
-        familiarity=4,
-        example_sentences=["This is a sentence."]
-    )
-    vocab_db.save_vocabulary(vocab)
-    
-    # 添加新例句
-    new_sentence = "Here's another sentence."
-    updated = vocab_db.add_example_sentence(user_id, "sentence", new_sentence)
-    assert updated is not None
-    assert new_sentence in updated.example_sentences
-    assert len(updated.example_sentences) == 2
-    
-    # 尝试添加重复例句（应该不会重复添加）
-    updated = vocab_db.add_example_sentence(user_id, "sentence", new_sentence)
-    assert updated is not None
-    assert len(updated.example_sentences) == 2  # 长度不变
-    
-    # 测试不存在的词
-    assert vocab_db.add_example_sentence(user_id, "notfound", "test sentence") is None
-
 
 def test_get_words_by_difficulty(vocab_db):
     """测试按难度级别获取词汇。"""
