@@ -1,5 +1,4 @@
 import redis
-import json
 from typing import List, Optional
 from schemas.messages import Message
 
@@ -13,7 +12,7 @@ class MessageDB:
     MessageDB
     -------------------
     以Redis为后端存储所有消息历史
-    
+
     所有消息历史都以统一前缀（chat:）隔离，支持多 session，支持消息裁剪和过期。
     主要功能：
     - 按用户/会话存储消息历史
