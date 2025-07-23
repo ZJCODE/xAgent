@@ -89,7 +89,8 @@ class Agent:
         self,
         user_message: Message | str,
         session: Session,
-        history_count: int = 20
+        history_count: int = 20,
+        max_iter: int = 5
     ) -> str:
         """
         只需传入用户最新消息（Message 或 str）和 session。
@@ -98,6 +99,7 @@ class Agent:
             user_message (Message or str): 用户最新消息。
             session (Session): 会话对象。
             history_count (int): 获取历史条数，默认 20。
+            max_iter (int): 最大迭代次数，默认 5。
         Returns:
             str: 大模型回复内容。
         """
@@ -106,8 +108,10 @@ class Agent:
         session.add_message(user_message)
 
         reply = None
+        iter_count = 0
 
-        while not reply:
+        while not reply and iter_count < max_iter:
+            iter_count += 1
 
             history = session.get_history(history_count)
             input_msgs = [
