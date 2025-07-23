@@ -1,6 +1,7 @@
 import time
 from typing import List, Optional
 import json
+import logging  # 新增
 
 from langfuse import observe
 from langfuse.openai import OpenAI
@@ -10,6 +11,11 @@ from utils.tool_decorator import function_tool
 
 from dotenv import load_dotenv
 
+# 日志系统初始化（只需一次）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 
 load_dotenv(override=True)
 
@@ -29,6 +35,7 @@ class Session:
         self.user_id = user_id
         self.session_id = session_id
         self.message_db = message_db
+        self.logger = logging.getLogger(f"{self.__class__.__name__}[{user_id}:{session_id}]")  # 新增
         # 本地消息用 (user_id, session_id) 区分
         key = (user_id, session_id)
         if not self.message_db and key not in Session._local_messages:
@@ -36,22 +43,28 @@ class Session:
 
     def add_message(self, message: Message):
         if self.message_db:
+            self.logger.info("Adding message to DB: %s", message)
             self.message_db.add_message(self.user_id, message, self.session_id)
         else:
             key = (self.user_id, self.session_id)
+            self.logger.info("Adding message to local session: %s", message)
             Session._local_messages[key].append(message)
 
     def get_history(self, count: int = 20) -> List[Message]:
         if self.message_db:
+            self.logger.info("Fetching last %d messages from DB", count)
             return self.message_db.get_messages(self.user_id, self.session_id, count)
         key = (self.user_id, self.session_id)
+        self.logger.info("Fetching last %d messages from local session", count)
         return Session._local_messages[key][-count:]
     
     def clear_history(self):
         if self.message_db:
+            self.logger.info("Clearing history in DB")
             self.message_db.clear_history(self.user_id, self.session_id)
         else:
             key = (self.user_id, self.session_id)
+            self.logger.info("Clearing local session history")
             Session._local_messages[key] = []
 
 class Agent:
@@ -67,9 +80,9 @@ class Agent:
                  tools: Optional[list] = None):
         self.model = model
         self.client = client or OpenAI()
-        # tools: list[callable], e.g. [add, ...]
         tool_fns = tools or [add]
         self.tools = {fn.__name__: fn for fn in tool_fns}
+        self.logger = logging.getLogger(self.__class__.__name__)  # 新增
 
     @observe()
     def chat(
@@ -109,6 +122,7 @@ class Agent:
                 input=input_msgs
             )
             reply = response.output_text
+            self.logger.info("LLM reply: %s", reply)
 
             tool_calls = response.output
             for tool_call in tool_calls:
@@ -119,8 +133,9 @@ class Agent:
                 args = json.loads(tool_call.arguments)
                 func = self.tools.get(name)
                 if func:
+                    self.logger.info("Calling tool: %s with args: %s", name, args)
                     result = func(**args)
-                    tool_msg = Message(role="assistant", content=f"[call id {tool_call.id}] tool call result from tool `{name}` with args {args} is: {result}", timestamp=time.time(), is_tool_result=True)
+                    tool_msg = Message(role="assistant", content=f"[tool_call id {tool_call.id}] tool_call result from tool `{name}` with args {args} is: {result}", timestamp=time.time(), is_tool_result=True)
                     session.add_message(tool_msg)
 
         model_msg = Message(role="assistant", content=reply, timestamp=time.time())
@@ -130,51 +145,25 @@ class Agent:
 
 if __name__ == "__main__":
 
-
     # Simple Test Example
 
     @function_tool()
     def add(a: int, b: int) -> int:
         "Add two numbers."
         return a + b
-    
-    from vocabulary import VocabularyService
-    service = VocabularyService()
-    
-    @function_tool()
-    def lookup_word(word: str, user_id: str) -> str:
-        """
-        调用 LLM 查询单词详细信息。
-        Args:
-            word (str): 要查询的单词
-        Returns:
-            str: 单词详细信息
-        """
-        record = service.lookup_word(word, user_id)
-        return record.model_dump_json()
 
-    agent = Agent(tools=[add, lookup_word])
-    session = Session(user_id="user1")
+    agent = Agent(tools=[add])
+    session = Session(user_id="user123123")
     session.clear_history()  # 清空历史以便测试
     user_msg = "the answer for 12 + 13 is"
-    print("User:", user_msg)
     reply = agent.chat(user_msg, session)
-    print("Agent:", reply)
     user_msg = "the answer for 10 + 20 is and 21 + 22 is"
-    print("User:", user_msg)
     reply = agent.chat(user_msg, session)
-    print("Agent:", reply)
     # user_msg = "The Weather in Hangzhou is"
-    # print("User:", user_msg)
     # reply = agent.chat(user_msg, session)
-    # print("Agent:", reply)
-    # user_msg = "The Meaning of word aesthetics is"
-    # print("User:", user_msg)
-    # reply = agent.chat(user_msg, session)
-    # print("Agent:", reply)
-    print("Session history:")
-    for msg in session.get_history():
-        print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
+    # print("Session history:")
+    # for msg in session.get_history():
+    #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
 
     # # DB Session Example
     # print("DB Session Example:")
