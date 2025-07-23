@@ -2,6 +2,8 @@ import time
 from typing import List, Optional
 import json
 import logging  # 新增
+import base64  # 新增
+import os  # 新增
 
 from langfuse import observe
 from langfuse.openai import OpenAI
@@ -101,13 +103,15 @@ class Agent:
             history_count (int): 获取历史条数，默认 20。
             max_iter (int): 最大迭代次数，默认 5。
         Returns:
-            str: 大模型回复内容。
+            str: 大模型回复内容
         """
         if isinstance(user_message, str):
             user_message = Message(role="user", content=user_message, timestamp=time.time())
         session.add_message(user_message)
 
         reply = None
+        image_base64 = None
+        image_path = None
         iter_count = 0
 
         while not reply and iter_count < max_iter:
@@ -122,7 +126,8 @@ class Agent:
             )
             response = self.client.responses.create(
                 model=self.model,
-                tools=[{"type": "web_search_preview"}] + [fn.__tool_spec__ for fn in self.tools.values()],
+                tools=[{"type": "web_search_preview"}, 
+                       {"type": "image_generation","quality": "low"}] + [fn.__tool_spec__ for fn in self.tools.values()],
                 input=input_msgs
             )
             reply = response.output_text
@@ -131,19 +136,31 @@ class Agent:
             tool_calls = response.output
             for tool_call in tool_calls:
                 history_count += 1  # 增加历史条数以弥补Tool消息的占用
-                if tool_call.type != "function_call":
-                    continue
-                name = tool_call.name
-                args = json.loads(tool_call.arguments)
-                func = self.tools.get(name)
-                if func:
-                    self.logger.info("Calling tool: %s with args: %s", name, args)
-                    result = func(**args)
-                    tool_msg = Message(role="assistant", content=f"[tool_call id {tool_call.id}] tool_call result from tool `{name}` with args {args} is: {result}", timestamp=time.time(), is_tool_result=True)
-                    session.add_message(tool_msg)
+                if tool_call.type == "image_generation_call":
+                    image_base64 = tool_call.result
+                    self.logger.info("Image generated (base64 length: %d)", len(image_base64))
+                    image_msg = Message(
+                        role="assistant",
+                        content=f"[image_generation] generated image (base64, length={len(image_base64)})",
+                        timestamp=time.time(),
+                        is_tool_result=True
+                    )
+                    session.add_message(image_msg)
+                    # 返回 markdown 格式的 base64 图片
+                    return f'![generated image](data:image/png;base64,{image_base64})'
+                elif tool_call.type == "function_call":
+                    name = tool_call.name
+                    args = json.loads(tool_call.arguments)
+                    func = self.tools.get(name)
+                    if func:
+                        self.logger.info("Calling tool: %s with args: %s", name, args)
+                        result = func(**args)
+                        tool_msg = Message(role="assistant", content=f"[tool_call id {tool_call.id}] tool_call result from tool `{name}` with args {args} is: {result}", timestamp=time.time(), is_tool_result=True)
+                        session.add_message(tool_msg)
 
         model_msg = Message(role="assistant", content=reply, timestamp=time.time())
         session.add_message(model_msg)
+
         return reply
     
 

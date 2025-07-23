@@ -63,7 +63,18 @@ def display_chat_history():
     """显示聊天历史"""
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            content = message["content"]
+            # 判断是否为 base64 图片 markdown
+            if isinstance(content, str) and content.startswith("![generated image](data:image/png;base64,"):
+                prefix = "![generated image]("
+                suffix = ")"
+                img_url = content[len(prefix):-len(suffix)]
+                st.markdown(
+                    f'<img src="{img_url}" style="max-width:400px;">',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(content)
             if "timestamp" in message:
                 st.caption(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(message['timestamp']))}")
 
@@ -73,7 +84,7 @@ def main():
     
     # 侧边栏配置
     with st.sidebar:
-        st.title("🤖 对话配置")
+        st.title("对话配置")
         
         # 用户配置
         st.subheader("用户设置")
@@ -170,7 +181,19 @@ def main():
                         st.session_state.session
                     )
                     
-                    st.markdown(reply)
+                    # 判断是否为 base64 图片 markdown
+                    if reply.startswith("![generated image](data:image/png;base64,"):
+                        # 提取 base64 数据
+                        prefix = "![generated image]("
+                        suffix = ")"
+                        img_url = reply[len(prefix):-len(suffix)]
+                        # 用 HTML 控制最大宽度
+                        st.markdown(
+                            f'<img src="{img_url}" style="max-width:400px;">',
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.markdown(reply)
                     
                     # 添加助手消息到历史
                     assistant_message = {
