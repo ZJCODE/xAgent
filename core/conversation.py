@@ -98,7 +98,7 @@ class Agent:
 
             history = session.get_history(history_count)
             input_msgs = [
-                {"role": "system", "content": f"**Current user_id**: {session.user_id}, **Current time**: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"}
+                {"role": "system", "content": f"**Current user_id**: {session.user_id} \n**Current time**: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"}
             ]
             input_msgs.extend(
                 {"role": msg.role, "content": msg.content} for msg in history
@@ -120,7 +120,7 @@ class Agent:
                 func = self.tools.get(name)
                 if func:
                     result = func(**args)
-                    tool_msg = Message(role="assistant", content=f"tool call result from tool `{name}` is: {result}", timestamp=time.time())
+                    tool_msg = Message(role="assistant", content=f"tool call result from tool `{name}` is: {result}", timestamp=time.time(), is_tool_result=True)
                     session.add_message(tool_msg)
 
         model_msg = Message(role="assistant", content=reply, timestamp=time.time())
@@ -146,6 +146,10 @@ if __name__ == "__main__":
     reply = agent.chat(user_msg, session)
     print("Agent:", reply)
     user_msg = "The Weather in Hangzhou is"
+    print("User:", user_msg)
+    reply = agent.chat(user_msg, session)
+    print("Agent:", reply)
+    user_msg = "Can you explain aesthetics?"
     print("User:", user_msg)
     reply = agent.chat(user_msg, session)
     print("Agent:", reply)
