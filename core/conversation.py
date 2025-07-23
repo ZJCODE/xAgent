@@ -1,12 +1,15 @@
 import time
 from typing import List, Optional
+import json
 
 from langfuse import observe
 from langfuse.openai import OpenAI
 from schemas.messages import Message
 from db.message_db import MessageDB
+from utils.tool_decorator import function_tool
 
 from dotenv import load_dotenv
+
 
 load_dotenv(override=True)
 
@@ -60,10 +63,13 @@ class Agent:
 
     def __init__(self, 
                  model: str = DEFAULT_MODEL,
-                 client: OpenAI = None):
-        
+                 client: OpenAI = None,
+                 tools: Optional[list] = None):
         self.model = model
         self.client = client or OpenAI()
+        # tools: list[callable], e.g. [add, ...]
+        tool_fns = tools or [add]
+        self.tools = {fn.__name__: fn for fn in tool_fns}
 
     @observe()
     def chat(
@@ -85,65 +91,114 @@ class Agent:
         if isinstance(user_message, str):
             user_message = Message(role="user", content=user_message, timestamp=time.time())
         session.add_message(user_message)
-        history = session.get_history(history_count)
-        input_msgs = [{"role": m.role, "content": m.content} for m in history]
-        response = self.client.responses.create(
-            model=self.model,
-            input=input_msgs
-        )
-        reply = response.output_text
+
+        reply = None
+
+        while not reply:
+
+            history = session.get_history(history_count)
+            input_msgs = [
+                {"role": "system", "content": f"current user_id: {session.user_id}, current time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"}
+            ]
+            input_msgs.extend(
+                {"role": msg.role, "content": msg.content} for msg in history
+            )
+            response = self.client.responses.create(
+                model=self.model,
+                tools=[{"type": "web_search_preview"}] + [fn.__tool_spec__ for fn in self.tools.values()],
+                input=input_msgs
+            )
+            reply = response.output_text
+
+            tool_calls = response.output
+            for tool_call in tool_calls:
+                if tool_call.type != "function_call":
+                    continue
+                name = tool_call.name
+                args = json.loads(tool_call.arguments)
+                func = self.tools.get(name)
+                if func:
+                    result = func(**args)
+                    tool_msg = Message(role="assistant", content=f"tool call result from tool `{name}` is: {result}", timestamp=time.time())
+                    session.add_message(tool_msg)
+
         model_msg = Message(role="assistant", content=reply, timestamp=time.time())
         session.add_message(model_msg)
         return reply
     
 
 if __name__ == "__main__":
-    
-    # DB Session Example
-    print("DB Session Example:")
-    agent = Agent()
-    session = Session(user_id="user1", session_id="session1", message_db=MessageDB())
-    session.clear_history()  # 清空历史以便测试
-    user_msg = "You can call me Jun."
-    reply = agent.chat(user_msg, session)
-    user_msg = "Hello, how are you?"
-    reply = agent.chat(user_msg, session)
-    user_msg = "Do you know who I am?"
-    reply = agent.chat(user_msg, session)
-    print("Session history:")
-    for msg in session.get_history():
-        print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
-
-    agent2 = Agent()
-    session2 = Session(user_id="user2", session_id="session2", message_db=MessageDB())
-    session2.clear_history()  # 清空历史以便测试
-    user_msg = "Do you know who I am?"
-    reply = agent2.chat(user_msg, session2)
-    print("Session 2 history:")
-    for msg in session2.get_history():
-        print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
 
 
-    # Local Session Example
-    print("\nLocal Session Example:")
-    agent = Agent()
+    # Simple Test Example
+
+    @function_tool()
+    def add(a: int, b: int) -> int:
+        "Add two numbers."
+        return a + b
+
+    agent = Agent(tools=[add])
     session = Session(user_id="user1")
     session.clear_history()  # 清空历史以便测试
-    user_msg = "You can call me Jun."
+    user_msg = "the answer for 12 + 13 is"
+    print("User:", user_msg)
     reply = agent.chat(user_msg, session)
-    user_msg = "Hello, how are you?"
+    print("Agent:", reply)
+    user_msg = "The Weather in Hangzhou is"
+    print("User:", user_msg)
     reply = agent.chat(user_msg, session)
-    user_msg = "Do you know who I am?"
-    reply = agent.chat(user_msg, session)
+    print("Agent:", reply)
     print("Session history:")
     for msg in session.get_history():
         print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
 
-    agent2 = Agent()
-    session2 = Session(user_id="user2")
-    session2.clear_history()  # 清空历史以便测试
-    user_msg = "Do you know who I am?"
-    reply = agent2.chat(user_msg, session2)
-    print("Session 2 history:")
-    for msg in session2.get_history():
-        print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
+    # # DB Session Example
+    # print("DB Session Example:")
+    # agent = Agent()
+    # session = Session(user_id="user1", session_id="session1", message_db=MessageDB())
+    # session.clear_history()  # 清空历史以便测试
+    # user_msg = "You can call me Jun."
+    # reply = agent.chat(user_msg, session)
+    # user_msg = "What time is it now?"
+    # reply = agent.chat(user_msg, session)
+    # user_msg = "Weather in Hangzhou"
+    # reply = agent.chat(user_msg, session)
+    # user_msg = "Do you know who I am and what my user ID is?"
+    # reply = agent.chat(user_msg, session)
+    # print("Session history:")
+    # for msg in session.get_history():
+    #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
+
+    # agent2 = Agent()
+    # session2 = Session(user_id="user2", session_id="session2", message_db=MessageDB())
+    # session2.clear_history()  # 清空历史以便测试
+    # user_msg = "Do you know who I am?"
+    # reply = agent2.chat(user_msg, session2)
+    # print("Session 2 history:")
+    # for msg in session2.get_history():
+    #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
+
+
+    # # Local Session Example
+    # print("\nLocal Session Example:")
+    # agent = Agent()
+    # session = Session(user_id="user1")
+    # session.clear_history()  # 清空历史以便测试
+    # user_msg = "You can call me Jun."
+    # reply = agent.chat(user_msg, session)
+    # user_msg = "Hello, how are you?"
+    # reply = agent.chat(user_msg, session)
+    # user_msg = "Do you know who I am?"
+    # reply = agent.chat(user_msg, session)
+    # print("Session history:")
+    # for msg in session.get_history():
+    #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
+
+    # agent2 = Agent()
+    # session2 = Session(user_id="user2")
+    # session2.clear_history()  # 清空历史以便测试
+    # user_msg = "Do you know who I am?"
+    # reply = agent2.chat(user_msg, session2)
+    # print("Session 2 history:")
+    # for msg in session2.get_history():
+    #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
