@@ -120,7 +120,7 @@ class Agent:
                 func = self.tools.get(name)
                 if func:
                     result = func(**args)
-                    tool_msg = Message(role="assistant", content=f"tool call result from tool `{name}` is: {result}", timestamp=time.time(), is_tool_result=True)
+                    tool_msg = Message(role="assistant", content=f"[call id {tool_call.id}] tool call result from tool `{name}` with args {args} is: {result}", timestamp=time.time(), is_tool_result=True)
                     session.add_message(tool_msg)
 
         model_msg = Message(role="assistant", content=reply, timestamp=time.time())
@@ -137,22 +137,41 @@ if __name__ == "__main__":
     def add(a: int, b: int) -> int:
         "Add two numbers."
         return a + b
+    
+    from vocabulary import VocabularyService
+    service = VocabularyService()
+    
+    @function_tool()
+    def lookup_word(word: str, user_id: str) -> str:
+        """
+        调用 LLM 查询单词详细信息。
+        Args:
+            word (str): 要查询的单词
+        Returns:
+            str: 单词详细信息
+        """
+        record = service.lookup_word(word, user_id)
+        return record.model_dump_json()
 
-    agent = Agent(tools=[add])
+    agent = Agent(tools=[add, lookup_word])
     session = Session(user_id="user1")
     session.clear_history()  # 清空历史以便测试
     user_msg = "the answer for 12 + 13 is"
     print("User:", user_msg)
     reply = agent.chat(user_msg, session)
     print("Agent:", reply)
-    user_msg = "The Weather in Hangzhou is"
+    user_msg = "the answer for 10 + 20 is and 21 + 22 is"
     print("User:", user_msg)
     reply = agent.chat(user_msg, session)
     print("Agent:", reply)
-    user_msg = "Can you explain aesthetics?"
-    print("User:", user_msg)
-    reply = agent.chat(user_msg, session)
-    print("Agent:", reply)
+    # user_msg = "The Weather in Hangzhou is"
+    # print("User:", user_msg)
+    # reply = agent.chat(user_msg, session)
+    # print("Agent:", reply)
+    # user_msg = "The Meaning of word aesthetics is"
+    # print("User:", user_msg)
+    # reply = agent.chat(user_msg, session)
+    # print("Agent:", reply)
     print("Session history:")
     for msg in session.get_history():
         print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
