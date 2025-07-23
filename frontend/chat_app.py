@@ -126,7 +126,7 @@ def main():
         
         # 模型配置
         st.subheader("模型设置")
-        model_options = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+        model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4.1"]
         model = st.selectbox("选择模型", model_options, index=0)
         
         # 应用配置按钮
@@ -164,16 +164,10 @@ def main():
         st.write(f"**存储方式**: {'Redis' if st.session_state.use_redis else '内存'}")
         st.write(f"**模型**: {model}")
         
-        # 显示可用工具
-        st.subheader("可用工具")
-        st.write("• **add**: 数字加法计算")
-        st.write("• **lookup_word**: 英语单词查询")
-        st.write("• **web_search_preview**: 网络搜索")
 
     # 主界面
-    st.title("🤖 对话测试")
-    st.markdown("基于 Session 和 Agent 的智能对话系统")
-    
+    st.title("🤖 Conversational AI")
+
     # 初始化 Agent 和 Session（如果还没有）
     if st.session_state.agent is None or st.session_state.session is None:
         try:
