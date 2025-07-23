@@ -98,7 +98,7 @@ class Agent:
 
             history = session.get_history(history_count)
             input_msgs = [
-                {"role": "system", "content": f"current user_id: {session.user_id}, current time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"}
+                {"role": "system", "content": f"**Current user_id**: {session.user_id}, **Current time**: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"}
             ]
             input_msgs.extend(
                 {"role": msg.role, "content": msg.content} for msg in history
@@ -112,6 +112,7 @@ class Agent:
 
             tool_calls = response.output
             for tool_call in tool_calls:
+                history_count += 1  # 增加历史条数以弥补Tool消息的占用
                 if tool_call.type != "function_call":
                     continue
                 name = tool_call.name
