@@ -137,7 +137,7 @@ def main():
         
 
     # 主界面
-    st.title("🤖 Conversational AI")
+    st.title("Conversational AI")
 
     # 初始化 Agent 和 Session（如果还没有）
     if st.session_state.agent is None or st.session_state.session is None:

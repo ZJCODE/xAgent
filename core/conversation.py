@@ -111,7 +111,6 @@ class Agent:
 
         reply = None
         image_base64 = None
-        image_path = None
         iter_count = 0
 
         while not reply and iter_count < max_iter:
