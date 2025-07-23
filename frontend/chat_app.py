@@ -4,14 +4,14 @@ import sys
 import os
 import time
 from typing import Optional
-import requests
+
 
 # 添加项目根目录到 Python 路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.conversation import Session, Agent
 from db.message_db import MessageDB
-from utils.tool_decorator import function_tool
+from tools.vocabulary import lookup_word, get_vocabulary
 
 # 页面配置
 st.set_page_config(
@@ -20,45 +20,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-API_BASE_URL = "http://localhost:8000"  # 根据实际 FastAPI 服务地址调整
-
-@function_tool()
-def lookup_word(word: str, user_id: str) -> str:
-    """
-    lookup word details
-    """
-    try:
-        url = f"{API_BASE_URL}/lookup"
-        payload = {
-            "word": word,
-            "user_id": user_id,
-            "cache": True
-        }
-        resp = requests.post(url, json=payload, timeout=10)
-        resp.raise_for_status()
-        return resp.text  # 返回原始 JSON 字符串
-    except Exception as e:
-        return f"Error occurred while fetching word details: {str(e)}"
-
-@function_tool()
-def get_vocabulary(user_id: str, n: int = 10) -> str:
-    """
-    get vocabularys for user
-    """
-    try:
-        url = f"{API_BASE_URL}/get_vocabulary"
-        payload = {
-            "user_id": user_id,
-            "n": n,
-            "exclude_known": True
-        }
-        resp = requests.post(url, json=payload, timeout=10)
-        resp.raise_for_status()
-        return resp.text  # 返回原始 JSON 字符串
-    except Exception as e:
-        return f"Error occurred while fetching vocabulary: {str(e)}"
-
 
 # 初始化 Session State
 def init_session_state():
