@@ -147,15 +147,17 @@ class Agent:
                 iter_count += 1
                 input_msgs = self._build_input_messages(session, history_count)
                 response = await self._call_model(input_msgs)
+                
                 if response is None:
                     break
 
-                reply = response.output_text
                 tool_calls = response.output
 
                 special_result = await self._handle_tool_calls(tool_calls, session)
                 if special_result is not None:
                     return special_result
+                
+                reply = response.output_text
 
             model_msg = Message(role="assistant", content=reply, timestamp=time.time())
             session.add_message(model_msg)
