@@ -21,20 +21,19 @@ def web_search(search_query: str) -> str:
     return response.output_text
 
 @function_tool()
-def draw_image(prompt: str, quality: str = "low") -> str:
+def draw_image(prompt: str) -> str:
     """
     when the user wants to generate an image based on a prompt, use this tool
     """
     response = client.responses.create(
         model=DEFAULT_MODEL,
-        tools=[{"type": "image_generation", "quality": quality}],
+        tools=[{"type": "image_generation", "quality": "low"}],
         input=prompt,
         tool_choice="required"
     )
 
     tool_calls = response.output
     for tool_call in tool_calls:
-        history_count += 1  # 增加历史条数以弥补Tool消息的占用
         if tool_call.type == "image_generation_call":
             image_base64 = tool_call.result
             return f'![generated image](data:image/png;base64,{image_base64})'

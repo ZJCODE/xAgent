@@ -11,6 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.conversation import Session, Agent
 from db.message_db import MessageDB
 from tools.vocabulary import lookup_word, get_vocabulary
+from tools.openai_tool import web_search,draw_image
 
 # 页面配置
 st.set_page_config(
@@ -44,8 +45,8 @@ def init_session_state():
 def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis: bool, model: str):
     """创建 Agent 和 Session 实例"""
     # 创建工具列表
-    tools = [lookup_word, get_vocabulary]
-    
+    tools = [lookup_word, get_vocabulary, web_search, draw_image]
+
     # 创建 Agent
     agent = Agent(model=model, tools=tools)
     
