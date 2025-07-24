@@ -1,73 +1,108 @@
-# iLanguage - AI驱动的英语学习平台
+# iLanguage - AI驱动的智能英语学习平台
 
-## 项目简介
+[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Latest-green.svg)](https://fastapi.tiangolo.com)
+[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-orange.svg)](https://openai.com)
+[![Redis](https://img.shields.io/badge/Redis-Latest-red.svg)](https://redis.io)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Latest-ff6b6b.svg)](https://streamlit.io)
 
-iLanguage 是一个基于 FastAPI 和 OpenAI GPT-4o 的智能英语学习平台，专注于词汇学习和语言能力提升。项目采用现代化的分层架构设计，集成了 Redis 数据存储、AI 智能查询、词汇管理等功能，为用户提供个性化的英语学习体验。
+## 🎯 项目简介
 
-## 核心功能
+iLanguage 是一个功能完整的AI驱动智能英语学习平台，集成了**词汇学习**、**智能对话**、**个性化推荐**等核心功能。项目采用现代化微服务架构，提供RESTful API服务和交互式Web界面，为用户提供沉浸式的英语学习体验。
 
-### 🎯 智能词汇查询
-- **AI驱动解释**：基于 OpenAI GPT-4o-mini 提供准确的词汇定义和解释
-- **智能缓存**：Redis 缓存机制，提升查询效率
-- **个性化存储**：用户词汇记录持久化存储
-- **难度分级**：自动识别词汇难度等级（初级/中级/高级/专家）
+### ✨ 核心特色
+- 🤖 **AI智能助手**：基于OpenAI GPT-4o的智能对话系统
+- 📚 **智能词汇学习**：AI驱动的词汇查询、解释和管理
+- 🎨 **多模态交互**：支持文本对话、图像生成、网络搜索
+- 📊 **个性化推荐**：基于学习行为的智能词汇推荐算法
+- 💾 **数据持久化**：Redis存储，支持用户学习记录追踪
+- 🌐 **双界面支持**：RESTful API + Streamlit Web界面
 
-### 📚 词汇管理系统
-- **熟悉度追踪**：0-10级熟悉度评分系统
-- **复习推荐**：基于遗忘曲线的智能复习提醒
-- **例句管理**：丰富的例句库，支持添加和管理
-- **学习统计**：详细的学习进度和词汇统计
+## 🏗️ 系统架构
 
-### 🔄 智能推荐算法
-- **多路召回**：结合熟悉度、时间间隔等多维度因素
-- **分层采样**：优先覆盖不同难度级别的词汇
-- **个性化排序**：根据用户学习情况动态调整推荐优先级
+### 核心模块
 
-## 技术栈
+#### 🧠 AI对话系统
+- **Session管理**：支持多用户、多会话的消息历史管理
+- **Agent框架**：异步AI代理，支持工具调用和函数执行
+- **工具集成**：词汇查询、网络搜索、图像生成等内置工具
+- **存储灵活性**：支持内存存储和Redis持久化两种模式
 
-### 后端框架
-- **FastAPI** - 现代化的 Python Web 框架
-- **Uvicorn** - ASGI 服务器
+#### 📖 智能词汇系统
+- **AI词汇解释**：基于GPT-4o的智能词汇定义和例句生成
+- **难度分级**：自动识别词汇难度（初级/中级/高级/专家）
+- **熟悉度追踪**：0-10级熟悉度评分和学习进度追踪
+- **智能推荐**：基于遗忘曲线和多维度因素的复习推荐
+
+#### 🎨 多模态功能
+- **图像生成**：集成DALL-E图像生成功能
+- **网络搜索**：实时信息检索和内容获取
+- **数学计算**：内置计算工具支持
+
+### 技术栈
+
+#### 后端核心
+- **FastAPI** - 高性能异步Web框架
+- **Uvicorn** - ASGI服务器
 - **Pydantic** - 数据验证和序列化
+- **AsyncIO** - 异步编程支持
 
-### AI 服务
-- **OpenAI GPT-4o-mini** - 智能词汇解释和内容生成
-- **Langfuse** - AI 应用监控和追踪
+#### AI服务
+- **OpenAI GPT-4o/GPT-4o-mini** - 大语言模型
+- **DALL-E** - 图像生成模型
+- **Langfuse** - AI应用监控和追踪
 - **Tenacity** - 重试机制和错误处理
 
-### 数据存储
-- **Redis** - 高性能缓存和数据存储
+#### 数据存储
+- **Redis** - 高性能缓存和数据持久化
 - **Python-dotenv** - 环境变量管理
 
-### 开发工具
-- **Pytest** - 单元测试框架
-- **分层架构** - 清晰的代码组织结构
+#### 前端界面
+- **Streamlit** - 交互式Web应用框架
+- **现代化UI** - 响应式设计和用户体验优化
 
-## 项目结构
+#### 开发工具
+- **Pytest** - 完整的单元测试覆盖
+- **分层架构** - 清晰的代码组织和模块化设计
+
+## 📁 项目结构
 
 ```
 iLanguage/
-├── core/                 # 核心业务逻辑层
-│   ├── vocabulary.py     # 词汇服务核心类
-│   ├── content.py        # 内容生成服务
-│   ├── conversation.py   # 对话练习服务
-│   └── base.py          # 基础服务类
-├── api/                  # API 路由层
-│   ├── vocabulary.py     # 词汇相关接口
-│   └── health.py        # 健康检查接口
-├── schemas/              # 数据模型定义
-│   ├── vocabulary.py     # 词汇数据模型
-│   └── health.py        # 健康检查模型
-├── db/                   # 数据访问层
-│   └── vocabulary_db.py  # Redis 数据库操作
-├── test/                 # 测试文件
-│   ├── test_vocabulary_db.py
-│   └── test_redis_basic.py
-├── static/               # 静态文件（预留）
-├── examples/             # 示例代码
-├── main.py              # FastAPI 应用入口
-├── requirements.txt     # 项目依赖
-└── README.md           # 项目文档
+├── 🏗️ 核心业务层
+│   ├── core/
+│   │   ├── agent.py          # AI对话代理核心类
+│   │   ├── vocabulary.py     # 词汇服务核心类
+│   │   └── base.py          # 基础服务类
+│   └── tools/               # 工具函数集
+│       ├── vocabulary_tool.py # 词汇查询工具
+│       └── openai_tool.py    # OpenAI集成工具
+├── 🌐 API服务层
+│   ├── api/
+│   │   ├── vocabulary.py     # 词汇相关接口
+│   │   └── health.py        # 健康检查接口
+│   └── main.py              # FastAPI应用入口
+├── 💾 数据访问层
+│   ├── db/
+│   │   ├── vocabulary_db.py  # 词汇数据库操作
+│   │   └── message_db.py    # 消息数据库操作
+│   └── schemas/             # 数据模型定义
+│       ├── vocabulary.py     # 词汇数据模型
+│       └── messages.py      # 消息数据模型
+├── 🖥️ 前端界面
+│   └── frontend/
+│       └── chat_app.py      # Streamlit对话界面
+├── 🧪 测试模块
+│   └── test/
+│       ├── test_vocabulary_db.py
+│       ├── test_message_db.py
+│       └── test_redis_basic.py
+├── 🔧 工具和配置
+│   ├── utils/
+│   │   └── tool_decorator.py # 工具装饰器
+│   ├── requirements.txt     # 项目依赖
+│   ├── .env                 # 环境变量配置
+│   └── README.md           # 项目文档
 ```
 
 ## 快速开始
@@ -135,7 +170,6 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 {
   "word": "sophisticated",
   "user_id": "user123",
-  "save": true,
   "cache": true
 }
 ```
