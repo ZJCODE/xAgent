@@ -137,42 +137,39 @@ class Agent:
         自动更新 session，生成回复并存储。
         """
         try:
-            msg = self._to_message(user_message)
-            session.add_message(msg)
+            self._store_user_message(user_message, session)
 
-            reply = None
-            iter_count = 0
+            for _ in range(max_iter):
 
-            while not reply and iter_count < max_iter:
-                iter_count += 1
                 input_msgs = self._build_input_messages(session, history_count)
-                response = await self._call_model(input_msgs)
                 
+                response = await self._call_model(input_msgs)
                 if response is None:
-                    break
-
-                tool_calls = response.output
-
-                special_result = await self._handle_tool_calls(tool_calls, session)
+                    return "Sorry, model did not respond."
+                
+                special_result = await self._handle_tool_calls(response.output, session)
                 if special_result is not None:
                     return special_result
-                
-                reply = response.output_text
 
-            model_msg = Message(role="assistant", content=reply, timestamp=time.time())
-            session.add_message(model_msg)
-            return reply
+                reply_text = response.output_text
+                if reply_text:
+                    self._store_model_reply(reply_text, session)
+                    return reply_text
+                
+            return "Sorry, I could not generate a response after multiple attempts."
+        
         except Exception as e:
             self.logger.exception("Agent chat error")
             return "Sorry, something went wrong."
 
-    def _to_message(self, user_message: Message | str) -> Message:
-        """
-        保证输入为 Message 类型。
-        """
-        if isinstance(user_message, Message):
-            return user_message
-        return Message(role="user", content=user_message, timestamp=time.time())
+    def _store_user_message(self, user_message: Message | str, session: Session) -> None:
+        if isinstance(user_message, str):
+            user_message = Message(role="user", content=user_message, timestamp=time.time())
+        session.add_message(user_message)
+
+    def _store_model_reply(self, reply_text: str, session: Session) -> None:
+        model_msg = Message(role="assistant", content=reply_text, timestamp=time.time())
+        session.add_message(model_msg)
 
     def _build_input_messages(self, session: Session, history_count: int) -> list:
         """
