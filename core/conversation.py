@@ -75,16 +75,21 @@ class Agent:
     """
 
     DEFAULT_MODEL = "gpt-4o-mini"
+    DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id}"
 
     def __init__(self, 
-                 model: str = DEFAULT_MODEL,
+                 model: Optional[str] = None,
+                 system_prompt: Optional[str] = None,
                  client: OpenAI = None,
-                 tools: Optional[list] = None):
-        self.model = model
+                 tools: Optional[list] = None,
+                 ):
+        
+        self.model = model or self.DEFAULT_MODEL
+        self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
         self.client = client or OpenAI()
         tool_fns = tools or [add]
         self.tools = {fn.__name__: fn for fn in tool_fns}
-        self.logger = logging.getLogger(self.__class__.__name__)  # 新增
+        self.logger = logging.getLogger(self.__class__.__name__)
 
     @observe()
     def chat(
@@ -118,15 +123,19 @@ class Agent:
 
             history = session.get_history(history_count)
             input_msgs = [
-                {"role": "system", "content": f"**Current user_id**: {session.user_id} \n**Current time**: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"}
+                {
+                    "role": "system",
+                    "content": self.system_prompt.format(
+                        user_id=session.user_id)
+                }
             ]
             input_msgs.extend(
                 {"role": msg.role, "content": msg.content} for msg in history
             )
             response = self.client.responses.create(
                 model=self.model,
-                tools=[{"type": "web_search_preview"}, 
-                       {"type": "image_generation","quality": "low"}] + [fn.tool_spec for fn in self.tools.values()],
+                tools=[{"type": "web_search_preview"},
+                       {"type": "image_generation", "quality": "low"}] + [fn.tool_spec for fn in self.tools.values()],
                 input=input_msgs
             )
             reply = response.output_text
