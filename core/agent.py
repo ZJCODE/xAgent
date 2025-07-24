@@ -133,33 +133,48 @@ class Agent:
         max_iter: int = 5
     ) -> str:
         """
-        只需传入用户最新消息（Message 或 str）和 session。
-        自动更新 session，生成回复并存储。
+        Generate a reply from the agent given a user message and session.
+
+        Args:
+            user_message (Message | str): The latest user message.
+            session (Session): The session object managing message history.
+            history_count (int, optional): Number of previous messages to include. Defaults to 20.
+            max_iter (int, optional): Maximum model call attempts. Defaults to 5.
+
+        Returns:
+            str: The agent's reply or error message.
         """
         try:
+            # Store the incoming user message in session history
             self._store_user_message(user_message, session)
 
-            for _ in range(max_iter):
+            for attempt in range(max_iter):
+                # Build input messages for the model
+                input_messages = self._build_input_messages(session, history_count)
 
-                input_msgs = self._build_input_messages(session, history_count)
-                
-                response = await self._call_model(input_msgs)
+                # Call the model and get response
+                response = await self._call_model(input_messages)
                 if response is None:
+                    self.logger.warning("Model did not respond on attempt %d", attempt + 1)
                     return "Sorry, model did not respond."
-                
+
+                # Handle any tool calls in the response
                 special_result = await self._handle_tool_calls(response.output, session)
                 if special_result is not None:
                     return special_result
 
+                # If model returned a text reply, store and return it
                 reply_text = response.output_text
                 if reply_text:
                     self._store_model_reply(reply_text, session)
                     return reply_text
-                
+
+            # If no valid reply after max_iter attempts
+            self.logger.error("Failed to generate response after %d attempts", max_iter)
             return "Sorry, I could not generate a response after multiple attempts."
-        
+
         except Exception as e:
-            self.logger.exception("Agent chat error")
+            self.logger.exception("Agent chat error: %s", e)
             return "Sorry, something went wrong."
 
     def _store_user_message(self, user_message: Message | str, session: Session) -> None:
