@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.agent import Session, Agent
 from db.message_db import MessageDB
-from tools.vocabulary import lookup_word, get_vocabulary
+from tools.vocabulary_tool import lookup_word, get_vocabulary
 from tools.openai_tool import web_search,draw_image
 
 # 页面配置
