@@ -34,7 +34,7 @@ class MessageDB:
         if not url:
             raise ValueError("REDIS_URL not set in environment or not provided as argument")
         try:
-            self.r = redis.StrictRedis.from_url(url, decode_responses=True)
+            self.r = redis.Redis.from_url(url, decode_responses=True)
             self.r.ping()
         except Exception as e:
             raise ConnectionError(f"Failed to connect to Redis at {url}: {e}")

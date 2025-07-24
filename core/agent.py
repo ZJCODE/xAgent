@@ -218,11 +218,12 @@ if __name__ == "__main__":
         return a + b
 
     from tools.openai_tool import web_search
+    from db.message_db import MessageDB
 
     agent = Agent(tools=[add, web_search])
 
     # session = Session(user_id="user123123", session_id="test_session", message_db=MessageDB())
-    session = Session(user_id="user123")
+    session = Session(user_id="user123", message_db=MessageDB())
     session.clear_session()  # 清空历史以便测试
 
     reply = agent("the answer for 12 + 13 is", session)
