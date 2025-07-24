@@ -126,7 +126,7 @@ class Agent:
             response = self.client.responses.create(
                 model=self.model,
                 tools=[{"type": "web_search_preview"}, 
-                       {"type": "image_generation","quality": "low"}] + [fn.__tool_spec__ for fn in self.tools.values()],
+                       {"type": "image_generation","quality": "low"}] + [fn.tool_spec for fn in self.tools.values()],
                 input=input_msgs
             )
             reply = response.output_text

@@ -25,7 +25,7 @@ def function_tool(name: str = None, description: str = None):
         name (str): 工具名称，默认为函数名
         description (str): 工具描述，默认为函数文档字符串
     Returns:
-        function: 包装后的函数，具有 __tool_spec__ 属性
+        function: 包装后的函数，具有 tool_spec 属性
     Raises:
         TypeError: 如果函数参数类型不支持
         ValueError: 如果函数没有参数或返回值类型不支持
@@ -36,7 +36,7 @@ def function_tool(name: str = None, description: str = None):
             \"\"\"This is my tool function.\"\"\"
             return f"Received {param1} and {param2}"
 
-        print(my_tool.__tool_spec__)
+        print(my_tool.tool_spec)
     """
     def decorator(func):
         sig = inspect.signature(func)
@@ -60,6 +60,6 @@ def function_tool(name: str = None, description: str = None):
             "description": description or (func.__doc__.strip() if func.__doc__ else ""),
             "parameters": parameters
         }
-        func.__tool_spec__ = tool
+        func.tool_spec = tool
         return func
     return decorator

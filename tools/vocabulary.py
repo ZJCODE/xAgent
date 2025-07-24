@@ -7,7 +7,7 @@ API_BASE_URL = "http://localhost:8000"  # 根据实际 FastAPI 服务地址调�
 @function_tool()
 def lookup_word(word: str, user_id: str) -> str:
     """
-    lookup word details
+    when user lookup a word or want to know the meaning of a word, use this tool
     """
     try:
         url = f"{API_BASE_URL}/lookup"
@@ -25,7 +25,7 @@ def lookup_word(word: str, user_id: str) -> str:
 @function_tool()
 def get_vocabulary(user_id: str, n: int = 10) -> str:
     """
-    get vocabularys for user
+    when user want to get vocabulary list for review or practice, use this tool
     """
     try:
         url = f"{API_BASE_URL}/get_vocabulary"
