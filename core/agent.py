@@ -231,6 +231,12 @@ if __name__ == "__main__":
     reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
     print("Reply:", reply)
 
+    assistant_item = session.pop_message()  # Remove agent's response
+    user_item = session.pop_message()  # Remove user's question
+
+    print("Last user message:", user_item.content)
+    print("Last assistant message:", assistant_item.content)
+
     reply = agent("The Weather in Hangzhou and Beijing is", session)
     print("Reply:", reply)
 

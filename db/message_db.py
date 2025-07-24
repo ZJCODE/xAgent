@@ -110,3 +110,21 @@ class MessageDB:
         """
         key = self._make_key(user_id, session_id)
         self.r.delete(key)
+
+    def pop_message(self, user_id: str, session_id: Optional[str] = None) -> Optional[Message]:
+        """
+        移除并返回最后一条非 tool_result 消息。如果最后一条消息是 tool_result，则自动继续 pop，直到遇到非 tool_result 或为空。
+        Args:
+            user_id (str): 用户 ID。
+            session_id (str, optional): 会话 ID。
+        Returns:
+            Optional[Message]: 被移除的消息对象（非 tool_result），如果没有则返回 None。
+        """
+        key = self._make_key(user_id, session_id)
+        while True:
+            raw_msg = self.r.rpop(key)
+            if raw_msg is None:
+                return None
+            msg = Message.model_validate_json(raw_msg)
+            if not msg.is_tool_result:
+                return msg

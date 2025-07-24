@@ -62,3 +62,25 @@ class Session:
                 Session._local_messages[key] = []
         except Exception as e:
             self.logger.error("Failed to clear history: %s", e)
+
+    def pop_message(self) -> Optional[Message]:
+        """
+        移除并返回最后一条非 tool_result 消息（支持撤销/修改最后一条消息）。
+        Returns:
+            Optional[Message]: 被移除的消息对象（非 tool_result），如果没有则返回 None。
+        """
+        try:
+            if self.message_db:
+                self.logger.info("Popping last message from DB")
+                return self.message_db.pop_message(self.user_id, self.session_id)
+            else:
+                key = (self.user_id, self.session_id)
+                self.logger.info("Popping last message from local session")
+                while Session._local_messages[key]:
+                    msg = Session._local_messages[key].pop()
+                    if not msg.is_tool_result:
+                        return msg
+                return None
+        except Exception as e:
+            self.logger.error("Failed to pop message: %s", e)
+            return None
