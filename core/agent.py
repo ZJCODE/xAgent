@@ -1,9 +1,11 @@
 import time
 from typing import List, Optional
 import json
-import logging  # 新增
+import logging
+import asyncio
+
 from langfuse import observe
-from langfuse.openai import OpenAI
+from langfuse.openai import OpenAI,AsyncOpenAI
 from schemas.messages import Message
 from db.message_db import MessageDB
 from utils.tool_decorator import function_tool
@@ -82,8 +84,7 @@ class Session:
 
 class Agent:
     """
-    负责与大模型交互，生成回复。
-    核心职责：输入构造、模型调用、工具调用处理、消息管理、异常处理。
+    基础 Agent 类，支持与 OpenAI 模型交互。
     """
 
     DEFAULT_MODEL = "gpt-4o-mini"
@@ -93,20 +94,38 @@ class Agent:
         self, 
         model: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        client: Optional[OpenAI] = None,
+        client: Optional[AsyncOpenAI] = None,
         tools: Optional[list] = None,
     ):
         self.model: str = model or self.DEFAULT_MODEL
         self.system_prompt: str = system_prompt or self.DEFAULT_SYSTEM_PROMPT
-        self.client: OpenAI = client or OpenAI()
+        self.client: AsyncOpenAI = client or AsyncOpenAI()
         self.tools: dict = {}
         for fn in tools or []:
+            if not asyncio.iscoroutinefunction(fn):
+                raise TypeError(f"Tool function '{fn.__name__}' must be async.")
             if fn.__name__ not in self.tools:
                 self.tools[fn.__name__] = fn
         self.logger = logging.getLogger(self.__class__.__name__)
 
+    def __call__(
+            self, 
+            user_message: Message | str, 
+            session: Session, 
+            history_count: int = 20, 
+            max_iter: int = 5) -> str:
+        """
+        支持同步调用 Agent（自动转异步）。
+        """
+        def execute():
+            return asyncio.run(self.chat(user_message, session, history_count, max_iter))
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor() as executor:
+            future = executor.submit(execute)
+            return future.result()
+
     @observe()
-    def chat(
+    async def chat(
         self,
         user_message: Message | str,
         session: Session,
@@ -127,14 +146,14 @@ class Agent:
             while not reply and iter_count < max_iter:
                 iter_count += 1
                 input_msgs = self._build_input_messages(session, history_count)
-                response = self._call_model(input_msgs)
+                response = await self._call_model(input_msgs)
                 if response is None:
                     break
 
                 reply = response.output_text
                 tool_calls = response.output
 
-                special_result = self._handle_tool_calls(tool_calls, session)
+                special_result = await self._handle_tool_calls(tool_calls, session)
                 if special_result is not None:
                     return special_result
 
@@ -173,12 +192,12 @@ class Agent:
         })
         return input_msgs
 
-    def _call_model(self, input_msgs: list) -> Optional[object]:
+    async def _call_model(self, input_msgs: list) -> Optional[object]:
         """
         调用大模型，返回响应对象或 None。
         """
         try:
-            return self.client.responses.create(
+            return await self.client.responses.create(
                 model=self.model,
                 tools=[fn.tool_spec for fn in self.tools.values()],
                 input=input_msgs
@@ -187,20 +206,20 @@ class Agent:
             self.logger.error("Model call failed: %s", e)
             return None
 
-    def _handle_tool_calls(self, tool_calls: list, session: Session) -> Optional[str]:
+    async def _handle_tool_calls(self, tool_calls: list, session: Session) -> Optional[str]:
         """
-        处理所有 tool_call，返回特殊结果（如图片）或 None。
+        异步并发处理所有 tool_call，返回特殊结果（如图片）或 None。
         """
-        for tool_call in tool_calls:
-            if getattr(tool_call, "type", None) == "function_call":
-                result = self._act(tool_call, session)
-                if result is not None:
-                    return result
+        tasks = [self._act(tc, session) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
+        results = await asyncio.gather(*tasks)
+        for result in results:
+            if result is not None:
+                return result
         return None
 
-    def _act(self, tool_call, session: Session) -> Optional[str]:
+    async def _act(self, tool_call, session: Session) -> Optional[str]:
         """
-        执行工具函数调用，并将结果写入 session。
+        异步执行工具函数调用，并将结果写入 session。
         """
         name = getattr(tool_call, "name", None)
         try:
@@ -212,7 +231,7 @@ class Agent:
         if func:
             self.logger.info("Calling tool: %s with args: %s", name, args)
             try:
-                result = func(**args)
+                result = await func(**args)
             except Exception as e:
                 self.logger.error("Tool call error: %s", e)
                 result = f"Tool error: {e}"
@@ -237,75 +256,29 @@ class Agent:
 
 if __name__ == "__main__":
 
-    # Simple Test Example
 
     @function_tool()
     def add(a: int, b: int) -> int:
         "Add two numbers."
         return a + b
-    
+
     from tools.openai_tool import web_search
 
     agent = Agent(tools=[add, web_search])
-    session = Session(user_id="user123123")
+
+    # session = Session(user_id="user123123", session_id="test_session", message_db=MessageDB())
+    session = Session(user_id="user123")
     session.clear_history()  # 清空历史以便测试
-    # user_msg = "the answer for 12 + 13 is"
-    # reply = agent.chat(user_msg, session)
-    # user_msg = "the answer for 10 + 20 is and 21 + 22 is"
-    # reply = agent.chat(user_msg, session)
-    user_msg = "The Weather in Hangzhou is"
-    reply = agent.chat(user_msg, session)
-    # print("Session history:")
-    # for msg in session.get_history():
-    #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
 
-    # # DB Session Example
-    # print("DB Session Example:")
-    # agent = Agent()
-    # session = Session(user_id="user1", session_id="session1", message_db=MessageDB())
-    # session.clear_history()  # 清空历史以便测试
-    # user_msg = "You can call me Jun."
-    # reply = agent.chat(user_msg, session)
-    # user_msg = "What time is it now?"
-    # reply = agent.chat(user_msg, session)
-    # user_msg = "Weather in Hangzhou"
-    # reply = agent.chat(user_msg, session)
-    # user_msg = "Do you know who I am and what my user ID is?"
-    # reply = agent.chat(user_msg, session)
-    # print("Session history:")
-    # for msg in session.get_history():
-    #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
+    reply = agent("the answer for 12 + 13 is", session)
+    print("Reply:", reply)
 
-    # agent2 = Agent()
-    # session2 = Session(user_id="user2", session_id="session2", message_db=MessageDB())
-    # session2.clear_history()  # 清空历史以便测试
-    # user_msg = "Do you know who I am?"
-    # reply = agent2.chat(user_msg, session2)
-    # print("Session 2 history:")
-    # for msg in session2.get_history():
-    #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
+    reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
+    print("Reply:", reply)
 
+    reply = agent("The Weather in Hangzhou and Beijing is", session)
+    print("Reply:", reply)
 
-    # # Local Session Example
-    # print("\nLocal Session Example:")
-    # agent = Agent()
-    # session = Session(user_id="user1")
-    # session.clear_history()  # 清空历史以便测试
-    # user_msg = "You can call me Jun."
-    # reply = agent.chat(user_msg, session)
-    # user_msg = "Hello, how are you?"
-    # reply = agent.chat(user_msg, session)
-    # user_msg = "Do you know who I am?"
-    # reply = agent.chat(user_msg, session)
-    # print("Session history:")
-    # for msg in session.get_history():
-    #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
-
-    # agent2 = Agent()
-    # session2 = Session(user_id="user2")
-    # session2.clear_history()  # 清空历史以便测试
-    # user_msg = "Do you know who I am?"
-    # reply = agent2.chat(user_msg, session2)
-    # print("Session 2 history:")
-    # for msg in session2.get_history():
-    #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
+    print("Session history:")
+    for msg in session.get_history():
+        print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")

@@ -3,19 +3,19 @@ import tempfile
 import os
 
 from langfuse import observe
-from langfuse.openai import OpenAI
+from langfuse.openai import OpenAI,AsyncOpenAI
 
 from utils.tool_decorator import function_tool
 
-client = OpenAI()
+client = AsyncOpenAI()
 DEFAULT_MODEL = "gpt-4o-mini"
 
 @function_tool()
 @observe()
-def web_search(search_query: str) -> str:
+async def web_search(search_query: str) -> str:
     "when the user wants to search the web using a search engine, use this tool"
 
-    response = client.responses.create(
+    response = await client.responses.create(
         model=DEFAULT_MODEL,
         tools=[{"type": "web_search_preview"},],
         input=search_query,
@@ -26,13 +26,13 @@ def web_search(search_query: str) -> str:
 
 @function_tool()
 @observe()
-def draw_image(prompt: str) -> str:
+async def draw_image(prompt: str) -> str:
     """
     when the user wants to generate an image based on a prompt, use this tool
     """
 
 
-    response = client.responses.create(
+    response = await client.responses.create(
         model=DEFAULT_MODEL,
         tools=[{"type": "image_generation", "quality": "low"}],
         input=prompt,
@@ -59,10 +59,11 @@ def upload_image(image_path: str) -> str:
 
 
 if __name__ == "__main__":
-    # Example usage
-    search_result = web_search("What is the capital of France?")
+
+    import asyncio
+    search_result = asyncio.run(web_search("What is the capital of France?"))
     print("Search Result:", search_result)
 
-    image_url = draw_image("A beautiful sunset over the mountains")
+    image_url = asyncio.run(draw_image("A beautiful sunset over the mountains"))
     print("Generated Image URL:", image_url)
     # Note: Ensure you have the necessary API keys and environment setup for OpenAI and sm.ms

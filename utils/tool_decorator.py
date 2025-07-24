@@ -1,4 +1,5 @@
 import inspect
+import functools
 from typing import get_type_hints
 
 def python_type_to_openai_type(py_type):
@@ -38,6 +39,7 @@ def function_tool(name: str = None, description: str = None):
 
         print(my_tool.tool_spec)
     """
+    import asyncio
     def decorator(func):
         sig = inspect.signature(func)
         type_hints = get_type_hints(func)
@@ -60,6 +62,16 @@ def function_tool(name: str = None, description: str = None):
             "description": description or (func.__doc__.strip() if func.__doc__ else ""),
             "parameters": parameters
         }
-        func.tool_spec = tool
-        return func
+        # 自动包装为异步
+        if asyncio.iscoroutinefunction(func):
+            async_func = func
+        else:
+            async def async_func(*args, **kwargs):
+                loop = asyncio.get_running_loop()
+                partial_func = functools.partial(func, *args, **kwargs)
+                return await loop.run_in_executor(None, partial_func)
+            async_func.__name__ = func.__name__
+            async_func.__doc__ = func.__doc__
+        async_func.tool_spec = tool
+        return async_func
     return decorator

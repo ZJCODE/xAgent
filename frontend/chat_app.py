@@ -3,6 +3,7 @@ import os
 import time
 from typing import Optional
 import streamlit as st
+import asyncio
 
 
 # 添加项目根目录到 Python 路径
@@ -176,10 +177,12 @@ def main():
         with st.chat_message("assistant"):
             with st.spinner("正在思考..."):
                 try:
-                    # 使用 Agent 生成回复
-                    reply = st.session_state.agent.chat(
-                        prompt, 
-                        st.session_state.session
+                    # 使用 Agent 生成异步回复
+                    reply = asyncio.run(
+                        st.session_state.agent.chat(
+                            prompt, 
+                            st.session_state.session
+                        )
                     )
                     
                     # 判断是否为 base64 图片 markdown
