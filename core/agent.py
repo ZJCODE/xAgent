@@ -1,5 +1,5 @@
 import time
-from typing import List, Optional
+from typing import Optional
 import json
 import logging
 import asyncio
@@ -13,10 +13,9 @@ logging.basicConfig(
 )
 
 from langfuse import observe
-from langfuse.openai import OpenAI,AsyncOpenAI
+from langfuse.openai import AsyncOpenAI
 
 from schemas.messages import Message
-from db.message_db import MessageDB
 from core.session import Session
 from utils.tool_decorator import function_tool
 

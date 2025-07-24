@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 import time
 from collections import defaultdict
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 from langfuse import observe
 from langfuse.openai import OpenAI
