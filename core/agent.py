@@ -83,25 +83,24 @@ class Session:
 class Agent:
     """
     负责与大模型交互，生成回复。
+    核心职责：输入构造、模型调用、工具调用处理、消息管理、异常处理。
     """
 
     DEFAULT_MODEL = "gpt-4o-mini"
     DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id}"
 
-    def __init__(self, 
-                 model: Optional[str] = None,
-                 system_prompt: Optional[str] = None,
-                 client: Optional[OpenAI] = None,
-                 tools: Optional[list] = None,
-                 ):
-        
-        self.model = model or self.DEFAULT_MODEL
-        self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
-        self.client = client or OpenAI()
-        # 工具函数去重
-        tool_fns = tools or []
-        self.tools = {}
-        for fn in tool_fns:
+    def __init__(
+        self, 
+        model: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        client: Optional[OpenAI] = None,
+        tools: Optional[list] = None,
+    ):
+        self.model: str = model or self.DEFAULT_MODEL
+        self.system_prompt: str = system_prompt or self.DEFAULT_SYSTEM_PROMPT
+        self.client: OpenAI = client or OpenAI()
+        self.tools: dict = {}
+        for fn in tools or []:
             if fn.__name__ not in self.tools:
                 self.tools[fn.__name__] = fn
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -117,91 +116,124 @@ class Agent:
         """
         只需传入用户最新消息（Message 或 str）和 session。
         自动更新 session，生成回复并存储。
-        Args:
-            user_message (Message or str): 用户最新消息。
-            session (Session): 会话对象。
-            history_count (int): 获取历史条数，默认 20。
-            max_iter (int): 最大迭代次数，默认 5。
-        Returns:
-            str: 大模型回复内容
         """
         try:
-            if isinstance(user_message, str):
-                user_message = Message(role="user", content=user_message, timestamp=time.time())
-            session.add_message(user_message)
+            msg = self._to_message(user_message)
+            session.add_message(msg)
 
             reply = None
             iter_count = 0
 
             while not reply and iter_count < max_iter:
                 iter_count += 1
-
-                history = session.get_history(history_count)
-                input_msgs = [
-                    {
-                        "role": "system",
-                        "content": self.system_prompt.format(user_id=session.user_id)
-                    }
-                ]
-                input_msgs.extend(
-                    {"role": msg.role, "content": msg.content} for msg in history
-                )
-                input_msgs.append({
-                    "role": "assistant",
-                    "content": f"Current time is {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"
-                })
-                try:
-                    response = self.client.responses.create(
-                        model=self.model,
-                        tools=[fn.tool_spec for fn in self.tools.values()],
-                        input=input_msgs
-                    )
-                except Exception as e:
-                    self.logger.error("Model call failed: %s", e)
+                input_msgs = self._build_input_messages(session, history_count)
+                response = self._call_model(input_msgs)
+                if response is None:
                     break
 
                 reply = response.output_text
-
                 tool_calls = response.output
-                for tool_call in tool_calls:
-                    history_count += 1
-                    if tool_call.type == "function_call":
-                        name = tool_call.name
-                        try:
-                            args = json.loads(tool_call.arguments)
-                        except Exception as e:
-                            self.logger.error("Tool args parse error: %s", e)
-                            continue
-                        func = self.tools.get(name)
-                        if func:
-                            self.logger.info("Calling tool: %s with args: %s", name, args)
-                            try:
-                                result = func(**args)
-                            except Exception as e:
-                                self.logger.error("Tool call error: %s", e)
-                                result = f"Tool error: {e}"
-                            # Temp add extra logic for image generation
-                            if name == "draw_image" and isinstance(result, str) and result.startswith("![generated image](data:image/png;base64,"):
-                                image_msg = Message(
-                                    role="assistant",
-                                    content=f"just generated an image with prompt `{args['prompt']}`",
-                                    timestamp=time.time(),
-                                    is_tool_result=True
-                                )
-                                session.add_message(image_msg)
-                                return result  # Return early if image generation
-                            # END OF TEMP ADD
-                            tool_msg = Message(role="assistant", content=f"[tool_call id {tool_call.id}] tool_call result from tool `{name}` with args {args} is: {result}", timestamp=time.time(), is_tool_result=True)
-                            session.add_message(tool_msg)
+
+                special_result = self._handle_tool_calls(tool_calls, session)
+                if special_result is not None:
+                    return special_result
 
             model_msg = Message(role="assistant", content=reply, timestamp=time.time())
             session.add_message(model_msg)
-
             return reply
         except Exception as e:
-            self.logger.error("Agent chat error: %s", e)
+            self.logger.exception("Agent chat error")
             return "Sorry, something went wrong."
-    
+
+    def _to_message(self, user_message: Message | str) -> Message:
+        """
+        保证输入为 Message 类型。
+        """
+        if isinstance(user_message, Message):
+            return user_message
+        return Message(role="user", content=user_message, timestamp=time.time())
+
+    def _build_input_messages(self, session: Session, history_count: int) -> list:
+        """
+        构造输入给大模型的消息列表。
+        """
+        history = session.get_history(history_count)
+        input_msgs = [
+            {
+                "role": "system",
+                "content": self.system_prompt.format(user_id=session.user_id)
+            }
+        ]
+        input_msgs.extend(
+            {"role": msg.role, "content": msg.content} for msg in history
+        )
+        input_msgs.append({
+            "role": "assistant",
+            "content": f"Current time is {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"
+        })
+        return input_msgs
+
+    def _call_model(self, input_msgs: list) -> Optional[object]:
+        """
+        调用大模型，返回响应对象或 None。
+        """
+        try:
+            return self.client.responses.create(
+                model=self.model,
+                tools=[fn.tool_spec for fn in self.tools.values()],
+                input=input_msgs
+            )
+        except Exception as e:
+            self.logger.error("Model call failed: %s", e)
+            return None
+
+    def _handle_tool_calls(self, tool_calls: list, session: Session) -> Optional[str]:
+        """
+        处理所有 tool_call，返回特殊结果（如图片）或 None。
+        """
+        for tool_call in tool_calls:
+            if getattr(tool_call, "type", None) == "function_call":
+                result = self._act(tool_call, session)
+                if result is not None:
+                    return result
+        return None
+
+    def _act(self, tool_call, session: Session) -> Optional[str]:
+        """
+        执行工具函数调用，并将结果写入 session。
+        """
+        name = getattr(tool_call, "name", None)
+        try:
+            args = json.loads(getattr(tool_call, "arguments", "{}"))
+        except Exception as e:
+            self.logger.error("Tool args parse error: %s", e)
+            return None
+        func = self.tools.get(name)
+        if func:
+            self.logger.info("Calling tool: %s with args: %s", name, args)
+            try:
+                result = func(**args)
+            except Exception as e:
+                self.logger.error("Tool call error: %s", e)
+                result = f"Tool error: {e}"
+            # 图片生成特殊处理
+            if name == "draw_image" and isinstance(result, str) and result.startswith("![generated image](data:image/png;base64,"):
+                image_msg = Message(
+                    role="assistant",
+                    content=f"just generated an image with prompt `{args.get('prompt', '')}`",
+                    timestamp=time.time(),
+                    is_tool_result=True
+                )
+                session.add_message(image_msg)
+                return result
+            tool_msg = Message(
+                role="assistant",
+                content=f"[tool_call id {getattr(tool_call, 'id', '')}] tool_call result from tool `{name}` with args {args} is: {result}",
+                timestamp=time.time(),
+                is_tool_result=True
+            )
+            session.add_message(tool_msg)
+        return None
 
 if __name__ == "__main__":
 

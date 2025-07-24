@@ -1,7 +1,9 @@
+import base64
+import tempfile
+import os
+
 from langfuse import observe
 from langfuse.openai import OpenAI
-import requests
-import os
 
 from utils.tool_decorator import function_tool
 
@@ -9,6 +11,7 @@ client = OpenAI()
 DEFAULT_MODEL = "gpt-4o-mini"
 
 @function_tool()
+@observe()
 def web_search(search_query: str) -> str:
     "when the user wants to search the web using a search engine, use this tool"
 
@@ -22,12 +25,12 @@ def web_search(search_query: str) -> str:
     return response.output_text
 
 @function_tool()
+@observe()
 def draw_image(prompt: str) -> str:
     """
     when the user wants to generate an image based on a prompt, use this tool
     """
-    import base64
-    import tempfile
+
 
     response = client.responses.create(
         model=DEFAULT_MODEL,
