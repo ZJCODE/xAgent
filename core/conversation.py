@@ -129,6 +129,10 @@ class Agent:
             input_msgs.extend(
                 {"role": msg.role, "content": msg.content} for msg in history
             )
+            input_msgs.append({
+                "role": "assistant",
+                "content": f"Current time is {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"
+            })
             response = self.client.responses.create(
                 model=self.model,
                 tools=[fn.tool_spec for fn in self.tools.values()],
@@ -146,6 +150,17 @@ class Agent:
                     if func:
                         self.logger.info("Calling tool: %s with args: %s", name, args)
                         result = func(**args)
+                        # Temp add extra logic for image generation
+                        if name == "draw_image" and isinstance(result, str) and result.startswith("![generated image](data:image/png;base64,"):
+                            image_msg = Message(
+                                role="assistant",
+                                content=f"just generated an image with prompt `{args['prompt']}`",
+                                timestamp=time.time(),
+                                is_tool_result=True
+                            )
+                            session.add_message(image_msg)
+                            return result  # Return early if image generation
+                        # END OF TEMP ADD
                         tool_msg = Message(role="assistant", content=f"[tool_call id {tool_call.id}] tool_call result from tool `{name}` with args {args} is: {result}", timestamp=time.time(), is_tool_result=True)
                         session.add_message(tool_msg)
 
@@ -165,7 +180,7 @@ if __name__ == "__main__":
         return a + b
     
     from tools.openai_tool import web_search
-    
+
     agent = Agent(tools=[add, web_search])
     session = Session(user_id="user123123")
     session.clear_history()  # 清空历史以便测试
