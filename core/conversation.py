@@ -2,9 +2,6 @@ import time
 from typing import List, Optional
 import json
 import logging  # 新增
-import base64  # 新增
-import os  # 新增
-
 from langfuse import observe
 from langfuse.openai import OpenAI
 from schemas.messages import Message
@@ -134,29 +131,15 @@ class Agent:
             )
             response = self.client.responses.create(
                 model=self.model,
-                tools=[{"type": "web_search_preview"},
-                       {"type": "image_generation", "quality": "low"}] + [fn.tool_spec for fn in self.tools.values()],
+                tools=[fn.tool_spec for fn in self.tools.values()],
                 input=input_msgs
             )
             reply = response.output_text
-            self.logger.info("LLM reply: %s", reply)
 
             tool_calls = response.output
             for tool_call in tool_calls:
                 history_count += 1  # 增加历史条数以弥补Tool消息的占用
-                if tool_call.type == "image_generation_call":
-                    image_base64 = tool_call.result
-                    self.logger.info("Image generated (base64 length: %d)", len(image_base64))
-                    image_msg = Message(
-                        role="assistant",
-                        content=f"[image_generation] generated image (base64, length={len(image_base64)})",
-                        timestamp=time.time(),
-                        is_tool_result=True
-                    )
-                    session.add_message(image_msg)
-                    # 返回 markdown 格式的 base64 图片
-                    return f'![generated image](data:image/png;base64,{image_base64})'
-                elif tool_call.type == "function_call":
+                if tool_call.type == "function_call":
                     name = tool_call.name
                     args = json.loads(tool_call.arguments)
                     func = self.tools.get(name)
@@ -180,16 +163,18 @@ if __name__ == "__main__":
     def add(a: int, b: int) -> int:
         "Add two numbers."
         return a + b
-
-    agent = Agent(tools=[add])
+    
+    from tools.openai_tool import web_search
+    
+    agent = Agent(tools=[add, web_search])
     session = Session(user_id="user123123")
     session.clear_history()  # 清空历史以便测试
-    user_msg = "the answer for 12 + 13 is"
-    reply = agent.chat(user_msg, session)
-    user_msg = "the answer for 10 + 20 is and 21 + 22 is"
-    reply = agent.chat(user_msg, session)
-    # user_msg = "The Weather in Hangzhou is"
+    # user_msg = "the answer for 12 + 13 is"
     # reply = agent.chat(user_msg, session)
+    # user_msg = "the answer for 10 + 20 is and 21 + 22 is"
+    # reply = agent.chat(user_msg, session)
+    user_msg = "The Weather in Hangzhou is"
+    reply = agent.chat(user_msg, session)
     # print("Session history:")
     # for msg in session.get_history():
     #     print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")
