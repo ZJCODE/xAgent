@@ -190,21 +190,23 @@ class Agent:
         """
         构造输入给大模型的消息列表。
         """
-        history = session.get_history(history_count)
-        input_msgs = [
-            {
-                "role": "system",
-                "content": self.system_prompt.format(user_id=session.user_id)
-            }
+        # Sytem Message
+        system_msg = {
+            "role": "system",
+            "content": self.system_prompt.format(user_id=session.user_id)
+        }
+        # User History Messages
+        history_msgs = [
+            {"role": msg.role, "content": msg.content}
+            for msg in session.get_history(history_count)
         ]
-        input_msgs.extend(
-            {"role": msg.role, "content": msg.content} for msg in history
-        )
-        input_msgs.append({
+        # Current Time Message (put here instead of in system prompt for token cache efficiency)
+        time_msg = {
             "role": "assistant",
             "content": f"Current time is {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"
-        })
-        return input_msgs
+        }
+        # Combine all messages
+        return [system_msg] + history_msgs + [time_msg]
 
     async def _call_model(self, input_msgs: list) -> Optional[object]:
         """
