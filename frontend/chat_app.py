@@ -8,7 +8,7 @@ import streamlit as st
 # 添加项目根目录到 Python 路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.conversation import Session, Agent
+from core.agent import Session, Agent
 from db.message_db import MessageDB
 from tools.vocabulary import lookup_word, get_vocabulary
 from tools.openai_tool import web_search,draw_image
