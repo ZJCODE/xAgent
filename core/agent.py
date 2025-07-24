@@ -119,11 +119,11 @@ class Agent:
     def _store_user_message(self, user_message: Message | str, session: Session) -> None:
         if isinstance(user_message, str):
             user_message = Message(role="user", content=user_message, timestamp=time.time())
-        session.add_message(user_message)
+        session.add_messages(user_message)
 
     def _store_model_reply(self, reply_text: str, session: Session) -> None:
         model_msg = Message(role="assistant", content=reply_text, timestamp=time.time())
-        session.add_message(model_msg)
+        session.add_messages(model_msg)
 
     def _build_input_messages(self, session: Session, history_count: int) -> list:
         """
@@ -137,7 +137,7 @@ class Agent:
         # User History Messages
         history_msgs = [
             {"role": msg.role, "content": msg.content}
-            for msg in session.get_history(history_count)
+            for msg in session.get_messages(history_count)
         ]
         # Current Time Message (put here instead of in system prompt for token cache efficiency)
         time_msg = {
@@ -198,7 +198,7 @@ class Agent:
                     timestamp=time.time(),
                     is_tool_result=True
                 )
-                session.add_message(image_msg)
+                session.add_messages(image_msg)
                 return result
             tool_msg = Message(
                 role="assistant",
@@ -206,7 +206,7 @@ class Agent:
                 timestamp=time.time(),
                 is_tool_result=True
             )
-            session.add_message(tool_msg)
+            session.add_messages(tool_msg)
         return None
 
 if __name__ == "__main__":
@@ -223,7 +223,7 @@ if __name__ == "__main__":
 
     # session = Session(user_id="user123123", session_id="test_session", message_db=MessageDB())
     session = Session(user_id="user123")
-    session.clear_history()  # 清空历史以便测试
+    session.clear_session()  # 清空历史以便测试
 
     reply = agent("the answer for 12 + 13 is", session)
     print("Reply:", reply)
@@ -241,5 +241,5 @@ if __name__ == "__main__":
     print("Reply:", reply)
 
     print("Session history:")
-    for msg in session.get_history():
+    for msg in session.get_messages():
         print(f"{msg.role}: {msg.content} (at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.timestamp))})")

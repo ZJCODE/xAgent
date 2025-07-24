@@ -125,7 +125,7 @@ def main():
         # 清空历史按钮
         if st.button("清空对话历史", type="secondary"):
             if st.session_state.session:
-                st.session_state.session.clear_history()
+                st.session_state.session.clear_session()
                 st.session_state.messages = []
                 st.success("对话历史已清空！")
                 st.rerun()

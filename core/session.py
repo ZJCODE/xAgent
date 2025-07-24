@@ -24,22 +24,28 @@ class Session:
             Session._local_messages[key] = []
         self.logger = logging.getLogger(f"{self.__class__.__name__}[{user_id}:{session_id}]")
 
-    def add_message(self, message: Message) -> None:
+    def add_messages(self, messages: Message | List[Message]) -> None:
+        """
+        支持添加单个 Message 或多个 Message（List[Message]）。
+        """
         try:
+            if not isinstance(messages, list):
+                messages = [messages]
             if self.message_db:
-                self.logger.info("Adding message to DB: %s", message)
-                self.message_db.add_message(self.user_id, message, self.session_id)
+                self.logger.info("Adding messages to DB: %s", messages)
+                for message in messages:
+                    self.message_db.add_message(self.user_id, message, self.session_id)
             else:
                 key = (self.user_id, self.session_id)
-                self.logger.info("Adding message to local session: %s", message)
+                self.logger.info("Adding messages to local session: %s", messages)
                 max_local_history = 100
-                Session._local_messages[key].append(message)
+                Session._local_messages[key].extend(messages)
                 if len(Session._local_messages[key]) > max_local_history:
                     Session._local_messages[key] = Session._local_messages[key][-max_local_history:]
         except Exception as e:
-            self.logger.error("Failed to add message: %s", e)
+            self.logger.error("Failed to add messages: %s", e)
 
-    def get_history(self, count: int = 20) -> List[Message]:
+    def get_messages(self, count: int = 20) -> List[Message]:
         try:
             if self.message_db:
                 self.logger.info("Fetching last %d messages from DB", count)
@@ -51,7 +57,7 @@ class Session:
             self.logger.error("Failed to get history: %s", e)
             return []
 
-    def clear_history(self) -> None:
+    def clear_session(self) -> None:
         try:
             if self.message_db:
                 self.logger.info("Clearing history in DB")
