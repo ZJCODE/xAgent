@@ -72,7 +72,7 @@ class Agent:
         user_message: Message | str,
         session: Session,
         history_count: int = 20,
-        max_iter: int = 5,
+        max_iter: int = 10,
         output_type: type[BaseModel] = None
     ) -> str | BaseModel:
         """
@@ -82,7 +82,7 @@ class Agent:
             user_message (Message | str): The latest user message.
             session (Session): The session object managing message history.
             history_count (int, optional): Number of previous messages to include. Defaults to 20.
-            max_iter (int, optional): Maximum model call attempts. Defaults to 5.
+            max_iter (int, optional): Maximum model call attempts. Defaults to 10.
             output_type (type[BaseModel], optional): Pydantic model for structured output.
 
         Returns:
