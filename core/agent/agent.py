@@ -27,7 +27,7 @@ class Agent:
     基础 Agent 类，支持与 OpenAI 模型交互。
     """
 
-    DEFAULT_MODEL = "gpt-4o-mini"
+    DEFAULT_MODEL = "gpt-4.1-mini"
     DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id} , **Current date**: {date}, **Current timezone**: {timezone}"
 
     def __init__(
@@ -229,43 +229,53 @@ if __name__ == "__main__":
     def add(a: int, b: int) -> int:
         "Add two numbers."
         return a + b
+    
+    @function_tool()
+    def multiply(a: int, b: int) -> int:
+        "Multiply two numbers."
+        return a * b
 
     from tools.openai_tool import web_search
     from db.message_db import MessageDB
 
-    agent = Agent(tools=[add, web_search])
+    agent = Agent(tools=[add,multiply,web_search],
+                  system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. If you need to search the web, use the web_search tool.",
+                  model="gpt-4.1-mini")
 
     # session = Session(user_id="user123123", session_id="test_session", message_db=MessageDB())
     session = Session(user_id="user123", message_db=MessageDB())
     session.clear_session()  # 清空历史以便测试
 
-    reply = agent("the answer for 12 + 13 is", session)
+    # reply = agent("the answer for 12 + 13 is", session)
+    # print("Reply:", reply)
+
+    # reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
+    # print("Reply:", reply)
+
+    reply = agent("What is 20+(2*4)+3+(4*5)?", session)
     print("Reply:", reply)
 
-    reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
-    print("Reply:", reply)
+    # assistant_item = session.pop_message()  # Remove agent's response
+    # user_item = session.pop_message()  # Remove user's question
 
-    assistant_item = session.pop_message()  # Remove agent's response
-    user_item = session.pop_message()  # Remove user's question
+    # print("Last user message:", user_item.content)
+    # print("Last assistant message:", assistant_item.content)
 
-    print("Last user message:", user_item.content)
-    print("Last assistant message:", assistant_item.content)
+    # reply = agent("The Weather in Hangzhou and Beijing is", session)
+    # print("Reply:", reply)
 
-    reply = agent("The Weather in Hangzhou and Beijing is", session)
-    print("Reply:", reply)
+    # class Step(BaseModel):
+    #     explanation: str
+    #     output: str
 
-    class Step(BaseModel):
-        explanation: str
-        output: str
+    # class MathReasoning(BaseModel):
+    #     steps: list[Step]
+    #     final_answer: str
 
-    class MathReasoning(BaseModel):
-        steps: list[Step]
-        final_answer: str
-
-    reply = agent("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
-    for step in reply.steps:
-        print(f"Step: {step.explanation} => Output: {step.output}")
-    print("Final Answer:", reply.final_answer)
+    # reply = agent("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
+    # for step in reply.steps:
+    #     print(f"Step: {step.explanation} => Output: {step.output}")
+    # print("Final Answer:", reply.final_answer)
 
 
     print("Session history:")
