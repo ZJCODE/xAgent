@@ -27,7 +27,7 @@ class Agent:
     """
 
     DEFAULT_MODEL = "gpt-4o-mini"
-    DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id}"
+    DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id} , **Current date**: {date}, **Current timezone**: {timezone}"
 
     def __init__(
         self, 
@@ -132,21 +132,16 @@ class Agent:
         # Sytem Message
         system_msg = {
             "role": "system",
-            "content": self.system_prompt.format(user_id=session.user_id)
+            "content": self.system_prompt.format(user_id=session.user_id, date=time.strftime('%Y-%m-%d'), timezone=time.tzname[0])
         }
         # User History Messages
         history_msgs = [
             {"role": msg.role, "content": msg.content}
             for msg in session.get_messages(history_count)
         ]
-        # Current Time Message (put here instead of in system prompt for token cache efficiency)
-        time_msg = {
-            "role": "assistant",
-            "content": f"Current time is {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"
-        }
         # Combine all messages
-        return [system_msg] + history_msgs + [time_msg]
-
+        return [system_msg] + history_msgs
+    
     async def _call_model(self, input_msgs: list) -> Optional[object]:
         """
         调用大模型，返回响应对象或 None。
