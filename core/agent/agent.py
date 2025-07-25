@@ -190,7 +190,7 @@ class Agent:
             except Exception as e:
                 self.logger.error("Tool call error: %s", e)
                 result = f"Tool error: {e}"
-            # 图片生成特殊处理
+            # 图片生成特殊处理 / 后续生成图片返回URL而不是base64的时候可以把这段代码注释掉
             if name == "draw_image" and isinstance(result, str) and result.startswith("![generated image](data:image/png;base64,"):
                 image_msg = Message(
                     role="assistant",
