@@ -4,6 +4,7 @@ import json
 import logging
 import asyncio
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 
 # 日志系统初始化（只需一次）
@@ -52,12 +53,14 @@ class Agent:
             user_message: Message | str, 
             session: Session, 
             history_count: int = 20, 
-            max_iter: int = 5) -> str:
+            max_iter: int = 5,
+            output_type: type[BaseModel] = None
+    ) -> str | BaseModel:
         """
         支持同步调用 Agent（自动转异步）。
         """
         def execute():
-            return asyncio.run(self.chat(user_message, session, history_count, max_iter))
+            return asyncio.run(self.chat(user_message, session, history_count, max_iter, output_type))
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor() as executor:
             future = executor.submit(execute)
@@ -69,8 +72,9 @@ class Agent:
         user_message: Message | str,
         session: Session,
         history_count: int = 20,
-        max_iter: int = 5
-    ) -> str:
+        max_iter: int = 5,
+        output_type: type[BaseModel] = None
+    ) -> str | BaseModel:
         """
         Generate a reply from the agent given a user message and session.
 
@@ -79,9 +83,10 @@ class Agent:
             session (Session): The session object managing message history.
             history_count (int, optional): Number of previous messages to include. Defaults to 20.
             max_iter (int, optional): Maximum model call attempts. Defaults to 5.
+            output_type (type[BaseModel], optional): Pydantic model for structured output.
 
         Returns:
-            str: The agent's reply or error message.
+            str | BaseModel: The agent's reply or error message.
         """
         try:
             # Store the incoming user message in session history
@@ -92,7 +97,7 @@ class Agent:
                 input_messages = self._build_input_messages(session, history_count)
 
                 # Call the model and get response
-                response = await self._call_model(input_messages)
+                response = await self._call_model(input_messages, output_type)
                 if response is None:
                     self.logger.warning("Model did not respond on attempt %d", attempt + 1)
                     return "Sorry, model did not respond."
@@ -101,6 +106,11 @@ class Agent:
                 special_result = await self._handle_tool_calls(response.output, session)
                 if special_result is not None:
                     return special_result
+
+                if output_type is not None and hasattr(response, "output_parsed"):
+                    # Structured output
+                    self._store_model_reply(str(response.output_parsed), session)
+                    return response.output_parsed
 
                 # If model returned a text reply, store and return it
                 reply_text = response.output_text
@@ -142,16 +152,24 @@ class Agent:
         # Combine all messages
         return [system_msg] + history_msgs
     
-    async def _call_model(self, input_msgs: list) -> Optional[object]:
+    async def _call_model(self, input_msgs: list, output_type: type[BaseModel] = None) -> Optional[object]:
         """
         调用大模型，返回响应对象或 None。
         """
         try:
-            return await self.client.responses.create(
-                model=self.model,
-                tools=[fn.tool_spec for fn in self.tools.values()],
-                input=input_msgs
-            )
+            if output_type is not None:
+                return await self.client.responses.parse(
+                    model=self.model,
+                    tools=[fn.tool_spec for fn in self.tools.values()],
+                    input=input_msgs,
+                    text_format=output_type
+                )
+            else:
+                return await self.client.responses.create(
+                    model=self.model,
+                    tools=[fn.tool_spec for fn in self.tools.values()],
+                    input=input_msgs
+                )
         except Exception as e:
             self.logger.error("Model call failed: %s", e)
             return None
@@ -235,6 +253,20 @@ if __name__ == "__main__":
 
     reply = agent("The Weather in Hangzhou and Beijing is", session)
     print("Reply:", reply)
+
+    class Step(BaseModel):
+        explanation: str
+        output: str
+
+    class MathReasoning(BaseModel):
+        steps: list[Step]
+        final_answer: str
+
+    reply = agent("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
+    for step in reply.steps:
+        print(f"Step: {step.explanation} => Output: {step.output}")
+    print("Final Answer:", reply.final_answer)
+
 
     print("Session history:")
     for msg in session.get_messages():
