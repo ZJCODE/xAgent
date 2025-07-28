@@ -123,11 +123,11 @@ class Agent:
 
     def _store_user_message(self, user_message: Message | str, session: Session) -> None:
         if isinstance(user_message, str):
-            user_message = Message(role="user", content=user_message, timestamp=time.time())
+            user_message = Message(role="user", content=user_message, timestamp=time.time(), type="message")
         session.add_messages(user_message)
 
     def _store_model_reply(self, reply_text: str, session: Session) -> None:
-        model_msg = Message(role="assistant", content=reply_text, timestamp=time.time())
+        model_msg = Message(role="assistant", content=reply_text, timestamp=time.time(), type="message")
         session.add_messages(model_msg)
 
     def _build_input_messages(self, session: Session, history_count: int) -> list:
@@ -142,29 +142,26 @@ class Agent:
         # User History Messages
         history_msgs = []
         for msg in session.get_messages(history_count):
-            if msg.role != "tool":
+            if msg.type == "message":
                 history_msgs.append({"role": msg.role, "content": msg.content})
-            else:
-                # 处理工具调用和工具结果
-                tc = msg.tool_call
-                if tc is not None:
-                    if tc.type == "function_call":
-                        # 工具调用消息
-                        history_msgs.append({
-                            "type": "function_call",
-                            "call_id": getattr(tc, "call_id", ""),
-                            "name": getattr(tc, "name", ""),
-                            "arguments": getattr(tc, "arguments", "{}")
-                        })
-                    elif tc.type == "function_call_output":
-                        # 工具调用结果消息
-                        history_msgs.append({
-                            "type": "function_call_output",
-                            "call_id": getattr(tc, "call_id", ""),
-                            "output": getattr(tc, "output", "")
-                        })
+            elif msg.type == "function_call":
+                # 工具调用消息
+                history_msgs.append({
+                    "type": "function_call",
+                    "call_id": getattr(msg.tool_call, "call_id", ""),
+                    "name": getattr(msg.tool_call, "name", ""),
+                    "arguments": getattr(msg.tool_call, "arguments", "{}")
+                })
+            elif msg.type == "function_call_output":
+                # 工具调用结果消息
+                history_msgs.append({
+                    "type": "function_call_output",
+                    "call_id": getattr(msg.tool_call, "call_id", ""),
+                    "output": getattr(msg.tool_call, "output", "")
+                })
         return [system_msg] + history_msgs
     
+    @observe()
     async def _call_model(self, input_msgs: list, output_type: type[BaseModel] = None) -> Optional[object]:
         """
         调用大模型，返回响应对象或 None。
@@ -226,23 +223,22 @@ class Agent:
                 session.add_messages(image_msg)
                 return result
             tool_call_msg = Message(
+                type="function_call",
                 role="tool", 
                 content=f"Calling tool: `{name}` with args: {args}",
                 timestamp=time.time(),
                 tool_call=ToolCall(
-                    type="function_call",
-                    id=getattr(tool_call, "id", ""),
                     call_id=getattr(tool_call, "call_id", ""),
                     name=name,
                     arguments=json.dumps(args)
                 )
             )
             tool_res_msg = Message(
+                type="function_call_output",
                 role="tool",
                 content=f"Tool `{name}` result: {result}",
                 timestamp=time.time(),
                 tool_call=ToolCall(
-                    type="function_call_output",
                     call_id=getattr(tool_call, "call_id", ""),
                     output=json.dumps(result)
                 )
