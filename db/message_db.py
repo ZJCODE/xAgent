@@ -52,18 +52,21 @@ class MessageDB:
             return f"{self.MSG_PREFIX}:{user_id}:{session_id}"
         return f"{self.MSG_PREFIX}:{user_id}"
 
-    def add_message(self, user_id: str, message: Message, session_id: Optional[str] = None, ttl: int = 2592000):
+    def add_messages(self, user_id: str, messages: Message | List[Message], session_id: Optional[str] = None, ttl: int = 2592000):
         """
-        向消息历史追加一条消息，并设置过期时间。
+        向消息历史追加一条或多条消息，并设置过期时间。
         Args:
             user_id (str): 用户 ID。
-            message (Message): 消息对象。
+            messages (Message | List[Message]): 消息对象或消息对象列表。
             session_id (str, optional): 会话 ID。
             ttl (int): 过期时间（秒），默认 30 天。
         """
         key = self._make_key(user_id, session_id)
-        self.r.rpush(key, message.model_dump_json())
-        self.r.expire(key, ttl)
+        if not isinstance(messages, list):
+            messages = [messages]
+        if messages:
+            self.r.rpush(key, *(m.model_dump_json() for m in messages))
+            self.r.expire(key, ttl)
 
     def get_messages(self, user_id: str, session_id: Optional[str] = None, count: int = 20) -> List[Message]:
         """

@@ -33,8 +33,7 @@ class Session:
                 messages = [messages]
             if self.message_db:
                 self.logger.info("Adding messages to DB: %s", messages)
-                for message in messages:
-                    self.message_db.add_message(self.user_id, message, self.session_id)
+                self.message_db.add_messages(self.user_id, messages, self.session_id)
             else:
                 key = (self.user_id, self.session_id)
                 self.logger.info("Adding messages to local session: %s", messages)
@@ -89,4 +88,5 @@ class Session:
                 return None
         except Exception as e:
             self.logger.error("Failed to pop message: %s", e)
+            return None
             return None
