@@ -142,23 +142,7 @@ class Agent:
         # User History Messages
         history_msgs = []
         for msg in session.get_messages(history_count):
-            if msg.type == "message":
-                history_msgs.append({"role": msg.role, "content": msg.content})
-            elif msg.type == "function_call":
-                # 工具调用消息
-                history_msgs.append({
-                    "type": "function_call",
-                    "call_id": getattr(msg.tool_call, "call_id", "001"),
-                    "name": getattr(msg.tool_call, "name", ""),
-                    "arguments": getattr(msg.tool_call, "arguments", "{}")
-                })
-            elif msg.type == "function_call_output":
-                # 工具调用结果消息
-                history_msgs.append({
-                    "type": "function_call_output",
-                    "call_id": getattr(msg.tool_call, "call_id", "001"),
-                    "output": getattr(msg.tool_call, "output", "")
-                })
+            history_msgs.append(msg.to_dict())
         return [system_msg] + history_msgs
     
     @observe()
