@@ -59,12 +59,7 @@ class Agent:
         """
         支持同步调用 Agent（自动转异步）。
         """
-        def execute():
-            return asyncio.run(self.chat(user_message, session, history_count, max_iter, output_type))
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor() as executor:
-            future = executor.submit(execute)
-            return future.result()
+        return asyncio.run(self.chat(user_message, session, history_count, max_iter, output_type))
 
     @observe()
     async def chat(
@@ -252,7 +247,7 @@ if __name__ == "__main__":
     # reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
     # print("Reply:", reply)
 
-    reply = agent("What is 20+(2*4)+3+(4*5)?", session)
+    reply = agent("What is 18+(2*4)+3+(4*5)?", session)
     print("Reply:", reply)
 
     # assistant_item = session.pop_message()  # Remove agent's response
