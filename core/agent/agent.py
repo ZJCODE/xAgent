@@ -201,7 +201,7 @@ class Agent:
             # 图片生成特殊处理 / 后续生成图片返回URL而不是base64的时候可以把这段代码注释掉
             if name == "draw_image" and isinstance(result, str) and result.startswith("![generated image](data:image/png;base64,"):
                 image_msg = Message(
-                    role="assistant",
+                    role="user",
                     content=f"just generated an image with prompt `{args.get('prompt', '')}`",
                     timestamp=time.time(),
                     is_tool_result=True
@@ -209,7 +209,7 @@ class Agent:
                 session.add_messages(image_msg)
                 return result
             tool_msg = Message(
-                role="assistant",
+                role="user",
                 content=f"[tool_call id {getattr(tool_call, 'id', '')}] tool_call result from tool `{name}` with args {args} is: {result}",
                 timestamp=time.time(),
                 is_tool_result=True
