@@ -83,7 +83,7 @@ class Session:
                 self.logger.info("Popping last message from local session")
                 while Session._local_messages[key]:
                     msg = Session._local_messages[key].pop()
-                    if not msg.is_tool_result:
+                    if not msg.tool_call:
                         return msg
                 return None
         except Exception as e:

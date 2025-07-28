@@ -16,7 +16,7 @@ logging.basicConfig(
 from langfuse import observe
 from langfuse.openai import AsyncOpenAI
 
-from schemas.messages import Message
+from schemas.messages import Message,ToolCall
 from core.agent.session import Session
 from utils.tool_decorator import function_tool
 
@@ -140,11 +140,29 @@ class Agent:
             "content": self.system_prompt.format(user_id=session.user_id, date=time.strftime('%Y-%m-%d'), timezone=time.tzname[0])
         }
         # User History Messages
-        history_msgs = [
-            {"role": msg.role, "content": msg.content}
-            for msg in session.get_messages(history_count)
-        ]
-        # Combine all messages
+        history_msgs = []
+        for msg in session.get_messages(history_count):
+            if msg.role != "tool":
+                history_msgs.append({"role": msg.role, "content": msg.content})
+            else:
+                # 处理工具调用和工具结果
+                tc = msg.tool_call
+                if tc is not None:
+                    if tc.type == "function_call":
+                        # 工具调用消息
+                        history_msgs.append({
+                            "type": "function_call",
+                            "call_id": getattr(tc, "call_id", ""),
+                            "name": getattr(tc, "name", ""),
+                            "arguments": getattr(tc, "arguments", "{}")
+                        })
+                    elif tc.type == "function_call_output":
+                        # 工具调用结果消息
+                        history_msgs.append({
+                            "type": "function_call_output",
+                            "call_id": getattr(tc, "call_id", ""),
+                            "output": getattr(tc, "output", "")
+                        })
         return [system_msg] + history_msgs
     
     async def _call_model(self, input_msgs: list, output_type: type[BaseModel] = None) -> Optional[object]:
@@ -204,17 +222,32 @@ class Agent:
                     role="user",
                     content=f"just generated an image with prompt `{args.get('prompt', '')}`",
                     timestamp=time.time(),
-                    is_tool_result=True
                 )
                 session.add_messages(image_msg)
                 return result
-            tool_msg = Message(
-                role="user",
-                content=f"[tool_call id {getattr(tool_call, 'id', '')}] tool_call result from tool `{name}` with args {args} is: {result}",
+            tool_call_msg = Message(
+                role="tool", 
+                content=f"Calling tool: {name} with args: {args}",
                 timestamp=time.time(),
-                is_tool_result=True
+                tool_call=ToolCall(
+                    type="function_call",
+                    id=getattr(tool_call, "id", ""),
+                    call_id=getattr(tool_call, "call_id", ""),
+                    name=name,
+                    arguments=json.dumps(args)
+                )
             )
-            session.add_messages(tool_msg)
+            tool_res_msg = Message(
+                role="tool",
+                content=f"Tool {name} result: {result}",
+                timestamp=time.time(),
+                tool_call=ToolCall(
+                    type="function_call_output",
+                    call_id=getattr(tool_call, "call_id", ""),
+                    output=json.dumps(result)
+                )
+            )
+            session.add_messages([tool_call_msg, tool_res_msg])
         return None
 
 if __name__ == "__main__":

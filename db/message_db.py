@@ -129,5 +129,5 @@ class MessageDB:
             if raw_msg is None:
                 return None
             msg = Message.model_validate_json(raw_msg)
-            if not msg.is_tool_result:
+            if not msg.tool_call:
                 return msg
