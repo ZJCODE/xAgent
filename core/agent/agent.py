@@ -227,7 +227,7 @@ class Agent:
                 return result
             tool_call_msg = Message(
                 role="tool", 
-                content=f"Calling tool: {name} with args: {args}",
+                content=f"Calling tool: `{name}` with args: {args}",
                 timestamp=time.time(),
                 tool_call=ToolCall(
                     type="function_call",
@@ -239,7 +239,7 @@ class Agent:
             )
             tool_res_msg = Message(
                 role="tool",
-                content=f"Tool {name} result: {result}",
+                content=f"Tool `{name}` result: {result}",
                 timestamp=time.time(),
                 tool_call=ToolCall(
                     type="function_call_output",
