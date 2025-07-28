@@ -100,7 +100,7 @@ def main():
         # 模型配置
         st.subheader("模型设置")
         model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4.1"]
-        model = st.selectbox("选择模型", model_options, index=0)
+        model = st.selectbox("选择模型", model_options, index=2)
         
         # 应用配置按钮
         if st.button("应用配置", type="primary"):

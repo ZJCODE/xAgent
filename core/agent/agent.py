@@ -148,7 +148,7 @@ class Agent:
                 # 工具调用消息
                 history_msgs.append({
                     "type": "function_call",
-                    "call_id": getattr(msg.tool_call, "call_id", ""),
+                    "call_id": getattr(msg.tool_call, "call_id", "001"),
                     "name": getattr(msg.tool_call, "name", ""),
                     "arguments": getattr(msg.tool_call, "arguments", "{}")
                 })
@@ -156,7 +156,7 @@ class Agent:
                 # 工具调用结果消息
                 history_msgs.append({
                     "type": "function_call_output",
-                    "call_id": getattr(msg.tool_call, "call_id", ""),
+                    "call_id": getattr(msg.tool_call, "call_id", "001"),
                     "output": getattr(msg.tool_call, "output", "")
                 })
         return [system_msg] + history_msgs
@@ -216,9 +216,10 @@ class Agent:
             # 图片生成特殊处理 / 后续生成图片返回URL而不是base64的时候可以把这段代码注释掉
             if name == "draw_image" and isinstance(result, str) and result.startswith("![generated image](data:image/png;base64,"):
                 image_msg = Message(
+                    type="message",
                     role="user",
                     content=f"just generated an image with prompt `{args.get('prompt', '')}`",
-                    timestamp=time.time(),
+                    timestamp=time.time()
                 )
                 session.add_messages(image_msg)
                 return result
@@ -236,11 +237,11 @@ class Agent:
             tool_res_msg = Message(
                 type="function_call_output",
                 role="tool",
-                content=f"Tool `{name}` result: {result}",
+                content=f"Tool `{name}` result: {str(result) if len(str(result)) < 20 else str(result)[:20] + '...'}",
                 timestamp=time.time(),
                 tool_call=ToolCall(
-                    call_id=getattr(tool_call, "call_id", ""),
-                    output=json.dumps(result)
+                    call_id=getattr(tool_call, "call_id", "001"),
+                    output=json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
                 )
             )
             session.add_messages([tool_call_msg, tool_res_msg])
