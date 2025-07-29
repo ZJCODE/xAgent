@@ -49,8 +49,10 @@ def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis:
     tools = [lookup_word, get_vocabulary, web_search, draw_image]
 
     # 创建 Agent
-    agent = Agent(model=model, tools=tools)
-    
+    agent = Agent(model=model, 
+                  tools=tools,
+                  system_prompt=f"Current date is {time.strftime('%Y-%m-%d')}")
+
     # 创建 Session
     message_db = MessageDB() if use_redis else None
     session = Session(

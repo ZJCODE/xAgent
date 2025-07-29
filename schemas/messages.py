@@ -8,13 +8,20 @@ class ToolCall(BaseModel):
     arguments: Optional[str] = Field(None, description="Arguments for the function call, as a JSON string")
     output: Optional[str] = Field(None, description="Output/result of the function call")
 
+class ImageContent(BaseModel):
+    """Represents image content in a message."""
+    format: str = Field(..., description="Image format (e.g., png, jpeg)")
+    url: Optional[str] = Field(None, description="URL of the image")
+    source: Optional[bytes] = Field(None, description="The binary content of the image")
+
 class Message(BaseModel):
     """Message model for communication between roles."""
-    type: str = Field(..., description="Type of message (e.g., message, function_call)")
+    type: str = Field("message", description="Type of message (e.g., message, function_call)")
     role: str = Field(..., description="The role of the sender (e.g., user, assistant)")
     content: str = Field(..., description="The content of the message")
     timestamp: float = Field(..., description="The timestamp of when the message was sent")
     tool_call: Optional[ToolCall] = Field(None, description="tool/function calls associated with the message")
+    image: Optional[ImageContent] = Field(None, description="Image content associated with the message")
 
     def to_dict(self):
         """Convert the message to a dictionary, including tool call if present."""
