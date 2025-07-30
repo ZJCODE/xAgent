@@ -1,3 +1,4 @@
+import time
 from pydantic import BaseModel, Field
 from typing import Optional
 
@@ -11,21 +12,87 @@ class ToolCall(BaseModel):
 class ImageContent(BaseModel):
     """Represents image content in a message."""
     format: str = Field(..., description="Image format (e.g., png, jpeg)")
-    url: Optional[str] = Field(None, description="URL of the image")
-    source: Optional[bytes] = Field(None, description="The binary content of the image")
+    source: Optional[str] = Field(None, description="URL or base64 string of the image")
+
+class VoiceContent(BaseModel):
+    """Represents voice content in a message."""
+    format: str = Field(..., description="Voice format (e.g., mp3, wav)")
+    source: Optional[bytes] = Field(None, description="The binary content of the voice file")
+
+class DocumentContent(BaseModel):
+    """Represents document content in a message."""
+    format: str = Field(..., description="Document format (e.g., pdf, docx)")
+    source: Optional[bytes] = Field(None, description="The binary content of the document")
+
+class MultiModalContent(BaseModel):
+    """Represents multi-modal content in a message."""
+    image: Optional[ImageContent] = Field(None, description="Image content associated with the message")
+    voice: Optional[VoiceContent] = Field(None, description="Voice content associated with the message")
+    document: Optional[DocumentContent] = Field(None, description="Document content associated with the message")
 
 class Message(BaseModel):
     """Message model for communication between roles."""
     type: str = Field("message", description="Type of message (e.g., message, function_call)")
     role: str = Field(..., description="The role of the sender (e.g., user, assistant)")
     content: str = Field(..., description="The content of the message")
-    timestamp: float = Field(..., description="The timestamp of when the message was sent")
+    timestamp: float = Field(default_factory=time.time, description="The timestamp of when the message was sent")
     tool_call: Optional[ToolCall] = Field(None, description="tool/function calls associated with the message")
-    image: Optional[ImageContent] = Field(None, description="Image content associated with the message")
+    multimodal: Optional[MultiModalContent] = Field(None, description="Multi-modal content associated with the message")
 
-    def to_dict(self):
+    @classmethod
+    def create(
+        cls,
+        content: str,
+        role: Optional[str] = "user",
+        image_source: Optional[str] = None,
+    ) -> "Message":
+        """
+        Create a message with optional image content.
+        Args:
+            content (str): The text content of the message.
+            role (Optional[str]): The role of the sender (default is "user").
+            image_source (Optional[str]): The URL or base64 string of the image to be included in the message.
+        Returns:
+            Message: An instance of the Message class with the provided content and optional image.
+
+        Raises:
+            ValueError: If both image_url and image_source are provided.
+
+        Usage:
+            # Create a text message
+            msg = Message.create("Hello, world!")
+            # Create a message with specific role
+            msg = Message.create("Hello, world!", role="assistant")
+            # Create a message with an image URL
+            msg = Message.create("Hello, world!", image_source="https://example.com/image.jpg")
+        """
+        multimodal = None
+        if image_source:
+            multimodal = MultiModalContent(
+                image=ImageContent(format="jpeg", source=image_source)
+            )
+
+        return cls(
+            role=role,
+            type="message",
+            content=content,
+            multimodal=multimodal
+        )
+
+    def to_dict(self) -> dict:
         """Convert the message to a dictionary, including tool call if present."""
         if self.type == "message":
+            if self.multimodal and self.multimodal.image:
+                return {
+                    "role": self.role,
+                    "content": [
+                        {"type": "input_text", "text": self.content},
+                        {
+                            "type": "input_image",
+                            "image_url": self.multimodal.image.source,
+                        },
+                    ],
+                }
             return {
                 "role": self.role,
                 "content": self.content,

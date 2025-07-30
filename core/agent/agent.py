@@ -41,12 +41,9 @@ class Agent:
         self.system_prompt: str = system_prompt or self.DEFAULT_SYSTEM_PROMPT
         self.client: AsyncOpenAI = client or AsyncOpenAI()
         self.tools: dict = {}
-        for fn in tools or []:
-            if not asyncio.iscoroutinefunction(fn):
-                raise TypeError(f"Tool function '{fn.__name__}' must be async.")
-            if fn.__name__ not in self.tools:
-                self.tools[fn.__name__] = fn
+        self._register_tools(tools)
         self.logger = logging.getLogger(self.__class__.__name__)
+
 
     def __call__(
             self, 
@@ -54,12 +51,13 @@ class Agent:
             session: Session, 
             history_count: int = 20, 
             max_iter: int = 5,
+            image_source: Optional[str] = None,
             output_type: type[BaseModel] = None
     ) -> str | BaseModel:
         """
         支持同步调用 Agent（自动转异步）。
         """
-        return asyncio.run(self.chat(user_message, session, history_count, max_iter, output_type))
+        return asyncio.run(self.chat(user_message, session, history_count, max_iter, image_source, output_type))
 
     @observe()
     async def chat(
@@ -68,6 +66,7 @@ class Agent:
         session: Session,
         history_count: int = 20,
         max_iter: int = 10,
+        image_source: Optional[str] = None,
         output_type: type[BaseModel] = None
     ) -> str | BaseModel:
         """
@@ -85,7 +84,7 @@ class Agent:
         """
         try:
             # Store the incoming user message in session history
-            self._store_user_message(user_message, session)
+            self._store_user_message(user_message, session, image_source)
 
             for attempt in range(max_iter):
                 # Build input messages for the model
@@ -121,13 +120,23 @@ class Agent:
             self.logger.exception("Agent chat error: %s", e)
             return "Sorry, something went wrong."
 
-    def _store_user_message(self, user_message: Message | str, session: Session) -> None:
+    def _register_tools(self, tools: Optional[list]) -> None:
+        """
+        注册工具函数，确保每个工具是异步的且唯一。
+        """
+        for fn in tools or []:
+            if not asyncio.iscoroutinefunction(fn):
+                raise TypeError(f"Tool function '{fn.__name__}' must be async.")
+            if fn.__name__ not in self.tools:
+                self.tools[fn.__name__] = fn
+
+    def _store_user_message(self, user_message: Message | str, session: Session, image_source: Optional[str]) -> None:
         if isinstance(user_message, str):
-            user_message = Message(role="user", content=user_message, timestamp=time.time(), type="message")
+            user_message = Message.create(content=user_message, role="user", image_source=image_source)
         session.add_messages(user_message)
 
     def _store_model_reply(self, reply_text: str, session: Session) -> None:
-        model_msg = Message(role="assistant", content=reply_text, timestamp=time.time(), type="message")
+        model_msg = Message.create(content=reply_text, role="assistant")
         session.add_messages(model_msg)
 
     def _build_input_messages(self, session: Session, history_count: int) -> list:
@@ -203,7 +212,6 @@ class Agent:
                     type="message",
                     role="user",
                     content=f"just generated an image with prompt `{args.get('prompt', '')}`",
-                    timestamp=time.time()
                 )
                 session.add_messages(image_msg)
                 return result
@@ -211,7 +219,6 @@ class Agent:
                 type="function_call",
                 role="tool", 
                 content=f"Calling tool: `{name}` with args: {args}",
-                timestamp=time.time(),
                 tool_call=ToolCall(
                     call_id=getattr(tool_call, "call_id", ""),
                     name=name,
@@ -222,7 +229,6 @@ class Agent:
                 type="function_call_output",
                 role="tool",
                 content=f"Tool `{name}` result: {str(result) if len(str(result)) < 20 else str(result)[:20] + '...'}",
-                timestamp=time.time(),
                 tool_call=ToolCall(
                     call_id=getattr(tool_call, "call_id", "001"),
                     output=json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
@@ -255,11 +261,11 @@ if __name__ == "__main__":
     session = Session(user_id="user123", message_db=MessageDB())
     session.clear_session()  # 清空历史以便测试
 
-    # reply = agent("the answer for 12 + 13 is", session)
-    # print("Reply:", reply)
+    reply = agent("the answer for 12 + 13 is", session)
+    print("Reply:", reply)
 
-    # reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
-    # print("Reply:", reply)
+    reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
+    print("Reply:", reply)
 
     reply = agent("What is 18+(2*4)+3+(4*5)?", session)
     print("Reply:", reply)
@@ -285,6 +291,24 @@ if __name__ == "__main__":
     # for step in reply.steps:
     #     print(f"Step: {step.explanation} => Output: {step.output}")
     # print("Final Answer:", reply.final_answer)
+
+
+    # reply = agent("Can you describe the image?", session = session,image_source="https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg")
+    # print("Reply:", reply)
+
+
+    import base64
+    def encode_image(image_path):
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode("utf-8")
+
+    # Path to your image
+    image_path = "tests/assets/test_image.png"
+    # Getting the Base64 string
+    base64_image = f"data:image/jpeg;base64,{encode_image(image_path)}"
+
+    reply = agent("Can you describe the image?", session = session,image_source=base64_image)
+    print("Reply:", reply)
 
 
     print("Session history:")
