@@ -28,7 +28,7 @@ class Agent:
     """
 
     DEFAULT_MODEL = "gpt-4.1-mini"
-    DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id} , **Current date**: {date}, **Current timezone**: {timezone}"
+    DEFAULT_SYSTEM_PROMPT = "**Current date**: {date}, **Current timezone**: {timezone}"
 
     def __init__(
         self, 
@@ -147,7 +147,7 @@ class Agent:
         # Sytem Message
         system_msg = {
             "role": "system",
-            "content": self.system_prompt.format(user_id=session.user_id, date=time.strftime('%Y-%m-%d'), timezone=time.tzname[0])
+            "content": self.system_prompt.format(date=time.strftime('%Y-%m-%d'), timezone=time.tzname[0])
         }
         # User History Messages
         history_msgs = []
