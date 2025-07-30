@@ -127,9 +127,9 @@ class Agent:
         """
         for fn in tools or []:
             if not asyncio.iscoroutinefunction(fn):
-                raise TypeError(f"Tool function '{fn.__name__}' must be async.")
-            if fn.__name__ not in self.tools:
-                self.tools[fn.__name__] = fn
+                raise TypeError(f"Tool function '{fn.tool_spec['name']}' must be async.")
+            if fn.tool_spec['name'] not in self.tools:
+                self.tools[fn.tool_spec['name']] = fn
 
     def _store_user_message(self, user_message: Message | str, session: Session, image_source: Optional[str]) -> None:
         if isinstance(user_message, str):
@@ -251,22 +251,33 @@ if __name__ == "__main__":
     from tools.openai_tool import web_search
     from db.message_db import MessageDB
 
-    agent = Agent(tools=[add,multiply,web_search],
-                  system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. If you need to search the web, use the web_search tool.",
+    try:
+        from tools.mcp_tool import MCPTool
+        mt = MCPTool("http://127.0.0.1:8000/mcp/")
+        mcp_tools = asyncio.run(mt.get_openai_tools())
+    except ImportError:
+        mcp_tools = []
+        print("MCPTool not available, skipping MCP tools.")
+    
+    agent = Agent(tools=[add,multiply,web_search] + mcp_tools,
+                  system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. If you need to search the web, use the web_search tool. If you want roll a dice, use the roll_dice tool.",
                   model="gpt-4.1-mini")
 
     # session = Session(user_id="user123123", session_id="test_session", message_db=MessageDB())
     session = Session(user_id="user123", message_db=MessageDB())
     session.clear_session()  # 清空历史以便测试
 
-    reply = agent("the answer for 12 + 13 is", session)
+    # reply = agent("the answer for 12 + 13 is", session)
+    # print("Reply:", reply)
+
+    reply = agent("roll a dice three times", session)
     print("Reply:", reply)
 
     # reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
     # print("Reply:", reply)
 
-    reply = agent("What is 18+2*4+3+4*5?", session)
-    print("Reply:", reply)
+    # reply = agent("What is 18+2*4+3+4*5?", session)
+    # print("Reply:", reply)
 
     # assistant_item = session.pop_message()  # Remove agent's response
     # user_item = session.pop_message()  # Remove user's question
@@ -308,9 +319,8 @@ if __name__ == "__main__":
     # reply = agent("Can you describe the image?", session = session,image_source=base64_image)
     # print("Reply:", reply)
 
-
-    reply = agent("Can you describe the image?", session = session,image_source="tests/assets/test_image.png")
-    print("Reply:", reply)
+    # reply = agent("Can you describe the image?", session = session,image_source="tests/assets/test_image.png")
+    # print("Reply:", reply)
 
     print("Session history:")
     for msg in session.get_messages():
