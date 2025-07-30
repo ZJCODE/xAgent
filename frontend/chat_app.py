@@ -4,6 +4,7 @@ import time
 from typing import Optional
 import streamlit as st
 import asyncio
+import base64
 
 
 # 添加项目根目录到 Python 路径
@@ -161,11 +162,29 @@ def main():
     # 显示聊天历史
     display_chat_history()
     
-    # 聊天输入
-    if prompt := st.chat_input("请输入您的消息..."):
+    # 聊天输入和图片上传移动到底部并分栏
+    image_base64 = None
+    image_bytes = None
+    prompt = None
+    with st._bottom:
+        left_col, right_col = st.columns(2)
+        with left_col:
+            st.subheader("对话输入")
+            prompt = st.chat_input("Type here your question...")
+        with right_col:
+            uploaded_image = st.file_uploader("上传图片（可选，支持jpg/png）", type=["jpg", "jpeg", "png"])
+            if uploaded_image is not None:
+                image_bytes = uploaded_image.read()
+                image_base64 = f"data:image/{uploaded_image.type.split('/')[-1]};base64," + base64.b64encode(image_bytes).decode("utf-8")
+                # st.image(image_bytes, caption=None, width=50)
+
+    # 聊天输入逻辑调整为使用 prompt
+    if prompt:
         # 显示用户消息
         with st.chat_message("user"):
             st.markdown(prompt)
+            if image_base64:
+                st.image(image_bytes, caption="本次消息附带图片", width=200)
         
         # 添加用户消息到历史
         user_message = {
@@ -173,17 +192,20 @@ def main():
             "content": prompt,
             "timestamp": time.time()
         }
+        if image_base64:
+            user_message["image_base64"] = image_base64
         st.session_state.messages.append(user_message)
         
         # 生成助手回复
         with st.chat_message("assistant"):
             with st.spinner("正在思考..."):
                 try:
-                    # 使用 Agent 生成异步回复
+                    # 使用 Agent 生成异步回复，传递 image_source
                     reply = asyncio.run(
                         st.session_state.agent.chat(
                             prompt, 
-                            st.session_state.session
+                            st.session_state.session,
+                            image_source=image_base64 if image_base64 else None
                         )
                     )
                     
