@@ -1,9 +1,7 @@
 import asyncio
-import json
-from fastmcp import Client, FastMCP
+from fastmcp import Client
 
 client = Client("http://127.0.0.1:8000/mcp/")
-
 
 async def main():
     async with client:
