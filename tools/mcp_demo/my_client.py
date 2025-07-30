@@ -21,8 +21,9 @@ async def main():
         # Execute Tools
         result = await client.call_tool("roll_dice", {"n_dice": 2})
         print("Tool result:", result)
-        result = await client.call_tool("add_numbers", {"a": 5, "b": 10})
-        print("Tool result:", result)
+        
+        # result = await client.call_tool("add_numbers", {"a": 5, "b": 10})
+        # print("Tool result:", result)
         
         # Access Resource
         content = await client.read_resource("data://config")
