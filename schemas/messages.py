@@ -53,7 +53,7 @@ class Message(BaseModel):
         Args:
             content (str): The text content of the message.
             role (Optional[str]): The role of the sender (default is "user").
-            image_source (Optional[str]): The URL or base64 string of the image to be included in the message.
+            image_source (Optional[str]): The URL or file path or base64 string of the image to be included in the message.
         Returns:
             Message: An instance of the Message class with the provided content and optional image.
 

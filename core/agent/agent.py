@@ -77,6 +77,7 @@ class Agent:
             session (Session): The session object managing message history.
             history_count (int, optional): Number of previous messages to include. Defaults to 20.
             max_iter (int, optional): Maximum model call attempts. Defaults to 10.
+            image_source (Optional[str], optional): Source of the image, if any can be a URL or File path or base64 string.
             output_type (type[BaseModel], optional): Pydantic model for structured output.
 
         Returns:
@@ -264,7 +265,7 @@ if __name__ == "__main__":
     # reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
     # print("Reply:", reply)
 
-    reply = agent("What is 18+(2*4)+3+(4*5)?", session)
+    reply = agent("What is 18+2*4+3+4*5?", session)
     print("Reply:", reply)
 
     # assistant_item = session.pop_message()  # Remove agent's response

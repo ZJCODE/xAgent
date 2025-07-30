@@ -41,7 +41,7 @@ def init_session_state():
         st.session_state.user_id = "streamlit_user"
     
     if "session_id" not in st.session_state:
-        st.session_state.session_id = None
+        st.session_state.session_id = "test_session"  # 可以设置为 None 或空字符串
     
     if "use_redis" not in st.session_state:
         st.session_state.use_redis = True
