@@ -3,9 +3,12 @@ import tempfile
 import os
 
 from langfuse import observe
-from langfuse.openai import OpenAI,AsyncOpenAI
+from langfuse.openai import AsyncOpenAI
 
 from utils.tool_decorator import function_tool
+
+from dotenv import load_dotenv
+load_dotenv(override=True)
 
 client = AsyncOpenAI()
 DEFAULT_MODEL = "gpt-4o-mini"
@@ -44,7 +47,7 @@ async def draw_image(prompt: str) -> str:
         if tool_call.type == "image_generation_call":
             image_base64 = tool_call.result
             try:
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                with tempfile.NamedTemporaryFile(prefix="generated_", suffix=".png", delete=False) as tmp_file:
                     tmp_file.write(base64.b64decode(image_base64))
                     tmp_path = tmp_file.name
                 # Upload and get URL
@@ -55,15 +58,19 @@ async def draw_image(prompt: str) -> str:
                 return f'![generated image](data:image/png;base64,{image_base64})'
 
 def upload_image(image_path: str) -> str:
-    raise Exception("Upload image function not implemented")
+    from utils.image_upload import upload_image as s3_upload_image
+    url = s3_upload_image(image_path)
+    if not url:
+        raise Exception("Image upload failed")
+    return url
 
 
 if __name__ == "__main__":
 
     import asyncio
-    search_result = asyncio.run(web_search("What is the capital of France?"))
-    print("Search Result:", search_result)
+    # search_result = asyncio.run(web_search("What is the capital of France?"))
+    # print("Search Result:", search_result)
 
     image_url = asyncio.run(draw_image("A beautiful sunset over the mountains"))
-    print("Generated Image URL:", image_url)
+    # print("Generated Image URL:", image_url)
     # Note: Ensure you have the necessary API keys and environment setup for OpenAI and sm.ms

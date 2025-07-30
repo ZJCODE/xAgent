@@ -2,6 +2,8 @@ import time
 from pydantic import BaseModel, Field
 from typing import Optional
 
+from utils.image_upload import upload_image
+
 class ToolCall(BaseModel):
     """Represents a tool/function call within a message."""
     call_id: str = Field(..., description="Call ID for tracking")
@@ -68,6 +70,12 @@ class Message(BaseModel):
         """
         multimodal = None
         if image_source:
+            if not (image_source.startswith("http") or image_source.startswith("data:image/")):
+                uploaded_url = upload_image(image_source)
+                if uploaded_url:
+                    image_source = uploaded_url
+                else:
+                    raise ValueError("Image upload failed, please check the image source.")
             multimodal = MultiModalContent(
                 image=ImageContent(format="jpeg", source=image_source)
             )

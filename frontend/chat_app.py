@@ -5,6 +5,7 @@ from typing import Optional
 import streamlit as st
 import asyncio
 import base64
+import re
 
 
 # 添加项目根目录到 Python 路径
@@ -64,6 +65,18 @@ def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis:
     
     return agent, session
 
+def render_markdown_with_img_limit(content: str, max_width: int = 400):
+    """
+    将 markdown 图片语法替换为带最大宽度限制的 HTML img 标签
+    """
+    def replacer(match):
+        alt = match.group(1)
+        url = match.group(2)
+        return f'<img src="{url}" alt="{alt}" style="max-width:{max_width}px;">'
+    # 匹配 ![alt](url)
+    pattern = r'!\[([^\]]*)\]\(([^)]+)\)'
+    return re.sub(pattern, replacer, content)
+
 def display_chat_history():
     """显示聊天历史"""
     for message in st.session_state.messages:
@@ -79,7 +92,8 @@ def display_chat_history():
                     unsafe_allow_html=True
                 )
             else:
-                st.markdown(content)
+                # 新增：对所有 markdown 内容做图片宽度限制
+                st.markdown(render_markdown_with_img_limit(content), unsafe_allow_html=True)
             if "timestamp" in message:
                 st.caption(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(message['timestamp']))}")
 
@@ -182,7 +196,8 @@ def main():
     if prompt:
         # 显示用户消息
         with st.chat_message("user"):
-            st.markdown(prompt)
+            # 新增：对用户输入内容做图片宽度限制
+            st.markdown(render_markdown_with_img_limit(prompt), unsafe_allow_html=True)
             if image_base64:
                 st.image(image_bytes, caption="本次消息附带图片", width=200)
         
@@ -221,7 +236,8 @@ def main():
                             unsafe_allow_html=True
                         )
                     else:
-                        st.markdown(reply)
+                        # 新增：对助手回复内容做图片宽度限制
+                        st.markdown(render_markdown_with_img_limit(reply), unsafe_allow_html=True)
                     
                     # 添加助手消息到历史
                     assistant_message = {

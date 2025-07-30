@@ -201,20 +201,7 @@ class Agent:
         func = self.tools.get(name)
         if func:
             self.logger.info("Calling tool: %s with args: %s", name, args)
-            try:
-                result = await func(**args)
-            except Exception as e:
-                self.logger.error("Tool call error: %s", e)
-                result = f"Tool error: {e}"
-            # 图片生成特殊处理 / 后续生成图片返回URL而不是base64的时候可以把这段代码注释掉
-            if name == "draw_image" and isinstance(result, str) and result.startswith("![generated image](data:image/png;base64,"):
-                image_msg = Message(
-                    type="message",
-                    role="user",
-                    content=f"just generated an image with prompt `{args.get('prompt', '')}`",
-                )
-                session.add_messages(image_msg)
-                return result
+
             tool_call_msg = Message(
                 type="function_call",
                 role="tool", 
@@ -225,6 +212,15 @@ class Agent:
                     arguments=json.dumps(args)
                 )
             )
+
+            session.add_messages(tool_call_msg)
+
+            try:
+                result = await func(**args)
+            except Exception as e:
+                self.logger.error("Tool call error: %s", e)
+                result = f"Tool error: {e}"
+
             tool_res_msg = Message(
                 type="function_call_output",
                 role="tool",
@@ -234,7 +230,8 @@ class Agent:
                     output=json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
                 )
             )
-            session.add_messages([tool_call_msg, tool_res_msg])
+            session.add_messages(tool_res_msg)
+
         return None
 
 if __name__ == "__main__":
@@ -264,8 +261,8 @@ if __name__ == "__main__":
     reply = agent("the answer for 12 + 13 is", session)
     print("Reply:", reply)
 
-    reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
-    print("Reply:", reply)
+    # reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
+    # print("Reply:", reply)
 
     reply = agent("What is 18+(2*4)+3+(4*5)?", session)
     print("Reply:", reply)
@@ -297,19 +294,22 @@ if __name__ == "__main__":
     # print("Reply:", reply)
 
 
-    import base64
-    def encode_image(image_path):
-        with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode("utf-8")
+    # import base64
+    # def encode_image(image_path):
+    #     with open(image_path, "rb") as image_file:
+    #         return base64.b64encode(image_file.read()).decode("utf-8")
 
-    # Path to your image
-    image_path = "tests/assets/test_image.png"
-    # Getting the Base64 string
-    base64_image = f"data:image/jpeg;base64,{encode_image(image_path)}"
+    # # Path to your image
+    # image_path = "tests/assets/test_image.png"
+    # # Getting the Base64 string
+    # base64_image = f"data:image/jpeg;base64,{encode_image(image_path)}"
 
-    reply = agent("Can you describe the image?", session = session,image_source=base64_image)
+    # reply = agent("Can you describe the image?", session = session,image_source=base64_image)
+    # print("Reply:", reply)
+
+
+    reply = agent("Can you describe the image?", session = session,image_source="tests/assets/test_image.png")
     print("Reply:", reply)
-
 
     print("Session history:")
     for msg in session.get_messages():
