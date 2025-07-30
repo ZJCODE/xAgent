@@ -6,6 +6,7 @@ import streamlit as st
 import asyncio
 import base64
 import re
+import tempfile
 
 
 # 添加项目根目录到 Python 路径
@@ -177,7 +178,7 @@ def main():
     display_chat_history()
     
     # 聊天输入和图片上传移动到底部并分栏
-    image_base64 = None
+    image_path = None
     image_bytes = None
     prompt = None
     with st._bottom:
@@ -189,7 +190,11 @@ def main():
             uploaded_image = st.file_uploader("上传图片（可选，支持jpg/png）", type=["jpg", "jpeg", "png"])
             if uploaded_image is not None:
                 image_bytes = uploaded_image.read()
-                image_base64 = f"data:image/{uploaded_image.type.split('/')[-1]};base64," + base64.b64encode(image_bytes).decode("utf-8")
+                # 保存到临时文件
+                suffix = "." + uploaded_image.type.split('/')[-1]
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                    tmp_file.write(image_bytes)
+                    image_path = tmp_file.name
                 # st.image(image_bytes, caption=None, width=50)
 
     # 聊天输入逻辑调整为使用 prompt
@@ -198,7 +203,7 @@ def main():
         with st.chat_message("user"):
             # 新增：对用户输入内容做图片宽度限制
             st.markdown(render_markdown_with_img_limit(prompt), unsafe_allow_html=True)
-            if image_base64:
+            if image_bytes:
                 st.image(image_bytes, caption="本次消息附带图片", width=200)
         
         # 添加用户消息到历史
@@ -207,20 +212,20 @@ def main():
             "content": prompt,
             "timestamp": time.time()
         }
-        if image_base64:
-            user_message["image_base64"] = image_base64
+        if image_path:
+            user_message["image_path"] = image_path
         st.session_state.messages.append(user_message)
         
         # 生成助手回复
         with st.chat_message("assistant"):
             with st.spinner("正在思考..."):
                 try:
-                    # 使用 Agent 生成异步回复，传递 image_source
+                    # 使用 Agent 生成异步回复，传递 image_source=本地路径
                     reply = asyncio.run(
                         st.session_state.agent.chat(
                             prompt, 
                             st.session_state.session,
-                            image_source=image_base64 if image_base64 else None
+                            image_source=image_path if image_path else None
                         )
                     )
                     
