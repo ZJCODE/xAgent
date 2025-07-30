@@ -45,6 +45,9 @@ def init_session_state():
     
     if "use_redis" not in st.session_state:
         st.session_state.use_redis = False
+    
+    if "show_image_upload" not in st.session_state:
+        st.session_state.show_image_upload = False
 
 def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis: bool, model: str):
     """创建 Agent 和 Session 实例"""
@@ -120,6 +123,13 @@ def main():
         model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4.1"]
         model = st.selectbox("选择模型", model_options, index=2)
         
+        # 新增：图片上传模块显示控制
+        st.subheader("界面设置")
+        show_image_upload = st.checkbox("显示图片上传模块", value=st.session_state.show_image_upload)
+        if show_image_upload != st.session_state.show_image_upload:
+            st.session_state.show_image_upload = show_image_upload
+            st.rerun()
+        
         # 应用配置按钮
         if st.button("应用配置", type="primary"):
             st.session_state.user_id = user_id
@@ -182,20 +192,23 @@ def main():
     image_bytes = None
     prompt = None
     with st._bottom:
-        left_col, right_col = st.columns(2)
-        with left_col:
-            st.subheader("对话输入")
+        if st.session_state.show_image_upload:
+            left_col, right_col = st.columns(2)
+            with left_col:
+                st.subheader("对话输入")
+                prompt = st.chat_input("Type here your question...")
+            with right_col:
+                uploaded_image = st.file_uploader("上传图片（可选，支持jpg/png）", type=["jpg", "jpeg", "png"])
+                if uploaded_image is not None:
+                    image_bytes = uploaded_image.read()
+                    # 保存到临时文件
+                    suffix = "." + uploaded_image.type.split('/')[-1]
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                        tmp_file.write(image_bytes)
+                        image_path = tmp_file.name
+                    # st.image(image_bytes, caption=None, width=50)
+        else:
             prompt = st.chat_input("Type here your question...")
-        with right_col:
-            uploaded_image = st.file_uploader("上传图片（可选，支持jpg/png）", type=["jpg", "jpeg", "png"])
-            if uploaded_image is not None:
-                image_bytes = uploaded_image.read()
-                # 保存到临时文件
-                suffix = "." + uploaded_image.type.split('/')[-1]
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                    tmp_file.write(image_bytes)
-                    image_path = tmp_file.name
-                # st.image(image_bytes, caption=None, width=50)
 
     # 聊天输入逻辑调整为使用 prompt
     if prompt:
