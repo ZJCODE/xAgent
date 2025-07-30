@@ -44,7 +44,7 @@ def init_session_state():
         st.session_state.session_id = None
     
     if "use_redis" not in st.session_state:
-        st.session_state.use_redis = False
+        st.session_state.use_redis = True
     
     if "show_image_upload" not in st.session_state:
         st.session_state.show_image_upload = False
