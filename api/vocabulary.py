@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from tenacity import RetryError
-from core.capabilities.vocabulary import VocabularyService
+from core.service.vocabulary import VocabularyService
 from schemas.vocabulary import BaseVocabularyRecord, VocabularyRecord
 
 router = APIRouter()

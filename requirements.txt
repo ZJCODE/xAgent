@@ -9,3 +9,4 @@ openai
 tenacity
 streamlit
 boto3
+fastmcp
