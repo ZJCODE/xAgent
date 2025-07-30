@@ -13,13 +13,22 @@ class MCPTool:
         """
         self.client = Client(url)
 
+    def _get_attr_or_key(self, obj, key, default=None):
+        # Try attribute first, then dict key, else default
+        if hasattr(obj, key):
+            return getattr(obj, key)
+        elif isinstance(obj, dict):
+            return obj.get(key, default)
+        else:
+            return default
+
     def _convert_to_openai_tool(self, mcp_tool: Any) -> Callable:
         """
         将 MCP tool 对象或 dict 转换为 OpenAI tool 规范的异步函数，并带有 tool_spec 属性。
         """
-        name = getattr(mcp_tool, "name", None) or mcp_tool.get("name")
-        description = getattr(mcp_tool, "description", None) or mcp_tool.get("description", "")
-        input_schema = getattr(mcp_tool, "inputSchema", None) or mcp_tool.get("inputSchema", {})
+        name = self._get_attr_or_key(mcp_tool, "name")
+        description = self._get_attr_or_key(mcp_tool, "description", "")
+        input_schema = self._get_attr_or_key(mcp_tool, "inputSchema", {})
         input_schema.update({"additionalProperties": False})
 
         async def openai_tool_func(**kwargs):
