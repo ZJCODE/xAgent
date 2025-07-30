@@ -26,7 +26,8 @@ class MCPTool:
             if self.client is None:
                 raise RuntimeError("MCPTool: client is not set.")
             async with self.client:
-                return await self.client.call_tool(name, kwargs)
+                result = await self.client.call_tool(name, kwargs)
+                return result.data
 
         openai_tool_func.tool_spec = {
             "type": "function",
