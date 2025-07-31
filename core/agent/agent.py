@@ -238,6 +238,11 @@ class Agent:
 if __name__ == "__main__":
 
 
+    from tools.openai_tool import web_search
+    from db.message_db import MessageDB
+    from tools.mcp_tool import MCPTool
+
+
     @function_tool()
     def add(a: int, b: int) -> int:
         "Add two numbers."
@@ -247,19 +252,17 @@ if __name__ == "__main__":
     def multiply(a: int, b: int) -> int:
         "Multiply two numbers."
         return a * b
-
-    from tools.openai_tool import web_search
-    from db.message_db import MessageDB
+    
+    normal_tools = [add, multiply, web_search]
+    mcp_tools = []
 
     try:
-        from tools.mcp_tool import MCPTool
         mt = MCPTool("http://127.0.0.1:8000/mcp/")
         mcp_tools = asyncio.run(mt.get_openai_tools())
     except ImportError:
-        mcp_tools = []
         print("MCPTool not available, skipping MCP tools.")
     
-    agent = Agent(tools=[add,multiply,web_search] + mcp_tools,
+    agent = Agent(tools=normal_tools + mcp_tools,
                   system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. If you need to search the web, use the web_search tool. If you want roll a dice, use the roll_dice tool.",
                   model="gpt-4.1-mini")
 
