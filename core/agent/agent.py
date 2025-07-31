@@ -19,6 +19,7 @@ from langfuse.openai import AsyncOpenAI
 from schemas.messages import Message,ToolCall
 from core.agent.session import Session
 from utils.tool_decorator import function_tool
+from utils.mcp_convertor import MCPTool
 
 load_dotenv(override=True)
 
@@ -36,12 +37,15 @@ class Agent:
         system_prompt: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[list] = None,
+        mcp_servers: Optional[str | list] = None
     ):
         self.model: str = model or self.DEFAULT_MODEL
         self.system_prompt: str = self.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
         self.client: AsyncOpenAI = client or AsyncOpenAI()
         self.tools: dict = {}
         self._register_tools(tools)
+        self.mcp_servers: list = mcp_servers or []
+        self.mcp_tools: dict = {}
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def __call__(
@@ -83,6 +87,9 @@ class Agent:
             str | BaseModel: The agent's reply or error message.
         """
         try:
+            # Register tools and MCP servers in each chat call to make sure they are up-to-date
+            await self._register_mcp_servers(self.mcp_servers)
+
             # Store the incoming user message in session history
             self._store_user_message(user_message, session, image_source)
 
@@ -130,6 +137,20 @@ class Agent:
             if fn.tool_spec['name'] not in self.tools:
                 self.tools[fn.tool_spec['name']] = fn
 
+    async def _register_mcp_servers(self, mcp_servers: Optional[str | list]) -> None:
+        """
+        注册 MCP 服务器地址。
+        """
+        self.mcp_tools = {}
+        if isinstance(mcp_servers, str):
+            mcp_servers = [mcp_servers]
+        for url in mcp_servers or []:
+            mt = MCPTool(url)
+            mcp_tools = await mt.get_openai_tools()
+            for tool in mcp_tools:
+                if tool.tool_spec['name'] not in self.mcp_tools:
+                    self.mcp_tools[tool.tool_spec['name']] = tool
+
     def _store_user_message(self, user_message: Message | str, session: Session, image_source: Optional[str]) -> None:
         if isinstance(user_message, str):
             user_message = Message.create(content=user_message, role="user", image_source=image_source)
@@ -163,14 +184,14 @@ class Agent:
             if output_type is not None:
                 return await self.client.responses.parse(
                     model=self.model,
-                    tools=[fn.tool_spec for fn in self.tools.values()],
+                    tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
                     input=input_msgs,
                     text_format=output_type
                 )
             else:
                 return await self.client.responses.create(
                     model=self.model,
-                    tools=[fn.tool_spec for fn in self.tools.values()],
+                    tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
                     input=input_msgs
                 )
         except Exception as e:
@@ -198,7 +219,7 @@ class Agent:
         except Exception as e:
             self.logger.error("Tool args parse error: %s", e)
             return None
-        func = self.tools.get(name)
+        func = self.tools.get(name) or self.mcp_tools.get(name)
         if func:
             self.logger.info("Calling tool: %s with args: %s", name, args)
 
@@ -252,18 +273,25 @@ if __name__ == "__main__":
         "Multiply two numbers."
         return a * b
     
-    normal_tools = [add, multiply, web_search]
-    mcp_tools = []
+    # normal_tools = [add, multiply, web_search]
+    # mcp_tools = []
 
-    try:
-        mt = MCPTool("http://127.0.0.1:8000/mcp/")
-        mcp_tools = asyncio.run(mt.get_openai_tools())
-    except ImportError:
-        print("MCPTool not available, skipping MCP tools.")
+    # try:
+    #     mt = MCPTool("http://127.0.0.1:8001/mcp/")
+    #     mcp_tools = asyncio.run(mt.get_openai_tools())
+    # except ImportError:
+    #     print("MCPTool not available, skipping MCP tools.")
     
-    agent = Agent(tools=normal_tools + mcp_tools,
+    # agent = Agent(tools=normal_tools + mcp_tools,
+    #               system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. If you need to search the web, use the web_search tool. If you want roll a dice, use the roll_dice tool.",
+    #               model="gpt-4.1-mini")
+
+
+    agent = Agent(tools=[add, multiply, web_search],
+                  mcp_servers=["http://127.0.0.1:8001/mcp/"],
                   system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. If you need to search the web, use the web_search tool. If you want roll a dice, use the roll_dice tool.",
                   model="gpt-4.1-mini")
+
 
     # session = Session(user_id="user123123", session_id="test_session", message_db=MessageDB())
     session = Session(user_id="user123", message_db=MessageDB())
@@ -275,8 +303,8 @@ if __name__ == "__main__":
     reply = agent("roll a dice three times", session)
     print("Reply:", reply)
 
-    # reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
-    # print("Reply:", reply)
+    reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
+    print("Reply:", reply)
 
     # reply = agent("What is 18+2*4+3+4*5?", session)
     # print("Reply:", reply)

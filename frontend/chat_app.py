@@ -53,19 +53,11 @@ def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis:
     """创建 Agent 和 Session 实例"""
     # 创建工具列表
 
-    mcp_tools = []
-    try:
-        from utils.mcp_convertor import MCPTool
-        mt = MCPTool("http://127.0.0.1:8001/mcp/")
-        mcp_tools = asyncio.run(mt.get_openai_tools())
-    except ImportError:
-        print("MCPTool not available, skipping MCP tools.")
-    
     tools = [lookup_word, get_vocabulary, web_search, draw_image]
-
     # 创建 Agent
     agent = Agent(model=model, 
-                  tools=tools + mcp_tools,
+                  tools=tools,
+                  mcp_servers=["http://127.0.0.1:8001/mcp/"],
                   system_prompt=f"Current date is {time.strftime('%Y-%m-%d')}")
 
     # 创建 Session
