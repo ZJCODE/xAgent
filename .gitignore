@@ -17,6 +17,7 @@ build/
 *.db
 *.sqlite3
 *.env
+*.pid
 .env
 .venv
 venv/
@@ -49,3 +50,4 @@ Pipfile.lock
 poetry.lock
 # pyright
 pyrightconfig.json
+
