@@ -44,7 +44,6 @@ class Agent:
         self._register_tools(tools)
         self.logger = logging.getLogger(self.__class__.__name__)
 
-
     def __call__(
             self, 
             user_message: Message | str, 
@@ -240,7 +239,7 @@ if __name__ == "__main__":
 
     from tools.openai_tool import web_search
     from db.message_db import MessageDB
-    from tools.mcp_tool import MCPTool
+    from utils.mcp_tool import MCPTool
 
 
     @function_tool()
