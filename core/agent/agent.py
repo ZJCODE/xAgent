@@ -3,6 +3,7 @@ from typing import Optional
 import json
 import logging
 import asyncio
+import uuid
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
@@ -35,12 +36,14 @@ class Agent:
         self, 
         model: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        name: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[list] = None,
         mcp_servers: Optional[str | list] = None
     ):
         self.model: str = model or self.DEFAULT_MODEL
         self.system_prompt: str = self.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
+        self.name: str = name or "default_agent"
         self.client: AsyncOpenAI = client or AsyncOpenAI()
         self.tools: dict = {}
         self._register_tools(tools)
@@ -223,6 +226,12 @@ class Agent:
         if func:
             self.logger.info("Calling tool: %s with args: %s", name, args)
 
+            try:
+                result = await func(**args)
+            except Exception as e:
+                self.logger.error("Tool call error: %s", e)
+                result = f"Tool error: {e}"
+
             tool_call_msg = Message(
                 type="function_call",
                 role="tool", 
@@ -234,14 +243,6 @@ class Agent:
                 )
             )
 
-            session.add_messages(tool_call_msg)
-
-            try:
-                result = await func(**args)
-            except Exception as e:
-                self.logger.error("Tool call error: %s", e)
-                result = f"Tool error: {e}"
-
             tool_res_msg = Message(
                 type="function_call_output",
                 role="tool",
@@ -251,9 +252,19 @@ class Agent:
                     output=json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
                 )
             )
-            session.add_messages(tool_res_msg)
+            session.add_messages([tool_call_msg, tool_res_msg])
 
         return None
+
+    def as_tool(self,name: str = None, description: str = None):
+        """
+        将 Agent 实例转换为 OpenAI 工具函数。
+        """
+        @function_tool(name=name or self.name, description=description or self.system_prompt)
+        async def tool_func(message: str):
+            return await self.chat(user_message=message, session=Session(user_id=f"agent_{self.name}_as_tool", session_id=f"session_{uuid.uuid4()}"))
+
+        return tool_func
 
 if __name__ == "__main__":
 
@@ -286,10 +297,20 @@ if __name__ == "__main__":
     #               system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. If you need to search the web, use the web_search tool. If you want roll a dice, use the roll_dice tool.",
     #               model="gpt-4.1-mini")
 
+    story_agent = Agent(system_prompt="you are a story teller.",
+                        model="gpt-4.1-mini")
+    
+    story_tool = story_agent.as_tool(name="story_tool", description="A tool to tell stories based on user input and return the story for reference.")
 
-    agent = Agent(tools=[add, multiply, web_search],
+    # res = asyncio.run(story_tool("Can you tell me a story about a brave knight?"))
+    # print("Story Tool Result:", res)
+
+    agent = Agent(tools=[add, multiply, web_search, story_tool],
                   mcp_servers=["http://127.0.0.1:8001/mcp/"],
-                  system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. If you need to search the web, use the web_search tool. If you want roll a dice, use the roll_dice tool.",
+                  system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. " \
+                  "If you need to search the web, use the web_search tool. " \
+                  "If you want roll a dice, use the roll_dice tool." \
+                  "If you want to tell a story, use the story tool.",
                   model="gpt-4.1-mini")
 
 
@@ -300,10 +321,13 @@ if __name__ == "__main__":
     # reply = agent("the answer for 12 + 13 is", session)
     # print("Reply:", reply)
 
-    reply = agent("roll a dice three times", session)
-    print("Reply:", reply)
+    # reply = agent("roll a dice three times", session)
+    # print("Reply:", reply)
 
-    reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
+    # reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
+    # print("Reply:", reply)
+
+    reply = agent("Can you tell me a story about a brave knight?", session)
     print("Reply:", reply)
 
     # reply = agent("What is 18+2*4+3+4*5?", session)

@@ -53,7 +53,13 @@ def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis:
     """创建 Agent 和 Session 实例"""
     # 创建工具列表
 
-    tools = [lookup_word, get_vocabulary, web_search, draw_image]
+    story_agent = Agent(system_prompt="you are a story maker who can tell vivid stories.",
+                        model="gpt-4.1-mini")
+    
+    story_tool = story_agent.as_tool(name="story_make_tool", description="A tool to tell stories based on user input and return the story for reference.")
+
+    tools = [lookup_word, get_vocabulary, web_search, draw_image, story_tool]
+
     # 创建 Agent
     agent = Agent(model=model, 
                   tools=tools,
