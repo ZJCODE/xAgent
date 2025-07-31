@@ -1,6 +1,9 @@
 import base64
 import tempfile
 import os
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 from langfuse import observe
 from langfuse.openai import AsyncOpenAI
@@ -8,8 +11,6 @@ from langfuse.openai import AsyncOpenAI
 from xagent.utils.tool_decorator import function_tool
 from xagent.utils.image_upload import upload_image as s3_upload_image
 
-from dotenv import load_dotenv
-load_dotenv(override=True)
 
 client = AsyncOpenAI()
 DEFAULT_MODEL = "gpt-4o-mini"

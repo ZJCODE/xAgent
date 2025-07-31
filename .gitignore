@@ -17,7 +17,7 @@ build/
 *.db
 *.sqlite3
 *.env
-*.pid
+logs/*.pid
 .env
 .venv
 venv/

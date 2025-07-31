@@ -1,11 +1,12 @@
 import os
 import pytest
 import time
-from xagent.schemas.messages import Message
-from xagent.db.message_db import MessageDB
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
+
+from xagent.schemas import Message
+from xagent.db import MessageDB
 
 @pytest.fixture(scope="function")
 def message_db():

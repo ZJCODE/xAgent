@@ -1,11 +1,12 @@
 import os
 import pytest
 import time
-from xagent.schemas.vocabulary import VocabularyRecord, DifficultyLevel
-from xagent.db.vocabulary_db import VocabularyDB
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
+
+from tools.vocabulary.vocabulary_schema import VocabularyRecord, DifficultyLevel
+
 
 @pytest.fixture(scope="function")
 def vocab_db():

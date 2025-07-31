@@ -1,6 +1,6 @@
 import redis
 from typing import List, Optional
-from xagent.schemas.messages import Message
+from xagent.schemas import Message
 
 import os
 from dotenv import load_dotenv

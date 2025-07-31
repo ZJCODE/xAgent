@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# start.sh
+# run.sh
 
 # Usage:
-#   bash start.sh         # 启动所有服务
-#   bash start.sh stop    # 停止所有服务
-#   bash start.sh status  # 查看服务状态
+#   bash run.sh         # 启动所有服务
+#   bash run.sh stop    # 停止所有服务
+#   bash run.sh status  # 查看服务状态
 
-conda activate xagent
+# conda activate xagent
 
 APP_ROOT=$(cd "$(dirname "$0")"; pwd)
 export PYTHONPATH="$APP_ROOT"

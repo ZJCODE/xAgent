@@ -11,8 +11,8 @@ import tempfile
 # 添加项目根目录到 Python 路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from xagent.core.agent import Session, Agent
-from xagent.db.message_db import MessageDB
+from xagent.core import Session, Agent
+from xagent.db import MessageDB
 from tools.vocabulary_tool import lookup_word, get_vocabulary
 from tools.openai_tool import web_search,draw_image
 

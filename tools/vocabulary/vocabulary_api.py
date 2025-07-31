@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from tenacity import RetryError
+
 from tools.vocabulary.vocabulary_service import VocabularyService
 from tools.vocabulary.vocabulary_schema import BaseVocabularyRecord, VocabularyRecord
 

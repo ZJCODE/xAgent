@@ -17,8 +17,8 @@ logging.basicConfig(
 from langfuse import observe
 from langfuse.openai import AsyncOpenAI
 
-from xagent.schemas.messages import Message,ToolCall
-from xagent.core.agent.session import Session
+from xagent.schemas import Message,ToolCall
+from xagent.core import Session
 from xagent.utils.tool_decorator import function_tool
 from xagent.utils.mcp_convertor import MCPTool
 
