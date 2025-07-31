@@ -65,7 +65,7 @@ if __name__ == "__main__":
         tools = await mcp_tool.get_openai_tools()
         for tool in tools:
             print(f"Tool: {tool.tool_spec['name']}, Description: {tool.tool_spec['description']}")
-        result = await tools[1](a=5, b=10)
+        result = await tools[0](n_dice=2)
         print(f"Result: {result}")
 
     asyncio.run(main())

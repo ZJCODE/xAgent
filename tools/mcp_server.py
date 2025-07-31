@@ -3,7 +3,7 @@ from fastmcp import FastMCP
 
 mcp = FastMCP(name="MCP Server")
 
-@mcp.tool(enabled=False)
+@mcp.tool(enabled=True)
 def roll_dice(n_dice: int) -> list[int]:
     """Roll `n_dice` 6-sided dice and return the results."""
     return [random.randint(1, 6) for _ in range(n_dice)]
