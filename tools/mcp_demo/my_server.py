@@ -20,7 +20,7 @@ def add_numbers(a: int, b: int) -> int:
 def get_user_details(user_id: str = None) -> str:
     """Retrieve user details based on user_id."""
     # user_id will be injected by the server, not provided by the LLM
-    return "current is 31 years old, lives in Shanghai, China"
+    return "current user is 31 years old, lives in Hangzhou, China"
 
 @mcp.resource("data://config")
 def get_config() -> dict:
