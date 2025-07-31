@@ -20,8 +20,7 @@ def add_numbers(a: int, b: int) -> int:
 def get_user_details(user_id: str = None) -> str:
     """Retrieve user details based on user_id."""
     # user_id will be injected by the server, not provided by the LLM
-    return "current user is 31 years old, lives in Hangzhou, China"
-
+    return "current user is 31 years old, lives in Hangzhou, China , hobby is reading books"
 @mcp.resource("data://config")
 def get_config() -> dict:
     """Provides the application configuration."""
@@ -34,4 +33,4 @@ def analyze_data(data_points: list[float]) -> str:
     return f"Please analyze these data points: {formatted_data}"
 
 if __name__ == "__main__":
-    mcp.run(transport="http", port=8000)
+    mcp.run(transport="http", port=8001)

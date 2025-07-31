@@ -59,7 +59,7 @@ class MCPTool:
 if __name__ == "__main__":
     import asyncio
 
-    mcp_tool = MCPTool("http://127.0.0.1:8000/mcp/")
+    mcp_tool = MCPTool("http://127.0.0.1:8001/mcp/")
 
     async def main():
         tools = await mcp_tool.get_openai_tools()

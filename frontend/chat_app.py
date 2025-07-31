@@ -55,8 +55,8 @@ def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis:
 
     mcp_tools = []
     try:
-        from utils.mcp_tool import MCPTool
-        mt = MCPTool("http://127.0.0.1:8000/mcp/")
+        from utils.mcp_convertor import MCPTool
+        mt = MCPTool("http://127.0.0.1:8001/mcp/")
         mcp_tools = asyncio.run(mt.get_openai_tools())
     except ImportError:
         print("MCPTool not available, skipping MCP tools.")

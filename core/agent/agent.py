@@ -28,7 +28,7 @@ class Agent:
     """
 
     DEFAULT_MODEL = "gpt-4.1-mini"
-    DEFAULT_SYSTEM_PROMPT = "**Current date**: {date}, **Current timezone**: {timezone}"
+    DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id}, **Current date**: {date}, **Current timezone**: {timezone}\n"
 
     def __init__(
         self, 
@@ -38,7 +38,7 @@ class Agent:
         tools: Optional[list] = None,
     ):
         self.model: str = model or self.DEFAULT_MODEL
-        self.system_prompt: str = system_prompt or self.DEFAULT_SYSTEM_PROMPT
+        self.system_prompt: str = self.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
         self.client: AsyncOpenAI = client or AsyncOpenAI()
         self.tools: dict = {}
         self._register_tools(tools)
@@ -146,7 +146,7 @@ class Agent:
         # Sytem Message
         system_msg = {
             "role": "system",
-            "content": self.system_prompt.format(date=time.strftime('%Y-%m-%d'), timezone=time.tzname[0])
+            "content": self.system_prompt.format(user_id= session.user_id, date=time.strftime('%Y-%m-%d'), timezone=time.tzname[0])
         }
         # User History Messages
         history_msgs = []
@@ -239,7 +239,7 @@ if __name__ == "__main__":
 
     from tools.openai_tool import web_search
     from db.message_db import MessageDB
-    from utils.mcp_tool import MCPTool
+    from utils.mcp_convertor import MCPTool
 
 
     @function_tool()
