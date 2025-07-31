@@ -9,6 +9,8 @@
 
 # conda activate xagent
 
+# export PYTHONPATH="${pwd}"
+
 APP_ROOT=$(cd "$(dirname "$0")"; pwd)
 export PYTHONPATH="$APP_ROOT"
 
