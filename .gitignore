@@ -51,3 +51,6 @@ poetry.lock
 # pyright
 pyrightconfig.json
 
+logs/api.pid
+logs/mcp_server.pid
+logs/frontend.pid
