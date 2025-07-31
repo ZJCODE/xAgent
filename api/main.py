@@ -1,9 +1,8 @@
 # main.py
 from fastapi import FastAPI
 
-from xagent.api.health import router as health_router
-from xagent.api.vocabulary import router as vocabulary_router
-
+from api.health import router as health_router
+from tools.vocabulary.vocabulary_api import router as vocabulary_router
 
 app = FastAPI()
 app.include_router(health_router)

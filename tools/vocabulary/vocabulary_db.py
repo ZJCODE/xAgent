@@ -1,7 +1,7 @@
 import os
 import time
 import redis
-from xagent.schemas.vocabulary import VocabularyRecord
+from tools.vocabulary.vocabulary_schema import VocabularyRecord
 from dotenv import load_dotenv
 
 load_dotenv(override=True)

@@ -1,7 +1,7 @@
 # api/health.py
 from fastapi import APIRouter
-from xagent.core.base import BaseService
-from xagent.schemas.health import HealthResponse
+from api.base import BaseService
+from api.schema.health import HealthResponse
 
 router = APIRouter()
 service = BaseService()

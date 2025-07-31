@@ -13,8 +13,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from xagent.core.agent import Session, Agent
 from xagent.db.message_db import MessageDB
-from xagent.tools.vocabulary_tool import lookup_word, get_vocabulary
-from xagent.tools.openai_tool import web_search,draw_image
+from tools.vocabulary_tool import lookup_word, get_vocabulary
+from tools.openai_tool import web_search,draw_image
 
 # 页面配置
 st.set_page_config(
