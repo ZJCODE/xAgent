@@ -6,6 +6,7 @@ from langfuse import observe
 from langfuse.openai import AsyncOpenAI
 
 from utils.tool_decorator import function_tool
+from utils.image_upload import upload_image as s3_upload_image
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -58,7 +59,6 @@ async def draw_image(prompt: str) -> str:
                 return f'![generated image](data:image/png;base64,{image_base64})'
 
 def upload_image(image_path: str) -> str:
-    from utils.image_upload import upload_image as s3_upload_image
     url = s3_upload_image(image_path)
     if not url:
         raise Exception("Image upload failed")
