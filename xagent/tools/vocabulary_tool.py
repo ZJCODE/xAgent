@@ -1,5 +1,5 @@
 import httpx
-from utils.tool_decorator import function_tool
+from xagent.utils.tool_decorator import function_tool
 
 API_BASE_URL = "http://localhost:8000"  # 根据实际 FastAPI 服务地址调整
 

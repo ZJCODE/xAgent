@@ -10,8 +10,8 @@ from langfuse.openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pydantic import ValidationError
 
-from schemas.vocabulary import BaseVocabularyRecord, VocabularyRecord
-from db.vocabulary_db import VocabularyDB
+from xagent.schemas.vocabulary import BaseVocabularyRecord, VocabularyRecord
+from xagent.db.vocabulary_db import VocabularyDB
 
 
 load_dotenv(override=True)

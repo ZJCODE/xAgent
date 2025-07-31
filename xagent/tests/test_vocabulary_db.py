@@ -1,8 +1,8 @@
 import os
 import pytest
 import time
-from schemas.vocabulary import VocabularyRecord, DifficultyLevel
-from db.vocabulary_db import VocabularyDB
+from xagent.schemas.vocabulary import VocabularyRecord, DifficultyLevel
+from xagent.db.vocabulary_db import VocabularyDB
 from dotenv import load_dotenv
 
 load_dotenv()

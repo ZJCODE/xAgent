@@ -17,10 +17,10 @@ logging.basicConfig(
 from langfuse import observe
 from langfuse.openai import AsyncOpenAI
 
-from schemas.messages import Message,ToolCall
-from core.agent.session import Session
-from utils.tool_decorator import function_tool
-from utils.mcp_convertor import MCPTool
+from xagent.schemas.messages import Message,ToolCall
+from xagent.core.agent.session import Session
+from xagent.utils.tool_decorator import function_tool
+from xagent.utils.mcp_convertor import MCPTool
 
 load_dotenv(override=True)
 

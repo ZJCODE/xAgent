@@ -4,7 +4,6 @@ import time
 from typing import Optional
 import streamlit as st
 import asyncio
-import base64
 import re
 import tempfile
 
@@ -12,10 +11,10 @@ import tempfile
 # 添加项目根目录到 Python 路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.agent import Session, Agent
-from db.message_db import MessageDB
-from tools.vocabulary_tool import lookup_word, get_vocabulary
-from tools.openai_tool import web_search,draw_image
+from xagent.core.agent import Session, Agent
+from xagent.db.message_db import MessageDB
+from xagent.tools.vocabulary_tool import lookup_word, get_vocabulary
+from xagent.tools.openai_tool import web_search,draw_image
 
 # 页面配置
 st.set_page_config(

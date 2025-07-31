@@ -5,8 +5,8 @@ import os
 from langfuse import observe
 from langfuse.openai import AsyncOpenAI
 
-from utils.tool_decorator import function_tool
-from utils.image_upload import upload_image as s3_upload_image
+from xagent.utils.tool_decorator import function_tool
+from xagent.utils.image_upload import upload_image as s3_upload_image
 
 from dotenv import load_dotenv
 load_dotenv(override=True)

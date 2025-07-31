@@ -1,8 +1,8 @@
 import os
 import pytest
 import time
-from schemas.messages import Message
-from db.message_db import MessageDB
+from xagent.schemas.messages import Message
+from xagent.db.message_db import MessageDB
 from dotenv import load_dotenv
 
 load_dotenv()

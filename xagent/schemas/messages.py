@@ -2,7 +2,7 @@ import time
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from utils.image_upload import upload_image
+from xagent.utils.image_upload import upload_image
 
 class ToolCall(BaseModel):
     """Represents a tool/function call within a message."""

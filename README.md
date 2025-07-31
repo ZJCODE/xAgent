@@ -145,12 +145,9 @@ LANGFUSE_HOST=https://cloud.langfuse.com
 ### 4. 启动服务
 
 ```bash
-# 方式1：直接运行
-python main.py
 
-# 方式2：使用 uvicorn
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
+python xagent/api/main.py
+
 
 ### 5. 访问服务
 
