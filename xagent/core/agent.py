@@ -93,8 +93,8 @@ class Agent:
         Args:
             user_message (Message | str): The latest user message.
             session (Session): The session object managing message history.
-            history_count (int, optional): Number of previous messages to include. Defaults to 20 , must be even.
-            tool_choose_history_count (int, optional): Number of messages to consider for tool selection. Defaults to 6 , must be even.
+            history_count (int, optional): Number of previous messages to include. Defaults to 20.
+            tool_choose_history_count (int, optional): Number of messages to consider for tool selection. Defaults to 6.
             max_iter (int, optional): Maximum model call attempts. Defaults to 10.
             image_source (Optional[str], optional): Source of the image, if any can be a URL or File path or base64 string.
             output_type (type[BaseModel], optional): Pydantic model for structured output.
@@ -102,7 +102,7 @@ class Agent:
         Returns:
             str | BaseModel: The agent's reply or error message.
         """
-        
+
         try:
             # Register tools and MCP servers in each chat call to make sure they are up-to-date
             await self._register_mcp_servers(self.mcp_servers)
@@ -119,6 +119,10 @@ class Agent:
 
                 # Handle any tool calls in the response
                 tool_call_result = await self._handle_tool_calls(tool_calls, session, input_messages)
+
+                # make sure all len(tool_calls) is considered in tool_choose_history_count after successful handling
+                if tool_calls is not None and len(tool_calls) > 0:
+                    tool_choose_history_count += len(tool_calls)
 
                 if tool_call_result == self.ANSWER_ACTION:
                     response = await self._call_model(input_messages, output_type)
@@ -190,11 +194,6 @@ class Agent:
         """
         构造输入给大模型的消息列表。
         """
-
-        # Ensure history_count is even for balanced input
-        if history_count % 2 != 0:
-            history_count += 1
-
         # Sytem Message
         system_msg = {
             "role": "system",
@@ -204,18 +203,15 @@ class Agent:
         history_msgs = []
         for msg in session.get_messages(history_count):
             history_msgs.append(msg.to_dict())
-        return [system_msg] + history_msgs
-    
+        return [system_msg] + self._verify_input_messages(history_msgs)
+
     @observe()
     async def _choose_tools(self, input_msgs: list, tool_choose_history_count: int) -> Optional[list]:
-        # make sure tool_choose_history_count is even
-        if tool_choose_history_count % 2 != 0:
-            tool_choose_history_count += 1  # Ensure it's even for balanced tool selection
         try:
             response = await self.client.responses.create(
                     model=self.tool_choose_model,
                     tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
-                    input=input_msgs[-tool_choose_history_count:],
+                    input=[input_msgs[0]] + self._verify_input_messages(input_msgs[1:][-tool_choose_history_count:]),
                     tool_choice ="required",
             )
             return response.output
@@ -321,6 +317,15 @@ class Agent:
             return [tool_call_msg, tool_res_msg]
 
         return None
+
+    @staticmethod
+    def _verify_input_messages(input_messages: list) -> None:
+        """
+        验证输入消息列表，确保格式正确。
+        """
+        if input_messages[0].get("type") == "function_call_output":
+            input_messages.pop(0)  # Remove tool output if present at the start
+        return input_messages
 
     def as_tool(self,name: str = None, description: str = None,message_db: Optional[MessageDB] = None):
         """
