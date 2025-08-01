@@ -95,7 +95,8 @@ class Agent:
         history_count: int = 20,
         max_iter: int = 10,
         image_source: Optional[str] = None,
-        output_type: type[BaseModel] = None
+        output_type: type[BaseModel] = None,
+        stream: bool = False
     ) -> str | BaseModel:
         """
         Generate a reply from the agent given a user message and session.
@@ -242,14 +243,14 @@ class Agent:
         """
     
         tool_names = [tc.name for tc in tool_calls]
-
+        # Execute in order if specific tools are present
         if self.REPLY_TOOL_NAME in tool_names or self.NEED_MORE_INFO_TOOL_NAME in tool_names:
             for tc in tool_calls:
                 if getattr(tc, "type", None) == "function_call":
                     await self._act(tc, session)
                     if tc.name in [self.REPLY_TOOL_NAME, self.NEED_MORE_INFO_TOOL_NAME]:
                         return self.ANSWER_ACTION
-
+        # Otherwise, execute all tool calls concurrently
         tasks = [self._act(tc, session) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
         await asyncio.gather(*tasks)
         return None

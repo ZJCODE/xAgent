@@ -26,7 +26,7 @@ def add_numbers(a: int, b: int) -> int:
 def get_user_details(user_id: str = None) -> str:
     """Retrieve user details based on user_id."""
     # user_id will be injected by the server, not provided by the LLM
-    return "current user is 31 years old, lives in Hangzhou, China , hobby is reading books"
+    return "current user is Jun, 31 years old, lives in Hangzhou, China , hobby is reading books"
 
 @mcp.tool(enabled=True)
 def look_up_word(word: str, user_id: str) -> str:
