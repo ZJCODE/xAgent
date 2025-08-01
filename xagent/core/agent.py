@@ -32,6 +32,7 @@ class Agent:
 
     DEFAULT_NAME = "default_agent"
     DEFAULT_MODEL = "gpt-4.1-mini"
+    DEFAULT_TOOL_CHOOSE_MODEL = "gpt-4.1-mini"
     DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id}, **Current date**: {date}, **Current timezone**: {timezone}\n"
 
     REPLY_TOOL_NAME = "ready_to_reply"
@@ -45,11 +46,13 @@ class Agent:
         model: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[list] = None,
+        tool_choose_model: Optional[str] = None,
         mcp_servers: Optional[str | list] = None
     ):
         self.name: str = name or self.DEFAULT_NAME
         self.system_prompt: str = self.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
         self.model: str = model or self.DEFAULT_MODEL
+        self.tool_choose_model: str = tool_choose_model or self.DEFAULT_TOOL_CHOOSE_MODEL
         self.client: AsyncOpenAI = client or AsyncOpenAI()
         self.tools: dict = {}
         self._register_tools(self._default_tools + (tools or []))
@@ -198,7 +201,7 @@ class Agent:
     async def _choose_tools(self, input_msgs: list) -> Optional[list]:
         try:
             response = await self.client.responses.create(
-                    model=self.model,
+                    model=self.tool_choose_model,
                     tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
                     input=input_msgs,
                     tool_choice ="required",
