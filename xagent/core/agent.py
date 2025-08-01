@@ -231,6 +231,7 @@ class Agent:
             self.logger.error("Model call failed: %s", e)
             return None
 
+    @observe()
     async def _handle_tool_calls(self, tool_calls: list, session: Session, input_messages: list) -> Optional[str]:
         """
         异步并发处理所有 tool_call，返回特殊结果（如图片）或 None。
