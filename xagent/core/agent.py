@@ -140,6 +140,19 @@ class Agent:
             self.logger.exception("Agent chat error: %s", e)
             return "Sorry, something went wrong."
 
+    def as_tool(self,name: str = None, description: str = None,message_db: Optional[MessageDB] = None):
+        """
+        将 Agent 实例转换为 OpenAI 工具函数。
+        """
+        @function_tool(name=name or self.name, description=description or self.system_prompt)
+        async def tool_func(input: str):
+            return await self.chat(user_message=input, 
+                                   session=Session(user_id=f"agent_{self.name}_as_tool", 
+                                                   session_id=f"{uuid.uuid4()}",
+                                                    message_db=message_db
+                                                   ))
+        return tool_func
+
     @property
     def _default_tools(self) -> list:
 
@@ -326,16 +339,3 @@ class Agent:
         if input_messages[0].get("type") == "function_call_output":
             input_messages.pop(0)  # Remove tool output if present at the start
         return input_messages
-
-    def as_tool(self,name: str = None, description: str = None,message_db: Optional[MessageDB] = None):
-        """
-        将 Agent 实例转换为 OpenAI 工具函数。
-        """
-        @function_tool(name=name or self.name, description=description or self.system_prompt)
-        async def tool_func(input: str):
-            return await self.chat(user_message=input, 
-                                   session=Session(user_id=f"agent_{self.name}_as_tool", 
-                                                   session_id=f"{uuid.uuid4()}",
-                                                    message_db=message_db
-                                                   ))
-        return tool_func
