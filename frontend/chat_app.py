@@ -136,7 +136,7 @@ def main():
         model = st.selectbox("选择模型", model_options, index=2)
         
         tool_model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4.1","gpt-4.1-mini","gpt-4.1-nano"]
-        tool_choose_model = st.selectbox("选择工具选择模型", tool_model_options, index=3)
+        tool_choose_model = st.selectbox("选择工具选择模型", tool_model_options, index=4)
         
         # 新增：图片上传模块显示控制
         st.subheader("界面设置")

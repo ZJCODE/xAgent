@@ -65,7 +65,8 @@ class Agent:
             self, 
             user_message: Message | str, 
             session: Session, 
-            history_count: int = 20, 
+            history_count: int = 16, 
+            tool_choose_history_count: int = 5,
             max_iter: int = 5,
             image_source: Optional[str] = None,
             output_type: type[BaseModel] = None
@@ -73,14 +74,15 @@ class Agent:
         """
         支持同步调用 Agent（自动转异步）。
         """
-        return asyncio.run(self.chat(user_message, session, history_count, max_iter, image_source, output_type))
+        return asyncio.run(self.chat(user_message, session, history_count,tool_choose_history_count,max_iter, image_source, output_type))
 
     @observe()
     async def chat(
         self,
         user_message: Message | str,
         session: Session,
-        history_count: int = 20,
+        history_count: int = 16,
+        tool_choose_history_count: int = 5,
         max_iter: int = 10,
         image_source: Optional[str] = None,
         output_type: type[BaseModel] = None
@@ -111,7 +113,7 @@ class Agent:
 
             for attempt in range(max_iter):
                 # Call choose tools to see if any tool calls are needed
-                tool_calls = await self._choose_tools(input_messages)
+                tool_calls = await self._choose_tools(input_messages, tool_choose_history_count)
 
                 # Handle any tool calls in the response
                 tool_call_result = await self._handle_tool_calls(tool_calls, session, input_messages)
@@ -198,12 +200,12 @@ class Agent:
         return [system_msg] + history_msgs
     
     @observe()
-    async def _choose_tools(self, input_msgs: list) -> Optional[list]:
+    async def _choose_tools(self, input_msgs: list, tool_choose_history_count: int) -> Optional[list]:
         try:
             response = await self.client.responses.create(
                     model=self.tool_choose_model,
                     tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
-                    input=input_msgs,
+                    input=input_msgs[-tool_choose_history_count:],
                     tool_choice ="required",
             )
             return response.output
