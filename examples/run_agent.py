@@ -66,7 +66,7 @@ session.clear_session()  # 清空历史以便测试
 # reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
 # print("Reply:", reply)
 
-reply = agent("Can you tell me a story about a brave knight?", session)
+reply = agent("Can you tell me a story about start in 20 words?", session)
 print("Reply:", reply)
 
 # reply = agent("What is 18+2*4+3+4*5?", session)
@@ -81,18 +81,18 @@ print("Reply:", reply)
 # reply = agent("The Weather in Hangzhou and Beijing is", session)
 # print("Reply:", reply)
 
-class Step(BaseModel):
-    explanation: str
-    output: str
+# class Step(BaseModel):
+#     explanation: str
+#     output: str
 
-class MathReasoning(BaseModel):
-    steps: list[Step]
-    final_answer: str
+# class MathReasoning(BaseModel):
+#     steps: list[Step]
+#     final_answer: str
 
-reply = agent("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
-for step in reply.steps:
-    print(f"Step: {step.explanation} => Output: {step.output}")
-print("Final Answer:", reply.final_answer)
+# reply = agent("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
+# for step in reply.steps:
+#     print(f"Step: {step.explanation} => Output: {step.output}")
+# print("Final Answer:", reply.final_answer)
 
 
 # reply = agent("Can you describe the image?", session = session,image_source="https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg")

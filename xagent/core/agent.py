@@ -103,19 +103,17 @@ class Agent:
             # Store the incoming user message in session history
             self._store_user_message(user_message, session, image_source)
 
-            for attempt in range(max_iter):
-                # Build input messages for the model
-                input_messages = self._build_input_messages(session, history_count)
+            # Build input messages once outside the loop
+            input_messages = self._build_input_messages(session, history_count)
 
+            for attempt in range(max_iter):
                 # Call choose tools to see if any tool calls are needed
                 tool_calls = await self._choose_tools(input_messages)
 
                 # Handle any tool calls in the response
-                tool_call_result = await self._handle_tool_calls(tool_calls, session)
+                tool_call_result = await self._handle_tool_calls(tool_calls, session, input_messages)
 
                 if tool_call_result == self.ANSWER_ACTION:
-
-                    input_messages = self._build_input_messages(session, history_count)
                     response = await self._call_model(input_messages, output_type)
 
                     if response:
@@ -233,25 +231,28 @@ class Agent:
             self.logger.error("Model call failed: %s", e)
             return None
 
-    async def _handle_tool_calls(self, tool_calls: list, session: Session) -> Optional[str]:
+    async def _handle_tool_calls(self, tool_calls: list, session: Session, input_messages: list) -> Optional[str]:
         """
         异步并发处理所有 tool_call，返回特殊结果（如图片）或 None。
         """
-    
+
+        if tool_calls is None or not tool_calls:
+            return None
+
         tool_names = [tc.name for tc in tool_calls]
         # Execute in order if specific tools are present
         if self.REPLY_TOOL_NAME in tool_names or self.NEED_MORE_INFO_TOOL_NAME in tool_names:
             for tc in tool_calls:
                 if getattr(tc, "type", None) == "function_call":
-                    await self._act(tc, session)
+                    await self._act(tc, session, input_messages)
                     if tc.name in [self.REPLY_TOOL_NAME, self.NEED_MORE_INFO_TOOL_NAME]:
                         return self.ANSWER_ACTION
         # Otherwise, execute all tool calls concurrently
-        tasks = [self._act(tc, session) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
+        tasks = [self._act(tc, session, input_messages) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
         await asyncio.gather(*tasks)
         return None
 
-    async def _act(self, tool_call, session: Session) -> Optional[str]:
+    async def _act(self, tool_call, session: Session, input_messages: list) -> Optional[str]:
         """
         异步执行工具函数调用，并将结果写入 session。
         """
@@ -292,6 +293,9 @@ class Agent:
                 )
             )
             session.add_messages([tool_call_msg, tool_res_msg])
+            
+            # Append tool messages to input_messages to avoid rebuilding
+            input_messages.extend([tool_call_msg.to_dict(), tool_res_msg.to_dict()])
 
         return None
 
