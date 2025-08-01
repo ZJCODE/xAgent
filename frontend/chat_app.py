@@ -51,11 +51,16 @@ def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis:
     """创建 Agent 和 Session 实例"""
     # 创建工具列表
 
+    message_db = MessageDB() if use_redis else None
+
     story_agent = Agent(name="story_agent",
                         system_prompt="you are a story maker who can tell vivid stories.",
                         model="gpt-4.1-mini")
     
-    story_tool = story_agent.as_tool(name="story_make_tool", description="A tool to tell stories based on user input and return the story for reference.")
+    story_tool = story_agent.as_tool(name="story_make_tool", 
+                                     description="A tool to tell stories based on user input and return the story for reference.",
+                                     message_db=message_db
+                                     )
 
     tools = [web_search, draw_image, story_tool]
 
@@ -66,7 +71,7 @@ def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis:
                   system_prompt=f"Current date is {time.strftime('%Y-%m-%d')}")
 
     # 创建 Session
-    message_db = MessageDB() if use_redis else None
+    
     session = Session(
         user_id=user_id,
         session_id=session_id,

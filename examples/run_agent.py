@@ -40,7 +40,9 @@ story_agent = Agent(name = "story_agent",
                     system_prompt="you are a story teller.",
                     model="gpt-4.1-mini")
 
-story_tool = story_agent.as_tool(name="story_tool", description="A tool to tell stories based on user input and return the story for reference.")
+story_tool = story_agent.as_tool(name="story_tool", 
+                                 description="A tool to tell stories based on user input and return the story for reference.",
+                                 message_db=MessageDB())
 
 # res = asyncio.run(story_tool("Can you tell me a story about a brave knight?"))
 # print("Story Tool Result:", res)
