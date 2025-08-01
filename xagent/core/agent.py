@@ -119,16 +119,9 @@ class Agent:
                     response = await self._call_model(input_messages, output_type)
 
                     if response:
-                        if output_type is not None and hasattr(response, "output_parsed"):
-                            # Structured output
-                            self._store_model_reply(str(response.output_parsed), session)
-                            return response.output_parsed
-
-                        # If model returned a text reply, store and return it
-                        reply_text = response.output_text
-                        if reply_text:
-                            self._store_model_reply(reply_text, session)
-                            return reply_text
+                        response_str = response.model_dump_json() if output_type else str(response)
+                        self._store_model_reply(response_str, session)
+                        return response
 
             # If no valid reply after max_iter attempts
             self.logger.error("Failed to generate response after %d attempts", max_iter)
@@ -222,16 +215,18 @@ class Agent:
         """
         try:
             if output_type is not None:
-                return await self.client.responses.parse(
+                response =  await self.client.responses.parse(
                     model=self.model,
                     input=input_msgs,
                     text_format=output_type
                 )
+                return response.output_parsed
             else:
-                return await self.client.responses.create(
+                response =  await self.client.responses.create(
                     model=self.model,
                     input=input_msgs
                 )
+                return response.output_text
         except Exception as e:
             self.logger.error("Model call failed: %s", e)
             return None

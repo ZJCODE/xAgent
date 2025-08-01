@@ -49,10 +49,7 @@ story_tool = story_agent.as_tool(name="story_tool",
 
 agent = Agent(tools=[add, multiply, web_search, story_tool],
                 mcp_servers="http://127.0.0.1:8001/mcp/",
-                system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. " \
-                "If you need to search the web, use the web_search tool. " \
-                "If you want roll a dice, use the roll_dice tool." \
-                "If you want to tell a story, use the story tool.",
+                system_prompt="You are a helpful assistant.",
                 model="gpt-4.1")
 
 
