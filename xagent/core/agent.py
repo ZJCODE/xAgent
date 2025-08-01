@@ -95,8 +95,7 @@ class Agent:
         history_count: int = 20,
         max_iter: int = 10,
         image_source: Optional[str] = None,
-        output_type: type[BaseModel] = None,
-        stream: bool = False
+        output_type: type[BaseModel] = None
     ) -> str | BaseModel:
         """
         Generate a reply from the agent given a user message and session.
