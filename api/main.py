@@ -2,11 +2,9 @@
 from fastapi import FastAPI
 
 from api.health import router as health_router
-from tools.vocabulary.vocabulary_api import router as vocabulary_router
 
 app = FastAPI()
 app.include_router(health_router)
-app.include_router(vocabulary_router)
 
 if __name__ == "__main__":
     import uvicorn

@@ -13,7 +13,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from xagent.core import Session, Agent
 from xagent.db import MessageDB
-from tools.vocabulary_tool import lookup_word, get_vocabulary
 from tools.openai_tool import web_search,draw_image
 
 # 页面配置
@@ -57,7 +56,7 @@ def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis:
     
     story_tool = story_agent.as_tool(name="story_make_tool", description="A tool to tell stories based on user input and return the story for reference.")
 
-    tools = [lookup_word, get_vocabulary, web_search, draw_image, story_tool]
+    tools = [web_search, draw_image, story_tool]
 
     # 创建 Agent
     agent = Agent(model=model, 

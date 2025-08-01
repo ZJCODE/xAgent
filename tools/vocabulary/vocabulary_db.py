@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-from tools.vocabulary.vocabulary_schema import VocabularyRecord
+from .vocabulary_schema import VocabularyRecord
 
 class VocabularyDB:
     """

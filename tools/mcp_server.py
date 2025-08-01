@@ -1,7 +1,13 @@
 import random
 from fastmcp import FastMCP
 
+from vocabulary.vocabulary import Vocabulary
+
 mcp = FastMCP(name="MCP Server")
+
+vocabulary = Vocabulary()
+
+## Tools
 
 @mcp.tool(enabled=True)
 def roll_dice(n_dice: int) -> list[int]:
@@ -21,10 +27,36 @@ def get_user_details(user_id: str = None) -> str:
     """Retrieve user details based on user_id."""
     # user_id will be injected by the server, not provided by the LLM
     return "current user is 31 years old, lives in Hangzhou, China , hobby is reading books"
+
+@mcp.tool(enabled=True)
+def look_up_word(word: str, user_id: str) -> str:
+    """when user asks for a word definition or meaning, use this tool to look it up."""
+    try:
+        result = vocabulary.lookup_word(word=word, user_id=user_id)
+        result = f"Definition of '{word}':\n {result}"
+    except Exception as e:
+        result = f"Error looking up word: {str(e)}"
+    return result
+
+@mcp.tool(enabled=True)
+def get_vocabulary(user_id: str, n: int) -> list[str]:
+    """when user asks for vocabulary list for review or study, use this tool to retrieve it."""
+    try:
+        vocabularies = vocabulary.get_vocabulary(user_id=user_id, n=n, exclude_known=True)
+        vocabularies = [f"Vocabulary:\n {vocab}" for vocab in vocabularies]
+    except Exception as e:
+        vocabularies = [f"Error retrieving vocabulary: {str(e)}"]
+    return vocabularies
+
+## Resources
+
 @mcp.resource("data://config")
 def get_config() -> dict:
     """Provides the application configuration."""
     return {"theme": "dark", "version": "1.0"}
+
+
+# Prompts
 
 @mcp.prompt
 def analyze_data(data_points: list[float]) -> str:

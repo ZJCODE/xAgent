@@ -10,8 +10,8 @@ from langfuse.openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pydantic import ValidationError
 
-from tools.vocabulary.vocabulary_schema import BaseVocabularyRecord, VocabularyRecord
-from tools.vocabulary.vocabulary_db import VocabularyDB
+from .vocabulary_schema import BaseVocabularyRecord, VocabularyRecord
+from .vocabulary_db import VocabularyDB
 
 
 load_dotenv(override=True)
@@ -22,7 +22,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
-class VocabularyService:
+class Vocabulary:
     """
     用户词汇服务，负责单词查询、缓存、存储与推荐等功能。
     """
@@ -50,7 +50,7 @@ class VocabularyService:
         self.db: VocabularyDB = db or VocabularyDB(os.environ.get("REDIS_URL"))
         self.system_message: str = system_message or self.SYSTEM_MESSAGE
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.logger.info("VocabularyService initialized with model: %s", self.model)
+        self.logger.info("Vocabulary initialized with model: %s", self.model)
 
     @observe()
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
@@ -218,7 +218,7 @@ class VocabularyService:
 
 if __name__ == "__main__":
     # Example usage
-    service = VocabularyService()
+    service = Vocabulary()
     try:
         record = service.lookup_word("apple", user_id="user123")
         record = service.lookup_word("sophisticated", user_id="user123")
