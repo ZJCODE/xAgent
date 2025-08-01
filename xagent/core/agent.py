@@ -33,11 +33,21 @@ class Agent:
     DEFAULT_NAME = "default_agent"
     DEFAULT_MODEL = "gpt-4.1-mini"
     DEFAULT_TOOL_CHOOSE_MODEL = "gpt-4.1-mini"
-    DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id}, **Current date**: {date}, **Current timezone**: {timezone}\n"
 
     REPLY_TOOL_NAME = "ready_to_reply"
     NEED_MORE_INFO_TOOL_NAME = "need_more_info"
     ANSWER_ACTION = "answer"
+
+    DEFAULT_SYSTEM_PROMPT = (
+        "**Current user_id**: {user_id}\n"
+        "**Current date**: {date}\n" 
+        "**Current timezone**: {timezone}\n\n"
+        "When you need more information from user to answer, "
+        "you can use the tool `need_more_info`.\n"
+        "When you are ready to reply to user, "
+        "you can use the tool `ready_to_reply`.\n\n"
+    )
+
 
     def __init__(
         self, 
