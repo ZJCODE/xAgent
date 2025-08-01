@@ -64,9 +64,9 @@ class Agent:
     def __call__(
             self, 
             user_message: Message | str, 
-            session: Session, 
-            history_count: int = 16, 
-            tool_choose_history_count: int = 5,
+            session: Session,
+            history_count: int = 16,
+            tool_choose_history_count: int = 6,
             max_iter: int = 5,
             image_source: Optional[str] = None,
             output_type: type[BaseModel] = None
@@ -82,7 +82,7 @@ class Agent:
         user_message: Message | str,
         session: Session,
         history_count: int = 16,
-        tool_choose_history_count: int = 5,
+        tool_choose_history_count: int = 6,
         max_iter: int = 10,
         image_source: Optional[str] = None,
         output_type: type[BaseModel] = None
@@ -93,7 +93,8 @@ class Agent:
         Args:
             user_message (Message | str): The latest user message.
             session (Session): The session object managing message history.
-            history_count (int, optional): Number of previous messages to include. Defaults to 20.
+            history_count (int, optional): Number of previous messages to include. Defaults to 20 , must be even.
+            tool_choose_history_count (int, optional): Number of messages to consider for tool selection. Defaults to 6 , must be even.
             max_iter (int, optional): Maximum model call attempts. Defaults to 10.
             image_source (Optional[str], optional): Source of the image, if any can be a URL or File path or base64 string.
             output_type (type[BaseModel], optional): Pydantic model for structured output.
@@ -101,6 +102,7 @@ class Agent:
         Returns:
             str | BaseModel: The agent's reply or error message.
         """
+        
         try:
             # Register tools and MCP servers in each chat call to make sure they are up-to-date
             await self._register_mcp_servers(self.mcp_servers)
@@ -188,6 +190,11 @@ class Agent:
         """
         构造输入给大模型的消息列表。
         """
+
+        # Ensure history_count is even for balanced input
+        if history_count % 2 != 0:
+            history_count += 1
+
         # Sytem Message
         system_msg = {
             "role": "system",
@@ -201,6 +208,9 @@ class Agent:
     
     @observe()
     async def _choose_tools(self, input_msgs: list, tool_choose_history_count: int) -> Optional[list]:
+        # make sure tool_choose_history_count is even
+        if tool_choose_history_count % 2 != 0:
+            tool_choose_history_count += 1  # Ensure it's even for balanced tool selection
         try:
             response = await self.client.responses.create(
                     model=self.tool_choose_model,
@@ -250,17 +260,24 @@ class Agent:
         if self.REPLY_TOOL_NAME in tool_names or self.NEED_MORE_INFO_TOOL_NAME in tool_names:
             for tc in tool_calls:
                 if getattr(tc, "type", None) == "function_call":
-                    await self._act(tc, session, input_messages)
+                    tool_messages = await self._act(tc, session)
+                    if tool_messages:
+                        input_messages.extend([msg.to_dict() for msg in tool_messages])
                     if tc.name in [self.REPLY_TOOL_NAME, self.NEED_MORE_INFO_TOOL_NAME]:
                         return self.ANSWER_ACTION
         # Otherwise, execute all tool calls concurrently
-        tasks = [self._act(tc, session, input_messages) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
-        await asyncio.gather(*tasks)
+        tasks = [self._act(tc, session) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
+        results = await asyncio.gather(*tasks)
+        # Safely add all tool messages after concurrent execution
+        for tool_messages in results:
+            if tool_messages:
+                input_messages.extend([msg.to_dict() for msg in tool_messages])
         return None
 
-    async def _act(self, tool_call, session: Session, input_messages: list) -> Optional[str]:
+    async def _act(self, tool_call, session: Session) -> Optional[list]:
         """
         异步执行工具函数调用，并将结果写入 session。
+        返回工具调用和结果消息的列表。
         """
         name = getattr(tool_call, "name", None)
         try:
@@ -300,8 +317,8 @@ class Agent:
             )
             session.add_messages([tool_call_msg, tool_res_msg])
             
-            # Append tool messages to input_messages to avoid rebuilding
-            input_messages.extend([tool_call_msg.to_dict(), tool_res_msg.to_dict()])
+            # Return the messages instead of modifying input_messages directly
+            return [tool_call_msg, tool_res_msg]
 
         return None
 
