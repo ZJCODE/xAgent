@@ -332,8 +332,8 @@ class Agent:
         将 Agent 实例转换为 OpenAI 工具函数。
         """
         @function_tool(name=name or self.name, description=description or self.system_prompt)
-        async def tool_func(message: str):
-            return await self.chat(user_message=message, 
+        async def tool_func(input: str):
+            return await self.chat(user_message=input, 
                                    session=Session(user_id=f"agent_{self.name}_as_tool", 
                                                    session_id=f"{uuid.uuid4()}",
                                                     message_db=message_db
