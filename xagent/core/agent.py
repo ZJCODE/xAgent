@@ -32,6 +32,10 @@ class Agent:
     DEFAULT_MODEL = "gpt-4.1-mini"
     DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id}, **Current date**: {date}, **Current timezone**: {timezone}\n"
 
+    REPLY_TOOL_NAME = "ready_to_reply"
+    NEED_MORE_INFO_TOOL_NAME = "need_more_info"
+    ANSWER_ACTION = "answer"
+
     def __init__(
         self, 
         model: Optional[str] = None,
@@ -41,15 +45,33 @@ class Agent:
         tools: Optional[list] = None,
         mcp_servers: Optional[str | list] = None
     ):
+
         self.model: str = model or self.DEFAULT_MODEL
         self.system_prompt: str = self.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
         self.name: str = name or "default_agent"
         self.client: AsyncOpenAI = client or AsyncOpenAI()
         self.tools: dict = {}
-        self._register_tools(tools)
+        self._register_tools(self._default_tools + (tools or []))
         self.mcp_servers: list = mcp_servers or []
         self.mcp_tools: dict = {}
         self.logger = logging.getLogger(self.__class__.__name__)
+
+
+
+    @property
+    def _default_tools(self) -> list:
+
+        @function_tool(name=self.REPLY_TOOL_NAME)
+        def ready_to_reply() -> str:
+            """When Agent is ready to reply to user, use this tool."""
+            return "Ready to reply!"
+
+        @function_tool(name=self.NEED_MORE_INFO_TOOL_NAME)
+        def need_more_info() -> str:
+            """When Agent needs more information to answer, use this tool."""
+            return "I need more information to answer your question."
+
+        return [ready_to_reply, need_more_info]
 
     def __call__(
             self, 
@@ -100,27 +122,28 @@ class Agent:
                 # Build input messages for the model
                 input_messages = self._build_input_messages(session, history_count)
 
-                # Call the model and get response
-                response = await self._call_model(input_messages, output_type)
-                if response is None:
-                    self.logger.warning("Model did not respond on attempt %d", attempt + 1)
-                    return "Sorry, model did not respond."
+                # Call choose tools to see if any tool calls are needed
+                tool_calls = await self._choose_tools(input_messages)
 
                 # Handle any tool calls in the response
-                special_result = await self._handle_tool_calls(response.output, session)
-                if special_result is not None:
-                    return special_result
+                tool_call_result = await self._handle_tool_calls(tool_calls, session)
 
-                if output_type is not None and hasattr(response, "output_parsed"):
-                    # Structured output
-                    self._store_model_reply(str(response.output_parsed), session)
-                    return response.output_parsed
+                if tool_call_result == self.ANSWER_ACTION:
 
-                # If model returned a text reply, store and return it
-                reply_text = response.output_text
-                if reply_text:
-                    self._store_model_reply(reply_text, session)
-                    return reply_text
+                    input_messages = self._build_input_messages(session, history_count)
+                    response = await self._call_model(input_messages, output_type)
+
+                    if response:
+                        if output_type is not None and hasattr(response, "output_parsed"):
+                            # Structured output
+                            self._store_model_reply(str(response.output_parsed), session)
+                            return response.output_parsed
+
+                        # If model returned a text reply, store and return it
+                        reply_text = response.output_text
+                        if reply_text:
+                            self._store_model_reply(reply_text, session)
+                            return reply_text
 
             # If no valid reply after max_iter attempts
             self.logger.error("Failed to generate response after %d attempts", max_iter)
@@ -179,6 +202,20 @@ class Agent:
         return [system_msg] + history_msgs
     
     @observe()
+    async def _choose_tools(self, input_msgs: list) -> Optional[list]:
+        try:
+            response = await self.client.responses.create(
+                    model=self.model,
+                    tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
+                    input=input_msgs,
+                    tool_choice ="required",
+            )
+            return response.output
+        except Exception as e:
+            self.logger.error("Tool selection failed: %s", e)
+            return None
+
+    @observe()
     async def _call_model(self, input_msgs: list, output_type: type[BaseModel] = None) -> Optional[object]:
         """
         调用大模型，返回响应对象或 None。
@@ -187,14 +224,12 @@ class Agent:
             if output_type is not None:
                 return await self.client.responses.parse(
                     model=self.model,
-                    tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
                     input=input_msgs,
                     text_format=output_type
                 )
             else:
                 return await self.client.responses.create(
                     model=self.model,
-                    tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
                     input=input_msgs
                 )
         except Exception as e:
@@ -205,11 +240,18 @@ class Agent:
         """
         异步并发处理所有 tool_call，返回特殊结果（如图片）或 None。
         """
+    
+        tool_names = [tc.name for tc in tool_calls]
+
+        if self.REPLY_TOOL_NAME in tool_names or self.NEED_MORE_INFO_TOOL_NAME in tool_names:
+            for tc in tool_calls:
+                if getattr(tc, "type", None) == "function_call":
+                    await self._act(tc, session)
+                    if tc.name in [self.REPLY_TOOL_NAME, self.NEED_MORE_INFO_TOOL_NAME]:
+                        return self.ANSWER_ACTION
+
         tasks = [self._act(tc, session) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
-        results = await asyncio.gather(*tasks)
-        for result in results:
-            if result is not None:
-                return result
+        await asyncio.gather(*tasks)
         return None
 
     async def _act(self, tool_call, session: Session) -> Optional[str]:
