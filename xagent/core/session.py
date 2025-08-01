@@ -90,4 +90,3 @@ class Session:
         except Exception as e:
             self.logger.error("Failed to pop message: %s", e)
             return None
-            return None
