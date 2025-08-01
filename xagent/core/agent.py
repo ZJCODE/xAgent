@@ -29,6 +29,7 @@ class Agent:
     基础 Agent 类，支持与 OpenAI 模型交互。
     """
 
+    DEFAULT_NAME = "default_agent"
     DEFAULT_MODEL = "gpt-4.1-mini"
     DEFAULT_SYSTEM_PROMPT = "**Current user_id**: {user_id}, **Current date**: {date}, **Current timezone**: {timezone}\n"
 
@@ -38,17 +39,16 @@ class Agent:
 
     def __init__(
         self, 
-        model: Optional[str] = None,
-        system_prompt: Optional[str] = None,
         name: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[list] = None,
         mcp_servers: Optional[str | list] = None
     ):
-
-        self.model: str = model or self.DEFAULT_MODEL
+        self.name: str = name or self.DEFAULT_NAME
         self.system_prompt: str = self.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
-        self.name: str = name or "default_agent"
+        self.model: str = model or self.DEFAULT_MODEL
         self.client: AsyncOpenAI = client or AsyncOpenAI()
         self.tools: dict = {}
         self._register_tools(self._default_tools + (tools or []))
@@ -56,22 +56,6 @@ class Agent:
         self.mcp_tools: dict = {}
         self.logger = logging.getLogger(self.__class__.__name__)
 
-
-
-    @property
-    def _default_tools(self) -> list:
-
-        @function_tool(name=self.REPLY_TOOL_NAME)
-        def ready_to_reply() -> str:
-            """When Agent is ready to reply to user, use this tool."""
-            return "Ready to reply!"
-
-        @function_tool(name=self.NEED_MORE_INFO_TOOL_NAME)
-        def need_more_info() -> str:
-            """When Agent needs more information to answer, use this tool."""
-            return "I need more information to answer your question."
-
-        return [ready_to_reply, need_more_info]
 
     def __call__(
             self, 
@@ -152,6 +136,21 @@ class Agent:
         except Exception as e:
             self.logger.exception("Agent chat error: %s", e)
             return "Sorry, something went wrong."
+
+    @property
+    def _default_tools(self) -> list:
+
+        @function_tool(name=self.REPLY_TOOL_NAME)
+        def ready_to_reply() -> str:
+            """When Agent is ready to reply to user, use this tool."""
+            return "Ready to reply!"
+
+        @function_tool(name=self.NEED_MORE_INFO_TOOL_NAME)
+        def need_more_info() -> str:
+            """When Agent needs more information to answer, use this tool."""
+            return "I need more information to answer your question."
+
+        return [ready_to_reply, need_more_info]
 
     def _register_tools(self, tools: Optional[list]) -> None:
         """
