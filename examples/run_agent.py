@@ -3,12 +3,14 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
+from pydantic import BaseModel
 from tools.openai_tool import web_search
 from xagent.utils.tool_decorator import function_tool
 from xagent.utils.mcp_convertor import MCPTool
 from xagent.db import MessageDB
 from xagent.core import Agent
 from xagent.core import Session
+
 
 
 @function_tool()
@@ -34,7 +36,8 @@ def multiply(a: int, b: int) -> int:
 #               system_prompt="when you need to calculate, you can use the tools provided, such as add and multiply. If you need to search the web, use the web_search tool. If you want roll a dice, use the roll_dice tool.",
 #               model="gpt-4.1-mini")
 
-story_agent = Agent(system_prompt="you are a story teller.",
+story_agent = Agent(name = "story_agent",
+                    system_prompt="you are a story teller.",
                     model="gpt-4.1-mini")
 
 story_tool = story_agent.as_tool(name="story_tool", description="A tool to tell stories based on user input and return the story for reference.")
@@ -79,18 +82,18 @@ print("Reply:", reply)
 # reply = agent("The Weather in Hangzhou and Beijing is", session)
 # print("Reply:", reply)
 
-# class Step(BaseModel):
-#     explanation: str
-#     output: str
+class Step(BaseModel):
+    explanation: str
+    output: str
 
-# class MathReasoning(BaseModel):
-#     steps: list[Step]
-#     final_answer: str
+class MathReasoning(BaseModel):
+    steps: list[Step]
+    final_answer: str
 
-# reply = agent("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
-# for step in reply.steps:
-#     print(f"Step: {step.explanation} => Output: {step.output}")
-# print("Final Answer:", reply.final_answer)
+reply = agent("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
+for step in reply.steps:
+    print(f"Step: {step.explanation} => Output: {step.output}")
+print("Final Answer:", reply.final_answer)
 
 
 # reply = agent("Can you describe the image?", session = session,image_source="https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg")
