@@ -156,6 +156,7 @@ class Agent:
             if fn.tool_spec['name'] not in self.tools:
                 self.tools[fn.tool_spec['name']] = fn
 
+    @observe()
     async def _register_mcp_servers(self, mcp_servers: Optional[str | list]) -> None:
         """
         注册 MCP 服务器地址。
@@ -179,6 +180,7 @@ class Agent:
         model_msg = Message.create(content=reply_text, role="assistant")
         session.add_messages(model_msg)
 
+    @observe()
     def _build_input_messages(self, session: Session, history_count: int) -> list:
         """
         构造输入给大模型的消息列表。
