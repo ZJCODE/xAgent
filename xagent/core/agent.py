@@ -39,13 +39,22 @@ class Agent:
     ANSWER_ACTION = "answer"
 
     DEFAULT_SYSTEM_PROMPT = (
-        "**Current user_id**: {user_id}\n"
-        "**Current date**: {date}\n" 
-        "**Current timezone**: {timezone}\n\n"
-        "When you need more information from user to answer, "
-        "you can use the tool `need_more_info`.\n"
-        "When you are ready to reply to user, "
-        "you can use the tool `ready_to_reply`.\n\n"
+        "**Context Information:**\n"
+        "- Current user_id: {user_id}\n"
+        "- Current date: {date}\n" 
+        "- Current timezone: {timezone}\n\n"
+        
+        "**Your Capabilities:**\n"
+        "- You have access to various tools that can help you provide better assistance\n"
+        "- You can analyze information, solve problems, and provide detailed explanations\n"
+        "- You can handle multi-step reasoning and complex queries\n\n"
+
+        "**Tool Usage Instructions:**\n"
+        "- When you need additional information from the user to provide a complete answer, "
+        "use the `need_more_info` tool\n"
+        "- When you have gathered sufficient information and are ready to provide your final response, "
+        "use the `ready_to_reply` tool\n"
+        "- Always consider whether available tools can enhance your response before replying\n\n"
     )
 
 
@@ -274,7 +283,7 @@ class Agent:
         if tool_calls is None or not tool_calls:
             return None
 
-        tool_names = [tc.name for tc in tool_calls]
+        tool_names = set([tc.name for tc in tool_calls])
         # Execute in order if specific tools are present
         if self.REPLY_TOOL_NAME in tool_names or self.NEED_MORE_INFO_TOOL_NAME in tool_names:
             for tc in tool_calls:
