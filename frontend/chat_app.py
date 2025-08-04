@@ -47,7 +47,7 @@ def init_session_state():
     if "show_image_upload" not in st.session_state:
         st.session_state.show_image_upload = False
 
-def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis: bool, model: str, tool_choose_model: str):
+def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis: bool, model: str):
     """创建 Agent 和 Session 实例"""
     # 创建工具列表
 
@@ -67,7 +67,6 @@ def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis:
     # 创建 Agent
     agent = Agent(model=model, 
                   tools=tools,
-                  tool_choose_model=tool_choose_model,
                   mcp_servers=["http://127.0.0.1:8001/mcp/"],
                   system_prompt=f"Current date is {time.strftime('%Y-%m-%d')}")
 
@@ -135,9 +134,6 @@ def main():
         model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4.1","gpt-4.1-mini","gpt-4.1-nano"]
         model = st.selectbox("选择模型", model_options, index=2)
         
-        tool_model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4.1","gpt-4.1-mini","gpt-4.1-nano"]
-        tool_choose_model = st.selectbox("选择工具选择模型", tool_model_options, index=2)
-        
         # 新增：图片上传模块显示控制
         st.subheader("界面设置")
         show_image_upload = st.checkbox("显示图片上传模块", value=st.session_state.show_image_upload)
@@ -157,8 +153,7 @@ def main():
                     user_id, 
                     st.session_state.session_id, 
                     use_redis, 
-                    model,
-                    tool_choose_model
+                    model
                 )
                 st.session_state.agent = agent
                 st.session_state.session = session
@@ -180,7 +175,6 @@ def main():
         st.write(f"**会话ID**: {st.session_state.session_id or '无'}")
         st.write(f"**存储方式**: {'Redis' if st.session_state.use_redis else '内存'}")
         st.write(f"**模型**: {model}")
-        st.write(f"**工具选择模型**: {tool_choose_model}")
         
 
     # 主界面
@@ -190,13 +184,11 @@ def main():
     if st.session_state.agent is None or st.session_state.session is None:
         try:
             # 获取默认的工具选择模型
-            default_tool_choose_model = "gpt-4o-mini"
             agent, session = create_agent_and_session(
                 st.session_state.user_id,
                 st.session_state.session_id,
                 st.session_state.use_redis,
-                model,
-                default_tool_choose_model
+                model
             )
             st.session_state.agent = agent
             st.session_state.session = session

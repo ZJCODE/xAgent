@@ -66,8 +66,8 @@ session.clear_session()  # 清空历史以便测试
 # reply = agent("the answer for 10 + 20 is and 21 + 22 is", session)
 # print("Reply:", reply)
 
-reply = agent("Can you tell me a story about start in 20 words?", session)
-print("Reply:", reply)
+# reply = agent("Can you tell me a story about start in 20 words?", session)
+# print("Reply:", reply)
 
 # reply = agent("What is 18+2*4+3+4*5?", session)
 # print("Reply:", reply)
@@ -78,8 +78,8 @@ print("Reply:", reply)
 # print("Last user message:", user_item.content)
 # print("Last assistant message:", assistant_item.content)
 
-# reply = agent("The Weather in Hangzhou and Beijing is", session)
-# print("Reply:", reply)
+reply = agent("The Weather in Hangzhou and Beijing is", session)
+print("Reply:", reply)
 
 # class Step(BaseModel):
 #     explanation: str

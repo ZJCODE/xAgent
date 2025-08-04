@@ -4,6 +4,7 @@ import json
 import logging
 import asyncio
 import uuid
+from enum import Enum, auto
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
@@ -25,6 +26,12 @@ from xagent.utils.mcp_convertor import MCPTool
 
 load_dotenv(override=True)
 
+class ReplyType(Enum):
+    SIMPLE_REPLY = "simple_reply"
+    STRUCTURED_REPLY = "structured_reply"
+    TOOL_CALL = "tool_call"
+    ERROR = "error"
+
 class Agent:
     """
     基础 Agent 类，支持与 OpenAI 模型交互。
@@ -32,13 +39,8 @@ class Agent:
 
     DEFAULT_NAME = "default_agent"
     DEFAULT_MODEL = "gpt-4.1-mini"
-    DEFAULT_TOOL_CHOOSE_MODEL = "gpt-4.1-mini"
 
-    REPLY_TOOL_NAME = "ready_to_reply"
-    NEED_MORE_INFO_TOOL_NAME = "need_more_info"
-    ANSWER_ACTION = "answer"
-
-    TOOL_CHOOSE_SYSTEM_PROMPT = (
+    DEFAULT_SYSTEM_PROMPT = (
         "**Context Information:**\n"
         "- Current user_id: {user_id}\n"
         "- Current date: {date}\n" 
@@ -48,20 +50,7 @@ class Agent:
         "- You have access to various tools that can help you provide better assistance\n"
         "- You can analyze information, solve problems, and provide detailed explanations\n"
         "- You can handle multi-step reasoning and complex queries\n\n"
-
-        "**Tool Usage Instructions:**\n"
-        "- When you need additional information from the user to provide a complete answer, "
-        "use the `need_more_info` tool\n"
-        "- When you have gathered sufficient information and are ready to provide your final response, "
-        "use the `ready_to_reply` tool\n"
-        "- Always consider whether available tools can enhance your response before replying\n\n"
-    )
-    
-    DEFAULT_SYSTEM_PROMPT = (
-        "**Context Information:**\n"
-        "- Current user_id: {user_id}\n"
-        "- Current date: {date}\n" 
-        "- Current timezone: {timezone}\n\n"
+        "- If you need more information to answer, you can ask the user for clarification\n"
     )
 
 
@@ -72,16 +61,14 @@ class Agent:
         model: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[list] = None,
-        tool_choose_model: Optional[str] = None,
         mcp_servers: Optional[str | list] = None
     ):
         self.name: str = name or self.DEFAULT_NAME
         self.system_prompt: str = self.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
         self.model: str = model or self.DEFAULT_MODEL
-        self.tool_choose_model: str = tool_choose_model or self.DEFAULT_TOOL_CHOOSE_MODEL
         self.client: AsyncOpenAI = client or AsyncOpenAI()
         self.tools: dict = {}
-        self._register_tools(self._default_tools + (tools or []))
+        self._register_tools(tools or [])
         self.mcp_servers: list = mcp_servers or []
         self.mcp_tools: dict = {}
         self.mcp_tools_last_updated: Optional[float] = None
@@ -94,7 +81,6 @@ class Agent:
             user_message: Message | str, 
             session: Session,
             history_count: int = 16,
-            tool_choose_history_count: int = 6,
             max_iter: int = 5,
             image_source: Optional[str] = None,
             output_type: type[BaseModel] = None
@@ -102,7 +88,7 @@ class Agent:
         """
         支持同步调用 Agent（自动转异步）。
         """
-        return asyncio.run(self.chat(user_message, session, history_count,tool_choose_history_count,max_iter, image_source, output_type))
+        return asyncio.run(self.chat(user_message, session, history_count,max_iter, image_source, output_type))
 
     @observe()
     async def chat(
@@ -110,7 +96,6 @@ class Agent:
         user_message: Message | str,
         session: Session,
         history_count: int = 16,
-        tool_choose_history_count: int = 6,
         max_iter: int = 10,
         image_source: Optional[str] = None,
         output_type: type[BaseModel] = None
@@ -122,7 +107,6 @@ class Agent:
             user_message (Message | str): The latest user message.
             session (Session): The session object managing message history.
             history_count (int, optional): Number of previous messages to include. Defaults to 20.
-            tool_choose_history_count (int, optional): Number of messages to consider for tool selection. Defaults to 6.
             max_iter (int, optional): Maximum model call attempts. Defaults to 10.
             image_source (Optional[str], optional): Source of the image, if any can be a URL or File path or base64 string.
             output_type (type[BaseModel], optional): Pydantic model for structured output.
@@ -142,23 +126,20 @@ class Agent:
             input_messages = [msg.to_dict() for msg in session.get_messages(history_count)]
 
             for attempt in range(max_iter):
-                # Call choose tools to see if any tool calls are needed
-                tool_calls = await self._choose_tools(input_messages, session, tool_choose_history_count)
 
-                # Handle any tool calls in the response
-                tool_call_result = await self._handle_tool_calls(tool_calls, session, input_messages)
+                reply_type, response = await self._call_model(input_messages, session, output_type)
 
-                # make sure all len(tool_calls) is considered in tool_choose_history_count after successful handling
-                if tool_calls is not None and len(tool_calls) > 0:
-                    tool_choose_history_count += len(tool_calls)
-
-                if tool_call_result == self.ANSWER_ACTION:
-                    response = await self._call_model(input_messages, session, output_type)
-
-                    if response:
-                        response_str = response.model_dump_json() if output_type else str(response)
-                        self._store_model_reply(response_str, session)
-                        return response
+                if reply_type == ReplyType.SIMPLE_REPLY:
+                    self._store_model_reply(str(response), session)
+                    return response
+                elif reply_type == ReplyType.STRUCTURED_REPLY:
+                    self._store_model_reply(response.model_dump_json(), session)
+                    return response
+                elif reply_type == ReplyType.TOOL_CALL:
+                    await self._handle_tool_calls(response, session, input_messages)
+                else:
+                    self.logger.error("Unknown reply type: %s", reply_type)
+                    return "Sorry, I encountered an error while processing your request."
 
             # If no valid reply after max_iter attempts
             self.logger.error("Failed to generate response after %d attempts", max_iter)
@@ -181,20 +162,6 @@ class Agent:
                                                    ))
         return tool_func
 
-    @property
-    def _default_tools(self) -> list:
-
-        @function_tool(name=self.REPLY_TOOL_NAME)
-        def ready_to_reply() -> str:
-            """When Agent is ready to reply to user, use this tool."""
-            return "Ready to reply!"
-
-        @function_tool(name=self.NEED_MORE_INFO_TOOL_NAME)
-        def need_more_info() -> str:
-            """When Agent needs more information to answer, use this tool."""
-            return "I need more information to answer your question."
-
-        return [ready_to_reply, need_more_info]
 
     def _register_tools(self, tools: Optional[list]) -> None:
         """
@@ -244,30 +211,6 @@ class Agent:
 
 
     @observe()
-    async def _choose_tools(self, input_msgs: list, session: Session, tool_choose_history_count: int) -> Optional[list]:
-
-        system_msg = {
-            "role": "system",
-            "content": self.TOOL_CHOOSE_SYSTEM_PROMPT.format(
-                user_id=session.user_id, 
-                date=time.strftime('%Y-%m-%d'), 
-                timezone=time.tzname[0]
-            )
-        }
-
-        try:
-            response = await self.client.responses.create(
-                    model=self.tool_choose_model,
-                    tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
-                    input=[system_msg] + self._sanitize_input_messages(input_msgs[-tool_choose_history_count:]),
-                    tool_choice ="required",
-            )
-            return response.output
-        except Exception as e:
-            self.logger.error("Tool selection failed: %s", e)
-            return None
-
-    @observe()
     async def _call_model(self, input_msgs: list, session: Session, output_type: type[BaseModel] = None) -> Optional[object]:
         """
         调用大模型，返回响应对象或 None。
@@ -283,25 +226,35 @@ class Agent:
         }
 
         try:
+
             if output_type is not None:
-                response =  await self.client.responses.parse(
+                response = await self.client.responses.parse(
                     model=self.model,
-                    input=[system_msg] + self._sanitize_input_messages(input_msgs),
+                    tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
+                    input=input_msgs,
                     text_format=output_type
                 )
-                return response.output_parsed
+                return ReplyType.STRUCTURED_REPLY, response.output_parsed
             else:
-                response =  await self.client.responses.create(
+                response = await self.client.responses.create(
                     model=self.model,
-                    input=[system_msg] + self._sanitize_input_messages(input_msgs)
+                    tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
+                    input=input_msgs
                 )
-                return response.output_text
+
+            if response.output_text:
+                return ReplyType.SIMPLE_REPLY, response.output_text
+            
+            if response.output:
+                return ReplyType.TOOL_CALL, response.output
+            
+            return ReplyType.ERROR, "No valid output from model response."
         except Exception as e:
             self.logger.error("Model call failed: %s", e)
-            return None
+            return ReplyType.ERROR, str(e)
 
     @observe()
-    async def _handle_tool_calls(self, tool_calls: list, session: Session, input_messages: list) -> Optional[str]:
+    async def _handle_tool_calls(self, tool_calls: list, session: Session, input_messages: list) -> None:
         """
         异步并发处理所有 tool_call，返回特殊结果（如图片）或 None。
         """
@@ -309,16 +262,6 @@ class Agent:
         if tool_calls is None or not tool_calls:
             return None
 
-        # Quick check for special tools first
-        for tc in tool_calls:
-            if getattr(tc, "type", None) == "function_call" and tc.name in [self.REPLY_TOOL_NAME, self.NEED_MORE_INFO_TOOL_NAME]:
-                # Only process this specific tool call
-                tool_messages = await self._act(tc, session)
-                if tool_messages:
-                    input_messages.extend([msg.to_dict() for msg in tool_messages])
-                return self.ANSWER_ACTION
-        
-            # If no special tools found, process all concurrently
         tasks = [self._act(tc, session) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
         results = await asyncio.gather(*tasks)
         # Safely add all tool messages after concurrent execution
