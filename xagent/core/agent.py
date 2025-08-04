@@ -38,7 +38,7 @@ class Agent:
     NEED_MORE_INFO_TOOL_NAME = "need_more_info"
     ANSWER_ACTION = "answer"
 
-    DEFAULT_SYSTEM_PROMPT = (
+    TOOL_CHOOSE_SYSTEM_PROMPT = (
         "**Context Information:**\n"
         "- Current user_id: {user_id}\n"
         "- Current date: {date}\n" 
@@ -55,6 +55,13 @@ class Agent:
         "- When you have gathered sufficient information and are ready to provide your final response, "
         "use the `ready_to_reply` tool\n"
         "- Always consider whether available tools can enhance your response before replying\n\n"
+    )
+    
+    DEFAULT_SYSTEM_PROMPT = (
+        "**Context Information:**\n"
+        "- Current user_id: {user_id}\n"
+        "- Current date: {date}\n" 
+        "- Current timezone: {timezone}\n\n"
     )
 
 
@@ -77,6 +84,8 @@ class Agent:
         self._register_tools(self._default_tools + (tools or []))
         self.mcp_servers: list = mcp_servers or []
         self.mcp_tools: dict = {}
+        self.mcp_tools_last_updated: Optional[float] = None
+        self.mcp_cache_ttl: int = 300  # 5 minutes
         self.logger = logging.getLogger(self.__class__.__name__)
 
 
@@ -130,11 +139,11 @@ class Agent:
             self._store_user_message(user_message, session, image_source)
 
             # Build input messages once outside the loop
-            input_messages = self._build_input_messages(session, history_count)
+            input_messages = [msg.to_dict() for msg in session.get_messages(history_count)]
 
             for attempt in range(max_iter):
                 # Call choose tools to see if any tool calls are needed
-                tool_calls = await self._choose_tools(input_messages, tool_choose_history_count)
+                tool_calls = await self._choose_tools(input_messages, session, tool_choose_history_count)
 
                 # Handle any tool calls in the response
                 tool_call_result = await self._handle_tool_calls(tool_calls, session, input_messages)
@@ -144,7 +153,7 @@ class Agent:
                     tool_choose_history_count += len(tool_calls)
 
                 if tool_call_result == self.ANSWER_ACTION:
-                    response = await self._call_model(input_messages, output_type)
+                    response = await self._call_model(input_messages, session, output_type)
 
                     if response:
                         response_str = response.model_dump_json() if output_type else str(response)
@@ -202,15 +211,27 @@ class Agent:
         """
         注册 MCP 服务器地址。
         """
+        now = time.time()
+        if self.mcp_tools_last_updated and (now - self.mcp_tools_last_updated) < self.mcp_cache_ttl:
+            return
+
         self.mcp_tools = {}
         if isinstance(mcp_servers, str):
             mcp_servers = [mcp_servers]
         for url in mcp_servers or []:
-            mt = MCPTool(url)
-            mcp_tools = await mt.get_openai_tools()
-            for tool in mcp_tools:
-                if tool.tool_spec['name'] not in self.mcp_tools:
-                    self.mcp_tools[tool.tool_spec['name']] = tool
+            try:
+                mt = MCPTool(url)
+                mcp_tools = await mt.get_openai_tools()
+                for tool in mcp_tools:
+                    if tool.tool_spec['name'] not in self.mcp_tools:
+                        self.mcp_tools[tool.tool_spec['name']] = tool
+            except Exception as e:
+                self.logger.error(f"Failed to get tools from MCP server {url}: {e}")
+                # If one server fails, we should probably not update the timestamp
+                # to try again on the next call. But for now, we continue with other servers.
+                continue
+        
+        self.mcp_tools_last_updated = now
 
     def _store_user_message(self, user_message: Message | str, session: Session, image_source: Optional[str]) -> None:
         if isinstance(user_message, str):
@@ -221,29 +242,24 @@ class Agent:
         model_msg = Message.create(content=reply_text, role="assistant")
         session.add_messages(model_msg)
 
-    @observe()
-    def _build_input_messages(self, session: Session, history_count: int) -> list:
-        """
-        构造输入给大模型的消息列表。
-        """
-        # Sytem Message
-        system_msg = {
-            "role": "system",
-            "content": self.system_prompt.format(user_id= session.user_id, date=time.strftime('%Y-%m-%d'), timezone=time.tzname[0])
-        }
-        # User History Messages
-        history_msgs = []
-        for msg in session.get_messages(history_count):
-            history_msgs.append(msg.to_dict())
-        return [system_msg] + self._verify_input_messages(history_msgs)
 
     @observe()
-    async def _choose_tools(self, input_msgs: list, tool_choose_history_count: int) -> Optional[list]:
+    async def _choose_tools(self, input_msgs: list, session: Session, tool_choose_history_count: int) -> Optional[list]:
+
+        system_msg = {
+            "role": "system",
+            "content": self.TOOL_CHOOSE_SYSTEM_PROMPT.format(
+                user_id=session.user_id, 
+                date=time.strftime('%Y-%m-%d'), 
+                timezone=time.tzname[0]
+            )
+        }
+
         try:
             response = await self.client.responses.create(
                     model=self.tool_choose_model,
                     tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
-                    input=[input_msgs[0]] + self._verify_input_messages(input_msgs[1:][-tool_choose_history_count:]),
+                    input=[system_msg] + self._sanitize_input_messages(input_msgs[-tool_choose_history_count:]),
                     tool_choice ="required",
             )
             return response.output
@@ -252,22 +268,32 @@ class Agent:
             return None
 
     @observe()
-    async def _call_model(self, input_msgs: list, output_type: type[BaseModel] = None) -> Optional[object]:
+    async def _call_model(self, input_msgs: list, session: Session, output_type: type[BaseModel] = None) -> Optional[object]:
         """
         调用大模型，返回响应对象或 None。
         """
+
+        system_msg = {
+            "role": "system",
+            "content": self.system_prompt.format(
+                user_id=session.user_id, 
+                date=time.strftime('%Y-%m-%d'), 
+                timezone=time.tzname[0]
+            )
+        }
+
         try:
             if output_type is not None:
                 response =  await self.client.responses.parse(
                     model=self.model,
-                    input=input_msgs,
+                    input=[system_msg] + self._sanitize_input_messages(input_msgs),
                     text_format=output_type
                 )
                 return response.output_parsed
             else:
                 response =  await self.client.responses.create(
                     model=self.model,
-                    input=input_msgs
+                    input=[system_msg] + self._sanitize_input_messages(input_msgs)
                 )
                 return response.output_text
         except Exception as e:
@@ -283,17 +309,16 @@ class Agent:
         if tool_calls is None or not tool_calls:
             return None
 
-        tool_names = set([tc.name for tc in tool_calls])
-        # Execute in order if specific tools are present
-        if self.REPLY_TOOL_NAME in tool_names or self.NEED_MORE_INFO_TOOL_NAME in tool_names:
-            for tc in tool_calls:
-                if getattr(tc, "type", None) == "function_call":
-                    tool_messages = await self._act(tc, session)
-                    if tool_messages:
-                        input_messages.extend([msg.to_dict() for msg in tool_messages])
-                    if tc.name in [self.REPLY_TOOL_NAME, self.NEED_MORE_INFO_TOOL_NAME]:
-                        return self.ANSWER_ACTION
-        # Otherwise, execute all tool calls concurrently
+        # Quick check for special tools first
+        for tc in tool_calls:
+            if getattr(tc, "type", None) == "function_call" and tc.name in [self.REPLY_TOOL_NAME, self.NEED_MORE_INFO_TOOL_NAME]:
+                # Only process this specific tool call
+                tool_messages = await self._act(tc, session)
+                if tool_messages:
+                    input_messages.extend([msg.to_dict() for msg in tool_messages])
+                return self.ANSWER_ACTION
+        
+            # If no special tools found, process all concurrently
         tasks = [self._act(tc, session) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
         results = await asyncio.gather(*tasks)
         # Safely add all tool messages after concurrent execution
@@ -351,10 +376,10 @@ class Agent:
         return None
 
     @staticmethod
-    def _verify_input_messages(input_messages: list) -> None:
+    def _sanitize_input_messages(input_messages: list) -> list:
         """
-        验证输入消息列表，确保格式正确。
+        清理输入消息列表，确保其不以 'function_call_output' 类型的消息开头。
         """
-        if input_messages[0].get("type") == "function_call_output":
-            input_messages.pop(0)  # Remove tool output if present at the start
+        while input_messages and input_messages[0].get("type") == "function_call_output":
+            input_messages.pop(0)
         return input_messages
