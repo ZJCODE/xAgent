@@ -4,7 +4,7 @@ import json
 import logging
 import asyncio
 import uuid
-from enum import Enum, auto
+from enum import Enum
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
@@ -45,12 +45,13 @@ class Agent:
         "- Current user_id: {user_id}\n"
         "- Current date: {date}\n" 
         "- Current timezone: {timezone}\n\n"
-        
-        "**Your Capabilities:**\n"
-        "- You have access to various tools that can help you provide better assistance\n"
-        "- You can analyze information, solve problems, and provide detailed explanations\n"
-        "- You can handle multi-step reasoning and complex queries\n\n"
-        "- If you need more information to answer, you can ask the user for clarification\n"
+        "**Basic Capabilities:**\n" \
+        "- Respond directly when you can answer a question without tools\n"
+        "- Use available tools when specialized functionality is needed\n"
+        "- Handle multi-step reasoning and break down complex problems\n"
+        "- Be concise yet informative in your responses\n"
+        "- When uncertain, ask clarifying questions\n"
+        "- Acknowledge when a request is beyond your capabilities\n"
     )
 
 
@@ -231,7 +232,7 @@ class Agent:
                 response = await self.client.responses.parse(
                     model=self.model,
                     tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
-                    input=input_msgs,
+                    input=[system_msg] + self._sanitize_input_messages(input_msgs),
                     text_format=output_type
                 )
                 return ReplyType.STRUCTURED_REPLY, response.output_parsed
@@ -239,7 +240,7 @@ class Agent:
                 response = await self.client.responses.create(
                     model=self.model,
                     tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
-                    input=input_msgs
+                    input=[system_msg] + self._sanitize_input_messages(input_msgs),
                 )
 
             if response.output_text:
