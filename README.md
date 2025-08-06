@@ -70,6 +70,10 @@ xAgent/
 2. **Install dependencies**
    ```bash
    pip install -r requirements.txt
+
+   or 
+
+   pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
    ```
 
 3. **Environment Setup**
