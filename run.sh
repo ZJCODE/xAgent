@@ -21,6 +21,10 @@ FRONTEND_PID_FILE="$APP_ROOT/logs/frontend.pid"
 start_services() {
     echo "Starting the application..."
 
+    # comment out the proxy settings if not needed (when using clash or other proxy tools need to set)
+    export HTTP_PROXY=http://127.0.0.1:7890
+    export HTTPS_PROXY=http://127.0.0.1:7890
+
     mkdir -p "$APP_ROOT/logs"
 
     echo "Starting the API server..."
@@ -32,7 +36,7 @@ start_services() {
     echo $! > "$MCP_PID_FILE"
 
     echo "Starting the frontend..."
-    nohup streamlit run frontend/chat_app.py > logs/frontend.log 2>&1 &
+    nohup streamlit run frontend/chat_app.py --server.address=0.0.0.0 --server.port=8501 > logs/frontend.log 2>&1 &
     echo $! > "$FRONTEND_PID_FILE"
 
     echo "All services started."
