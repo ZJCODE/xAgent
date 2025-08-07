@@ -13,7 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from xagent.core import Session, Agent
 from xagent.db import MessageDB
-from tools.openai_tool import web_search,draw_image
+from xagent.tools.openai_tool import web_search,draw_image
 
 # 页面配置
 st.set_page_config(

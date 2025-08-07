@@ -4,7 +4,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
 from pydantic import BaseModel
-from tools.openai_tool import web_search
+from xagent.tools.openai_tool import web_search
 from xagent.utils.tool_decorator import function_tool
 from xagent.utils.mcp_convertor import MCPTool
 from xagent.db import MessageDB
