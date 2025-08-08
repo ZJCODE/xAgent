@@ -278,11 +278,19 @@ class WeatherReport(BaseModel):
     condition: str
     humidity: int
 
+class Step(BaseModel):
+    explanation: str
+    output: str
+
+class MathReasoning(BaseModel):
+    steps: list[Step]
+    final_answer: str
+
 async def get_structured_response():
-    agent = Agent(model="gpt-4.1-mini", tools=[web_search])
+    agent = Agent(model="gpt-4.1-mini")
     session = Session(user_id="user123")
     
-    # Request structured output
+    # Request structured output for weather
     weather_data = await agent.chat(
         "Generate weather data for New York",
         session,
@@ -292,6 +300,12 @@ async def get_structured_response():
     print(f"Location: {weather_data.location}")
     print(f"Temperature: {weather_data.temperature}°F")
     print(f"Condition: {weather_data.condition}")
+    
+    # Request structured output for mathematical reasoning
+    reply = await agent("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
+    for index,step in enumerate(reply.steps):
+        print(f"Step {index + 1}: {step.explanation} => Output: {step.output}")
+    print("Final Answer:", reply.final_answer)
 
 asyncio.run(get_structured_response())
 ```
