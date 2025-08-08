@@ -119,12 +119,12 @@ Environment Configuration
 cp .env.example .env
 ```
 
-**Required variables:**
+Required variables
 ```env
 OPENAI_API_KEY=your_openai_api_key
 ```
 
-**Optional variables:**
+Optional variables
 ```env
 REDIS_URL=your_redis_url_with_password
 LANGFUSE_SECRET_KEY=your_langfuse_key
