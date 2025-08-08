@@ -324,7 +324,6 @@ async def main():
 
     # Create session for conversation management
     session = Session(
-        user_id="user123",
         session_id="session456",
     )
 
@@ -385,11 +384,11 @@ from xagent.core import Agent, Session
 
 # Sync tools - automatically converted to async
 @function_tool()
-def calculate_fibonacci(n: int) -> int:
-    """Calculate nth Fibonacci number (CPU-intensive)."""
-    if n <= 1:
-        return n
-    return calculate_fibonacci(n-1) + calculate_fibonacci(n-2)
+def calculate_square(n: int) -> int:
+    """Calculate square of a number (CPU-intensive)."""
+    import time
+    time.sleep(0.1)  # Simulate CPU work
+    return n * n
 
 @function_tool()
 def format_text(text: str, style: str) -> str:
@@ -412,7 +411,7 @@ async def fetch_weather(city: str) -> str:
 async def main():
     # Mix of sync and async tools
     agent = Agent(
-        tools=[calculate_fibonacci, format_text, fetch_weather],
+        tools=[calculate_square, format_text, fetch_weather],
         model="gpt-4.1-mini"
     )
     
@@ -420,7 +419,7 @@ async def main():
     
     # Agent handles all tools automatically - sync tools run in thread pool
     response = await agent.chat(
-        "Calculate the 10th Fibonacci number, format 'hello world' in title case, and get weather for Tokyo",
+        "Calculate the square of 15, format 'hello world' in title case, and get weather for Tokyo",
         session
     )
     print(response)
@@ -581,6 +580,7 @@ asyncio.run(main())
 - Use **async functions** for I/O-bound operations (API calls, database queries, network requests)
 - Both types execute concurrently when called by the agent
 - Sync tools automatically run in thread pools to avoid blocking
+- **Note**: Recursive functions are not supported as tools due to potential stack overflow issues in async environments
 
 ### MCP Protocol Integration
 
