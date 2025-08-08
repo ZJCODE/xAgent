@@ -19,7 +19,7 @@ xAgent provides a complete AI assistant experience with text and image processin
   - [📘 Basic Chat](#-basic-chat)
   - [🗄️ Advanced Chat with Redis Persistence](#%EF%B8%8F-advanced-chat-with-redis-persistence)
   - [🔧 Custom Tools (Sync and Async)](#-custom-tools-sync-and-async)
-  - [🛡️ MCP Protocol Integration](#-mcp-protocol-integration)
+  - [🔧 MCP Protocol Integration](#-mcp-protocol-integration)
   - [📊 Structured Output with Pydantic](#-structured-output-with-pydantic)
   - [🤖 Agent as Tool Pattern](#-agent-as-tool-pattern)
 - [🔧 Development Guide](#-development-guide)
@@ -287,7 +287,7 @@ async def main():
 asyncio.run(main())
 ```
 
-### 🛡️ MCP Protocol Integration
+### 🔧 MCP Protocol Integration
 
 ```python
 import asyncio
