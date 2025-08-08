@@ -138,21 +138,19 @@ class HTTPAgentServer:
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Agent processing error: {str(e)}")
     
-    def run(self, host: str = None, port: int = None, reload: bool = None) -> None:
+    def run(self, host: str = None, port: int = None) -> None:
         """
         Run the HTTP server.
         
         Args:
             host: Host to bind to
             port: Port to bind to
-            reload: Enable auto-reload for development
         """
         server_cfg = self.config.get("server", {})
         
         # Use provided args or fall back to config defaults
         host = host or server_cfg.get("host", "0.0.0.0")
         port = port or server_cfg.get("port", 8010)
-        reload = reload if reload is not None else server_cfg.get("debug", False)
         
         print(f"Starting xAgent HTTP Server on {host}:{port}")
         print(f"Agent: {self.agent.name}")
@@ -163,7 +161,6 @@ class HTTPAgentServer:
             self.app,
             host=host,
             port=port,
-            reload=reload,
         )
 
 
@@ -175,7 +172,8 @@ def get_app() -> FastAPI:
     """Get the FastAPI app instance for uvicorn."""
     global _server_instance
     if _server_instance is None:
-        _server_instance = HTTPAgentServer()
+        # Default config path when used as module
+        _server_instance = HTTPAgentServer("config/agent.yaml")
     return _server_instance.app
 
 
@@ -189,13 +187,12 @@ def main():
     parser.add_argument("--config", default="config/agent.yaml", help="Config file path")
     parser.add_argument("--host", default=None, help="Host to bind to")
     parser.add_argument("--port", type=int, default=None, help="Port to bind to")
-    parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
     
     args = parser.parse_args()
     
     try:
         server = HTTPAgentServer(config_path=args.config)
-        server.run(host=args.host, port=args.port, reload=args.reload)
+        server.run(host=args.host, port=args.port)
     except Exception as e:
         print(f"Failed to start server: {e}")
         raise
