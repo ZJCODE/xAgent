@@ -228,13 +228,11 @@ class Agent:
         model_msg = Message.create(content=reply_text, role="assistant")
         await session.add_messages(model_msg)
 
-
     @observe()
-    async def _call_model(self, input_msgs: list, session: Session, output_type: type[BaseModel] = None) -> Optional[object]:
+    async def _call_model(self, input_msgs: list, session: Session, output_type: type[BaseModel] = None) -> tuple[ReplyType, object]:
         """
         调用大模型，返回响应对象或 None。
         """
-
         system_msg = {
             "role": "system",
             "content": self.system_prompt.format(
@@ -244,34 +242,47 @@ class Agent:
             )
         }
 
+        # 预先构建工具规格列表，避免重复计算
+        all_tools = list(self.tools.values()) + list(self.mcp_tools.values())
+        tool_specs = [fn.tool_spec for fn in all_tools] if all_tools else None
+        
+        # 预处理消息
+        messages = [system_msg] + self._sanitize_input_messages(input_msgs)
+
         try:
+            # 根据是否需要结构化输出选择不同的API调用
             if output_type is not None:
                 response = await self.client.responses.parse(
                     model=self.model,
-                    tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
-                    input=[system_msg] + self._sanitize_input_messages(input_msgs),
+                    tools=tool_specs,
+                    input=messages,
                     text_format=output_type
                 )
-                if getattr(response, "output_parsed", None) is not None:
+                # 检查结构化输出
+                if hasattr(response, "output_parsed") and response.output_parsed is not None:
                     return ReplyType.STRUCTURED_REPLY, response.output_parsed
             else:
                 response = await self.client.responses.create(
                     model=self.model,
-                    tools=[fn.tool_spec for fn in list(self.tools.values()) + list(self.mcp_tools.values())],
-                    input=[system_msg] + self._sanitize_input_messages(input_msgs),
+                    tools=tool_specs,
+                    input=messages,
                 )
 
-            if response.output_text:
+            # 统一处理响应，按优先级检查不同类型的输出
+            if hasattr(response, 'output_text') and response.output_text:
                 return ReplyType.SIMPLE_REPLY, response.output_text
             
-            if response.output:
+            if hasattr(response, 'output') and response.output:
                 return ReplyType.TOOL_CALL, response.output
             
+            # 如果没有有效输出，记录警告并返回错误
+            self.logger.warning("Model response contains no valid output: %s", response)
             return ReplyType.ERROR, "No valid output from model response."
+            
         except Exception as e:
-            self.logger.error("Model call failed: %s", e)
-            return ReplyType.ERROR, str(e)
-
+            self.logger.exception("Model call failed: %s", e)
+            return ReplyType.ERROR, f"Model call error: {str(e)}"
+    
     @observe()
     async def _handle_tool_calls(self, tool_calls: list, session: Session, input_messages: list) -> None:
         """
