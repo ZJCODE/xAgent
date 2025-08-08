@@ -18,12 +18,6 @@ xAgent is a powerful multi-modal conversational AI system that supports text, im
 - **MCP Support**: Model Context Protocol integration for dynamic tool loading
 - **Concurrent Execution**: Parallel tool execution for improved performance
 
-### 📚 **Intelligent Vocabulary Learning**
-- **Smart Word Lookup**: AI-powered word definitions with difficulty levels
-- **Personalized Vocabulary**: User-specific word learning and tracking
-- **Familiarity System**: Track learning progress with smart review recommendations
-- **Multi-Level Learning**: Beginner, Intermediate, and Advanced word explanations
-
 ### 🔧 **Developer-Friendly Architecture**
 - **Async-First Design**: Built for high-performance concurrent operations
 - **Modular Design**: Clean separation of concerns with pluggable components
@@ -148,164 +142,6 @@ chmod +x run.sh
 - **API Documentation**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
 
-## ⚡ Async Best Practices
-
-### 1. **Always Use Async Context**
-```python
-import asyncio
-
-# ✅ Correct: Run in async context
-async def main():
-    agent = Agent()
-    session = Session(user_id="user123")
-    response = await agent.chat("Hello", session)
-    print(response)
-
-asyncio.run(main())
-
-# ❌ Incorrect: Don't use sync context
-# response = agent.chat("Hello", session)  # This will fail
-```
-
-### 2. **Flexible Tool Development** (Sync or Async)
-```python
-# Both sync and async tools work seamlessly
-@function_tool()
-def cpu_intensive_task(data: str) -> str:
-    # Sync function for CPU-bound work - runs in thread pool
-    import time
-    time.sleep(1)  # Simulate CPU work
-    return f"Processed: {data}"
-
-@function_tool()
-async def io_intensive_task(url: str) -> str:
-    # Async function for I/O-bound work - runs directly
-    import httpx
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url)
-        return response.text[:100]
-
-# Agent automatically handles both types concurrently
-agent = Agent(tools=[cpu_intensive_task, io_intensive_task])
-```
-
-### 3. **Session Management**
-```python
-# ✅ Reuse session for conversation continuity
-async def conversation_example():
-    agent = Agent()
-    session = Session(user_id="user123", session_id="chat001")
-    
-    # First message
-    await agent.chat("My name is Alice", session)
-    
-    # Context is preserved automatically
-    response = await agent.chat("What's my name?", session)
-    # Response: "Your name is Alice"
-```
-
-### 4. **Error Handling in Async Context**
-```python
-async def robust_chat():
-    agent = Agent()
-    session = Session(user_id="user123")
-    
-    try:
-        response = await agent.chat("Complex query", session)
-        print(response)
-    except Exception as e:
-        print(f"Chat failed: {e}")
-        # Handle gracefully
-```
-
-### 5. **Memory Management for Long Conversations**
-```python
-async def long_conversation():
-    agent = Agent()
-    session = Session(user_id="user123")
-    
-    # Control message history to prevent memory issues
-    response = await agent.chat(
-        "Tell me about AI", 
-        session,
-        history_count=10  # Only use last 10 messages for context
-    )
-```
-
-## 🔧 Tool Development Guide
-
-### Understanding Automatic Async Conversion
-
-xAgent's `@function_tool()` decorator automatically converts sync functions to async, making tool development flexible and intuitive:
-
-```python
-from xagent.utils.tool_decorator import function_tool
-import time
-import asyncio
-import httpx
-
-# ✅ Sync function - automatically wrapped for thread-pool execution
-@function_tool()
-def cpu_heavy_task(n: int) -> int:
-    """Calculate sum of squares (CPU-intensive)."""
-    time.sleep(0.1)  # Simulate heavy computation
-    return sum(i**2 for i in range(n))
-
-# ✅ Async function - used directly on event loop  
-@function_tool()
-async def network_request(url: str) -> str:
-    """Fetch data from URL (I/O-intensive)."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url)
-        return response.text[:100]
-
-# ✅ Simple sync function - no need to make it async
-@function_tool()
-def simple_math(a: int, b: int) -> int:
-    """Add two numbers."""
-    return a + b  # No async needed for simple operations
-```
-
-### When to Use Sync vs Async
-
-**Use Sync Functions For:**
-- Mathematical calculations  
-- Data transformations
-- File operations (small files)
-- Simple string/data processing
-- CPU-bound operations
-
-**Use Async Functions For:**
-- HTTP requests
-- Database queries  
-- File I/O (large files)
-- External API calls
-- Network operations
-
-### Performance Characteristics
-
-```python
-# Concurrent execution example
-async def demo_concurrent_tools():
-    agent = Agent(tools=[
-        cpu_heavy_task,    # Runs in thread pool
-        network_request,   # Runs on event loop  
-        simple_math        # Runs in thread pool
-    ])
-    
-    session = Session(user_id="demo")
-    
-    # All tools execute concurrently when called by agent
-    # - sync tools don't block the event loop
-    # - async tools run directly for optimal I/O performance
-    # - total execution time = max(individual_times), not sum
-    
-    response = await agent.chat(
-        "Calculate sum of squares for 1000, fetch https://httpbin.org/json, and add 5+3",
-        session
-    )
-```
-
 ## 💡 Usage Examples
 
 ### Basic Async Chat
@@ -320,7 +156,7 @@ async def main():
     agent = Agent(
         name="my_assistant",
         system_prompt="You are a helpful AI assistant.",
-        model="gpt-4.1-mini"  # Using latest model,
+        model="gpt-4.1-mini",
         tools=[web_search]  # Add web search tool
     )
 
@@ -514,6 +350,165 @@ async def agent_as_tool_example():
 asyncio.run(agent_as_tool_example())
 ```
 
+## 🔧 Tool Development Guide
+
+
+## ⚡ Async Best Practices
+
+### 1. **Always Use Async Context**
+```python
+import asyncio
+
+# ✅ Correct: Run in async context
+async def main():
+    agent = Agent()
+    session = Session(user_id="user123")
+    response = await agent.chat("Hello", session)
+    print(response)
+
+asyncio.run(main())
+
+# ❌ Incorrect: Don't use sync context
+# response = agent.chat("Hello", session)  # This will fail
+```
+
+### 2. **Flexible Tool Development** (Sync or Async)
+```python
+# Both sync and async tools work seamlessly
+@function_tool()
+def cpu_intensive_task(data: str) -> str:
+    # Sync function for CPU-bound work - runs in thread pool
+    import time
+    time.sleep(1)  # Simulate CPU work
+    return f"Processed: {data}"
+
+@function_tool()
+async def io_intensive_task(url: str) -> str:
+    # Async function for I/O-bound work - runs directly
+    import httpx
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        return response.text[:100]
+
+# Agent automatically handles both types concurrently
+agent = Agent(tools=[cpu_intensive_task, io_intensive_task])
+```
+
+### 3. **Session Management**
+```python
+# ✅ Reuse session for conversation continuity
+async def conversation_example():
+    agent = Agent()
+    session = Session(user_id="user123", session_id="chat001")
+    
+    # First message
+    await agent.chat("My name is Alice", session)
+    
+    # Context is preserved automatically
+    response = await agent.chat("What's my name?", session)
+    # Response: "Your name is Alice"
+```
+
+### 4. **Error Handling in Async Context**
+```python
+async def robust_chat():
+    agent = Agent()
+    session = Session(user_id="user123")
+    
+    try:
+        response = await agent.chat("Complex query", session)
+        print(response)
+    except Exception as e:
+        print(f"Chat failed: {e}")
+        # Handle gracefully
+```
+
+### 5. **Memory Management for Long Conversations**
+```python
+async def long_conversation():
+    agent = Agent()
+    session = Session(user_id="user123")
+    
+    # Control message history to prevent memory issues
+    response = await agent.chat(
+        "Tell me about AI", 
+        session,
+        history_count=10  # Only use last 10 messages for context
+    )
+```
+
+
+### Understanding Automatic Async Conversion
+
+xAgent's `@function_tool()` decorator automatically converts sync functions to async, making tool development flexible and intuitive:
+
+```python
+from xagent.utils.tool_decorator import function_tool
+import time
+import asyncio
+import httpx
+
+# ✅ Sync function - automatically wrapped for thread-pool execution
+@function_tool()
+def cpu_heavy_task(n: int) -> int:
+    """Calculate sum of squares (CPU-intensive)."""
+    time.sleep(0.1)  # Simulate heavy computation
+    return sum(i**2 for i in range(n))
+
+# ✅ Async function - used directly on event loop  
+@function_tool()
+async def network_request(url: str) -> str:
+    """Fetch data from URL (I/O-intensive)."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        return response.text[:100]
+
+# ✅ Simple sync function - no need to make it async
+@function_tool()
+def simple_math(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b  # No async needed for simple operations
+```
+
+### When to Use Sync vs Async
+
+**Use Sync Functions For:**
+- Mathematical calculations  
+- Data transformations
+- File operations (small files)
+- Simple string/data processing
+- CPU-bound operations
+
+**Use Async Functions For:**
+- HTTP requests
+- Database queries  
+- File I/O (large files)
+- External API calls
+- Network operations
+
+### Performance Characteristics
+
+```python
+# Concurrent execution example
+async def demo_concurrent_tools():
+    agent = Agent(tools=[
+        cpu_heavy_task,    # Runs in thread pool
+        network_request,   # Runs on event loop  
+        simple_math        # Runs in thread pool
+    ])
+    
+    session = Session(user_id="demo")
+    
+    # All tools execute concurrently when called by agent
+    # - sync tools don't block the event loop
+    # - async tools run directly for optimal I/O performance
+    # - total execution time = max(individual_times), not sum
+    
+    response = await agent.chat(
+        "Calculate sum of squares for 1000, fetch https://httpbin.org/json, and add 5+3",
+        session
+    )
+```
 
 ## 📊 Monitoring & Observability
 
