@@ -77,9 +77,9 @@ class Agent:
         self.logger = logging.getLogger(self.__class__.__name__)
 
 
-    def __call__(
-            self, 
-            user_message: Message | str, 
+    async def __call__(
+            self,
+            user_message: Message | str,
             session: Session,
             history_count: int = 16,
             max_iter: int = 5,
@@ -87,9 +87,27 @@ class Agent:
             output_type: type[BaseModel] = None
     ) -> str | BaseModel:
         """
-        支持同步调用 Agent（自动转异步）。
+        Generate a reply from the agent given a user message and session.
+
+        Args:
+            user_message (Message | str): The latest user message.
+            session (Session): The session object managing message history.
+            history_count (int, optional): Number of previous messages to include. Defaults to 20.
+            max_iter (int, optional): Maximum model call attempts. Defaults to 10.
+            image_source (Optional[str], optional): Source of the image, if any can be a URL or File path or base64 string.
+            output_type (type[BaseModel], optional): Pydantic model for structured output.
+
+        Returns:
+            str | BaseModel: The agent's reply or error message.
         """
-        return asyncio.run(self.chat(user_message, session, history_count,max_iter, image_source, output_type))
+        return await self.chat(
+            user_message=user_message,
+            session=session,
+            history_count=history_count,
+            max_iter=max_iter,
+            image_source=image_source,
+            output_type=output_type
+        )
 
     @observe()
     async def chat(
@@ -121,20 +139,20 @@ class Agent:
             await self._register_mcp_servers(self.mcp_servers)
 
             # Store the incoming user message in session history
-            self._store_user_message(user_message, session, image_source)
+            await self._store_user_message(user_message, session, image_source)
 
             # Build input messages once outside the loop
-            input_messages = [msg.to_dict() for msg in session.get_messages(history_count)]
+            input_messages = [msg.to_dict() for msg in await session.get_messages(history_count)]
 
             for attempt in range(max_iter):
 
                 reply_type, response = await self._call_model(input_messages, session, output_type)
 
                 if reply_type == ReplyType.SIMPLE_REPLY:
-                    self._store_model_reply(str(response), session)
+                    await self._store_model_reply(str(response), session)
                     return response
                 elif reply_type == ReplyType.STRUCTURED_REPLY:
-                    self._store_model_reply(response.model_dump_json(), session)
+                    await self._store_model_reply(response.model_dump_json(), session)
                     return response
                 elif reply_type == ReplyType.TOOL_CALL:
                     await self._handle_tool_calls(response, session, input_messages)
@@ -201,14 +219,14 @@ class Agent:
         
         self.mcp_tools_last_updated = now
 
-    def _store_user_message(self, user_message: Message | str, session: Session, image_source: Optional[str]) -> None:
+    async def _store_user_message(self, user_message: Message | str, session: Session, image_source: Optional[str]) -> None:
         if isinstance(user_message, str):
             user_message = Message.create(content=user_message, role="user", image_source=image_source)
-        session.add_messages(user_message)
+        await session.add_messages(user_message)
 
-    def _store_model_reply(self, reply_text: str, session: Session) -> None:
+    async def _store_model_reply(self, reply_text: str, session: Session) -> None:
         model_msg = Message.create(content=reply_text, role="assistant")
-        session.add_messages(model_msg)
+        await session.add_messages(model_msg)
 
 
     @observe()
@@ -312,7 +330,7 @@ class Agent:
                     output=json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
                 )
             )
-            session.add_messages([tool_call_msg, tool_res_msg])
+            await session.add_messages([tool_call_msg, tool_res_msg])
             
             # Return the messages instead of modifying input_messages directly
             return [tool_call_msg, tool_res_msg]

@@ -25,7 +25,7 @@ class Session:
             Session._local_messages[key] = []
         self.logger = logging.getLogger(f"{self.__class__.__name__}[{user_id}:{session_id}]")
 
-    def add_messages(self, messages: Message | List[Message]) -> None:
+    async def add_messages(self, messages: Message | List[Message]) -> None:
         """
         支持添加单个 Message 或多个 Message（List[Message]）。
         """
@@ -34,7 +34,7 @@ class Session:
                 messages = [messages]
             if self.message_db:
                 self.logger.info("Adding messages to DB: %s", messages)
-                self.message_db.add_messages(self.user_id, messages, self.session_id)
+                await self.message_db.add_messages(self.user_id, messages, self.session_id)
             else:
                 key = (self.user_id, self.session_id)
                 self.logger.info("Adding messages to local session: %s", messages)
@@ -45,11 +45,11 @@ class Session:
         except Exception as e:
             self.logger.error("Failed to add messages: %s", e)
 
-    def get_messages(self, count: int = 20) -> List[Message]:
+    async def get_messages(self, count: int = 20) -> List[Message]:
         try:
             if self.message_db:
                 self.logger.info("Fetching last %d messages from DB", count)
-                return self.message_db.get_messages(self.user_id, self.session_id, count)
+                return await self.message_db.get_messages(self.user_id, self.session_id, count)
             key = (self.user_id, self.session_id)
             self.logger.info("Fetching last %d messages from local session", count)
             return Session._local_messages[key][-count:]
@@ -57,11 +57,11 @@ class Session:
             self.logger.error("Failed to get history: %s", e)
             return []
 
-    def clear_session(self) -> None:
+    async def clear_session(self) -> None:
         try:
             if self.message_db:
                 self.logger.info("Clearing history in DB")
-                self.message_db.clear_history(self.user_id, self.session_id)
+                await self.message_db.clear_history(self.user_id, self.session_id)
             else:
                 key = (self.user_id, self.session_id)
                 self.logger.info("Clearing local session history")
@@ -69,7 +69,7 @@ class Session:
         except Exception as e:
             self.logger.error("Failed to clear history: %s", e)
 
-    def pop_message(self) -> Optional[Message]:
+    async def pop_message(self) -> Optional[Message]:
         """
         移除并返回最后一条非 tool_result 消息（支持撤销/修改最后一条消息）。
         Returns:
@@ -78,7 +78,7 @@ class Session:
         try:
             if self.message_db:
                 self.logger.info("Popping last message from DB")
-                return self.message_db.pop_message(self.user_id, self.session_id)
+                return await self.message_db.pop_message(self.user_id, self.session_id)
             else:
                 key = (self.user_id, self.session_id)
                 self.logger.info("Popping last message from local session")

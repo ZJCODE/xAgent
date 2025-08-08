@@ -6,7 +6,7 @@ import streamlit as st
 import asyncio
 import re
 import tempfile
-
+import uuid
 
 # 添加项目根目录到 Python 路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,7 +39,7 @@ def init_session_state():
         st.session_state.user_id = "streamlit_user"
     
     if "session_id" not in st.session_state:
-        st.session_state.session_id = "test_session"  # 可以设置为 None 或空字符串
+        st.session_state.session_id = str(uuid.uuid4())
     
     if "use_redis" not in st.session_state:
         st.session_state.use_redis = True
