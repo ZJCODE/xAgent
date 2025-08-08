@@ -565,8 +565,6 @@ def calculate_square(n: int) -> int:
     return n * n
 ```
 
-`function_tool` decorator can pass `name` and `description` to override defaults
-
 ## 🤖 API Reference
 
 ### Core Classes
