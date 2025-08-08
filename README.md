@@ -451,7 +451,8 @@ agent:
     - "http://localhost:8001/mcp/"
   tools:
     - "web_search"
-    
+  use_local_session: true
+
 server:
   host: "0.0.0.0"
   port: 8010
