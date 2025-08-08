@@ -10,3 +10,4 @@ tenacity
 streamlit
 boto3
 fastmcp
+pyyaml

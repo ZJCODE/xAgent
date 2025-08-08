@@ -22,6 +22,7 @@ xAgent provides a complete AI assistant experience with text and image processin
   - [🔧 MCP Protocol Integration](#-mcp-protocol-integration)
   - [📊 Structured Output with Pydantic](#-structured-output-with-pydantic)
   - [🤖 Agent as Tool Pattern](#-agent-as-tool-pattern)
+- [🌐 HTTP Agent Server](#-http-agent-server)
 - [🔧 Development Guide](#-development-guide)
   - [🛠️ Creating Tools](#%EF%B8%8F-creating-tools)
   - [📋 Tool Development Guidelines](#-tool-development-guidelines)
@@ -68,7 +69,8 @@ xAgent/
 ├── 🤖 xagent/                # Core async agent framework
 │   ├── core/                 # Agent and session management
 │   │   ├── agent.py          # Main Agent class with chat
-│   │   └── session.py        # Session management with operations
+│   │   ├── session.py        # Session management with operations
+│   │   └── server.py         # Standalone HTTP Agent Server
 │   ├── db/                   # Database layer (Redis)
 │   │   └── message.py        # Message persistence
 │   ├── schemas/              # Data models and types (Pydantic)
@@ -155,6 +157,9 @@ python tools/mcp_server.py
 
 # Terminal 3: Frontend
 streamlit run frontend/chat_app.py --server.port 8501
+
+# Terminal 4: Standalone HTTP Agent Server (Optional)
+python xagent/core/server.py --config config/agent.yaml
 ```
 
 
@@ -165,6 +170,7 @@ streamlit run frontend/chat_app.py --server.port 8501
 | **Chat Interface** | http://localhost:8501 | Main user interface |
 | **API Docs** | http://localhost:8000/docs | Interactive API documentation |
 | **Health Check** | http://localhost:8000/health | Service status monitoring |
+| **HTTP Agent Server** | http://localhost:8010/chat | Standalone agent HTTP API |
 
 ## 💡 Usage Examples
 
@@ -417,6 +423,148 @@ async def agent_as_tool_example():
 
 asyncio.run(agent_as_tool_example())
 ```
+
+## 🌐 HTTP Agent Server
+
+xAgent provides a standalone HTTP server that exposes the Agent functionality through REST API endpoints. This allows integration with other systems and services through simple HTTP calls.
+
+### 🚀 Starting the HTTP Server
+
+```bash
+# Start with default config
+python xagent/core/server.py --config config/agent.yaml
+
+# Server will start on http://localhost:8010 by default
+```
+
+### ⚙️ Configuration
+
+The HTTP server is configured through a YAML file (e.g., `config/agent.yaml`):
+
+```yaml
+agent:
+  name: "Agent"
+  system_prompt: |
+    You are a helpful assistant. Your task is to assist users with their queries and tasks.
+  model: "gpt-4.1-mini"
+  mcp_servers:
+    - http://localhost:8001/mcp/
+  tools:
+    - "web_search"
+    
+server:
+  host: "0.0.0.0"
+  port: 8010
+  debug: true
+```
+
+### 📡 API Endpoints
+
+#### POST `/chat`
+
+Main chat endpoint for interacting with the AI agent.
+
+**Request Body:**
+```json
+{
+  "user_id": "string",      // Required: User identifier
+  "session_id": "string",   // Required: Session identifier for conversation context
+  "user_message": "string", // Required: User's message to the agent
+  "image_source": "string"  // Optional: Image URL or base64 encoded image
+}
+```
+
+**Response:**
+```json
+{
+  "reply": "string"  // Agent's response message
+}
+```
+
+### 💡 Usage Examples
+
+#### Basic Chat Request
+
+```bash
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user123",
+    "session_id": "session456",
+    "user_message": "Hello, how are you?"
+  }'
+```
+
+#### Chat with Image
+
+```bash
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user123",
+    "session_id": "session456", 
+    "user_message": "What do you see in this image?",
+    "image_source": "https://example.com/image.jpg"
+  }'
+```
+
+#### Python Client Example
+
+```python
+import requests
+import json
+
+def chat_with_agent(user_message, user_id="test", session_id="test", image_source=None):
+    url = "http://localhost:8010/chat"
+    
+    payload = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "user_message": user_message
+    }
+    
+    if image_source:
+        payload["image_source"] = image_source
+    
+    response = requests.post(url, json=payload)
+    
+    if response.status_code == 200:
+        return response.json()["reply"]
+    else:
+        return f"Error: {response.status_code}"
+
+# Usage
+reply = chat_with_agent("你是谁")
+print(reply)
+
+# Continue conversation with context
+reply = chat_with_agent("我的名字是张三", session_id="session456")
+print(reply)
+
+reply = chat_with_agent("我的名字是什么？", session_id="session456")
+print(reply)  # Will remember the name from previous message
+```
+
+### 🔧 Features
+
+| Feature | Description |
+|---------|-------------|
+| **Configuration-Driven** | Easy setup through YAML config files |
+| **Session Management** | Automatic conversation context preservation |
+| **Multi-Modal Support** | Text and image processing capabilities |
+| **Tool Integration** | Configurable tool ecosystem through YAML |
+| **MCP Protocol** | Dynamic tool loading from MCP servers |
+| **RESTful API** | Standard HTTP/JSON interface |
+| **Stateless Design** | Each request is independent with session context |
+
+### 🎯 Use Cases
+
+- **Microservice Integration** - Embed AI capabilities in existing systems
+- **API Gateway** - Centralized AI service for multiple applications  
+- **Mobile App Backend** - Provide AI chat functionality to mobile apps
+- **Webhook Processing** - Process incoming webhooks with AI analysis
+- **Batch Processing** - Process multiple requests programmatically
+- **Third-party Integrations** - Connect with external platforms and services
 
 
 ## 🔧 Development Guide
