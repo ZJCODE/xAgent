@@ -286,6 +286,29 @@ async def main():
 asyncio.run(main())
 ```
 
+### MCP Protocol Integration
+
+```python
+import asyncio
+from xagent.core import Agent, Session
+
+async def mcp_integration_example():
+    # Create agent with MCP tools
+    agent = Agent(
+        tools=[],
+        mcp_servers=["http://localhost:8001/mcp/"],  # Auto-refresh MCP tools
+        model="gpt-4.1-mini"
+    )
+    
+    session = Session(user_id="user123")
+    
+    # Use MCP tools automatically
+    response = await agent.chat("Use the available MCP tools to help me", session)
+    print(response)
+
+asyncio.run(mcp_integration_example())
+```
+
 ### 📊 Structured Output with Pydantic
 
 ```python
@@ -440,29 +463,6 @@ xAgent's `@function_tool()` decorator automatically handles sync-to-async conver
 - **Async functions** → Run directly on event loop
 - **Concurrent execution** → All tools execute in parallel when called
 
-
-### MCP Protocol Integration
-
-```python
-import asyncio
-from xagent.core import Agent, Session
-
-async def mcp_integration_example():
-    # Create agent with MCP tools
-    agent = Agent(
-        tools=[],
-        mcp_servers=["http://localhost:8001/mcp/"],  # Auto-refresh MCP tools
-        model="gpt-4.1-mini"
-    )
-    
-    session = Session(user_id="user123")
-    
-    # Use MCP tools automatically
-    response = await agent.chat("Use the available MCP tools to help me", session)
-    print(response)
-
-asyncio.run(mcp_integration_example())
-```
 
 ## ⚡ Best Practices
 
