@@ -42,11 +42,11 @@ xAgent/
 │   ├── core/              # Agent and session management
 │   ├── db/                # Database layer (Redis)
 │   ├── schemas/           # Data models and types
+│   ├── tools/             # Tool ecosystem
+│   │   ├── mcp_server.py      # MCP protocol server
+│   │   ├── openai_tool.py     # OpenAI tool integrations
+│   │   └── vocabulary/        # Vocabulary learning system
 │   └── utils/             # Utility functions
-├── tools/                 # Tool ecosystem
-│   ├── mcp_server.py      # MCP protocol server
-│   ├── openai_tool.py     # OpenAI tool integrations
-│   └── vocabulary/        # Vocabulary learning system
 ├── examples/              # Usage examples
 └── tests/                 # Test suite
 ```
@@ -63,7 +63,7 @@ xAgent/
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/xAgent.git
+   git clone https://github.com/ZJCODE/xAgent.git
    cd xAgent
    ```
 
