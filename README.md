@@ -83,10 +83,17 @@ xAgent/
    
    # Configure environment variables
    OPENAI_API_KEY=your_openai_api_key
-   REDIS_URL=redis://localhost:6379
+
+   REDIS_URL=your_redis_url_with_password # Optional
+
    LANGFUSE_SECRET_KEY=your_langfuse_key  # Optional
    LANGFUSE_PUBLIC_KEY=your_langfuse_public_key  # Optional
    LANGFUSE_HOST=https://cloud.langfuse.com  # Optional
+   
+   AWS_ACCESS_KEY_ID=your_aws_access_key_id # Optional
+   AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key # Optional
+   AWS_REGION=us-east-1 # Optional
+   BUCKET_NAME=your_bucket_name # Optional
    ```
 
 ### Running the Application
