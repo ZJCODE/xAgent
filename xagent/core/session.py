@@ -13,17 +13,17 @@ class Session:
 
     def __init__(
         self,
-        user_id: str,
+        user_id: Optional[str] = None,
         session_id: Optional[str] = None,
         message_db: Optional[MessageDB] = None
     ):
-        self.user_id = user_id
-        self.session_id = session_id
+        self.user_id = user_id or "default_user"
+        self.session_id = session_id or "default_session"
         self.message_db = message_db
-        key = (user_id, session_id)
+        key = (self.user_id, self.session_id)
         if not self.message_db and key not in Session._local_messages:
             Session._local_messages[key] = []
-        self.logger = logging.getLogger(f"{self.__class__.__name__}[{user_id}:{session_id}]")
+        self.logger = logging.getLogger(f"{self.__class__.__name__}[{self.user_id}:{self.session_id}]")
 
     async def add_messages(self, messages: Message | List[Message]) -> None:
         """
