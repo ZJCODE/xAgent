@@ -6,149 +6,186 @@
 [![Redis](https://img.shields.io/badge/Redis-7.0+-red.svg)](https://redis.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-xAgent is a powerful multi-modal conversational AI system that supports text, image interactions, and vocabulary learning. Built with **async-first architecture**, FastAPI backend, Streamlit frontend, and Redis for persistence, it provides a complete AI assistant experience with intelligent vocabulary management and concurrent tool execution.
+> **🚀 A powerful multi-modal conversational AI system with async-first architecture**
 
-## ✨ Features
+xAgent provides a complete AI assistant experience with text and image processing capabilities, intelligent vocabulary management, and high-performance concurrent tool execution. Built on FastAPI, Streamlit, and Redis for production-ready scalability.
+
+## 📋 Table of Contents
+
+- [✨ Key Features](#-key-features)
+- [🏗️ Architecture](#%EF%B8%8F-architecture)
+- [🚀 Quick Start](#-quick-start)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Running the Application](#running-the-application)
+- [💡 Usage Examples](#-usage-examples)
+  - [Basic Chat](#basic-async-chat)
+  - [Redis Persistence](#advanced-chat-with-redis-persistence)
+  - [Custom Tools](#custom-tools-sync-and-async)
+  - [Structured Output](#structured-output-with-pydantic)
+  - [Agent Composition](#agent-as-tool-pattern)
+- [🔧 Development Guide](#-development-guide)
+  - [Tool Development](#tool-development-guide)
+  - [Async Best Practices](#-async-best-practices)
+  - [MCP Integration](#mcp-protocol-integration)
+- [📚 API Reference](#-api-reference)
+- [📊 Monitoring](#-monitoring--observability)
+- [🤝 Contributing](#-contributing)
+- [📄 License](#-license)
+
+## ✨ Key Features
+
+<table>
+<tr>
+<td width="50%">
 
 ### 🤖 **Multi-Modal AI Chat**
-- **Text Conversations**: Powered by OpenAI GPT models (GPT-4.1, GPT-4.1-mini, GPT-4o)
-- **Image Processing**: Upload and analyze images with AI
-- **Session Management**: Persistent conversation history with Redis and async operations
-- **Tool Integration**: Extensible tool system with automatic sync-to-async conversion
-- **MCP Support**: Model Context Protocol integration for dynamic tool loading
-- **Concurrent Execution**: Parallel tool execution for improved performance
+- **Text Conversations** - OpenAI GPT models (GPT-4.1, GPT-4.1-mini, GPT-4o)
+- **Image Processing** - Upload and analyze images with AI
+- **Session Management** - Persistent conversation history with Redis
+- **Tool Integration** - Extensible tool system with auto sync-to-async conversion
+- **MCP Support** - Model Context Protocol for dynamic tool loading
+- **Concurrent Execution** - Parallel tool execution for improved performance
 
-### 🔧 **Developer-Friendly Architecture**
-- **Async-First Design**: Built for high-performance concurrent operations
-- **Modular Design**: Clean separation of concerns with pluggable components
-- **MCP Protocol**: Model Context Protocol server for tool integration
-- **Comprehensive Testing**: Full test coverage with pytest
-- **Observability**: Built-in logging and monitoring with Langfuse
-- **Type Safety**: Full type hints with Pydantic models
+</td>
+<td width="50%">
+
+### 🔧 **Developer Experience**
+- **Async-First Design** - High-performance concurrent operations
+- **Modular Architecture** - Clean separation with pluggable components
+- **Type Safety** - Full type hints with Pydantic models
+- **Comprehensive Testing** - Full test coverage with pytest
+- **Observability** - Built-in logging and monitoring with Langfuse
+- **Flexible Tools** - Support both sync and async tool functions
+
+</td>
+</tr>
+</table>
 
 ## 🏗️ Architecture
 
+**Async-First Design for High Performance**
+
 ```
-xAgent/ (Async-First Architecture)
-├── api/                    # FastAPI backend services
-│   ├── main.py            # API server entry point
-│   ├── health.py          # Health check endpoints
-│   └── schemas/           # API data models
-├── frontend/              # Streamlit web interface
-│   └── chat_app.py        # Main chat application
-├── xagent/                # Core async agent framework
-│   ├── core/              # Agent and session management (async)
-│   │   ├── agent.py       # Main Agent class with async chat
-│   │   └── session.py     # Session management with async operations
-│   ├── db/                # Async database layer (Redis)
-│   │   └── message.py     # Async message persistence
-│   ├── schemas/           # Data models and types (Pydantic)
-│   ├── tools/             # Async tool ecosystem
-│   │   ├── mcp_server.py      # MCP protocol server
-│   │   ├── openai_tool.py     # OpenAI tool integrations
-│   │   └── vocabulary/        # Vocabulary learning system
-│   └── utils/             # Async utility functions
-│       ├── tool_decorator.py  # Async tool decorators
-│       └── mcp_convertor.py   # MCP async client
-├── examples/              # Async usage examples
-│   └── run_agent.py       # Complete async examples
-└── tests/                 # Async test suite
-    └── test_*.py          # Comprehensive async tests
+xAgent/
+├── 🌐 api/                    # FastAPI backend services
+│   ├── main.py               # API server entry point
+│   ├── health.py             # Health check endpoints
+│   └── schemas/              # API data models
+├── 🎨 frontend/              # Streamlit web interface  
+│   └── chat_app.py           # Main chat application
+├── 🤖 xagent/                # Core async agent framework
+│   ├── core/                 # Agent and session management (async)
+│   │   ├── agent.py          # Main Agent class with async chat
+│   │   └── session.py        # Session management with async operations
+│   ├── db/                   # Async database layer (Redis)
+│   │   └── message.py        # Async message persistence
+│   ├── schemas/              # Data models and types (Pydantic)
+│   ├── tools/                # Async tool ecosystem
+│   │   ├── mcp_server.py     # MCP protocol server
+│   │   ├── openai_tool.py    # OpenAI tool integrations
+│   │   └── vocabulary/       # Vocabulary learning system
+│   └── utils/                # Async utility functions
+│       ├── tool_decorator.py # Async tool decorators
+│       └── mcp_convertor.py  # MCP async client
+├── 📝 examples/              # Usage examples and demos
+└── 🧪 tests/                 # Comprehensive async test suite
 ```
 
-### Key Async Components:
+### 🔄 Core Components
 
-- **Agent**: Core async conversation handler with concurrent tool execution
-- **Session**: Async message history management with Redis integration  
-- **MessageDB**: Async Redis operations for scalable persistence
-- **Tools**: Automatic sync-to-async conversion for optimal performance
-- **Tool Decorator**: Smart async wrapper for both sync and async functions
-- **MCP Integration**: Async Model Context Protocol support
+| Component | Purpose | Technology |
+|-----------|---------|------------|
+| **Agent** | Core async conversation handler | OpenAI API + AsyncIO |
+| **Session** | Message history management | Redis + Async Operations |
+| **MessageDB** | Scalable persistence layer | Redis with async client |
+| **Tools** | Extensible function ecosystem | Auto sync-to-async conversion |
+| **MCP** | Dynamic tool loading protocol | Async HTTP client |
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- Python 3.12+
-- Redis Server
-- OpenAI API Key
-- Understanding of Python async/await patterns
+| Requirement | Version | Purpose |
+|-------------|---------|---------|
+| **Python** | 3.12+ | Core runtime |
+| **Redis** | 7.0+ | Message persistence |
+| **OpenAI API Key** | - | AI model access |
 
 ### Installation
 
-1. **Clone the repository**
+1. **Clone and Setup**
    ```bash
    git clone https://github.com/ZJCODE/xAgent.git
    cd xAgent
-   ```
-
-2. **Install dependencies**
-   ```bash
    pip install -r requirements.txt
-
-   or 
-
-   pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
    ```
 
-3. **Environment Setup**
+2. **Environment Configuration**
    ```bash
-   # Create .env file
+   # Copy and edit environment file
    cp .env.example .env
+   ```
    
-   # Configure environment variables
+   **Required variables:**
+   ```env
    OPENAI_API_KEY=your_openai_api_key
-
-   REDIS_URL=your_redis_url_with_password # Optional
-
-   LANGFUSE_SECRET_KEY=your_langfuse_key  # Optional
-   LANGFUSE_PUBLIC_KEY=your_langfuse_public_key  # Optional
-   LANGFUSE_HOST=https://cloud.langfuse.com  # Optional
+   ```
    
-   AWS_ACCESS_KEY_ID=your_aws_access_key_id # Optional
-   AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key # Optional
-   AWS_REGION=us-east-1 # Optional
-   BUCKET_NAME=your_bucket_name # Optional
+   **Optional variables:**
+   ```env
+   REDIS_URL=your_redis_url_with_password
+   LANGFUSE_SECRET_KEY=your_langfuse_key
+   LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
+   LANGFUSE_HOST=https://cloud.langfuse.com
+   AWS_ACCESS_KEY_ID=your_aws_access_key_id
+   AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
+   AWS_REGION=us-east-1
+   BUCKET_NAME=your_bucket_name
    ```
 
 ### Running the Application
 
-#### Option 1: Quick Start (All Services)
+<details>
+<summary><strong>🚀 Quick Start (All Services)</strong></summary>
+
 ```bash
 chmod +x run.sh
 ./run.sh
 ```
+</details>
 
-#### Option 2: Manual Start
+<details>
+<summary><strong>⚙️ Manual Start (Individual Services)</strong></summary>
 
-1. **Start API Server**
-   ```bash
-   uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
-   ```
+```bash
+# Terminal 1: API Server
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 
-2. **Start MCP Server**
-   ```bash
-   python tools/mcp_server.py
-   ```
+# Terminal 2: MCP Server  
+python tools/mcp_server.py
 
-3. **Start Frontend**
-   ```bash
-   streamlit run frontend/chat_app.py --server.port 8501
-   ```
+# Terminal 3: Frontend
+streamlit run frontend/chat_app.py --server.port 8501
+```
+</details>
 
-### Access the Application
+### 🌐 Access Points
 
-- **Chat Interface**: http://localhost:8501
-- **API Documentation**: http://localhost:8000/docs
-- **Health Check**: http://localhost:8000/health
+| Service | URL | Description |
+|---------|-----|-------------|
+| **Chat Interface** | http://localhost:8501 | Main user interface |
+| **API Docs** | http://localhost:8000/docs | Interactive API documentation |
+| **Health Check** | http://localhost:8000/health | Service status monitoring |
 
 ## 💡 Usage Examples
 
-### Basic Async Chat
+<details>
+<summary><strong>📘 Basic Async Chat</strong></summary>
+
 ```python
 import asyncio
 from xagent.core import Agent, Session
-from xagent.db import MessageDB
 from xagent.tools import web_search
 
 async def main():
@@ -161,9 +198,7 @@ async def main():
     )
 
     # Create session for conversation management
-    session = Session(
-        session_id="session456",
-    )
+    session = Session(session_id="session456")
 
     # Async chat interaction
     response = await agent.chat("Hello, how are you?", session)
@@ -173,11 +208,12 @@ async def main():
     response = await agent.chat("What's the weather like in Hangzhou?", session)
     print(response)
 
-# Run the async function
 asyncio.run(main())
 ```
+</details>
 
-### Advanced Chat with Redis Persistence
+<details>
+<summary><strong>🗄️ Advanced Chat with Redis Persistence</strong></summary>
 ```python
 import asyncio
 from xagent.core import Agent, Session
@@ -211,8 +247,10 @@ async def chat_with_persistence():
 
 asyncio.run(chat_with_persistence())
 ```
+</details>
 
-### Custom Tools (Sync and Async)
+<details>
+<summary><strong>🔧 Custom Tools (Sync and Async)</strong></summary>
 ```python
 import asyncio
 import time
@@ -224,7 +262,6 @@ from xagent.core import Agent, Session
 @function_tool()
 def calculate_square(n: int) -> int:
     """Calculate square of a number (CPU-intensive)."""
-    import time
     time.sleep(0.1)  # Simulate CPU work
     return n * n
 
@@ -264,16 +301,11 @@ async def main():
 
 asyncio.run(main())
 ```
+</details>
 
-### Structured Output with Pydantic
+<details>
+<summary><strong>📊 Structured Output with Pydantic</strong></summary>
 ```python
-"""
-Structured Output with Pydantic Example
-
-This example demonstrates how to use xAgent to generate structured output
-using Pydantic models for type-safe responses.
-"""
-
 import asyncio
 from pydantic import BaseModel
 from xagent.core import Agent, Session
@@ -310,24 +342,22 @@ async def get_structured_response():
     print(f"Humidity: {weather_data.humidity}%")
 
     # Request structured output for mathematical reasoning
-    reply = await agent.chat("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
+    reply = await agent.chat(
+        "how can I solve 8x + 7 = -23", 
+        session, 
+        output_type=MathReasoning
+    )
     for index, step in enumerate(reply.steps):
         print(f"Step {index + 1}: {step.explanation} => Output: {step.output}")
     print("Final Answer:", reply.final_answer)
 
-if __name__ == "__main__":
-    asyncio.run(get_structured_response())
+asyncio.run(get_structured_response())
 ```
+</details>
 
-### Agent as Tool Pattern
+<details>
+<summary><strong>🤖 Agent as Tool Pattern</strong></summary>
 ```python
-"""
-Agent as Tool Pattern Example
-
-This example demonstrates how to use agents as tools, creating specialized
-agents that can be composed together for complex tasks.
-"""
-
 import asyncio
 from xagent.core import Agent, Session
 from xagent.db import MessageDB
@@ -337,14 +367,14 @@ async def agent_as_tool_example():
     # Create specialized agents
     researcher_agent = Agent(
         name="research_specialist",
-        system_prompt="You are a research expert. Gather information, analyze data, and provide well-researched insights.",
+        system_prompt="Research expert. Gather information and provide insights.",
         model="gpt-4.1-mini",
-        tools=[web_search]  # Add web search tool for research purposes
+        tools=[web_search]
     )
     
     writing_agent = Agent(
         name="writing_specialist", 
-        system_prompt="You are a professional writer. Create engaging content.",
+        system_prompt="Professional writer. Create engaging content.",
         model="gpt-4.1-mini"
     )
     
@@ -366,7 +396,7 @@ async def agent_as_tool_example():
     coordinator = Agent(
         name="coordinator",
         tools=[research_tool, writing_tool],
-        system_prompt="You are a coordination agent that breaks down complex tasks and delegates them to specialist agents. Analyze requests, create execution plans, delegate to the right specialist (researcher for information gathering, content_writer for writing), and synthesize results into coherent outputs.",
+        system_prompt="Coordination agent that delegates to specialists.",
         model="gpt-4.1"
     )
     
@@ -374,21 +404,67 @@ async def agent_as_tool_example():
     
     # Complex multi-step task
     response = await coordinator.chat(
-        "Research the benefits of renewable energy and write a brief summary",
+        "Research renewable energy benefits and write a brief summary",
         session
     )
     print(response)
 
-if __name__ == "__main__":
-    asyncio.run(agent_as_tool_example())
+asyncio.run(agent_as_tool_example())
+```
+</details>
+
+## 🔧 Development Guide
+
+### Tool Development Guide
+
+#### 🛠️ Creating Tools
+
+Both sync and async functions work seamlessly:
+
+```python
+from xagent.utils.tool_decorator import function_tool
+import asyncio
+import time
+
+# ✅ Sync tool - perfect for CPU-bound operations
+@function_tool()
+def my_sync_tool(input_text: str) -> str:
+    """Process text synchronously (runs in thread pool)."""
+    time.sleep(0.1)  # Simulate CPU-intensive work
+    return f"Sync processed: {input_text}"
+
+# ✅ Async tool - ideal for I/O-bound operations  
+@function_tool()
+async def my_async_tool(input_text: str) -> str:
+    """Process text asynchronously."""
+    await asyncio.sleep(0.1)  # Simulate async I/O operation
+    return f"Async processed: {input_text}"
 ```
 
-## 🔧 Tool Development Guide
+#### 📋 Tool Development Guidelines
 
+| Use Case | Tool Type | Example |
+|----------|-----------|---------|
+| **CPU-bound** | Sync functions | Math calculations, data processing |
+| **I/O-bound** | Async functions | API calls, database queries |
+| **Simple operations** | Sync functions | String manipulation, file operations |
+| **Network requests** | Async functions | HTTP requests, WebSocket connections |
+
+> **⚠️ Note**: Recursive functions are not supported as tools due to potential stack overflow issues in async environments.
+
+#### 🔄 Automatic Async Conversion
+
+xAgent's `@function_tool()` decorator automatically handles sync-to-async conversion:
+
+- **Sync functions** → Run in thread pool (non-blocking)
+- **Async functions** → Run directly on event loop
+- **Concurrent execution** → All tools execute in parallel when called
 
 ## ⚡ Async Best Practices
 
-### 1. **Always Use Async Context**
+<details>
+<summary><strong>1. Always Use Async Context</strong></summary>
+
 ```python
 import asyncio
 
@@ -404,8 +480,11 @@ asyncio.run(main())
 # ❌ Incorrect: Don't use sync context
 # response = agent.chat("Hello", session)  # This will fail
 ```
+</details>
 
-### 2. **Flexible Tool Development** (Sync or Async)
+<details>
+<summary><strong>2. Smart Tool Selection</strong></summary>
+
 ```python
 # Both sync and async tools work seamlessly
 @function_tool()
@@ -426,8 +505,10 @@ async def io_intensive_task(url: str) -> str:
 # Agent automatically handles both types concurrently
 agent = Agent(tools=[cpu_intensive_task, io_intensive_task])
 ```
+</details>
 
-### 3. **Session Management**
+<details>
+<summary><strong>3. Session Management</strong></summary>
 ```python
 # ✅ Reuse session for conversation continuity
 async def conversation_example():
@@ -441,8 +522,11 @@ async def conversation_example():
     response = await agent.chat("What's my name?", session)
     # Response: "Your name is Alice"
 ```
+</details>
 
-### 4. **Error Handling in Async Context**
+<details>
+<summary><strong>4. Error Handling</strong></summary>
+
 ```python
 async def robust_chat():
     agent = Agent()
@@ -455,8 +539,11 @@ async def robust_chat():
         print(f"Chat failed: {e}")
         # Handle gracefully
 ```
+</details>
 
-### 5. **Memory Management for Long Conversations**
+<details>
+<summary><strong>5. Memory Management</strong></summary>
+
 ```python
 async def long_conversation():
     agent = Agent()
@@ -469,163 +556,18 @@ async def long_conversation():
         history_count=10  # Only use last 10 messages for context
     )
 ```
-
-
-### Understanding Automatic Async Conversion
-
-xAgent's `@function_tool()` decorator automatically converts sync functions to async, making tool development flexible and intuitive:
-
-```python
-from xagent.utils.tool_decorator import function_tool
-import time
-import asyncio
-import httpx
-
-# ✅ Sync function - automatically wrapped for thread-pool execution
-@function_tool()
-def cpu_heavy_task(n: int) -> int:
-    """Calculate sum of squares (CPU-intensive)."""
-    time.sleep(0.1)  # Simulate heavy computation
-    return sum(i**2 for i in range(n))
-
-# ✅ Async function - used directly on event loop  
-@function_tool()
-async def network_request(url: str) -> str:
-    """Fetch data from URL (I/O-intensive)."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url)
-        return response.text[:100]
-
-# ✅ Simple sync function - no need to make it async
-@function_tool()
-def simple_math(a: int, b: int) -> int:
-    """Add two numbers."""
-    return a + b  # No async needed for simple operations
-```
-
-### When to Use Sync vs Async
-
-**Use Sync Functions For:**
-- Mathematical calculations  
-- Data transformations
-- File operations (small files)
-- Simple string/data processing
-- CPU-bound operations
-
-**Use Async Functions For:**
-- HTTP requests
-- Database queries  
-- File I/O (large files)
-- External API calls
-- Network operations
-
-### Performance Characteristics
-
-```python
-# Concurrent execution example
-async def demo_concurrent_tools():
-    agent = Agent(tools=[
-        cpu_heavy_task,    # Runs in thread pool
-        network_request,   # Runs on event loop  
-        simple_math        # Runs in thread pool
-    ])
-    
-    session = Session(user_id="demo")
-    
-    # All tools execute concurrently when called by agent
-    # - sync tools don't block the event loop
-    # - async tools run directly for optimal I/O performance
-    # - total execution time = max(individual_times), not sum
-    
-    response = await agent.chat(
-        "Calculate sum of squares for 1000, fetch https://httpbin.org/json, and add 5+3",
-        session
-    )
-```
-
-## 📊 Monitoring & Observability
-
-xAgent includes built-in observability features:
-
-- **Langfuse Integration**: Track AI interactions and performance
-- **Comprehensive Logging**: Structured logging throughout the system
-- **Health Checks**: API health monitoring endpoints
-- **Performance Metrics**: Tool execution time and success rates
-
-## 🔧 Development
-
-### Project Structure
-
-- **`api/`**: FastAPI backend with health checks and API endpoints.
-- **`frontend/`**: Streamlit-based chat interface with image upload support.
-- **`xagent/`**: The core agent framework, containing:
-    - **`core/`**: Core agent logic and session management.
-    - **`db/`**: Redis-based persistence layer for conversations.
-    - **`tools/`**: Extensible tool ecosystem, including the vocabulary learning system.
-    - **`schemas/`**: Data models and types used across the framework.
-    - **`utils/`**: Shared utility functions.
-- **`examples/`**: Example scripts demonstrating how to use the xAgent framework.
-- **`tests/`**: Comprehensive test suite for the project.
-
-
-### Adding New Tools
-
-1. Create a tool function (sync or async) with the `@function_tool()` decorator
-2. Add to the agent's tool list  
-3. Test with the provided test framework
-
-```python
-import asyncio
-import time
-from xagent.utils.tool_decorator import function_tool
-
-# Sync tool - perfect for CPU-bound operations
-@function_tool()
-def my_sync_tool(input_text: str) -> str:
-    """Process text synchronously (runs in thread pool)."""
-    # Simulate CPU-intensive work
-    time.sleep(0.1)
-    return f"Sync processed: {input_text}"
-
-# Async tool - ideal for I/O-bound operations  
-@function_tool()
-async def my_async_tool(input_text: str) -> str:
-    """Process text asynchronously."""
-    # Simulate async I/O operation
-    await asyncio.sleep(0.1)
-    return f"Async processed: {input_text}"
-
-# Use with agent
-async def main():
-    agent = Agent(tools=[my_sync_tool, my_async_tool])
-    session = Session(user_id="user123")
-    
-    response = await agent.chat("Use both tools to process 'hello world'", session)
-    print(response)
-
-asyncio.run(main())
-```
-
-**Tool Development Guidelines:**
-- Use **sync functions** for CPU-bound operations (math, data processing, file operations)
-- Use **async functions** for I/O-bound operations (API calls, database queries, network requests)
-- Both types execute concurrently when called by the agent
-- Sync tools automatically run in thread pools to avoid blocking
-- **Note**: Recursive functions are not supported as tools due to potential stack overflow issues in async environments
+</details>
 
 ### MCP Protocol Integration
-
-xAgent supports the Model Context Protocol for tool integration with full async support:
 
 ```python
 import asyncio
 from xagent.core import Agent, Session
 
 async def mcp_integration_example():
-
     # Create agent with MCP tools
     agent = Agent(
-        tools=tools,
+        tools=[],
         mcp_servers=["http://localhost:8001/mcp/"],  # Auto-refresh MCP tools
         model="gpt-4.1-mini"
     )
@@ -639,11 +581,13 @@ async def mcp_integration_example():
 asyncio.run(mcp_integration_example())
 ```
 
-## 📝 API Reference
+## � API Reference
 
 ### Core Classes
 
-#### `Agent`
+<details>
+<summary><strong>🤖 Agent</strong></summary>
+
 Main AI agent class for handling async conversations and tool execution.
 
 ```python
@@ -669,8 +613,11 @@ Agent(
 - `client`: Custom AsyncOpenAI client instance
 - `tools`: List of async function tools
 - `mcp_servers`: MCP server URLs for dynamic tool loading
+</details>
 
-#### `Session`
+<details>
+<summary><strong>💬 Session</strong></summary>
+
 Manages conversation history and persistence with async operations.
 
 ```python
@@ -692,8 +639,11 @@ Session(
 - Redis-backed persistence for production use
 - Thread-safe async operations
 - Efficient message batching
+</details>
 
-#### `MessageDB`
+<details>
+<summary><strong>🗄️ MessageDB</strong></summary>
+
 Redis-backed async message persistence layer.
 
 ```python
@@ -706,85 +656,79 @@ session = Session(
     message_db=message_db
 )
 ```
+</details>
 
-### Important Async Considerations
+### Important Considerations
 
-1. **Tool functions can be sync or async** (automatic conversion):
-   ```python
-   # ✅ Sync function - automatically converted to async
-   @function_tool()
-   def simple_calculator(a: int, b: int) -> int:
-       """Add two numbers together."""
-       return a + b
-   
-   # ✅ Async function - used directly
-   @function_tool()
-   async def api_call(query: str) -> str:
-       """Make an API call."""
-       async with httpx.AsyncClient() as client:
-           response = await client.get(f"https://api.example.com/{query}")
-           return response.text
-   ```
+| Aspect | Details |
+|--------|---------|
+| **Tool functions** | Can be sync or async (automatic conversion) |
+| **Agent interactions** | Always use `await` |
+| **Context** | Run in async context with `asyncio.run()` |
+| **Concurrency** | All tools execute in parallel automatically |
 
-2. **Always use `await` with agent interactions**:
-   ```python
-   response = await agent.chat(message, session)
-   ```
+## 📊 Monitoring & Observability
 
-3. **Run in async context**:
-   ```python
-   import asyncio
-   
-   async def main():
-       # Your async code here
-       pass
-   
-   asyncio.run(main())
-   ```
+xAgent includes comprehensive observability features:
 
-4. **Automatic async conversion benefits**:
-   - Sync functions are wrapped in `loop.run_in_executor()` for thread-pool execution
-   - CPU-bound sync functions don't block the event loop
-   - Async functions run directly for I/O-bound operations
-   - All tools execute concurrently using `asyncio.gather()`
-   - Maintains conversation context consistency
+- **🔍 Langfuse Integration** - Track AI interactions and performance
+- **📝 Structured Logging** - Throughout the entire system
+- **❤️ Health Checks** - API monitoring endpoints
+- **⚡ Performance Metrics** - Tool execution time and success rates
 
 ## 🤝 Contributing
 
-We welcome contributions! Please follow these steps:
+We welcome contributions! Here's how to get started:
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+### Development Workflow
+
+1. **Fork** the repository
+2. **Create** a feature branch: `git checkout -b feature/amazing-feature`
+3. **Commit** your changes: `git commit -m 'Add amazing feature'`
+4. **Push** to the branch: `git push origin feature/amazing-feature`
+5. **Open** a Pull Request
 
 ### Development Guidelines
 
-- Follow PEP 8 coding standards
-- Add tests for new features
-- Update documentation as needed
-- Use type hints throughout
-- Follow conventional commit messages
+| Area | Requirements |
+|------|-------------|
+| **Code Style** | Follow PEP 8 standards |
+| **Testing** | Add tests for new features |
+| **Documentation** | Update docs as needed |
+| **Type Safety** | Use type hints throughout |
+| **Commits** | Follow conventional commit messages |
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
-- [OpenAI](https://openai.com/) for the GPT models
-- [FastAPI](https://fastapi.tiangolo.com/) for the robust API framework
-- [Streamlit](https://streamlit.io/) for the intuitive web interface
-- [Redis](https://redis.io/) for high-performance data storage
-- [Langfuse](https://langfuse.com/) for observability and monitoring
+Special thanks to the amazing open source projects that make xAgent possible:
 
-## 📞 Support
+- **[OpenAI](https://openai.com/)** - GPT models powering our AI
+- **[FastAPI](https://fastapi.tiangolo.com/)** - Robust async API framework
+- **[Streamlit](https://streamlit.io/)** - Intuitive web interface
+- **[Redis](https://redis.io/)** - High-performance data storage
+- **[Langfuse](https://langfuse.com/)** - Observability and monitoring
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/xAgent/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/xAgent/discussions)
-- **Email**: support@xagent.dev
+## 📞 Support & Community
+
+| Resource | Link | Purpose |
+|----------|------|---------|
+| **🐛 Issues** | [GitHub Issues](https://github.com/ZJCODE/xAgent/issues) | Bug reports & feature requests |
+| **💬 Discussions** | [GitHub Discussions](https://github.com/ZJCODE/xAgent/discussions) | Community chat & Q&A |
+| **📧 Email** | support@xagent.dev | Direct support |
 
 ---
 
+<div align="center">
+
 **xAgent** - Empowering conversations with AI 🚀
+
+[![GitHub stars](https://img.shields.io/github/stars/ZJCODE/xAgent?style=social)](https://github.com/ZJCODE/xAgent)
+[![GitHub forks](https://img.shields.io/github/forks/ZJCODE/xAgent?style=social)](https://github.com/ZJCODE/xAgent)
+
+*Built with ❤️ for the AI community*
+
+</div>
