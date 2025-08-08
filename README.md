@@ -106,46 +106,46 @@ xAgent/
 
 ### Installation
 
-1. **Clone and Setup**
-   ```bash
-   git clone https://github.com/ZJCODE/xAgent.git
-   cd xAgent
-   pip install -r requirements.txt
-   ```
+Clone and Setup
+```bash
+git clone https://github.com/ZJCODE/xAgent.git
+cd xAgent
+pip install -r requirements.txt
+```
 
-2. **Environment Configuration**
-   ```bash
-   # Copy and edit environment file
-   cp .env.example .env
-   ```
-   
-   **Required variables:**
-   ```env
-   OPENAI_API_KEY=your_openai_api_key
-   ```
-   
-   **Optional variables:**
-   ```env
-   REDIS_URL=your_redis_url_with_password
-   LANGFUSE_SECRET_KEY=your_langfuse_key
-   LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
-   LANGFUSE_HOST=https://cloud.langfuse.com
-   AWS_ACCESS_KEY_ID=your_aws_access_key_id
-   AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
-   AWS_REGION=us-east-1
-   BUCKET_NAME=your_bucket_name
-   ```
+Environment Configuration
+```bash
+# Copy and edit environment file
+cp .env.example .env
+```
+
+**Required variables:**
+```env
+OPENAI_API_KEY=your_openai_api_key
+```
+
+**Optional variables:**
+```env
+REDIS_URL=your_redis_url_with_password
+LANGFUSE_SECRET_KEY=your_langfuse_key
+LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
+LANGFUSE_HOST=https://cloud.langfuse.com
+AWS_ACCESS_KEY_ID=your_aws_access_key_id
+AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
+AWS_REGION=us-east-1
+BUCKET_NAME=your_bucket_name
+```
 
 ### Running the Application
 
-🚀 Quick Start (All Services)
+#### 🚀 Quick Start (All Services)
 
 ```bash
 chmod +x run.sh
 ./run.sh
 ```
 
-⚙️ Manual Start (Individual Services)
+#### ⚙️ Manual Start (Individual Services)
 
 ```bash
 # Terminal 1: API Server
@@ -169,7 +169,7 @@ streamlit run frontend/chat_app.py --server.port 8501
 
 ## 💡 Usage Examples
 
-📘 Basic Async Chat
+### 📘 Basic Async Chat
 
 ```python
 import asyncio
@@ -199,7 +199,7 @@ async def main():
 asyncio.run(main())
 ```
 
-🗄️ Advanced Chat with Redis Persistence
+### 🗄️ Advanced Chat with Redis Persistence
 
 ```python
 import asyncio
@@ -235,8 +235,7 @@ async def chat_with_persistence():
 asyncio.run(chat_with_persistence())
 ```
 
-
-🔧 Custom Tools (Sync and Async)
+### 🔧 Custom Tools (Sync and Async)
 
 ```python
 import asyncio
@@ -289,8 +288,7 @@ async def main():
 asyncio.run(main())
 ```
 
-
-📊 Structured Output with Pydantic
+### 📊 Structured Output with Pydantic
 
 ```python
 import asyncio
@@ -341,8 +339,7 @@ async def get_structured_response():
 asyncio.run(get_structured_response())
 ```
 
-
-🤖 Agent as Tool Pattern
+### 🤖 Agent as Tool Pattern
 
 ```python
 import asyncio
@@ -402,9 +399,7 @@ asyncio.run(agent_as_tool_example())
 
 ## 🔧 Development Guide
 
-### Tool Development Guide
-
-#### 🛠️ Creating Tools
+### 🛠️ Creating Tools
 
 Both sync and async functions work seamlessly:
 
@@ -428,7 +423,7 @@ async def my_async_tool(input_text: str) -> str:
     return f"Async processed: {input_text}"
 ```
 
-#### 📋 Tool Development Guidelines
+###  📋 Tool Development Guidelines
 
 | Use Case | Tool Type | Example |
 |----------|-----------|---------|
@@ -439,7 +434,7 @@ async def my_async_tool(input_text: str) -> str:
 
 > **⚠️ Note**: Recursive functions are not supported as tools due to potential stack overflow issues in async environments.
 
-#### 🔄 Automatic Async Conversion
+###  🔄 Automatic Async Conversion
 
 xAgent's `@function_tool()` decorator automatically handles sync-to-async conversion:
 
@@ -447,9 +442,9 @@ xAgent's `@function_tool()` decorator automatically handles sync-to-async conver
 - **Async functions** → Run directly on event loop
 - **Concurrent execution** → All tools execute in parallel when called
 
-## ⚡ Async Best Practices
+## ⚡ Best Practices
 
-1. Always Use Async Context
+### Always Use Async Context
 
 ```python
 import asyncio
@@ -468,7 +463,7 @@ asyncio.run(main())
 ```
 
 
-2. Smart Tool Selection
+### Smart Tool Selection
 
 ```python
 # Both sync and async tools work seamlessly
@@ -491,8 +486,8 @@ async def io_intensive_task(url: str) -> str:
 agent = Agent(tools=[cpu_intensive_task, io_intensive_task])
 ```
 
+### Session Management
 
-3. Session Management
 ```python
 # ✅ Reuse session for conversation continuity
 async def conversation_example():
@@ -507,8 +502,7 @@ async def conversation_example():
     # Response: "Your name is Alice"
 ```
 
-
-4. Error Handling
+### Error Handling
 
 ```python
 async def robust_chat():
@@ -524,7 +518,7 @@ async def robust_chat():
 ```
 
 
-5. Memory Management
+### Memory Management
 
 ```python
 async def long_conversation():
@@ -563,7 +557,7 @@ async def mcp_integration_example():
 asyncio.run(mcp_integration_example())
 ```
 
-## � API Reference
+## 🤖 API Reference
 
 ### Core Classes
 
