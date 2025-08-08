@@ -171,12 +171,17 @@ xAgent includes built-in observability features:
 
 ### Project Structure
 
-- **`api/`**: FastAPI backend with health checks and API endpoints
-- **`frontend/`**: Streamlit-based chat interface with image upload support
-- **`xagent/core/`**: Core agent framework with session management
-- **`xagent/db/`**: Redis-based persistence layer
-- **`tools/`**: Extensible tool ecosystem including vocabulary learning
-- **`tests/`**: Comprehensive test suite
+- **`api/`**: FastAPI backend with health checks and API endpoints.
+- **`frontend/`**: Streamlit-based chat interface with image upload support.
+- **`xagent/`**: The core agent framework, containing:
+    - **`core/`**: Core agent logic and session management.
+    - **`db/`**: Redis-based persistence layer for conversations.
+    - **`tools/`**: Extensible tool ecosystem, including the vocabulary learning system.
+    - **`schemas/`**: Data models and types used across the framework.
+    - **`utils/`**: Shared utility functions.
+- **`examples/`**: Example scripts demonstrating how to use the xAgent framework.
+- **`tests/`**: Comprehensive test suite for the project.
+
 
 ### Adding New Tools
 
