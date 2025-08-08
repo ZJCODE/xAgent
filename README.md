@@ -613,6 +613,17 @@ xAgent's `@function_tool()` decorator automatically handles sync-to-async conver
 - **Async functions** → Run directly on event loop
 - **Concurrent execution** → All tools execute in parallel when called
 
+### 📝 Override Defaults
+
+You can override the default tool name and description using the `function_tool` decorator:
+
+```python
+@function_tool(name="custom_square", description="Calculate the square of a number")
+def calculate_square(n: int) -> int:
+    return n * n
+```
+
+`function_tool` decorator can pass `name` and `description` to override defaults
 
 ## 🤖 API Reference
 
