@@ -1,7 +1,12 @@
+"""
+Basic Async Chat Example
+
+This example demonstrates the basic usage of xAgent with async chat functionality.
+"""
+
 import asyncio
 from xagent.core import Agent, Session
-from xagent.db import MessageDB
-from xagent.tools.openai_tool import web_search
+from xagent.tools import web_search
 
 async def main():
     # Create agent with async-aware architecture
@@ -26,4 +31,5 @@ async def main():
     print(response)
 
 # Run the async function
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

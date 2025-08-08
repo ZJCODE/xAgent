@@ -149,7 +149,7 @@ chmod +x run.sh
 import asyncio
 from xagent.core import Agent, Session
 from xagent.db import MessageDB
-from xagent.tools.openai_tool import web_search
+from xagent.tools import web_search
 
 async def main():
     # Create agent with async-aware architecture
@@ -267,10 +267,17 @@ asyncio.run(main())
 
 ### Structured Output with Pydantic
 ```python
+"""
+Structured Output with Pydantic Example
+
+This example demonstrates how to use xAgent to generate structured output
+using Pydantic models for type-safe responses.
+"""
+
 import asyncio
 from pydantic import BaseModel
 from xagent.core import Agent, Session
-from xagent.tools.openai_tool import web_search
+from xagent.tools import web_search
 
 class WeatherReport(BaseModel):
     location: str
@@ -287,12 +294,12 @@ class MathReasoning(BaseModel):
     final_answer: str
 
 async def get_structured_response():
-    agent = Agent(model="gpt-4.1-mini")
+    agent = Agent(model="gpt-4.1-mini", tools=[web_search])
     session = Session(user_id="user123")
     
     # Request structured output for weather
     weather_data = await agent.chat(
-        "Generate weather data for New York",
+        "what's the weather like in Hangzhou?",
         session,
         output_type=WeatherReport
     )
@@ -300,28 +307,39 @@ async def get_structured_response():
     print(f"Location: {weather_data.location}")
     print(f"Temperature: {weather_data.temperature}°F")
     print(f"Condition: {weather_data.condition}")
-    
+    print(f"Humidity: {weather_data.humidity}%")
+
     # Request structured output for mathematical reasoning
-    reply = await agent("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
-    for index,step in enumerate(reply.steps):
+    reply = await agent.chat("how can I solve 8x + 7 = -23", session, output_type=MathReasoning)
+    for index, step in enumerate(reply.steps):
         print(f"Step {index + 1}: {step.explanation} => Output: {step.output}")
     print("Final Answer:", reply.final_answer)
 
-asyncio.run(get_structured_response())
+if __name__ == "__main__":
+    asyncio.run(get_structured_response())
 ```
 
 ### Agent as Tool Pattern
 ```python
+"""
+Agent as Tool Pattern Example
+
+This example demonstrates how to use agents as tools, creating specialized
+agents that can be composed together for complex tasks.
+"""
+
 import asyncio
 from xagent.core import Agent, Session
 from xagent.db import MessageDB
+from xagent.tools import web_search
 
 async def agent_as_tool_example():
     # Create specialized agents
-    math_agent = Agent(
-        name="math_specialist",
-        system_prompt="You are a mathematics expert. Solve problems step by step.",
-        model="gpt-4.1-mini"
+    researcher_agent = Agent(
+        name="research_specialist",
+        system_prompt="You are a research expert. Gather information, analyze data, and provide well-researched insights.",
+        model="gpt-4.1-mini",
+        tools=[web_search]  # Add web search tool for research purposes
     )
     
     writing_agent = Agent(
@@ -332,9 +350,9 @@ async def agent_as_tool_example():
     
     # Convert agents to tools
     message_db = MessageDB()
-    math_tool = math_agent.as_tool(
-        name="math_solver",
-        description="Solve mathematical problems",
+    research_tool = researcher_agent.as_tool(
+        name="researcher",
+        description="Research topics and provide detailed analysis",
         message_db=message_db
     )
     
@@ -347,21 +365,22 @@ async def agent_as_tool_example():
     # Main coordinator agent with specialist tools
     coordinator = Agent(
         name="coordinator",
-        tools=[math_tool, writing_tool],
-        system_prompt="You coordinate between specialists to solve complex tasks.",
-        model="gpt-4.1-mini"
+        tools=[research_tool, writing_tool],
+        system_prompt="You are a coordination agent that breaks down complex tasks and delegates them to specialist agents. Analyze requests, create execution plans, delegate to the right specialist (researcher for information gathering, content_writer for writing), and synthesize results into coherent outputs.",
+        model="gpt-4.1"
     )
     
     session = Session(user_id="user123")
     
     # Complex multi-step task
     response = await coordinator.chat(
-        "Calculate the compound interest for $1000 at 5% for 10 years, then write a brief explanation",
+        "Research the benefits of renewable energy and write a brief summary",
         session
     )
     print(response)
 
-asyncio.run(agent_as_tool_example())
+if __name__ == "__main__":
+    asyncio.run(agent_as_tool_example())
 ```
 
 ## 🔧 Tool Development Guide
@@ -601,12 +620,8 @@ xAgent supports the Model Context Protocol for tool integration with full async 
 ```python
 import asyncio
 from xagent.core import Agent, Session
-from xagent.utils.mcp_convertor import MCPTool
 
 async def mcp_integration_example():
-    # Connect to MCP server
-    mcp_tool = MCPTool("http://localhost:8001/mcp/")
-    tools = await mcp_tool.get_openai_tools()
 
     # Create agent with MCP tools
     agent = Agent(
