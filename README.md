@@ -440,6 +440,30 @@ xAgent's `@function_tool()` decorator automatically handles sync-to-async conver
 - **Async functions** → Run directly on event loop
 - **Concurrent execution** → All tools execute in parallel when called
 
+
+### MCP Protocol Integration
+
+```python
+import asyncio
+from xagent.core import Agent, Session
+
+async def mcp_integration_example():
+    # Create agent with MCP tools
+    agent = Agent(
+        tools=[],
+        mcp_servers=["http://localhost:8001/mcp/"],  # Auto-refresh MCP tools
+        model="gpt-4.1-mini"
+    )
+    
+    session = Session(user_id="user123")
+    
+    # Use MCP tools automatically
+    response = await agent.chat("Use the available MCP tools to help me", session)
+    print(response)
+
+asyncio.run(mcp_integration_example())
+```
+
 ## ⚡ Best Practices
 
 ### Always Use Async Context
@@ -529,30 +553,6 @@ async def long_conversation():
         session,
         history_count=10  # Only use last 10 messages for context
     )
-```
-
-
-### MCP Protocol Integration
-
-```python
-import asyncio
-from xagent.core import Agent, Session
-
-async def mcp_integration_example():
-    # Create agent with MCP tools
-    agent = Agent(
-        tools=[],
-        mcp_servers=["http://localhost:8001/mcp/"],  # Auto-refresh MCP tools
-        model="gpt-4.1-mini"
-    )
-    
-    session = Session(user_id="user123")
-    
-    # Use MCP tools automatically
-    response = await agent.chat("Use the available MCP tools to help me", session)
-    print(response)
-
-asyncio.run(mcp_integration_example())
 ```
 
 ## 🤖 API Reference
