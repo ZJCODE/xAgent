@@ -435,6 +435,17 @@ python xagent/core/server.py --config config/agent.yaml
 # Server will start on http://localhost:8010 by default
 ```
 
+### 🏃 Programmatic Usage
+
+You can also start the HTTP Agent Server directly from Python:
+
+```python
+from xagent.core.server import HTTPAgentServer
+
+server = HTTPAgentServer("config/agent.yaml")
+server.run(host="0.0.0.0", port=8010)
+```
+
 ### ⚙️ Configuration
 
 The HTTP server is configured through a YAML file (e.g., `config/agent.yaml`):

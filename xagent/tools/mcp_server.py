@@ -64,5 +64,19 @@ def analyze_data(data_points: list[float]) -> str:
     formatted_data = ", ".join(str(point) for point in data_points)
     return f"Please analyze these data points: {formatted_data}"
 
+def main():
+    """Main entry point for xagent-mcp command."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="xAgent MCP Server")
+    parser.add_argument("--port", type=int, default=8001, help="Port to bind to")
+    parser.add_argument("--host", default="localhost", help="Host to bind to")
+    parser.add_argument("--transport", default="http", help="Transport type")
+    
+    args = parser.parse_args()
+    
+    print(f"Starting xAgent MCP Server on {args.host}:{args.port}")
+    mcp.run(transport=args.transport, port=args.port, host=args.host)
+
 if __name__ == "__main__":
-    mcp.run(transport="http", port=8001)
+    main()
