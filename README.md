@@ -6,7 +6,7 @@
 [![Redis](https://img.shields.io/badge/Redis-7.0+-red.svg)](https://redis.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **🚀 A powerful multi-modal conversational AI system with async-first architecture**
+> **🚀 A powerful multi-modal conversational AI system with modern architecture**
 
 xAgent provides a complete AI assistant experience with text and image processing capabilities, intelligent vocabulary management, and high-performance concurrent tool execution. Built on FastAPI, Streamlit, and Redis for production-ready scalability.
 
@@ -16,7 +16,7 @@ xAgent provides a complete AI assistant experience with text and image processin
 - [🏗️ Architecture](#%EF%B8%8F-architecture)
 - [🚀 Quick Start](#-quick-start)
 - [💡 Usage Examples](#-usage-examples)
-  - [📘 Basic Async Chat](#-basic-async-chat)
+  - [📘 Basic Chat](#-basic-chat)
   - [🗄️ Advanced Chat with Redis Persistence](#%EF%B8%8F-advanced-chat-with-redis-persistence)
   - [🔧 Custom Tools (Sync and Async)](#-custom-tools-sync-and-async)
   - [📊 Structured Output with Pydantic](#-structured-output-with-pydantic)
@@ -24,7 +24,7 @@ xAgent provides a complete AI assistant experience with text and image processin
 - [🔧 Development Guide](#-development-guide)
   - [🛠️ Creating Tools](#%EF%B8%8F-creating-tools)
   - [📋 Tool Development Guidelines](#-tool-development-guidelines)
-  - [🔄 Automatic Async Conversion](#-automatic-async-conversion)
+  - [🔄 Automatic Conversion](#-automatic-conversion)
 - [⚡ Best Practices](#-best-practices)
 - [🤖 API Reference](#-api-reference)
 - [📊 Monitoring & Observability](#-monitoring--observability)
@@ -44,7 +44,7 @@ xAgent provides a complete AI assistant experience with text and image processin
 
 
 ### 🔧 **Developer Experience**
-- **Async-First Design** - High-performance concurrent operations
+- **Modern Design** - High-performance concurrent operations
 - **Modular Architecture** - Clean separation with pluggable components
 - **Type Safety** - Full type hints with Pydantic models
 - **Comprehensive Testing** - Full test coverage with pytest
@@ -54,7 +54,7 @@ xAgent provides a complete AI assistant experience with text and image processin
 
 ## 🏗️ Architecture
 
-**Async-First Design for High Performance**
+**Modern Design for High Performance**
 
 ```
 xAgent/
@@ -65,32 +65,32 @@ xAgent/
 ├── 🎨 frontend/              # Streamlit web interface  
 │   └── chat_app.py           # Main chat application
 ├── 🤖 xagent/                # Core async agent framework
-│   ├── core/                 # Agent and session management (async)
-│   │   ├── agent.py          # Main Agent class with async chat
-│   │   └── session.py        # Session management with async operations
-│   ├── db/                   # Async database layer (Redis)
-│   │   └── message.py        # Async message persistence
+│   ├── core/                 # Agent and session management
+│   │   ├── agent.py          # Main Agent class with chat
+│   │   └── session.py        # Session management with operations
+│   ├── db/                   # Database layer (Redis)
+│   │   └── message.py        # Message persistence
 │   ├── schemas/              # Data models and types (Pydantic)
-│   ├── tools/                # Async tool ecosystem
+│   ├── tools/                # Tool ecosystem
 │   │   ├── mcp_server.py     # MCP protocol server
 │   │   ├── openai_tool.py    # OpenAI tool integrations
 │   │   └── vocabulary/       # Vocabulary learning system
-│   └── utils/                # Async utility functions
-│       ├── tool_decorator.py # Async tool decorators
-│       └── mcp_convertor.py  # MCP async client
+│   └── utils/                # Utility functions
+│       ├── tool_decorator.py # Tool decorators
+│       └── mcp_convertor.py  # MCP client
 ├── 📝 examples/              # Usage examples and demos
-└── 🧪 tests/                 # Comprehensive async test suite
+└── 🧪 tests/                 # Comprehensive test suite
 ```
 
 ### 🔄 Core Components
 
 | Component | Purpose | Technology |
 |-----------|---------|------------|
-| **Agent** | Core async conversation handler | OpenAI API + AsyncIO |
-| **Session** | Message history management | Redis + Async Operations |
-| **MessageDB** | Scalable persistence layer | Redis with async client |
+| **Agent** | Core conversation handler | OpenAI API + AsyncIO |
+| **Session** | Message history management | Redis + Operations |
+| **MessageDB** | Scalable persistence layer | Redis with client |
 | **Tools** | Extensible function ecosystem | Auto sync-to-async conversion |
-| **MCP** | Dynamic tool loading protocol | Async HTTP client |
+| **MCP** | Dynamic tool loading protocol | HTTP client |
 
 ## 🚀 Quick Start
 
@@ -167,7 +167,7 @@ streamlit run frontend/chat_app.py --server.port 8501
 
 ## 💡 Usage Examples
 
-### 📘 Basic Async Chat
+### 📘 Basic Chat
 
 ```python
 import asyncio
@@ -175,7 +175,7 @@ from xagent.core import Agent, Session
 from xagent.tools import web_search
 
 async def main():
-    # Create agent with async-aware architecture
+    # Create agent with modern architecture
     agent = Agent(
         name="my_assistant",
         system_prompt="You are a helpful AI assistant.",
@@ -186,7 +186,7 @@ async def main():
     # Create session for conversation management
     session = Session(session_id="session456")
 
-    # Async chat interaction
+    # Chat interaction
     response = await agent.chat("Hello, how are you?", session)
     print(response)
 
@@ -432,7 +432,7 @@ async def my_async_tool(input_text: str) -> str:
 
 > **⚠️ Note**: Recursive functions are not supported as tools due to potential stack overflow issues in async environments.
 
-###  🔄 Automatic Async Conversion
+###  🔄 Automatic Conversion
 
 xAgent's `@function_tool()` decorator automatically handles sync-to-async conversion:
 
@@ -474,7 +474,7 @@ def cpu_intensive_task(data: str) -> str:
 
 @function_tool()
 async def io_intensive_task(url: str) -> str:
-    # Async function for I/O-bound work - runs directly
+    # Function for I/O-bound work - runs directly
     import httpx
     async with httpx.AsyncClient() as client:
         response = await client.get(url)
@@ -561,7 +561,7 @@ asyncio.run(mcp_integration_example())
 
 🤖 Agent
 
-Main AI agent class for handling async conversations and tool execution.
+Main AI agent class for handling conversations and tool execution.
 
 ```python
 Agent(
@@ -577,20 +577,20 @@ Agent(
 **Key Methods:**
 - `async chat(user_message, session, **kwargs) -> str | BaseModel`: Main chat interface
 - `async __call__(user_message, session, **kwargs) -> str | BaseModel`: Shorthand for chat
-- `as_tool(name, description, message_db) -> Callable`: Convert agent to async tool
+- `as_tool(name, description, message_db) -> Callable`: Convert agent to tool
 
 **Parameters:**
 - `name`: Agent identifier (default: "default_agent")
 - `system_prompt`: Instructions for the agent behavior
 - `model`: OpenAI model to use (default: "gpt-4.1-mini")
 - `client`: Custom AsyncOpenAI client instance
-- `tools`: List of async function tools
+- `tools`: List of function tools
 - `mcp_servers`: MCP server URLs for dynamic tool loading
 
 
 💬 Session
 
-Manages conversation history and persistence with async operations.
+Manages conversation history and persistence with operations.
 
 ```python
 Session(
@@ -609,13 +609,13 @@ Session(
 **Features:**
 - Automatic fallback to in-memory storage if no MessageDB provided
 - Redis-backed persistence for production use
-- Thread-safe async operations
+- Thread-safe operations
 - Efficient message batching
 
 
 🗄️ MessageDB
 
-Redis-backed async message persistence layer.
+Redis-backed message persistence layer.
 
 ```python
 # Initialize with environment variables or defaults
@@ -635,7 +635,7 @@ session = Session(
 |--------|---------|
 | **Tool functions** | Can be sync or async (automatic conversion) |
 | **Agent interactions** | Always use `await` |
-| **Context** | Run in async context with `asyncio.run()` |
+| **Context** | Run in context with `asyncio.run()` |
 | **Concurrency** | All tools execute in parallel automatically |
 
 ## 📊 Monitoring & Observability
