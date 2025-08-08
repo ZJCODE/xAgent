@@ -245,7 +245,6 @@ class Agent:
         }
 
         try:
-
             if output_type is not None:
                 response = await self.client.responses.parse(
                     model=self.model,
@@ -253,7 +252,8 @@ class Agent:
                     input=[system_msg] + self._sanitize_input_messages(input_msgs),
                     text_format=output_type
                 )
-                return ReplyType.STRUCTURED_REPLY, response.output_parsed
+                if getattr(response, "output_parsed", None) is not None:
+                    return ReplyType.STRUCTURED_REPLY, response.output_parsed
             else:
                 response = await self.client.responses.create(
                     model=self.model,
