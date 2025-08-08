@@ -35,9 +35,6 @@ xAgent provides a complete AI assistant experience with text and image processin
 
 ## ✨ Key Features
 
-<table>
-<tr>
-<td width="50%">
 
 ### 🤖 **Multi-Modal AI Chat**
 - **Text Conversations** - OpenAI GPT models (GPT-4.1, GPT-4.1-mini, GPT-4o)
@@ -47,8 +44,6 @@ xAgent provides a complete AI assistant experience with text and image processin
 - **MCP Support** - Model Context Protocol for dynamic tool loading
 - **Concurrent Execution** - Parallel tool execution for improved performance
 
-</td>
-<td width="50%">
 
 ### 🔧 **Developer Experience**
 - **Async-First Design** - High-performance concurrent operations
@@ -58,9 +53,6 @@ xAgent provides a complete AI assistant experience with text and image processin
 - **Observability** - Built-in logging and monitoring with Langfuse
 - **Flexible Tools** - Support both sync and async tool functions
 
-</td>
-</tr>
-</table>
 
 ## 🏗️ Architecture
 
@@ -146,17 +138,14 @@ xAgent/
 
 ### Running the Application
 
-<details>
-<summary><strong>🚀 Quick Start (All Services)</strong></summary>
+🚀 Quick Start (All Services)
 
 ```bash
 chmod +x run.sh
 ./run.sh
 ```
-</details>
 
-<details>
-<summary><strong>⚙️ Manual Start (Individual Services)</strong></summary>
+⚙️ Manual Start (Individual Services)
 
 ```bash
 # Terminal 1: API Server
@@ -168,7 +157,7 @@ python tools/mcp_server.py
 # Terminal 3: Frontend
 streamlit run frontend/chat_app.py --server.port 8501
 ```
-</details>
+
 
 ### 🌐 Access Points
 
@@ -180,8 +169,7 @@ streamlit run frontend/chat_app.py --server.port 8501
 
 ## 💡 Usage Examples
 
-<details>
-<summary><strong>📘 Basic Async Chat</strong></summary>
+📘 Basic Async Chat
 
 ```python
 import asyncio
@@ -210,10 +198,9 @@ async def main():
 
 asyncio.run(main())
 ```
-</details>
 
-<details>
-<summary><strong>🗄️ Advanced Chat with Redis Persistence</strong></summary>
+🗄️ Advanced Chat with Redis Persistence
+
 ```python
 import asyncio
 from xagent.core import Agent, Session
@@ -247,10 +234,10 @@ async def chat_with_persistence():
 
 asyncio.run(chat_with_persistence())
 ```
-</details>
 
-<details>
-<summary><strong>🔧 Custom Tools (Sync and Async)</strong></summary>
+
+🔧 Custom Tools (Sync and Async)
+
 ```python
 import asyncio
 import time
@@ -301,10 +288,10 @@ async def main():
 
 asyncio.run(main())
 ```
-</details>
 
-<details>
-<summary><strong>📊 Structured Output with Pydantic</strong></summary>
+
+📊 Structured Output with Pydantic
+
 ```python
 import asyncio
 from pydantic import BaseModel
@@ -353,10 +340,10 @@ async def get_structured_response():
 
 asyncio.run(get_structured_response())
 ```
-</details>
 
-<details>
-<summary><strong>🤖 Agent as Tool Pattern</strong></summary>
+
+🤖 Agent as Tool Pattern
+
 ```python
 import asyncio
 from xagent.core import Agent, Session
@@ -411,7 +398,7 @@ async def agent_as_tool_example():
 
 asyncio.run(agent_as_tool_example())
 ```
-</details>
+
 
 ## 🔧 Development Guide
 
@@ -462,8 +449,7 @@ xAgent's `@function_tool()` decorator automatically handles sync-to-async conver
 
 ## ⚡ Async Best Practices
 
-<details>
-<summary><strong>1. Always Use Async Context</strong></summary>
+1. Always Use Async Context
 
 ```python
 import asyncio
@@ -480,10 +466,9 @@ asyncio.run(main())
 # ❌ Incorrect: Don't use sync context
 # response = agent.chat("Hello", session)  # This will fail
 ```
-</details>
 
-<details>
-<summary><strong>2. Smart Tool Selection</strong></summary>
+
+2. Smart Tool Selection
 
 ```python
 # Both sync and async tools work seamlessly
@@ -505,10 +490,9 @@ async def io_intensive_task(url: str) -> str:
 # Agent automatically handles both types concurrently
 agent = Agent(tools=[cpu_intensive_task, io_intensive_task])
 ```
-</details>
 
-<details>
-<summary><strong>3. Session Management</strong></summary>
+
+3. Session Management
 ```python
 # ✅ Reuse session for conversation continuity
 async def conversation_example():
@@ -522,10 +506,9 @@ async def conversation_example():
     response = await agent.chat("What's my name?", session)
     # Response: "Your name is Alice"
 ```
-</details>
 
-<details>
-<summary><strong>4. Error Handling</strong></summary>
+
+4. Error Handling
 
 ```python
 async def robust_chat():
@@ -539,10 +522,9 @@ async def robust_chat():
         print(f"Chat failed: {e}")
         # Handle gracefully
 ```
-</details>
 
-<details>
-<summary><strong>5. Memory Management</strong></summary>
+
+5. Memory Management
 
 ```python
 async def long_conversation():
@@ -556,7 +538,7 @@ async def long_conversation():
         history_count=10  # Only use last 10 messages for context
     )
 ```
-</details>
+
 
 ### MCP Protocol Integration
 
@@ -585,8 +567,7 @@ asyncio.run(mcp_integration_example())
 
 ### Core Classes
 
-<details>
-<summary><strong>🤖 Agent</strong></summary>
+🤖 Agent
 
 Main AI agent class for handling async conversations and tool execution.
 
@@ -613,10 +594,9 @@ Agent(
 - `client`: Custom AsyncOpenAI client instance
 - `tools`: List of async function tools
 - `mcp_servers`: MCP server URLs for dynamic tool loading
-</details>
 
-<details>
-<summary><strong>💬 Session</strong></summary>
+
+💬 Session
 
 Manages conversation history and persistence with async operations.
 
@@ -639,10 +619,9 @@ Session(
 - Redis-backed persistence for production use
 - Thread-safe async operations
 - Efficient message batching
-</details>
 
-<details>
-<summary><strong>🗄️ MessageDB</strong></summary>
+
+🗄️ MessageDB
 
 Redis-backed async message persistence layer.
 
@@ -656,7 +635,7 @@ session = Session(
     message_db=message_db
 )
 ```
-</details>
+
 
 ### Important Considerations
 
