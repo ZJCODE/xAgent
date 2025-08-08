@@ -690,7 +690,7 @@ Special thanks to the amazing open source projects that make xAgent possible:
 |----------|------|---------|
 | **🐛 Issues** | [GitHub Issues](https://github.com/ZJCODE/xAgent/issues) | Bug reports & feature requests |
 | **💬 Discussions** | [GitHub Discussions](https://github.com/ZJCODE/xAgent/discussions) | Community chat & Q&A |
-| **📧 Email** | support@xagent.dev | Direct support |
+| **📧 Email** | zhangjun310@live.com | Direct support |
 
 ---
 
