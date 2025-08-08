@@ -286,7 +286,7 @@ async def main():
 asyncio.run(main())
 ```
 
-### MCP Protocol Integration
+### 🛡️ MCP Protocol Integration
 
 ```python
 import asyncio
