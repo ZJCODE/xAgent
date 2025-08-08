@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from xagent.core.agent import Agent
 from xagent.core.session import Session
+from xagent.db.message import MessageDB
 from xagent.tools import TOOL_REGISTRY
 
 # 1. 加载 .env（密钥等）
@@ -40,6 +41,11 @@ agent_cfg = config["agent"]
 tool_names = agent_cfg.get("tools", [])
 tools = [TOOL_REGISTRY[name] for name in tool_names if name in TOOL_REGISTRY]
 
+
+# 根据 use_local_session 参数决定是否使用 MessageDB
+use_local_session = agent_cfg.get("use_local_session", True)
+message_db = None if use_local_session else MessageDB()
+
 agent = Agent(
     name=agent_cfg.get("name"),
     system_prompt=agent_cfg.get("system_prompt"),
@@ -60,7 +66,7 @@ class AgentInput(BaseModel):
 # 6. 路由
 @app.post("/chat")
 async def chat(input: AgentInput):
-    session = Session(user_id=input.user_id, session_id=input.session_id)
+    session = Session(user_id=input.user_id, session_id=input.session_id, message_db=message_db)
     response = await agent(
         user_message=input.user_message,
         session=session,
