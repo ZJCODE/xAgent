@@ -153,7 +153,7 @@ chmod +x run.sh
 uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 
 # Terminal 2: MCP Server  
-python tools/mcp_server.py
+python xagent/tools/mcp_server.py
 
 # Terminal 3: Frontend
 streamlit run frontend/chat_app.py --server.port 8501

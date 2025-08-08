@@ -28,7 +28,7 @@ start_services() {
     echo $! > "$API_PID_FILE"
 
     echo "Starting the MCP server..."
-    nohup python tools/mcp_server.py > logs/mcp_server.log 2>&1 &
+    nohup python xagent/tools/mcp_server.py > logs/mcp_server.log 2>&1 &
     echo $! > "$MCP_PID_FILE"
 
     echo "Starting the frontend..."
