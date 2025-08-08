@@ -467,17 +467,19 @@ Main chat endpoint for interacting with the AI agent.
 **Request Body:**
 ```json
 {
-  "user_id": "string",      // Required: User identifier
-  "session_id": "string",   // Required: Session identifier for conversation context
-  "user_message": "string", // Required: User's message to the agent
-  "image_source": "string"  // Optional: Image URL or base64 encoded image
+  "user_id": "string",      
+  "session_id": "string",   
+  "user_message": "string", 
+  "image_source": "string"  
 }
 ```
+
+image_source: Image URL or base64 encoded image (Optional)
 
 **Response:**
 ```json
 {
-  "reply": "string"  // Agent's response message
+  "reply": "string"
 }
 ```
 

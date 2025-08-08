@@ -53,7 +53,7 @@ app = FastAPI(title="xAgent HTTP Agent Server")
 # 5. 定义请求体
 class AgentInput(BaseModel):
     user_id: str
-    session_id: str         # 支持外部传入session_id
+    session_id: str
     user_message: str
     image_source: str = None
 
@@ -77,14 +77,3 @@ if __name__ == "__main__":
         port=server_cfg.get("port", 8010),
         reload=server_cfg.get("debug", False),
     )
-
-
-# python xagent/core/server.py --config config/agent.yaml
-
-# curl -X POST "http://localhost:8010/chat" \
-#   -H "Content-Type: application/json" \
-#   -d '{
-#     "user_id": "test",
-#     "session_id": "test",
-#     "user_message": "你是谁"
-#   }'
