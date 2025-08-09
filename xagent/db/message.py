@@ -4,6 +4,7 @@ from xagent.schemas import Message
 
 import os
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv(override=True)
 
@@ -34,13 +35,26 @@ class MessageDB:
             raise ValueError("REDIS_URL not set in environment or not provided as argument")
         self.redis_url = url
         self.r = None
+        self._loop_id: Optional[int] = None  # 记录当前客户端绑定的事件循环 id
 
     async def _get_client(self):
-        """Get or create async Redis client."""
+        """Get or create async Redis client, and rebuild when event loop changes."""
+        current_loop_id = id(asyncio.get_running_loop())
+
+        # 如果已有客户端但事件循环已变化，则关闭旧客户端并重建
+        if self.r is not None and self._loop_id is not None and self._loop_id != current_loop_id:
+            try:
+                await self.r.close()
+            except Exception:
+                pass
+            self.r = None
+            self._loop_id = None
+
         if self.r is None:
             try:
                 self.r = redis.Redis.from_url(self.redis_url, decode_responses=True)
                 await self.r.ping()
+                self._loop_id = current_loop_id
             except Exception as e:
                 raise ConnectionError(f"Failed to connect to Redis at {self.redis_url}: {e}")
         return self.r
@@ -148,3 +162,4 @@ class MessageDB:
         """Close the Redis connection."""
         if self.r:
             await self.r.close()
+            self._loop_id = None

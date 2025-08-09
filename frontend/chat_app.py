@@ -164,7 +164,8 @@ def main():
         # 清空历史按钮
         if st.button("清空对话历史", type="secondary"):
             if st.session_state.session:
-                st.session_state.session.clear_session()
+                # 正确等待异步清理，避免 RuntimeWarning: coroutine was never awaited
+                asyncio.run(st.session_state.session.clear_session())
                 st.session_state.messages = []
                 st.success("对话历史已清空！")
                 st.rerun()
