@@ -69,9 +69,9 @@ def upload_image(image_path: str) -> str:
 if __name__ == "__main__":
 
     import asyncio
-    # search_result = asyncio.run(web_search("What is the capital of France?"))
-    # print("Search Result:", search_result)
+    search_result = asyncio.run(web_search("What is the weather like today in hangzhou?"))
+    print("Search Result:", search_result)
 
-    image_url = asyncio.run(draw_image("A beautiful sunset over the mountains"))
+    # image_url = asyncio.run(draw_image("A beautiful sunset over the mountains"))
     # print("Generated Image URL:", image_url)
     # Note: Ensure you have the necessary API keys and environment setup for OpenAI and sm.ms

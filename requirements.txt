@@ -1,13 +1,30 @@
+# Web Framework
 fastapi
 uvicorn
+
+# Data Models
 pydantic
-redis
-pytest
-langfuse
-python-dotenv
-openai
-tenacity
+
+# Frontend
 streamlit
+
+# Database & Storage
+redis
+
+# Cloud Services
 boto3
+
+# AI/ML APIs
+openai
+langfuse
 fastmcp
+
+# Configuration & Environment
+python-dotenv
 pyyaml
+
+# Utilities
+tenacity
+
+# Development Tools
+pytest
