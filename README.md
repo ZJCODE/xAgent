@@ -57,7 +57,6 @@ xAgent provides a complete AI assistant experience with text and image processin
 **Modern Design for High Performance**
 
 ```
-```
 xAgent/
 ├── 🤖 xagent/                # Core async agent framework
 │   ├── core/                 # Agent and session management
