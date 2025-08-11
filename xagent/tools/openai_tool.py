@@ -47,7 +47,7 @@ async def draw_image(prompt: str) -> str:
 
     response = await client.responses.create(
         model=DEFAULT_MODEL,
-        tools=[{"type": "image_generation"}],
+        tools=[{"type": "image_generation", "quality": "low"}],
         input=clean_prompt,
         tool_choice="required"
     )
