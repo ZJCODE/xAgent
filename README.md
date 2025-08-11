@@ -1,4 +1,4 @@
-# xAgent - Multi-Modal Conversational AI System
+# xAgent - Multi-Modal AI Agent System
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
@@ -6,7 +6,7 @@
 [![Redis](https://img.shields.io/badge/Redis-7.0+-red.svg)](https://redis.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **🚀 A powerful multi-modal conversational AI system with modern architecture**
+> **🚀 A powerful multi-modal AI Agent system with modern architecture**
 
 xAgent provides a complete AI assistant experience with text and image processing capabilities, intelligent vocabulary management, and high-performance concurrent tool execution. Built on FastAPI, Streamlit, and Redis for production-ready scalability.
 
