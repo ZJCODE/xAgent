@@ -191,6 +191,7 @@ async def main():
         system_prompt="You are a helpful AI assistant.",
         model="gpt-4.1-mini",
         tools=[web_search]  # Add web search tool
+        stream=False  # Set to True for streaming responses
     )
 
     # Create session for conversation management
@@ -203,6 +204,12 @@ async def main():
     # Continue conversation with context
     response = await agent.chat("What's the weather like in Hangzhou?", session)
     print(response)
+
+    # Streaming response example
+    response = await agent.chat("Hello, how are you?", session,stream=True)
+    async for event in response:
+        print(event)
+
 
 asyncio.run(main())
 ```
@@ -483,24 +490,34 @@ server:
 
 Main chat endpoint for interacting with the AI agent.
 
+
 **Request Body:**
 ```json
 {
   "user_id": "string",      
   "session_id": "string",   
   "user_message": "string", 
-  "image_source": "string"  
+  "image_source": "string",
+  "stream": false
 }
 ```
 
-image_source: Image URL or base64 encoded image (Optional)
+- `image_source`: Image URL or base64 encoded image (Optional)
+- `stream`: Set to `true` to enable streaming response (Optional, defaults to `false`)
 
-**Response:**
+**Standard Response (`stream: false`):**
 ```json
 {
   "reply": "string"
 }
 ```
+
+**Streaming Response (`stream: true`):**
+
+The server will stream Server-Sent Events (SSE). Each event is a JSON object.
+
+- **Data Event:** `data: {"delta": "some text"}`
+- **Completion Event:** `data: [DONE]`
 
 ### 💡 Usage Examples
 
