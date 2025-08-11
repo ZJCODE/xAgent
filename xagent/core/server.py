@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import importlib.util
 import sys
+import json
+from fastapi.responses import StreamingResponse
 
 from xagent.core.agent import Agent
 from xagent.core.session import Session
@@ -21,6 +23,8 @@ class AgentInput(BaseModel):
     session_id: str
     user_message: str
     image_source: Optional[str] = None
+    # Enable server-side streaming when true
+    stream: Optional[bool] = False
 
 
 class ClearSessionInput(BaseModel):
@@ -176,7 +180,7 @@ class HTTPAgentServer:
                 input_data: User input containing message and metadata
                 
             Returns:
-                Agent response
+                Agent response or streaming SSE when input_data.stream is True
             """
             try:
                 session = Session(
@@ -185,6 +189,34 @@ class HTTPAgentServer:
                     message_db=self.message_db
                 )
                 
+                # Streaming mode via Server-Sent Events
+                if input_data.stream:
+                    async def event_generator():
+                        try:
+                            response = await self.agent(
+                                user_message=input_data.user_message,
+                                session=session,
+                                image_source=input_data.image_source,
+                                stream=True
+                            )
+                            # If the agent returns an async generator, stream deltas
+                            if hasattr(response, "__aiter__"):
+                                async for delta in response:
+                                    # Send as SSE data frames
+                                    yield f"data: {json.dumps({'delta': delta})}\n\n"
+                                # Signal completion
+                                yield "data: [DONE]\n\n"
+                            else:
+                                # Fallback when no generator is returned
+                                yield f"data: {json.dumps({'message': str(response)})}\n\n"
+                                yield "data: [DONE]\n\n"
+                        except Exception as e:
+                            # Stream error as SSE, client can handle gracefully
+                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                            yield "data: [DONE]\n\n"
+                    return StreamingResponse(event_generator(), media_type="text/event-stream")
+                
+                # Non-streaming mode (default)
                 response = await self.agent(
                     user_message=input_data.user_message,
                     session=session,

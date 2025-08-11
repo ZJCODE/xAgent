@@ -107,7 +107,8 @@ class Agent:
             history_count=history_count,
             max_iter=max_iter,
             image_source=image_source,
-            output_type=output_type
+            output_type=output_type,
+            stream=stream
         )
 
     @observe()
