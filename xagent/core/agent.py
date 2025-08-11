@@ -287,13 +287,13 @@ class Agent:
                 self.logger.warning("Model response contains no valid output: %s", response)
                 return ReplyType.ERROR, "No valid output from model response."
             else:
-                index = 0
-                type = None
-                async for event in response:
-                    index += 1
-                    if index == 3:
-                        type = event.item.type
-                        break
+                
+                # Get the third event to determine the stream type
+                await anext(response, None)  # Skip first event
+                await anext(response, None)  # Skip second event
+                third_event = await anext(response, None)
+                type = third_event.item.type if third_event else None
+
                 if type == "message":
                     async def stream_generator():
                         async for event in response:
