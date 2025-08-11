@@ -106,7 +106,7 @@ start_services() {
   # MCP Server
   start_process \
     "MCP server" \
-    "python xagent/tools/mcp_server.py" \
+    "python toolkit/mcp_server.py" \
     "$MCP_PID_FILE" \
     "$APP_ROOT/logs/mcp_server.log"
 
