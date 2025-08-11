@@ -50,6 +50,56 @@ class AgentHTTPClient:
         except httpx.RequestError as e:
             raise Exception(f"网络请求失败: {str(e)}")
     
+    async def chat_stream(self, user_message: str, user_id: str, session_id: str, image_source: Optional[str] = None):
+        """发送聊天消息到Agent服务（流式输出）"""
+        try:
+            payload = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "user_message": user_message,
+                "stream": True
+            }
+            if image_source:
+                payload["image_source"] = image_source
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/chat",
+                    json=payload,
+                    headers={"Accept": "text/event-stream"}
+                ) as response:
+                    
+                    if response.status_code != 200:
+                        raise Exception(f"HTTP {response.status_code}: {await response.aread()}")
+                    
+                    buffer = ""
+                    async for chunk in response.aiter_bytes():
+                        if chunk:
+                            buffer += chunk.decode('utf-8')
+                            lines = buffer.split('\n')
+                            buffer = lines[-1]  # 保留最后一行可能不完整的数据
+                            
+                            for line in lines[:-1]:
+                                line = line.strip()
+                                if line.startswith('data: '):
+                                    data_str = line[6:]  # 移除 'data: ' 前缀
+                                    if data_str == '[DONE]':
+                                        return
+                                    try:
+                                        data = json.loads(data_str)
+                                        if 'delta' in data:
+                                            yield data['delta']
+                                        elif 'message' in data:
+                                            yield data['message']
+                                        elif 'error' in data:
+                                            raise Exception(data['error'])
+                                    except json.JSONDecodeError:
+                                        continue
+                                        
+        except httpx.RequestError as e:
+            raise Exception(f"网络请求失败: {str(e)}")
+    
     async def clear_session(self, user_id: str, session_id: str):
         """清空会话历史"""
         try:
@@ -101,6 +151,9 @@ def init_session_state():
     
     if "show_image_upload" not in st.session_state:
         st.session_state.show_image_upload = False
+    
+    if "enable_streaming" not in st.session_state:
+        st.session_state.enable_streaming = False
 
 def create_http_client(agent_server_url: str):
     """创建 HTTP 客户端实例"""
@@ -167,6 +220,12 @@ def main():
         show_image_upload = st.checkbox("显示图片上传模块", value=st.session_state.show_image_upload)
         if show_image_upload != st.session_state.show_image_upload:
             st.session_state.show_image_upload = show_image_upload
+            st.rerun()
+        
+        # 新增：流式输出控制
+        enable_streaming = st.checkbox("启用流式输出", value=st.session_state.enable_streaming)
+        if enable_streaming != st.session_state.enable_streaming:
+            st.session_state.enable_streaming = enable_streaming
             st.rerun()
         
         # 应用配置按钮
@@ -260,52 +319,94 @@ def main():
         
         # 生成助手回复
         with st.chat_message("assistant"):
-            with st.spinner("正在思考..."):
-                try:
-                    # 使用 HTTP 客户端调用远程 Agent 服务
-                    reply = asyncio.run(
-                        st.session_state.http_client.chat(
+            try:
+                if st.session_state.enable_streaming:
+                    # 流式输出模式
+                    reply_placeholder = st.empty()
+                    full_reply = ""
+                    first_chunk_received = False
+                    
+                    # 初始显示"正在思考..."
+                    with reply_placeholder:
+                        st.caption("正在思考...")
+                    
+                    async def stream_response():
+                        nonlocal full_reply, first_chunk_received
+                        async for chunk in st.session_state.http_client.chat_stream(
                             user_message=prompt,
                             user_id=st.session_state.user_id,
                             session_id=st.session_state.session_id,
                             image_source=image_path if image_path else None
+                        ):
+                            # 收到第一个chunk时，清除"正在思考..."提示
+                            if not first_chunk_received:
+                                first_chunk_received = True
+                                reply_placeholder.empty()
+                            
+                            full_reply += chunk
+                            # 实时更新显示
+                            if full_reply.startswith("![generated image](data:image/png;base64,"):
+                                # 如果是图片，等待完整后再显示
+                                if full_reply.endswith(")"):
+                                    prefix = "![generated image]("
+                                    suffix = ")"
+                                    img_url = full_reply[len(prefix):-len(suffix)]
+                                    reply_placeholder.markdown(
+                                        f'<img src="{img_url}" style="max-width:400px;">',
+                                        unsafe_allow_html=True
+                                    )
+                            else:
+                                reply_placeholder.markdown(render_markdown_with_img_limit(full_reply), unsafe_allow_html=True)
+                    
+                    asyncio.run(stream_response())
+                    
+                    reply = full_reply
+                else:
+                    # 非流式输出模式
+                    with st.spinner("正在思考..."):
+                        reply = asyncio.run(
+                            st.session_state.http_client.chat(
+                                user_message=prompt,
+                                user_id=st.session_state.user_id,
+                                session_id=st.session_state.session_id,
+                                image_source=image_path if image_path else None
+                            )
                         )
-                    )
-                    
-                    # 判断是否为 base64 图片 markdown
-                    if reply.startswith("![generated image](data:image/png;base64,"):
-                        # 提取 base64 数据
-                        prefix = "![generated image]("
-                        suffix = ")"
-                        img_url = reply[len(prefix):-len(suffix)]
-                        # 用 HTML 控制最大宽度
-                        st.markdown(
-                            f'<img src="{img_url}" style="max-width:400px;">',
-                            unsafe_allow_html=True
-                        )
-                    else:
-                        # 新增：对助手回复内容做图片宽度限制
-                        st.markdown(render_markdown_with_img_limit(reply), unsafe_allow_html=True)
-                    
-                    # 添加助手消息到历史
-                    assistant_message = {
-                        "role": "assistant",
-                        "content": reply,
-                        "timestamp": time.time()
-                    }
-                    st.session_state.messages.append(assistant_message)
-                    
-                except Exception as e:
-                    error_msg = f"生成回复时出错: {str(e)}"
-                    st.error(error_msg)
-                    
-                    # 添加错误消息到历史
-                    error_message = {
-                        "role": "assistant",
-                        "content": error_msg,
-                        "timestamp": time.time()
-                    }
-                    st.session_state.messages.append(error_message)
+                        
+                        # 判断是否为 base64 图片 markdown
+                        if reply.startswith("![generated image](data:image/png;base64,"):
+                            # 提取 base64 数据
+                            prefix = "![generated image]("
+                            suffix = ")"
+                            img_url = reply[len(prefix):-len(suffix)]
+                            # 用 HTML 控制最大宽度
+                            st.markdown(
+                                f'<img src="{img_url}" style="max-width:400px;">',
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            # 新增：对助手回复内容做图片宽度限制
+                            st.markdown(render_markdown_with_img_limit(reply), unsafe_allow_html=True)
+                
+                # 添加助手消息到历史
+                assistant_message = {
+                    "role": "assistant",
+                    "content": reply,
+                    "timestamp": time.time()
+                }
+                st.session_state.messages.append(assistant_message)
+                
+            except Exception as e:
+                error_msg = f"生成回复时出错: {str(e)}"
+                st.error(error_msg)
+                
+                # 添加错误消息到历史
+                error_message = {
+                    "role": "assistant",
+                    "content": error_msg,
+                    "timestamp": time.time()
+                }
+                st.session_state.messages.append(error_message)
 
 if __name__ == "__main__":
     main()
