@@ -34,22 +34,22 @@ xAgent provides a complete AI assistant experience with text and image processin
 
 ## ✨ Key Features
 
-### 🤖 **Multi-Modal AI Chat**
-- **Text Conversations** - OpenAI GPT models (GPT-4.1, GPT-4.1-mini, GPT-4o)
-- **Image Processing** - Upload and analyze images with AI
-- **Session Management** - Persistent conversation history with Redis
-- **Tool Integration** - Extensible tool system with auto sync-to-async conversion
-- **MCP Support** - Model Context Protocol for dynamic tool loading
-- **Concurrent Execution** - Parallel tool execution for improved performance
+### 🤖 **Core AI Capabilities**
+- **Multi-Modal Conversations**: Engage in rich conversations with support for both text (via models like GPT-4o) and image inputs.
+- **Persistent Sessions**: Leverages Redis to maintain conversation history, ensuring seamless and stateful interactions across sessions.
+- **Extensible Tool System**: Easily integrate custom synchronous or asynchronous functions as tools. The system automatically handles sync-to-async conversion for non-blocking execution.
+- **Concurrent Tool Execution**: Capable of running multiple tools in parallel, significantly improving response times for complex queries.
+- **Structured Outputs**: Define response structure using Pydantic models to get reliable, typed data from the agent.
+- **Agent as a Tool**: A powerful pattern where specialized agents can be converted into tools, allowing a coordinator agent to delegate complex tasks.
+- **MCP Integration**: Dynamically loads and refreshes tools from external sources using the Model Context Protocol (MCP).
 
-
-### 🔧 **Developer Experience**
-- **Modern Design** - High-performance concurrent operations
-- **Modular Architecture** - Clean separation with pluggable components
-- **Type Safety** - Full type hints with Pydantic models
-- **Comprehensive Testing** - Full test coverage with pytest
-- **Observability** - Built-in logging and monitoring with Langfuse
-- **Flexible Tools** - Support both sync and async tool functions
+### 🔧 **Developer-Focused Design**
+- **Modern Async Architecture**: Built from the ground up with `asyncio` for high-performance, non-blocking operations.
+- **Standalone HTTP Server**: Expose agent functionality via a REST API, complete with streaming support for real-time responses. See the [HTTP Agent Server](#-http-agent-server) section for details.
+- **Modular and Pluggable**: The clear separation of components like `Agent`, `Session`, and `MessageDB` makes the system easy to extend and maintain.
+- **Ready-to-Use Frontend**: Includes a Streamlit-based [chat application](frontend/chat_app.py) for immediate interaction and testing.
+- **Observability**: Integrated with Langfuse for detailed tracing and monitoring of agent interactions.
+- **Comprehensive Test Suite**: A full suite of tests in the [`tests/`](tests/) directory ensures reliability and simplifies development.
 
 
 ## 🏗️ Architecture
