@@ -153,7 +153,7 @@ def init_session_state():
         st.session_state.show_image_upload = False
     
     if "enable_streaming" not in st.session_state:
-        st.session_state.enable_streaming = False
+        st.session_state.enable_streaming = True
 
 def create_http_client(agent_server_url: str):
     """创建 HTTP 客户端实例"""
