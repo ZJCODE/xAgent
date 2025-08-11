@@ -49,7 +49,6 @@ xAgent provides a complete AI assistant experience with text and image processin
 - **Modular and Pluggable**: The clear separation of components like `Agent`, `Session`, and `MessageDB` makes the system easy to extend and maintain.
 - **Ready-to-Use Frontend**: Includes a Streamlit-based [chat application](frontend/chat_app.py) for immediate interaction and testing.
 - **Observability**: Integrated with Langfuse for detailed tracing and monitoring of agent interactions.
-- **Comprehensive Test Suite**: A full suite of tests in the [`tests/`](tests/) directory ensures reliability and simplifies development.
 
 
 ## 🏗️ Architecture
@@ -442,7 +441,7 @@ xAgent provides a standalone HTTP server that exposes the Agent functionality th
 
 ```bash
 # Start with default config
-python xagent/core/server.py --config config/agent.yaml
+python xagent/core/server.py --config config/agent.yaml --toolkit toolkit
 
 # Server will start on http://localhost:8010 by default
 ```
