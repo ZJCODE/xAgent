@@ -7,13 +7,8 @@ import asyncio
 import re
 import tempfile
 import uuid
-
-# 添加项目根目录到 Python 路径
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from xagent.core import Session, Agent
-from xagent.db import MessageDB
-from xagent.tools import web_search,draw_image
+import httpx
+import json
 
 # 页面配置
 st.set_page_config(
@@ -23,17 +18,77 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+class AgentHTTPClient:
+    """HTTP客户端用于与xAgent服务通信"""
+    
+    def __init__(self, base_url: str = "http://localhost:8010"):
+        self.base_url = base_url.rstrip('/')
+        
+    async def chat(self, user_message: str, user_id: str, session_id: str, image_source: Optional[str] = None):
+        """发送聊天消息到Agent服务"""
+        try:
+            payload = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "user_message": user_message
+            }
+            if image_source:
+                payload["image_source"] = image_source
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat",
+                    json=payload
+                )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result.get("reply", "")
+            else:
+                raise Exception(f"HTTP {response.status_code}: {response.text}")
+                
+        except httpx.RequestError as e:
+            raise Exception(f"网络请求失败: {str(e)}")
+    
+    async def clear_session(self, user_id: str, session_id: str):
+        """清空会话历史"""
+        try:
+            payload = {
+                "user_id": user_id,
+                "session_id": session_id
+            }
+            
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/clear_session",
+                    json=payload
+                )
+            
+            if response.status_code == 200:
+                return True
+            else:
+                raise Exception(f"HTTP {response.status_code}: {response.text}")
+                
+        except httpx.RequestError as e:
+            raise Exception(f"网络请求失败: {str(e)}")
+    
+    def health_check(self):
+        """检查服务健康状态"""
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                response = client.get(f"{self.base_url}/health")
+                return response.status_code == 200
+        except:
+            return False
+
 # 初始化 Session State
 def init_session_state():
     """初始化 Streamlit session state"""
     if "messages" not in st.session_state:
         st.session_state.messages = []
     
-    if "agent" not in st.session_state:
-        st.session_state.agent = None
-    
-    if "session" not in st.session_state:
-        st.session_state.session = None
+    if "http_client" not in st.session_state:
+        st.session_state.http_client = None
     
     if "user_id" not in st.session_state:
         st.session_state.user_id = "streamlit_user"
@@ -41,44 +96,15 @@ def init_session_state():
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
     
-    if "use_redis" not in st.session_state:
-        st.session_state.use_redis = True
+    if "agent_server_url" not in st.session_state:
+        st.session_state.agent_server_url = "http://localhost:8010"
     
     if "show_image_upload" not in st.session_state:
         st.session_state.show_image_upload = False
 
-def create_agent_and_session(user_id: str, session_id: Optional[str], use_redis: bool, model: str):
-    """创建 Agent 和 Session 实例"""
-    # 创建工具列表
-
-    message_db = MessageDB() if use_redis else None
-
-    story_agent = Agent(name="story_agent",
-                        system_prompt="you are a story maker who can tell vivid stories.",
-                        model="gpt-4.1-mini")
-    
-    story_tool = story_agent.as_tool(name="story_make_tool", 
-                                     description="A tool to tell stories based on user input and return the story for reference.",
-                                     message_db=message_db
-                                     )
-
-    tools = [web_search, draw_image, story_tool]
-
-    # 创建 Agent
-    agent = Agent(model=model, 
-                  tools=tools,
-                  mcp_servers=["http://127.0.0.1:8001/mcp/"],
-                  system_prompt=f"Current date is {time.strftime('%Y-%m-%d')}")
-
-    # 创建 Session
-    
-    session = Session(
-        user_id=user_id,
-        session_id=session_id,
-        message_db=message_db
-    )
-    
-    return agent, session
+def create_http_client(agent_server_url: str):
+    """创建 HTTP 客户端实例"""
+    return AgentHTTPClient(base_url=agent_server_url)
 
 def render_markdown_with_img_limit(content: str, max_width: int = 400):
     """
@@ -120,19 +146,21 @@ def main():
     with st.sidebar:
         st.title("对话配置")
         
+        # 服务器配置
+        st.subheader("Agent 服务器设置")
+        agent_server_url = st.text_input("Agent 服务器地址", value=st.session_state.agent_server_url, key="agent_server_url_input")
+        
+        # 检查服务器连接状态
+        if st.session_state.http_client:
+            if st.session_state.http_client.health_check():
+                st.success("✅ 服务器连接正常")
+            else:
+                st.error("❌ 服务器连接失败")
+        
         # 用户配置
         st.subheader("用户设置")
         user_id = st.text_input("用户ID", value=st.session_state.user_id, key="user_id_input")
         session_id = st.text_input("会话ID (可选)", value=st.session_state.session_id or "", key="session_id_input")
-        
-        # 存储配置
-        st.subheader("存储设置")
-        use_redis = st.checkbox("使用 Redis 存储", value=st.session_state.use_redis)
-        
-        # 模型配置
-        st.subheader("模型设置")
-        model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4.1","gpt-4.1-mini","gpt-4.1-nano"]
-        model = st.selectbox("选择模型", model_options, index=2)
         
         # 新增：图片上传模块显示控制
         st.subheader("界面设置")
@@ -145,65 +173,53 @@ def main():
         if st.button("应用配置", type="primary"):
             st.session_state.user_id = user_id
             st.session_state.session_id = session_id if session_id else None
-            st.session_state.use_redis = use_redis
+            st.session_state.agent_server_url = agent_server_url
             
-            # 重新创建 Agent 和 Session
+            # 重新创建 HTTP 客户端
             try:
-                agent, session = create_agent_and_session(
-                    user_id, 
-                    st.session_state.session_id, 
-                    use_redis, 
-                    model
-                )
-                st.session_state.agent = agent
-                st.session_state.session = session
+                http_client = create_http_client(agent_server_url)
+                st.session_state.http_client = http_client
                 st.success("配置已应用！")
             except Exception as e:
                 st.error(f"配置失败: {str(e)}")
         
         # 清空历史按钮
         if st.button("清空对话历史", type="secondary"):
-            if st.session_state.session:
-                # 正确等待异步清理，避免 RuntimeWarning: coroutine was never awaited
-                asyncio.run(st.session_state.session.clear_session())
-                st.session_state.messages = []
-                st.success("对话历史已清空！")
-                st.rerun()
+            if st.session_state.http_client:
+                try:
+                    # 调用清空会话的 HTTP 接口
+                    success = asyncio.run(st.session_state.http_client.clear_session(
+                        st.session_state.user_id, 
+                        st.session_state.session_id
+                    ))
+                    if success:
+                        st.session_state.messages = []
+                        st.success("对话历史已清空！")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"清空历史失败: {str(e)}")
         
-        # 显示当前配置
-        st.subheader("当前配置")
-        st.write(f"**用户ID**: {st.session_state.user_id}")
-        st.write(f"**会话ID**: {st.session_state.session_id or '无'}")
-        st.write(f"**存储方式**: {'Redis' if st.session_state.use_redis else '内存'}")
-        st.write(f"**模型**: {model}")
         
-
     # 主界面
     st.title("Conversational AI")
 
-    # 初始化 Agent 和 Session（如果还没有）
-    if st.session_state.agent is None or st.session_state.session is None:
+    # 初始化 HTTP 客户端（如果还没有）
+    if st.session_state.http_client is None:
         try:
-            # 获取默认的工具选择模型
-            agent, session = create_agent_and_session(
-                st.session_state.user_id,
-                st.session_state.session_id,
-                st.session_state.use_redis,
-                model
-            )
-            st.session_state.agent = agent
-            st.session_state.session = session
+            http_client = create_http_client(st.session_state.agent_server_url)
+            st.session_state.http_client = http_client
         except Exception as e:
-            st.error(f"初始化失败: {str(e)}")
+            st.error(f"初始化 HTTP 客户端失败: {str(e)}")
             st.stop()
     
     # 显示聊天历史
     display_chat_history()
     
-    # 聊天输入和图片上传移动到底部并分栏
+    # 聊天输入和图片上传移动到底部
     image_path = None
     image_bytes = None
     prompt = None
+    
     with st._bottom:
         if st.session_state.show_image_upload:
             left_col, right_col = st.columns(2)
@@ -246,11 +262,12 @@ def main():
         with st.chat_message("assistant"):
             with st.spinner("正在思考..."):
                 try:
-                    # 使用 Agent 生成异步回复，传递 image_source=本地路径
+                    # 使用 HTTP 客户端调用远程 Agent 服务
                     reply = asyncio.run(
-                        st.session_state.agent.chat(
-                            prompt, 
-                            st.session_state.session,
+                        st.session_state.http_client.chat(
+                            user_message=prompt,
+                            user_id=st.session_state.user_id,
+                            session_id=st.session_state.session_id,
                             image_source=image_path if image_path else None
                         )
                     )

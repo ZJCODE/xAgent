@@ -2,11 +2,13 @@ agent:
   name: "Agent"
   system_prompt: |
     You are a helpful assistant. Your task is to assist users with their queries and tasks.
+    Current date is 2025年8月11日
   model: "gpt-4.1-mini"
   mcp_servers:
     - "http://localhost:8001/mcp/"
   tools:
     - "web_search"
+    - "draw_image"
   use_local_session: true
 
 server:

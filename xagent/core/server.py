@@ -21,6 +21,12 @@ class AgentInput(BaseModel):
     image_source: Optional[str] = None
 
 
+class ClearSessionInput(BaseModel):
+    """Request body for clear session endpoint."""
+    user_id: str
+    session_id: str
+
+
 class HTTPAgentServer:
     """HTTP Agent Server for xAgent."""
     
@@ -137,6 +143,32 @@ class HTTPAgentServer:
                 
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Agent processing error: {str(e)}")
+        
+        @app.post("/clear_session")
+        async def clear_session(input_data: ClearSessionInput):
+            """
+            Clear session data endpoint.
+            
+            Args:
+                input_data: Contains user_id and session_id to clear
+                
+            Returns:
+                Success confirmation
+            """
+            try:
+                session = Session(
+                    user_id=input_data.user_id,
+                    session_id=input_data.session_id,
+                    message_db=self.message_db
+                )
+                
+                await session.clear_session()
+                
+                return {"status": "success", "message": f"Session {input_data.session_id} for user {input_data.user_id} cleared"}
+                
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to clear session: {str(e)}")
+
     
     def run(self, host: str = None, port: int = None) -> None:
         """

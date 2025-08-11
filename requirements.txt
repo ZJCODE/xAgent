@@ -1,6 +1,7 @@
 # Web Framework
 fastapi
 uvicorn
+httpx
 
 # Data Models
 pydantic
