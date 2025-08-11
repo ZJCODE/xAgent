@@ -9,7 +9,7 @@ agent:
   tools:
     - "web_search"
     - "draw_image"
-  use_local_session: true
+  use_local_session: false
 
 server:
   host: "0.0.0.0"
