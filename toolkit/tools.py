@@ -1,14 +1,19 @@
+from collections import Counter
 from xagent.utils.tool_decorator import function_tool
 
 @function_tool()
-def say_hello(name: str) -> str:
+def char_count(text: str) -> dict:
     """
-    A simple tool that returns a greeting message.
+    Count the frequency of each character in the given text.
     
     Args:
-        name (str): The name of the person to greet.
+        text (str): The input text to analyze.
         
     Returns:
-        str: A greeting message.
+        dict: A dictionary with characters as keys and their counts as values.
     """
-    return f"Hello, {name}!"
+    if not text:
+        return {}
+    
+    # Use Counter to count character frequencies
+    return dict(Counter(text))

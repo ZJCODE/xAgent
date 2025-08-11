@@ -1,5 +1,5 @@
-from .tools import say_hello
+from .tools import char_count
 
 TOOLKIT_REGISTRY = {
-    "say_hello": say_hello
+    "char_count": char_count
 }
