@@ -301,13 +301,14 @@ def main():
     """Main entry point for xagent-server command."""
     parser = argparse.ArgumentParser(description="xAgent HTTP Server")
     parser.add_argument("--config", default="config/agent.yaml", help="Config file path")
+    parser.add_argument("--toolkit_path", default="toolkit", help="Toolkit directory path")
     parser.add_argument("--host", default=None, help="Host to bind to")
     parser.add_argument("--port", type=int, default=None, help="Port to bind to")
     
     args = parser.parse_args()
     
     try:
-        server = HTTPAgentServer(config_path=args.config)
+        server = HTTPAgentServer(config_path=args.config, toolkit_path=args.toolkit_path)
         server.run(host=args.host, port=args.port)
     except Exception as e:
         print(f"Failed to start server: {e}")

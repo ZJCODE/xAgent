@@ -41,6 +41,9 @@ AGENT_HOST="${AGENT_HOST:-0.0.0.0}"
 AGENT_PORT="${AGENT_PORT:-8010}"
 MCP_PORT="${MCP_PORT:-8001}"
 
+DEFAULT_CONFIG_PATH="$APP_ROOT/config/agent.yaml"
+DEFAULT_TOOLKIT_PATH="$APP_ROOT/toolkit"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -116,7 +119,7 @@ start_services() {
   # Agent HTTP Server (xagent/core/server.py)
   start_process \
     "Agent HTTP server" \
-    "python xagent/core/server.py --config config/agent.yaml --host $AGENT_HOST --port $AGENT_PORT" \
+    "python xagent/core/server.py --config $DEFAULT_CONFIG_PATH --toolkit_path $DEFAULT_TOOLKIT_PATH --host $AGENT_HOST --port $AGENT_PORT" \
     "$AGENT_PID_FILE" \
     "$APP_ROOT/logs/agent.log"
 
