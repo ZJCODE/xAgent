@@ -443,7 +443,7 @@ You can also start the HTTP Agent Server directly from Python:
 from xagent.core.server import HTTPAgentServer
 
 # Create and run the HTTP Agent Server
-server = HTTPAgentServer("config/agent.yaml")
+server = HTTPAgentServer(config_path = "config/agent.yaml",toolkit_path = "toolkit")
 
 # Run the server
 server.run(host="0.0.0.0", port=8010)
@@ -462,13 +462,14 @@ agent:
   mcp_servers:
     - "http://localhost:8001/mcp/"
   tools:
-    - "web_search"
-  use_local_session: true
+    - "web_search" # built-in web search tool
+    - "draw_image" # built-in image drawing tool
+    - "char_count" # custom tool for counting characters
+  use_local_session: false
 
 server:
   host: "0.0.0.0"
   port: 8010
-  debug: true
 ```
 
 ### 📡 API Endpoints

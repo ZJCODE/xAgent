@@ -6,9 +6,9 @@ agent:
   mcp_servers:
     - "http://localhost:8001/mcp/"
   tools:
-    - "web_search"
-    - "draw_image"
-    - "char_count" 
+    - "web_search" # built-in web search tool
+    - "draw_image" # built-in image drawing tool
+    - "char_count" # custom tool for counting characters
   use_local_session: false
 
 server:
