@@ -57,13 +57,8 @@ xAgent provides a complete AI assistant experience with text and image processin
 **Modern Design for High Performance**
 
 ```
+```
 xAgent/
-├── 🌐 api/                    # FastAPI backend services
-│   ├── main.py               # API server entry point
-│   ├── health.py             # Health check endpoints
-│   └── schemas/              # API data models
-├── 🎨 frontend/              # Streamlit web interface  
-│   └── chat_app.py           # Main chat application
 ├── 🤖 xagent/                # Core async agent framework
 │   ├── core/                 # Agent and session management
 │   │   ├── agent.py          # Main Agent class with chat
@@ -72,13 +67,24 @@ xAgent/
 │   ├── db/                   # Database layer (Redis)
 │   │   └── message.py        # Message persistence
 │   ├── schemas/              # Data models and types (Pydantic)
+│   │   └── message.py        # Message and ToolCall models
 │   ├── tools/                # Tool ecosystem
-│   │   ├── mcp_server.py     # MCP protocol server
+│   │   ├── __init__.py       # Tool registry (web_search, draw_image)
 │   │   ├── openai_tool.py    # OpenAI tool integrations
-│   │   └── vocabulary/       # Vocabulary learning system
+│   │   └── mcp_demo/         # MCP demo server and client
 │   └── utils/                # Utility functions
 │       ├── tool_decorator.py # Tool decorators
-│       └── mcp_convertor.py  # MCP client
+│       ├── mcp_convertor.py  # MCP client
+│       └── image_upload.py   # AWS S3 image upload utility
+├── 🛠️ toolkit/               # Custom tool ecosystem
+│   ├── __init__.py           # Toolkit registry
+│   ├── tools.py              # Custom tools (char_count)
+│   ├── mcp_server.py         # Main MCP server
+│   └── vocabulary/           # Vocabulary learning system
+├── ⚙️ config/                # Configuration files
+│   └── agent.yaml            # Agent server configuration
+├── 🎨 frontend/              # Streamlit web interface  
+│   └── chat_app.py           # Main chat application
 ├── 📝 examples/              # Usage examples and demos
 └── 🧪 tests/                 # Comprehensive test suite
 ```
