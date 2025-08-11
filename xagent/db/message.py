@@ -3,8 +3,8 @@ from typing import List, Optional, Final
 from xagent.schemas import Message
 
 import os
-import asyncio
 import logging
+import asyncio
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
@@ -37,46 +37,14 @@ class MessageDB:
             raise ValueError("REDIS_URL not set in environment or not provided as argument")
         self.redis_url = url
         self.r: Optional[redis.Redis] = None
-        self._loop_id: Optional[int] = None  # 记录当前客户端绑定的事件循环 id
-        self._client_lock = asyncio.Lock()
         self._sanitize_keys = sanitize_keys
 
     async def _get_client(self):
-        """Get or create async Redis client, and rebuild when event loop changes. Thread-safe across coroutines."""
-        async with self._client_lock:
-            current_loop_id = id(asyncio.get_running_loop())
-
-            # 如果已有客户端但事件循环已变化，则关闭旧客户端并重建
-            if self.r is not None and self._loop_id is not None and self._loop_id != current_loop_id:
-                try:
-                    # 优先使用 aclose（redis>=5.0）
-                    close = getattr(self.r, "aclose", None)
-                    if callable(close):
-                        await close()
-                    else:
-                        await self.r.close()
-                except Exception:
-                    pass
-                self.r = None
-                self._loop_id = None
-
-            if self.r is None:
-                try:
-                    # 仅保留稳定参数，避免不兼容
-                    self.r = redis.Redis.from_url(
-                        self.redis_url,
-                        decode_responses=True,
-                    )
-                    await self.r.ping()
-                    self._loop_id = current_loop_id
-                except Exception as e:
-                    raise ConnectionError(f"Failed to connect to Redis at {self.redis_url}: {e}")
-            return self.r
-
-    @staticmethod
-    def _sanitize_component(value: str) -> str:
-        """URL 编码组件，避免分隔符冲突或非法字符。"""
-        return quote(value, safe="-._~")
+        """Get or create async Redis client."""
+        if self.r is None:
+            self.r = redis.Redis.from_url(self.redis_url, decode_responses=True)
+            await self.r.ping()
+        return self.r
 
     def _make_key(self, user_id: str, session_id: Optional[str] = None) -> str:
         """
@@ -87,11 +55,14 @@ class MessageDB:
         Returns:
             str: Redis key，格式为 'chat:<user_id>' 或 'chat:<user_id>:<session_id>'。
         """
-        uid = self._sanitize_component(user_id) if self._sanitize_keys else user_id
+        if self._sanitize_keys:
+            user_id = quote(user_id, safe="-._~")
+            if session_id:
+                session_id = quote(session_id, safe="-._~")
+        
         if session_id:
-            sid = self._sanitize_component(session_id) if self._sanitize_keys else session_id
-            return f"{self.MSG_PREFIX}:{uid}:{sid}"
-        return f"{self.MSG_PREFIX}:{uid}"
+            return f"{self.MSG_PREFIX}:{user_id}:{session_id}"
+        return f"{self.MSG_PREFIX}:{user_id}"
 
     async def add_messages(
         self,
@@ -116,34 +87,26 @@ class MessageDB:
         if ttl is not None and ttl <= 0:
             raise ValueError("ttl must be a positive integer when provided")
         if max_len is not None and max_len <= 0:
-            # 不保留任何历史，相当于只保留即将写入的消息中的最后 0 条 => 直接清空
-            # 这里选择抛错而不是清空，避免误操作
             raise ValueError("max_len must be a positive integer when provided")
 
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
+        
         if not isinstance(messages, list):
             messages = [messages]
         if not messages:
             return
 
-        pipe = client.pipeline(transaction=True)
-        try:
-            pipe.rpush(key, *(m.model_dump_json() for m in messages))
-            if max_len is not None:
-                pipe.ltrim(key, -max_len, -1)
-            if reset_ttl and ttl is not None:
-                pipe.expire(key, ttl)
-            await pipe.execute()
-        finally:
-            try:
-                reset = getattr(pipe, "reset", None)
-                if callable(reset):
-                    maybe_coro = reset()
-                    if asyncio.iscoroutine(maybe_coro):
-                        await maybe_coro
-            except Exception:
-                pass
+        # Add messages
+        await client.rpush(key, *(m.model_dump_json() for m in messages))
+        
+        # Trim if needed
+        if max_len is not None:
+            await client.ltrim(key, -max_len, -1)
+        
+        # Set TTL if needed
+        if reset_ttl and ttl is not None:
+            await client.expire(key, ttl)
 
     async def get_messages(self, user_id: str, session_id: Optional[str] = None, count: int = 20) -> List[Message]:
         """
@@ -157,9 +120,11 @@ class MessageDB:
         """
         if count <= 0:
             return []
+        
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
         raw_msgs = await client.lrange(key, -count, -1)
+        
         messages: List[Message] = []
         for i, m in enumerate(raw_msgs):
             try:
@@ -177,8 +142,8 @@ class MessageDB:
             max_len (int): 最大保留条数，默认 200。
         """
         if max_len <= 0:
-            # 保护：不接受非正数
             raise ValueError("max_len must be a positive integer")
+        
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
         await client.ltrim(key, -max_len, -1)
@@ -193,6 +158,7 @@ class MessageDB:
         """
         if ttl <= 0:
             raise ValueError("ttl must be a positive integer")
+        
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
         await client.expire(key, ttl)
@@ -219,10 +185,12 @@ class MessageDB:
         """
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
+        
         while True:
             raw_msg = await client.rpop(key)
             if raw_msg is None:
                 return None
+            
             msg = Message.model_validate_json(raw_msg)
             if not msg.tool_call:
                 return msg
@@ -230,15 +198,8 @@ class MessageDB:
     async def close(self):
         """Close the Redis connection."""
         if self.r:
-            try:
-                close = getattr(self.r, "aclose", None)
-                if callable(close):
-                    await close()
-                else:
-                    await self.r.close()
-            finally:
-                self._loop_id = None
-                self.r = None
+            await self.r.aclose()
+            self.r = None
 
     async def __aenter__(self):
         await self._get_client()
