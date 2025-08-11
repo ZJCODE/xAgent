@@ -8,6 +8,7 @@ agent:
   tools:
     - "web_search"
     - "draw_image"
+    - "say_hello" 
   use_local_session: false
 
 server:
