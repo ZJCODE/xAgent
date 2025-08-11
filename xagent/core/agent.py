@@ -1,5 +1,5 @@
 import time
-from typing import Optional
+from typing import Optional, AsyncGenerator
 import json
 import logging
 import asyncio
@@ -84,8 +84,9 @@ class Agent:
             history_count: int = 16,
             max_iter: int = 5,
             image_source: Optional[str] = None,
-            output_type: type[BaseModel] = None
-    ) -> str | BaseModel:
+            output_type: type[BaseModel] = None,
+            stream=False
+    ) -> str | BaseModel | AsyncGenerator[str, None]:
         """
         Generate a reply from the agent given a user message and session.
 
@@ -117,8 +118,9 @@ class Agent:
         history_count: int = 16,
         max_iter: int = 10,
         image_source: Optional[str] = None,
-        output_type: type[BaseModel] = None
-    ) -> str | BaseModel:
+        output_type: type[BaseModel] = None,
+        stream=False
+    ) -> str | BaseModel | AsyncGenerator[str, None]:
         """
         Generate a reply from the agent given a user message and session.
 
@@ -129,6 +131,7 @@ class Agent:
             max_iter (int, optional): Maximum model call attempts. Defaults to 10.
             image_source (Optional[str], optional): Source of the image, if any can be a URL or File path or base64 string.
             output_type (type[BaseModel], optional): Pydantic model for structured output.
+            stream (bool, optional): Whether to stream the response. Defaults to False.
 
         Returns:
             str | BaseModel: The agent's reply or error message.
@@ -146,10 +149,11 @@ class Agent:
 
             for attempt in range(max_iter):
 
-                reply_type, response = await self._call_model(input_messages, session, output_type)
+                reply_type, response = await self._call_model(input_messages, session, output_type,stream)
 
                 if reply_type == ReplyType.SIMPLE_REPLY:
-                    await self._store_model_reply(str(response), session)
+                    if not stream:
+                        await self._store_model_reply(str(response), session)
                     return response
                 elif reply_type == ReplyType.STRUCTURED_REPLY:
                     await self._store_model_reply(response.model_dump_json(), session)
@@ -229,7 +233,8 @@ class Agent:
         await session.add_messages(model_msg)
 
     @observe()
-    async def _call_model(self, input_msgs: list, session: Session, output_type: type[BaseModel] = None) -> tuple[ReplyType, object]:
+    async def _call_model(self, input_msgs: list, session: Session, 
+                          output_type: type[BaseModel] = None, stream: bool = False) -> tuple[ReplyType, object]:
         """
         调用大模型，返回响应对象或 None。
         """
@@ -250,7 +255,7 @@ class Agent:
         messages = [system_msg] + self._sanitize_input_messages(input_msgs)
 
         try:
-            # 根据是否需要结构化输出选择不同的API调用
+            # 根据是否需要结构化输出选择不同的API调用,结构化输出强制不使用Stream 模式
             if output_type is not None:
                 response = await self.client.responses.parse(
                     model=self.model,
@@ -266,21 +271,54 @@ class Agent:
                     model=self.model,
                     tools=tool_specs,
                     input=messages,
+                    stream=stream
                 )
 
             # 统一处理响应，按优先级检查不同类型的输出
-            if hasattr(response, 'output_text') and response.output_text:
-                return ReplyType.SIMPLE_REPLY, response.output_text
-            
-            if hasattr(response, 'output') and response.output:
-                return ReplyType.TOOL_CALL, response.output
-            
-            # 如果没有有效输出，记录警告并返回错误
-            self.logger.warning("Model response contains no valid output: %s", response)
-            return ReplyType.ERROR, "No valid output from model response."
-            
+            if not stream:
+                if hasattr(response, 'output_text') and response.output_text:
+                    return ReplyType.SIMPLE_REPLY, response.output_text
+                
+                if hasattr(response, 'output') and response.output:
+                    return ReplyType.TOOL_CALL, response.output
+                
+                # 如果没有有效输出，记录警告并返回错误
+                self.logger.warning("Model response contains no valid output: %s", response)
+                return ReplyType.ERROR, "No valid output from model response."
+            else:
+                index = 0
+                type = None
+                async for event in response:
+                    index += 1
+                    if index == 3:
+                        type = event.item.type
+                        break
+                if type == "message":
+                    async def stream_generator():
+                        async for event in response:
+                            if event.type == 'response.output_text.delta':
+                                content = event.delta
+                                if content:
+                                    yield content
+                        await self._store_model_reply(event.response.output[0].content[0].text, session)
+                    return ReplyType.SIMPLE_REPLY, stream_generator()
+                elif type == "function_call":
+                    async for event in response:
+                        pass 
+                    return ReplyType.TOOL_CALL, event.response.output
+                else:
+                    self.logger.warning("Stream response type is not recognized: %s", type)
+                    async def stream_generator():
+                        yield "Stream response type is not recognized."
+                    # 返回一个生成器，避免直接返回错误信息
+                    return ReplyType.ERROR, stream_generator()
+                    
         except Exception as e:
             self.logger.exception("Model call failed: %s", e)
+            if stream:
+                async def stream_generator():
+                    yield f"Model call error: {str(e)}"
+                return ReplyType.ERROR, stream_generator()
             return ReplyType.ERROR, f"Model call error: {str(e)}"
     
     @observe()
