@@ -71,12 +71,19 @@ class HTTPAgentServer:
             FileNotFoundError: If config file not found
         """
         if not os.path.isfile(cfg_path):
-            # Support relative path lookup
-            base = os.path.dirname(os.path.abspath(__file__))
-            abs_path = os.path.join(base, cfg_path)
-            if not os.path.isfile(abs_path):
-                raise FileNotFoundError(f"Cannot find config file at {cfg_path} or {abs_path}")
-            cfg_path = abs_path
+            # Support relative path lookup from project root first
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            root_path = os.path.join(project_root, cfg_path)
+            if os.path.isfile(root_path):
+                cfg_path = root_path
+            else:
+                # Fallback to relative path from this file
+                base = os.path.dirname(os.path.abspath(__file__))
+                abs_path = os.path.join(base, cfg_path)
+                if os.path.isfile(abs_path):
+                    cfg_path = abs_path
+                else:
+                    raise FileNotFoundError(f"Cannot find config file at {cfg_path}, {root_path}, or {abs_path}")
             
         with open(cfg_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f)
@@ -293,8 +300,13 @@ def get_app() -> FastAPI:
     return _server_instance.app
 
 
-# For backward compatibility
-app = get_app()
+def get_app_lazy() -> FastAPI:
+    """Lazy initialization for global app variable."""
+    return get_app()
+
+
+# For backward compatibility - use lazy initialization to avoid import-time errors
+app = None  # Will be initialized when first accessed
 
 
 def main():
