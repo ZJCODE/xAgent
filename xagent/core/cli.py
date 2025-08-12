@@ -18,13 +18,13 @@ from ..tools import TOOL_REGISTRY
 class CLIAgent:
     """CLI Agent for xAgent."""
     
-    def __init__(self, config_path: str = "config/agent.yaml", toolkit_path: str = "toolkit", verbose: bool = False):
+    def __init__(self, config_path: Optional[str] = None, toolkit_path: Optional[str] = None, verbose: bool = False):
         """
         Initialize CLIAgent.
         
         Args:
-            config_path: Path to configuration file
-            toolkit_path: Path to toolkit directory
+            config_path: Path to configuration file (if None, uses default configuration)
+            toolkit_path: Path to toolkit directory (if None, no additional tools will be loaded)
             verbose: Enable verbose logging output
         """
         # Configure logging based on verbose setting
@@ -46,40 +46,29 @@ class CLIAgent:
         self.agent = self._initialize_agent()
         self.message_db = self._initialize_message_db()
         
-    def _load_config(self, cfg_path: str) -> Dict[str, Any]:
+    def _load_config(self, cfg_path: Optional[str]) -> Dict[str, Any]:
         """
         Load YAML configuration file.
         
         Args:
-            cfg_path: Path to config file
+            cfg_path: Path to config file (if None, uses default configuration)
             
         Returns:
             Configuration dictionary
         """
-        # Try to find config file in multiple locations
-        config_found = False
+        # If no config path provided, use default configuration
+        if cfg_path is None:
+            self.config_path = None
+            return self._get_default_config()
         
+        # Check if the specified config file exists
         if os.path.isfile(cfg_path):
-            config_found = True
-        else:
-            # Support relative path lookup from project root first
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            root_path = os.path.join(project_root, cfg_path)
-            if os.path.isfile(root_path):
-                cfg_path = root_path
-                config_found = True
-            else:
-                # Fallback to relative path from this file
-                base = os.path.dirname(os.path.abspath(__file__))
-                abs_path = os.path.join(base, cfg_path)
-                if os.path.isfile(abs_path):
-                    cfg_path = abs_path
-                    config_found = True
-        if config_found:
             self.config_path = cfg_path
             with open(cfg_path, "r", encoding="utf-8") as f:
                 return yaml.safe_load(f)
         else:
+            # Use default configuration if file doesn't exist
+            self.config_path = None
             return self._get_default_config()
     
     def _get_default_config(self) -> Dict[str, Any]:
@@ -94,7 +83,7 @@ class CLIAgent:
                 "name": "Agent",
                 "system_prompt": "You are a helpful assistant. Your task is to assist users with their queries and tasks.",
                 "model": "gpt-4o-mini",
-                "tools": ["web_search"],  # Default tool, can be overridden by toolkit
+                "tools": ["web_search"],  # No default tools, can be added via toolkit or config
                 "use_local_session": True
             },
             "server": {
@@ -192,7 +181,8 @@ class CLIAgent:
         )
         
         print(f"🤖 Welcome to xAgent CLI!")
-        print(f"Loading agent configuration from {self.config_path}")
+        config_msg = f"Loading agent configuration from {self.config_path}" if self.config_path else "Using default configuration"
+        print(config_msg)
         print(f"Agent: {self.agent.name}")
         print(f"Model: {self.agent.model}")
         print(f"Tools: {len(self.agent.tools)} loaded")
@@ -381,8 +371,8 @@ def main():
     
     # Interactive chat command
     chat_parser = subparsers.add_parser("chat", help="Start interactive chat session")
-    chat_parser.add_argument("--config", default="config/agent.yaml", help="Config file path")
-    chat_parser.add_argument("--toolkit_path", default="toolkit", help="Toolkit directory path")
+    chat_parser.add_argument("--config", default=None, help="Config file path (if not specified, uses default configuration)")
+    chat_parser.add_argument("--toolkit_path", default=None, help="Toolkit directory path (if not specified, no additional tools will be loaded)")
     chat_parser.add_argument("--user_id", help="User ID for the session")
     chat_parser.add_argument("--session_id", help="Session ID for the chat")
     chat_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
@@ -391,8 +381,8 @@ def main():
     # Single message command
     single_parser = subparsers.add_parser("ask", help="Ask a single question")
     single_parser.add_argument("message", help="The message to send to the agent")
-    single_parser.add_argument("--config", default="config/agent.yaml", help="Config file path")
-    single_parser.add_argument("--toolkit_path", default="toolkit", help="Toolkit directory path")
+    single_parser.add_argument("--config", default=None, help="Config file path (if not specified, uses default configuration)")
+    single_parser.add_argument("--toolkit_path", default=None, help="Toolkit directory path (if not specified, no additional tools will be loaded)")
     single_parser.add_argument("--user_id", help="User ID for the session")
     single_parser.add_argument("--session_id", help="Session ID for the chat")
     single_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
@@ -407,8 +397,8 @@ def main():
     # If no command specified, default to interactive chat
     if not args.command:
         args.command = "chat"
-        args.config = "config/agent.yaml"  # This will fallback to default config if not found
-        args.toolkit_path = "toolkit"
+        args.config = None  # Use default configuration when no command is specified
+        args.toolkit_path = None  # No toolkit by default
         args.user_id = None
         args.session_id = None
         args.verbose = False

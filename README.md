@@ -149,10 +149,10 @@ def greet_user(name: str) -> str:
 ### 3. Start the Server
 
 ```bash
-# Start the HTTP Agent Server
-xagent-server --config agent_config.yaml
+# Start the HTTP Agent Server with default configuration
+xagent-server
 
-# With custom toolkit (optional)
+# With custom configuration and toolkit
 xagent-server --config agent_config.yaml --toolkit my_toolkit
 
 # Server will be available at http://localhost:8010
