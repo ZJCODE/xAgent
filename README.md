@@ -200,6 +200,9 @@ xagent-cli ask "What is the capital of France?"
 
 # Use custom configuration
 xagent-cli chat --config my_config.yaml --user_id developer
+
+# With verbose logging
+xagent-cli ask "What is 2+2?" --verbose
 ```
 
 ### Interactive Chat Mode
@@ -257,6 +260,7 @@ xagent-cli ask "Tell me a joke" --user_id user123 --session_id session456
 | `--toolkit_path` | Custom toolkit directory | `toolkit` |
 | `--user_id` | User identifier | Auto-generated |
 | `--session_id` | Session identifier | Auto-generated |
+| `--verbose`, `-v` | Enable verbose logging | `False` |
 
 For detailed CLI documentation, see [CLI Usage Guide](docs/CLI_USAGE.md).
 
