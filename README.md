@@ -241,7 +241,6 @@ Type 'help' for available commands.
 |---------|-------------|---------|
 | `xagent-cli` | Start interactive chat with streaming (default) | `xagent-cli` |
 | `xagent-cli chat` | Start interactive chat explicitly | `xagent-cli chat --config my_config.yaml` |
-| `xagent-cli chat --no-stream` | Start interactive chat without streaming | `xagent-cli chat --no-stream` |
 | `xagent-cli ask <message>` | Ask single question (non-streaming) | `xagent-cli ask "Hello world"` |
 
 ### CLI Options
@@ -253,7 +252,6 @@ Type 'help' for available commands.
 | `--user_id` | User identifier | Auto-generated |
 | `--session_id` | Session identifier | Auto-generated |
 | `--verbose`, `-v` | Enable verbose logging | `False` |
-| `--no-stream` | Disable streaming (chat mode only) | `False` |
 
 ## 🤖 Advanced Usage: Agent Class
 
