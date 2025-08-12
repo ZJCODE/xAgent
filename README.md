@@ -102,6 +102,15 @@ agent:
   ...
 ```
 
+you can also set `use_local_session` to `false` if you want to use Redis for session persistence(need to set `REDIS_URL` in `.env`):
+
+```yaml
+agent:
+  ...
+  use_local_session: false
+  ...
+```
+
 ### 2. Create Custom Tools (Optional)
 
 Create `my_toolkit/` directory with `__init__.py` and your tool functions in script like  `your_tools.py`:
