@@ -3,6 +3,7 @@ import yaml
 import argparse
 import asyncio
 import uuid
+import logging
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 import importlib.util
@@ -18,14 +19,21 @@ from xagent.tools import TOOL_REGISTRY
 class CLIAgent:
     """CLI Agent for xAgent."""
     
-    def __init__(self, config_path: str = "config/agent.yaml", toolkit_path: str = "toolkit"):
+    def __init__(self, config_path: str = "config/agent.yaml", toolkit_path: str = "toolkit", verbose: bool = False):
         """
         Initialize CLIAgent.
         
         Args:
             config_path: Path to configuration file
             toolkit_path: Path to toolkit directory
+            verbose: Enable verbose logging output
         """
+        # Configure logging based on verbose setting
+        if not verbose:
+            # Suppress most logging except critical errors
+            logging.getLogger().setLevel(logging.CRITICAL)
+            logging.getLogger("xagent").setLevel(logging.CRITICAL)
+        
         # Load environment variables
         load_dotenv(override=True)
         
@@ -257,6 +265,7 @@ def main():
     chat_parser.add_argument("--toolkit_path", default="toolkit", help="Toolkit directory path")
     chat_parser.add_argument("--user_id", help="User ID for the session")
     chat_parser.add_argument("--session_id", help="Session ID for the chat")
+    chat_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     
     # Single message command
     single_parser = subparsers.add_parser("ask", help="Ask a single question")
@@ -265,6 +274,7 @@ def main():
     single_parser.add_argument("--toolkit_path", default="toolkit", help="Toolkit directory path")
     single_parser.add_argument("--user_id", help="User ID for the session")
     single_parser.add_argument("--session_id", help="Session ID for the chat")
+    single_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     
     # Parse arguments
     args = parser.parse_args()
@@ -276,9 +286,14 @@ def main():
         args.toolkit_path = "toolkit"
         args.user_id = None
         args.session_id = None
+        args.verbose = False
     
     try:
-        cli_agent = CLIAgent(config_path=args.config, toolkit_path=args.toolkit_path)
+        cli_agent = CLIAgent(
+            config_path=args.config, 
+            toolkit_path=args.toolkit_path,
+            verbose=getattr(args, 'verbose', False)
+        )
         
         if args.command == "chat":
             asyncio.run(cli_agent.chat_interactive(
