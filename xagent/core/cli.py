@@ -175,13 +175,14 @@ class CLIAgent:
         use_local_session = agent_cfg.get("use_local_session", True)
         return None if use_local_session else MessageDB()
     
-    async def chat_interactive(self, user_id: str = None, session_id: str = None):
+    async def chat_interactive(self, user_id: str = None, session_id: str = None, stream: bool = True):
         """
         Start an interactive chat session.
         
         Args:
             user_id: User ID for the session
             session_id: Session ID for the chat
+            stream: Enable streaming response (default: True)
         """
         # Generate default IDs if not provided
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
@@ -198,8 +199,10 @@ class CLIAgent:
         print(f"Model: {self.agent.model}")
         print(f"Tools: {len(self.agent.tools)} loaded")
         print(f"Session: {session_id}")
+        print(f"Streaming: {'Enabled' if stream else 'Disabled'}")
         print("Type 'exit', 'quit', or 'bye' to end the session.")
         print("Type 'clear' to clear the session history.")
+        print("Type 'stream on/off' to toggle streaming mode.")
         print("Type 'help' for available commands.")
         print("-" * 50)
         
@@ -216,6 +219,21 @@ class CLIAgent:
                     await session.clear_session()
                     print("🧹 Session history cleared.")
                     continue
+                elif user_input.lower().startswith('stream '):
+                    # Handle stream toggle command
+                    stream_cmd = user_input.lower().split()
+                    if len(stream_cmd) == 2:
+                        if stream_cmd[1] == 'on':
+                            stream = True
+                            print("🌊 Streaming mode enabled.")
+                        elif stream_cmd[1] == 'off':
+                            stream = False
+                            print("📄 Streaming mode disabled.")
+                        else:
+                            print("⚠️  Usage: stream on/off")
+                    else:
+                        print("⚠️  Usage: stream on/off")
+                    continue
                 elif user_input.lower() == 'help':
                     self._show_help()
                     continue
@@ -224,11 +242,32 @@ class CLIAgent:
                 
                 # Process the message
                 print("🤖 Agent: ", end="", flush=True)
-                response = await self.agent(
-                    user_message=user_input,
-                    session=session
-                )
-                print(response)
+                
+                if stream:
+                    # Handle streaming response
+                    response_generator = await self.agent(
+                        user_message=user_input,
+                        session=session,
+                        stream=True
+                    )
+                    
+                    # Check if response is a generator (streaming) or a string
+                    if hasattr(response_generator, '__aiter__'):
+                        async for chunk in response_generator:
+                            if chunk:
+                                print(chunk, end="", flush=True)
+                        print()  # Add newline after streaming is complete
+                    else:
+                        # Fallback for non-streaming response
+                        print(response_generator)
+                else:
+                    # Handle non-streaming response
+                    response = await self.agent(
+                        user_message=user_input,
+                        session=session,
+                        stream=False
+                    )
+                    print(response)
                 
             except KeyboardInterrupt:
                 print("\n\n👋 Session interrupted. Goodbye!")
@@ -236,7 +275,7 @@ class CLIAgent:
             except Exception as e:
                 print(f"\n❌ Error: {e}")
     
-    async def chat_single(self, message: str, user_id: str = None, session_id: str = None):
+    async def chat_single(self, message: str, user_id: str = None, session_id: str = None, stream: bool = False):
         """
         Process a single message and return the response.
         
@@ -244,9 +283,10 @@ class CLIAgent:
             message: The message to process
             user_id: User ID for the session
             session_id: Session ID for the chat
+            stream: Enable streaming response (default: False for single messages)
             
         Returns:
-            Agent response
+            Agent response (string for non-streaming, async generator for streaming)
         """
         # Generate default IDs if not provided
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
@@ -260,7 +300,8 @@ class CLIAgent:
         
         response = await self.agent(
             user_message=message,
-            session=session
+            session=session,
+            stream=stream
         )
         
         return response
@@ -270,6 +311,7 @@ class CLIAgent:
         print("\n📋 Available commands:")
         print("  exit, quit, bye  - Exit the chat session")
         print("  clear           - Clear session history")
+        print("  stream on/off   - Toggle streaming mode")
         print("  help            - Show this help message")
         print("\n🔧 Available tools:")
         for tool_name in self.agent.tools.keys():
@@ -347,6 +389,7 @@ def main():
     chat_parser.add_argument("--user_id", help="User ID for the session")
     chat_parser.add_argument("--session_id", help="Session ID for the chat")
     chat_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    chat_parser.add_argument("--no-stream", action="store_true", help="Disable streaming response (default: streaming enabled)")
     
     # Single message command
     single_parser = subparsers.add_parser("ask", help="Ask a single question")
@@ -356,6 +399,7 @@ def main():
     single_parser.add_argument("--user_id", help="User ID for the session")
     single_parser.add_argument("--session_id", help="Session ID for the chat")
     single_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    single_parser.add_argument("--stream", action="store_true", help="Enable streaming response (default: disabled for single messages)")
     
     # Init command to create default config
     init_parser = subparsers.add_parser("init", help="Create default configuration file")
@@ -372,6 +416,7 @@ def main():
         args.user_id = None
         args.session_id = None
         args.verbose = False
+        args.no_stream = False
     
     try:
         if args.command == "init":
@@ -387,15 +432,27 @@ def main():
         if args.command == "chat":
             asyncio.run(cli_agent.chat_interactive(
                 user_id=args.user_id,
-                session_id=args.session_id
+                session_id=args.session_id,
+                stream=not getattr(args, 'no_stream', False)
             ))
         elif args.command == "ask":
             response = asyncio.run(cli_agent.chat_single(
                 message=args.message,
                 user_id=args.user_id,
-                session_id=args.session_id
+                session_id=args.session_id,
+                stream=getattr(args, 'stream', False)
             ))
-            print(response)
+            
+            # Handle streaming response for ask command
+            if getattr(args, 'stream', False) and hasattr(response, '__aiter__'):
+                async def print_stream():
+                    async for chunk in response:
+                        if chunk:
+                            print(chunk, end="", flush=True)
+                    print()  # Add newline after streaming is complete
+                asyncio.run(print_stream())
+            else:
+                print(response)
         else:
             parser.print_help()
             
