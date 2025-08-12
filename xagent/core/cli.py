@@ -94,7 +94,7 @@ class CLIAgent:
                 "name": "Agent",
                 "system_prompt": "You are a helpful assistant. Your task is to assist users with their queries and tasks.",
                 "model": "gpt-4o-mini",
-                "tools": [],
+                "tools": ["web_search"],  # Default tool, can be overridden by toolkit
                 "use_local_session": True
             },
             "server": {
