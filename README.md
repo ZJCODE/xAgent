@@ -177,8 +177,7 @@ async def main():
     agent = Agent(
         name="my_assistant",
         system_prompt="You are a helpful AI assistant.",
-        model="gpt-4.1-mini",
-        stream=False  # Set to True for streaming responses
+        model="gpt-4.1-mini"
     )
 
     # Create session for conversation management
