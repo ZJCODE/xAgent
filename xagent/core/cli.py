@@ -56,27 +56,55 @@ class CLIAgent:
             
         Returns:
             Configuration dictionary
-            
-        Raises:
-            FileNotFoundError: If config file not found
         """
-        if not os.path.isfile(cfg_path):
+        # Try to find config file in multiple locations
+        config_found = False
+        
+        if os.path.isfile(cfg_path):
+            config_found = True
+        else:
             # Support relative path lookup from project root first
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             root_path = os.path.join(project_root, cfg_path)
             if os.path.isfile(root_path):
                 cfg_path = root_path
+                config_found = True
             else:
                 # Fallback to relative path from this file
                 base = os.path.dirname(os.path.abspath(__file__))
                 abs_path = os.path.join(base, cfg_path)
                 if os.path.isfile(abs_path):
                     cfg_path = abs_path
-                else:
-                    raise FileNotFoundError(f"Cannot find config file at {cfg_path}, {root_path}, or {abs_path}")
-            
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
+                    config_found = True
+        
+        if config_found:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f)
+        else:
+            # Return default configuration if no config file found
+            print(f"⚠️  Config file not found at {cfg_path}, using default configuration.")
+            return self._get_default_config()
+    
+    def _get_default_config(self) -> Dict[str, Any]:
+        """
+        Return default configuration when no config file is found.
+        
+        Returns:
+            Default configuration dictionary
+        """
+        return {
+            "agent": {
+                "name": "Agent",
+                "system_prompt": "You are a helpful assistant. Your task is to assist users with their queries and tasks.",
+                "model": "gpt-4o-mini",
+                "tools": [],
+                "use_local_session": True
+            },
+            "server": {
+                "host": "0.0.0.0",
+                "port": 8010
+            }
+        }
     
     def _load_toolkit_registry(self, toolkit_path: Optional[str]) -> Dict[str, Any]:
         """Dynamically load TOOLKIT_REGISTRY from a toolkit directory.
@@ -250,6 +278,59 @@ class CLIAgent:
             print("\n🌐 MCP tools:")
             for tool_name in self.agent.mcp_tools.keys():
                 print(f"  - {tool_name}")
+    
+    def create_default_config(self, config_path: str = "config/agent.yaml"):
+        """
+        Create a default configuration file.
+        
+        Args:
+            config_path: Path where to create the config file
+        """
+        # Create directory if it doesn't exist
+        config_dir = os.path.dirname(config_path)
+        if config_dir and not os.path.exists(config_dir):
+            os.makedirs(config_dir)
+        
+        default_config = self._get_default_config()
+        
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
+        
+        print(f"✅ Default configuration created at: {config_path}")
+        print("You can edit this file to customize your agent settings.")
+
+
+def create_default_config_file(config_path: str = "config/agent.yaml"):
+    """
+    Create a default configuration file.
+    
+    Args:
+        config_path: Path where to create the config file
+    """
+    # Create directory if it doesn't exist
+    config_dir = os.path.dirname(config_path)
+    if config_dir and not os.path.exists(config_dir):
+        os.makedirs(config_dir)
+    
+    default_config = {
+        "agent": {
+            "name": "Agent",
+            "system_prompt": "You are a helpful assistant. Your task is to assist users with their queries and tasks.",
+            "model": "gpt-4o-mini",
+            "tools": [],
+            "use_local_session": True
+        },
+        "server": {
+            "host": "0.0.0.0",
+            "port": 8010
+        }
+    }
+    
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
+    
+    print(f"✅ Default configuration created at: {config_path}")
+    print("You can edit this file to customize your agent settings.")
 
 
 def main():
@@ -276,19 +357,27 @@ def main():
     single_parser.add_argument("--session_id", help="Session ID for the chat")
     single_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     
+    # Init command to create default config
+    init_parser = subparsers.add_parser("init", help="Create default configuration file")
+    init_parser.add_argument("--config", default="config/agent.yaml", help="Config file path to create")
+    
     # Parse arguments
     args = parser.parse_args()
     
     # If no command specified, default to interactive chat
     if not args.command:
         args.command = "chat"
-        args.config = "config/agent.yaml"
+        args.config = "config/agent.yaml"  # This will fallback to default config if not found
         args.toolkit_path = "toolkit"
         args.user_id = None
         args.session_id = None
         args.verbose = False
     
     try:
+        if args.command == "init":
+            create_default_config_file(args.config)
+            return
+            
         cli_agent = CLIAgent(
             config_path=args.config, 
             toolkit_path=args.toolkit_path,
