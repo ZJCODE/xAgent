@@ -11,8 +11,6 @@ from langfuse.openai import AsyncOpenAI
 from xagent.utils.tool_decorator import function_tool
 from xagent.utils.image_upload import upload_image as s3_upload_image
 
-
-client = AsyncOpenAI()
 DEFAULT_MODEL = "gpt-4o-mini"
 
 @function_tool()
@@ -23,7 +21,8 @@ async def web_search(search_query: str) -> str:
     query = (search_query or "").strip()
     if not query:
         return ""
-
+    
+    client = AsyncOpenAI()
     response = await client.responses.create(
         model=DEFAULT_MODEL,
         tools=[{"type": "web_search_preview"},],
@@ -44,7 +43,8 @@ async def draw_image(prompt: str) -> str:
     clean_prompt = (prompt or "").strip()
     if not clean_prompt:
         return ""
-
+    
+    client = AsyncOpenAI()
     response = await client.responses.create(
         model=DEFAULT_MODEL,
         tools=[{"type": "image_generation", "quality": "low"}],

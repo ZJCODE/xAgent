@@ -62,6 +62,12 @@ AWS_REGION=us-east-1
 BUCKET_NAME=your_bucket_name
 ```
 
+you can manually load the `.env` file into your shell:
+
+```bash
+export $(cat .env | grep -v '^#' | xargs)
+```
+
 ## 🌐 Quick Start: HTTP Agent Server
 
 The simplest way to use xAgent is through the HTTP server. Just create a config file and start serving!
