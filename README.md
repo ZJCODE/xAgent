@@ -119,7 +119,7 @@ Create `my_toolkit/` directory with `__init__.py` and your tool functions in scr
 # my_toolkit/__init__.py
 from .your_tools import calculate_square, greet_user
 
-# Agent will automatically discover these tools
+# Agent will automatically discover these tools,you can choose which to load in agent config
 TOOLKIT_REGISTRY = {
     "calculate_square": calculate_square,
     "greet_user": greet_user
