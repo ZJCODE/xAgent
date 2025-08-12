@@ -75,8 +75,8 @@ class CLIAgent:
                 if os.path.isfile(abs_path):
                     cfg_path = abs_path
                     config_found = True
-        
         if config_found:
+            self.config_path = cfg_path
             with open(cfg_path, "r", encoding="utf-8") as f:
                 return yaml.safe_load(f)
         else:
@@ -192,6 +192,7 @@ class CLIAgent:
         )
         
         print(f"🤖 Welcome to xAgent CLI!")
+        print(f"Loading agent configuration from {self.config_path}")
         print(f"Agent: {self.agent.name}")
         print(f"Model: {self.agent.model}")
         print(f"Tools: {len(self.agent.tools)} loaded")
@@ -355,7 +356,7 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
             "name": "Agent",
             "system_prompt": "You are a helpful assistant. Your task is to assist users with their queries and tasks.",
             "model": "gpt-4o-mini",
-            "tools": ["web_search"],
+            "tools": [],
             "use_local_session": True
         },
         "server": {
