@@ -81,8 +81,6 @@ class CLIAgent:
             with open(cfg_path, "r", encoding="utf-8") as f:
                 return yaml.safe_load(f)
         else:
-            # Return default configuration if no config file found
-            print(f"⚠️  Config file not found at {cfg_path}, using default configuration.")
             return self._get_default_config()
     
     def _get_default_config(self) -> Dict[str, Any]:
