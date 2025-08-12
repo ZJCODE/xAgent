@@ -31,7 +31,6 @@ xAgent provides a complete AI assistant experience with text and image processin
 | Requirement | Version | Purpose |
 |-------------|---------|---------|
 | **Python** | 3.12+ | Core runtime |
-| **Redis** | 7.0+ | Message persistence |
 | **OpenAI API Key** | - | AI model access |
 
 ### Install via pip
