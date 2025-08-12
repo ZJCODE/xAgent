@@ -452,6 +452,14 @@ python xagent/core/server.py --config config/agent.yaml --toolkit toolkit
 # Server will start on http://localhost:8010 by default
 ```
 
+
+After installing the package, you can use the `xagent-server` command:
+```bash
+# Start the server using the installed command
+xagent-server --config /path/to/your/config.yaml --toolkit /path/to/your/toolkit
+```
+
+
 ### 🏃 Programmatic Usage
 
 You can also start the HTTP Agent Server directly from Python:
