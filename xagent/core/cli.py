@@ -28,10 +28,15 @@ class CLIAgent:
             verbose: Enable verbose logging output
         """
         # Configure logging based on verbose setting
+        self.verbose = verbose
         if not verbose:
             # Suppress most logging except critical errors
             logging.getLogger().setLevel(logging.CRITICAL)
             logging.getLogger("xagent").setLevel(logging.CRITICAL)
+        else:
+            # Enable verbose logging
+            logging.getLogger().setLevel(logging.INFO)
+            logging.getLogger("xagent").setLevel(logging.INFO)
         
         # Load environment variables
         load_dotenv(override=True)
@@ -161,15 +166,22 @@ class CLIAgent:
         use_local_session = agent_cfg.get("use_local_session", True)
         return None if use_local_session else MessageDB()
     
-    async def chat_interactive(self, user_id: str = None, session_id: str = None, stream: bool = True):
+    async def chat_interactive(self, user_id: str = None, session_id: str = None, stream: bool = None):
         """
         Start an interactive chat session.
         
         Args:
             user_id: User ID for the session
             session_id: Session ID for the chat
-            stream: Enable streaming response (default: True)
+            stream: Enable streaming response (default: True, but False when verbose mode is enabled)
         """
+        # If stream is not explicitly set, determine based on verbose mode
+        if stream is None:
+            # When verbose mode is enabled, default to non-streaming for better log readability
+            stream = not (logging.getLogger().level <= logging.INFO)
+        
+        # Check if verbose mode is enabled by checking log level
+        verbose_mode = logging.getLogger().level <= logging.INFO
         # Generate default IDs if not provided
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
         session_id = session_id or f"cli_session_{uuid.uuid4().hex[:8]}"
@@ -187,7 +199,10 @@ class CLIAgent:
         print(f"Model: {self.agent.model}")
         print(f"Tools: {len(self.agent.tools)} loaded")
         print(f"Session: {session_id}")
+        print(f"Verbose mode: {'Enabled' if verbose_mode else 'Disabled'}")
         print(f"Streaming: {'Enabled' if stream else 'Disabled'}")
+        if verbose_mode and stream:
+            print("ℹ️  Note: Verbose mode is enabled. Consider using 'stream off' for better log readability.")
         print("Type 'exit', 'quit', or 'bye' to end the session.")
         print("Type 'clear' to clear the session history.")
         print("Type 'stream on/off' to toggle streaming mode.")
@@ -415,10 +430,13 @@ def main():
         )
         
         if args.command == "chat":
+            # Determine stream setting - if --no-stream is specified, use False
+            # Otherwise, let chat_interactive decide based on verbose mode
+            stream_setting = None if not getattr(args, 'no_stream', False) else False
             asyncio.run(cli_agent.chat_interactive(
                 user_id=args.user_id,
                 session_id=args.session_id,
-                stream=not getattr(args, 'no_stream', False)
+                stream=stream_setting
             ))
         elif args.command == "ask":
             response = asyncio.run(cli_agent.chat_single(
