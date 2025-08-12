@@ -116,6 +116,12 @@ cd xAgent
 pip install -r requirements.txt
 ```
 
+
+install by using pip
+```bash
+pip install myxagent
+```
+
 Environment Configuration
 ```bash
 # Copy and edit environment file
@@ -727,6 +733,25 @@ We welcome contributions! Here's how to get started:
 | **Documentation** | Update docs as needed |
 | **Type Safety** | Use type hints throughout |
 | **Commits** | Follow conventional commit messages |
+
+## Package Upload
+
+First time upload
+
+```bash
+pip install build twine
+python -m build
+twine upload dist/*
+```
+
+Subsequent uploads
+
+```bash
+rm -rf dist/ build/ *.egg-info/
+python -m build
+twine upload dist/*
+```
+
 
 ## 📄 License
 

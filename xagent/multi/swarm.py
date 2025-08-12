@@ -1,6 +1,6 @@
-from xagent.core.agent import Agent
-from xagent.core.session import Session
-from xagent.schemas import Message
+from ..core.agent import Agent
+from ..core.session import Session
+from ..schemas import Message
 
 class SharedContext:
     """A shared context for managing data and chat history bewteen agents in a swarm."""

@@ -1,6 +1,7 @@
 import redis.asyncio as redis
 from typing import List, Optional, Final
-from xagent.schemas import Message
+
+from ..schemas import Message
 
 import os
 import logging
