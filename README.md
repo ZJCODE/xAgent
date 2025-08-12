@@ -12,44 +12,391 @@ xAgent provides a complete AI assistant experience with text and image processin
 
 ## 📋 Table of Contents
 
-- [✨ Key Features](#-key-features)
+- [🚀 Installation & Setup](#-installation--setup)
+- [🌐 Quick Start: HTTP Agent Server](#-quick-start-http-agent-server)
+- [🤖 Advanced Usage: Agent Class](#-advanced-usage-agent-class)
+- [🎮 Full Project Experience](#-full-project-experience)
 - [🏗️ Architecture](#%EF%B8%8F-architecture)
-- [🚀 Quick Start](#-quick-start)
-- [💡 Usage Examples](#-usage-examples)
-  - [📘 Basic Chat](#-basic-chat)
-  - [🗄️ Advanced Chat with Redis Persistence](#%EF%B8%8F-advanced-chat-with-redis-persistence)
-  - [🔧 Custom Tools (Sync and Async)](#-custom-tools-sync-and-async)
-  - [🔧 MCP Protocol Integration](#-mcp-protocol-integration)
-  - [📊 Structured Output with Pydantic](#-structured-output-with-pydantic)
-  - [🤖 Agent as Tool Pattern](#-agent-as-tool-pattern)
-- [🌐 HTTP Agent Server](#-http-agent-server)
 - [🔧 Development Guide](#-development-guide)
-  - [🛠️ Creating Tools](#%EF%B8%8F-creating-tools)
-  - [📋 Tool Development Guidelines](#-tool-development-guidelines)
-  - [🔄 Automatic Conversion](#-automatic-conversion)
 - [🤖 API Reference](#-api-reference)
 - [📊 Monitoring & Observability](#-monitoring--observability)
 - [🤝 Contributing](#-contributing)
 - [📄 License](#-license)
 
-## ✨ Key Features
+## 🚀 Installation & Setup
 
-### 🤖 **Core AI Capabilities**
-- **Multi-Modal Conversations**: Engage in rich conversations with support for both text (via models like GPT-4o) and image inputs.
-- **Persistent Sessions**: Leverages Redis to maintain conversation history, ensuring seamless and stateful interactions across sessions.
-- **Extensible Tool System**: Easily integrate custom synchronous or asynchronous functions as tools. The system automatically handles sync-to-async conversion for non-blocking execution.
-- **Concurrent Tool Execution**: Capable of running multiple tools in parallel, significantly improving response times for complex queries.
-- **Structured Outputs**: Define response structure using Pydantic models to get reliable, typed data from the agent.
-- **Agent as a Tool**: A powerful pattern where specialized agents can be converted into tools, allowing a coordinator agent to delegate complex tasks.
-- **MCP Integration**: Dynamically loads and refreshes tools from external sources using the Model Context Protocol (MCP).
+### Prerequisites
 
-### 🔧 **Developer-Focused Design**
-- **Modern Async Architecture**: Built from the ground up with `asyncio` for high-performance, non-blocking operations.
-- **Standalone HTTP Server**: Expose agent functionality via a REST API, complete with streaming support for real-time responses. See the [HTTP Agent Server](#-http-agent-server) section for details.
-- **Modular and Pluggable**: The clear separation of components like `Agent`, `Session`, and `MessageDB` makes the system easy to extend and maintain.
-- **Ready-to-Use Frontend**: Includes a Streamlit-based [chat application](frontend/chat_app.py) for immediate interaction and testing.
-- **Observability**: Integrated with Langfuse for detailed tracing and monitoring of agent interactions.
+| Requirement | Version | Purpose |
+|-------------|---------|---------|
+| **Python** | 3.12+ | Core runtime |
+| **Redis** | 7.0+ | Message persistence |
+| **OpenAI API Key** | - | AI model access |
 
+### Install via pip
+
+```bash
+pip install myxagent
+```
+
+### Environment Configuration
+
+Create a `.env` file in your project directory:
+
+```bash
+# Required
+OPENAI_API_KEY=your_openai_api_key
+
+# Optional - Redis persistence
+REDIS_URL=your_redis_url_with_password
+
+# Optional - Observability
+LANGFUSE_SECRET_KEY=your_langfuse_key
+LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
+LANGFUSE_HOST=https://cloud.langfuse.com
+
+# Optional - Image upload to S3
+AWS_ACCESS_KEY_ID=your_aws_access_key_id
+AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
+AWS_REGION=us-east-1
+BUCKET_NAME=your_bucket_name
+```
+
+## 🌐 Quick Start: HTTP Agent Server
+
+The simplest way to use xAgent is through the HTTP server. Just create a config file and start serving!
+
+### 1. Create Agent Configuration
+
+Create `agent_config.yaml`:
+
+```yaml
+agent:
+  name: "MyAgent"
+  system_prompt: |
+    You are a helpful assistant. Your task is to assist users with their queries and tasks.
+  model: "gpt-4.1-mini"
+  tools:
+    - "web_search"  # Built-in web search
+    - "draw_image"  # Built-in image generation
+    - "calculate_square"  # Custom tool from my_toolkit
+
+server:
+  host: "0.0.0.0"
+  port: 8010
+```
+
+### 2. Create Custom Tools (Optional)
+
+Create `my_toolkit/` directory with `__init__.py` and your tool functions in script like  `your_tools.py`:
+
+```python
+# my_toolkit/__init__.py
+from .your_tools import calculate_square, greet_user
+
+# Agent will automatically discover these tools
+TOOLKIT_REGISTRY = {
+    "calculate_square": calculate_square,
+    "greet_user": greet_user
+}
+
+```
+
+implement your tools in `your_tools.py`:
+
+```python
+# my_toolkit/your_tools.py
+from xagent.utils.tool_decorator import function_tool
+
+@function_tool()
+def calculate_square(n: int) -> int:
+    """Calculate the square of a number."""
+    return n * n
+
+@function_tool()
+def greet_user(name: str) -> str:
+    """Greet a user by name."""
+    return f"Hello, {name}! Nice to meet you."
+
+```
+
+### 3. Start the Server
+
+```bash
+# Start the HTTP Agent Server
+xagent-server --config agent_config.yaml --toolkit my_toolkit
+
+# Server will be available at http://localhost:8010
+```
+
+### 4. Use the API
+
+```bash
+# Simple chat request
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user123",
+    "session_id": "session456",
+    "user_message": "Calculate the square of 15 and greet me as Alice"
+  }'
+
+# Streaming response
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user123",
+    "session_id": "session456",
+    "user_message": "Hello, how are you?",
+    "stream": true
+  }'
+```
+
+### 5. API Documentation
+
+Visit `http://localhost:8010/docs` for interactive API documentation.
+
+## 🤖 Advanced Usage: Agent Class
+
+For more control and customization, use the Agent class directly in your Python code.
+
+### Basic Agent Usage
+
+```python
+import asyncio
+from xagent.core import Agent, Session
+
+async def main():
+    # Create agent
+    agent = Agent(
+        name="my_assistant",
+        system_prompt="You are a helpful AI assistant.",
+        model="gpt-4.1-mini",
+        stream=False  # Set to True for streaming responses
+    )
+
+    # Create session for conversation management
+    session = Session(session_id="session456")
+
+    # Chat interaction
+    response = await agent.chat("Hello, how are you?", session)
+    print(response)
+
+    # Streaming response example
+    response = await agent.chat("Tell me a story", session, stream=True)
+    async for event in response:
+        print(event, end="")
+
+asyncio.run(main())
+```
+
+### Adding Custom Tools
+
+```python
+import asyncio
+import time
+import httpx
+from xagent.utils.tool_decorator import function_tool
+from xagent.core import Agent, Session
+
+# Sync tools - automatically converted to async
+@function_tool()
+def calculate_square(n: int) -> int:
+    """Calculate square of a number."""
+    time.sleep(0.1)  # Simulate CPU work
+    return n * n
+
+# Async tools - used directly for I/O operations
+@function_tool()
+async def fetch_weather(city: str) -> str:
+    """Fetch weather data from API."""
+    async with httpx.AsyncClient() as client:
+        await asyncio.sleep(0.5)  # Simulate API call
+        return f"Weather in {city}: 22°C, Sunny"
+
+async def main():
+    # Create agent with custom tools
+    agent = Agent(
+        tools=[calculate_square, fetch_weather],
+        model="gpt-4.1-mini"
+    )
+    
+    session = Session(user_id="user123")
+    
+    # Agent handles all tools automatically
+    response = await agent.chat(
+        "Calculate the square of 15 and get weather for Tokyo",
+        session
+    )
+    print(response)
+
+asyncio.run(main())
+```
+
+### Structured Outputs with Pydantic
+
+```python
+import asyncio
+from pydantic import BaseModel
+from xagent.core import Agent, Session
+
+class WeatherReport(BaseModel):
+    location: str
+    temperature: int
+    condition: str
+    humidity: int
+
+async def get_structured_response():
+    agent = Agent(model="gpt-4.1-mini")
+    session = Session(user_id="user123")
+    
+    # Request structured output
+    weather_data = await agent.chat(
+        "what's the weather like in Hangzhou?",
+        session,
+        output_type=WeatherReport
+    )
+    
+    print(f"Location: {weather_data.location}")
+    print(f"Temperature: {weather_data.temperature}°F")
+    print(f"Condition: {weather_data.condition}")
+
+asyncio.run(get_structured_response())
+```
+
+### Agent as Tool Pattern
+
+```python
+import asyncio
+from xagent.core import Agent, Session
+from xagent.db import MessageDB
+from xagent.tools import web_search
+
+async def agent_as_tool_example():
+    # Create specialized agents
+    researcher_agent = Agent(
+        name="research_specialist",
+        system_prompt="Research expert. Gather information and provide insights.",
+        model="gpt-4.1-mini",
+        tools=[web_search]
+    )
+    
+    # Convert agent to tool
+    message_db = MessageDB()
+    research_tool = researcher_agent.as_tool(
+        name="researcher",
+        description="Research topics and provide detailed analysis",
+        message_db=message_db
+    )
+    
+    # Main coordinator agent with specialist tools
+    coordinator = Agent(
+        name="coordinator",
+        tools=[research_tool],
+        system_prompt="Coordination agent that delegates to specialists.",
+        model="gpt-4.1"
+    )
+    
+    session = Session(user_id="user123")
+    
+    # Complex multi-step task
+    response = await coordinator.chat(
+        "Research renewable energy benefits and write a brief summary",
+        session
+    )
+    print(response)
+
+asyncio.run(agent_as_tool_example())
+```
+
+### Persistent Sessions with Redis
+
+```python
+import asyncio
+from xagent.core import Agent, Session
+from xagent.db import MessageDB
+
+async def chat_with_persistence():
+    # Initialize Redis-backed message storage
+    message_db = MessageDB()
+    
+    # Create agent
+    agent = Agent(
+        name="persistent_agent",
+        model="gpt-4.1-mini"
+    )
+
+    # Create session with Redis persistence
+    session = Session(
+        user_id="user123", 
+        session_id="persistent_session",
+        message_db=message_db
+    )
+
+    # Chat with automatic message persistence
+    response = await agent.chat("Remember this: my favorite color is blue", session)
+    print(response)
+    
+    # Later conversation - context is preserved in Redis
+    response = await agent.chat("What's my favorite color?", session)
+    print(response)
+
+asyncio.run(chat_with_persistence())
+```
+
+## 🎮 Full Project Experience
+
+If you want to experience the complete xAgent ecosystem with all features, clone the repository and use the provided scripts.
+
+### Clone the Repository
+
+```bash
+git clone https://github.com/ZJCODE/xAgent.git
+cd xAgent
+pip install -r requirements.txt
+```
+
+### Environment Setup
+
+```bash
+# Copy and edit environment file
+cp .env.example .env
+# Edit .env with your API keys
+```
+
+### Quick Start (All Services)
+
+```bash
+chmod +x run.sh
+./run.sh
+```
+
+This will start:
+- **HTTP Agent Server** (http://localhost:8010) - Standalone agent API
+- **MCP Server** (http://localhost:8001) - Model Context Protocol server
+- **Chat Interface** (http://localhost:8501) - Streamlit web interface
+
+### Manual Start (Individual Services)
+
+```bash
+# Terminal 1: Standalone HTTP Agent Server
+python xagent/core/server.py --config config/agent.yaml --toolkit toolkit
+
+# Terminal 2: MCP Server
+python toolkit/mcp_server.py
+
+# Terminal 3: Frontend
+streamlit run frontend/chat_app.py --server.port 8501
+```
+
+### Access Points
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| **Chat Interface** | http://localhost:8501 | Main user interface |
+| **API Docs** | http://localhost:8000/docs | Interactive API documentation |
+| **HTTP Agent Server** | http://localhost:8010/chat | Standalone agent HTTP API |
+| **Health Check** | http://localhost:8000/health | Service status monitoring |
 
 ## 🏗️ Architecture
 
@@ -97,481 +444,6 @@ xAgent/
 | **Tools** | Extensible function ecosystem | Auto sync-to-async conversion |
 | **MCP** | Dynamic tool loading protocol | HTTP client |
 
-## 🚀 Quick Start
-
-### Prerequisites
-
-| Requirement | Version | Purpose |
-|-------------|---------|---------|
-| **Python** | 3.12+ | Core runtime |
-| **Redis** | 7.0+ | Message persistence |
-| **OpenAI API Key** | - | AI model access |
-
-### Installation
-
-Clone and Setup
-```bash
-git clone https://github.com/ZJCODE/xAgent.git
-cd xAgent
-pip install -r requirements.txt
-```
-
-
-install by using pip
-```bash
-pip install myxagent
-```
-
-Environment Configuration
-```bash
-# Copy and edit environment file
-cp .env.example .env
-```
-
-Required variables
-```env
-OPENAI_API_KEY=your_openai_api_key
-```
-
-Optional variables
-```env
-REDIS_URL=your_redis_url_with_password
-
-LANGFUSE_SECRET_KEY=your_langfuse_key
-LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
-LANGFUSE_HOST=https://cloud.langfuse.com
-
-AWS_ACCESS_KEY_ID=your_aws_access_key_id
-AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
-AWS_REGION=us-east-1
-BUCKET_NAME=your_bucket_name
-```
-
-### Running the Application
-
-#### 🚀 Quick Start (All Services)
-
-```bash
-chmod +x run.sh
-./run.sh
-```
-
-#### ⚙️ Manual Start (Individual Services)
-
-```bash
-# Terminal 1: Standalone HTTP Agent Server
-python xagent/core/server.py --config config/agent.yaml --toolkit toolkit
-
-# Terminal 2: MCP Server
-python toolkit/mcp_server.py
-
-# Terminal 3: Frontend
-streamlit run frontend/chat_app.py --server.port 8501
-```
-
-
-### 🌐 Access Points
-
-| Service | URL | Description |
-|---------|-----|-------------|
-| **Chat Interface** | http://localhost:8501 | Main user interface |
-| **API Docs** | http://localhost:8000/docs | Interactive API documentation |
-| **Health Check** | http://localhost:8000/health | Service status monitoring |
-| **HTTP Agent Server** | http://localhost:8010/chat | Standalone agent HTTP API |
-
-## 💡 Usage Examples
-
-### 📘 Basic Chat
-
-```python
-import asyncio
-from xagent.core import Agent, Session
-from xagent.tools import web_search
-
-async def main():
-    # Create agent with modern architecture
-    agent = Agent(
-        name="my_assistant",
-        system_prompt="You are a helpful AI assistant.",
-        model="gpt-4.1-mini",
-        tools=[web_search]  # Add web search tool
-        stream=False  # Set to True for streaming responses
-    )
-
-    # Create session for conversation management
-    session = Session(session_id="session456")
-
-    # Chat interaction
-    response = await agent.chat("Hello, how are you?", session)
-    print(response)
-
-    # Continue conversation with context
-    response = await agent.chat("What's the weather like in Hangzhou?", session)
-    print(response)
-
-    # Streaming response example
-    response = await agent.chat("Hello, how are you?", session,stream=True)
-    async for event in response:
-        print(event)
-
-
-asyncio.run(main())
-```
-
-### 🗄️ Advanced Chat with Redis Persistence
-
-```python
-import asyncio
-from xagent.core import Agent, Session
-from xagent.db import MessageDB
-
-async def chat_with_persistence():
-    # Initialize Redis-backed message storage
-    message_db = MessageDB()
-    
-    # Create agent
-    agent = Agent(
-        name="persistent_agent",
-        model="gpt-4.1-mini",
-        tools=[]
-    )
-
-    # Create session with Redis persistence
-    session = Session(
-        user_id="user123", 
-        session_id="persistent_session",
-        message_db=message_db
-    )
-
-    # Chat with automatic message persistence
-    response = await agent.chat("Remember this: my favorite color is blue", session)
-    print(response)
-    
-    # Later conversation - context is preserved in Redis
-    response = await agent.chat("What's my favorite color?", session)
-    print(response)
-
-asyncio.run(chat_with_persistence())
-```
-
-### 🔧 Custom Tools (Sync and Async)
-
-```python
-import asyncio
-import time
-import httpx
-from xagent.utils.tool_decorator import function_tool
-from xagent.core import Agent, Session
-
-# Sync tools - automatically converted to async
-@function_tool()
-def calculate_square(n: int) -> int:
-    """Calculate square of a number (CPU-intensive)."""
-    time.sleep(0.1)  # Simulate CPU work
-    return n * n
-
-@function_tool()
-def format_text(text: str, style: str) -> str:
-    """Format text with various styles."""
-    if style == "upper":
-        return text.upper()
-    elif style == "title":
-        return text.title()
-    return text
-
-# Async tools - used directly for I/O operations
-@function_tool()
-async def fetch_weather(city: str) -> str:
-    """Fetch weather data from API."""
-    async with httpx.AsyncClient() as client:
-        # Simulate weather API call
-        await asyncio.sleep(0.5)
-        return f"Weather in {city}: 22°C, Sunny"
-
-async def main():
-    # Mix of sync and async tools
-    agent = Agent(
-        tools=[calculate_square, format_text, fetch_weather],
-        model="gpt-4.1-mini"
-    )
-    
-    session = Session(user_id="user123")
-    
-    # Agent handles all tools automatically - sync tools run in thread pool
-    response = await agent.chat(
-        "Calculate the square of 15, format 'hello world' in title case, and get weather for Tokyo",
-        session
-    )
-    print(response)
-
-asyncio.run(main())
-```
-
-### 🔧 MCP Protocol Integration
-
-```python
-import asyncio
-from xagent.core import Agent, Session
-
-async def mcp_integration_example():
-    # Create agent with MCP tools
-    agent = Agent(
-        tools=[],
-        mcp_servers=["http://localhost:8001/mcp/"],  # Auto-refresh MCP tools
-        model="gpt-4.1-mini"
-    )
-    
-    session = Session(user_id="user123")
-    
-    # Use MCP tools automatically
-    response = await agent.chat("Use the available MCP tools to help me", session)
-    print(response)
-
-asyncio.run(mcp_integration_example())
-```
-
-### 📊 Structured Output with Pydantic
-
-```python
-import asyncio
-from pydantic import BaseModel
-from xagent.core import Agent, Session
-from xagent.tools import web_search
-
-class WeatherReport(BaseModel):
-    location: str
-    temperature: int
-    condition: str
-    humidity: int
-
-class Step(BaseModel):
-    explanation: str
-    output: str
-
-class MathReasoning(BaseModel):
-    steps: list[Step]
-    final_answer: str
-
-async def get_structured_response():
-    agent = Agent(model="gpt-4.1-mini", tools=[web_search])
-    session = Session(user_id="user123")
-    
-    # Request structured output for weather
-    weather_data = await agent.chat(
-        "what's the weather like in Hangzhou?",
-        session,
-        output_type=WeatherReport
-    )
-    
-    print(f"Location: {weather_data.location}")
-    print(f"Temperature: {weather_data.temperature}°F")
-    print(f"Condition: {weather_data.condition}")
-    print(f"Humidity: {weather_data.humidity}%")
-
-    # Request structured output for mathematical reasoning
-    reply = await agent.chat(
-        "how can I solve 8x + 7 = -23", 
-        session, 
-        output_type=MathReasoning
-    )
-    for index, step in enumerate(reply.steps):
-        print(f"Step {index + 1}: {step.explanation} => Output: {step.output}")
-    print("Final Answer:", reply.final_answer)
-
-asyncio.run(get_structured_response())
-```
-
-### 🤖 Agent as Tool Pattern
-
-```python
-import asyncio
-from xagent.core import Agent, Session
-from xagent.db import MessageDB
-from xagent.tools import web_search
-
-async def agent_as_tool_example():
-    # Create specialized agents
-    researcher_agent = Agent(
-        name="research_specialist",
-        system_prompt="Research expert. Gather information and provide insights.",
-        model="gpt-4.1-mini",
-        tools=[web_search]
-    )
-    
-    writing_agent = Agent(
-        name="writing_specialist", 
-        system_prompt="Professional writer. Create engaging content.",
-        model="gpt-4.1-mini"
-    )
-    
-    # Convert agents to tools
-    message_db = MessageDB()
-    research_tool = researcher_agent.as_tool(
-        name="researcher",
-        description="Research topics and provide detailed analysis",
-        message_db=message_db
-    )
-    
-    writing_tool = writing_agent.as_tool(
-        name="content_writer",
-        description="Write and edit content",
-        message_db=message_db
-    )
-    
-    # Main coordinator agent with specialist tools
-    coordinator = Agent(
-        name="coordinator",
-        tools=[research_tool, writing_tool],
-        system_prompt="Coordination agent that delegates to specialists.",
-        model="gpt-4.1"
-    )
-    
-    session = Session(user_id="user123")
-    
-    # Complex multi-step task
-    response = await coordinator.chat(
-        "Research renewable energy benefits and write a brief summary",
-        session
-    )
-    print(response)
-
-asyncio.run(agent_as_tool_example())
-```
-
-## 🌐 HTTP Agent Server
-
-xAgent provides a standalone HTTP server that exposes the Agent functionality through REST API endpoints. This allows integration with other systems and services through simple HTTP calls.
-
-### 🚀 Starting the HTTP Server
-
-```bash
-# Start with default config
-python xagent/core/server.py --config config/agent.yaml --toolkit toolkit
-
-# Server will start on http://localhost:8010 by default
-```
-
-After installing the package, you can use the `xagent-server` command:
-```bash
-# Start the server using the installed command
-xagent-server --config /path/to/your/config.yaml --toolkit /path/to/your/toolkit
-```
-
-
-### 🏃 Programmatic Usage
-
-You can also start the HTTP Agent Server directly from Python:
-
-```python
-from xagent.core.server import HTTPAgentServer
-
-# Create and run the HTTP Agent Server
-server = HTTPAgentServer(config_path = "config/agent.yaml",toolkit_path = "toolkit")
-
-# Run the server
-server.run(host="0.0.0.0", port=8010)
-```
-
-### ⚙️ Configuration
-
-The HTTP server is configured through a YAML file (e.g., `config/agent.yaml`):
-
-```yaml
-agent:
-  name: "Agent"
-  system_prompt: |
-    You are a helpful assistant. Your task is to assist users with their queries and tasks.
-  model: "gpt-4.1-mini"
-  mcp_servers:
-    - "http://localhost:8001/mcp/"
-  tools:
-    - "web_search" # built-in web search tool
-    - "draw_image" # built-in image drawing tool
-    - "char_count" # custom tool for counting characters
-  use_local_session: false
-
-server:
-  host: "0.0.0.0"
-  port: 8010
-```
-
-### 📡 API Endpoints
-
-#### POST `/chat`
-
-Main chat endpoint for interacting with the AI agent.
-
-
-**Request Body:**
-```json
-{
-  "user_id": "string",      
-  "session_id": "string",   
-  "user_message": "string", 
-  "image_source": "string",
-  "stream": false
-}
-```
-
-- `image_source`: Image URL or base64 encoded image (Optional)
-- `stream`: Set to `true` to enable streaming response (Optional, defaults to `false`)
-
-**Standard Response (`stream: false`):**
-```json
-{
-  "reply": "string"
-}
-```
-
-**Streaming Response (`stream: true`):**
-
-The server will stream Server-Sent Events (SSE). Each event is a JSON object.
-
-- **Data Event:** `data: {"delta": "some text"}`
-- **Completion Event:** `data: [DONE]`
-
-### 💡 Usage Examples
-
-#### Basic Chat Request
-
-```bash
-curl -X POST "http://localhost:8010/chat" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user123",
-    "session_id": "session456",
-    "user_message": "Hello, how are you?"
-  }'
-```
-
-streaming response example:
-
-```bash
-curl -X POST "http://localhost:8010/chat" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user123",
-    "session_id": "session456",
-    "user_message": "Hello, how are you?",
-    "stream": true
-  }'
-```
-
-#### Chat with Image
-
-```bash
-curl -X POST "http://localhost:8010/chat" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user123",
-    "session_id": "session456", 
-    "user_message": "What do you see in this image?",
-    "image_source": "https://example.com/image.jpg"
-  }'
-```
-
-
-## 🔧 Development Guide
 
 ### 🛠️ Creating Tools
 
@@ -597,7 +469,7 @@ async def my_async_tool(input_text: str) -> str:
     return f"Async processed: {input_text}"
 ```
 
-###  📋 Tool Development Guidelines
+### 📋 Tool Development Guidelines
 
 | Use Case | Tool Type | Example |
 |----------|-----------|---------|
@@ -608,7 +480,7 @@ async def my_async_tool(input_text: str) -> str:
 
 > **⚠️ Note**: Recursive functions are not supported as tools due to potential stack overflow issues in async environments.
 
-###  🔄 Automatic Conversion
+### 🔄 Automatic Conversion
 
 xAgent's `@function_tool()` decorator automatically handles sync-to-async conversion:
 
@@ -630,7 +502,7 @@ def calculate_square(n: int) -> int:
 
 ### Core Classes
 
-🤖 Agent
+#### 🤖 Agent
 
 Main AI agent class for handling conversations and tool execution.
 
@@ -658,8 +530,7 @@ Agent(
 - `tools`: List of function tools
 - `mcp_servers`: MCP server URLs for dynamic tool loading
 
-
-💬 Session
+#### 💬 Session
 
 Manages conversation history and persistence with operations.
 
@@ -677,14 +548,7 @@ Session(
 - `async clear_session() -> None`: Clear conversation history
 - `async pop_message() -> Optional[Message]`: Remove last non-tool message
 
-**Features:**
-- Automatic fallback to in-memory storage if no MessageDB provided
-- Redis-backed persistence for production use
-- Thread-safe operations
-- Efficient message batching
-
-
-🗄️ MessageDB
+#### 🗄️ MessageDB
 
 Redis-backed message persistence layer.
 
@@ -698,7 +562,6 @@ session = Session(
     message_db=message_db
 )
 ```
-
 
 ### Important Considerations
 
@@ -757,7 +620,6 @@ rm -rf dist/ build/ *.egg-info/
 python -m build
 twine upload dist/*
 ```
-
 
 ## 📄 License
 
