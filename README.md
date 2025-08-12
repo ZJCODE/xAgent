@@ -195,17 +195,14 @@ xAgent provides a powerful command-line interface for quick interactions and tes
 # Interactive chat mode with streaming (default)
 xagent-cli
 
+# Use custom configuration
+xagent-cli chat --config my_config.yaml --toolkit my_toolkit --user_id developer --session_id session123 --verbose
+
 # Ask a single question (non-streaming by default)
 xagent-cli ask "What is the capital of France?"
 
 # Ask with streaming enabled
 xagent-cli ask "Tell me a story about AI" --stream
-
-# Use custom configuration
-xagent-cli chat --config my_config.yaml --toolkit my_toolkit --user_id developer --session_id session123 --verbose
-
-# Interactive chat without streaming
-xagent-cli chat --no-stream
 
 ```
 
