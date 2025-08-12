@@ -201,60 +201,12 @@ xagent-cli ask "What is the capital of France?"
 # Ask with streaming enabled
 xagent-cli ask "Tell me a story about AI" --stream
 
+# Use custom configuration
+xagent-cli chat --config my_config.yaml --toolkit my_toolkit --user_id developer --session_id session123 --verbose
+
 # Interactive chat without streaming
 xagent-cli chat --no-stream
 
-# Use custom configuration
-xagent-cli chat --config my_config.yaml --user_id developer
-
-# With verbose logging
-xagent-cli ask "What is 2+2?" --verbose
-```
-
-### 🌊 Streaming Support
-
-The CLI features **intelligent streaming** that provides real-time responses as the AI generates them, creating a more natural conversation flow.
-
-#### Interactive Chat Streaming
-
-Interactive chat mode enables streaming by default for the best user experience:
-
-```bash
-$ xagent-cli chat
-🤖 Welcome to xAgent CLI!
-Agent: Agent
-Model: gpt-4.1-mini
-Tools: 3 loaded
-Session: cli_session_abc123
-Streaming: Enabled
-Type 'stream on/off' to toggle streaming mode.
---------------------------------------------------
-
-👤 You: Tell me about machine learning
-🤖 Agent: Machine learning is a subset of artificial intelligence...
-[Response streams in real-time, character by character]
-
-👤 You: stream off
-📄 Streaming mode disabled.
-
-👤 You: What is deep learning?
-🤖 Agent: Deep learning is a specialized subset of machine learning...
-[Full response appears at once]
-
-👤 You: stream on
-🌊 Streaming mode enabled.
-```
-
-#### Single Question Streaming
-
-For single questions, streaming is disabled by default but can be enabled:
-
-```bash
-# Non-streaming (default for single questions)
-xagent-cli ask "Explain quantum computing"
-
-# With streaming enabled
-xagent-cli ask "Write a poem about technology" --stream
 ```
 
 #### Streaming Control Commands
@@ -299,18 +251,6 @@ Type 'help' for available commands.
 👋 Goodbye!
 ```
 
-### Single Question Mode
-
-Perfect for quick queries or integration with scripts:
-
-```bash
-# Simple question
-xagent-cli ask "What is 2+2?"
-
-# With custom session
-xagent-cli ask "Tell me a joke" --user_id user123 --session_id session456
-```
-
 ### CLI Commands Reference
 
 | Command | Description | Example |
@@ -332,42 +272,6 @@ xagent-cli ask "Tell me a joke" --user_id user123 --session_id session456
 | `--verbose`, `-v` | Enable verbose logging | `False` |
 | `--no-stream` | Disable streaming (chat mode only) | `False` |
 | `--stream` | Enable streaming (ask mode only) | `False` |
-
-### 🚀 Why Use Streaming?
-
-Streaming provides several advantages for CLI interactions:
-
-| Benefit | Description |
-|---------|-------------|
-| **🕐 Real-time Feedback** | See responses as they're generated, no waiting for completion |
-| **⚡ Perceived Speed** | Interactions feel faster and more responsive |
-| **🎯 Early Insights** | Start reading responses before the AI finishes generating |
-| **💻 Better UX** | More natural conversation flow, especially for long responses |
-| **🔄 Interruptible** | Can stop reading early if you get what you need |
-
-### 📝 Streaming Examples
-
-```bash
-# Story generation with streaming - see the story unfold in real-time
-xagent-cli ask "Write a short story about a robot learning to paint" --stream
-
-# Technical explanation with streaming - start understanding concepts immediately  
-xagent-cli ask "Explain machine learning algorithms in detail" --stream
-
-# Interactive conversation with dynamic streaming control
-xagent-cli chat
-👤 You: stream off
-📄 Streaming mode disabled.
-👤 You: What is Python?
-🤖 Agent: [Complete response appears instantly]
-
-👤 You: stream on  
-🌊 Streaming mode enabled.
-👤 You: Tell me about advanced Python features
-🤖 Agent: [Response streams character by character]
-```
-
-For detailed CLI documentation, see [CLI Usage Guide](docs/CLI_USAGE.md).
 
 ## 🤖 Advanced Usage: Agent Class
 
