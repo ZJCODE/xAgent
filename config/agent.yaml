@@ -9,7 +9,7 @@ agent:
     - "web_search" # built-in web search tool
     - "draw_image" # built-in image drawing tool
     - "char_count" # custom tool for counting characters
-  use_local_session: false
+  use_local_session: true
 
 server:
   host: "0.0.0.0"

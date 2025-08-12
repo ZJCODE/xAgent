@@ -40,6 +40,7 @@ dependencies = [
 
 [project.scripts]
 xagent-server = "xagent.core.server:main"
+xagent-cli = "xagent.core.cli:main"
 
 [project.urls]
 Repository = "https://github.com/ZJCODE/xagent"

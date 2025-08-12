@@ -14,6 +14,7 @@ xAgent provides a complete AI assistant experience with text and image processin
 
 - [🚀 Installation & Setup](#-installation--setup)
 - [🌐 Quick Start: HTTP Agent Server](#-quick-start-http-agent-server)
+- [💻 Command Line Interface (CLI)](#-command-line-interface-cli)
 - [🤖 Advanced Usage: Agent Class](#-advanced-usage-agent-class)
 - [🎮 Full Project Experience](#-full-project-experience)
 - [🏗️ Architecture](#%EF%B8%8F-architecture)
@@ -183,6 +184,81 @@ curl -X POST "http://localhost:8010/chat" \
 ### 5. API Documentation
 
 Visit `http://localhost:8010/docs` for interactive API documentation.
+
+## 💻 Command Line Interface (CLI)
+
+xAgent provides a powerful command-line interface for quick interactions and testing. The CLI supports both single-question mode and interactive chat sessions.
+
+### Quick Start
+
+```bash
+# Interactive chat mode (default)
+xagent-cli
+
+# Ask a single question
+xagent-cli ask "What is the capital of France?"
+
+# Use custom configuration
+xagent-cli chat --config my_config.yaml --user_id developer
+```
+
+### Interactive Chat Mode
+
+Start a continuous conversation with the agent:
+
+```bash
+$ xagent-cli chat
+🤖 Welcome to xAgent CLI!
+Agent: Agent
+Model: gpt-4.1-mini
+Tools: 3 loaded
+Session: cli_session_abc123
+Type 'exit', 'quit', or 'bye' to end the session.
+--------------------------------------------------
+
+👤 You: Hello, how are you?
+🤖 Agent: Hello! I'm doing well, thank you for asking...
+
+👤 You: help
+📋 Available commands:
+  exit, quit, bye  - Exit the chat session
+  clear           - Clear session history
+  help            - Show this help message
+
+👤 You: exit
+👋 Goodbye!
+```
+
+### Single Question Mode
+
+Perfect for quick queries or integration with scripts:
+
+```bash
+# Simple question
+xagent-cli ask "What is 2+2?"
+
+# With custom session
+xagent-cli ask "Tell me a joke" --user_id user123 --session_id session456
+```
+
+### CLI Commands Reference
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `xagent-cli` | Start interactive chat (default) | `xagent-cli` |
+| `xagent-cli chat` | Start interactive chat explicitly | `xagent-cli chat --config my_config.yaml` |
+| `xagent-cli ask <message>` | Ask single question | `xagent-cli ask "Hello world"` |
+
+### CLI Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--config` | Configuration file path | `config/agent.yaml` |
+| `--toolkit_path` | Custom toolkit directory | `toolkit` |
+| `--user_id` | User identifier | Auto-generated |
+| `--session_id` | Session identifier | Auto-generated |
+
+For detailed CLI documentation, see [CLI Usage Guide](docs/CLI_USAGE.md).
 
 ## 🤖 Advanced Usage: Agent Class
 
