@@ -198,22 +198,10 @@ xagent-cli
 # Use custom configuration
 xagent-cli chat --config my_config.yaml --toolkit my_toolkit --user_id developer --session_id session123 --verbose
 
-# Ask a single question (non-streaming by default)
+# Ask a single question (non-streaming)
 xagent-cli ask "What is the capital of France?"
 
-# Ask with streaming enabled
-xagent-cli ask "Tell me a story about AI" --stream
-
 ```
-
-#### Streaming Control Commands
-
-During interactive chat sessions, you can control streaming behavior:
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `stream on` | Enable streaming mode | Creates real-time response flow |
-| `stream off` | Disable streaming mode | Shows complete response at once |
 
 ### Interactive Chat Mode
 
@@ -256,7 +244,6 @@ Type 'help' for available commands.
 | `xagent-cli chat` | Start interactive chat explicitly | `xagent-cli chat --config my_config.yaml` |
 | `xagent-cli chat --no-stream` | Start interactive chat without streaming | `xagent-cli chat --no-stream` |
 | `xagent-cli ask <message>` | Ask single question (non-streaming) | `xagent-cli ask "Hello world"` |
-| `xagent-cli ask <message> --stream` | Ask single question with streaming | `xagent-cli ask "Tell me a story" --stream` |
 
 ### CLI Options
 
@@ -268,7 +255,6 @@ Type 'help' for available commands.
 | `--session_id` | Session identifier | Auto-generated |
 | `--verbose`, `-v` | Enable verbose logging | `False` |
 | `--no-stream` | Disable streaming (chat mode only) | `False` |
-| `--stream` | Enable streaming (ask mode only) | `False` |
 
 ## 🤖 Advanced Usage: Agent Class
 

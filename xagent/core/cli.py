@@ -273,7 +273,7 @@ class CLIAgent:
             except Exception as e:
                 print(f"\n❌ Error: {e}")
     
-    async def chat_single(self, message: str, user_id: str = None, session_id: str = None, stream: bool = False):
+    async def chat_single(self, message: str, user_id: str = None, session_id: str = None):
         """
         Process a single message and return the response.
         
@@ -281,10 +281,9 @@ class CLIAgent:
             message: The message to process
             user_id: User ID for the session
             session_id: Session ID for the chat
-            stream: Enable streaming response (default: False for single messages)
             
         Returns:
-            Agent response (string for non-streaming, async generator for streaming)
+            Agent response string
         """
         # Generate default IDs if not provided
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
@@ -299,7 +298,7 @@ class CLIAgent:
         response = await self.agent(
             user_message=message,
             session=session,
-            stream=stream
+            stream=False
         )
         
         return response
@@ -397,7 +396,6 @@ def main():
     single_parser.add_argument("--user_id", help="User ID for the session")
     single_parser.add_argument("--session_id", help="Session ID for the chat")
     single_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    single_parser.add_argument("--stream", action="store_true", help="Enable streaming response (default: disabled for single messages)")
     
     # Init command to create default config
     init_parser = subparsers.add_parser("init", help="Create default configuration file")
@@ -437,20 +435,9 @@ def main():
             response = asyncio.run(cli_agent.chat_single(
                 message=args.message,
                 user_id=args.user_id,
-                session_id=args.session_id,
-                stream=getattr(args, 'stream', False)
+                session_id=args.session_id
             ))
-            
-            # Handle streaming response for ask command
-            if getattr(args, 'stream', False) and hasattr(response, '__aiter__'):
-                async def print_stream():
-                    async for chunk in response:
-                        if chunk:
-                            print(chunk, end="", flush=True)
-                    print()  # Add newline after streaming is complete
-                asyncio.run(print_stream())
-            else:
-                print(response)
+            print(response)
         else:
             parser.print_help()
             
