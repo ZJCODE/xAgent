@@ -229,8 +229,6 @@ class CLIAgent:
                     continue
                 
                 # Process the message
-                print("🤖 Agent: ", end="", flush=True)
-                
                 if stream:
                     # Handle streaming response
                     response_generator = await self.agent(
@@ -241,13 +239,14 @@ class CLIAgent:
                     
                     # Check if response is a generator (streaming) or a string
                     if hasattr(response_generator, '__aiter__'):
+                        print("🤖 Agent: ", end="", flush=True)
                         async for chunk in response_generator:
                             if chunk:
                                 print(chunk, end="", flush=True)
                         print()  # Add newline after streaming is complete
                     else:
                         # Fallback for non-streaming response
-                        print(response_generator)
+                        print("🤖 Agent: " + str(response_generator))
                 else:
                     # Handle non-streaming response
                     response = await self.agent(
@@ -255,7 +254,7 @@ class CLIAgent:
                         session=session,
                         stream=False
                     )
-                    print(response)
+                    print("🤖 Agent: " + str(response))
                 
             except KeyboardInterrupt:
                 print("\n\n👋 Session interrupted. Goodbye!")
