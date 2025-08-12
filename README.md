@@ -92,6 +92,16 @@ server:
   port: 8010
 ```
 
+you can also add `mcp_servers` like this if you want to use MCP (Model Context Protocol) for dynamic tool loading:
+
+```yaml
+agent:
+  ...
+  mcp_servers:
+    - "http://localhost:8001/mcp/"
+  ...
+```
+
 ### 2. Create Custom Tools (Optional)
 
 Create `my_toolkit/` directory with `__init__.py` and your tool functions in script like  `your_tools.py`:
