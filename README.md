@@ -254,6 +254,7 @@ asyncio.run(main())
 import asyncio
 from pydantic import BaseModel
 from xagent.core import Agent, Session
+from xagent.tools import web_search
 
 class WeatherReport(BaseModel):
     location: str
@@ -262,7 +263,7 @@ class WeatherReport(BaseModel):
     humidity: int
 
 async def get_structured_response():
-    agent = Agent(model="gpt-4.1-mini")
+    agent = Agent(model="gpt-4.1-mini", tools=[web_search])
     session = Session(user_id="user123")
     
     # Request structured output
@@ -275,6 +276,7 @@ async def get_structured_response():
     print(f"Location: {weather_data.location}")
     print(f"Temperature: {weather_data.temperature}°F")
     print(f"Condition: {weather_data.condition}")
+    print(f"Humidity: {weather_data.humidity}%")
 
 asyncio.run(get_structured_response())
 ```
