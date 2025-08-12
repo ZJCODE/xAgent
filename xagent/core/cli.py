@@ -8,12 +8,11 @@ from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 import importlib.util
 import sys
-import json
 
-from xagent.core.agent import Agent
-from xagent.core.session import Session
-from xagent.db.message import MessageDB
-from xagent.tools import TOOL_REGISTRY
+from ..core.agent import Agent
+from ..core.session import Session
+from ..db.message import MessageDB
+from ..tools import TOOL_REGISTRY
 
 
 class CLIAgent:
@@ -356,7 +355,7 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
             "name": "Agent",
             "system_prompt": "You are a helpful assistant. Your task is to assist users with their queries and tasks.",
             "model": "gpt-4o-mini",
-            "tools": [],
+            "tools": ["web_search"],
             "use_local_session": True
         },
         "server": {

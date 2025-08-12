@@ -1,8 +1,8 @@
 import logging
 from typing import List, Optional
 
-from xagent.schemas import Message
-from xagent.db import MessageDB
+from ..schemas import Message
+from ..db import MessageDB
 
 class Session:
     """

@@ -11,11 +11,10 @@ import sys
 import json
 from fastapi.responses import StreamingResponse
 
-from xagent.core.agent import Agent
-from xagent.core.session import Session
-from xagent.db.message import MessageDB
-from xagent.tools import TOOL_REGISTRY
-
+from ..core.agent import Agent
+from ..core.session import Session
+from ..db.message import MessageDB
+from ..tools import TOOL_REGISTRY
 
 class AgentInput(BaseModel):
     """Request body for chat endpoint."""
