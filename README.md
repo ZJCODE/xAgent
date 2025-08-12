@@ -84,7 +84,7 @@ agent:
   model: "gpt-4.1-mini"
   tools:
     - "web_search"  # Built-in web search
-    - "draw_image"  # Built-in image generation
+    - "draw_image"  # Built-in image generation (need set AWS credentials in .env)
     - "calculate_square"  # Custom tool from my_toolkit
 
 server:
