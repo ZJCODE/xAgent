@@ -67,7 +67,6 @@ class BaseAgentRunner:
             "agent": {
                 "name": "Agent",
                 "system_prompt": "You are a helpful assistant. Your task is to assist users with their queries and tasks.",
-                "description": "A general-purpose agent for various tasks.",  # used in tool conversion, describes what the Agent does
                 "model": "gpt-4o-mini",
                 "tools": ["web_search"],  # No default tools, can be added via toolkit or config
                 "use_local_session": True
@@ -133,13 +132,30 @@ class BaseAgentRunner:
         combined_registry: Dict[str, Any] = {**TOOL_REGISTRY, **toolkit_registry}
         tools = [combined_registry[name] for name in tool_names if name in combined_registry]
         
+        # Process sub_agents configuration
+        sub_agents = None
+        if "sub_agents" in agent_cfg:
+            sub_agents = []
+            for agent_config in agent_cfg["sub_agents"]:
+                if isinstance(agent_config, dict):
+                    # Convert dict to tuple format
+                    sub_agents.append((
+                        agent_config.get("name", ""),
+                        agent_config.get("description", ""),
+                        agent_config.get("server_url", "")
+                    ))
+                elif isinstance(agent_config, (list, tuple)) and len(agent_config) == 3:
+                    # Already in tuple format
+                    sub_agents.append(tuple(agent_config))
+        
+
         return Agent(
             name=agent_cfg.get("name"),
             system_prompt=agent_cfg.get("system_prompt"),
-            description=agent_cfg.get("description"),
             model=agent_cfg.get("model"),
             tools=tools,
             mcp_servers=agent_cfg.get("mcp_servers"),
+            sub_agents=sub_agents,
         )
     
     def _initialize_message_db(self) -> Optional[MessageDB]:

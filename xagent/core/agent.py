@@ -53,7 +53,7 @@ class Agent:
         "- Handle multi-step reasoning and break down complex problems\n"
         "- Be concise yet informative in your responses\n"
         "- When uncertain, ask clarifying questions\n"
-        "- Acknowledge when a request is beyond your capabilities\n"
+        "- Acknowledge when a request is beyond your capabilities\n\n\n"
     )
 
 
@@ -82,6 +82,9 @@ class Agent:
         self.agent_tools = self._convert_sub_agents_to_tools(sub_agents)
         self._register_tools(self.agent_tools)
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.info("sub_agents: %s",sub_agents)
+        if self.agent_tools:
+            self.logger.info("Registered agent tools: %s", [tool.tool_spec['name'] for tool in self.agent_tools])
 
     async def __call__(
             self,
@@ -424,11 +427,9 @@ class Agent:
         将 HTTP Agent 转换为 OpenAI 工具函数。
         
         Args:
-            server: HTTP Agent 服务器地址，例如 "http://localhost:8010"
+            server: HTTP Agent 服务器地址，例如 "http://localhost:8011"
             name: 工具名称
             description: 工具描述
-            user_id: 用户ID，默认生成一个UUID
-            session_id: 会话ID，默认生成一个UUID
         """
         @function_tool(name=name, description=description)
         async def tool_func(input: str, image_source: Optional[str] = None):
@@ -451,17 +452,73 @@ class Agent:
             if image_source:
                 request_body["image_source"] = image_source
             
+            # 构建完整的请求URL
+            chat_url = f"{server}/chat"
+            
+            # 添加详细日志
+            self.logger.info(f"Calling HTTP Agent at: {chat_url}")
+            self.logger.debug(f"Request body: {request_body}")
+
             try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(f"{server}/chat", json=request_body)
+                async with httpx.AsyncClient(timeout=60.0) as client:  # 增加超时时间
+                    response = await client.post(chat_url, json=request_body)
+                    
+                    self.logger.debug(f"HTTP response status: {response.status_code}")
+                    
                     if response.status_code == 200:
-                        response_data = response.json()
-                        return response_data.get("reply", "No reply received")
+                        try:
+                            response_data = response.json()
+                            reply = response_data.get("reply", "")
+                            
+                            if reply:
+                                self.logger.info(f"HTTP Agent '{name}' responded successfully")
+                                return reply
+                            else:
+                                error_msg = "Empty reply from HTTP Agent"
+                                self.logger.warning(error_msg)
+                                return error_msg
+                                
+                        except json.JSONDecodeError as e:
+                            error_msg = f"Invalid JSON response from HTTP Agent: {str(e)}"
+                            self.logger.error(f"{error_msg}. Response text: {response.text[:200]}...")
+                            return error_msg
+                            
+                    elif response.status_code == 500:
+                        # 处理服务器内部错误
+                        try:
+                            error_data = response.json()
+                            error_detail = error_data.get("detail", "Internal server error")
+                            error_msg = f"HTTP Agent internal error: {error_detail}"
+                        except:
+                            error_msg = f"HTTP Agent internal error: {response.text[:200]}"
+                        
+                        self.logger.error(error_msg)
+                        return error_msg
+                        
                     else:
-                        return f"HTTP Error {response.status_code}: {response.text}"
+                        # 处理其他HTTP错误
+                        error_msg = f"HTTP Agent error {response.status_code}: {response.text[:200]}"
+                        self.logger.error(error_msg)
+                        return error_msg
+                        
+            except httpx.ConnectError as e:
+                error_msg = f"Cannot connect to HTTP Agent at {chat_url}: {str(e)}"
+                self.logger.error(error_msg)
+                return error_msg
+                
+            except httpx.TimeoutException as e:
+                error_msg = f"HTTP Agent request timeout: {str(e)}"
+                self.logger.error(error_msg)
+                return error_msg
+                
             except httpx.RequestError as e:
-                return f"Connection Error: {str(e)}"
+                error_msg = f"HTTP Agent request error: {str(e)}"
+                self.logger.error(error_msg)
+                return error_msg
+                
             except Exception as e:
-                return f"Unexpected Error: {str(e)}"
+                error_msg = f"Unexpected error calling HTTP Agent: {str(e)}"
+                self.logger.exception(error_msg)
+                return error_msg
         
         return tool_func

@@ -1,0 +1,14 @@
+agent:
+  name: "Research Agent"
+  system_prompt: |
+    You are a research expert. Gather information by using web search, analyze data, and provide well-researched insights.
+  model: "gpt-4.1-mini"
+  mcp_servers:
+    - "http://localhost:8002/mcp/"
+  tools:
+    - "web_search" # built-in web search tool
+  use_local_session: true
+
+server:
+  host: "0.0.0.0"
+  port: 8011
