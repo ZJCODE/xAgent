@@ -268,12 +268,12 @@ curl http://localhost:8012/health
 
 # Now you can chat with the coordinator agent through its API
 curl -X POST "http://localhost:8010/chat" \
-  -H "Content-Type: application/json
-    -d '{
-        "user_id": "user123",
-        "session_id": "session456",
-        "user_message": "Research the lastest advancements in AI and write a summary."
-    }'
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user123",
+    "session_id": "session456",
+    "user_message": "Research the latest advancements in AI and write a summary."
+  }'
 ```
 
 ## 🌐 Web Interface
