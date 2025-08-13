@@ -2,7 +2,7 @@ import base64
 import tempfile
 import os
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, List
 
 load_dotenv(override=True)
 
@@ -36,9 +36,9 @@ async def web_search(search_query: str) -> str:
 
 @function_tool()
 @observe()
-async def draw_image(prompt: str, reference_image_source: Optional[str]) -> str:
+async def draw_image(prompt: str, reference_image_source: Optional[List[str]|str] = None) -> str:
     """
-    when the user wants to generate an image based on a prompt, use this tool,if user mentioned an image, use it as reference
+    when the user wants to generate an image based on a prompt, use this tool,if user mentioned some images, use them as reference
     """
 
     clean_prompt = (prompt or "").strip()
@@ -46,15 +46,18 @@ async def draw_image(prompt: str, reference_image_source: Optional[str]) -> str:
         return ""
     
     if reference_image_source:
+        if isinstance(reference_image_source, str):
+            reference_image_source = [reference_image_source]
+            
+        content = [{"type": "input_text", "text": clean_prompt}]
+        for img_url in reference_image_source:
+            content.append({
+                "type": "input_image",
+                "image_url": img_url,
+            })
         input = [{
             "role": "user",
-            "content": [
-                {"type": "input_text", "text": clean_prompt},
-                {
-                    "type": "input_image",
-                    "image_url": reference_image_source,
-                },
-            ]
+            "content": content
         }]
     else:
         input = [{

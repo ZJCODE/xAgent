@@ -1,9 +1,28 @@
 import inspect
 import functools
-from typing import get_type_hints
+from typing import get_type_hints, get_origin, get_args, Union
+import sys
 
 def python_type_to_openai_type(py_type):
-    # 只支持基础类型
+    # 处理 Optional 类型 (Optional[T] 等价于 Union[T, None])
+    if get_origin(py_type) is Union:
+        args = get_args(py_type)
+        # 如果是 Optional 类型，去掉 None 后处理
+        if len(args) == 2 and type(None) in args:
+            non_none_type = args[0] if args[1] is type(None) else args[1]
+            return python_type_to_openai_type(non_none_type)
+        # 处理联合类型，选择第一个类型作为主要类型
+        return python_type_to_openai_type(args[0])
+    
+    # 处理泛型 List
+    if get_origin(py_type) is list:
+        args = get_args(py_type)
+        if args:
+            item_type = python_type_to_openai_type(args[0])
+            return {"type": "array", "items": item_type}
+        return {"type": "array", "items": {"type": "string"}}
+    
+    # 基础类型处理
     if py_type is int:
         return {"type": "integer"}
     if py_type is float:
@@ -16,6 +35,12 @@ def python_type_to_openai_type(py_type):
         return {"type": "array", "items": {"type": "string"}}
     if py_type is dict:
         return {"type": "object"}
+    
+    # Python 3.10+ 的联合类型语法 (X | Y)
+    if sys.version_info >= (3, 10) and hasattr(py_type, '__class__') and py_type.__class__.__name__ == 'UnionType':
+        args = py_type.__args__
+        return python_type_to_openai_type(args[0])
+    
     return {"type": "string"}
 
 def function_tool(name: str = None, description: str = None):
