@@ -1,5 +1,5 @@
 import time
-from typing import Optional, AsyncGenerator
+from typing import Optional, AsyncGenerator, Union
 import json
 import logging
 import asyncio
@@ -7,6 +7,8 @@ import uuid
 from enum import Enum
 from dotenv import load_dotenv
 from pydantic import BaseModel
+import httpx
+from typing import List
 
 
 # 日志系统初始化（只需一次）
@@ -59,13 +61,16 @@ class Agent:
         self, 
         name: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        description: Optional[str] = None, # simple description of the agent for tool conversion , what the Agent does
         model: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[list] = None,
-        mcp_servers: Optional[str | list] = None
+        mcp_servers: Optional[Union[str, list]] = None,
+        sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None # (name, description, server_url) or Agent instances
     ):
         self.name: str = name or self.DEFAULT_NAME
         self.system_prompt: str = self.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
+        self.description: str = description
         self.model: str = model or self.DEFAULT_MODEL
         self.client: AsyncOpenAI = client or AsyncOpenAI()
         self.tools: dict = {}
@@ -74,8 +79,9 @@ class Agent:
         self.mcp_tools: dict = {}
         self.mcp_tools_last_updated: Optional[float] = None
         self.mcp_cache_ttl: int = 300  # 5 minutes
+        self.agent_tools = self._convert_sub_agents_to_tools(sub_agents)
+        self._register_tools(self.agent_tools)
         self.logger = logging.getLogger(self.__class__.__name__)
-
 
     async def __call__(
             self,
@@ -177,7 +183,7 @@ class Agent:
         """
         将 Agent 实例转换为 OpenAI 工具函数。
         """
-        @function_tool(name=name or self.name, description=description or self.system_prompt)
+        @function_tool(name=name or self.name, description=description or self.description)
         async def tool_func(input: str):
             return await self.chat(user_message=input, 
                                    session=Session(user_id=f"agent_{self.name}_as_tool", 
@@ -186,6 +192,22 @@ class Agent:
                                                    ))
         return tool_func
 
+    def _convert_sub_agents_to_tools(self, sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]]) -> Optional[list]:
+        """
+        将子 Agent 列表转换为工具函数列表。
+        """
+        tools = []
+        for item in sub_agents or []:
+            if isinstance(item, tuple) and len(item) == 3:
+                name, description, server = item
+                tool = self._convert_http_agent_to_tool(server=server, name=name, description=description)
+                tools.append(tool)
+            elif isinstance(item, Agent):
+                tool = item.as_tool()
+                tools.append(tool)
+            else:
+                self.logger.warning(f"Invalid sub_agent type: {type(item)}. Must be tuple[name, description, server_url] or Agent instance.")
+        return tools if tools else None
 
     def _register_tools(self, tools: Optional[list]) -> None:
         """
@@ -198,7 +220,7 @@ class Agent:
                 self.tools[fn.tool_spec['name']] = fn
 
     @observe()
-    async def _register_mcp_servers(self, mcp_servers: Optional[str | list]) -> None:
+    async def _register_mcp_servers(self, mcp_servers: Optional[Union[str, list]]) -> None:
         """
         注册 MCP 服务器地址。
         """
@@ -395,3 +417,51 @@ class Agent:
         while input_messages and input_messages[0].get("type") == "function_call_output":
             input_messages.pop(0)
         return input_messages
+    
+
+    def _convert_http_agent_to_tool(self, server: str, name: str = None, description: str = None):
+        """
+        将 HTTP Agent 转换为 OpenAI 工具函数。
+        
+        Args:
+            server: HTTP Agent 服务器地址，例如 "http://localhost:8010"
+            name: 工具名称
+            description: 工具描述
+            user_id: 用户ID，默认生成一个UUID
+            session_id: 会话ID，默认生成一个UUID
+        """
+        @function_tool(name=name, description=description)
+        async def tool_func(input: str, image_source: Optional[str] = None):
+            """
+            通过 HTTP 请求调用 Agent 的 chat 方法。
+            
+            Args:
+                input: 用户输入消息
+                image_source: 可选的图片源（URL、文件路径或base64字符串）
+            """
+            # 构建请求体，遵循 AgentInput 模型格式
+            request_body = {
+                "user_id": f"http_tool_{uuid.uuid4().hex[:8]}",
+                "session_id": f"session_{uuid.uuid4().hex[:8]}",
+                "user_message": input,
+                "stream": False  # 工具调用不使用流式响应
+            }
+            
+            # 如果提供了图片源，添加到请求体中
+            if image_source:
+                request_body["image_source"] = image_source
+            
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(f"{server}/chat", json=request_body)
+                    if response.status_code == 200:
+                        response_data = response.json()
+                        return response_data.get("reply", "No reply received")
+                    else:
+                        return f"HTTP Error {response.status_code}: {response.text}"
+            except httpx.RequestError as e:
+                return f"Connection Error: {str(e)}"
+            except Exception as e:
+                return f"Unexpected Error: {str(e)}"
+        
+        return tool_func

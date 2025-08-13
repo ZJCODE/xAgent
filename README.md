@@ -152,7 +152,7 @@ def greet_user(name: str) -> str:
 xagent-server
 
 # With custom configuration and toolkit
-xagent-server --config agent_config.yaml --toolkit my_toolkit
+xagent-server --config agent_config.yaml --toolkit_path my_toolkit
 
 # Server will be available at http://localhost:8010
 ```
@@ -195,7 +195,7 @@ xAgent provides a powerful command-line interface for quick interactions and tes
 xagent-cli
 
 # Use custom configuration
-xagent-cli chat --config my_config.yaml --toolkit my_toolkit --user_id developer --session_id session123 --verbose
+xagent-cli chat --config my_config.yaml --toolkit_path my_toolkit --user_id developer --session_id session123 --verbose
 
 # Ask a single question (non-streaming)
 xagent-cli ask "What is the capital of France?"

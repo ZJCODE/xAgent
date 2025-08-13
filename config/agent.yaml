@@ -2,6 +2,7 @@ agent:
   name: "Agent"
   system_prompt: |
     You are a helpful assistant. Your task is to assist users with their queries and tasks.
+  description: "A general-purpose agent for various tasks." # used in tool conversion, describes what the Agent does
   model: "gpt-4.1-mini"
   mcp_servers:
     - "http://localhost:8001/mcp/"
