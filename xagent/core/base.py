@@ -68,7 +68,10 @@ class BaseAgentRunner:
                 "name": "Agent",
                 "system_prompt": "You are a helpful assistant. Your task is to assist users with their queries and tasks.",
                 "model": "gpt-4o-mini",
-                "tools": ["web_search"],  # No default tools, can be added via toolkit or config
+                "capabilities": {
+                    "tools": ["web_search"],  # Default tools
+                    "mcp_servers": []  # Default MCP servers
+                },
                 "use_local_session": True
             },
             "server": {
@@ -127,7 +130,16 @@ class BaseAgentRunner:
         agent_cfg = self.config.get("agent", {})
         
         # Load tools from built-in registry and optional toolkit registry
-        tool_names = agent_cfg.get("tools", [])
+        capabilities = agent_cfg.get("capabilities", {})
+        tool_names = capabilities.get("tools", [])
+        mcp_servers = capabilities.get("mcp_servers", [])
+        
+        # Support legacy format for backward compatibility
+        if "tools" in agent_cfg and "tools" not in capabilities:
+            tool_names = agent_cfg.get("tools", [])
+        if "mcp_servers" in agent_cfg and "mcp_servers" not in capabilities:
+            mcp_servers = agent_cfg.get("mcp_servers", [])
+        
         toolkit_registry = self._load_toolkit_registry(self.toolkit_path)
         combined_registry: Dict[str, Any] = {**TOOL_REGISTRY, **toolkit_registry}
         tools = [combined_registry[name] for name in tool_names if name in combined_registry]
@@ -154,7 +166,7 @@ class BaseAgentRunner:
             system_prompt=agent_cfg.get("system_prompt"),
             model=agent_cfg.get("model"),
             tools=tools,
-            mcp_servers=agent_cfg.get("mcp_servers"),
+            mcp_servers=mcp_servers,
             sub_agents=sub_agents,
         )
     

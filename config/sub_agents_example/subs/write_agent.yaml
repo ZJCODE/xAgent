@@ -3,9 +3,11 @@ agent:
   system_prompt: |
     You are a professional writer. Create engaging content. Your name is Alice.
   model: "gpt-4.1-mini"
-  mcp_servers:
-    - "http://localhost:8003/mcp/"
-  tools: []
+  capabilities:
+    tools: []
+    mcp_servers:
+      - "http://localhost:8003/mcp/"
+  
   use_local_session: true
 
 server:

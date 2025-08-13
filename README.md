@@ -82,11 +82,12 @@ agent:
   system_prompt: |
     You are a helpful assistant. Your task is to assist users with their queries and tasks.
   model: "gpt-4.1-mini"
-  tools:
-    - "web_search"  # Built-in web search
-    - "draw_image"  # Built-in image generation (need set AWS credentials in .env)
-    - "calculate_square"  # Custom tool from my_toolkit
-
+  capabilities:
+    tools:
+      - "web_search"  # Built-in web search
+      - "draw_image"  # Built-in image generation (need set AWS credentials in .env)
+      - "calculate_square"  # Custom tool from my_toolkit
+      
 server:
   host: "0.0.0.0"
   port: 8010
@@ -97,8 +98,9 @@ you can also add `mcp_servers` if you want to use MCP (Model Context Protocol) f
 ```yaml
 agent:
   ...
-  mcp_servers:
-    - "http://localhost:8001/mcp/"
+  capabilities:
+    mcp_servers:
+      - "http://localhost:8001/mcp/"  # MCP server URL
   ...
 ```
 
@@ -198,10 +200,11 @@ agent:
     right specialist (research_specialist for information gathering, 
     writing_specialist for writing), and synthesize results into coherent outputs.
   model: "gpt-4.1"
-  mcp_servers:
-    - "http://localhost:8001/mcp/"
-  tools:
-    - "char_count"  # Custom toolkit tools
+  capabilities:
+    tools:
+      - "char_count"  # Custom toolkit tools
+    mcp_servers:
+      - "http://localhost:8001/mcp/"
   sub_agents:
     - name: "research_agent"
       description: "Research-focused agent for information gathering and analysis"
@@ -224,10 +227,11 @@ agent:
     You are a research expert. Gather information by using web search, 
     analyze data, and provide well-researched insights.
   model: "gpt-4.1-mini"
-  mcp_servers:
-    - "http://localhost:8002/mcp/"
-  tools:
-    - "web_search"  # Built-in web search
+  capabilities:
+    tools:
+      - "web_search"  # Built-in web search
+    mcp_servers:
+      - "http://localhost:8002/mcp/"
   use_local_session: true
 
 server:
@@ -243,7 +247,9 @@ agent:
     You are a professional writer. Create engaging content, 
     edit text, and ensure high-quality written outputs.
   model: "gpt-4.1-mini"
-  tools: []  # No additional tools needed
+  capabilities:
+    tools: []  # No additional tools needed
+    mcp_servers: [] 
   use_local_session: true
 
 server:
