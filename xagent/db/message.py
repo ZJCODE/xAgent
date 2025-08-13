@@ -13,26 +13,28 @@ logger = logging.getLogger(__name__)
 
 class MessageDB:
     """
-    MessageDB
-    -------------------
-    以Redis为后端存储所有消息历史
+    Stores all message history using Redis as the backend.
 
-    所有消息历史都以统一前缀（chat:）隔离，支持多 session，支持消息裁剪和过期。
-    主要功能：
-    - 按用户/会话存储消息历史
-    - 支持消息追加、获取、裁剪、设置过期
-    - Redis key 统一封装，便于维护
+    All message histories are isolated with a unified prefix (chat:), support multiple sessions, and allow message trimming and expiration.
+    Main features:
+    - Store message history by user/session
+    - Support message append, retrieval, trimming, and expiration
+    - Unified Redis key encapsulation for easier maintenance
     """
     MSG_PREFIX: Final[str] = "chat"
     DEFAULT_TTL: Final[int] = 2592000  # 30 days
 
     def __init__(self, redis_url: str = None, *, sanitize_keys: bool = False):
         """
-        初始化 MessageDB 实例，连接 Redis。
+        Initialize MessageDB instance and connect to Redis.
+        
         Args:
-            redis_url (str, optional): Redis 连接 URL。优先使用参数，否则读取环境变量 REDIS_URL。
+            redis_url (str, optional): Redis connection URL. Uses parameter first, 
+                otherwise reads from REDIS_URL environment variable.
+            sanitize_keys (bool, optional): Whether to URL-encode keys for safety. Defaults to False.
+        
         Raises:
-            ValueError: 未提供 Redis 连接信息。
+            ValueError: Redis connection information not provided.
         """
         url = redis_url or os.environ.get("REDIS_URL")
         if not url:
@@ -42,9 +44,17 @@ class MessageDB:
         self._sanitize_keys = sanitize_keys
 
     async def _get_client(self) -> redis.Redis:
-        """Get or create async Redis client with sane defaults."""
+        """
+        Get or create async Redis client with sane defaults.
+        
+        Returns:
+            redis.Redis: Configured Redis client instance.
+            
+        Raises:
+            Exception: If Redis connection fails during initial ping.
+        """
         if self.r is None:
-            # 采用合理的连接参数，提升稳定性与鲁棒性
+            # Use reasonable connection parameters to improve stability and robustness
             self.r = redis.Redis.from_url(
                 self.redis_url,
                 decode_responses=True,
@@ -63,12 +73,14 @@ class MessageDB:
 
     def _make_key(self, user_id: str, session_id: Optional[str] = None) -> str:
         """
-        生成 Redis key。
+        Generate Redis key.
+        
         Args:
-            user_id (str): 用户 ID。
-            session_id (str, optional): 会话 ID。
+            user_id (str): User ID.
+            session_id (str, optional): Session ID.
+            
         Returns:
-            str: Redis key，格式为 'chat:<user_id>' 或 'chat:<user_id>:<session_id>'。
+            str: Redis key in format 'chat:<user_id>' or 'chat:<user_id>:<session_id>'.
         """
         if self._sanitize_keys:
             user_id = quote(user_id, safe="-._~")
@@ -90,14 +102,19 @@ class MessageDB:
         reset_ttl: bool = True,
     ) -> None:
         """
-        向消息历史追加一条或多条消息，并设置过期时间。
+        Append one or more messages to message history and set expiration time.
+        
         Args:
-            user_id (str): 用户 ID。
-            messages (Message | List[Message]): 消息对象或消息对象列表。
-            session_id (str, optional): 会话 ID。
-            ttl (int): 过期时间（秒），默认 30 天。
-            max_len (Optional[int]): 若提供，则在追加后裁剪历史到该最大长度。
-            reset_ttl (bool): 是否刷新过期时间（滑动过期）。默认 True。
+            user_id (str): User ID.
+            messages (Message | List[Message]): Message object or list of message objects.
+            session_id (str, optional): Session ID.
+            ttl (int): Expiration time in seconds, defaults to 30 days.
+            max_len (Optional[int]): If provided, trim history to this maximum length after appending.
+            reset_ttl (bool): Whether to refresh expiration time (sliding expiration). Defaults to True.
+            
+        Raises:
+            ValueError: If ttl or max_len are invalid.
+            RedisError: If Redis operation fails.
         """
         if ttl is not None and ttl <= 0:
             raise ValueError("ttl must be a positive integer when provided")
@@ -112,7 +129,7 @@ class MessageDB:
         if not messages:
             return
 
-        # 使用 pipeline 合并多次往返，并保持逻辑上的原子性顺序
+        # Use pipeline to batch multiple round trips and maintain atomicity
         try:
             async with client.pipeline(transaction=False) as pipe:
                 pipe.rpush(key, *(m.model_dump_json() for m in messages))
@@ -128,13 +145,18 @@ class MessageDB:
 
     async def get_messages(self, user_id: str, session_id: Optional[str] = None, count: int = 20) -> List[Message]:
         """
-        获取消息历史，按倒序获取最近 count 条。
+        Get message history, retrieving the most recent `count` messages in reverse order.
+        
         Args:
-            user_id (str): 用户 ID。
-            session_id (str, optional): 会话 ID。
-            count (int): 获取条数，默认 20。
+            user_id (str): User ID.
+            session_id (str, optional): Session ID.
+            count (int): Number of messages to retrieve, defaults to 20.
+            
         Returns:
-            List[Message]: 消息对象列表，按时间正序排列。
+            List[Message]: List of message objects, sorted in chronological order.
+            
+        Raises:
+            RedisError: If Redis operation fails.
         """
         if count <= 0:
             return []
@@ -152,7 +174,7 @@ class MessageDB:
             try:
                 messages.append(Message.model_validate_json(m))
             except Exception as e:
-                # 控制日志尺寸，避免打印超长字符串
+                # Control log size to avoid printing overly long strings
                 preview = m[:120] + ("..." if len(m) > 120 else "")
                 logger.warning(
                     "Skip invalid message at index %d for key %s: %s | payload preview=%r",
@@ -162,11 +184,16 @@ class MessageDB:
 
     async def trim_history(self, user_id: str, session_id: Optional[str] = None, max_len: int = 200) -> None:
         """
-        裁剪消息历史，只保留最近 max_len 条。
+        Trim message history, keeping only the most recent `max_len` messages.
+        
         Args:
-            user_id (str): 用户 ID。
-            session_id (str, optional): 会话 ID。
-            max_len (int): 最大保留条数，默认 200。
+            user_id (str): User ID.
+            session_id (str, optional): Session ID.
+            max_len (int): Maximum number of messages to retain, defaults to 200.
+            
+        Raises:
+            ValueError: If max_len is not positive.
+            RedisError: If Redis operation fails.
         """
         if max_len <= 0:
             raise ValueError("max_len must be a positive integer")
@@ -181,11 +208,16 @@ class MessageDB:
 
     async def set_expire(self, user_id: str, session_id: Optional[str] = None, ttl: int = 2592000) -> None:
         """
-        设置消息历史的过期时间。
+        Set expiration time for message history.
+        
         Args:
-            user_id (str): 用户 ID。
-            session_id (str, optional): 会话 ID。
-            ttl (int): 过期时间（秒），默认 30 天。
+            user_id (str): User ID.
+            session_id (str, optional): Session ID.
+            ttl (int): Expiration time in seconds, defaults to 30 days.
+            
+        Raises:
+            ValueError: If ttl is not positive.
+            RedisError: If Redis operation fails.
         """
         if ttl <= 0:
             raise ValueError("ttl must be a positive integer")
@@ -200,10 +232,14 @@ class MessageDB:
 
     async def clear_history(self, user_id: str, session_id: Optional[str] = None) -> None:
         """
-        清空消息历史。
+        Clear message history.
+        
         Args:
-            user_id (str): 用户 ID。
-            session_id (str, optional): 会话 ID。
+            user_id (str): User ID.
+            session_id (str, optional): Session ID.
+            
+        Raises:
+            RedisError: If Redis operation fails.
         """
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
@@ -215,12 +251,18 @@ class MessageDB:
 
     async def pop_message(self, user_id: str, session_id: Optional[str] = None) -> Optional[Message]:
         """
-        移除并返回最后一条非 tool_result 消息。如果最后一条消息是 tool_result，则自动继续 pop，直到遇到非 tool_result 或为空。
+        Remove and return the last non-tool_result message. If the last message is a tool_result,
+        automatically continue popping until a non-tool_result message is found or the list is empty.
+        
         Args:
-            user_id (str): 用户 ID。
-            session_id (str, optional): 会话 ID。
+            user_id (str): User ID.
+            session_id (str, optional): Session ID.
+            
         Returns:
-            Optional[Message]: 被移除的消息对象（非 tool_result），如果没有则返回 None。
+            Optional[Message]: The removed message object (non-tool_result), or None if empty.
+            
+        Raises:
+            RedisError: If Redis operation fails.
         """
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
@@ -240,12 +282,12 @@ class MessageDB:
             except Exception as e:
                 preview = raw_msg[:120] + ("..." if len(raw_msg) > 120 else "")
                 logger.warning("Skip invalid popped message for key %s: %s | payload preview=%r", key, e, preview)
-                # 继续尝试下一条
+                # Continue to next message if this is a tool_result
                 continue
 
             if not msg.tool_call:
                 return msg
-            # 若为 tool_result，继续循环
+            # If it's a tool_result, continue the loop
 
     async def close(self) -> None:
         """Close the Redis connection."""
@@ -256,8 +298,10 @@ class MessageDB:
                 self.r = None
 
     async def __aenter__(self):
+        """Async context manager entry."""
         await self._get_client()
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
+        """Async context manager exit."""
         await self.close()
