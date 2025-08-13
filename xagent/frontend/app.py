@@ -202,7 +202,7 @@ def main():
         
         # 服务器配置
         st.subheader("Agent 服务器设置")
-        agent_server_url = st.text_input("Agent 服务器地址", value=st.session_state.agent_server_url, key="agent_server_url_input")
+        agent_server_url = st.text_input("Agent 服务器地址", value=st.session_state.agent_server_url)
         
         # 检查服务器连接状态
         if st.session_state.http_client:
@@ -213,8 +213,8 @@ def main():
         
         # 用户配置
         st.subheader("用户设置")
-        user_id = st.text_input("用户ID", value=st.session_state.user_id, key="user_id_input")
-        session_id = st.text_input("会话ID (可选)", value=st.session_state.session_id or "", key="session_id_input")
+        user_id = st.text_input("用户ID", value=st.session_state.user_id)
+        session_id = st.text_input("会话ID (可选)", value=st.session_state.session_id or "")
         
         # 新增：图片上传模块显示控制
         st.subheader("界面设置")
