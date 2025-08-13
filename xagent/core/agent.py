@@ -1,5 +1,5 @@
 import time
-from typing import Optional, AsyncGenerator, Union
+from typing import Optional, AsyncGenerator, Union, List
 import json
 import logging
 import asyncio
@@ -8,14 +8,6 @@ from enum import Enum
 from dotenv import load_dotenv
 from pydantic import BaseModel
 import httpx
-from typing import List
-
-
-# 日志系统初始化（只需一次）
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
 
 from langfuse import observe
 from langfuse.openai import AsyncOpenAI
@@ -28,6 +20,12 @@ from ..utils.mcp_convertor import MCPTool
 
 load_dotenv(override=True)
 
+# Initialize logging(only needs to be done once)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+
 class ReplyType(Enum):
     SIMPLE_REPLY = "simple_reply"
     STRUCTURED_REPLY = "structured_reply"
@@ -36,7 +34,7 @@ class ReplyType(Enum):
 
 class Agent:
     """
-    基础 Agent 类，支持与 OpenAI 模型交互。
+    Base class for creating an AI agent that can interact with users, manage tools, and handle multi-step reasoning.
     """
 
     DEFAULT_NAME = "default_agent"
@@ -68,6 +66,22 @@ class Agent:
         mcp_servers: Optional[Union[str, list]] = None,
         sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None # (name, description, server_url) or Agent instances
     ):
+        """
+        Initialize the Agent with optional parameters.
+        Args:
+            name (Optional[str]): The name of the agent.
+            system_prompt (Optional[str]): Custom system prompt to prepend to the default.
+            description (Optional[str]): Simple description of the agent for tool conversion.
+            model (Optional[str]): The OpenAI model to use, defaults to DEFAULT_MODEL.
+            client (Optional[AsyncOpenAI]): Custom OpenAI client instance, defaults to a new AsyncOpenAI instance.
+            tools (Optional[list]): List of tool functions to register with the agent.
+            mcp_servers (Optional[Union[str, list]]): MCP server URLs to fetch tools from.
+            sub_agents (Optional[List[Union[tuple[str, str, str], 'Agent']]]): List of sub-agents to convert to tools.
+
+        Initializes the agent with a name, system prompt, description, model, and tools.
+        If no name is provided, it defaults to "default_agent". The system prompt is a combination of a default prompt and any custom prompt provided.
+        The agent can also register tools, fetch tools from MCP servers, and convert sub-agents into tools.
+        """
         self.name: str = name or self.DEFAULT_NAME
         self.system_prompt: str = self.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
         self.description: str = description
@@ -97,18 +111,7 @@ class Agent:
             stream=False
     ) -> str | BaseModel | AsyncGenerator[str, None]:
         """
-        Generate a reply from the agent given a user message and session.
-
-        Args:
-            user_message (Message | str): The latest user message.
-            session (Session): The session object managing message history.
-            history_count (int, optional): Number of previous messages to include. Defaults to 20.
-            max_iter (int, optional): Maximum model call attempts. Defaults to 10.
-            image_source (Optional[str], optional): Source of the image, if any can be a URL or File path or base64 string.
-            output_type (type[BaseModel], optional): Pydantic model for structured output.
-
-        Returns:
-            str | BaseModel: The agent's reply or error message.
+        Call the agent to generate a reply based on the user message and session.
         """
         return await self.chat(
             user_message=user_message,
@@ -144,7 +147,7 @@ class Agent:
             stream (bool, optional): Whether to stream the response. Defaults to False.
 
         Returns:
-            str | BaseModel: The agent's reply or error message.
+            str | BaseModel | AsyncGenerator[str, None]: The agent's reply or error message.
         """
 
         try:
@@ -184,7 +187,13 @@ class Agent:
 
     def as_tool(self,name: str = None, description: str = None,message_db: Optional[MessageDB] = None):
         """
-        将 Agent 实例转换为 OpenAI 工具函数。
+        Convert the agent into an OpenAI tool function.
+        Args:
+            name (str): The name of the tool function.
+            description (str): A brief description of what the tool does.
+            message_db (Optional[MessageDB]): Optional message database for storing messages.
+        Returns:
+            function: An asynchronous function that can be used as an OpenAI tool.
         """
         @function_tool(name=name or self.name, description=description or self.description)
         async def tool_func(simple_input: str, shared_context: Optional[str] = None, image_source: Optional[str] = None):
@@ -198,7 +207,12 @@ class Agent:
 
     def _convert_sub_agents_to_tools(self, sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]]) -> Optional[list]:
         """
-        将子 Agent 列表转换为工具函数列表。
+        Convert sub-agents into OpenAI tool functions.
+        Args:
+            sub_agents (Optional[List[Union[tuple[str, str, str], 'Agent']]]): List of sub-agents to convert.
+            Each item can be a tuple (name, description, server_url) or an Agent instance.
+        Returns:
+            Optional[list]: List of tool functions converted from sub-agents.
         """
         tools = []
         for item in sub_agents or []:
@@ -215,7 +229,10 @@ class Agent:
 
     def _register_tools(self, tools: Optional[list]) -> None:
         """
-        注册工具函数，确保每个工具是异步的且唯一。
+        Register tool functions with the agent.
+        Ensures each tool function is asynchronous and unique.
+        Args:
+            tools (Optional[list]): List of tool functions to register.
         """
         for fn in tools or []:
             if not asyncio.iscoroutinefunction(fn):
@@ -226,7 +243,9 @@ class Agent:
     @observe()
     async def _register_mcp_servers(self, mcp_servers: Optional[Union[str, list]]) -> None:
         """
-        注册 MCP 服务器地址。
+        Register tools from MCP servers, updating the local cache if needed.
+        Args:
+            mcp_servers (Optional[Union[str, list]]): MCP server URLs to fetch tools from.
         """
         now = time.time()
         if self.mcp_tools_last_updated and (now - self.mcp_tools_last_updated) < self.mcp_cache_ttl:
@@ -263,7 +282,14 @@ class Agent:
     async def _call_model(self, input_msgs: list, session: Session, 
                           output_type: type[BaseModel] = None, stream: bool = False) -> tuple[ReplyType, object]:
         """
-        调用大模型，返回响应对象或 None。
+        Call the AI model with the provided input messages and session.
+        Args:
+            input_msgs (list): List of input messages to send to the model.
+            session (Session): The session object managing message history.
+            output_type (type[BaseModel], optional): Pydantic model for structured output.
+            stream (bool, optional): Whether to stream the response. Defaults to False.
+        Returns:
+            tuple[ReplyType, object]: A tuple containing the reply type and the response object.
         """
         system_msg = {
             "role": "system",
@@ -351,7 +377,13 @@ class Agent:
     @observe()
     async def _handle_tool_calls(self, tool_calls: list, session: Session, input_messages: list) -> None:
         """
-        异步并发处理所有 tool_call，返回特殊结果（如图片）或 None。
+        Handle tool calls by executing them concurrently.
+        Args:
+            tool_calls (list): List of tool call messages to process.
+            session (Session): The session object managing message history.
+            input_messages (list): List of input messages to update with tool call results.
+        Returns:
+            None: This method modifies input_messages in place and does not return a value.
         """
 
         if tool_calls is None or not tool_calls:
@@ -367,8 +399,12 @@ class Agent:
 
     async def _act(self, tool_call, session: Session) -> Optional[list]:
         """
-        异步执行工具函数调用，并将结果写入 session。
-        返回工具调用和结果消息的列表。
+        Execute a single tool call and return the messages generated by the tool.
+        Args:
+            tool_call: The tool call message to process.
+            session (Session): The session object managing message history.
+        Returns:
+            Optional[list]: A list of messages generated by the tool call, or None if the tool is not found or an error occurs.
         """
         name = getattr(tool_call, "name", None)
         try:
@@ -416,7 +452,11 @@ class Agent:
     @staticmethod
     def _sanitize_input_messages(input_messages: list) -> list:
         """
-        清理输入消息列表，确保其不以 'function_call_output' 类型的消息开头。
+        Checks if the first message is a function call output and removes it if so.
+        Args:
+            input_messages (list): List of input messages to sanitize.
+        Returns:
+            list: Sanitized list of input messages with no leading function call outputs.
         """
         while input_messages and input_messages[0].get("type") == "function_call_output":
             input_messages.pop(0)
@@ -425,23 +465,16 @@ class Agent:
 
     def _convert_http_agent_to_tool(self, server: str, name: str = None, description: str = None):
         """
-        将 HTTP Agent 转换为 OpenAI 工具函数。
-        
+        Convert an HTTP-based agent into an OpenAI tool function.
         Args:
-            server: HTTP Agent 服务器地址，例如 "http://localhost:8011"
-            name: 工具名称
-            description: 工具描述
+            server (str): The URL of the HTTP agent server.
+            name (str): The name of the tool function.
+            description (str): A brief description of what the tool does.
+        Returns:
+            function: An asynchronous function that can be used as an OpenAI tool.
         """
         @function_tool(name=name, description=description)
         async def tool_func(simple_input: str, shared_context: Optional[str] = None, image_source: Optional[str] = None):
-            """
-            通过 HTTP 请求调用 Agent 的 chat 方法。
-            
-            Args:
-                input: 用户输入消息
-                image_source: 可选的图片源（URL、文件路径或base64字符串）
-            """
-            # 构建请求体，遵循 AgentInput 模型格式
             request_body = {
                 "user_id": f"http_tool_{uuid.uuid4().hex[:8]}",
                 "session_id": f"session_{uuid.uuid4().hex[:8]}",
@@ -449,14 +482,11 @@ class Agent:
                 "stream": False  # 工具调用不使用流式响应
             }
             
-            # 如果提供了图片源，添加到请求体中
             if image_source:
                 request_body["image_source"] = image_source
             
-            # 构建完整的请求URL
             chat_url = f"{server}/chat"
             
-            # 添加详细日志
             self.logger.info(f"Calling HTTP Agent at: {chat_url}")
             self.logger.debug(f"Request body: {request_body}")
 
@@ -485,7 +515,6 @@ class Agent:
                             return error_msg
                             
                     elif response.status_code == 500:
-                        # 处理服务器内部错误
                         try:
                             error_data = response.json()
                             error_detail = error_data.get("detail", "Internal server error")
@@ -497,7 +526,6 @@ class Agent:
                         return error_msg
                         
                     else:
-                        # 处理其他HTTP错误
                         error_msg = f"HTTP Agent error {response.status_code}: {response.text[:200]}"
                         self.logger.error(error_msg)
                         return error_msg

@@ -6,8 +6,7 @@ from ..db import MessageDB
 
 class Session:
     """
-    管理单个会话的消息历史。
-    支持本地内存和 Redis 存储。
+    Session class to manage user sessions and message history.
     """
     _local_messages = {}  # {(user_id, session_id): [Message, ...]}
 
@@ -27,7 +26,9 @@ class Session:
 
     async def add_messages(self, messages: Message | List[Message]) -> None:
         """
-        支持添加单个 Message 或多个 Message（List[Message]）。
+        Add messages to the session history.
+        Args:
+            messages: A single Message object or a list of Message objects to add.
         """
         try:
             if not isinstance(messages, list):
@@ -46,6 +47,13 @@ class Session:
             self.logger.error("Failed to add messages: %s", e)
 
     async def get_messages(self, count: int = 20) -> List[Message]:
+        """
+        Get the last `count` messages from the session history.
+        Args:
+            count: Number of messages to retrieve (default is 20).
+        Returns:
+            List[Message]: List of Message objects from the session history.
+        """
         try:
             if self.message_db:
                 self.logger.info("Fetching last %d messages from DB", count)
@@ -58,6 +66,10 @@ class Session:
             return []
 
     async def clear_session(self) -> None:
+        """
+        Clear the session history.
+        This will remove all messages from the session.
+        """
         try:
             if self.message_db:
                 self.logger.info("Clearing history in DB")
@@ -71,9 +83,12 @@ class Session:
 
     async def pop_message(self) -> Optional[Message]:
         """
-        移除并返回最后一条非 tool_result 消息（支持撤销/修改最后一条消息）。
+        Pop the last message from the session history.
+        This will remove the last message from the session and return it.
+        If the last message is a tool result, it will continue popping until a non-tool result message is found.
+        If no such message exists, it returns None.
         Returns:
-            Optional[Message]: 被移除的消息对象（非 tool_result），如果没有则返回 None。
+            Optional[Message]: The last non-tool result message or None if no such message exists.
         """
         try:
             if self.message_db:
