@@ -82,6 +82,7 @@ agent:
   system_prompt: |
     You are a helpful assistant. Your task is to assist users with their queries and tasks.
   model: "gpt-4.1-mini"
+
   capabilities:
     tools:
       - "web_search"  # Built-in web search
@@ -204,6 +205,7 @@ agent:
     - Maintain a friendly and professional tone while ensuring efficiency in task delegation.  
     - Your goal is to act as the central hub, ensuring each request is handled by the most capable resource.  
   model: "gpt-4.1"
+
   capabilities:
     tools:
       - "char_count" # 自定义工具示例
@@ -217,6 +219,7 @@ agent:
     - name: "write_agent"
       description: "Expert agent for writing tasks, including content creation and editing"
       server_url: "http://localhost:8012"
+
   use_local_session: true
 
 server:
@@ -237,6 +240,7 @@ agent:
     - When applicable, compare multiple sources to ensure accuracy.  
     - If information is uncertain or unavailable, state this transparently.  
   model: "gpt-4.1-mini"
+
   capabilities:
     tools:
       - "web_search" # built-in web search tool
@@ -263,6 +267,7 @@ agent:
     - Organize ideas logically and maintain a smooth flow.  
     - Revise and refine content for maximum impact and readability.  
   model: "gpt-4.1-mini"
+  
   capabilities:
     tools: []
     mcp_servers:
