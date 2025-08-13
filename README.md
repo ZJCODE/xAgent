@@ -14,6 +14,7 @@ xAgent provides a complete AI assistant experience with text and image processin
 
 - [🚀 Installation & Setup](#-installation--setup)
 - [🌐 Quick Start: HTTP Agent Server](#-quick-start-http-agent-server)
+- [🌐 Web Interface](#-web-interface)
 - [💻 Command Line Interface (CLI)](#-command-line-interface-cli)
 - [🤖 Advanced Usage: Agent Class](#-advanced-usage-agent-class)
 - [🏗️ Architecture](#%EF%B8%8F-architecture)
@@ -182,6 +183,50 @@ curl -X POST "http://localhost:8010/chat" \
 ### 5. API Documentation
 
 Visit `http://localhost:8010/docs` for interactive API documentation.
+
+## 🌐 Web Interface
+
+xAgent provides a user-friendly Streamlit web interface for interactive conversations with your AI agent.
+
+### Launch Web Interface
+
+```bash
+# Start the web interface with default settings
+xagent-web
+
+# With custom agent server URL
+xagent-web --agent-server http://localhost:8010
+
+# With custom host and port
+xagent-web --host 0.0.0.0 --port 8501 --agent-server http://localhost:8010
+```
+
+### Web Interface Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--agent-server` | URL of the xAgent server | `http://localhost:8010` |
+| `--host` | Host address for Streamlit server | `0.0.0.0` |
+| `--port` | Port for Streamlit server | `8501` |
+
+### Complete Web Setup Example
+
+```bash
+# Terminal 1: Start the agent server
+xagent-server --config agent_config.yaml --toolkit_path my_toolkit
+
+# Terminal 2: Start the web interface
+xagent-web --agent-server http://localhost:8010
+
+# Access the web interface at http://localhost:8501
+```
+
+The web interface provides:
+- 💬 **Interactive Chat** - Real-time conversations with your agent
+- 🖼️ **Image Support** - Upload and process images
+- 📝 **Session Management** - Persistent conversation history
+- ⚙️ **Configuration** - Easy agent settings management
+- 📊 **Tool Execution** - Visual feedback for tool usage
 
 ## 💻 Command Line Interface (CLI)
 
@@ -441,15 +486,6 @@ async def chat_with_persistence():
 asyncio.run(chat_with_persistence())
 ```
 
-### Access Points
-
-| Service | URL | Description |
-|---------|-----|-------------|
-| **Chat Interface** | http://localhost:8501 | Main user interface |
-| **API Docs** | http://localhost:8000/docs | Interactive API documentation |
-| **HTTP Agent Server** | http://localhost:8010/chat | Standalone agent HTTP API |
-| **Health Check** | http://localhost:8000/health | Service status monitoring |
-
 ## 🏗️ Architecture
 
 **Modern Design for High Performance**
@@ -457,38 +493,45 @@ asyncio.run(chat_with_persistence())
 ```
 xAgent/
 ├── 🤖 xagent/                # Core async agent framework
+│   ├── __init__.py           # Package initialization and exports
+│   ├── __version__.py        # Version information
 │   ├── core/                 # Agent and session management
+│   │   ├── __init__.py       # Core exports (Agent, Session, HTTPAgentServer)
 │   │   ├── agent.py          # Main Agent class with chat
 │   │   ├── session.py        # Session management with operations
-│   │   └── server.py         # Standalone HTTP Agent Server
+│   │   ├── server.py         # Standalone HTTP Agent Server
+│   │   ├── cli.py            # Command line interface
+│   │   └── base.py           # Base classes and utilities
 │   ├── db/                   # Database layer (Redis)
+│   │   ├── __init__.py       # Database exports
 │   │   └── message.py        # Message persistence
 │   ├── schemas/              # Data models and types (Pydantic)
+│   │   ├── __init__.py       # Schema exports
 │   │   └── message.py        # Message and ToolCall models
 │   ├── tools/                # Tool ecosystem
 │   │   ├── __init__.py       # Tool registry (web_search, draw_image)
 │   │   ├── openai_tool.py    # OpenAI tool integrations
 │   │   └── mcp_demo/         # MCP demo server and client
-│   └── utils/                # Utility functions
-│       ├── tool_decorator.py # Tool decorators
-│       ├── mcp_convertor.py  # MCP client
-│       └── image_upload.py   # AWS S3 image upload utility
+│   ├── utils/                # Utility functions
+│   ├── multi/                # Multi-agent support
+│   │   ├── __init__.py       # Multi-agent exports
+│   │   ├── swarm.py          # Agent swarm coordination
+│   │   └── workflow.py       # Workflow management
+│   └── frontend/             # Web interface components
+│       ├── app.py            # Streamlit chat application
+│       └── launcher.py       # Web interface launcher
 ├── 🛠️ toolkit/               # Custom tool ecosystem
 │   ├── __init__.py           # Toolkit registry
 │   ├── tools.py              # Custom tools (char_count)
 │   ├── mcp_server.py         # Main MCP server
-│   └── vocabulary/           # Vocabulary learning system
 ├── ⚙️ config/                # Configuration files
-│   └── agent.yaml            # Agent server configuration
-├── 🎨 frontend/              # Streamlit web interface  
-│   └── chat_app.py           # Main chat application
+│   ├── agent.yaml            # Agent server configuration
+│   └── sub_agents_example/   # Sub-agent configuration examples
 ├── 📝 examples/              # Usage examples and demos
-│   ├── basic_chat.py         # Basic agent usage
-│   ├── stream_chat.py        # Streaming response example
-│   ├── cli_streaming_guide.py # Complete CLI streaming guide
-│   └── streaming_cli_usage.py # CLI usage patterns
-└── 🧪 tests/                 # Comprehensive test suite
+├── 🧪 tests/                 # Comprehensive test suite
+├── 📁 logs/                  # Log files
 ```
+
 
 ### 🔄 Core Components
 
