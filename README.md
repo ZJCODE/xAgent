@@ -497,6 +497,14 @@ asyncio.run(main())
 
 ### Structured Outputs with Pydantic
 
+With Pydantic structured outputs, you can:
+
+	•	Parse and validate an agent’s response into typed data
+	•	Easily extract specific fields
+	•	Ensure the response matches the expected format
+	•	Guarantee type safety in your application
+	•	Reliably chain multi-step tasks using structured data
+
 ```python
 import asyncio
 from pydantic import BaseModel
