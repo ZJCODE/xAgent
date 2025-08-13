@@ -15,6 +15,7 @@ agent:
   capabilities:
     tools:
       - "draw_image" # built-in image drawing tool
+      - "web_search" # built-in web search tool
       - "char_count" # custom tool example
     mcp_servers:
       - "http://localhost:8001/mcp/"
