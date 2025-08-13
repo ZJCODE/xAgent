@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "myxagent"
-version = "0.1.10"
+version = "0.1.11"
 description = "Multi-Modal AI Agent System"
 readme = "README.md"
 license = "MIT"
@@ -45,4 +45,4 @@ xagent-web = "xagent.frontend.launcher:main"
 Repository = "https://github.com/ZJCODE/xagent"
 
 [tool.setuptools]
-packages = {find = {include = ["xagent*", "toolkit*"], exclude = ["examples*", "tests*", "frontend*"]}}
+packages = {find = {include = ["xagent*", "toolkit*"], exclude = ["examples*", "tests*"]}}
