@@ -16,7 +16,6 @@ xAgent provides a complete AI assistant experience with text and image processin
 - [🌐 Quick Start: HTTP Agent Server](#-quick-start-http-agent-server)
 - [💻 Command Line Interface (CLI)](#-command-line-interface-cli)
 - [🤖 Advanced Usage: Agent Class](#-advanced-usage-agent-class)
-- [🎮 Full Project Experience](#-full-project-experience)
 - [🏗️ Architecture](#%EF%B8%8F-architecture)
 - [🔧 Development Guide](#-development-guide)
 - [🤖 API Reference](#-api-reference)
@@ -440,51 +439,6 @@ async def chat_with_persistence():
     print(response)
 
 asyncio.run(chat_with_persistence())
-```
-
-## 🎮 Full Project Experience
-
-If you want to experience the complete xAgent ecosystem with all features, clone the repository and use the provided scripts.
-
-### Clone the Repository
-
-```bash
-git clone https://github.com/ZJCODE/xAgent.git
-cd xAgent
-pip install -r requirements.txt
-```
-
-### Environment Setup
-
-```bash
-# Copy and edit environment file
-cp .env.example .env
-# Edit .env with your API keys
-```
-
-### Quick Start (All Services)
-
-```bash
-chmod +x run.sh
-./run.sh
-```
-
-This will start:
-- **HTTP Agent Server** (http://localhost:8010) - Standalone agent API
-- **MCP Server** (http://localhost:8001) - Model Context Protocol server
-- **Chat Interface** (http://localhost:8501) - Streamlit web interface
-
-### Manual Start (Individual Services)
-
-```bash
-# Terminal 1: Standalone HTTP Agent Server
-python xagent/core/server.py --config config/agent.yaml --toolkit toolkit
-
-# Terminal 2: MCP Server
-python toolkit/mcp_server.py
-
-# Terminal 3: Frontend
-streamlit run frontend/chat_app.py --server.port 8501
 ```
 
 ### Access Points

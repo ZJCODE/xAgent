@@ -147,7 +147,8 @@ def init_session_state():
         st.session_state.session_id = str(uuid.uuid4())
     
     if "agent_server_url" not in st.session_state:
-        st.session_state.agent_server_url = "http://localhost:8010"
+        # 从环境变量读取初始值，如果没有则使用默认值
+        st.session_state.agent_server_url = os.getenv("XAGENT_SERVER_URL", "http://localhost:8010")
     
     if "show_image_upload" not in st.session_state:
         st.session_state.show_image_upload = False
