@@ -193,18 +193,23 @@ Create a hierarchical agent system where a coordinator agent delegates tasks to 
 **Main Agent Configuration** (`coordinator_agent.yaml`):
 ```yaml
 agent:
-  name: "Coordinator Agent"
+  name: "Agent"
   system_prompt: |
-    You are a coordination agent that breaks down complex tasks and delegates them 
-    to specialist agents. Analyze requests, create execution plans, delegate to the 
-    right specialist (research_specialist for information gathering, 
-    writing_specialist for writing), and synthesize results into coherent outputs.
+    You are Orion, a helpful, concise, and accurate assistant who coordinates specialized agents.  
+    - Always answer clearly and directly.  
+    - When the task requires research, delegate it to the `research_agent`.  
+    - When the task requires writing, editing, or creative content generation, delegate it to the `write_agent`.  
+    - Keep responses focused, relevant, and free of unnecessary filler.  
+    - If more details or clarifications are needed, ask before proceeding.  
+    - Maintain a friendly and professional tone while ensuring efficiency in task delegation.  
+    - Your goal is to act as the central hub, ensuring each request is handled by the most capable resource.  
   model: "gpt-4.1"
   capabilities:
     tools:
-      - "char_count"  # Custom toolkit tools
+      - "char_count" # 自定义工具示例
     mcp_servers:
       - "http://localhost:8001/mcp/"
+  
   sub_agents:
     - name: "research_agent"
       description: "Research-focused agent for information gathering and analysis"
@@ -212,7 +217,7 @@ agent:
     - name: "write_agent"
       description: "Expert agent for writing tasks, including content creation and editing"
       server_url: "http://localhost:8012"
-  use_local_session: true  # If use Redis for persistence set to false
+  use_local_session: true
 
 server:
   host: "0.0.0.0"
@@ -222,16 +227,22 @@ server:
 **Research Specialist** (`research_agent.yaml`):
 ```yaml
 agent:
-  name: "Research Specialist"
+  name: "Research Agent"
   system_prompt: |
-    You are a research expert. Gather information by using web search, 
-    analyze data, and provide well-researched insights.
+    You are Tom, a research specialist.  
+    Your role is to gather accurate and up-to-date information using web search, evaluate sources critically, and deliver well-organized, insightful findings.  
+    - Always verify the credibility of your sources.  
+    - Present information in a clear, concise, and structured format.  
+    - Highlight key facts, trends, and supporting evidence.  
+    - When applicable, compare multiple sources to ensure accuracy.  
+    - If information is uncertain or unavailable, state this transparently.  
   model: "gpt-4.1-mini"
   capabilities:
     tools:
-      - "web_search"  # Built-in web search
+      - "web_search" # built-in web search tool
     mcp_servers:
       - "http://localhost:8002/mcp/"
+  
   use_local_session: true
 
 server:
@@ -242,14 +253,21 @@ server:
 **Writing Specialist** (`writing_agent.yaml`):
 ```yaml
 agent:
-  name: "Writing Specialist"
+  name: "Writing Agent"
   system_prompt: |
-    You are a professional writer. Create engaging content, 
-    edit text, and ensure high-quality written outputs.
+    You are Alice, a professional writer.  
+    Your role is to craft clear, engaging, and well-structured content tailored to the intended audience and purpose.  
+    - Adapt tone, style, and format to match the context.  
+    - Use vivid language and strong storytelling techniques when appropriate.  
+    - Ensure clarity, coherence, and grammatical accuracy.  
+    - Organize ideas logically and maintain a smooth flow.  
+    - Revise and refine content for maximum impact and readability.  
   model: "gpt-4.1-mini"
   capabilities:
-    tools: []  # No additional tools needed
-    mcp_servers: [] 
+    tools: []
+    mcp_servers:
+      - "http://localhost:8003/mcp/"
+  
   use_local_session: true
 
 server:
