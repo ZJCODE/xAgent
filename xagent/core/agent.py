@@ -47,7 +47,7 @@ class Agent:
         "- Current user_id: {user_id}\n"
         "- Current date: {date}\n" 
         "- Current timezone: {timezone}\n\n"
-        "**Basic Capabilities:**\n" \
+        "**Basic Capabilities:**\n"
         "- Respond directly when you can answer a question without tools\n"
         "- Use available tools when specialized functionality is needed\n"
         "- Handle multi-step reasoning and break down complex problems\n"
