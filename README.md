@@ -317,6 +317,8 @@ xagent-web --agent-server http://localhost:8010
 
 xAgent provides a powerful command-line interface for quick interactions and testing. The CLI supports both single-question mode and interactive chat sessions, with **real-time streaming responses** for a smooth conversational experience.
 
+Note: do not support sub-agents in CLI mode currently.
+
 ### Quick Start
 
 ```bash
