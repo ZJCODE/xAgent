@@ -313,13 +313,6 @@ xagent-web --agent-server http://localhost:8010
 # Access the web interface at http://localhost:8501
 ```
 
-The web interface provides:
-- 💬 **Interactive Chat** - Real-time conversations with your agent
-- 🖼️ **Image Support** - Upload and process images
-- 📝 **Session Management** - Persistent conversation history
-- ⚙️ **Configuration** - Easy agent settings management
-- 📊 **Tool Execution** - Visual feedback for tool usage
-
 ## 💻 Command Line Interface (CLI)
 
 xAgent provides a powerful command-line interface for quick interactions and testing. The CLI supports both single-question mode and interactive chat sessions, with **real-time streaming responses** for a smooth conversational experience.
