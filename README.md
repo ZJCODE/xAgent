@@ -699,7 +699,8 @@ Agent(
     model: Optional[str] = None,
     client: Optional[AsyncOpenAI] = None,
     tools: Optional[list] = None,
-    mcp_servers: Optional[str | list] = None
+    mcp_servers: Optional[str | list] = None,
+    sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None
 )
 ```
 
@@ -715,6 +716,7 @@ Agent(
 - `client`: Custom AsyncOpenAI client instance
 - `tools`: List of function tools
 - `mcp_servers`: MCP server URLs for dynamic tool loading
+- `sub_agents`: List of sub-agent configurations (name, description, server URL)
 
 #### 💬 Session
 
