@@ -187,8 +187,9 @@ class Agent:
         将 Agent 实例转换为 OpenAI 工具函数。
         """
         @function_tool(name=name or self.name, description=description or self.description)
-        async def tool_func(input: str):
-            return await self.chat(user_message=input, 
+        async def tool_func(simple_input: str, shared_context: Optional[str] = None, image_source: Optional[str] = None):
+            return await self.chat(user_message=f"### Shared Context:\n{shared_context}\n\n### User Input:\n{simple_input}" if shared_context else simple_input,
+                                   image_source=image_source,
                                    session=Session(user_id=f"agent_{self.name}_as_tool", 
                                                    session_id=f"{uuid.uuid4()}",
                                                     message_db=message_db
@@ -432,7 +433,7 @@ class Agent:
             description: 工具描述
         """
         @function_tool(name=name, description=description)
-        async def tool_func(input: str, image_source: Optional[str] = None):
+        async def tool_func(simple_input: str, shared_context: Optional[str] = None, image_source: Optional[str] = None):
             """
             通过 HTTP 请求调用 Agent 的 chat 方法。
             
@@ -444,7 +445,7 @@ class Agent:
             request_body = {
                 "user_id": f"http_tool_{uuid.uuid4().hex[:8]}",
                 "session_id": f"session_{uuid.uuid4().hex[:8]}",
-                "user_message": input,
+                "user_message": f"### Shared Context:\n{shared_context}\n\n### User Input:\n{simple_input}" if shared_context else simple_input,
                 "stream": False  # 工具调用不使用流式响应
             }
             
