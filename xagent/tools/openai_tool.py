@@ -2,6 +2,7 @@ import base64
 import tempfile
 import os
 from dotenv import load_dotenv
+from typing import Optional
 
 load_dotenv(override=True)
 
@@ -32,23 +33,40 @@ async def web_search(search_query: str) -> str:
 
     return (getattr(response, "output_text", "") or "").strip()
 
+
 @function_tool()
 @observe()
-async def draw_image(prompt: str) -> str:
+async def draw_image(prompt: str, reference_image_source: Optional[str]) -> str:
     """
-    when the user wants to generate an image based on a prompt, use this tool
+    when the user wants to generate an image based on a prompt, use this tool,if user mentioned an image, use it as reference
     """
-
 
     clean_prompt = (prompt or "").strip()
     if not clean_prompt:
         return ""
     
+    if reference_image_source:
+        input = [{
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": clean_prompt},
+                {
+                    "type": "input_image",
+                    "image_url": reference_image_source,
+                },
+            ]
+        }]
+    else:
+        input = [{
+            "role": "user",
+            "content": clean_prompt
+        }]
+    
     client = AsyncOpenAI()
     response = await client.responses.create(
         model=DEFAULT_MODEL,
         tools=[{"type": "image_generation", "quality": "low"}],
-        input=clean_prompt,
+        input=input,
         tool_choice="required"
     )
 

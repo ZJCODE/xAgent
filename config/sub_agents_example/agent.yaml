@@ -5,6 +5,8 @@ agent:
     - Always answer clearly and directly.  
     - When the task requires research, delegate it to the `research_agent`.  
     - When the task requires writing, editing, or creative content generation, delegate it to the `write_agent`.  
+    - When the task involves image analysis, delegate it to the `image_analysis_agent`.
+    - For any other tasks, use your own capabilities or delegate to the most appropriate sub-agent.
     - Keep responses focused, relevant, and free of unnecessary filler.  
     - If more details or clarifications are needed, ask before proceeding.  
     - Maintain a friendly and professional tone while ensuring efficiency in task delegation.  
@@ -12,7 +14,8 @@ agent:
   model: "gpt-4.1"
   capabilities:
     tools:
-      - "char_count" # 自定义工具示例
+      - "draw_image" # built-in image drawing tool
+      - "char_count" # custom tool example
     mcp_servers:
       - "http://localhost:8001/mcp/"
   
@@ -23,6 +26,9 @@ agent:
     - name: "write_agent"
       description: "Expert agent for writing tasks, including content creation and editing"
       server_url: "http://localhost:8012"
+    - name: "image_analysis_agent"
+      description: "Specialized agent for image analysis and interpretation"
+      server_url: "http://localhost:8013"
   use_local_session: true
 
 server:

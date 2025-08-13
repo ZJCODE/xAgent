@@ -5,6 +5,7 @@ run the following commands to start the sub-agents example:
 ```bash
 xagent-server --config config/sub_agents_example/subs/research_agent.yaml > logs/research_agent.log 2>&1 &
 xagent-server --config config/sub_agents_example/subs/write_agent.yaml > logs/write_agent.log 2>&1 &
+xagent-server --config config/sub_agents_example/subs/image_agent.yaml > logs/image_agent.log 2>&1 &
 xagent-server --config config/sub_agents_example/agent.yaml --toolkit_path toolkit > logs/agent.log 2>&1 &
 ```
 
@@ -13,6 +14,7 @@ kill the sub-agents example:
 ```bash
 pkill -f "xagent-server --config config/sub_agents_example/subs/research_agent.yaml"
 pkill -f "xagent-server --config config/sub_agents_example/subs/write_agent.yaml"
+pkill -f "xagent-server --config config/sub_agents_example/subs/image_agent.yaml"
 pkill -f "xagent-server --config config/sub_agents_example/agent.yaml"
 ``` 
 
