@@ -41,7 +41,7 @@ pip install myxagent
 
 ### Environment Configuration
 
-Quick Start Can Just Set OpenAI Key:
+Quick start by setting the OpenAI API key in your shell:
 
 ```bash
 export OPENAI_API_KEY=your_openai_api_key
