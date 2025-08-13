@@ -393,7 +393,7 @@ class Agent:
                 tool_call=ToolCall(
                     call_id=getattr(tool_call, "call_id", ""),
                     name=name,
-                    arguments=json.dumps(args)
+                    arguments=json.dumps(args, ensure_ascii=False)
                 )
             )
 
