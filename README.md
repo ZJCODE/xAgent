@@ -41,7 +41,13 @@ pip install myxagent
 
 ### Environment Configuration
 
-Create a `.env` file in your project directory:
+Quick Start Can Just Set OpenAI Key:
+
+```bash
+export OPENAI_API_KEY=your_openai_api_key
+```
+
+Or create a `.env` file in your project directory and add the following variables:
 
 ```bash
 # Required
@@ -267,7 +273,7 @@ agent:
     - Organize ideas logically and maintain a smooth flow.  
     - Revise and refine content for maximum impact and readability.  
   model: "gpt-4.1-mini"
-  
+
   capabilities:
     tools: []
     mcp_servers:

@@ -4,35 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "myxagent"
-version = "0.1.12"
+version = "0.1.13"
 description = "Multi-Modal AI Agent System"
-readme = "README.md"
-license = "MIT"
-authors = [
-    {name = "ZJun", email = "zhangjun310@live.com"}
-]
+readme = { file = "README.md", content-type = "text/markdown" }
+license = { text = "MIT" }
+authors = [{ name = "ZJun", email = "zhangjun310@live.com" }]
 keywords = ["ai", "agent", "openai", "chatbot", "async"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi",
-    "uvicorn",
-    "httpx",
-    "pydantic",
-    "streamlit",
-    "redis",
-    "boto3",
-    "openai",
-    "langfuse", 
-    "fastmcp",
-    "python-dotenv",
-    "pyyaml",
-    "tenacity",
+    "fastapi>=0.116.1,<0.117",        
+    "uvicorn>=0.35.0,<0.36", 
+    "httpx>=0.28.1,<0.29",            
+    "pydantic>=2.11.7,<3",            
+    "streamlit>=1.47.1,<2",           
+    "redis>=6.2.0,<7",                
+    "boto3>=1.39.17,<2",              
+    "openai>=1.98.0,<2",              
+    "langfuse>=3.2.1,<4",             
+    "fastmcp>=2.10.6,<3",             
+    "python-dotenv>=1.1.1,<2",        
+    "pyyaml>=6.0.2,<7",               
+    "tenacity>=9.1.2,<10",            
+    "watchdog>=6.0.0,<7",
 ]
 
 [project.scripts]
@@ -42,6 +44,8 @@ xagent-web = "xagent.frontend.launcher:main"
 
 [project.urls]
 Repository = "https://github.com/ZJCODE/xagent"
+Issues = "https://github.com/ZJCODE/xagent/issues"
+Homepage = "https://github.com/ZJCODE/xagent#readme"
 
 [tool.setuptools]
 packages = {find = {include = ["xagent*", "toolkit*"], exclude = ["examples*", "tests*"]}}
