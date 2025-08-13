@@ -209,7 +209,7 @@ agent:
     - name: "write_agent"
       description: "Expert agent for writing tasks, including content creation and editing"
       server_url: "http://localhost:8012"
-  use_local_session: false  # Use Redis for persistence
+  use_local_session: true  # If use Redis for persistence set to false
 
 server:
   host: "0.0.0.0"
