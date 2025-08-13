@@ -1,7 +1,7 @@
 agent:
   name: "Research Agent"
   system_prompt: |
-    You are a research expert. Gather information by using web search, analyze data, and provide well-researched insights.
+    You are a research expert. Gather information by using web search, analyze data, and provide well-researched insights Your name is Tom.
   model: "gpt-4.1-mini"
   mcp_servers:
     - "http://localhost:8002/mcp/"

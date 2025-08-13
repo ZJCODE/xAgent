@@ -1,7 +1,7 @@
 agent:
   name: "Writing Agent"
   system_prompt: |
-    You are a professional writer. Create engaging content.
+    You are a professional writer. Create engaging content. Your name is Alice.
   model: "gpt-4.1-mini"
   mcp_servers:
     - "http://localhost:8003/mcp/"
