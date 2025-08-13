@@ -180,9 +180,101 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
-### 5. API Documentation
+### 5. Advanced Configuration
 
-Visit `http://localhost:8010/docs` for interactive API documentation.
+xAgent supports sophisticated multi-agent architectures and advanced configuration options for complex use cases.
+
+#### Multi-Agent System with Sub-Agents
+
+Create a hierarchical agent system where a coordinator agent delegates tasks to specialized sub-agents:
+
+**Main Agent Configuration** (`coordinator_agent.yaml`):
+```yaml
+agent:
+  name: "Coordinator Agent"
+  system_prompt: |
+    You are a coordination agent that breaks down complex tasks and delegates them 
+    to specialist agents. Analyze requests, create execution plans, delegate to the 
+    right specialist (research_specialist for information gathering, 
+    writing_specialist for writing), and synthesize results into coherent outputs.
+  model: "gpt-4.1"
+  mcp_servers:
+    - "http://localhost:8001/mcp/"
+  tools:
+    - "char_count"  # Custom toolkit tools
+  sub_agents:
+    - name: "research_agent"
+      description: "Research-focused agent for information gathering and analysis"
+      server_url: "http://localhost:8011"
+    - name: "write_agent"
+      description: "Expert agent for writing tasks, including content creation and editing"
+      server_url: "http://localhost:8012"
+  use_local_session: false  # Use Redis for persistence
+
+server:
+  host: "0.0.0.0"
+  port: 8010
+```
+
+**Research Specialist** (`research_agent.yaml`):
+```yaml
+agent:
+  name: "Research Specialist"
+  system_prompt: |
+    You are a research expert. Gather information by using web search, 
+    analyze data, and provide well-researched insights.
+  model: "gpt-4.1-mini"
+  mcp_servers:
+    - "http://localhost:8002/mcp/"
+  tools:
+    - "web_search"  # Built-in web search
+  use_local_session: true
+
+server:
+  host: "0.0.0.0"
+  port: 8011
+```
+
+**Writing Specialist** (`writing_agent.yaml`):
+```yaml
+agent:
+  name: "Writing Specialist"
+  system_prompt: |
+    You are a professional writer. Create engaging content, 
+    edit text, and ensure high-quality written outputs.
+  model: "gpt-4.1-mini"
+  tools: []  # No additional tools needed
+  use_local_session: true
+
+server:
+  host: "0.0.0.0"
+  port: 8012
+```
+
+#### Starting Multi-Agent System
+
+```bash
+# Start sub-agents first
+xagent-server --config research_agent.yaml > logs/research.log 2>&1 &
+xagent-server --config writing_agent.yaml > logs/writing.log 2>&1 &
+
+# Start coordinator agent
+xagent-server --config coordinator_agent.yaml --toolkit_path my_toolkit > logs/coordinator.log 2>&1 &
+
+# Verify all agents are running
+curl http://localhost:8010/health
+curl http://localhost:8011/health
+curl http://localhost:8012/health
+
+# Now you can chat with the coordinator agent through its API
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json
+    -d '{
+        "user_id": "user123",
+        "session_id": "session456",
+        "user_message": "Research the lastest advancements in AI and write a summary."
+    }'
+```
 
 ## 🌐 Web Interface
 
