@@ -318,9 +318,9 @@ class Agent:
                 await anext(response, None)  # Skip first event
                 await anext(response, None)  # Skip second event
                 third_event = await anext(response, None)
-                type = third_event.item.type if third_event else None
+                event_type = third_event.item.type if third_event else None
 
-                if type == "message":
+                if event_type == "message":
                     async def stream_generator():
                         async for event in response:
                             if event.type == 'response.output_text.delta':
@@ -329,14 +329,14 @@ class Agent:
                                     yield content
                         await self._store_model_reply(event.response.output[0].content[0].text, session)
                     return ReplyType.SIMPLE_REPLY, stream_generator()
-                elif type == "function_call":
+                elif event_type == "function_call":
                     async for event in response:
                         pass 
                     return ReplyType.TOOL_CALL, event.response.output
                 else:
-                    self.logger.warning("Stream response type is not recognized: %s", type)
+                    self.logger.warning("Stream response event_type is not recognized: %s", event_type)
                     async def stream_generator():
-                        yield "Stream response type is not recognized."
+                        yield "Stream response event_type is not recognized."
                     # 返回一个生成器，避免直接返回错误信息
                     return ReplyType.ERROR, stream_generator()
                     
