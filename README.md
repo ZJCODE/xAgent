@@ -37,6 +37,12 @@ xAgent provides a complete AI assistant experience with text and image processin
 
 ```bash
 pip install myxagent
+
+# use official PyPI
+pip install myxagent -i https://pypi.org/simple
+
+# or use Aliyun mirror for faster download in China
+pip install myxagent -i https://mirrors.aliyun.com/pypi/simple
 ```
 
 ### Environment Configuration
