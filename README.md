@@ -39,9 +39,6 @@ export OPENAI_API_KEY=your_openai_api_key
 # Start the CLI with default configuration （interactive mode）
 xagent-cli
 
-# Or start the visual configuration and management interface (Recommended)
-xagent
-
 # Or start the HTTP server with default configuration （for development）
 xagent-server
 
@@ -67,6 +64,14 @@ xagent-web
 ```
 
 More about cli and http server usage, please refer to the [CLI](#-command-line-interface-cli) and [HTTP Agent Server](#-http-agent-server) sections.
+
+
+You can also start the visual configuration and management interface to build and interact with agents:
+
+```bash
+xagent
+```
+
 
 
 ## 🚀 Installation & Setup
