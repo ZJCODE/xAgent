@@ -28,7 +28,7 @@ xAgent provides a complete AI assistant experience with text and image processin
 
 ## 🚀 Quick Start
 
-To quickly start using xAgent, you can run the built-in `cli` or `HTTP serve`r with default settings:
+To quickly start using xAgent, install the package and set your OpenAI API key. Then you can run the `CLI` or `HTTP server` to interact with your AI agent.
 
 ```bash
 # Install xAgent
@@ -58,6 +58,9 @@ curl -X POST "http://localhost:8010/chat" \
     "user_message": "Who are you?"
   }'
 ```
+
+More about cli and http server usage, please refer to the [CLI](#-command-line-interface-cli) and [HTTP Agent Server](#-http-agent-server) sections.
+
 
 ## 🚀 Installation & Setup
 
