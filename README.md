@@ -810,6 +810,7 @@ xAgent/
 │   ├── mcp_server.py         # Main MCP server
 ├── ⚙️ config/                # Configuration files
 │   ├── agent.yaml            # Agent server configuration
+│   ├── structure_examples/   # Structured output examples
 │   └── sub_agents_example/   # Sub-agent configuration examples
 ├── 📝 examples/              # Usage examples and demos
 ├── 🧪 tests/                 # Comprehensive test suite
