@@ -64,7 +64,8 @@ class Agent:
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[list] = None,
         mcp_servers: Optional[Union[str, list]] = None,
-        sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None # (name, description, server_url) or Agent instances
+        sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None,  # (name, description, server_url) or Agent instances
+        output_type: type[BaseModel] = None
     ):
         """
         Initialize the Agent with optional parameters.
@@ -77,6 +78,7 @@ class Agent:
             tools (Optional[list]): List of tool functions to register with the agent.
             mcp_servers (Optional[Union[str, list]]): MCP server URLs to fetch tools from.
             sub_agents (Optional[List[Union[tuple[str, str, str], 'Agent']]]): List of sub-agents to convert to tools.
+            output_type (type[BaseModel]): Pydantic model for structured output, can be overridden in chat method.
 
         Initializes the agent with a name, system prompt, description, model, and tools.
         If no name is provided, it defaults to "default_agent". The system prompt is a combination of a default prompt and any custom prompt provided.
@@ -95,8 +97,8 @@ class Agent:
         self.mcp_cache_ttl: int = 300  # 5 minutes
         self.agent_tools = self._convert_sub_agents_to_tools(sub_agents)
         self._register_tools(self.agent_tools)
+        self.output_type: type[BaseModel] = output_type
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.logger.info("sub_agents: %s",sub_agents)
         if self.agent_tools:
             self.logger.info("Registered agent tools: %s", [tool.tool_spec['name'] for tool in self.agent_tools])
 
@@ -143,12 +145,15 @@ class Agent:
             history_count (int, optional): Number of previous messages to include. Defaults to 20.
             max_iter (int, optional): Maximum model call attempts. Defaults to 10.
             image_source (Optional[str], optional): Source of the image, if any can be a URL or File path or base64 string.
-            output_type (type[BaseModel], optional): Pydantic model for structured output.
+            output_type (type[BaseModel], optional): Pydantic model for structured output. Defaults to the Agent setting but can be overridden in chat().
             stream (bool, optional): Whether to stream the response. Defaults to False.
 
         Returns:
             str | BaseModel | AsyncGenerator[str, None]: The agent's reply or error message.
         """
+
+        if output_type is None:
+            output_type = self.output_type
 
         try:
             # Register tools and MCP servers in each chat call to make sure they are up-to-date
@@ -162,7 +167,7 @@ class Agent:
 
             for attempt in range(max_iter):
 
-                reply_type, response = await self._call_model(input_messages, session, output_type,stream)
+                reply_type, response = await self._call_model(input_messages, session, output_type, stream)
 
                 if reply_type == ReplyType.SIMPLE_REPLY:
                     if not stream:

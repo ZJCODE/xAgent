@@ -522,15 +522,27 @@ class WeatherReport(BaseModel):
     condition: str
     humidity: int
 
+class Step(BaseModel):
+    explanation: str
+    output: str
+
+class MathReasoning(BaseModel):
+    steps: list[Step]
+    final_answer: str
+
+
 async def get_structured_response():
-    agent = Agent(model="gpt-4.1-mini", tools=[web_search])
+    
+    agent = Agent(model="gpt-4.1-mini", 
+                  tools=[web_search], 
+                  output_type=WeatherReport) # You can set a default output type here or leave it None
+    
     session = Session(user_id="user123")
     
-    # Request structured output
+    # Request structured output for weather
     weather_data = await agent.chat(
         "what's the weather like in Hangzhou?",
-        session,
-        output_type=WeatherReport
+        session
     )
     
     print(f"Location: {weather_data.location}")
@@ -538,7 +550,15 @@ async def get_structured_response():
     print(f"Condition: {weather_data.condition}")
     print(f"Humidity: {weather_data.humidity}%")
 
-asyncio.run(get_structured_response())
+
+    # Request structured output for mathematical reasoning (overrides output_type)
+    reply = await agent.chat("how can I solve 8x + 7 = -23", session, output_type=MathReasoning) # Override output_type for this call
+    for index, step in enumerate(reply.steps):
+        print(f"Step {index + 1}: {step.explanation} => Output: {step.output}")
+    print("Final Answer:", reply.final_answer)
+
+if __name__ == "__main__":
+    asyncio.run(get_structured_response())
 ```
 
 ### Agent as Tool Pattern
