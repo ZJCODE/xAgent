@@ -19,6 +19,7 @@ class AgentConfigUI:
         self.config_dir.mkdir(exist_ok=True)
         self.toolkit_dir = Path("toolkit")
         self.running_servers = self._load_server_registry()
+        self.running_webchats = self._load_webchat_registry()
         
     def _load_server_registry(self) -> Dict[str, Dict]:
         """Load running server registry from file."""
@@ -36,6 +37,23 @@ class AgentConfigUI:
         registry_file = self.config_dir / "server_registry.json"
         with open(registry_file, 'w') as f:
             json.dump(self.running_servers, f, indent=2)
+    
+    def _load_webchat_registry(self) -> Dict[str, Dict]:
+        """Load running web chat registry from file."""
+        registry_file = self.config_dir / "webchat_registry.json"
+        if registry_file.exists():
+            try:
+                with open(registry_file, 'r') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+    
+    def _save_webchat_registry(self):
+        """Save running web chat registry to file."""
+        registry_file = self.config_dir / "webchat_registry.json"
+        with open(registry_file, 'w') as f:
+            json.dump(self.running_webchats, f, indent=2)
     
     def _check_server_health(self, url: str) -> bool:
         """Check if server is healthy."""
@@ -103,6 +121,47 @@ class AgentConfigUI:
         
         if dead_servers:
             self._save_server_registry()
+    
+    def _check_webchat_health(self, url: str) -> bool:
+        """Check if web chat is healthy."""
+        try:
+            response = requests.get(url, timeout=5)
+            return response.status_code == 200
+        except:
+            return False
+    
+    def _cleanup_dead_webchats(self):
+        """Remove dead web chats from registry."""
+        dead_webchats = []
+        for webchat_id, webchat_info in self.running_webchats.items():
+            if not self._check_webchat_health(webchat_info['url']):
+                # Check if process is still running
+                try:
+                    pid = webchat_info.get('pid')
+                    if pid and psutil.pid_exists(pid):
+                        continue
+                except:
+                    pass
+                dead_webchats.append(webchat_id)
+        
+        for webchat_id in dead_webchats:
+            del self.running_webchats[webchat_id]
+        
+        if dead_webchats:
+            self._save_webchat_registry()
+    
+    def _find_available_port(self, start_port: int = 8501) -> int:
+        """Find an available port starting from start_port."""
+        import socket
+        port = start_port
+        while port < start_port + 100:  # Try up to 100 ports
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('localhost', port))
+                    return port
+            except OSError:
+                port += 1
+        raise Exception(f"No available port found starting from {start_port}")
     
     def render_main_page(self):
         """Render the main configuration page."""
@@ -658,6 +717,7 @@ class AgentConfigUI:
         
         # Clean up dead servers first
         self._cleanup_dead_servers()
+        self._cleanup_dead_webchats()
         
         if not self.running_servers:
             st.info("No running servers found.")
@@ -676,23 +736,58 @@ class AgentConfigUI:
                 status_icon = "🟢" if is_healthy else "🔴"
                 status_text = "Healthy" if is_healthy else "Unhealthy"
                 
-                col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                # Check if this server has a running web chat
+                webchat_info = None
+                for wc_id, wc_info in self.running_webchats.items():
+                    if wc_info.get('agent_server') == server_info['url']:
+                        webchat_info = wc_info
+                        break
+                
+                col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
                 
                 with col1:
                     st.write(f"{status_icon} **{server_info['name']}**")
                     st.write(f"URL: {server_info['url']}")
                     st.write(f"Started: {server_info.get('started_at', 'Unknown')}")
+                    
+                    # Show web chat status if exists
+                    if webchat_info:
+                        webchat_healthy = self._check_webchat_health(webchat_info['url'])
+                        webchat_icon = "🟢" if webchat_healthy else "🔴"
+                        st.write(f"{webchat_icon} **Web Chat:** {webchat_info['url']}")
                 
                 with col2:
                     st.write(f"**Status:** {status_text}")
                     st.write(f"**PID:** {server_info.get('pid', 'Unknown')}")
+                    if webchat_info:
+                        st.write(f"**Chat PID:** {webchat_info.get('pid', 'Unknown')}")
                 
                 with col3:
                     if st.button("🌐 Open", key=f"open_{server_id}"):
                         st.markdown(f"[Open Server]({server_info['url']}/health)")
                 
                 with col4:
+                    if webchat_info:
+                        # Show close web chat button if web chat is running
+                        if st.button("❌ Close Chat", key=f"closechat_{server_id}"):
+                            self._stop_web_chat(webchat_info)
+                            time.sleep(1)
+                            st.rerun()
+                    else:
+                        # Show start web chat button if no web chat is running
+                        if st.button("💬 Web Chat", key=f"webchat_{server_id}"):
+                            if is_healthy:
+                                self._start_web_chat(server_info['url'])
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("❌ Server is not healthy. Please check server status first.")
+                
+                with col5:
                     if st.button("🛑 Stop", key=f"stop_{server_id}"):
+                        # Also stop web chat if running
+                        if webchat_info:
+                            self._stop_web_chat(webchat_info)
                         self._stop_server(server_id, server_info)
                         time.sleep(1)
                         st.rerun()
@@ -730,6 +825,151 @@ class AgentConfigUI:
         
         except Exception as e:
             st.error(f"Failed to stop server: {str(e)}")
+    
+    def _start_web_chat(self, agent_url):
+        """Start web chat interface for the agent server."""
+        try:
+            # Convert server URL for web chat command
+            # Handle different host formats
+            if "0.0.0.0" in agent_url:
+                # Replace 0.0.0.0 with localhost for web chat
+                chat_agent_url = agent_url.replace("0.0.0.0", "localhost")
+            else:
+                chat_agent_url = agent_url
+            
+            # Find available port
+            try:
+                available_port = self._find_available_port(8501)
+                st.info(f"🔍 Found available port: {available_port}")
+            except Exception as e:
+                st.error(f"❌ Could not find available port: {str(e)}")
+                return
+            
+            # Build web chat command
+            cmd = [
+                "xagent-web",
+                "--host", "0.0.0.0",
+                "--port", str(available_port), 
+                "--agent-server", chat_agent_url
+            ]
+            
+            st.info(f"🚀 Starting Web Chat with command: {' '.join(cmd)}")
+            
+            # Start web chat process in background
+            with st.spinner("Starting Web Chat..."):
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    preexec_fn=os.setsid,
+                    cwd=os.getcwd(),
+                    env=os.environ.copy()
+                )
+                
+                # Wait a moment for startup
+                time.sleep(5)
+                
+                # Check if process is still alive
+                if process.poll() is not None:
+                    # Process has terminated
+                    stdout, stderr = process.communicate()
+                    stdout_str = stdout.decode() if stdout else ""
+                    stderr_str = stderr.decode() if stderr else ""
+                    
+                    if stderr_str:
+                        st.error(f"**Error output:**\n```\n{stderr_str}\n```")
+                    if stdout_str:
+                        st.info(f"**Standard output:**\n```\n{stdout_str}\n```")
+                    
+                    st.error("❌ Web Chat process terminated unexpectedly")
+                    return
+                
+                # Check if web chat is responding
+                web_chat_url = f"http://localhost:{available_port}"
+                max_wait_time = 15  # Maximum wait time in seconds
+                check_interval = 2  # Check every 2 seconds
+                waited_time = 0
+                
+                while waited_time < max_wait_time:
+                    if self._check_webchat_health(web_chat_url):
+                        # Web Chat is up and running
+                        webchat_id = f"webchat_{agent_url.split(':')[-1]}_{available_port}"
+                        self.running_webchats[webchat_id] = {
+                            "agent_server": agent_url,
+                            "url": web_chat_url,
+                            "port": available_port,
+                            "pid": process.pid,
+                            "started_at": datetime.now().isoformat()
+                        }
+                        self._save_webchat_registry()
+                        
+                        st.success(f"✅ Web Chat started successfully!")
+                        st.info(f"💬 Web Chat URL: {web_chat_url}")
+                        st.info(f"🔗 Agent Server: {chat_agent_url}")
+                        st.info(f"⏱️ Startup time: {waited_time + 5} seconds")
+                        
+                        # Add a clickable link
+                        st.markdown(f"👉 [Open Web Chat Interface]({web_chat_url})")
+                        
+                        return
+                    
+                    time.sleep(check_interval)
+                    waited_time += check_interval
+                
+                # Timeout reached
+                st.error("❌ Web Chat startup timeout")
+                
+                # Terminate the process
+                try:
+                    process.terminate()
+                    time.sleep(2)
+                    if process.poll() is None:
+                        process.kill()
+                except:
+                    pass
+                
+        except FileNotFoundError:
+            st.error("❌ `xagent-web` command not found. Please ensure xAgent is properly installed.")
+            st.info("Try running: `pip install -e .` in the xAgent directory")
+        except Exception as e:
+            st.error(f"❌ Error starting Web Chat: {str(e)}")
+            import traceback
+            st.error(f"**Traceback:**\n```\n{traceback.format_exc()}\n```")
+    
+    def _stop_web_chat(self, webchat_info):
+        """Stop a running web chat."""
+        try:
+            pid = webchat_info.get('pid')
+            if pid:
+                try:
+                    # Try graceful termination first
+                    os.kill(pid, signal.SIGTERM)
+                    time.sleep(2)
+                    
+                    # Force kill if still running
+                    if psutil.pid_exists(pid):
+                        os.kill(pid, signal.SIGKILL)
+                    
+                    st.success(f"✅ Web Chat on port {webchat_info.get('port')} stopped successfully")
+                
+                except ProcessLookupError:
+                    st.info(f"Web Chat on port {webchat_info.get('port')} was already stopped")
+                except Exception as e:
+                    st.error(f"Error stopping Web Chat: {str(e)}")
+            
+            # Remove from registry
+            webchat_id_to_remove = None
+            for wc_id, wc_info in self.running_webchats.items():
+                if wc_info.get('pid') == webchat_info.get('pid'):
+                    webchat_id_to_remove = wc_id
+                    break
+            
+            if webchat_id_to_remove:
+                del self.running_webchats[webchat_id_to_remove]
+                self._save_webchat_registry()
+        
+        except Exception as e:
+            st.error(f"Failed to stop Web Chat: {str(e)}")
 
 
 def main():

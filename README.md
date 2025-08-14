@@ -478,35 +478,6 @@ xagent-config
 xagent-config --host 0.0.0.0 --port 8502
 ```
 
-**Features:**
-- 🎯 **Visual Agent Configuration** - Create agents through intuitive forms
-- 🛠️ **Tool Management** - Enable/disable built-in and custom tools
-- 🏗️ **Multi-Agent Setup** - Configure hierarchical agent systems
-- 📊 **Structured Output** - Define Pydantic models visually
-- 🚀 **One-Click Deployment** - Start servers directly from the UI
-- 📱 **Server Management** - Monitor and control running services
-- 💾 **Configuration Templates** - Save and reuse configurations
-
-#### Configuration Interface Workflow:
-
-1. **Create Configuration:**
-   - Open `http://localhost:8502` in your browser
-   - Fill in agent details (name, system prompt, model)
-   - Select tools and capabilities
-   - Configure server settings
-   - Preview generated YAML configuration
-
-2. **Deploy Agent:**
-   - Click "Start Server" to deploy immediately
-   - Or save configuration for later use
-   - Monitor server status in real-time
-
-3. **Manage Services:**
-   - View all running servers
-   - Check health status
-   - Stop/restart services as needed
-   - Access server endpoints directly
-
 ### Web Interface Options
 
 | Interface | Default Port | Description |
