@@ -235,7 +235,7 @@ curl -X POST "http://localhost:8010/chat" \
 
 ### 5. Advanced Configuration （Hierarchical Multi-Agent System）
 
-xAgent supports sophisticated multi-agent architectures and advanced configuration options for complex use cases.
+xAgent supports sophisticated multi-agent architectures and advanced configuration options for complex use cases. (agent as tool pattern)
 
 #### Multi-Agent System with Sub-Agents
 
