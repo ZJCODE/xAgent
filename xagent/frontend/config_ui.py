@@ -940,22 +940,48 @@ class AgentConfigUI:
         """Stop a running web chat."""
         try:
             pid = webchat_info.get('pid')
+            port = webchat_info.get('port')
+            
             if pid:
                 try:
-                    # Try graceful termination first
-                    os.kill(pid, signal.SIGTERM)
-                    time.sleep(2)
+                    # First, try to terminate the entire process group
+                    try:
+                        # Get the process group ID and terminate the whole group
+                        os.killpg(os.getpgid(pid), signal.SIGTERM)
+                        st.info(f"🔄 Sending SIGTERM to process group {pid}...")
+                        time.sleep(3)
+                        
+                        # Check if process still exists
+                        if psutil.pid_exists(pid):
+                            st.warning(f"⚠️ Process {pid} still running, force killing...")
+                            os.killpg(os.getpgid(pid), signal.SIGKILL)
+                            time.sleep(2)
+                    except ProcessLookupError:
+                        # Process group doesn't exist, try individual process
+                        os.kill(pid, signal.SIGTERM)
+                        time.sleep(3)
+                        
+                        if psutil.pid_exists(pid):
+                            os.kill(pid, signal.SIGKILL)
+                            time.sleep(2)
                     
-                    # Force kill if still running
+                    # Double check: kill any remaining processes using the port
+                    if port:
+                        self._kill_processes_on_port(port)
+                    
+                    # Verify the process is really dead
                     if psutil.pid_exists(pid):
-                        os.kill(pid, signal.SIGKILL)
-                    
-                    st.success(f"✅ Web Chat on port {webchat_info.get('port')} stopped successfully")
+                        st.error(f"❌ Failed to terminate process {pid}")
+                    else:
+                        st.success(f"✅ Web Chat on port {port} stopped successfully")
                 
                 except ProcessLookupError:
-                    st.info(f"Web Chat on port {webchat_info.get('port')} was already stopped")
+                    st.info(f"Web Chat on port {port} was already stopped")
                 except Exception as e:
                     st.error(f"Error stopping Web Chat: {str(e)}")
+                    # Try to kill processes on port as fallback
+                    if port:
+                        self._kill_processes_on_port(port)
             
             # Remove from registry
             webchat_id_to_remove = None
@@ -967,9 +993,74 @@ class AgentConfigUI:
             if webchat_id_to_remove:
                 del self.running_webchats[webchat_id_to_remove]
                 self._save_webchat_registry()
+                
+            # Final verification: check if port is really free
+            if port:
+                time.sleep(1)  # Wait a moment for port to be released
+                if self._is_port_in_use(port):
+                    st.warning(f"⚠️ Port {port} may still be in use")
+                else:
+                    st.info(f"✅ Port {port} is now available")
         
         except Exception as e:
             st.error(f"Failed to stop Web Chat: {str(e)}")
+    
+    def _kill_processes_on_port(self, port):
+        """Kill all processes using the specified port."""
+        try:
+            import subprocess
+            
+            # Find processes using the port
+            result = subprocess.run(
+                ['lsof', '-ti', f':{port}'],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split('\n')
+                for pid_str in pids:
+                    try:
+                        pid = int(pid_str.strip())
+                        os.kill(pid, signal.SIGKILL)
+                        st.info(f"🔫 Force killed process {pid} using port {port}")
+                    except (ValueError, ProcessLookupError):
+                        continue
+        except FileNotFoundError:
+            # lsof not available, try alternative method
+            try:
+                result = subprocess.run(
+                    ['netstat', '-tulpn'],
+                    capture_output=True,
+                    text=True
+                )
+                # Parse netstat output to find PIDs using the port
+                # This is a more complex parsing, but provides fallback
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if f':{port}' in line and 'LISTEN' in line:
+                        parts = line.split()
+                        if len(parts) > 6 and '/' in parts[-1]:
+                            try:
+                                pid = int(parts[-1].split('/')[0])
+                                os.kill(pid, signal.SIGKILL)
+                                st.info(f"🔫 Force killed process {pid} using port {port}")
+                            except (ValueError, ProcessLookupError):
+                                continue
+            except:
+                st.warning(f"⚠️ Could not find processes using port {port}")
+        except Exception as e:
+            st.warning(f"⚠️ Error killing processes on port {port}: {str(e)}")
+    
+    def _is_port_in_use(self, port):
+        """Check if a port is currently in use."""
+        import socket
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('localhost', port))
+                return False
+        except OSError:
+            return True
 
 
 def main():

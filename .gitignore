@@ -52,3 +52,4 @@ poetry.lock
 pyrightconfig.json
 
 server_registry.json
+webchat_registry.json
