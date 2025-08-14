@@ -66,11 +66,7 @@ xagent-web
 More about cli and http server usage, please refer to the [CLI](#-command-line-interface-cli) and [HTTP Agent Server](#-http-agent-server) sections.
 
 
-You can also start the visual configuration and management interface to build and interact with agents:
-
-```bash
-xagent
-```
+> You can also start the visual configuration and management interface to build and interact with agents by typing `xagent` in the terminal. More details in the [Web Interface](#-web-interface) section.
 
 
 
