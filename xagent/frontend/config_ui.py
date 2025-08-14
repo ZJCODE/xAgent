@@ -396,7 +396,7 @@ class AgentConfigUI:
             )
             
             # Display YAML preview
-            st.code(yaml.dump(config, default_flow_style=False), language="yaml")
+            st.code(yaml.dump(config, default_flow_style=False, allow_unicode=True), language="yaml")
             
             # Save and start buttons
             st.subheader("Actions")
@@ -411,8 +411,8 @@ class AgentConfigUI:
             with col_save:
                 if st.button("💾 Save Config", use_container_width=True):
                     config_path = self.config_dir / config_filename
-                    with open(config_path, 'w') as f:
-                        yaml.dump(config, f, default_flow_style=False)
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
                     st.success(f"Config saved to {config_path}")
                     time.sleep(1)
                     st.rerun()
@@ -489,8 +489,8 @@ class AgentConfigUI:
                 
             # Save config file
             config_path = self.config_dir / config_filename
-            with open(config_path, 'w') as f:
-                yaml.dump(config, f, default_flow_style=False)
+            with open(config_path, 'w', encoding='utf-8') as f:
+                yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
             
             # Build command
             cmd = ["xagent-server", "--config", str(config_path)]
@@ -610,7 +610,7 @@ class AgentConfigUI:
         for config_file in config_files:
             with st.expander(f"📄 {config_file.name}"):
                 try:
-                    with open(config_file, 'r') as f:
+                    with open(config_file, 'r', encoding='utf-8') as f:
                         config = yaml.safe_load(f)
                     
                     col1, col2, col3 = st.columns([2, 1, 1])
@@ -633,7 +633,7 @@ class AgentConfigUI:
                     
                     # Show config content
                     with st.expander("View Configuration"):
-                        st.code(yaml.dump(config, default_flow_style=False), language="yaml")
+                        st.code(yaml.dump(config, default_flow_style=False, allow_unicode=True), language="yaml")
                 
                 except Exception as e:
                     st.error(f"Error reading config file: {str(e)}")
@@ -641,7 +641,7 @@ class AgentConfigUI:
     def _start_server_from_file(self, config_file):
         """Start server from saved configuration file."""
         try:
-            with open(config_file, 'r') as f:
+            with open(config_file, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
             
             toolkit_path = "toolkit"  # Default toolkit path
