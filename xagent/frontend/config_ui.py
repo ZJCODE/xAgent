@@ -311,24 +311,25 @@ class AgentConfigUI:
                             with col_field_type:
                                 field_type = st.selectbox(
                                     f"Type",
-                                    ["str", "int", "float", "bool", "list", "dict"],
+                                    ["str", "int", "float", "bool", "list"],
                                     key=f"field_type_{i}"
                                 )
-                            
-                            # Description field (full width)
-                            field_desc = st.text_input(f"Description", key=f"field_desc_{i}", placeholder="Description of the field")
-                            
+
                             # For list type, add items specification
                             list_items_type = None
                             if field_type == "list":
                                 list_items_type = st.selectbox(
                                     f"List Items Type",
-                                    ["str", "int", "float", "bool", "dict"],
+                                    ["str", "int", "float", "bool"],
                                     key=f"list_items_{i}",
                                     help="Type of elements in the list"
                                 )
-                                st.markdown(f"*This will create: `List[{list_items_type}]`*")
+                                # st.markdown(f"*This will create: `List[{list_items_type}]`*")
                             
+                            # Description field (full width)
+                            field_desc = st.text_input(f"Description", key=f"field_desc_{i}", placeholder="Description of the field")
+                            
+
                             if field_name:
                                 field_config = {
                                     "type": field_type,
@@ -419,12 +420,6 @@ class AgentConfigUI:
             with col_start:
                 if st.button("🚀 Start Server", use_container_width=True):
                     self._start_server(config, config_filename, toolkit_path)
-                
-                # Add debug option
-                if st.checkbox("🐛 Debug Mode", help="Show detailed server logs during startup"):
-                    st.session_state.debug_mode = True
-                else:
-                    st.session_state.debug_mode = False
     
     def _build_config(self, agent_name, system_prompt, model, host, port,
                      enable_web_search, enable_draw_image, custom_tools,
@@ -487,8 +482,6 @@ class AgentConfigUI:
     
     def _start_server(self, config, config_filename, toolkit_path):
         """Start the agent server."""
-        debug_mode = getattr(st.session_state, 'debug_mode', False)
-        
         try:
             # Check prerequisites
             if not self._check_prerequisites():
@@ -499,9 +492,6 @@ class AgentConfigUI:
             with open(config_path, 'w') as f:
                 yaml.dump(config, f, default_flow_style=False)
             
-            if debug_mode:
-                st.info(f"📁 Config saved to: {config_path}")
-            
             # Build command
             cmd = ["xagent-server", "--config", str(config_path)]
             if toolkit_path and toolkit_path.strip() and toolkit_path != "toolkit":
@@ -511,32 +501,14 @@ class AgentConfigUI:
             
             # Start server process
             with st.spinner("Starting server..."):
-                if debug_mode:
-                    # In debug mode, show output in real-time
-                    process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        universal_newlines=True,
-                        bufsize=1,
-                        preexec_fn=os.setsid,
-                        cwd=os.getcwd(),
-                        env=os.environ.copy()
-                    )
-                    
-                    # Create containers for real-time output
-                    output_container = st.empty()
-                    output_lines = []
-                    
-                else:
-                    process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        preexec_fn=os.setsid,
-                        cwd=os.getcwd(),
-                        env=os.environ.copy()
-                    )
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    preexec_fn=os.setsid,
+                    cwd=os.getcwd(),
+                    env=os.environ.copy()
+                )
                 
                 # Wait and monitor server startup
                 server_url = f"http://{config['server']['host']}:{config['server']['port']}"
@@ -548,43 +520,17 @@ class AgentConfigUI:
                     time.sleep(check_interval)
                     waited_time += check_interval
                     
-                    # In debug mode, read and display output
-                    if debug_mode:
-                        try:
-                            # Read available output
-                            while True:
-                                line = process.stdout.readline()
-                                if not line:
-                                    break
-                                output_lines.append(line.strip())
-                                # Keep only last 20 lines
-                                if len(output_lines) > 20:
-                                    output_lines.pop(0)
-                                
-                            # Display output
-                            if output_lines:
-                                output_container.code('\n'.join(output_lines), language='text')
-                        except:
-                            pass
-                    
                     # Check if process is still alive
                     if process.poll() is not None:
                         # Process has terminated
-                        if debug_mode:
-                            # Read remaining output
-                            remaining_output = process.stdout.read()
-                            if remaining_output:
-                                output_lines.extend(remaining_output.strip().split('\n'))
-                                output_container.code('\n'.join(output_lines), language='text')
-                        else:
-                            stdout, stderr = process.communicate()
-                            stdout_str = stdout.decode() if stdout else ""
-                            stderr_str = stderr.decode() if stderr else ""
-                            
-                            if stderr_str:
-                                st.error(f"**Error output:**\n```\n{stderr_str}\n```")
-                            if stdout_str:
-                                st.info(f"**Standard output:**\n```\n{stdout_str}\n```")
+                        stdout, stderr = process.communicate()
+                        stdout_str = stdout.decode() if stdout else ""
+                        stderr_str = stderr.decode() if stderr else ""
+                        
+                        if stderr_str:
+                            st.error(f"**Error output:**\n```\n{stderr_str}\n```")
+                        if stdout_str:
+                            st.info(f"**Standard output:**\n```\n{stdout_str}\n```")
                         
                         st.error("❌ Server process terminated unexpectedly")
                         return
@@ -608,39 +554,28 @@ class AgentConfigUI:
                         st.info(f"🔗 Health Check: {server_url}/health")
                         st.info(f"⏱️ Startup time: {waited_time} seconds")
                         
-                        if debug_mode and output_lines:
-                            st.success("📊 Final startup logs:")
-                            st.code('\n'.join(output_lines), language='text')
-                        
                         return
                     
                     # Show progress
                     progress_msg = f"⏳ Waiting for server... ({waited_time}/{max_wait_time}s)"
-                    if not debug_mode:
-                        st.info(progress_msg)
+                    st.info(progress_msg)
                 
                 # Timeout reached
                 st.error("❌ Server startup timeout")
                 
                 # Try to get any output before terminating
-                if debug_mode:
-                    st.warning("Server failed to start within timeout period")
-                    if output_lines:
-                        st.error("**Final output:**")
-                        st.code('\n'.join(output_lines), language='text')
-                else:
-                    try:
-                        stdout, stderr = process.communicate(timeout=3)
-                        stdout_str = stdout.decode() if stdout else ""
-                        stderr_str = stderr.decode() if stderr else ""
+                try:
+                    stdout, stderr = process.communicate(timeout=3)
+                    stdout_str = stdout.decode() if stdout else ""
+                    stderr_str = stderr.decode() if stderr else ""
+                    
+                    if stderr_str:
+                        st.error(f"**Error output:**\n```\n{stderr_str}\n```")
+                    if stdout_str:
+                        st.info(f"**Standard output:**\n```\n{stdout_str}\n```")
                         
-                        if stderr_str:
-                            st.error(f"**Error output:**\n```\n{stderr_str}\n```")
-                        if stdout_str:
-                            st.info(f"**Standard output:**\n```\n{stdout_str}\n```")
-                            
-                    except subprocess.TimeoutExpired:
-                        st.warning("Could not retrieve process output")
+                except subprocess.TimeoutExpired:
+                    st.warning("Could not retrieve process output")
                 
                 # Terminate the process
                 try:
