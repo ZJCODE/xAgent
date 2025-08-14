@@ -198,9 +198,6 @@ def calculate_square(n: int) -> int:
     return n * n
 ```
 
-> **⚠️ Note**: Recursive functions are not supported as tools due to potential stack overflow issues in async environments.
-
-
 ### 3. Start the Server
 
 ```bash
