@@ -134,7 +134,9 @@ server:
   port: 8010
 ```
 
-If you want to use MCP (Model Context Protocol) for dynamic tool loading, you can also add `mcp_servers` in agent configuration:
+If you want to use MCP (Model Context Protocol) for dynamic tool loading, you can also add `mcp_servers` in agent configuration
+
+Example for how to start a MCP server can be found in `toolkit/mcp_server.py`:
 
 ```yaml
 agent:
