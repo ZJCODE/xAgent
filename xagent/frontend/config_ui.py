@@ -132,7 +132,6 @@ class AgentConfigUI:
     
     def render_config_page(self):
         """Render the agent configuration page."""
-        st.header("🛠️ Agent Configuration")
         
         col1, col2 = st.columns([2, 1])
         
@@ -173,61 +172,61 @@ class AgentConfigUI:
             st.subheader("Tools & Capabilities")
             
             # Built-in tools
-            st.write("**Built-in Tools:**")
-            enable_web_search = st.checkbox("Web Search", value=True)
-            enable_draw_image = st.checkbox("Image Generation", value=False)
+            with st.expander("Built-in Tools"):
+                st.markdown("Enable or disable built-in tools for your agent.")
+                enable_web_search = st.checkbox("Web Search", value=True)
+                enable_draw_image = st.checkbox("Image Generation", value=False)
             
             # Custom tools
-            st.write("**Custom Tools:**")
-            custom_tools = st.text_area(
-                "Custom Tool Names (one per line)",
-                help="Enter the names of custom tools from your toolkit",
-                placeholder="calculate_square\nfetch_weather"
-            )
-            
-            toolkit_path = st.text_input(
-                "Toolkit Path",
-                value="toolkit",
-                help="Path to custom toolkit directory containing your custom tools"
-            )
-            
-            # Add helper info for custom tools
-            if custom_tools.strip():
-                st.info("💡 Make sure your custom tools are defined in the toolkit directory and registered in `__init__.py`")
-                with st.expander("Custom Tools Setup Guide"):
-                    st.markdown("""
-                    **Creating Custom Tools:**
-                    1. Create your toolkit directory (e.g., `toolkit/`)
-                    2. Add your tool functions in `.py` files
-                    3. Register tools in `__init__.py`:
-                    ```python
-                    # toolkit/__init__.py
-                    from .your_tools import calculate_square, fetch_weather
-                    
-                    TOOLKIT_REGISTRY = {
-                        "calculate_square": calculate_square,
-                        "fetch_weather": fetch_weather
-                    }
-                    ```
-                    4. Use the `@function_tool()` decorator on your functions
-                    """)
+            with st.expander("Custom Tools"):
+                st.markdown("Configure custom tools from your toolkit directory.")
+                
+                toolkit_path = st.text_input(
+                    "Toolkit Path",
+                    value="toolkit",
+                    help="Path to custom toolkit directory containing your custom tools"
+                )
+
+                custom_tools = st.text_area(
+                    "Custom Tool Names (one per line)",
+                    help="Enter the names of custom tools from your toolkit",
+                    placeholder="calculate_square\nfetch_weather"
+                )            
+
+                
+                # Add helper info for custom tools
+                if custom_tools.strip():
+                    st.info("💡 Make sure your custom tools are defined in the toolkit directory and registered in `__init__.py`")
+                    with st.expander("Custom Tools Setup Guide"):
+                        st.markdown("""
+                        **Creating Custom Tools:**
+                        1. Create your toolkit directory (e.g., `toolkit/`)
+                        2. Add your tool functions in `.py` files
+                        3. Register tools in `__init__.py`:
+                        ```python
+                        # toolkit/__init__.py
+                        from .your_tools import calculate_square, fetch_weather
+                        
+                        TOOLKIT_REGISTRY = {
+                            "calculate_square": calculate_square,
+                            "fetch_weather": fetch_weather
+                        }
+                        ```
+                        4. Use the `@function_tool()` decorator on your functions
+                        """)
             
             # MCP Servers
-            st.write("**MCP Servers:**")
-            mcp_servers = st.text_area(
-                "MCP Server URLs (one per line)",
-                help="Enter URLs of MCP servers for dynamic tool loading",
-                placeholder="http://localhost:8001/mcp/\nhttp://localhost:8002/mcp/"
-            )
+            with st.expander("MCP Servers"):
+                st.markdown("Configure Model Context Protocol servers for dynamic tool loading.")
+                mcp_servers = st.text_area(
+                    "MCP Server URLs (one per line)",
+                    help="Enter URLs of MCP servers for dynamic tool loading",
+                    placeholder="http://localhost:8001/mcp/\nhttp://localhost:8002/mcp/"
+                )
             
-            # Session Configuration
-            st.subheader("Session Settings")
-            use_local_session = st.checkbox(
-                "Use Local Session", 
-                value=True, 
-                help="If unchecked, will use Redis for session persistence (requires REDIS_URL in environment)"
-            )
             
+            st.subheader("Advanced Settings")
+
             # Sub-agents Configuration
             with st.expander("Sub-agents (Multi-Agent System)"):
                 st.markdown("Configure specialized sub-agents for hierarchical agent systems.")
@@ -293,98 +292,39 @@ class AgentConfigUI:
             with st.expander("Structured Output (Optional)"):
                 st.markdown("Define the expected response format using Pydantic models.")
                 
-                col_enable, col_template = st.columns([1, 1])
-                with col_enable:
-                    enable_structured_output = st.checkbox("Enable Structured Output")
-                
-                with col_template:
-                    if st.button("📋 Load Template", help="Load a common template"):
-                        st.session_state.load_template = True
+                enable_structured_output = st.checkbox("Enable Structured Output")
                 
                 if enable_structured_output:
-                    # Template selection
-                    if getattr(st.session_state, 'load_template', False):
-                        template_choice = st.selectbox(
-                            "Choose a template:",
-                            ["Custom", "Content Report", "Analysis Result", "Task Summary"]
-                        )
-                        
-                        if template_choice == "Content Report":
-                            st.session_state.template_fields = {
-                                "title": {"type": "str", "description": "Content title"},
-                                "content": {"type": "str", "description": "Main content text"},
-                                "tags": {"type": "list", "description": "Content tags", "items": {"type": "str"}},
-                                "summary": {"type": "str", "description": "Brief summary"}
-                            }
-                            st.session_state.template_class_name = "ContentReport"
-                        elif template_choice == "Analysis Result":
-                            st.session_state.template_fields = {
-                                "conclusion": {"type": "str", "description": "Main conclusion"},
-                                "confidence": {"type": "float", "description": "Confidence score (0-1)"},
-                                "key_points": {"type": "list", "description": "Key findings", "items": {"type": "str"}},
-                                "recommendations": {"type": "list", "description": "Action items", "items": {"type": "str"}}
-                            }
-                            st.session_state.template_class_name = "AnalysisResult"
-                        elif template_choice == "Task Summary":
-                            st.session_state.template_fields = {
-                                "status": {"type": "str", "description": "Task completion status"},
-                                "steps_completed": {"type": "list", "description": "Completed steps", "items": {"type": "str"}},
-                                "next_actions": {"type": "list", "description": "Next actions needed", "items": {"type": "str"}},
-                                "duration_minutes": {"type": "int", "description": "Time spent in minutes"}
-                            }
-                            st.session_state.template_class_name = "TaskSummary"
-                        
-                        st.session_state.load_template = False
-                        st.rerun()
-                    
-                    # Use template or default values
-                    default_class_name = getattr(st.session_state, 'template_class_name', "ResponseModel")
-                    default_fields = getattr(st.session_state, 'template_fields', {})
-                    
-                    class_name = st.text_input("Class Name", value=default_class_name)
+                    class_name = st.text_input("Class Name", value="ResponseModel")
                     
                     st.write("**Fields:**")
-                    num_fields = st.number_input("Number of Fields", min_value=1, max_value=20, value=max(1, len(default_fields)))
+                    num_fields = st.number_input("Number of Fields", min_value=1, max_value=20, value=1)
                     
                     output_fields = {}
-                    field_names = list(default_fields.keys()) if default_fields else [""]
                     
                     for i in range(num_fields):
                         with st.container():
                             col_field_name, col_field_type = st.columns([1, 1])
                             
-                            # Get default values from template
-                            default_name = field_names[i] if i < len(field_names) else ""
-                            default_field_config = default_fields.get(default_name, {})
-                            default_type = default_field_config.get("type", "str")
-                            default_desc = default_field_config.get("description", "")
-                            default_items = default_field_config.get("items", {})
-                            
                             with col_field_name:
-                                field_name = st.text_input(f"Field {i+1} Name", key=f"field_name_{i}", value=default_name, placeholder="title")
+                                field_name = st.text_input(f"Field {i+1} Name", key=f"field_name_{i}", placeholder="title")
                             with col_field_type:
-                                type_index = ["str", "int", "float", "bool", "list", "dict"].index(default_type) if default_type in ["str", "int", "float", "bool", "list", "dict"] else 0
                                 field_type = st.selectbox(
                                     f"Type",
                                     ["str", "int", "float", "bool", "list", "dict"],
-                                    key=f"field_type_{i}",
-                                    index=type_index
+                                    key=f"field_type_{i}"
                                 )
                             
                             # Description field (full width)
-                            field_desc = st.text_input(f"Description", key=f"field_desc_{i}", value=default_desc, placeholder="Description of the field")
+                            field_desc = st.text_input(f"Description", key=f"field_desc_{i}", placeholder="Description of the field")
                             
                             # For list type, add items specification
                             list_items_type = None
                             if field_type == "list":
-                                st.info("📝 List type requires specifying the element type:")
-                                default_items_type = default_items.get("type", "str") if default_items else "str"
-                                items_index = ["str", "int", "float", "bool", "dict"].index(default_items_type) if default_items_type in ["str", "int", "float", "bool", "dict"] else 0
                                 list_items_type = st.selectbox(
                                     f"List Items Type",
                                     ["str", "int", "float", "bool", "dict"],
                                     key=f"list_items_{i}",
-                                    index=items_index,
                                     help="Type of elements in the list"
                                 )
                                 st.markdown(f"*This will create: `List[{list_items_type}]`*")
@@ -430,31 +370,17 @@ class AgentConfigUI:
                             python_code += f'    {field_name}: {field_type_str} = Field(description="{field_config["description"]}")\n'
                         
                         st.code(python_code, language="python")
-                        
-                        # Show example usage
-                        with st.expander("💡 Example Usage"):
-                            st.markdown(f"""
-                            **In your agent code:**
-                            ```python
-                            from xagent.core import Agent, Session
-                            
-                            agent = Agent(
-                                model="gpt-4o-mini",
-                                output_type={class_name}  # Use your model
-                            )
-                            
-                            session = Session(user_id="user123")
-                            
-                            # Agent will return structured {class_name} object
-                            response = await agent.chat("Your prompt here", session)
-                            
-                            # Access fields directly
-                            print(response.{list(output_fields.keys())[0] if output_fields else 'field_name'})
-                            ```
-                            """)
                     else:
                         st.info("👆 Add fields above to see the generated model preview")
         
+            # Session Configuration
+            st.subheader("Session Settings")
+            use_local_session = st.checkbox(
+                "Use Local Session", 
+                value=True, 
+                help="If unchecked, will use Redis for session persistence (requires REDIS_URL in environment)"
+            )
+
         with col2:
             st.subheader("📋 Configuration Preview")
             
@@ -735,7 +661,6 @@ class AgentConfigUI:
     
     def render_server_management(self):
         """Render server management page."""
-        st.header("🔧 Server Management")
         
         # List saved configurations
         st.subheader("Saved Configurations")
@@ -794,7 +719,7 @@ class AgentConfigUI:
     
     def render_running_servers(self):
         """Render running servers management page."""
-        st.header("🚀 Running Servers")
+        st.subheader("🚀 Running Servers")
         
         # Clean up dead servers first
         self._cleanup_dead_servers()
