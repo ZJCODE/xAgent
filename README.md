@@ -13,7 +13,8 @@ xAgent provides a complete AI assistant experience with text and image processin
 ## 📋 Table of Contents
 
 - [🚀 Installation & Setup](#-installation--setup)
-- [🌐 Quick Start: HTTP Agent Server](#-quick-start-http-agent-server)
+- [🚀 Quick Start](#-quick-start)
+- [🌐 HTTP Agent Server](#-http-agent-server)
 - [🌐 Web Interface](#-web-interface)
 - [💻 Command Line Interface (CLI)](#-command-line-interface-cli)
 - [🤖 Advanced Usage: Agent Class](#-advanced-usage-agent-class)
@@ -44,7 +45,8 @@ pip install myxagent -i https://pypi.org/simple
 # or use Aliyun mirror for faster download in China
 pip install myxagent -i https://mirrors.aliyun.com/pypi/simple
 ```
-### Quick Start
+
+## 🚀 Quick Start
 
 To quickly start using xAgent, you can run the built-in cli or HTTP server with default settings:
 
@@ -60,6 +62,18 @@ xagent-server
 
 # Start the Streamlit web interface (Optional)
 xagent-web
+```
+
+Interact by using server API:
+
+```bash
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user123",
+    "session_id": "session456",
+    "user_message": "Who are you?"
+  }'
 ```
 
 ### Environment Configuration
@@ -91,7 +105,7 @@ you can manually load the `.env` file into your shell:
 export $(cat .env | grep -v '^#' | xargs)
 ```
 
-## 🌐 Quick Start: HTTP Agent Server
+## 🌐 HTTP Agent Server
 
 The simplest way to use xAgent is through the HTTP server. Just create a config file and start serving!
 
