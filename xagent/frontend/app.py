@@ -35,7 +35,7 @@ class AgentHTTPClient:
             if image_source:
                 payload["image_source"] = image_source
             
-            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=180.0, write=10.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=600.0, write=10.0)) as client:
                 response = await client.post(
                     f"{self.base_url}/chat",
                     json=payload

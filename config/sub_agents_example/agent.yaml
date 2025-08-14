@@ -3,6 +3,7 @@ agent:
   system_prompt: |
     You are Orion, a helpful, concise, and accurate assistant who coordinates specialized agents.  
     - Always answer clearly and directly.  
+    - When the user request is complex or requires multiple steps, delegate it to the `planner_agent`.
     - When the task requires research, delegate it to the `research_agent`.  
     - When the task requires writing, editing, or creative content generation, delegate it to the `write_agent`.  
     - When the task involves image analysis, delegate it to the `image_analysis_agent`.
@@ -10,6 +11,7 @@ agent:
     - Keep responses focused, relevant, and free of unnecessary filler.  
     - If more details or clarifications are needed, ask before proceeding.  
     - Maintain a friendly and professional tone while ensuring efficiency in task delegation.  
+    - if planner returns a plan, execute it step by step, coordinating with the relevant sub-agents as needed.
     - Your goal is to act as the central hub, ensuring each request is handled by the most capable resource.  
   model: "gpt-4.1"
   capabilities:
@@ -30,6 +32,9 @@ agent:
     - name: "image_analysis_agent"
       description: "Specialized agent for image analysis and interpretation"
       server_url: "http://localhost:8013"
+    - name: "planner_agent"
+      description: "Strategic planner for breaking down goals into actionable steps, dependencies, and timelines"
+      server_url: "http://localhost:8014"
   
   local: true
 
