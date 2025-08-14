@@ -19,7 +19,6 @@ xAgent provides a complete AI assistant experience with text and image processin
 - [💻 Command Line Interface (CLI)](#-command-line-interface-cli)
 - [🤖 Advanced Usage: Agent Class](#-advanced-usage-agent-class)
 - [🏗️ Architecture](#%EF%B8%8F-architecture)
-- [🔧 Development Guide](#-development-guide)
 - [🤖 API Reference](#-api-reference)
 - [📊 Monitoring & Observability](#-monitoring--observability)
 - [🤝 Contributing](#-contributing)
@@ -166,7 +165,7 @@ from .your_tools import calculate_square, greet_user
 # Agent will automatically discover these tools,you can choose which to load in agent config
 TOOLKIT_REGISTRY = {
     "calculate_square": calculate_square,
-    "greet_user": greet_user
+    "fetch_weather": fetch_weather
 }
 
 ```
@@ -183,11 +182,22 @@ def calculate_square(n: int) -> int:
     return n * n
 
 @function_tool()
-def greet_user(name: str) -> str:
-    """Greet a user by name."""
-    return f"Hello, {name}! Nice to meet you."
+async def fetch_weather(city: str) -> str:
+    """Fetch weather data for a city (dummy implementation)."""
+    return f"The weather in {city} is sunny with a high of 25°C."
 
 ```
+
+You can override the default tool name and description using the `function_tool` decorator:
+
+```python
+@function_tool(name="custom_square", description="Calculate the square of a number")
+def calculate_square(n: int) -> int:
+    return n * n
+```
+
+> **⚠️ Note**: Recursive functions are not supported as tools due to potential stack overflow issues in async environments.
+
 
 ### 3. Start the Server
 
@@ -800,72 +810,6 @@ xAgent/
 ├── 📝 examples/              # Usage examples and demos
 ├── 🧪 tests/                 # Comprehensive test suite
 ├── 📁 logs/                  # Log files
-```
-
-
-### 🔄 Core Components
-
-| Component | Purpose | Technology |
-|-----------|---------|------------|
-| **Agent** | Core conversation handler | OpenAI API + AsyncIO |
-| **Session** | Message history management | Redis + Operations |
-| **MessageDB** | Scalable persistence layer | Redis with client |
-| **Tools** | Extensible function ecosystem | Auto sync-to-async conversion |
-| **MCP** | Dynamic tool loading protocol | HTTP client |
-
-## 🔧 Development Guide
-
-### 🛠️ Creating Tools
-
-Both sync and async functions work seamlessly:
-
-```python
-from xagent.utils.tool_decorator import function_tool
-import asyncio
-import time
-
-# ✅ Sync tool - perfect for CPU-bound operations
-@function_tool()
-def my_sync_tool(input_text: str) -> str:
-    """Process text synchronously (runs in thread pool)."""
-    time.sleep(0.1)  # Simulate CPU-intensive work
-    return f"Sync processed: {input_text}"
-
-# ✅ Async tool - ideal for I/O-bound operations  
-@function_tool()
-async def my_async_tool(input_text: str) -> str:
-    """Process text asynchronously."""
-    await asyncio.sleep(0.1)  # Simulate async I/O operation
-    return f"Async processed: {input_text}"
-```
-
-### 📋 Tool Development Guidelines
-
-| Use Case | Tool Type | Example |
-|----------|-----------|---------|
-| **CPU-bound** | Sync functions | Math calculations, data processing |
-| **I/O-bound** | Async functions | API calls, database queries |
-| **Simple operations** | Sync functions | String manipulation, file operations |
-| **Network requests** | Async functions | HTTP requests, WebSocket connections |
-
-> **⚠️ Note**: Recursive functions are not supported as tools due to potential stack overflow issues in async environments.
-
-### 🔄 Automatic Conversion
-
-xAgent's `@function_tool()` decorator automatically handles sync-to-async conversion:
-
-- **Sync functions** → Run in thread pool (non-blocking)
-- **Async functions** → Run directly on event loop
-- **Concurrent execution** → All tools execute in parallel when called
-
-### 📝 Override Defaults
-
-You can override the default tool name and description using the `function_tool` decorator:
-
-```python
-@function_tool(name="custom_square", description="Calculate the square of a number")
-def calculate_square(n: int) -> int:
-    return n * n
 ```
 
 ## 🤖 API Reference
