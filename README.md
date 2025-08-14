@@ -44,16 +44,27 @@ pip install myxagent -i https://pypi.org/simple
 # or use Aliyun mirror for faster download in China
 pip install myxagent -i https://mirrors.aliyun.com/pypi/simple
 ```
+### Quick Start
+
+To quickly start using xAgent, you can run the built-in cli or HTTP server with default settings:
+
+```bash
+# Set your OpenAI API key
+export OPENAI_API_KEY=your_openai_api_key
+
+# Start the CLI with default configuration
+xagent-cli
+
+# Or start the HTTP server with default configuration
+xagent-server
+
+# Start the Streamlit web interface (Optional)
+xagent-web
+```
 
 ### Environment Configuration
 
-Quick start by setting the OpenAI API key in your shell:
-
-```bash
-export OPENAI_API_KEY=your_openai_api_key
-```
-
-Or create a `.env` file in your project directory and add the following variables:
+Create a `.env` file in your project directory and add the following variables:
 
 ```bash
 # Required
