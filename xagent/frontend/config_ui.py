@@ -17,6 +17,8 @@ class AgentConfigUI:
     def __init__(self):
         self.config_dir = Path("config")
         self.config_dir.mkdir(exist_ok=True)
+        self.logs_dir = Path("logs")
+        self.logs_dir.mkdir(exist_ok=True)
         self.toolkit_dir = Path("toolkit")
         self.running_servers = self._load_server_registry()
         self.running_webchats = self._load_webchat_registry()
@@ -683,94 +685,125 @@ class AgentConfigUI:
             if toolkit_path and toolkit_path.strip() and toolkit_path != "toolkit":
                 cmd.extend(["--toolkit_path", toolkit_path])
             
-            st.info(f"🚀 Starting server with command: {' '.join(cmd)}")
+            # Create log file path
+            agent_name_safe = config['agent']['name'].lower().replace(' ', '_').replace('-', '_')
+            log_file = self.logs_dir / f"{agent_name_safe}.log"
             
-            # Start server process
+            st.info(f"🚀 Starting server with command: {' '.join(cmd)}")
+            st.info(f"📝 Logs will be written to: {log_file}")
+            
+            # Start server process with log redirection
             with st.spinner("Starting server..."):
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    preexec_fn=os.setsid,
-                    cwd=os.getcwd(),
-                    env=os.environ.copy()
-                )
-                
-                # Wait and monitor server startup
-                server_url = f"http://{config['server']['host']}:{config['server']['port']}"
-                max_wait_time = 30  # Maximum wait time in seconds
-                check_interval = 2  # Check every 2 seconds
-                waited_time = 0
-                
-                while waited_time < max_wait_time:
-                    time.sleep(check_interval)
-                    waited_time += check_interval
-                    
-                    # Check if process is still alive
-                    if process.poll() is not None:
-                        # Process has terminated
-                        stdout, stderr = process.communicate()
-                        stdout_str = stdout.decode() if stdout else ""
-                        stderr_str = stderr.decode() if stderr else ""
-                        
-                        if stderr_str:
-                            st.error(f"**Error output:**\n```\n{stderr_str}\n```")
-                        if stdout_str:
-                            st.info(f"**Standard output:**\n```\n{stdout_str}\n```")
-                        
-                        st.error("❌ Server process terminated unexpectedly")
-                        return
-                    
-                    # Check if server is responding
-                    if self._check_server_health(server_url):
-                        # Server is up and running
-                        server_id = f"{config['agent']['name']}_{config['server']['port']}"
-                        self.running_servers[server_id] = {
-                            "name": config['agent']['name'],
-                            "url": server_url,
-                            "config_file": config_filename,
-                            "pid": process.pid,
-                            "started_at": datetime.now().isoformat(),
-                            "toolkit_path": toolkit_path
-                        }
-                        self._save_server_registry()
-                        
-                        st.success(f"✅ Server started successfully!")
-                        st.info(f"🌐 Server URL: {server_url}")
-                        st.info(f"🔗 Health Check: {server_url}/health")
-                        st.info(f"⏱️ Startup time: {waited_time} seconds")
-                        
-                        return
-                    
-                    # Show progress
-                    progress_msg = f"⏳ Waiting for server... ({waited_time}/{max_wait_time}s)"
-                    st.info(progress_msg)
-                
-                # Timeout reached
-                st.error("❌ Server startup timeout")
-                
-                # Try to get any output before terminating
+                # Open log file for writing
+                log_file_handle = None
                 try:
-                    stdout, stderr = process.communicate(timeout=3)
-                    stdout_str = stdout.decode() if stdout else ""
-                    stderr_str = stderr.decode() if stderr else ""
+                    log_file_handle = open(log_file, 'w', encoding='utf-8')
                     
-                    if stderr_str:
-                        st.error(f"**Error output:**\n```\n{stderr_str}\n```")
-                    if stdout_str:
-                        st.info(f"**Standard output:**\n```\n{stdout_str}\n```")
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=log_file_handle,
+                        stderr=subprocess.STDOUT,  # Redirect stderr to stdout (which goes to log file)
+                        preexec_fn=os.setsid,
+                        cwd=os.getcwd(),
+                        env=os.environ.copy()
+                    )
+                    
+                    # Wait and monitor server startup
+                    server_url = f"http://{config['server']['host']}:{config['server']['port']}"
+                    max_wait_time = 30  # Maximum wait time in seconds
+                    check_interval = 2  # Check every 2 seconds
+                    waited_time = 0
+                    
+                    while waited_time < max_wait_time:
+                        time.sleep(check_interval)
+                        waited_time += check_interval
                         
-                except subprocess.TimeoutExpired:
-                    st.warning("Could not retrieve process output")
+                        # Check if process is still alive
+                        if process.poll() is not None:
+                            # Process has terminated
+                            if log_file_handle:
+                                log_file_handle.close()
+                                log_file_handle = None
+                            
+                            # Read the log file to show error
+                            try:
+                                with open(log_file, 'r', encoding='utf-8') as f:
+                                    log_content = f.read()
+                                if log_content:
+                                    st.error(f"**Server log output:**\n```\n{log_content[-2000:]}\n```")  # Show last 2000 chars
+                                else:
+                                    st.error("Server process terminated unexpectedly with no log output")
+                            except Exception as e:
+                                st.error(f"❌ Server process terminated unexpectedly. Could not read log file: {e}")
+                            
+                            st.error("❌ Server process terminated unexpectedly")
+                            return
+                        
+                        # Check if server is responding
+                        if self._check_server_health(server_url):
+                            # Server is up and running
+                            if log_file_handle:
+                                log_file_handle.close()
+                                log_file_handle = None
+                            
+                            server_id = f"{config['agent']['name']}_{config['server']['port']}"
+                            self.running_servers[server_id] = {
+                                "name": config['agent']['name'],
+                                "url": server_url,
+                                "config_file": config_filename,
+                                "log_file": str(log_file),
+                                "pid": process.pid,
+                                "started_at": datetime.now().isoformat(),
+                                "toolkit_path": toolkit_path
+                            }
+                            self._save_server_registry()
+                            
+                            st.success(f"✅ Server started successfully!")
+                            st.info(f"🌐 Server URL: {server_url}")
+                            st.info(f"🔗 Health Check: {server_url}/health")
+                            st.info(f"📝 Log File: {log_file}")
+                            st.info(f"⏱️ Startup time: {waited_time} seconds")
+                            
+                            return
+                        
+                        # Show progress
+                        progress_msg = f"⏳ Waiting for server... ({waited_time}/{max_wait_time}s)"
+                        st.info(progress_msg)
+                    
+                    # Timeout reached
+                    if log_file_handle:
+                        log_file_handle.close()
+                        log_file_handle = None
+                    st.error("❌ Server startup timeout")
+                    
+                    # Try to read log file to show any output
+                    try:
+                        with open(log_file, 'r', encoding='utf-8') as f:
+                            log_content = f.read()
+                        if log_content:
+                            st.error(f"**Log file content:**\n```\n{log_content[-2000:]}\n```")  # Show last 2000 chars
+                        else:
+                            st.info("No log output available")
+                            
+                    except Exception as e:
+                        st.warning(f"Could not read log file: {e}")
+                    
+                    # Terminate the process
+                    try:
+                        process.terminate()
+                        time.sleep(2)
+                        if process.poll() is None:
+                            process.kill()
+                    except:
+                        pass
                 
-                # Terminate the process
-                try:
-                    process.terminate()
-                    time.sleep(2)
-                    if process.poll() is None:
-                        process.kill()
-                except:
-                    pass
+                finally:
+                    # Ensure log file handle is always closed
+                    if log_file_handle:
+                        try:
+                            log_file_handle.close()
+                        except:
+                            pass
         
         except FileNotFoundError:
             st.error("❌ `xagent-server` command not found. Please ensure xAgent is properly installed.")
@@ -876,6 +909,9 @@ class AgentConfigUI:
                     st.write(f"{status_icon} **{server_info['name']}**")
                     st.write(f"URL: {server_info['url']}")
                     st.write(f"Started: {server_info.get('started_at', 'Unknown')}")
+                    log_file = server_info.get('log_file')
+                    if log_file:
+                        st.write(f"📝 Log: {log_file}")
                     
                     # Show web chat status if exists
                     if webchat_info:
@@ -921,7 +957,51 @@ class AgentConfigUI:
                 
                 # Server details
                 with st.expander(f"Details - {server_info['name']}"):
-                    st.json(server_info)
+                    col_details, col_logs = st.columns([1, 1])
+                    
+                    with col_details:
+                        st.subheader("Server Info")
+                        st.json(server_info)
+                    
+                    with col_logs:
+                        st.subheader("📝 Log File")
+                        log_file = server_info.get('log_file')
+                        if log_file and Path(log_file).exists():
+                            if st.button(f"📄 View Latest Logs", key=f"viewlog_{server_id}"):
+                                try:
+                                    with open(log_file, 'r', encoding='utf-8') as f:
+                                        log_content = f.read()
+                                    
+                                    # Show last 3000 characters of log
+                                    if len(log_content) > 3000:
+                                        display_content = "..." + log_content[-3000:]
+                                    else:
+                                        display_content = log_content
+                                    
+                                    st.text_area(
+                                        f"Latest logs from {Path(log_file).name}:",
+                                        value=display_content,
+                                        height=300,
+                                        disabled=True,
+                                        key=f"logcontent_{server_id}"
+                                    )
+                                except Exception as e:
+                                    st.error(f"Error reading log file: {e}")
+                            
+                            st.info(f"Log file: `{log_file}`")
+                            
+                            # Add option to clear logs
+                            if st.button(f"🗑️ Clear Logs", key=f"clearlog_{server_id}"):
+                                try:
+                                    with open(log_file, 'w', encoding='utf-8') as f:
+                                        f.write("")  # Clear the file
+                                    st.success("✅ Log file cleared")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error clearing log file: {e}")
+                        else:
+                            st.warning("No log file found or file doesn't exist")
                 
                 st.divider()
     
