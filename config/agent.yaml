@@ -1,14 +1,13 @@
 agent:
-  name: "MyAgent"
+  name: "Agent"
   system_prompt: |
     You are a helpful assistant. Your task is to assist users with their queries and tasks.
-  model: "gpt-4.1-mini"
+  model: "gpt-4.1"
 
   capabilities:
     tools:
       - "web_search"  # Built-in web search
       - "draw_image"  # Built-in image generation (need set AWS credentials in .env)
-      - "calculate_square"  # Custom tool from my_toolkit
       
 server:
   host: "0.0.0.0"
