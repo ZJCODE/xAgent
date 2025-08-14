@@ -145,7 +145,7 @@ agent:
   ...
 ```
 
-you can also set `use_local_session` to `false` if you want to use Redis for session persistence(need to set `REDIS_URL` in `.env`):
+If you use Redis, you can set `use_local_session` to `false` (make sure to configure `REDIS_URL` in the `.env` file). This way, when deploying multiple services, the conversation can remain consistent even if requests are routed to different service instances.
 
 ```yaml
 agent:
