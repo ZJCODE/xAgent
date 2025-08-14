@@ -355,6 +355,8 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
+You can create sub-agents with any depth you want, forming a hierarchical tree structure of agents. Just make sure there are no circular references, and start the agents in a bottom-up order.
+
 #### Structured Output Configuration
 
 现在您可以在YAML配置文件中定义`output_schema`，系统会自动将其转换为Pydantic BaseModel，并设置为Agent的`output_type`字段。这样可以确保Agent返回结构化的、类型安全的输出，完美兼容OpenAI的JSON Schema要求。
