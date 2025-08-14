@@ -177,18 +177,28 @@ def display_chat_history():
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             content = message["content"]
-            # 判断是否为 base64 图片 markdown
-            if isinstance(content, str) and content.startswith("![generated image](data:image/png;base64,"):
-                prefix = "![generated image]("
-                suffix = ")"
-                img_url = content[len(prefix):-len(suffix)]
-                st.markdown(
-                    f'<img src="{img_url}" style="max-width:400px;">',
-                    unsafe_allow_html=True
-                )
+            
+            # 检查是否为字典/JSON对象
+            if isinstance(content, dict):
+                # 如果是JSON对象，使用st.json展示
+                st.json(content)
+            elif isinstance(content, str):
+                # 判断是否为 base64 图片 markdown
+                if content.startswith("![generated image](data:image/png;base64,"):
+                    prefix = "![generated image]("
+                    suffix = ")"
+                    img_url = content[len(prefix):-len(suffix)]
+                    st.markdown(
+                        f'<img src="{img_url}" style="max-width:400px;">',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    # 新增：对所有 markdown 内容做图片宽度限制
+                    st.markdown(render_markdown_with_img_limit(content), unsafe_allow_html=True)
             else:
-                # 新增：对所有 markdown 内容做图片宽度限制
-                st.markdown(render_markdown_with_img_limit(content), unsafe_allow_html=True)
+                # 其他类型，转换为字符串显示
+                st.text(str(content))
+                
             if "timestamp" in message:
                 st.caption(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(message['timestamp']))}")
 
@@ -324,7 +334,7 @@ def main():
                 if st.session_state.enable_streaming:
                     # 流式输出模式
                     reply_placeholder = st.empty()
-                    full_reply = ""
+                    full_reply = ""  # 初始化为字符串，但可能会被字典覆盖
                     first_chunk_received = False
                     
                     # 初始显示"正在思考..."
@@ -344,19 +354,31 @@ def main():
                                 first_chunk_received = True
                                 reply_placeholder.empty()
                             
-                            full_reply += chunk
-                            # 实时更新显示
-                            if full_reply.startswith("![generated image](data:image/png;base64,"):
-                                # 如果是图片，等待完整后再显示
-                                if full_reply.endswith(")"):
-                                    prefix = "![generated image]("
-                                    suffix = ")"
-                                    img_url = full_reply[len(prefix):-len(suffix)]
-                                    reply_placeholder.markdown(
-                                        f'<img src="{img_url}" style="max-width:400px;">',
-                                        unsafe_allow_html=True
-                                    )
+                            # 检查chunk类型，如果是字典则转换为字符串
+                            if isinstance(chunk, dict):
+                                # 如果是字典，可能是JSON响应，直接显示并结束
+                                reply_placeholder.json(chunk)
+                                full_reply = chunk  # 保存为字典
+                                return
+                            elif isinstance(chunk, str):
+                                full_reply += chunk
+                                # 实时更新显示
+                                if full_reply.startswith("![generated image](data:image/png;base64,"):
+                                    # 如果是图片，等待完整后再显示
+                                    if full_reply.endswith(")"):
+                                        prefix = "![generated image]("
+                                        suffix = ")"
+                                        img_url = full_reply[len(prefix):-len(suffix)]
+                                        reply_placeholder.markdown(
+                                            f'<img src="{img_url}" style="max-width:400px;">',
+                                            unsafe_allow_html=True
+                                        )
+                                else:
+                                    reply_placeholder.markdown(render_markdown_with_img_limit(full_reply), unsafe_allow_html=True)
                             else:
+                                # 其他类型转换为字符串处理
+                                chunk_str = str(chunk)
+                                full_reply += chunk_str
                                 reply_placeholder.markdown(render_markdown_with_img_limit(full_reply), unsafe_allow_html=True)
                     
                     asyncio.run(stream_response())
@@ -374,20 +396,28 @@ def main():
                             )
                         )
                         
-                        # 判断是否为 base64 图片 markdown
-                        if reply.startswith("![generated image](data:image/png;base64,"):
-                            # 提取 base64 数据
-                            prefix = "![generated image]("
-                            suffix = ")"
-                            img_url = reply[len(prefix):-len(suffix)]
-                            # 用 HTML 控制最大宽度
-                            st.markdown(
-                                f'<img src="{img_url}" style="max-width:400px;">',
-                                unsafe_allow_html=True
-                            )
+                        # 检查是否为字典/JSON对象
+                        if isinstance(reply, dict):
+                            # 如果是JSON对象，使用st.json展示
+                            st.json(reply)
+                        elif isinstance(reply, str):
+                            # 判断是否为 base64 图片 markdown
+                            if reply.startswith("![generated image](data:image/png;base64,"):
+                                # 提取 base64 数据
+                                prefix = "![generated image]("
+                                suffix = ")"
+                                img_url = reply[len(prefix):-len(suffix)]
+                                # 用 HTML 控制最大宽度
+                                st.markdown(
+                                    f'<img src="{img_url}" style="max-width:400px;">',
+                                    unsafe_allow_html=True
+                                )
+                            else:
+                                # 新增：对助手回复内容做图片宽度限制
+                                st.markdown(render_markdown_with_img_limit(reply), unsafe_allow_html=True)
                         else:
-                            # 新增：对助手回复内容做图片宽度限制
-                            st.markdown(render_markdown_with_img_limit(reply), unsafe_allow_html=True)
+                            # 其他类型，转换为字符串显示
+                            st.text(str(reply))
                 
                 # 添加助手消息到历史
                 assistant_message = {
