@@ -83,6 +83,9 @@ More about cli and http server usage, please refer to the [CLI](#-command-line-i
 ```bash
 pip install myxagent
 
+# upgrade to the latest version
+pip install --upgrade myxagent
+
 # use official PyPI
 pip install myxagent -i https://pypi.org/simple
 
