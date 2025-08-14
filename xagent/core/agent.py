@@ -154,6 +154,9 @@ class Agent:
 
         if output_type is None:
             output_type = self.output_type
+            
+        if output_type:
+            stream = False  # Structured output does not support streaming
 
         try:
             # Register tools and MCP servers in each chat call to make sure they are up-to-date

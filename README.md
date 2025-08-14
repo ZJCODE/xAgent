@@ -317,6 +317,70 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
+#### Structured Output Configuration
+
+现在您可以在YAML配置文件中定义`output_schema`，系统会自动将其转换为Pydantic BaseModel，并设置为Agent的`output_type`字段。
+
+
+在您的YAML配置文件中，可以这样定义output_schema：
+
+```yaml
+agent:
+  name: "YourAgent"
+  system_prompt: "Your system prompt here"
+  model: "gpt-4o-mini"
+  
+  output_schema:
+    class_name: "YourModelName"  # 生成的BaseModel类名
+    fields:
+      field_name:
+        type: "field_type"        # 支持的类型见下方
+        description: "字段描述"    # 字段的描述信息
+```
+
+目前支持以下Python基础类型：
+
+- `str` - 字符串类型
+- `int` - 整数类型  
+- `float` - 浮点数类型
+- `bool` - 布尔类型
+- `list` - 列表类型
+- `dict` - 字典类型
+
+天气报告模型示例
+
+```yaml
+agent:
+  name: "WeatherAgent"
+  system_prompt: |
+    You are a weather reporting assistant. 
+    Provide structured weather information.
+  model: "gpt-4o-mini"
+  capabilities:
+    tools:
+      - "web_search"  # 使用内置的web搜索工具
+  
+  output_schema:
+    class_name: "WeatherReport"
+    fields:
+      location:
+        type: "str"
+        description: "The location for the weather report"
+      temperature:
+        type: "int"
+        description: "Temperature in degrees Celsius"
+```
+
+这相当于创建了以下Python类：
+
+```python
+class WeatherReport(BaseModel):
+    location: str = Field(description="The location for the weather report")
+    temperature: int = Field(description="Temperature in degrees Celsius")
+```
+
+这样启动的Agent会按照设定的`output_schema`自动创建Pydantic模型，并在聊天时返回结构化的输出。
+
 ## 🌐 Web Interface
 
 xAgent provides a user-friendly Streamlit web interface for interactive conversations with your AI agent.

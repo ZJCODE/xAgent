@@ -2,8 +2,9 @@ import os
 import yaml
 import importlib.util
 import sys
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Type
 from dotenv import load_dotenv
+from pydantic import BaseModel, create_model
 
 from ..core.agent import Agent
 from ..db.message import MessageDB
@@ -125,6 +126,56 @@ class BaseAgentRunner:
             print(f"Warning: failed to load TOOLKIT_REGISTRY from {toolkit_path}: {e}")
         return {}
     
+    def _create_output_model_from_schema(self, output_schema: Optional[Dict[str, Any]]) -> Optional[Type[BaseModel]]:
+        """
+        Create a dynamic Pydantic BaseModel from YAML output_schema configuration.
+        
+        Args:
+            output_schema: Dictionary containing class_name and fields configuration
+            
+        Returns:
+            Dynamic Pydantic BaseModel class or None if no schema provided
+        """
+        if not output_schema:
+            return None
+        
+        try:
+            class_name = output_schema.get("class_name", "DynamicModel")
+            fields_config = output_schema.get("fields", {})
+            
+            if not fields_config:
+                return None
+            
+            # Build field definitions for create_model
+            field_definitions = {}
+            for field_name, field_config in fields_config.items():
+                field_type = field_config.get("type", "str")
+                field_description = field_config.get("description", "")
+                
+                # Map string type names to actual Python types
+                type_mapping = {
+                    "str": str,
+                    "int": int,
+                    "float": float,
+                    "bool": bool,
+                    "list": list,
+                    "dict": dict,
+                }
+                
+                python_type = type_mapping.get(field_type, str)
+                
+                # Create field definition (type, default_value, Field(...))
+                from pydantic import Field
+                field_definitions[field_name] = (python_type, Field(description=field_description))
+            
+            # Create the dynamic model
+            dynamic_model = create_model(class_name, **field_definitions)
+            return dynamic_model
+            
+        except Exception as e:
+            print(f"Warning: failed to create output model from schema: {e}")
+            return None
+    
     def _initialize_agent(self) -> Agent:
         """Initialize the agent with tools and configuration."""
         agent_cfg = self.config.get("agent", {})
@@ -160,6 +211,10 @@ class BaseAgentRunner:
                     # Already in tuple format
                     sub_agents.append(tuple(agent_config))
         
+        # Create output model from schema if provided
+        output_type = None
+        if "output_schema" in agent_cfg:
+            output_type = self._create_output_model_from_schema(agent_cfg["output_schema"])
 
         return Agent(
             name=agent_cfg.get("name"),
@@ -168,6 +223,7 @@ class BaseAgentRunner:
             tools=tools,
             mcp_servers=mcp_servers,
             sub_agents=sub_agents,
+            output_type=output_type,
         )
     
     def _initialize_message_db(self) -> Optional[MessageDB]:

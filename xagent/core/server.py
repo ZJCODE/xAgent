@@ -103,7 +103,11 @@ class HTTPAgentServer(BaseAgentRunner):
                                 yield "data: [DONE]\n\n"
                             else:
                                 # Fallback when no generator is returned
-                                yield f"data: {json.dumps({'message': str(response)})}\n\n"
+                                # Handle structured output properly
+                                if hasattr(response, 'model_dump'):  # Pydantic BaseModel
+                                    yield f"data: {json.dumps({'message': response.model_dump()})}\n\n"
+                                else:  # String response
+                                    yield f"data: {json.dumps({'message': str(response)})}\n\n"
                                 yield "data: [DONE]\n\n"
                         except Exception as e:
                             # Stream error as SSE, client can handle gracefully
@@ -118,7 +122,11 @@ class HTTPAgentServer(BaseAgentRunner):
                     image_source=input_data.image_source
                 )
                 
-                return {"reply": str(response)}
+                # Handle different response types properly
+                if hasattr(response, 'model_dump'):  # Pydantic BaseModel
+                    return {"reply": response.model_dump()}
+                else:  # String response
+                    return {"reply": str(response)}
                 
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Agent processing error: {str(e)}")

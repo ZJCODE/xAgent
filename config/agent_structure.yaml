@@ -1,0 +1,25 @@
+agent:
+  name: "WeatherAgent"
+  system_prompt: |
+    You are a weather reporting assistant. When asked for weather information,
+    provide accurate and structured responses using the defined output format.
+  model: "gpt-4o-mini"
+  capabilities:
+    tools:
+      - "web_search"
+  
+  use_local_session: true
+
+  output_schema:
+    class_name: "WeatherReport"
+    fields:
+      location:
+        type: "str"
+        description: "The location for the weather report"
+      temperature:
+        type: "int"
+        description: "Temperature in degrees Celsius"
+
+server:
+  host: "0.0.0.0"
+  port: 8010
