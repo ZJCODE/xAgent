@@ -5,6 +5,9 @@ import asyncio
 import uuid
 import logging
 from typing import Optional, Dict, Any
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 from ..core.base import BaseAgentRunner
 from ..core.session import Session

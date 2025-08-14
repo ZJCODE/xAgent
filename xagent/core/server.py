@@ -7,6 +7,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import json
 from fastapi.responses import StreamingResponse
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 from ..core.base import BaseAgentRunner
 from ..core.session import Session
