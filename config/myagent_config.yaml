@@ -1,0 +1,11 @@
+agent:
+  capabilities:
+    tools:
+    - web_search
+  model: gpt-4o-mini
+  name: MyAgent
+  system_prompt: You are a helpful AI assistant.
+  use_local_session: true
+server:
+  host: 0.0.0.0
+  port: 8007

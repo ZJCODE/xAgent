@@ -45,8 +45,8 @@ xagent-server
 # Start the Streamlit web interface (Optional)
 xagent-web
 
-# Start the visual configuration interface (NEW!)
-xagent-config
+# Or start the visual configuration and management interface (Recommended)
+xagent
 ```
 
 If start a http server, you can interact with the agent using the following command:
@@ -467,15 +467,15 @@ xagent-web --agent-server http://localhost:8010
 xagent-web --host 0.0.0.0 --port 8501 --agent-server http://localhost:8010
 ```
 
-### 2. Configuration Interface (NEW!)
-Visual configuration interface for creating and managing xAgent servers without writing YAML files.
+### 2. Configuration and Management Interface
+Visual configuration and management interface for creating and managing xAgent servers without writing YAML files.
 
 ```bash
-# Start the configuration interface
-xagent-config
+# Start the configuration and management interface
+xagent
 
 # With custom host and port
-xagent-config --host 0.0.0.0 --port 8502
+xagent --host 0.0.0.0 --port 8502
 ```
 
 ### Web Interface Options
@@ -483,22 +483,8 @@ xagent-config --host 0.0.0.0 --port 8502
 | Interface | Default Port | Description |
 |-----------|--------------|-------------|
 | Chat Interface | 8501 | Interactive conversation with agents |
-| Config Interface | 8502 | Visual agent configuration and management |
+| Config and Management Interface | 8502 | Visual agent configuration and management( chat interface included) |
 
-### Complete Web Setup Example
-
-```bash
-# Terminal 1: Start the agent server using config UI
-xagent-config
-# Create and start your agent through the web interface
-
-# Terminal 2: Start the chat interface  
-xagent-web --agent-server http://localhost:8010
-
-# Access:
-# - Configuration UI: http://localhost:8502
-# - Chat Interface: http://localhost:8501
-```
 
 ## 💻 Command Line Interface (CLI)
 

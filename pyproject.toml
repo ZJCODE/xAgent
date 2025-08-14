@@ -43,7 +43,7 @@ dependencies = [
 xagent-server = "xagent.core.server:main"
 xagent-cli = "xagent.core.cli:main"
 xagent-web = "xagent.frontend.launcher:main"
-xagent-config = "xagent.frontend.config_launcher:main"
+xagent = "xagent.frontend.config_launcher:main"
 
 [project.urls]
 Repository = "https://github.com/ZJCODE/xagent"
