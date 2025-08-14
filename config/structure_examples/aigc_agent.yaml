@@ -1,0 +1,34 @@
+agent:
+  name: "AIGCAgent"
+  system_prompt: |
+    You are a content generation assistant. When asked to generate content,
+    provide structured and detailed responses using the defined output format.
+  model: "gpt-4o-mini"
+  capabilities:
+    tools:
+      - "web_search"
+      - "draw_image" # built-in image drawing tool
+  
+  use_local_session: true
+
+  output_schema:
+    class_name: "ContentReport"
+    fields:
+      title:
+        type: "str"
+        description: "The title of the content report"
+      content:
+        type: "str"
+        description: "The main content of the report"
+      images:
+        type: "list"
+        items: "str"  # 指定列表元素为字符串类型
+        description: "List of image URLs related to the content"
+      tags:
+        type: "list"
+        items: "str"
+        description: "List of relevant tags"
+
+server:
+  host: "0.0.0.0"
+  port: 8010

@@ -2,7 +2,7 @@ import os
 import yaml
 import importlib.util
 import sys
-from typing import Optional, Dict, Any, Type
+from typing import Optional, Dict, Any, Type, List
 from dotenv import load_dotenv
 from pydantic import BaseModel, create_model
 
@@ -163,6 +163,13 @@ class BaseAgentRunner:
                 }
                 
                 python_type = type_mapping.get(field_type, str)
+                
+                # Handle list types with items specification
+                if field_type == "list" and "items" in field_config:
+                    items_type = field_config["items"]
+                    items_python_type = type_mapping.get(items_type, str)
+                    # Create List[items_type] annotation
+                    python_type = List[items_python_type]
                 
                 # Create field definition (type, default_value, Field(...))
                 from pydantic import Field

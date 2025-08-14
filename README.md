@@ -319,8 +319,7 @@ curl -X POST "http://localhost:8010/chat" \
 
 #### Structured Output Configuration
 
-现在您可以在YAML配置文件中定义`output_schema`，系统会自动将其转换为Pydantic BaseModel，并设置为Agent的`output_type`字段。
-
+现在您可以在YAML配置文件中定义`output_schema`，系统会自动将其转换为Pydantic BaseModel，并设置为Agent的`output_type`字段。这样可以确保Agent返回结构化的、类型安全的输出，完美兼容OpenAI的JSON Schema要求。
 
 在您的YAML配置文件中，可以这样定义output_schema：
 
@@ -336,6 +335,10 @@ agent:
       field_name:
         type: "field_type"        # 支持的类型见下方
         description: "字段描述"    # 字段的描述信息
+      list_field:
+        type: "list"
+        items: "str"              # 列表元素类型（必需）
+        description: "列表字段描述"
 ```
 
 目前支持以下Python基础类型：
@@ -344,39 +347,58 @@ agent:
 - `int` - 整数类型  
 - `float` - 浮点数类型
 - `bool` - 布尔类型
-- `list` - 列表类型
+- `list` - 列表类型（**必须指定 `items` 字段**）
 - `dict` - 字典类型
 
-天气报告模型示例
+**重要注意事项：**
+- 当使用 `list` 类型时，必须通过 `items` 字段指定列表元素的类型
+- 这是为了符合OpenAI JSON Schema的验证要求
+- `items` 支持任何基础类型：`str`、`int`、`float`、`bool`等
+
+内容生成模型示例（包含列表字段）：
 
 ```yaml
 agent:
-  name: "WeatherAgent"
+  name: "ContentAgent"
   system_prompt: |
-    You are a weather reporting assistant. 
-    Provide structured weather information.
+    You are a content generation assistant. 
+    Generate structured content with images.
   model: "gpt-4o-mini"
   capabilities:
     tools:
-      - "web_search"  # 使用内置的web搜索工具
+      - "web_search"
+      - "draw_image"
   
   output_schema:
-    class_name: "WeatherReport"
+    class_name: "ContentReport"
     fields:
-      location:
+      title:
         type: "str"
-        description: "The location for the weather report"
-      temperature:
-        type: "int"
-        description: "Temperature in degrees Celsius"
+        description: "The title of the content report"
+      content:
+        type: "str"
+        description: "The main content of the report"
+      images:
+        type: "list"
+        items: "str"  # 指定列表元素为字符串类型
+        description: "List of image URLs related to the content"
+      tags:
+        type: "list"
+        items: "str"
+        description: "List of relevant tags"
 ```
 
 这相当于创建了以下Python类：
 
 ```python
-class WeatherReport(BaseModel):
-    location: str = Field(description="The location for the weather report")
-    temperature: int = Field(description="Temperature in degrees Celsius")
+from typing import List
+from pydantic import BaseModel, Field
+
+class ContentReport(BaseModel):
+    title: str = Field(description="The title of the content report")
+    content: str = Field(description="The main content of the report")
+    images: List[str] = Field(description="List of image URLs related to the content")
+    tags: List[str] = Field(description="List of relevant tags")
 ```
 
 这样启动的Agent会按照设定的`output_schema`自动创建Pydantic模型，并在聊天时返回结构化的输出。
