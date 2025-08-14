@@ -48,7 +48,7 @@ pip install myxagent -i https://mirrors.aliyun.com/pypi/simple
 
 ## 🚀 Quick Start
 
-To quickly start using xAgent, you can run the built-in cli or HTTP server with default settings:
+To quickly start using xAgent, you can run the built-in `cli` or `HTTP serve`r with default settings:
 
 ```bash
 # Set your OpenAI API key
