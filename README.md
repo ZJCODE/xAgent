@@ -8,7 +8,7 @@
 
 > **🚀 A powerful multi-modal AI Agent system with real-time streaming responses**
 
-xAgent provides a complete AI assistant experience with text and image processing capabilities, intelligent vocabulary management, high-performance concurrent tool execution, and **real-time streaming CLI interface**. Built on FastAPI, Streamlit, and Redis for production-ready scalability.
+xAgent provides an end-to-end AI assistant experience—covering text and image processing, concurrent tool execution, an intuitive HTTP server, a web interface, and a real-time streaming CLI—built with FastAPI, Streamlit, and Redis to scale in production.
 
 ## 📋 Table of Contents
 
