@@ -564,7 +564,7 @@ class AgentConfigUI:
             )
             
             # Display YAML preview
-            st.code(yaml.dump(config, default_flow_style=False, allow_unicode=True), language="yaml")
+            st.code(yaml.dump(config, default_flow_style=False, allow_unicode=True, sort_keys=False), language="yaml")
             
             # Save and start buttons
             st.subheader("Actions")
@@ -587,7 +587,7 @@ class AgentConfigUI:
                 if st.button(save_button_text, use_container_width=True):
                     config_path = self.config_dir / config_filename
                     with open(config_path, 'w', encoding='utf-8') as f:
-                        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+                        yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
                     success_message = f"Config updated: {config_path}" if config_mode == "Edit Existing" else f"Config saved to {config_path}"
                     st.success(success_message)
                     time.sleep(1)
@@ -666,7 +666,7 @@ class AgentConfigUI:
             # Save config file
             config_path = self.config_dir / config_filename
             with open(config_path, 'w', encoding='utf-8') as f:
-                yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+                yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
             
             # Build command
             cmd = ["xagent-server", "--config", str(config_path)]
