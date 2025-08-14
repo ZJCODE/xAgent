@@ -8,9 +8,7 @@ agent:
     tools:
       - "web_search"
       - "draw_image" # built-in image drawing tool
-  
-  use_local_session: true
-
+      
   output_schema:
     class_name: "ContentReport"
     fields:
@@ -28,6 +26,8 @@ agent:
         type: "list"
         items: "str"
         description: "List of relevant tags"
+
+  local: true
 
 server:
   host: "0.0.0.0"

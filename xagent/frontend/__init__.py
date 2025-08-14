@@ -8,8 +8,6 @@ This module provides web interfaces for interacting with xAgent:
 
 from .app import main as chat_app_main
 from .launcher import main as web_launcher_main
-from .config_ui import main as config_ui_main
-from .config_launcher import main as config_launcher_main
 
 __all__ = [
     "chat_app_main",

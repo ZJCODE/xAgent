@@ -7,8 +7,6 @@ agent:
   capabilities:
     tools:
       - "web_search"
-  
-  use_local_session: true
 
   output_schema:
     class_name: "WeatherReport"
@@ -19,6 +17,8 @@ agent:
       temperature:
         type: "int"
         description: "Temperature in degrees Celsius"
+
+  local: true
 
 server:
   host: "0.0.0.0"

@@ -15,7 +15,7 @@ agent:
     mcp_servers:
       - "http://localhost:8002/mcp/"
   
-  use_local_session: true
+  local: true
 
 server:
   host: "0.0.0.0"

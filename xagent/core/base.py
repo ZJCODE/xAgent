@@ -73,7 +73,7 @@ class BaseAgentRunner:
                     "tools": ["web_search"],  # Default tools
                     "mcp_servers": []  # Default MCP servers
                 },
-                "use_local_session": True
+                "local": True
             },
             "server": {
                 "host": "0.0.0.0",
@@ -236,5 +236,5 @@ class BaseAgentRunner:
     def _initialize_message_db(self) -> Optional[MessageDB]:
         """Initialize message database based on configuration."""
         agent_cfg = self.config.get("agent", {})
-        use_local_session = agent_cfg.get("use_local_session", True)
-        return None if use_local_session else MessageDB()
+        local = agent_cfg.get("local", True)
+        return None if local else MessageDB()

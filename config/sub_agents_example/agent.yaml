@@ -30,7 +30,8 @@ agent:
     - name: "image_analysis_agent"
       description: "Specialized agent for image analysis and interpretation"
       server_url: "http://localhost:8013"
-  use_local_session: true
+  
+  local: true
 
 server:
   host: "0.0.0.0"

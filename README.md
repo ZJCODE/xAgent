@@ -66,9 +66,6 @@ xagent-web
 More about cli and http server usage, please refer to the [CLI](#-command-line-interface-cli) and [HTTP Agent Server](#-http-agent-server) sections.
 
 
-> You can also start the visual configuration and management interface to build and interact with agents by typing `xagent` in the terminal. More details in the [Web Interface](#-web-interface) section.
-
-
 
 ## 🚀 Installation & Setup
 
@@ -158,12 +155,12 @@ agent:
   ...
 ```
 
-If you use Redis, you can set `use_local_session` to `false` (make sure to configure `REDIS_URL` in the `.env` file). This way, when deploying multiple services, the conversation can remain consistent even if requests are routed to different service instances.
+If you use Redis, you can set `local` to `false` (make sure to configure `REDIS_URL` in the `.env` file). This way, when deploying multiple services, the conversation can remain consistent even if requests are routed to different service instances.
 
 ```yaml
 agent:
   ...
-  use_local_session: false
+  local: false
   ...
 ```
 
@@ -281,7 +278,7 @@ agent:
       description: "Expert agent for writing tasks, including content creation and editing"
       server_url: "http://localhost:8012"
 
-  use_local_session: true
+  local: true
 
 server:
   host: "0.0.0.0"
@@ -308,7 +305,7 @@ agent:
     mcp_servers:
       - "http://localhost:8002/mcp/"
   
-  use_local_session: true
+  local: true
 
 server:
   host: "0.0.0.0"
@@ -334,7 +331,7 @@ agent:
     mcp_servers:
       - "http://localhost:8003/mcp/"
   
-  use_local_session: true
+  local: true
 
 server:
   host: "0.0.0.0"
@@ -459,9 +456,6 @@ An agent started this way will automatically create a Pydantic model based on th
 
 ## 🌐 Web Interface
 
-xAgent provides multiple web interfaces for different use cases:
-
-### 1. Chat Interface
 User-friendly Streamlit chat interface for interactive conversations with your AI agent.
 
 ```bash
@@ -474,25 +468,6 @@ xagent-web --agent-server http://localhost:8010
 # With custom host and port
 xagent-web --host 0.0.0.0 --port 8501 --agent-server http://localhost:8010
 ```
-
-### 2. Configuration and Management Interface
-Visual configuration and management interface for creating and managing xAgent servers without writing YAML files.
-
-```bash
-# Start the configuration and management interface
-xagent
-
-# With custom host and port
-xagent --host 0.0.0.0 --port 8502
-```
-
-### Web Interface Options
-
-| Interface | Default Port | Description |
-|-----------|--------------|-------------|
-| Chat Interface | 8501 | Interactive conversation with agents |
-| Config and Management Interface | 8502 | Visual agent configuration and management( chat interface included) |
-
 
 ## 💻 Command Line Interface (CLI)
 

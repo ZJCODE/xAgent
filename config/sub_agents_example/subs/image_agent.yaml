@@ -23,7 +23,7 @@ agent:
     tools: []
     mcp_servers: []
   
-  use_local_session: true
+  local: true
 
 server:
   host: "0.0.0.0"
