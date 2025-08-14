@@ -36,17 +36,19 @@ pip install myxagent
 # Set your OpenAI API key
 export OPENAI_API_KEY=your_openai_api_key
 
-# Start the CLI with default configuration
+# Start the CLI with default configuration （interactive mode）
 xagent-cli
 
-# Or start the HTTP server with default configuration
+# Or start the visual configuration and management interface (Recommended)
+xagent
+
+# Or start the HTTP server with default configuration （for development）
 xagent-server
 
 # Start the Streamlit web interface (Optional)
 xagent-web
 
-# Or start the visual configuration and management interface (Recommended)
-xagent
+
 ```
 
 If start a http server, you can interact with the agent using the following command:
