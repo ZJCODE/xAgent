@@ -47,7 +47,7 @@ xagent-server
 xagent-web
 ```
 
-Interact by using server API:
+If start a http server, you can interact with the agent using the following command:
 
 ```bash
 curl -X POST "http://localhost:8010/chat" \
@@ -55,7 +55,8 @@ curl -X POST "http://localhost:8010/chat" \
   -d '{
     "user_id": "user123",
     "session_id": "session456",
-    "user_message": "Who are you?"
+    "user_message": "Who are you?",
+    "stream": false
   }'
 ```
 
