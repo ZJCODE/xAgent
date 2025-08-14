@@ -134,7 +134,7 @@ server:
   port: 8010
 ```
 
-you can also add `mcp_servers` if you want to use MCP (Model Context Protocol) for dynamic tool loading:
+If you want to use MCP (Model Context Protocol) for dynamic tool loading, you can also add `mcp_servers` in agent configuration:
 
 ```yaml
 agent:
