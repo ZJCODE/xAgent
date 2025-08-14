@@ -349,7 +349,7 @@ class AgentConfigUI:
             st.subheader("Advanced Settings")
 
             # Sub-agents Configuration
-            with st.expander("Sub-agents (Multi-Agent System)"):
+            with st.expander("Sub-agents (as tools)"):
                 st.markdown("Configure specialized sub-agents for hierarchical agent systems.")
                 
                 with st.container():
@@ -404,30 +404,18 @@ class AgentConfigUI:
                     
                     if sub_agents_config:
                         st.success(f"✅ {len(sub_agents_config)} sub-agent(s) configured")
-                        with st.expander("� Deployment Order"):
+                        with st.expander("Deployment Order"):
                             st.markdown("""
                             **Start servers in this order:**
                             1. Start all sub-agent servers first
                             2. Wait for them to be healthy
                             3. Start the main coordinator agent
-                            
-                            **Example:**
-                            ```bash
-                            # Terminal 1: Start sub-agents
-                            xagent-server --config research_agent.yaml
-                            
-                            # Terminal 2: Start sub-agents  
-                            xagent-server --config writing_agent.yaml
-                            
-                            # Terminal 3: Start coordinator (this agent)
-                            xagent-server --config coordinator_agent.yaml
-                            ```
                             """)
                     else:
                         st.warning("⚠️ Fill in all sub-agent fields to enable multi-agent system")
             
             # Structured Output Configuration
-            with st.expander("Structured Output (Optional)"):
+            with st.expander("Structured Output"):
                 st.markdown("Define the expected response format using Pydantic models.")
                 
                 # Load existing structured output configuration
