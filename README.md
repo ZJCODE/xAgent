@@ -45,10 +45,6 @@ xagent
 # Or start the HTTP server with default configuration （for development）
 xagent-server
 
-# Start the Streamlit web interface (Optional)
-xagent-web
-
-
 ```
 
 If start a http server, you can interact with the agent using the following command:
@@ -62,6 +58,12 @@ curl -X POST "http://localhost:8010/chat" \
     "user_message": "Who are you?",
     "stream": false
   }'
+```
+
+or start a Streamlit web interface to interact with the agent server:
+
+```bash
+xagent-web
 ```
 
 More about cli and http server usage, please refer to the [CLI](#-command-line-interface-cli) and [HTTP Agent Server](#-http-agent-server) sections.
