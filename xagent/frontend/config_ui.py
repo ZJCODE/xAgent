@@ -192,6 +192,46 @@ class AgentConfigUI:
     def render_config_page(self):
         """Render the agent configuration page."""
         
+        # Check for existing config files
+        config_files = list(self.config_dir.glob("*.yaml"))
+        config_files = [f for f in config_files if f.name not in ["server_registry.json", "webchat_registry.json"]]
+        
+        # Load from existing config section
+        col_mode, col_file = st.columns([1, 2])
+        
+        with col_mode:
+            config_mode = st.radio(
+                "Choose mode:",
+                ["Create New", "Edit Existing"],
+                help="Create a new configuration or edit an existing one",
+                horizontal=True,
+                label_visibility="visible"
+            )
+        
+        # Initialize default values
+        loaded_config = None
+        if config_mode == "Edit Existing" and config_files:
+            with col_file:
+                selected_file = st.selectbox(
+                    "Select config file:",
+                    options=[f.name for f in config_files],
+                    help="Choose an existing configuration file to edit"
+                )
+                
+                if selected_file:
+                    config_path = self.config_dir / selected_file
+                    try:
+                        with open(config_path, 'r', encoding='utf-8') as f:
+                            loaded_config = yaml.safe_load(f)
+                        # st.success(f"✅ Loaded configuration: {selected_file}")
+                    except Exception as e:
+                        st.error(f"❌ Error loading config: {str(e)}")
+        elif config_mode == "Edit Existing" and not config_files:
+            st.info("No existing configuration files found. Switch to 'Create New' mode.")
+            config_mode = "Create New"
+        
+        st.divider()
+        
         col1, col2 = st.columns([2, 1])
         
         with col1:
@@ -200,21 +240,25 @@ class AgentConfigUI:
             
             agent_name = st.text_input(
                 "Agent Name",
-                value="MyAgent",
+                value=loaded_config.get('agent', {}).get('name', 'MyAgent') if loaded_config else "MyAgent",
                 help="Unique identifier for your agent"
             )
             
             system_prompt = st.text_area(
                 "System Prompt",
-                value="You are a helpful AI assistant.",
+                value=loaded_config.get('agent', {}).get('system_prompt', 'You are a helpful AI assistant.') if loaded_config else "You are a helpful AI assistant.",
                 height=100,
                 help="Instructions that define the agent's behavior and personality"
             )
             
+            model_options = ["gpt-4o", "gpt-4o-mini", "gpt-4.1","gpt-4.1-mini",'gpt-4.1-nano']
+            current_model = loaded_config.get('agent', {}).get('model', 'gpt-4o-mini') if loaded_config else 'gpt-4o-mini'
+            model_index = model_options.index(current_model) if current_model in model_options else 1
+            
             model = st.selectbox(
                 "Model",
-                ["gpt-4o", "gpt-4o-mini", "gpt-4.1","gpt-4.1-mini",'gpt-4.1-nano'],
-                index=1,
+                model_options,
+                index=model_index,
                 help="OpenAI model to use for the agent"
             )
             
@@ -223,9 +267,9 @@ class AgentConfigUI:
             
             col_host, col_port = st.columns(2)
             with col_host:
-                host = st.text_input("Host", value="0.0.0.0")
+                host = st.text_input("Host", value=loaded_config.get('server', {}).get('host', '0.0.0.0') if loaded_config else "0.0.0.0")
             with col_port:
-                port = st.number_input("Port", min_value=1000, max_value=65535, value=8010)
+                port = st.number_input("Port", min_value=1000, max_value=65535, value=loaded_config.get('server', {}).get('port', 8010) if loaded_config else 8010)
             
             # Tool Configuration
             st.subheader("Tools & Capabilities")
@@ -233,8 +277,12 @@ class AgentConfigUI:
             # Built-in tools
             with st.expander("Built-in Tools"):
                 st.markdown("Enable or disable built-in tools for your agent.")
-                enable_web_search = st.checkbox("Web Search", value=True)
-                enable_draw_image = st.checkbox("Image Generation", value=False)
+                
+                # Extract current tool settings from loaded config
+                current_tools = loaded_config.get('agent', {}).get('capabilities', {}).get('tools', []) if loaded_config else []
+                
+                enable_web_search = st.checkbox("Web Search", value="web_search" in current_tools if loaded_config else True)
+                enable_draw_image = st.checkbox("Image Generation", value="draw_image" in current_tools if loaded_config else False)
             
             # Custom tools
             with st.expander("Custom Tools"):
@@ -246,8 +294,15 @@ class AgentConfigUI:
                     help="Path to custom toolkit directory containing your custom tools"
                 )
 
+                # Extract custom tools from loaded config
+                current_custom_tools = []
+                if loaded_config:
+                    current_tools = loaded_config.get('agent', {}).get('capabilities', {}).get('tools', [])
+                    current_custom_tools = [tool for tool in current_tools if tool not in ["web_search", "draw_image"]]
+                
                 custom_tools = st.text_area(
                     "Custom Tool Names (one per line)",
+                    value="\n".join(current_custom_tools) if current_custom_tools else "",
                     help="Enter the names of custom tools from your toolkit",
                     placeholder="calculate_square\nfetch_weather"
                 )            
@@ -277,8 +332,13 @@ class AgentConfigUI:
             # MCP Servers
             with st.expander("MCP Servers"):
                 st.markdown("Configure Model Context Protocol servers for dynamic tool loading.")
+                
+                # Extract current MCP servers from loaded config
+                current_mcp_servers = loaded_config.get('agent', {}).get('capabilities', {}).get('mcp_servers', []) if loaded_config else []
+                
                 mcp_servers = st.text_area(
                     "MCP Server URLs (one per line)",
+                    value="\n".join(current_mcp_servers) if current_mcp_servers else "",
                     help="Enter URLs of MCP servers for dynamic tool loading",
                     placeholder="http://localhost:8001/mcp/\nhttp://localhost:8002/mcp/"
                 )
@@ -297,21 +357,38 @@ class AgentConfigUI:
                     with col_example:
                         st.success("📝 **Example Use Cases:**\n- Research + Writing agents\n- Analysis + Visualization\n- Data Processing + Reporting")
                 
-                sub_agents_enabled = st.checkbox("Enable Sub-agents")
+                # Load existing sub-agents configuration
+                current_sub_agents = loaded_config.get('agent', {}).get('sub_agents', []) if loaded_config else []
+                
+                sub_agents_enabled = st.checkbox("Enable Sub-agents", value=len(current_sub_agents) > 0 if loaded_config else False)
                 
                 sub_agents_config = []
                 if sub_agents_enabled:
-                    num_sub_agents = st.number_input("Number of Sub-agents", min_value=1, max_value=10, value=2)
+                    default_num = len(current_sub_agents) if current_sub_agents else 2
+                    num_sub_agents = st.number_input("Number of Sub-agents", min_value=1, max_value=10, value=default_num)
                     
                     for i in range(num_sub_agents):
                         with st.container():
                             st.write(f"**Sub-agent {i+1}:**")
                             col_name, col_desc = st.columns(2)
+                            
+                            # Use existing values if available
+                            existing_agent = current_sub_agents[i] if i < len(current_sub_agents) else {}
+                            
                             with col_name:
-                                sub_name = st.text_input(f"Name", key=f"sub_name_{i}", placeholder="research_agent")
+                                sub_name = st.text_input(f"Name", 
+                                                       key=f"sub_name_{i}", 
+                                                       value=existing_agent.get('name', ''),
+                                                       placeholder="research_agent")
                             with col_desc:
-                                sub_desc = st.text_input(f"Description", key=f"sub_desc_{i}", placeholder="Research specialist")
-                            sub_url = st.text_input(f"Server URL", key=f"sub_url_{i}", placeholder="http://localhost:8011")
+                                sub_desc = st.text_input(f"Description", 
+                                                       key=f"sub_desc_{i}", 
+                                                       value=existing_agent.get('description', ''),
+                                                       placeholder="Research specialist")
+                            sub_url = st.text_input(f"Server URL", 
+                                                   key=f"sub_url_{i}", 
+                                                   value=existing_agent.get('server_url', ''),
+                                                   placeholder="http://localhost:8011")
                             
                             if sub_name and sub_desc and sub_url:
                                 sub_agents_config.append({
@@ -351,42 +428,75 @@ class AgentConfigUI:
             with st.expander("Structured Output (Optional)"):
                 st.markdown("Define the expected response format using Pydantic models.")
                 
-                enable_structured_output = st.checkbox("Enable Structured Output")
+                # Load existing structured output configuration
+                current_output_schema = loaded_config.get('agent', {}).get('output_schema', {}) if loaded_config else {}
+                has_output_schema = bool(current_output_schema)
+                
+                enable_structured_output = st.checkbox("Enable Structured Output", value=has_output_schema)
                 
                 if enable_structured_output:
-                    class_name = st.text_input("Class Name", value="ResponseModel")
+                    class_name = st.text_input("Class Name", 
+                                             value=current_output_schema.get('class_name', 'ResponseModel'))
                     
                     st.write("**Fields:**")
-                    num_fields = st.number_input("Number of Fields", min_value=1, max_value=20, value=1)
+                    
+                    # Get existing fields
+                    existing_fields = current_output_schema.get('fields', {})
+                    default_num_fields = len(existing_fields) if existing_fields else 1
+                    
+                    num_fields = st.number_input("Number of Fields", min_value=1, max_value=20, value=default_num_fields)
                     
                     output_fields = {}
+                    existing_field_items = list(existing_fields.items())
                     
                     for i in range(num_fields):
                         with st.container():
                             col_field_name, col_field_type = st.columns([1, 1])
                             
+                            # Use existing field data if available
+                            existing_field_name = existing_field_items[i][0] if i < len(existing_field_items) else ""
+                            existing_field_data = existing_field_items[i][1] if i < len(existing_field_items) else {}
+                            
                             with col_field_name:
-                                field_name = st.text_input(f"Field {i+1} Name", key=f"field_name_{i}", placeholder="title")
+                                field_name = st.text_input(f"Field {i+1} Name", 
+                                                          key=f"field_name_{i}", 
+                                                          value=existing_field_name,
+                                                          placeholder="title")
                             with col_field_type:
+                                # Get existing field type
+                                existing_field_type = existing_field_data.get('type', 'str')
+                                field_type_options = ["str", "int", "float", "bool", "list"]
+                                field_type_index = field_type_options.index(existing_field_type) if existing_field_type in field_type_options else 0
+                                
                                 field_type = st.selectbox(
                                     f"Type",
-                                    ["str", "int", "float", "bool", "list"],
+                                    field_type_options,
+                                    index=field_type_index,
                                     key=f"field_type_{i}"
                                 )
 
                             # For list type, add items specification
                             list_items_type = None
                             if field_type == "list":
+                                # Get existing list items type
+                                existing_items_type = existing_field_data.get('items', {}).get('type', 'str') if existing_field_data else 'str'
+                                items_type_options = ["str", "int", "float", "bool"]
+                                items_type_index = items_type_options.index(existing_items_type) if existing_items_type in items_type_options else 0
+                                
                                 list_items_type = st.selectbox(
                                     f"List Items Type",
-                                    ["str", "int", "float", "bool"],
+                                    items_type_options,
+                                    index=items_type_index,
                                     key=f"list_items_{i}",
                                     help="Type of elements in the list"
                                 )
-                                # st.markdown(f"*This will create: `List[{list_items_type}]`*")
                             
                             # Description field (full width)
-                            field_desc = st.text_input(f"Description", key=f"field_desc_{i}", placeholder="Description of the field")
+                            existing_description = existing_field_data.get('description', '') if existing_field_data else ''
+                            field_desc = st.text_input(f"Description", 
+                                                      key=f"field_desc_{i}", 
+                                                      value=existing_description,
+                                                      placeholder="Description of the field")
                             
 
                             if field_name:
@@ -437,12 +547,22 @@ class AgentConfigUI:
             st.subheader("Session Settings")
             use_local_session = st.checkbox(
                 "Use Local Session", 
-                value=True, 
+                value=loaded_config.get('agent', {}).get('use_local_session', True) if loaded_config else True, 
                 help="If unchecked, will use Redis for session persistence (requires REDIS_URL in environment)"
             )
 
         with col2:
             st.subheader("📋 Configuration Preview")
+            
+            # Initialize default values for optional variables
+            if 'sub_agents_config' not in locals():
+                sub_agents_config = []
+            if 'enable_structured_output' not in locals():
+                enable_structured_output = False
+            if 'output_fields' not in locals():
+                output_fields = {}
+            if 'class_name' not in locals():
+                class_name = ""
             
             # Build configuration
             config = self._build_config(
@@ -450,8 +570,7 @@ class AgentConfigUI:
                 enable_web_search, enable_draw_image, custom_tools,
                 mcp_servers, use_local_session, toolkit_path,
                 sub_agents_config, enable_structured_output,
-                output_fields if 'output_fields' in locals() else {},
-                class_name if 'class_name' in locals() else ""
+                output_fields, class_name
             )
             
             # Display YAML preview
@@ -460,19 +579,27 @@ class AgentConfigUI:
             # Save and start buttons
             st.subheader("Actions")
             
+            # Set default filename based on mode
+            if config_mode == "Edit Existing" and 'selected_file' in locals():
+                default_filename = selected_file
+            else:
+                default_filename = f"{agent_name.lower().replace(' ', '_')}_config.yaml"
+            
             config_filename = st.text_input(
                 "Config Filename",
-                value=f"{agent_name.lower().replace(' ', '_')}_config.yaml"
+                value=default_filename
             )
             
             col_save, col_start = st.columns(2)
             
             with col_save:
-                if st.button("💾 Save Config", use_container_width=True):
+                save_button_text = "💾 Update Config" if config_mode == "Edit Existing" else "💾 Save Config"
+                if st.button(save_button_text, use_container_width=True):
                     config_path = self.config_dir / config_filename
                     with open(config_path, 'w', encoding='utf-8') as f:
                         yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
-                    st.success(f"Config saved to {config_path}")
+                    success_message = f"Config updated: {config_path}" if config_mode == "Edit Existing" else f"Config saved to {config_path}"
+                    st.success(success_message)
                     time.sleep(1)
                     st.rerun()
             
