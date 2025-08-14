@@ -185,6 +185,33 @@ class AgentConfigUI:
                 placeholder="calculate_square\nfetch_weather"
             )
             
+            toolkit_path = st.text_input(
+                "Toolkit Path",
+                value="toolkit",
+                help="Path to custom toolkit directory containing your custom tools"
+            )
+            
+            # Add helper info for custom tools
+            if custom_tools.strip():
+                st.info("💡 Make sure your custom tools are defined in the toolkit directory and registered in `__init__.py`")
+                with st.expander("Custom Tools Setup Guide"):
+                    st.markdown("""
+                    **Creating Custom Tools:**
+                    1. Create your toolkit directory (e.g., `toolkit/`)
+                    2. Add your tool functions in `.py` files
+                    3. Register tools in `__init__.py`:
+                    ```python
+                    # toolkit/__init__.py
+                    from .your_tools import calculate_square, fetch_weather
+                    
+                    TOOLKIT_REGISTRY = {
+                        "calculate_square": calculate_square,
+                        "fetch_weather": fetch_weather
+                    }
+                    ```
+                    4. Use the `@function_tool()` decorator on your functions
+                    """)
+            
             # MCP Servers
             st.write("**MCP Servers:**")
             mcp_servers = st.text_area(
@@ -193,34 +220,40 @@ class AgentConfigUI:
                 placeholder="http://localhost:8001/mcp/\nhttp://localhost:8002/mcp/"
             )
             
-            # Advanced Settings
-            with st.expander("Advanced Settings"):
-                use_local_session = st.checkbox("Use Local Session", value=True, 
-                                               help="If unchecked, will use Redis for session persistence")
+            # Session Configuration
+            st.subheader("Session Settings")
+            use_local_session = st.checkbox(
+                "Use Local Session", 
+                value=True, 
+                help="If unchecked, will use Redis for session persistence (requires REDIS_URL in environment)"
+            )
+            
+            # Sub-agents Configuration
+            with st.expander("Sub-agents (Multi-Agent System)"):
+                st.markdown("Configure specialized sub-agents for hierarchical agent systems.")
                 
-                toolkit_path = st.text_input(
-                    "Toolkit Path",
-                    value="toolkit",
-                    help="Path to custom toolkit directory"
-                )
+                with st.container():
+                    col_info, col_example = st.columns(2)
+                    with col_info:
+                        st.info("💡 **How it works:**\n- Main agent coordinates tasks\n- Sub-agents handle specialized work\n- Automatic delegation based on task type")
+                    with col_example:
+                        st.success("📝 **Example Use Cases:**\n- Research + Writing agents\n- Analysis + Visualization\n- Data Processing + Reporting")
                 
-                # Sub-agents configuration
-                st.write("**Sub-agents:**")
                 sub_agents_enabled = st.checkbox("Enable Sub-agents")
                 
                 sub_agents_config = []
                 if sub_agents_enabled:
-                    num_sub_agents = st.number_input("Number of Sub-agents", min_value=1, max_value=10, value=1)
+                    num_sub_agents = st.number_input("Number of Sub-agents", min_value=1, max_value=10, value=2)
                     
                     for i in range(num_sub_agents):
                         with st.container():
-                            st.write(f"Sub-agent {i+1}:")
+                            st.write(f"**Sub-agent {i+1}:**")
                             col_name, col_desc = st.columns(2)
                             with col_name:
-                                sub_name = st.text_input(f"Name", key=f"sub_name_{i}")
+                                sub_name = st.text_input(f"Name", key=f"sub_name_{i}", placeholder="research_agent")
                             with col_desc:
-                                sub_desc = st.text_input(f"Description", key=f"sub_desc_{i}")
-                            sub_url = st.text_input(f"Server URL", key=f"sub_url_{i}")
+                                sub_desc = st.text_input(f"Description", key=f"sub_desc_{i}", placeholder="Research specialist")
+                            sub_url = st.text_input(f"Server URL", key=f"sub_url_{i}", placeholder="http://localhost:8011")
                             
                             if sub_name and sub_desc and sub_url:
                                 sub_agents_config.append({
@@ -228,36 +261,199 @@ class AgentConfigUI:
                                     "description": sub_desc,
                                     "server_url": sub_url
                                 })
+                            
+                            if i < num_sub_agents - 1:  # Don't add divider after last item
+                                st.divider()
+                    
+                    if sub_agents_config:
+                        st.success(f"✅ {len(sub_agents_config)} sub-agent(s) configured")
+                        with st.expander("� Deployment Order"):
+                            st.markdown("""
+                            **Start servers in this order:**
+                            1. Start all sub-agent servers first
+                            2. Wait for them to be healthy
+                            3. Start the main coordinator agent
+                            
+                            **Example:**
+                            ```bash
+                            # Terminal 1: Start sub-agents
+                            xagent-server --config research_agent.yaml
+                            
+                            # Terminal 2: Start sub-agents  
+                            xagent-server --config writing_agent.yaml
+                            
+                            # Terminal 3: Start coordinator (this agent)
+                            xagent-server --config coordinator_agent.yaml
+                            ```
+                            """)
+                    else:
+                        st.warning("⚠️ Fill in all sub-agent fields to enable multi-agent system")
             
             # Structured Output Configuration
             with st.expander("Structured Output (Optional)"):
-                enable_structured_output = st.checkbox("Enable Structured Output")
+                st.markdown("Define the expected response format using Pydantic models.")
+                
+                col_enable, col_template = st.columns([1, 1])
+                with col_enable:
+                    enable_structured_output = st.checkbox("Enable Structured Output")
+                
+                with col_template:
+                    if st.button("📋 Load Template", help="Load a common template"):
+                        st.session_state.load_template = True
                 
                 if enable_structured_output:
-                    class_name = st.text_input("Class Name", value="ResponseModel")
+                    # Template selection
+                    if getattr(st.session_state, 'load_template', False):
+                        template_choice = st.selectbox(
+                            "Choose a template:",
+                            ["Custom", "Content Report", "Analysis Result", "Task Summary"]
+                        )
+                        
+                        if template_choice == "Content Report":
+                            st.session_state.template_fields = {
+                                "title": {"type": "str", "description": "Content title"},
+                                "content": {"type": "str", "description": "Main content text"},
+                                "tags": {"type": "list", "description": "Content tags", "items": {"type": "str"}},
+                                "summary": {"type": "str", "description": "Brief summary"}
+                            }
+                            st.session_state.template_class_name = "ContentReport"
+                        elif template_choice == "Analysis Result":
+                            st.session_state.template_fields = {
+                                "conclusion": {"type": "str", "description": "Main conclusion"},
+                                "confidence": {"type": "float", "description": "Confidence score (0-1)"},
+                                "key_points": {"type": "list", "description": "Key findings", "items": {"type": "str"}},
+                                "recommendations": {"type": "list", "description": "Action items", "items": {"type": "str"}}
+                            }
+                            st.session_state.template_class_name = "AnalysisResult"
+                        elif template_choice == "Task Summary":
+                            st.session_state.template_fields = {
+                                "status": {"type": "str", "description": "Task completion status"},
+                                "steps_completed": {"type": "list", "description": "Completed steps", "items": {"type": "str"}},
+                                "next_actions": {"type": "list", "description": "Next actions needed", "items": {"type": "str"}},
+                                "duration_minutes": {"type": "int", "description": "Time spent in minutes"}
+                            }
+                            st.session_state.template_class_name = "TaskSummary"
+                        
+                        st.session_state.load_template = False
+                        st.rerun()
+                    
+                    # Use template or default values
+                    default_class_name = getattr(st.session_state, 'template_class_name', "ResponseModel")
+                    default_fields = getattr(st.session_state, 'template_fields', {})
+                    
+                    class_name = st.text_input("Class Name", value=default_class_name)
                     
                     st.write("**Fields:**")
-                    num_fields = st.number_input("Number of Fields", min_value=1, max_value=20, value=1)
+                    num_fields = st.number_input("Number of Fields", min_value=1, max_value=20, value=max(1, len(default_fields)))
                     
                     output_fields = {}
+                    field_names = list(default_fields.keys()) if default_fields else [""]
+                    
                     for i in range(num_fields):
-                        col_field_name, col_field_type, col_field_desc = st.columns([1, 1, 2])
-                        with col_field_name:
-                            field_name = st.text_input(f"Field {i+1} Name", key=f"field_name_{i}")
-                        with col_field_type:
-                            field_type = st.selectbox(
-                                f"Type",
-                                ["str", "int", "float", "bool", "list", "dict"],
-                                key=f"field_type_{i}"
-                            )
-                        with col_field_desc:
-                            field_desc = st.text_input(f"Description", key=f"field_desc_{i}")
+                        with st.container():
+                            col_field_name, col_field_type = st.columns([1, 1])
+                            
+                            # Get default values from template
+                            default_name = field_names[i] if i < len(field_names) else ""
+                            default_field_config = default_fields.get(default_name, {})
+                            default_type = default_field_config.get("type", "str")
+                            default_desc = default_field_config.get("description", "")
+                            default_items = default_field_config.get("items", {})
+                            
+                            with col_field_name:
+                                field_name = st.text_input(f"Field {i+1} Name", key=f"field_name_{i}", value=default_name, placeholder="title")
+                            with col_field_type:
+                                type_index = ["str", "int", "float", "bool", "list", "dict"].index(default_type) if default_type in ["str", "int", "float", "bool", "list", "dict"] else 0
+                                field_type = st.selectbox(
+                                    f"Type",
+                                    ["str", "int", "float", "bool", "list", "dict"],
+                                    key=f"field_type_{i}",
+                                    index=type_index
+                                )
+                            
+                            # Description field (full width)
+                            field_desc = st.text_input(f"Description", key=f"field_desc_{i}", value=default_desc, placeholder="Description of the field")
+                            
+                            # For list type, add items specification
+                            list_items_type = None
+                            if field_type == "list":
+                                st.info("📝 List type requires specifying the element type:")
+                                default_items_type = default_items.get("type", "str") if default_items else "str"
+                                items_index = ["str", "int", "float", "bool", "dict"].index(default_items_type) if default_items_type in ["str", "int", "float", "bool", "dict"] else 0
+                                list_items_type = st.selectbox(
+                                    f"List Items Type",
+                                    ["str", "int", "float", "bool", "dict"],
+                                    key=f"list_items_{i}",
+                                    index=items_index,
+                                    help="Type of elements in the list"
+                                )
+                                st.markdown(f"*This will create: `List[{list_items_type}]`*")
+                            
+                            if field_name:
+                                field_config = {
+                                    "type": field_type,
+                                    "description": field_desc
+                                }
+                                
+                                # Add items for list type
+                                if field_type == "list" and list_items_type:
+                                    field_config["items"] = {"type": list_items_type}
+                                
+                                output_fields[field_name] = field_config
+                            
+                            if i < num_fields - 1:  # Don't add divider after last field
+                                st.divider()
+                    
+                    # Show preview of generated model
+                    if output_fields:
+                        st.subheader("📋 Generated Model Preview")
                         
-                        if field_name:
-                            output_fields[field_name] = {
-                                "type": field_type,
-                                "description": field_desc
-                            }
+                        # Generate Python code preview
+                        python_code = f"from typing import List\nfrom pydantic import BaseModel, Field\n\nclass {class_name}(BaseModel):\n"
+                        
+                        for field_name, field_config in output_fields.items():
+                            field_type_str = field_config["type"]
+                            if field_type_str == "list" and "items" in field_config:
+                                items_type = field_config["items"]["type"]
+                                field_type_str = f"List[{items_type}]"
+                            elif field_type_str == "str":
+                                field_type_str = "str"
+                            elif field_type_str == "int":
+                                field_type_str = "int"
+                            elif field_type_str == "float":
+                                field_type_str = "float"
+                            elif field_type_str == "bool":
+                                field_type_str = "bool"
+                            elif field_type_str == "dict":
+                                field_type_str = "dict"
+                            
+                            python_code += f'    {field_name}: {field_type_str} = Field(description="{field_config["description"]}")\n'
+                        
+                        st.code(python_code, language="python")
+                        
+                        # Show example usage
+                        with st.expander("💡 Example Usage"):
+                            st.markdown(f"""
+                            **In your agent code:**
+                            ```python
+                            from xagent.core import Agent, Session
+                            
+                            agent = Agent(
+                                model="gpt-4o-mini",
+                                output_type={class_name}  # Use your model
+                            )
+                            
+                            session = Session(user_id="user123")
+                            
+                            # Agent will return structured {class_name} object
+                            response = await agent.chat("Your prompt here", session)
+                            
+                            # Access fields directly
+                            print(response.{list(output_fields.keys())[0] if output_fields else 'field_name'})
+                            ```
+                            """)
+                    else:
+                        st.info("👆 Add fields above to see the generated model preview")
         
         with col2:
             st.subheader("📋 Configuration Preview")
