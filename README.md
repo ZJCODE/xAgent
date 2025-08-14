@@ -233,7 +233,7 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
-### 5. Advanced Configuration
+### 5. Advanced Configuration （Hierarchical Multi-Agent System）
 
 xAgent supports sophisticated multi-agent architectures and advanced configuration options for complex use cases.
 
@@ -357,11 +357,13 @@ curl -X POST "http://localhost:8010/chat" \
 
 You can create sub-agents with any depth you want, forming a hierarchical tree structure of agents. Just make sure there are no circular references, and start the agents in a bottom-up order.
 
+### 6. Advanced Configuration （Structured Output with Pydantic Models）
+
+xagent now supports defining structured output schemas directly in the YAML configuration file. This feature allows you to specify the expected output format using Pydantic models, ensuring type safety and easy parsing of the agent's responses.
+
 #### Structured Output Configuration
 
-现在您可以在YAML配置文件中定义`output_schema`，系统会自动将其转换为Pydantic BaseModel，并设置为Agent的`output_type`字段。这样可以确保Agent返回结构化的、类型安全的输出，完美兼容OpenAI的JSON Schema要求。
-
-在您的YAML配置文件中，可以这样定义output_schema：
+In your YAML configuration file, you can define output_schema like this:
 
 ```yaml
 agent:
@@ -370,32 +372,33 @@ agent:
   model: "gpt-4o-mini"
   
   output_schema:
-    class_name: "YourModelName"  # 生成的BaseModel类名
+    class_name: "YourModelName"  # Pydantic model class name
     fields:
       field_name:
-        type: "field_type"        # 支持的类型见下方
-        description: "字段描述"    # 字段的描述信息
+        type: "field_type"        # Field type (str, int, float, bool, list, dict)
+        description: "description"    # Field description
       list_field:
         type: "list"
-        items: "str"              # 列表元素类型（必需）
-        description: "列表字段描述"
+        items: "str"              # List item type (required for list fields)
+        description: "A list of strings"
 ```
 
-目前支持以下Python基础类型：
+#### Supported Field Types
 
-- `str` - 字符串类型
-- `int` - 整数类型  
-- `float` - 浮点数类型
-- `bool` - 布尔类型
-- `list` - 列表类型（**必须指定 `items` 字段**）
-- `dict` - 字典类型
+- `str` - string type
+- `int` - integer type
+- `float` - floating-point type
+- `bool` - boolean type
+- `list` - list type
+- `dict` - dictionary type
 
-**重要注意事项：**
-- 当使用 `list` 类型时，必须通过 `items` 字段指定列表元素的类型
-- 这是为了符合OpenAI JSON Schema的验证要求
-- `items` 支持任何基础类型：`str`、`int`、`float`、`bool`等
 
-内容生成模型示例（包含列表字段）：
+Important Notes:
+- When using the `list` type, you must specify the element type through the items field.
+- This is to comply with OpenAI JSON Schema validation requirements.
+- items supports any basic type: `str`, `int`, `float`, `bool`, etc.
+
+Example of a content generation model (with a list field):
 
 ```yaml
 agent:
@@ -420,7 +423,7 @@ agent:
         description: "The main content of the report"
       images:
         type: "list"
-        items: "str"  # 指定列表元素为字符串类型
+        items: "str"  # List of image URLs with string type
         description: "List of image URLs related to the content"
       tags:
         type: "list"
@@ -428,7 +431,7 @@ agent:
         description: "List of relevant tags"
 ```
 
-这相当于创建了以下Python类：
+The above configuration will automatically generate the following Pydantic model:
 
 ```python
 from typing import List
@@ -441,7 +444,7 @@ class ContentReport(BaseModel):
     tags: List[str] = Field(description="List of relevant tags")
 ```
 
-这样启动的Agent会按照设定的`output_schema`自动创建Pydantic模型，并在聊天时返回结构化的输出。
+An agent started this way will automatically create a Pydantic model based on the specified output_schema and return structured output during conversations.
 
 ## 🌐 Web Interface
 
