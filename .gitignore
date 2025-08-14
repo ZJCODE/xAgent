@@ -50,3 +50,5 @@ Pipfile.lock
 poetry.lock
 # pyright
 pyrightconfig.json
+
+server_registry.json

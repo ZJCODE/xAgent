@@ -35,12 +35,15 @@ dependencies = [
     "pyyaml>=6.0.2,<7",               
     "tenacity>=9.1.2,<10",            
     "watchdog>=6.0.0,<7",
+    "psutil>=6.0.0,<7",               
+    "requests>=2.32.0,<3",            
 ]
 
 [project.scripts]
 xagent-server = "xagent.core.server:main"
 xagent-cli = "xagent.core.cli:main"
 xagent-web = "xagent.frontend.launcher:main"
+xagent-config = "xagent.frontend.config_launcher:main"
 
 [project.urls]
 Repository = "https://github.com/ZJCODE/xagent"

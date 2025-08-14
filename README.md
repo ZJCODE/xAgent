@@ -44,6 +44,9 @@ xagent-server
 
 # Start the Streamlit web interface (Optional)
 xagent-web
+
+# Start the visual configuration interface (NEW!)
+xagent-config
 ```
 
 If start a http server, you can interact with the agent using the following command:
@@ -448,12 +451,13 @@ An agent started this way will automatically create a Pydantic model based on th
 
 ## 🌐 Web Interface
 
-xAgent provides a user-friendly Streamlit web interface for interactive conversations with your AI agent.
+xAgent provides multiple web interfaces for different use cases:
 
-### Launch Web Interface
+### 1. Chat Interface
+User-friendly Streamlit chat interface for interactive conversations with your AI agent.
 
 ```bash
-# Start the web interface with default settings
+# Start the chat interface with default settings
 xagent-web
 
 # With custom agent server URL
@@ -463,24 +467,66 @@ xagent-web --agent-server http://localhost:8010
 xagent-web --host 0.0.0.0 --port 8501 --agent-server http://localhost:8010
 ```
 
+### 2. Configuration Interface (NEW!)
+Visual configuration interface for creating and managing xAgent servers without writing YAML files.
+
+```bash
+# Start the configuration interface
+xagent-config
+
+# With custom host and port
+xagent-config --host 0.0.0.0 --port 8502
+```
+
+**Features:**
+- 🎯 **Visual Agent Configuration** - Create agents through intuitive forms
+- 🛠️ **Tool Management** - Enable/disable built-in and custom tools
+- 🏗️ **Multi-Agent Setup** - Configure hierarchical agent systems
+- 📊 **Structured Output** - Define Pydantic models visually
+- 🚀 **One-Click Deployment** - Start servers directly from the UI
+- 📱 **Server Management** - Monitor and control running services
+- 💾 **Configuration Templates** - Save and reuse configurations
+
+#### Configuration Interface Workflow:
+
+1. **Create Configuration:**
+   - Open `http://localhost:8502` in your browser
+   - Fill in agent details (name, system prompt, model)
+   - Select tools and capabilities
+   - Configure server settings
+   - Preview generated YAML configuration
+
+2. **Deploy Agent:**
+   - Click "Start Server" to deploy immediately
+   - Or save configuration for later use
+   - Monitor server status in real-time
+
+3. **Manage Services:**
+   - View all running servers
+   - Check health status
+   - Stop/restart services as needed
+   - Access server endpoints directly
+
 ### Web Interface Options
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--agent-server` | URL of the xAgent server | `http://localhost:8010` |
-| `--host` | Host address for Streamlit server | `0.0.0.0` |
-| `--port` | Port for Streamlit server | `8501` |
+| Interface | Default Port | Description |
+|-----------|--------------|-------------|
+| Chat Interface | 8501 | Interactive conversation with agents |
+| Config Interface | 8502 | Visual agent configuration and management |
 
 ### Complete Web Setup Example
 
 ```bash
-# Terminal 1: Start the agent server
-xagent-server --config agent_config.yaml --toolkit_path my_toolkit
+# Terminal 1: Start the agent server using config UI
+xagent-config
+# Create and start your agent through the web interface
 
-# Terminal 2: Start the web interface
+# Terminal 2: Start the chat interface  
 xagent-web --agent-server http://localhost:8010
 
-# Access the web interface at http://localhost:8501
+# Access:
+# - Configuration UI: http://localhost:8502
+# - Chat Interface: http://localhost:8501
 ```
 
 ## 💻 Command Line Interface (CLI)
