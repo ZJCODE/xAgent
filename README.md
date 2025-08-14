@@ -12,8 +12,8 @@ xAgent provides a complete AI assistant experience with text and image processin
 
 ## 📋 Table of Contents
 
-- [🚀 Installation & Setup](#-installation--setup)
 - [🚀 Quick Start](#-quick-start)
+- [🚀 Installation & Setup](#-installation--setup)
 - [🌐 HTTP Agent Server](#-http-agent-server)
 - [🌐 Web Interface](#-web-interface)
 - [💻 Command Line Interface (CLI)](#-command-line-interface-cli)
@@ -25,32 +25,15 @@ xAgent provides a complete AI assistant experience with text and image processin
 - [🤝 Contributing](#-contributing)
 - [📄 License](#-license)
 
-## 🚀 Installation & Setup
-
-### Prerequisites
-
-| Requirement | Version | Purpose |
-|-------------|---------|---------|
-| **Python** | 3.12+ | Core runtime |
-| **OpenAI API Key** | - | AI model access |
-
-### Install via pip
-
-```bash
-pip install myxagent
-
-# use official PyPI
-pip install myxagent -i https://pypi.org/simple
-
-# or use Aliyun mirror for faster download in China
-pip install myxagent -i https://mirrors.aliyun.com/pypi/simple
-```
 
 ## 🚀 Quick Start
 
 To quickly start using xAgent, you can run the built-in `cli` or `HTTP serve`r with default settings:
 
 ```bash
+# Install xAgent
+pip install myxagent
+
 # Set your OpenAI API key
 export OPENAI_API_KEY=your_openai_api_key
 
@@ -76,6 +59,28 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
+## 🚀 Installation & Setup
+
+### Prerequisites
+
+| Requirement | Version | Purpose |
+|-------------|---------|---------|
+| **Python** | 3.12+ | Core runtime |
+| **OpenAI API Key** | - | AI model access |
+
+### Install via pip
+
+```bash
+pip install myxagent
+
+# use official PyPI
+pip install myxagent -i https://pypi.org/simple
+
+# or use Aliyun mirror for faster download in China
+pip install myxagent -i https://mirrors.aliyun.com/pypi/simple
+```
+
+
 ### Environment Configuration
 
 Create a `.env` file in your project directory and add the following variables:
@@ -99,11 +104,6 @@ AWS_REGION=us-east-1
 BUCKET_NAME=your_bucket_name
 ```
 
-you can manually load the `.env` file into your shell:
-
-```bash
-export $(cat .env | grep -v '^#' | xargs)
-```
 
 ## 🌐 HTTP Agent Server
 
