@@ -960,9 +960,9 @@ class AgentConfigUI:
                                     with open(log_file, 'r', encoding='utf-8') as f:
                                         log_content = f.read()
                                     
-                                    # Show last 3000 characters of log
-                                    if len(log_content) > 3000:
-                                        display_content = "..." + log_content[-3000:]
+                                    # Show last 10000 characters of log
+                                    if len(log_content) > 10000:
+                                        display_content = "..." + log_content[-10000:]
                                     else:
                                         display_content = log_content
                                     
