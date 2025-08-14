@@ -241,7 +241,7 @@ xAgent supports sophisticated multi-agent architectures and advanced configurati
 
 Create a hierarchical agent system where a coordinator agent delegates tasks to specialized sub-agents:
 
-**Main Agent Configuration** (`coordinator_agent.yaml`):
+Main Agent Configuration (`coordinator_agent.yaml`):
 ```yaml
 agent:
   name: "Agent"
@@ -277,7 +277,7 @@ server:
   port: 8010
 ```
 
-**Research Specialist** (`research_agent.yaml`):
+Research Specialist (`research_agent.yaml`):
 ```yaml
 agent:
   name: "Research Agent"
@@ -304,7 +304,7 @@ server:
   port: 8011
 ```
 
-**Writing Specialist** (`writing_agent.yaml`):
+Writing Specialist (`writing_agent.yaml`):
 ```yaml
 agent:
   name: "Writing Agent"
