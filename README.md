@@ -258,7 +258,7 @@ agent:
 
   capabilities:
     tools:
-      - "char_count" # 自定义工具示例
+      - "char_count" # custom tool for character counting
     mcp_servers:
       - "http://localhost:8001/mcp/"
   
