@@ -805,6 +805,9 @@ async def chat_with_persistence():
 asyncio.run(chat_with_persistence())
 ```
 
+you can implement your own message storage by inheriting from `MessageStorageBase` and implementing the required methods like `add_messages`, `get_messages`, etc.
+
+
 ## 🏗️ Architecture
 
 **Modern Design for High Performance**
