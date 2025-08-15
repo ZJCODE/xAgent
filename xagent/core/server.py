@@ -23,6 +23,10 @@ class AgentInput(BaseModel):
     image_source: Optional[str] = None
     # Enable server-side streaming when true
     stream: Optional[bool] = False
+    # Number of previous messages to include in conversation history
+    history_count: Optional[int] = 16
+    # Maximum model call attempts
+    max_iter: Optional[int] = 10
 
 
 class ClearSessionInput(BaseModel):
@@ -76,6 +80,13 @@ class HTTPAgentServer(BaseAgentRunner):
             
             Args:
                 input_data: User input containing message and metadata
+                    - user_id: Unique identifier for the user
+                    - session_id: Unique identifier for the conversation session
+                    - user_message: The user's message content
+                    - image_source: Optional image for analysis (URL, file path, or base64)
+                    - stream: Whether to enable streaming response (default: False)
+                    - history_count: Number of previous messages to include (default: 16)
+                    - max_iter: Maximum model call attempts (default: 10)
                 
             Returns:
                 Agent response or streaming SSE when input_data.stream is True
@@ -94,6 +105,8 @@ class HTTPAgentServer(BaseAgentRunner):
                             response = await self.agent(
                                 user_message=input_data.user_message,
                                 session=session,
+                                history_count=input_data.history_count,
+                                max_iter=input_data.max_iter,
                                 image_source=input_data.image_source,
                                 stream=True
                             )
@@ -122,6 +135,8 @@ class HTTPAgentServer(BaseAgentRunner):
                 response = await self.agent(
                     user_message=input_data.user_message,
                     session=session,
+                    history_count=input_data.history_count,
+                    max_iter=input_data.max_iter,
                     image_source=input_data.image_source
                 )
                 
