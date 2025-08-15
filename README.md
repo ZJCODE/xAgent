@@ -597,7 +597,7 @@ For more control and customization, use the Agent class directly in your Python 
 
 ```python
 import asyncio
-from xagent.core import Agent, Session
+from xagent.core import Agent
 
 async def main():
     # Create agent
@@ -607,15 +607,21 @@ async def main():
         model="gpt-4.1-mini"
     )
 
-    # Create session for conversation management
-    session = Session(session_id="session456")
-
     # Chat interaction
-    response = await agent.chat("Hello, how are you?", session)
+    response = await agent.chat(
+        user_message="Hello, how are you?",
+        user_id="user123", 
+        session_id="session456"
+    )
     print(response)
 
     # Streaming response example
-    response = await agent.chat("Tell me a story", session, stream=True)
+    response = await agent.chat(
+        user_message="Tell me a story",
+        user_id="user123",
+        session_id="session456", 
+        stream=True
+    )
     async for event in response:
         print(event, end="")
 
@@ -629,7 +635,7 @@ import asyncio
 import time
 import httpx
 from xagent.utils.tool_decorator import function_tool
-from xagent.core import Agent, Session
+from xagent.core import Agent
 
 # Sync tools - automatically converted to async
 @function_tool()
@@ -653,12 +659,11 @@ async def main():
         model="gpt-4.1-mini"
     )
     
-    session = Session(user_id="user123")
-    
     # Agent handles all tools automatically
     response = await agent.chat(
-        "Calculate the square of 15 and get weather for Tokyo",
-        session
+        user_message="Calculate the square of 15 and get weather for Tokyo",
+        user_id="user123",
+        session_id="session456"
     )
     print(response)
 
@@ -677,7 +682,7 @@ With Pydantic structured outputs, you can:
 ```python
 import asyncio
 from pydantic import BaseModel
-from xagent.core import Agent, Session
+from xagent.core import Agent
 from xagent.tools import web_search
 
 class WeatherReport(BaseModel):
@@ -701,12 +706,11 @@ async def get_structured_response():
                   tools=[web_search], 
                   output_type=WeatherReport) # You can set a default output type here or leave it None
     
-    session = Session(user_id="user123")
-    
     # Request structured output for weather
     weather_data = await agent.chat(
-        "what's the weather like in Hangzhou?",
-        session
+        user_message="what's the weather like in Hangzhou?",
+        user_id="user123",
+        session_id="session456"
     )
     
     print(f"Location: {weather_data.location}")
@@ -716,7 +720,12 @@ async def get_structured_response():
 
 
     # Request structured output for mathematical reasoning (overrides output_type)
-    reply = await agent.chat("how can I solve 8x + 7 = -23", session, output_type=MathReasoning) # Override output_type for this call
+    reply = await agent.chat(
+        user_message="how can I solve 8x + 7 = -23",
+        user_id="user123",
+        session_id="session456",
+        output_type=MathReasoning
+    ) # Override output_type for this call
     for index, step in enumerate(reply.steps):
         print(f"Step {index + 1}: {step.explanation} => Output: {step.output}")
     print("Final Answer:", reply.final_answer)
@@ -729,25 +738,26 @@ if __name__ == "__main__":
 
 ```python
 import asyncio
-from xagent.core import Agent, Session
+from xagent.core import Agent
 from xagent.db import MessageStorageLocal
 from xagent.tools import web_search
 
 async def agent_as_tool_example():
-    # Create specialized agents
+    # Create specialized agents with message storage
+    message_storage = MessageStorageLocal()
+    
     researcher_agent = Agent(
         name="research_specialist",
         system_prompt="Research expert. Gather information and provide insights.",
         model="gpt-4.1-mini",
-        tools=[web_search]
+        tools=[web_search],
+        message_storage=message_storage
     )
     
     # Convert agent to tool
-    message_storage = MessageStorageLocal()
     research_tool = researcher_agent.as_tool(
         name="researcher",
-        description="Research topics and provide detailed analysis",
-        message_storage=message_storage
+        description="Research topics and provide detailed analysis"
     )
     
     # Main coordinator agent with specialist tools
@@ -755,15 +765,15 @@ async def agent_as_tool_example():
         name="coordinator",
         tools=[research_tool],
         system_prompt="Coordination agent that delegates to specialists.",
-        model="gpt-4.1"
+        model="gpt-4.1",
+        message_storage=message_storage
     )
-    
-    session = Session(user_id="user123")
     
     # Complex multi-step task
     response = await coordinator.chat(
-        "Research renewable energy benefits and write a brief summary",
-        session
+        user_message="Research renewable energy benefits and write a brief summary",
+        user_id="user123",
+        session_id="session456"
     )
     print(response)
 
@@ -774,32 +784,34 @@ asyncio.run(agent_as_tool_example())
 
 ```python
 import asyncio
-from xagent.core import Agent, Session
+from xagent.core import Agent
 from xagent.db import MessageStorageRedis
 
 async def chat_with_persistence():
     # Initialize Redis-backed message storage
     message_storage = MessageStorageRedis()
     
-    # Create agent
+    # Create agent with Redis persistence
     agent = Agent(
         name="persistent_agent",
-        model="gpt-4.1-mini"
-    )
-
-    # Create session with Redis persistence
-    session = Session(
-        user_id="user123", 
-        session_id="persistent_session",
+        model="gpt-4.1-mini",
         message_storage=message_storage
     )
 
     # Chat with automatic message persistence
-    response = await agent.chat("Remember this: my favorite color is blue", session)
+    response = await agent.chat(
+        user_message="Remember this: my favorite color is blue",
+        user_id="user123",
+        session_id="persistent_session"
+    )
     print(response)
     
     # Later conversation - context is preserved in Redis
-    response = await agent.chat("What's my favorite color?", session)
+    response = await agent.chat(
+        user_message="What's my favorite color?",
+        user_id="user123",
+        session_id="persistent_session"
+    )
     print(response)
 
 asyncio.run(chat_with_persistence())
@@ -882,18 +894,21 @@ Agent(
     client: Optional[AsyncOpenAI] = None,
     tools: Optional[list] = None,
     mcp_servers: Optional[str | list] = None,
-    sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None
+    sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None,
+    output_type: Optional[type[BaseModel]] = None,
+    message_storage: Optional[MessageStorageBase] = None
 )
 ```
 
 **Key Methods:**
-- `async chat(user_message, session, **kwargs) -> str | BaseModel`: Main chat interface
-- `async __call__(user_message, session, **kwargs) -> str | BaseModel`: Shorthand for chat
-- `as_tool(name, description, message_storage) -> Callable`: Convert agent to tool
+- `async chat(user_message, user_id, session_id, **kwargs) -> str | BaseModel`: Main chat interface
+- `async __call__(user_message, user_id, session_id, **kwargs) -> str | BaseModel`: Shorthand for chat
+- `as_tool(name, description) -> Callable`: Convert agent to tool
 
 **Chat Method Parameters:**
 - `user_message`: The user's message (string or Message object)
-- `session`: Session object for conversation management
+- `user_id`: User identifier for message storage (default: "default_user")
+- `session_id`: Session identifier for message storage (default: "default_session")
 - `history_count`: Number of previous messages to include (default: 16)
 - `max_iter`: Maximum model call attempts (default: 10)
 - `image_source`: Optional image for analysis (URL, path, or base64)
@@ -908,6 +923,8 @@ Agent(
 - `tools`: List of function tools
 - `mcp_servers`: MCP server URLs for dynamic tool loading
 - `sub_agents`: List of sub-agent configurations (name, description, server URL)
+- `output_type`: Pydantic model for structured output
+- `message_storage`: MessageStorageBase instance for conversation persistence
 
 #### 🌐 HTTPAgentServer
 
@@ -959,23 +976,36 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
-#### 💬 Session
+#### � Message Storage
 
-Manages conversation history and persistence with operations.
+xAgent provides flexible message storage options for conversation persistence.
 
+**Available Storage Backends:**
+- `MessageStorageLocal`: In-memory storage (default)
+- `MessageStorageRedis`: Redis-based persistence
+
+**Usage in Agent:**
 ```python
-Session(
-    user_id: str,
-    session_id: Optional[str] = None,
-    message_storage: Optional[MessageStorageBase] = None
+from xagent.db import MessageStorageRedis
+
+# Create agent with Redis storage
+agent = Agent(
+    name="persistent_agent",
+    message_storage=MessageStorageRedis()
+)
+
+# Chat calls automatically handle storage
+response = await agent.chat(
+    user_message="Hello",
+    user_id="user123",
+    session_id="session456"
 )
 ```
 
-**Key Methods:**
-- `async add_messages(messages: Message | List[Message]) -> None`: Store messages
-- `async get_messages(count: int = 20) -> List[Message]`: Retrieve message history
-- `async clear_session() -> None`: Clear conversation history
-- `async pop_message() -> Optional[Message]`: Remove last non-tool message
+**Key Interface Methods (MessageStorageBase):**
+- `async add_messages(user_id, session_id, messages) -> None`: Store messages
+- `async get_messages(user_id, session_id, count) -> List[Message]`: Retrieve history
+- `async clear_session(user_id, session_id) -> None`: Clear conversation history
 
 
 ### Important Considerations
@@ -983,8 +1013,9 @@ Session(
 | Aspect | Details |
 |--------|---------|
 | **Tool functions** | Can be sync or async (automatic conversion) |
-| **Agent interactions** | Always use `await` |
+| **Agent interactions** | Always use `await` with proper user_id and session_id |
 | **Context** | Run in context with `asyncio.run()` |
+| **Message Storage** | Configure via Agent constructor for persistence |
 | **Concurrency** | All tools execute in parallel automatically |
 
 ## 📊 Monitoring & Observability
