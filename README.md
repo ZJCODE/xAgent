@@ -739,7 +739,7 @@ if __name__ == "__main__":
 ```python
 import asyncio
 from xagent.core import Agent
-from xagent.db import MessageStorageLocal
+from xagent.components import MessageStorageLocal
 from xagent.tools import web_search
 
 async def agent_as_tool_example():
@@ -785,7 +785,7 @@ asyncio.run(agent_as_tool_example())
 ```python
 import asyncio
 from xagent.core import Agent
-from xagent.db import MessageStorageRedis
+from xagent.components import MessageStorageRedis
 
 async def chat_with_persistence():
     # Initialize Redis-backed message storage
@@ -840,7 +840,7 @@ xAgent/
 │   │   ├── server.py         # HTTP Agent Server (FastAPI)
 │   │   ├── web.py            # Streamlit chat application
 │   │   └── web_launcher.py   # Web interface launcher
-│   ├── db/                   # Message storage layer
+│   ├── components/           # Message storage layer
 │   │   ├── __init__.py       # Database exports
 │   │   ├── base_messages.py  # Abstract message storage interface
 │   │   ├── local_messages.py # In-memory message storage
@@ -984,7 +984,7 @@ xAgent provides flexible message storage options for conversation persistence.
 
 **Usage in Agent:**
 ```python
-from xagent.db import MessageStorageRedis
+from xagent.components import MessageStorageRedis
 
 # Create agent with Redis storage
 agent = Agent(

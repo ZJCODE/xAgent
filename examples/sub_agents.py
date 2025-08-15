@@ -7,7 +7,6 @@ agents that can be composed together for complex tasks.
 
 import asyncio
 from xagent.core import Agent
-from xagent.db import MessageDB
 from xagent.tools import web_search
 
 async def agent_as_tool_example():

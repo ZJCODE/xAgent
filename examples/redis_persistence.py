@@ -7,7 +7,7 @@ conversation history across sessions.
 
 import asyncio
 from xagent.core import Agent
-from xagent.db import MessageStorageRedis
+from xagent.components import MessageStorageRedis
 
 async def chat_with_persistence():
     # Initialize Redis-backed message storage

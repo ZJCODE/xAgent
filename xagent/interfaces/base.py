@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, create_model
 
 # Local imports
 from ..core.agent import Agent
-from ..db import MessageStorageLocal,MessageStorageRedis,MessageStorageBase
+from ..components import MessageStorageLocal,MessageStorageRedis,MessageStorageBase
 from ..tools import TOOL_REGISTRY
 
 

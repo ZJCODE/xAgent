@@ -5,7 +5,7 @@ The Agent now directly manages MessageStorageBase internally.
 
 import asyncio
 from xagent.core.agent import Agent
-from xagent.db import MessageStorageLocal, MessageStorageRedis
+from xagent.components import MessageStorageLocal, MessageStorageRedis
 
 
 async def main():

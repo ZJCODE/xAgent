@@ -15,7 +15,7 @@ from langfuse.openai import AsyncOpenAI
 from pydantic import BaseModel
 
 # Local imports
-from ..db import MessageStorageBase, MessageStorageLocal
+from ..components import MessageStorageBase, MessageStorageLocal
 from ..schemas import Message, ToolCall
 from ..utils.mcp_convertor import MCPTool
 from ..utils.tool_decorator import function_tool
