@@ -186,8 +186,8 @@ class MessageStorageRedis(MessageStorageBase):
     async def add_messages(
         self,
         user_id: str,
-        messages: Union[Message, List[Message]],
         session_id: str,
+        messages: Union[Message, List[Message]],
         ttl: int = MessageStorageRedisConfig.DEFAULT_TTL,
         *,
         max_len: Optional[int] = None,
@@ -198,8 +198,8 @@ class MessageStorageRedis(MessageStorageBase):
         
         Args:
             user_id: User identifier
-            messages: Single Message object or list of Message objects
             session_id: Session identifier
+            messages: Single Message object or list of Message objects
             ttl: Expiration time in seconds
             max_len: Maximum history length (triggers trimming if exceeded)
             reset_ttl: Whether to refresh expiration time (sliding window)

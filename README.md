@@ -143,7 +143,7 @@ server:
   port: 8010
 ```
 
-(Optional) If you want to use MCP (Model Context Protocol) for dynamic tool loading, you can also add `mcp_servers` in agent configuration
+If you want to use MCP (Model Context Protocol) for dynamic tool loading, you can also add `mcp_servers` in agent configuration
 
 Example for how to start a MCP server can be found in `toolkit/mcp_server.py`:
 
@@ -156,7 +156,7 @@ agent:
   ...
 ```
 
-(Optional) If you use Redis, you can set `message_storage` to `redis` (make sure to configure `REDIS_URL` in the `.env` file). 
+If you use Redis, you can set `message_storage` to `redis` (make sure to configure `REDIS_URL` in the `.env` file). 
 
 This way, when deploying multiple services, the conversation can remain consistent even if requests are routed to different service instances.
 

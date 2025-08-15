@@ -77,8 +77,8 @@ class MessageStorageLocal(MessageStorageBase):
     async def add_messages(
         self,
         user_id: str,
-        messages: Union[Message, List[Message]],
         session_id: str,
+        messages: Union[Message, List[Message]],
         **kwargs  # Accept additional kwargs for compatibility with MessageDB
     ) -> None:
         """
@@ -86,8 +86,8 @@ class MessageStorageLocal(MessageStorageBase):
         
         Args:
             user_id: User identifier
-            messages: Single Message object or list of Message objects
             session_id: Session identifier
+            messages: Single Message object or list of Message objects
             **kwargs: Additional arguments (ignored, for compatibility)
             
         Note:

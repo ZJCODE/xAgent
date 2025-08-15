@@ -82,7 +82,7 @@ class Session:
         normalized_messages = self._normalize_messages_input(messages)
         
         try:
-            await self.message_storage.add_messages(self.user_id, normalized_messages, self.session_id)
+            await self.message_storage.add_messages(self.user_id, self.session_id, normalized_messages)
         except Exception as e:
             self.logger.error("Failed to add messages: %s", e)
     

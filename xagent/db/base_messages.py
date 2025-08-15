@@ -22,8 +22,8 @@ class MessageStorageBase(ABC):
     async def add_messages(
         self,
         user_id: str,
-        messages: Union[Message, List[Message]],
         session_id: str,
+        messages: Union[Message, List[Message]],
         **kwargs
     ) -> None:
         """
@@ -31,8 +31,8 @@ class MessageStorageBase(ABC):
         
         Args:
             user_id: User identifier
-            messages: Single Message object or list of Message objects
             session_id: Session identifier
+            messages: Single Message object or list of Message objects
             **kwargs: Additional backend-specific arguments
             
         Raises:
