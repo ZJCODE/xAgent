@@ -10,7 +10,7 @@ agent:
       - "draw_image"  # Built-in image generation (need set AWS credentials in .env)
       - "char_count"  # Custom tool for counting characters
       
-  message_storage: "local"  # Use Redis for message storage currently supported  local or redis
+  message_storage: "redis"  # Use Redis for message storage currently supported  local or redis
   
 server:
   host: "0.0.0.0"
