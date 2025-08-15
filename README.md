@@ -47,6 +47,7 @@ xagent-server
 If start a http server, you can interact with the agent using the following command:
 
 ```bash
+# Basic chat request
 curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
   -d '{
@@ -54,6 +55,17 @@ curl -X POST "http://localhost:8010/chat" \
     "session_id": "session456",
     "user_message": "Who are you?",
     "stream": false
+  }'
+
+# Advanced request with custom parameters
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user123",
+    "session_id": "session456", 
+    "user_message": "Analyze recent AI trends and provide insights",
+    "history_count": 20,
+    "max_iter": 15
   }'
 ```
 
@@ -239,7 +251,43 @@ curl -X POST "http://localhost:8010/chat" \
     "user_message": "Hello, how are you?",
     "stream": true
   }'
+
+# Advanced parameters for conversation control
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user123",
+    "session_id": "session456",
+    "user_message": "Based on our previous conversation, summarize what you know about me",
+    "history_count": 25,
+    "max_iter": 15,
+    "stream": false
+  }'
 ```
+
+#### API Parameters Reference
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `user_id` | string | **required** | Unique identifier for the user |
+| `session_id` | string | **required** | Unique identifier for the conversation session |
+| `user_message` | string | **required** | The user's message content |
+| `image_source` | string | optional | Image URL, file path, or base64 string for analysis |
+| `stream` | boolean | `false` | Enable streaming response via Server-Sent Events |
+| `history_count` | integer | `16` | Number of previous messages to include in context |
+| `max_iter` | integer | `10` | Maximum model call attempts for complex reasoning |
+
+#### Parameter Usage Guidelines
+
+**`history_count`** - Controls conversation context:
+- **1-5**: Independent questions without context
+- **10-20**: Standard multi-turn conversations  
+- **25+**: Complex conversations requiring extensive history
+
+**`max_iter`** - Controls reasoning depth:
+- **5-8**: Simple Q&A without tool usage
+- **10-12**: Standard tasks with light tool usage
+- **15+**: Complex multi-step reasoning and tool chains
 
 ### 5. Advanced Configuration （Hierarchical Multi-Agent System）
 
@@ -828,7 +876,16 @@ Agent(
 - `async __call__(user_message, session, **kwargs) -> str | BaseModel`: Shorthand for chat
 - `as_tool(name, description, message_db) -> Callable`: Convert agent to tool
 
-**Parameters:**
+**Chat Method Parameters:**
+- `user_message`: The user's message (string or Message object)
+- `session`: Session object for conversation management
+- `history_count`: Number of previous messages to include (default: 16)
+- `max_iter`: Maximum model call attempts (default: 10)
+- `image_source`: Optional image for analysis (URL, path, or base64)
+- `output_type`: Pydantic model for structured output
+- `stream`: Enable streaming response (default: False)
+
+**Agent Parameters:**
 - `name`: Agent identifier (default: "default_agent")
 - `system_prompt`: Instructions for the agent behavior
 - `model`: OpenAI model to use (default: "gpt-4.1-mini")
@@ -836,6 +893,56 @@ Agent(
 - `tools`: List of function tools
 - `mcp_servers`: MCP server URLs for dynamic tool loading
 - `sub_agents`: List of sub-agent configurations (name, description, server URL)
+
+#### 🌐 HTTPAgentServer
+
+HTTP server for agent interactions with REST API endpoints.
+
+```python
+HTTPAgentServer(
+    config_path: Optional[str] = None,
+    toolkit_path: Optional[str] = None
+)
+```
+
+**API Endpoints:**
+- `GET /health`: Health check endpoint
+- `POST /chat`: Main chat interaction endpoint
+- `POST /clear_session`: Clear conversation session
+
+**Chat Endpoint (`POST /chat`) Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `user_id` | string | ✅ | - | Unique user identifier |
+| `session_id` | string | ✅ | - | Conversation session identifier |
+| `user_message` | string | ✅ | - | User's message content |
+| `image_source` | string | ❌ | `null` | Image URL, file path, or base64 string |
+| `stream` | boolean | ❌ | `false` | Enable Server-Sent Events streaming |
+| `history_count` | integer | ❌ | `16` | Number of previous messages to include |
+| `max_iter` | integer | ❌ | `10` | Maximum model call attempts |
+
+**Example Usage:**
+```bash
+# Start server
+xagent-server --config config.yaml --toolkit_path ./tools
+
+# Basic chat
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "user123", "session_id": "session456", "user_message": "Hello!"}'
+
+# Advanced chat with custom parameters
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user123", 
+    "session_id": "session456",
+    "user_message": "Analyze the conversation context",
+    "history_count": 25,
+    "max_iter": 15
+  }'
+```
 
 #### 💬 Session
 
