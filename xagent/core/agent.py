@@ -45,14 +45,7 @@ class Agent:
         "**Context Information:**\n"
         "- Current user_id: {user_id}\n"
         "- Current date: {date}\n" 
-        "- Current timezone: {timezone}\n\n"
-        "**Basic Capabilities:**\n"
-        "- Respond directly when you can answer a question without tools\n"
-        "- Use available tools when specialized functionality is needed\n"
-        "- Handle multi-step reasoning and break down complex problems\n"
-        "- Be concise yet informative in your responses\n"
-        "- When uncertain, ask clarifying questions\n"
-        "- Acknowledge when a request is beyond your capabilities\n\n\n"
+        "- Current timezone: {timezone}\n\n\n"
     )
 
 
@@ -205,8 +198,8 @@ class Agent:
             function: An asynchronous function that can be used as an OpenAI tool.
         """
 
-        async def tool_func(task: str, attachment_context: Optional[str] = None, image_source: Optional[str] = None, expected_output: Optional[str] = None):
-            user_message = f"### Attachments:\n{attachment_context}\n\n### User Input:\n{task}" if attachment_context else task
+        async def tool_func(task: str, expected_output: str, context: Optional[str] = None, image_source: Optional[str] = None):
+            user_message = f"### Shared Contents :\n{context}\n\n### User Input:\n{task}" if context else task
             if expected_output:
                 user_message += f"\n\n### Expected Output:\n{expected_output}"
             return await self.chat(user_message=user_message,
@@ -488,8 +481,8 @@ class Agent:
             function: An asynchronous function that can be used as an OpenAI tool.
         """
 
-        async def tool_func(task: str, attachment_context: Optional[str] = None, image_source: Optional[str] = None, expected_output: Optional[str] = None):
-            user_message = f"### Attachments:\n{attachment_context}\n\n### User Input:\n{task}" if attachment_context else task
+        async def tool_func(task: str, expected_output: str, context: Optional[str] = None, image_source: Optional[str] = None):
+            user_message = f"### Shared Contents:\n{context}\n\n### User Input:\n{task}" if context else task
             if expected_output:
                 user_message += f"\n\n### Expected Output:\n{expected_output}"
             
@@ -588,23 +581,22 @@ class Agent:
                     "properties": {
                         "task": {
                             "type": "string",
-                            "description": "Clear, actionable instruction or specific question for the agent. keep it focused and concise."
-                        },
-                        "attachment_context": {
-                            "type": "string",
-                            "description": "Contextual information to help the agent understand and complete the task. Use this to provide additional context or data that the agent can use to improve its response."
-                        },
-                        "image_source": {
-                            "type": "string",
-                            "description": "Optional image for the agent to analyze. Can be a URL (http/https), or base64 encoded image string. Include this when the task requires visual analysis or image processing."
+                            "description": "Clear, actionable instruction or specific question for the agent. Keep it focused and concise."
                         },
                         "expected_output": {
                             "type": "string",
-                            "description": "Description of the expected output format. Specify the desired structure, content, or type of response you want from the agent. This helps guide the agent to produce results that meet your needs."
+                            "description": "Specification of the desired output format, structure, or content type."
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "Optional context to share with the agent, such as previous messages, user preferences, or background information that helps complete the task."
+                        },
+                        "image_source": {
+                            "type": "string",
+                            "description": "Optional image for analysis. Can be a URL (http/https) or base64 encoded image string."
                         }
                     },
-                    "required": ["task", "attachment_context", "image_source", "expected_output"],
+                    "required": ["task", "expected_output"],
                     "additionalProperties": False
-                },
-                "strict": True
+                }
             }
