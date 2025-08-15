@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 # Local imports
 from .base_messages import MessageStorageBase
-from ..schemas import Message
+from ...schemas import Message
 
 
 class MessageStorageLocalConfig:
@@ -133,9 +133,14 @@ class MessageStorageLocal(MessageStorageBase):
         session_key = self._get_session_key(user_id, session_id)
         self._ensure_session_exists(session_key)
         
-        self.logger.debug("Fetching last %d messages from local session %s", count, session_key)
         messages = self._messages[session_key]
-        return messages[-count:] if messages else []
+        result_messages = messages[-count:] if messages else []
+        
+        self.logger.debug(
+            "Retrieved %d/%d messages for session %s", 
+            len(result_messages), len(messages), session_key
+        )
+        return result_messages
 
     async def clear_history(self, user_id: str, session_id: str) -> None:
         """
@@ -146,8 +151,12 @@ class MessageStorageLocal(MessageStorageBase):
             session_id: Session identifier
         """
         session_key = self._get_session_key(user_id, session_id)
+        self._ensure_session_exists(session_key)
+        
+        message_count = len(self._messages[session_key])
         self.logger.info("Clearing local session history for %s", session_key)
         self._messages[session_key] = []
+        self.logger.debug("Cleared history for session %s (deleted: %d)", session_key, message_count)
 
     async def pop_message(self, user_id: str, session_id: str) -> Optional[Message]:
         """
@@ -171,10 +180,21 @@ class MessageStorageLocal(MessageStorageBase):
         self.logger.info("Popping last message from local session %s", session_key)
         
         messages = self._messages[session_key]
+        messages_popped = 0
         while messages:
             msg = messages.pop()
+            messages_popped += 1
             if not self._is_tool_message(msg):
+                self.logger.debug(
+                    "Popped non-tool message for session %s (checked %d messages)", 
+                    session_key, messages_popped
+                )
                 return msg
+            
+            # Continue if this is a tool message
+            self.logger.debug("Skipping tool message for session %s", session_key)
+        
+        self.logger.debug("No messages found for session %s", session_key)
         return None
 
     def _is_tool_message(self, message: Message) -> bool:

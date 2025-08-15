@@ -10,10 +10,7 @@ from redis.exceptions import RedisError
 
 # Local imports
 from .base_messages import MessageStorageBase
-from ..schemas import Message
-
-# Module logger
-logger = logging.getLogger(__name__)
+from ...schemas import Message
 
 
 class MessageStorageRedisConfig:

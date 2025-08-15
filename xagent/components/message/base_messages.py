@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Union
 
 # Local imports
-from ..schemas import Message
+from ...schemas import Message
 
 
 class MessageStorageBase(ABC):
