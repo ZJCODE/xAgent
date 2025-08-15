@@ -8,7 +8,10 @@ agent:
     tools:
       - "web_search"  # Built-in web search
       - "draw_image"  # Built-in image generation (need set AWS credentials in .env)
+      - "char_count"  # Custom tool for counting characters
       
+  local: true
+  
 server:
   host: "0.0.0.0"
   port: 8010
