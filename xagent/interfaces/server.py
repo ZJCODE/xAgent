@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 from .base import BaseAgentRunner
-from ..core.session import Session
 
 
 class AgentInput(BaseModel):
@@ -90,19 +89,14 @@ class HTTPAgentServer(BaseAgentRunner):
                 Agent response or streaming SSE when input_data.stream is True
             """
             try:
-                session = Session(
-                    user_id=input_data.user_id,
-                    session_id=input_data.session_id,
-                    message_storage=self.message_storage
-                )
-                
                 # Streaming mode via Server-Sent Events
                 if input_data.stream:
                     async def event_generator():
                         try:
                             response = await self.agent(
                                 user_message=input_data.user_message,
-                                session=session,
+                                user_id=input_data.user_id,
+                                session_id=input_data.session_id,
                                 history_count=input_data.history_count,
                                 max_iter=input_data.max_iter,
                                 image_source=input_data.image_source,
@@ -132,7 +126,8 @@ class HTTPAgentServer(BaseAgentRunner):
                 # Non-streaming mode (default)
                 response = await self.agent(
                     user_message=input_data.user_message,
-                    session=session,
+                    user_id=input_data.user_id,
+                    session_id=input_data.session_id,
                     history_count=input_data.history_count,
                     max_iter=input_data.max_iter,
                     image_source=input_data.image_source
@@ -159,13 +154,10 @@ class HTTPAgentServer(BaseAgentRunner):
                 Success confirmation
             """
             try:
-                session = Session(
+                await self.message_storage.clear_history(
                     user_id=input_data.user_id,
-                    session_id=input_data.session_id,
-                    message_storage=self.message_storage
+                    session_id=input_data.session_id
                 )
-                
-                await session.clear_session()
                 
                 return {"status": "success", "message": f"Session {input_data.session_id} for user {input_data.user_id} cleared"}
                 

@@ -15,8 +15,7 @@ from langfuse.openai import AsyncOpenAI
 from pydantic import BaseModel
 
 # Local imports
-from ..core import Session
-from ..db import MessageStorageBase
+from ..db import MessageStorageBase, MessageStorageLocal
 from ..schemas import Message, ToolCall
 from ..utils.mcp_convertor import MCPTool
 from ..utils.tool_decorator import function_tool
@@ -82,7 +81,8 @@ class Agent:
         tools: Optional[List] = None,
         mcp_servers: Optional[Union[str, List[str]]] = None,
         sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None,
-        output_type: Optional[type[BaseModel]] = None
+        output_type: Optional[type[BaseModel]] = None,
+        message_storage: Optional[MessageStorageBase] = None
     ):
         """
         Initialize the Agent with optional parameters.
@@ -97,6 +97,7 @@ class Agent:
             mcp_servers: MCP server URLs to fetch tools from
             sub_agents: List of sub-agents to convert to tools
             output_type: Pydantic model for structured output
+            message_storage: MessageStorageBase instance for message storage
         """
         # Basic configuration
         self.name = name or AgentConfig.DEFAULT_NAME
@@ -104,6 +105,12 @@ class Agent:
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.client = client or AsyncOpenAI()
         self.output_type = output_type
+        
+        # Message storage setup
+        if message_storage is not None:
+            self.message_storage = message_storage
+        else:
+            self.message_storage = MessageStorageLocal()
         
         # System prompt setup
         self.system_prompt = AgentConfig.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
@@ -139,17 +146,19 @@ class Agent:
     async def __call__(
         self,
         user_message: Union[Message, str],
-        session: Session,
+        user_id: str = "default_user",
+        session_id: str = "default_session",
         history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         image_source: Optional[str] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
-        """Call the agent to generate a reply based on the user message and session."""
+        """Call the agent to generate a reply based on the user message."""
         return await self.chat(
             user_message=user_message,
-            session=session,
+            user_id=user_id,
+            session_id=session_id,
             history_count=history_count,
             max_iter=max_iter,
             image_source=image_source,
@@ -161,7 +170,8 @@ class Agent:
     async def chat(
         self,
         user_message: Union[Message, str],
-        session: Session,
+        user_id: str = "default_user",
+        session_id: str = "default_session",
         history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         image_source: Optional[str] = None,
@@ -169,11 +179,12 @@ class Agent:
         stream: bool = False
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """
-        Generate a reply from the agent given a user message and session.
+        Generate a reply from the agent given a user message.
 
         Args:
             user_message: The latest user message
-            session: The session object managing message history
+            user_id: User identifier for message storage
+            session_id: Session identifier for message storage
             history_count: Number of previous messages to include
             max_iter: Maximum model call attempts
             image_source: Source of the image, if any (URL, file path, or base64 string)
@@ -194,23 +205,23 @@ class Agent:
             await self._register_mcp_servers(self.mcp_servers)
 
             # Store the incoming user message in session history
-            await self._store_user_message(user_message, session, image_source)
+            await self._store_user_message(user_message, user_id, session_id, image_source)
 
             # Build input messages once outside the loop
-            input_messages = [msg.to_dict() for msg in await session.get_messages(history_count)]
+            input_messages = [msg.to_dict() for msg in await self.message_storage.get_messages(user_id, session_id, history_count)]
 
             for attempt in range(max_iter):
-                reply_type, response = await self._call_model(input_messages, session, output_type, stream)
+                reply_type, response = await self._call_model(input_messages, user_id, session_id, output_type, stream)
 
                 if reply_type == ReplyType.SIMPLE_REPLY:
                     if not stream:
-                        await self._store_model_reply(str(response), session)
+                        await self._store_model_reply(str(response), user_id, session_id)
                     return response
                 elif reply_type == ReplyType.STRUCTURED_REPLY:
-                    await self._store_model_reply(response.model_dump_json(), session)
+                    await self._store_model_reply(response.model_dump_json(), user_id, session_id)
                     return response
                 elif reply_type == ReplyType.TOOL_CALL:
-                    await self._handle_tool_calls(response, session, input_messages)
+                    await self._handle_tool_calls(response, user_id, session_id, input_messages)
                 else:
                     self.logger.error("Unknown reply type: %s", reply_type)
                     return "Sorry, I encountered an error while processing your request."
@@ -226,15 +237,13 @@ class Agent:
     def as_tool(
         self, 
         name: Optional[str] = None, 
-        description: Optional[str] = None,
-        message_storage: Optional[MessageStorageBase] = None
+        description: Optional[str] = None
     ):
         """
         Convert the agent into an OpenAI tool function.
         Args:
             name (str): The name of the tool function.
             description (str): A brief description of what the tool does.
-            message_storage (Optional[MessageStorageBase]): Optional message database for storing messages.
         Returns:
             function: An asynchronous function that can be used as an OpenAI tool.
         """
@@ -254,10 +263,9 @@ class Agent:
                 user_message += f"\n\n### Expected Output:\n{expected_output}"
             return await self.chat(user_message=user_message,
                                    image_source=image_source,
-                                   session=Session(user_id=f"agent_{self.name}_as_tool", 
-                                                   session_id=f"{uuid.uuid4()}",
-                                                    message_storage=message_storage
-                                                   ))
+                                   user_id=f"agent_{self.name}_as_tool", 
+                                   session_id=f"{uuid.uuid4()}"
+                                   )
 
         return tool_func
 
@@ -325,23 +333,24 @@ class Agent:
         
         self.mcp_tools_last_updated = now
 
-    async def _store_user_message(self, user_message: Message | str, session: Session, image_source: Optional[str]) -> None:
+    async def _store_user_message(self, user_message: Message | str, user_id: str, session_id: str, image_source: Optional[str]) -> None:
         if isinstance(user_message, str):
             user_message = Message.create(content=user_message, role="user", image_source=image_source)
-        await session.add_messages(user_message)
+        await self.message_storage.add_messages(user_id, session_id, user_message)
 
-    async def _store_model_reply(self, reply_text: str, session: Session) -> None:
+    async def _store_model_reply(self, reply_text: str, user_id: str, session_id: str) -> None:
         model_msg = Message.create(content=reply_text, role="assistant")
-        await session.add_messages(model_msg)
+        await self.message_storage.add_messages(user_id, session_id, model_msg)
 
     @observe()
-    async def _call_model(self, input_msgs: list, session: Session, 
+    async def _call_model(self, input_msgs: list, user_id: str, session_id: str,
                           output_type: type[BaseModel] = None, stream: bool = False) -> tuple[ReplyType, object]:
         """
-        Call the AI model with the provided input messages and session.
+        Call the AI model with the provided input messages.
         Args:
             input_msgs (list): List of input messages to send to the model.
-            session (Session): The session object managing message history.
+            user_id (str): User identifier for message storage.
+            session_id (str): Session identifier for message storage.
             output_type (type[BaseModel], optional): Pydantic model for structured output.
             stream (bool, optional): Whether to stream the response. Defaults to False.
         Returns:
@@ -350,7 +359,7 @@ class Agent:
         system_msg = {
             "role": "system",
             "content": self.system_prompt.format(
-                user_id=session.user_id, 
+                user_id=user_id, 
                 date=time.strftime('%Y-%m-%d'), 
                 timezone=time.tzname[0]
             )
@@ -409,7 +418,7 @@ class Agent:
                                 content = event.delta
                                 if content:
                                     yield content
-                        await self._store_model_reply(event.response.output[0].content[0].text, session)
+                        await self._store_model_reply(event.response.output[0].content[0].text, user_id, session_id)
                     return ReplyType.SIMPLE_REPLY, stream_generator()
                 elif event_type == "function_call":
                     async for event in response:
@@ -431,12 +440,13 @@ class Agent:
             return ReplyType.ERROR, f"Model call error: {str(e)}"
     
     @observe()
-    async def _handle_tool_calls(self, tool_calls: list, session: Session, input_messages: list) -> None:
+    async def _handle_tool_calls(self, tool_calls: list, user_id: str, session_id: str, input_messages: list) -> None:
         """
         Handle tool calls by executing them concurrently.
         Args:
             tool_calls (list): List of tool call messages to process.
-            session (Session): The session object managing message history.
+            user_id (str): User identifier for message storage.
+            session_id (str): Session identifier for message storage.
             input_messages (list): List of input messages to update with tool call results.
         Returns:
             None: This method modifies input_messages in place and does not return a value.
@@ -445,7 +455,7 @@ class Agent:
         if tool_calls is None or not tool_calls:
             return None
 
-        tasks = [self._act(tc, session) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
+        tasks = [self._act(tc, user_id, session_id) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
         results = await asyncio.gather(*tasks)
         # Safely add all tool messages after concurrent execution
         for tool_messages in results:
@@ -453,12 +463,13 @@ class Agent:
                 input_messages.extend([msg.to_dict() for msg in tool_messages])
         return None
 
-    async def _act(self, tool_call, session: Session) -> Optional[list]:
+    async def _act(self, tool_call, user_id: str, session_id: str) -> Optional[list]:
         """
         Execute a single tool call and return the messages generated by the tool.
         Args:
             tool_call: The tool call message to process.
-            session (Session): The session object managing message history.
+            user_id (str): User identifier for message storage.
+            session_id (str): Session identifier for message storage.
         Returns:
             Optional[list]: A list of messages generated by the tool call, or None if the tool is not found or an error occurs.
         """
@@ -505,7 +516,7 @@ class Agent:
                     output=json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
                 )
             )
-            await session.add_messages([tool_call_msg, tool_res_msg])
+            await self.message_storage.add_messages(user_id, session_id, [tool_call_msg, tool_res_msg])
             
             # Return the messages instead of modifying input_messages directly
             return [tool_call_msg, tool_res_msg]

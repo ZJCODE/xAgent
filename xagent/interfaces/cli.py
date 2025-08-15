@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 from .base import BaseAgentRunner
-from ..core.session import Session
 
 
 class CLIAgent(BaseAgentRunner):
@@ -62,12 +61,6 @@ class CLIAgent(BaseAgentRunner):
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
         session_id = session_id or f"cli_session_{uuid.uuid4().hex[:8]}"
         
-        session = Session(
-            user_id=user_id,
-            session_id=session_id,
-            message_storage=self.message_storage
-        )
-        
         print(f"🤖 Welcome to xAgent CLI!")
         config_msg = f"Loading agent configuration from {self.config_path}" if self.config_path else "Using default configuration"
         print(config_msg)
@@ -95,7 +88,7 @@ class CLIAgent(BaseAgentRunner):
                     print("👋 Goodbye!")
                     break
                 elif user_input.lower() == 'clear':
-                    await session.clear_session()
+                    await self.message_storage.clear_history(user_id, session_id)
                     print("🧹 Session history cleared.")
                     continue
                 elif user_input.lower().startswith('stream '):
@@ -124,7 +117,8 @@ class CLIAgent(BaseAgentRunner):
                     # Handle streaming response
                     response_generator = await self.agent(
                         user_message=user_input,
-                        session=session,
+                        user_id=user_id,
+                        session_id=session_id,
                         stream=True
                     )
                     
@@ -142,7 +136,8 @@ class CLIAgent(BaseAgentRunner):
                     # Handle non-streaming response
                     response = await self.agent(
                         user_message=user_input,
-                        session=session,
+                        user_id=user_id,
+                        session_id=session_id,
                         stream=False
                     )
                     print("🤖 Agent: " + str(response))
@@ -169,15 +164,10 @@ class CLIAgent(BaseAgentRunner):
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
         session_id = session_id or f"cli_session_{uuid.uuid4().hex[:8]}"
         
-        session = Session(
-            user_id=user_id,
-            session_id=session_id,
-            message_storage=self.message_storage
-        )
-        
         response = await self.agent(
             user_message=message,
-            session=session,
+            user_id=user_id,
+            session_id=session_id,
             stream=False
         )
         

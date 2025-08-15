@@ -7,7 +7,6 @@ import pytest
 from pydantic import BaseModel
 
 from xagent.core.agent import Agent
-from xagent.core.session import Session
 from xagent.schemas.message import Message
 
 
@@ -18,12 +17,11 @@ async def test_simple_reply_and_storage():
     mock_client.responses.create = AsyncMock(return_value=types.SimpleNamespace(output_text="hello"))
 
     agent = Agent(name="test_agent", client=mock_client)
-    session = Session(user_id="u1", session_id="s1")
 
-    reply = await agent.chat("Hi there", session)
+    reply = await agent.chat("Hi there", user_id="u1", session_id="s1")
     assert reply == "hello"
 
-    messages = await session.get_messages(10)
+    messages = await agent.message_storage.get_messages("u1", "s1", 10)
     assert any(m.role == "assistant" and m.content == "hello" for m in messages)
 
 
@@ -38,9 +36,8 @@ async def test_structured_reply():
     mock_client.responses.parse = AsyncMock(return_value=types.SimpleNamespace(output_parsed=SimpleOut(result="ok")))
 
     agent = Agent(name="test_agent_struct", client=mock_client)
-    session = Session(user_id="u2", session_id="s2")
 
-    out = await agent.chat("Give structured output", session, output_type=SimpleOut)
+    out = await agent.chat("Give structured output", user_id="u2", session_id="s2", output_type=SimpleOut)
     assert isinstance(out, SimpleOut)
     assert out.result == "ok"
 
@@ -63,13 +60,12 @@ async def test_tool_call_executes_registered_tool():
     mock_client.responses.create = AsyncMock(side_effect=[first_output, second_output])
 
     agent = Agent(name="tool_agent", client=mock_client, tools=[echo])
-    session = Session(user_id="u3", session_id="s3")
 
-    reply = await agent.chat("Call tool", session)
+    reply = await agent.chat("Call tool", user_id="u3", session_id="s3")
     assert reply == "final reply"
 
-    # Ensure tool call messages were stored in session
-    messages = await session.get_messages(20)
+    # Ensure tool call messages were stored in message_storage
+    messages = await agent.message_storage.get_messages("u3", "s3", 20)
     # Should contain at least one tool call output message
     assert any(m.type == "function_call_output" and "Tool `echo` result" in m.content for m in messages)
 

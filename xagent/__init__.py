@@ -4,7 +4,7 @@ xAgent - Multi-Modal AI Agent System
 A powerful multi-modal AI Agent system with modern architecture.
 """
 
-from .core import Session, Agent
+from .core import Agent
 from .interfaces import HTTPAgentServer, CLIAgent
 from .schemas import Message
 from .db import MessageStorageBase, MessageStorageRedis, MessageStorageLocal
@@ -15,7 +15,6 @@ from .__version__ import __version__
 
 __all__ = [
     # Core components
-    "Session",
     "Agent", 
 
     # interfaces

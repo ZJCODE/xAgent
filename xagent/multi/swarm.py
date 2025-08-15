@@ -1,5 +1,4 @@
 from ..core.agent import Agent
-from ..core.session import Session
 from ..schemas import Message
 
 class SharedContext:

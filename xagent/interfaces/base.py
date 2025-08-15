@@ -331,6 +331,7 @@ class BaseAgentRunner:
             mcp_servers=mcp_servers,
             sub_agents=sub_agents,
             output_type=output_type,
+            message_storage=self.message_storage,
         )
     
     def _load_agent_tools(self, agent_cfg: Dict[str, Any]) -> List[Any]:

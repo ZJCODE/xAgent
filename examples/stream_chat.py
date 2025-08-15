@@ -1,11 +1,11 @@
 """
-Basic Async Chat Example
+Streaming Chat Example
 
-This example demonstrates the basic usage of xAgent with async chat functionality.
+This example demonstrates the streaming chat functionality of xAgent.
 """
 
 import asyncio
-from xagent.core import Agent, Session
+from xagent.core import Agent
 from xagent.tools import web_search
 
 async def main():
@@ -17,20 +17,27 @@ async def main():
         tools=[web_search]  # Add web search tool
     )
 
-    # Create session for conversation management
-    session = Session(
+    # Async streaming chat interaction
+    response = await agent.chat(
+        user_message="Hello, how are you?", 
+        user_id="user123",
         session_id="session456",
+        stream=True
     )
-
-    # Async chat interaction
-    response = await agent.chat("Hello, how are you?", session,stream=True)
     async for event in response:
-        print(event)
+        print(event, end="", flush=True)
+    print()  # New line after streaming
 
-    # Continue conversation with context
-    response = await agent.chat("What's the weather like in Hangzhou?", session,stream=True)
+    # Continue conversation with context using streaming
+    response = await agent.chat(
+        user_message="What's the weather like in Hangzhou?", 
+        user_id="user123",
+        session_id="session456",
+        stream=True
+    )
     async for event in response:
-        print(event)
+        print(event, end="", flush=True)
+    print()  # New line after streaming
 
 # Run the async function
 if __name__ == "__main__":

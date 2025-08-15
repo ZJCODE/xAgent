@@ -5,7 +5,7 @@ This example demonstrates the basic usage of xAgent with async chat functionalit
 """
 
 import asyncio
-from xagent.core import Agent, Session
+from xagent.core import Agent
 from xagent.tools import web_search
 
 async def main():
@@ -17,17 +17,20 @@ async def main():
         tools=[web_search]  # Add web search tool
     )
 
-    # Create session for conversation management
-    session = Session(
-        session_id="session456",
+    # Async chat interaction with user_id and session_id
+    response = await agent.chat(
+        user_message="Hello, how are you?", 
+        user_id="user123",
+        session_id="session456"
     )
-
-    # Async chat interaction
-    response = await agent.chat("Hello, how are you?", session)
     print(response)
 
-    # Continue conversation with context
-    response = await agent.chat("What's the weather like in Hangzhou?", session)
+    # Continue conversation with context using the same user_id and session_id
+    response = await agent.chat(
+        user_message="What's the weather like in Hangzhou?", 
+        user_id="user123",
+        session_id="session456"
+    )
     print(response)
 
 # Run the async function
