@@ -1,9 +1,17 @@
 import inspect
 import functools
-from typing import get_type_hints, get_origin, get_args, Union
+from typing import get_type_hints, get_origin, get_args, Union, Literal
 import sys
 
 def python_type_to_openai_type(py_type):
+    # 处理 Literal 类型 (用于枚举)
+    if get_origin(py_type) is Literal:
+        args = get_args(py_type)
+        if args:
+            # 假设所有 literal 值都是字符串类型
+            return {"type": "string", "enum": list(args)}
+        return {"type": "string"}
+    
     # 处理 Optional 类型 (Optional[T] 等价于 Union[T, None])
     if get_origin(py_type) is Union:
         args = get_args(py_type)
@@ -43,13 +51,15 @@ def python_type_to_openai_type(py_type):
     
     return {"type": "string"}
 
-def function_tool(name: str = None, description: str = None):
+def function_tool(name: str = None, description: str = None, strict: bool = False, param_descriptions: dict = None):
     """
     将函数包装成 openai tool call 所需的规范格式，仅支持基础类型
 
     Args:
         name (str): 工具名称，默认为函数名
         description (str): 工具描述，默认为函数文档字符串
+        strict (bool): 是否启用严格模式，默认为 False
+        param_descriptions (dict): 参数描述字典，格式为 {param_name: description}
     Returns:
         function: 包装后的函数，具有 tool_spec 属性
     Raises:
@@ -57,7 +67,14 @@ def function_tool(name: str = None, description: str = None):
         ValueError: 如果函数没有参数或返回值类型不支持
 
     Example usage:
-        @function_tool(name="my_tool", description="This is my tool")
+        @function_tool(
+            name="my_tool", 
+            description="This is my tool",
+            param_descriptions={
+                "param1": "First parameter description",
+                "param2": "Second parameter description"
+            }
+        )
         def my_tool(param1: int, param2: str):
             \"\"\"This is my tool function.\"\"\"
             return f"Received {param1} and {param2}"
@@ -72,7 +89,13 @@ def function_tool(name: str = None, description: str = None):
         required = []
         for param in sig.parameters.values():
             param_type = type_hints.get(param.name, str)
-            properties[param.name] = python_type_to_openai_type(param_type)
+            param_spec = python_type_to_openai_type(param_type)
+            
+            # 添加参数描述（如果提供了）
+            if param_descriptions and param.name in param_descriptions:
+                param_spec["description"] = param_descriptions[param.name]
+            
+            properties[param.name] = param_spec
             if param.default is param.empty:
                 required.append(param.name)
         parameters = {
@@ -87,6 +110,10 @@ def function_tool(name: str = None, description: str = None):
             "description": description or (func.__doc__.strip() if func.__doc__ else ""),
             "parameters": parameters
         }
+        
+        # 添加 strict 属性（如果为 True）
+        if strict:
+            tool["strict"] = True
         # 自动包装为异步
         if asyncio.iscoroutinefunction(func):
             async_func = func
