@@ -424,7 +424,7 @@ agent:
     class_name: "YourModelName"  # Pydantic model class name
     fields:
       field_name:
-        type: "field_type"        # Field type (str, int, float, bool, list, dict)
+        type: "field_type"        # Field type (str, int, float, bool, list)
         description: "description"    # Field description
       list_field:
         type: "list"
