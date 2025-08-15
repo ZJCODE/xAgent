@@ -1,4 +1,5 @@
 import time
+from turtle import st
 from typing import Optional, AsyncGenerator, Union, List
 import json
 import logging
@@ -203,14 +204,19 @@ class Agent:
         Returns:
             function: An asynchronous function that can be used as an OpenAI tool.
         """
-        @function_tool(name=name or self.name, description=description or self.description)
-        async def tool_func(input: str, shared_context: Optional[str] = None, image_source: Optional[str] = None):
-            return await self.chat(user_message=f"### Shared Context:\n{shared_context}\n\n### User Input:\n{input}" if shared_context else input,
+
+        async def tool_func(task: str, attachment_context: Optional[str] = None, image_source: Optional[str] = None, expected_output: Optional[str] = None):
+            user_message = f"### Attachments:\n{attachment_context}\n\n### User Input:\n{task}" if attachment_context else task
+            if expected_output:
+                user_message += f"\n\n### Expected Output:\n{expected_output}"
+            return await self.chat(user_message=user_message,
                                    image_source=image_source,
                                    session=Session(user_id=f"agent_{self.name}_as_tool", 
                                                    session_id=f"{uuid.uuid4()}",
                                                     message_db=message_db
                                                    ))
+        tool_func.tool_spec = self._agent_tool_spec(name=name or self.name, description=description or self.description)
+
         return tool_func
 
     def _convert_sub_agents_to_tools(self, sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]]) -> Optional[list]:
@@ -481,12 +487,16 @@ class Agent:
         Returns:
             function: An asynchronous function that can be used as an OpenAI tool.
         """
-        @function_tool(name=name, description=description)
-        async def tool_func(input: str, shared_context: Optional[str] = None, image_source: Optional[str] = None):
+
+        async def tool_func(task: str, attachment_context: Optional[str] = None, image_source: Optional[str] = None, expected_output: Optional[str] = None):
+            user_message = f"### Attachments:\n{attachment_context}\n\n### User Input:\n{task}" if attachment_context else task
+            if expected_output:
+                user_message += f"\n\n### Expected Output:\n{expected_output}"
+            
             request_body = {
                 "user_id": f"http_tool_{uuid.uuid4().hex[:8]}",
                 "session_id": f"session_{uuid.uuid4().hex[:8]}",
-                "user_message": f"### Shared Context:\n{shared_context}\n\n### User Input:\n{input}" if shared_context else input,
+                "user_message": user_message,
                 "stream": False  # 工具调用不使用流式响应
             }
             
@@ -558,4 +568,43 @@ class Agent:
                 self.logger.exception(error_msg)
                 return error_msg
         
+        tool_func.tool_spec = self._agent_tool_spec(name=name or self.name, description=description or self.description)
+
         return tool_func
+
+    @staticmethod
+    def _agent_tool_spec(name: str = None, description: str = None):
+        """
+        Get the tool specification for the agent.
+        Returns:
+            dict: A dictionary representing the OpenAI tool specification for the agent.
+        """
+        return {
+                "type": "function",
+                "name": name,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Clear, actionable instruction or specific question for the agent. keep it focused and concise."
+                        },
+                        "attachment_context": {
+                            "type": "string",
+                            "description": "Contextual information to help the agent understand and complete the task. Use this to provide additional context or data that the agent can use to improve its response."
+                        },
+                        "image_source": {
+                            "type": "string",
+                            "description": "Optional image for the agent to analyze. Can be a URL (http/https), or base64 encoded image string. Include this when the task requires visual analysis or image processing."
+                        },
+                        "expected_output": {
+                            "type": "string",
+                            "description": "Description of the expected output format. Specify the desired structure, content, or type of response you want from the agent. This helps guide the agent to produce results that meet your needs."
+                        }
+                    },
+                    "required": ["task", "attachment_context", "image_source", "expected_output"],
+                    "additionalProperties": False
+                },
+                "strict": True
+            }
