@@ -149,7 +149,7 @@ class BaseAgentRunner:
                     "tools": ["web_search"],  # Default tools
                     "mcp_servers": []  # Default MCP servers
                 },
-                "local": True
+                "message_storage": "local",  # Default to local message storage
             },
             "server": {
                 "host": BaseAgentConfig.DEFAULT_HOST,
