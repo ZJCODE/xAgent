@@ -522,10 +522,10 @@ Note: do not support sub-agents in CLI mode currently.
 xagent-cli
 
 # Use custom configuration
-xagent-cli chat --config my_config.yaml --toolkit_path my_toolkit --user_id developer --session_id session123 --verbose
+xagent-cli --config my_config.yaml --toolkit_path my_toolkit --user_id developer --session_id session123 --verbose
 
 # Ask a single question (non-streaming)
-xagent-cli ask "What is the capital of France?"
+xagent-cli --ask "What is the capital of France?"
 
 ```
 
@@ -534,12 +534,13 @@ xagent-cli ask "What is the capital of France?"
 Start a continuous conversation with the agent with **streaming enabled by default**:
 
 ```bash
-$ xagent-cli chat
+$ xagent-cli
 🤖 Welcome to xAgent CLI!
 Agent: Agent
 Model: gpt-4.1-mini
 Tools: 3 loaded
 Session: cli_session_abc123
+Verbose mode: Disabled
 Streaming: Enabled
 Type 'exit', 'quit', or 'bye' to end the session.
 Type 'clear' to clear the session history.
@@ -567,18 +568,22 @@ Type 'help' for available commands.
 | Command | Description | Example |
 |---------|-------------|---------|
 | `xagent-cli` | Start interactive chat with streaming (default) | `xagent-cli` |
-| `xagent-cli chat` | Start interactive chat explicitly | `xagent-cli chat --config my_config.yaml` |
-| `xagent-cli ask <message>` | Ask single question (non-streaming) | `xagent-cli ask "Hello world"` |
+| `xagent-cli --ask <message>` | Ask single question (non-streaming) | `xagent-cli --ask "Hello world"` |
+| `xagent-cli --init` | Create default configuration file | `xagent-cli --init` |
 
 ### CLI Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--config` | Configuration file path | `config/agent.yaml` |
-| `--toolkit_path` | Custom toolkit directory | `toolkit` |
+| `--config` | Configuration file path | Uses default configuration |
+| `--toolkit_path` | Custom toolkit directory | No additional tools |
 | `--user_id` | User identifier | Auto-generated |
 | `--session_id` | Session identifier | Auto-generated |
 | `--verbose`, `-v` | Enable verbose logging | `False` |
+| `--no-stream` | Disable streaming response | `False` (streaming enabled) |
+| `--ask` | Ask single question and exit | Interactive mode |
+| `--init` | Create default configuration file | - |
+| `--init-config` | Config file path for --init | `config/agent.yaml` |
 
 ## 🤖 Advanced Usage: Agent Class
 

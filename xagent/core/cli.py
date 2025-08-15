@@ -245,75 +245,60 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
 
 def main():
     """Main entry point for xagent-cli command."""
-    parser = argparse.ArgumentParser(description="xAgent CLI")
+    parser = argparse.ArgumentParser(description="xAgent CLI - Interactive chat agent")
     
-    # Subcommands
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    # Main command arguments (no subcommands)
+    parser.add_argument("--config", default=None, help="Config file path (if not specified, uses default configuration)")
+    parser.add_argument("--toolkit_path", default=None, help="Toolkit directory path (if not specified, no additional tools will be loaded)")
+    parser.add_argument("--user_id", help="User ID for the session")
+    parser.add_argument("--session_id", help="Session ID for the chat")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--no-stream", action="store_true", help="Disable streaming response (default: streaming enabled)")
     
-    # Interactive chat command
-    chat_parser = subparsers.add_parser("chat", help="Start interactive chat session")
-    chat_parser.add_argument("--config", default=None, help="Config file path (if not specified, uses default configuration)")
-    chat_parser.add_argument("--toolkit_path", default=None, help="Toolkit directory path (if not specified, no additional tools will be loaded)")
-    chat_parser.add_argument("--user_id", help="User ID for the session")
-    chat_parser.add_argument("--session_id", help="Session ID for the chat")
-    chat_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    chat_parser.add_argument("--no-stream", action="store_true", help="Disable streaming response (default: streaming enabled)")
-    
-    # Single message command
-    single_parser = subparsers.add_parser("ask", help="Ask a single question")
-    single_parser.add_argument("message", help="The message to send to the agent")
-    single_parser.add_argument("--config", default=None, help="Config file path (if not specified, uses default configuration)")
-    single_parser.add_argument("--toolkit_path", default=None, help="Toolkit directory path (if not specified, no additional tools will be loaded)")
-    single_parser.add_argument("--user_id", help="User ID for the session")
-    single_parser.add_argument("--session_id", help="Session ID for the chat")
-    single_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    
-    # Init command to create default config
-    init_parser = subparsers.add_parser("init", help="Create default configuration file")
-    init_parser.add_argument("--config", default="config/agent.yaml", help="Config file path to create")
+    # Special commands as optional arguments
+    parser.add_argument("--ask", metavar="MESSAGE", help="Ask a single question instead of starting interactive chat")
+    parser.add_argument("--init", action="store_true", help="Create default configuration file and exit")
+    parser.add_argument("--init-config", default="config/agent.yaml", help="Config file path to create when using --init")
     
     # Parse arguments
     args = parser.parse_args()
     
-    # If no command specified, default to interactive chat
-    if not args.command:
-        args.command = "chat"
-        args.config = None  # Use default configuration when no command is specified
-        args.toolkit_path = None  # No toolkit by default
-        args.user_id = None
-        args.session_id = None
-        args.verbose = False
-        args.no_stream = False
-    
     try:
-        if args.command == "init":
-            create_default_config_file(args.config)
+        # Handle init command
+        if args.init:
+            create_default_config_file(args.init_config)
             return
-            
-        cli_agent = CLIAgent(
-            config_path=args.config, 
-            toolkit_path=args.toolkit_path,
-            verbose=getattr(args, 'verbose', False)
-        )
         
-        if args.command == "chat":
-            # Determine stream setting - if --no-stream is specified, use False
-            # Otherwise, let chat_interactive decide based on verbose mode
-            stream_setting = None if not getattr(args, 'no_stream', False) else False
-            asyncio.run(cli_agent.chat_interactive(
-                user_id=args.user_id,
-                session_id=args.session_id,
-                stream=stream_setting
-            ))
-        elif args.command == "ask":
+        # Handle single question
+        if args.ask:
+            cli_agent = CLIAgent(
+                config_path=args.config,
+                toolkit_path=args.toolkit_path,
+                verbose=args.verbose
+            )
             response = asyncio.run(cli_agent.chat_single(
-                message=args.message,
+                message=args.ask,
                 user_id=args.user_id,
                 session_id=args.session_id
             ))
             print(response)
-        else:
-            parser.print_help()
+            return
+        
+        # Default behavior: start interactive chat
+        cli_agent = CLIAgent(
+            config_path=args.config,
+            toolkit_path=args.toolkit_path,
+            verbose=args.verbose
+        )
+        
+        # Determine stream setting - if --no-stream is specified, use False
+        # Otherwise, let chat_interactive decide based on verbose mode
+        stream_setting = None if not args.no_stream else False
+        asyncio.run(cli_agent.chat_interactive(
+            user_id=args.user_id,
+            session_id=args.session_id,
+            stream=stream_setting
+        ))
             
     except Exception as e:
         print(f"Failed to start CLI: {e}")
