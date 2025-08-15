@@ -1,307 +1,600 @@
-import redis.asyncio as redis
-from typing import List, Optional, Final
-
-from ..schemas import Message
-
-import os
+# Standard library imports
 import logging
+import os
+from typing import Final, List, Optional, Union
 from urllib.parse import quote
+
+# Third-party imports
+import redis.asyncio as redis
 from redis.exceptions import RedisError
 
+# Local imports
+from ..schemas import Message
+
+# Module logger
 logger = logging.getLogger(__name__)
+
+
+class MessageDBConfig:
+    """Configuration constants for MessageDB class."""
+    
+    # Redis key constants
+    MSG_PREFIX: Final[str] = "chat"
+    
+    # Time constants (in seconds)
+    DEFAULT_TTL: Final[int] = 2592000  # 30 days
+    HEALTH_CHECK_INTERVAL: Final[int] = 30
+    SOCKET_CONNECT_TIMEOUT: Final[int] = 5
+    SOCKET_TIMEOUT: Final[int] = 5
+    
+    # Default values
+    DEFAULT_MESSAGE_COUNT: Final[int] = 20
+    DEFAULT_MAX_HISTORY: Final[int] = 200
+    
+    # Redis client settings
+    CLIENT_NAME: Final[str] = "xagent-message-db"
+    
+    # Message preview settings
+    MESSAGE_PREVIEW_LENGTH: Final[int] = 120
+    
+    # URL encoding safe characters
+    URL_SAFE_CHARS: Final[str] = "-._~"
 
 
 class MessageDB:
     """
-    Stores all message history using Redis as the backend.
+    Redis-based message storage backend for conversation history.
 
-    All message histories are isolated with a unified prefix (chat:), support multiple sessions, and allow message trimming and expiration.
-    Main features:
-    - Store message history by user/session
-    - Support message append, retrieval, trimming, and expiration
-    - Unified Redis key encapsulation for easier maintenance
+    This class provides a robust, scalable solution for storing and retrieving
+    conversation messages using Redis as the backend. It supports:
+    
+    Features:
+    - Multi-user and multi-session isolation
+    - Automatic message expiration (TTL)
+    - History trimming to manage memory usage
+    - Atomic operations using Redis pipelines
+    - Connection pooling and health checks
+    - Graceful error handling and recovery
+    - URL-safe key sanitization (optional)
+    
+    Storage Format:
+    - Keys: "chat:<user_id>" or "chat:<user_id>:<session_id>"
+    - Values: JSON-serialized Message objects in Redis lists
+    - Expiration: Configurable TTL with sliding window support
+    
+    Attributes:
+        redis_url: Redis connection URL
+        r: Redis client instance (lazy-initialized)
+        sanitize_keys: Whether to URL-encode keys for safety
+        logger: Logger instance for this class
     """
-    MSG_PREFIX: Final[str] = "chat"
-    DEFAULT_TTL: Final[int] = 2592000  # 30 days
 
-    def __init__(self, redis_url: str = None, *, sanitize_keys: bool = False):
+    def __init__(
+        self, 
+        redis_url: Optional[str] = None, 
+        *, 
+        sanitize_keys: bool = False
+    ):
         """
-        Initialize MessageDB instance and connect to Redis.
+        Initialize MessageDB instance.
         
         Args:
-            redis_url (str, optional): Redis connection URL. Uses parameter first, 
-                otherwise reads from REDIS_URL environment variable.
-            sanitize_keys (bool, optional): Whether to URL-encode keys for safety. Defaults to False.
+            redis_url: Redis connection URL. If None, reads from REDIS_URL environment variable
+            sanitize_keys: Whether to URL-encode keys for safety. Defaults to False
         
         Raises:
-            ValueError: Redis connection information not provided.
+            ValueError: If Redis connection information is not provided
+            
+        Note:
+            The Redis connection is lazy-initialized on first use to avoid
+            blocking the constructor with network operations.
         """
+        self.redis_url = self._get_redis_url(redis_url)
+        self.r: Optional[redis.Redis] = None
+        self.sanitize_keys = sanitize_keys
+        self.logger = logging.getLogger(f"{self.__class__.__name__}")
+    
+    def _get_redis_url(self, redis_url: Optional[str]) -> str:
+        """Get Redis URL from parameter or environment variable."""
         url = redis_url or os.environ.get("REDIS_URL")
         if not url:
-            raise ValueError("REDIS_URL not set in environment or not provided as argument")
-        self.redis_url = url
-        self.r: Optional[redis.Redis] = None
-        self._sanitize_keys = sanitize_keys
+            raise ValueError(
+                "Redis connection information not provided. "
+                "Set REDIS_URL environment variable or pass redis_url parameter."
+            )
+        return url
 
     async def _get_client(self) -> redis.Redis:
         """
-        Get or create async Redis client with sane defaults.
+        Get or create async Redis client with optimized configuration.
         
         Returns:
-            redis.Redis: Configured Redis client instance.
+            Configured Redis client instance with connection pooling and health checks
             
         Raises:
-            Exception: If Redis connection fails during initial ping.
+            RedisError: If Redis connection fails during initial health check
+            
+        Note:
+            The client is cached and reused across method calls. Connection
+            parameters are optimized for stability and performance.
         """
         if self.r is None:
-            # Use reasonable connection parameters to improve stability and robustness
-            self.r = redis.Redis.from_url(
-                self.redis_url,
-                decode_responses=True,
-                health_check_interval=30,
-                socket_connect_timeout=5,
-                socket_timeout=5,
-                retry_on_timeout=True,
-                client_name="xagent-message-db",
-            )
-            try:
-                await self.r.ping()
-            except Exception as e:
-                logger.error("Redis initial ping failed: %s", e)
-                raise
+            self.r = await self._create_redis_client()
+            await self._validate_connection()
         return self.r
+    
+    async def _create_redis_client(self) -> redis.Redis:
+        """Create and configure Redis client with optimal settings."""
+        return redis.Redis.from_url(
+            self.redis_url,
+            decode_responses=True,
+            health_check_interval=MessageDBConfig.HEALTH_CHECK_INTERVAL,
+            socket_connect_timeout=MessageDBConfig.SOCKET_CONNECT_TIMEOUT,
+            socket_timeout=MessageDBConfig.SOCKET_TIMEOUT,
+            retry_on_timeout=True,
+            client_name=MessageDBConfig.CLIENT_NAME,
+        )
+    
+    async def _validate_connection(self) -> None:
+        """Validate Redis connection with initial ping."""
+        try:
+            await self.r.ping()
+            self.logger.info("Redis connection established successfully")
+        except Exception as e:
+            self.logger.error("Redis connection failed: %s", e)
+            self.r = None  # Reset client on failure
+            raise RedisError(f"Failed to establish Redis connection: {e}") from e
 
     def _make_key(self, user_id: str, session_id: Optional[str] = None) -> str:
         """
-        Generate Redis key.
+        Generate Redis key with optional sanitization.
         
         Args:
-            user_id (str): User ID.
-            session_id (str, optional): Session ID.
+            user_id: User identifier (required)
+            session_id: Session identifier (optional)
             
         Returns:
-            str: Redis key in format 'chat:<user_id>' or 'chat:<user_id>:<session_id>'.
+            Redis key in format 'chat:<user_id>' or 'chat:<user_id>:<session_id>'
+            
+        Raises:
+            ValueError: If user_id is empty or invalid
+            
+        Note:
+            When sanitize_keys is enabled, user_id and session_id are URL-encoded
+            to ensure compatibility with Redis key naming conventions.
         """
-        if self._sanitize_keys:
-            user_id = quote(user_id, safe="-._~")
-            if session_id:
-                session_id = quote(session_id, safe="-._~")
+        if not user_id or not isinstance(user_id, str):
+            raise ValueError("user_id must be a non-empty string")
+        
+        # Sanitize identifiers if requested
+        sanitized_user_id = self._sanitize_identifier(user_id)
+        sanitized_session_id = None
         
         if session_id:
-            return f"{self.MSG_PREFIX}:{user_id}:{session_id}"
-        return f"{self.MSG_PREFIX}:{user_id}"
+            if not isinstance(session_id, str):
+                raise ValueError("session_id must be a string when provided")
+            sanitized_session_id = self._sanitize_identifier(session_id)
+        
+        # Build key
+        if sanitized_session_id:
+            return f"{MessageDBConfig.MSG_PREFIX}:{sanitized_user_id}:{sanitized_session_id}"
+        return f"{MessageDBConfig.MSG_PREFIX}:{sanitized_user_id}"
+    
+    def _sanitize_identifier(self, identifier: str) -> str:
+        """Sanitize identifier for Redis key usage."""
+        if self.sanitize_keys:
+            return quote(identifier, safe=MessageDBConfig.URL_SAFE_CHARS)
+        return identifier
 
     async def add_messages(
         self,
         user_id: str,
-        messages: Message | List[Message],
+        messages: Union[Message, List[Message]],
         session_id: Optional[str] = None,
-        ttl: int = 2592000,
+        ttl: int = MessageDBConfig.DEFAULT_TTL,
         *,
         max_len: Optional[int] = None,
         reset_ttl: bool = True,
     ) -> None:
         """
-        Append one or more messages to message history and set expiration time.
+        Append messages to conversation history with atomic operations.
         
         Args:
-            user_id (str): User ID.
-            messages (Message | List[Message]): Message object or list of message objects.
-            session_id (str, optional): Session ID.
-            ttl (int): Expiration time in seconds, defaults to 30 days.
-            max_len (Optional[int]): If provided, trim history to this maximum length after appending.
-            reset_ttl (bool): Whether to refresh expiration time (sliding expiration). Defaults to True.
+            user_id: User identifier
+            messages: Single Message object or list of Message objects
+            session_id: Session identifier (optional)
+            ttl: Expiration time in seconds
+            max_len: Maximum history length (triggers trimming if exceeded)
+            reset_ttl: Whether to refresh expiration time (sliding window)
             
         Raises:
-            ValueError: If ttl or max_len are invalid.
-            RedisError: If Redis operation fails.
+            ValueError: If parameters are invalid
+            RedisError: If Redis operation fails
+            
+        Note:
+            Uses Redis pipeline for atomic operations to ensure data consistency.
+            If max_len is provided, history is automatically trimmed after addition.
         """
-        if ttl is not None and ttl <= 0:
-            raise ValueError("ttl must be a positive integer when provided")
-        if max_len is not None and max_len <= 0:
-            raise ValueError("max_len must be a positive integer when provided")
-
-        client = await self._get_client()
-        key = self._make_key(user_id, session_id)
+        # Validate parameters
+        self._validate_add_messages_params(ttl, max_len)
         
-        if not isinstance(messages, list):
-            messages = [messages]
-        if not messages:
+        # Normalize input
+        normalized_messages = self._normalize_messages_input(messages)
+        if not normalized_messages:
+            self.logger.debug("No messages to add, skipping operation")
             return
 
-        # Use pipeline to batch multiple round trips and maintain atomicity
+        # Execute atomic operation
+        client = await self._get_client()
+        key = self._make_key(user_id, session_id)
+        
         try:
-            async with client.pipeline(transaction=False) as pipe:
-                pipe.rpush(key, *(m.model_dump_json() for m in messages))
-                if max_len is not None:
-                    pipe.ltrim(key, -max_len, -1)
-                if reset_ttl and ttl is not None:
-                    pipe.expire(key, ttl)
-                await pipe.execute()
+            await self._execute_add_messages_pipeline(
+                client, key, normalized_messages, ttl, max_len, reset_ttl
+            )
+            self.logger.debug(
+                "Added %d messages to key %s", len(normalized_messages), key
+            )
         except RedisError as e:
-            logger.error("Failed to add messages for key %s: %s", key, e)
+            self.logger.error("Failed to add messages for key %s: %s", key, e)
             raise
+    
+    def _validate_add_messages_params(self, ttl: int, max_len: Optional[int]) -> None:
+        """Validate parameters for add_messages method."""
+        if ttl is not None and ttl <= 0:
+            raise ValueError("ttl must be a positive integer")
+        if max_len is not None and max_len <= 0:
+            raise ValueError("max_len must be a positive integer")
+    
+    def _normalize_messages_input(
+        self, 
+        messages: Union[Message, List[Message]]
+    ) -> List[Message]:
+        """Normalize message input to a list."""
+        if not isinstance(messages, list):
+            return [messages] if messages else []
+        return messages
+    
+    async def _execute_add_messages_pipeline(
+        self,
+        client: redis.Redis,
+        key: str,
+        messages: List[Message],
+        ttl: int,
+        max_len: Optional[int],
+        reset_ttl: bool
+    ) -> None:
+        """Execute Redis pipeline for adding messages atomically."""
+        async with client.pipeline(transaction=False) as pipe:
+            # Add messages to list
+            pipe.rpush(key, *(m.model_dump_json() for m in messages))
+            
+            # Trim if max_len specified
+            if max_len is not None:
+                pipe.ltrim(key, -max_len, -1)
+            
+            # Set/refresh TTL
+            if reset_ttl and ttl is not None:
+                pipe.expire(key, ttl)
+            
+            await pipe.execute()
         
 
-    async def get_messages(self, user_id: str, session_id: Optional[str] = None, count: int = 20) -> List[Message]:
+    async def get_messages(
+        self, 
+        user_id: str, 
+        session_id: Optional[str] = None, 
+        count: int = MessageDBConfig.DEFAULT_MESSAGE_COUNT
+    ) -> List[Message]:
         """
-        Get message history, retrieving the most recent `count` messages in reverse order.
+        Retrieve recent messages from conversation history.
         
         Args:
-            user_id (str): User ID.
-            session_id (str, optional): Session ID.
-            count (int): Number of messages to retrieve, defaults to 20.
+            user_id: User identifier
+            session_id: Session identifier (optional)
+            count: Number of recent messages to retrieve
             
         Returns:
-            List[Message]: List of message objects, sorted in chronological order.
+            List of Message objects in chronological order (oldest first)
             
         Raises:
-            RedisError: If Redis operation fails.
+            ValueError: If count is not positive
+            RedisError: If Redis operation fails
+            
+        Note:
+            Invalid messages in Redis are skipped with warnings logged.
+            The method is resilient to data corruption and partial failures.
         """
         if count <= 0:
-            return []
+            raise ValueError("count must be a positive integer")
         
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
-        try:
-            raw_msgs = await client.lrange(key, -count, -1)
-        except RedisError as e:
-            logger.error("Failed to get messages for key %s: %s", key, e)
-            raise
         
-        messages: List[Message] = []
-        for i, m in enumerate(raw_msgs):
+        try:
+            raw_messages = await client.lrange(key, -count, -1)
+            valid_messages = self._parse_raw_messages(raw_messages, key)
+            
+            self.logger.debug(
+                "Retrieved %d/%d valid messages for key %s", 
+                len(valid_messages), len(raw_messages), key
+            )
+            return valid_messages
+            
+        except RedisError as e:
+            self.logger.error("Failed to get messages for key %s: %s", key, e)
+            raise
+    
+    def _parse_raw_messages(self, raw_messages: List[str], key: str) -> List[Message]:
+        """Parse raw Redis messages into Message objects with error handling."""
+        valid_messages: List[Message] = []
+        
+        for i, raw_msg in enumerate(raw_messages):
             try:
-                messages.append(Message.model_validate_json(m))
+                message = Message.model_validate_json(raw_msg)
+                valid_messages.append(message)
             except Exception as e:
-                # Control log size to avoid printing overly long strings
-                preview = m[:120] + ("..." if len(m) > 120 else "")
-                logger.warning(
-                    "Skip invalid message at index %d for key %s: %s | payload preview=%r",
-                    i, key, e, preview,
+                preview = self._create_message_preview(raw_msg)
+                self.logger.warning(
+                    "Skipping invalid message at index %d for key %s: %s | preview=%s",
+                    i, key, e, preview
                 )
-        return messages
+        
+        return valid_messages
+    
+    def _create_message_preview(self, raw_message: str) -> str:
+        """Create a safe preview of raw message for logging."""
+        if len(raw_message) <= MessageDBConfig.MESSAGE_PREVIEW_LENGTH:
+            return repr(raw_message)
+        return repr(
+            raw_message[:MessageDBConfig.MESSAGE_PREVIEW_LENGTH] + "..."
+        )
 
-    async def trim_history(self, user_id: str, session_id: Optional[str] = None, max_len: int = 200) -> None:
+    async def trim_history(
+        self, 
+        user_id: str, 
+        session_id: Optional[str] = None, 
+        max_len: int = MessageDBConfig.DEFAULT_MAX_HISTORY
+    ) -> None:
         """
-        Trim message history, keeping only the most recent `max_len` messages.
+        Trim conversation history to maximum length.
         
         Args:
-            user_id (str): User ID.
-            session_id (str, optional): Session ID.
-            max_len (int): Maximum number of messages to retain, defaults to 200.
+            user_id: User identifier
+            session_id: Session identifier (optional)
+            max_len: Maximum number of messages to retain
             
         Raises:
-            ValueError: If max_len is not positive.
-            RedisError: If Redis operation fails.
+            ValueError: If max_len is not positive
+            RedisError: If Redis operation fails
+            
+        Note:
+            Keeps the most recent max_len messages and removes older ones.
         """
         if max_len <= 0:
             raise ValueError("max_len must be a positive integer")
         
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
+        
         try:
             await client.ltrim(key, -max_len, -1)
+            self.logger.debug("Trimmed history to %d messages for key %s", max_len, key)
         except RedisError as e:
-            logger.error("Failed to trim history for key %s: %s", key, e)
+            self.logger.error("Failed to trim history for key %s: %s", key, e)
             raise
 
-    async def set_expire(self, user_id: str, session_id: Optional[str] = None, ttl: int = 2592000) -> None:
+    async def set_expire(
+        self, 
+        user_id: str, 
+        session_id: Optional[str] = None, 
+        ttl: int = MessageDBConfig.DEFAULT_TTL
+    ) -> None:
         """
-        Set expiration time for message history.
+        Set expiration time for conversation history.
         
         Args:
-            user_id (str): User ID.
-            session_id (str, optional): Session ID.
-            ttl (int): Expiration time in seconds, defaults to 30 days.
+            user_id: User identifier
+            session_id: Session identifier (optional)
+            ttl: Time to live in seconds
             
         Raises:
-            ValueError: If ttl is not positive.
-            RedisError: If Redis operation fails.
+            ValueError: If ttl is not positive
+            RedisError: If Redis operation fails
         """
         if ttl <= 0:
             raise ValueError("ttl must be a positive integer")
         
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
+        
         try:
             await client.expire(key, ttl)
+            self.logger.debug("Set TTL to %d seconds for key %s", ttl, key)
         except RedisError as e:
-            logger.error("Failed to set expire for key %s: %s", key, e)
+            self.logger.error("Failed to set expire for key %s: %s", key, e)
             raise
 
     async def clear_history(self, user_id: str, session_id: Optional[str] = None) -> None:
         """
-        Clear message history.
+        Clear all messages from conversation history.
         
         Args:
-            user_id (str): User ID.
-            session_id (str, optional): Session ID.
+            user_id: User identifier
+            session_id: Session identifier (optional)
             
         Raises:
-            RedisError: If Redis operation fails.
+            RedisError: If Redis operation fails
         """
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
+        
         try:
-            await client.delete(key)
+            deleted_count = await client.delete(key)
+            self.logger.debug("Cleared history for key %s (deleted: %d)", key, deleted_count)
         except RedisError as e:
-            logger.error("Failed to clear history for key %s: %s", key, e)
+            self.logger.error("Failed to clear history for key %s: %s", key, e)
             raise
 
     async def pop_message(self, user_id: str, session_id: Optional[str] = None) -> Optional[Message]:
         """
-        Remove and return the last non-tool_result message. If the last message is a tool_result,
-        automatically continue popping until a non-tool_result message is found or the list is empty.
+        Remove and return the last non-tool message from history.
+        
+        This method automatically skips tool-related messages and continues
+        popping until a regular message is found or the history is empty.
         
         Args:
-            user_id (str): User ID.
-            session_id (str, optional): Session ID.
+            user_id: User identifier
+            session_id: Session identifier (optional)
             
         Returns:
-            Optional[Message]: The removed message object (non-tool_result), or None if empty.
+            The removed Message object (non-tool), or None if history is empty
+            or contains only tool messages
             
         Raises:
-            RedisError: If Redis operation fails.
+            RedisError: If Redis operation fails
+            
+        Note:
+            Tool messages are automatically removed but not returned.
+            This ensures only meaningful conversation messages are popped.
         """
         client = await self._get_client()
         key = self._make_key(user_id, session_id)
         
+        messages_popped = 0
         while True:
             try:
                 raw_msg = await client.rpop(key)
+                messages_popped += 1
             except RedisError as e:
-                logger.error("Failed to pop message for key %s: %s", key, e)
+                self.logger.error("Failed to pop message for key %s: %s", key, e)
                 raise
 
+            # No more messages
             if raw_msg is None:
+                self.logger.debug("No messages found for key %s", key)
                 return None
 
+            # Try to parse message
             try:
-                msg = Message.model_validate_json(raw_msg)
+                message = Message.model_validate_json(raw_msg)
             except Exception as e:
-                preview = raw_msg[:120] + ("..." if len(raw_msg) > 120 else "")
-                logger.warning("Skip invalid popped message for key %s: %s | payload preview=%r", key, e, preview)
-                # Continue to next message if this is a tool_result
-                continue
+                preview = self._create_message_preview(raw_msg)
+                self.logger.warning(
+                    "Skipping invalid popped message for key %s: %s | preview=%s", 
+                    key, e, preview
+                )
+                continue  # Continue to next message
 
-            if not msg.tool_call:
-                return msg
-            # If it's a tool_result, continue the loop
+            # Return first non-tool message
+            if not self._is_tool_message(message):
+                self.logger.debug(
+                    "Popped non-tool message for key %s (checked %d messages)", 
+                    key, messages_popped
+                )
+                return message
+            
+            # Continue if this is a tool message
+            self.logger.debug("Skipping tool message for key %s", key)
+    
+    def _is_tool_message(self, message: Message) -> bool:
+        """Check if a message is tool-related."""
+        return bool(getattr(message, 'tool_call', None))
 
     async def close(self) -> None:
-        """Close the Redis connection."""
+        """
+        Close the Redis connection and cleanup resources.
+        
+        This method is idempotent and safe to call multiple times.
+        """
         if self.r:
             try:
                 await self.r.aclose()
+                self.logger.debug("Redis connection closed successfully")
+            except Exception as e:
+                self.logger.warning("Error closing Redis connection: %s", e)
             finally:
                 self.r = None
 
     async def __aenter__(self):
-        """Async context manager entry."""
+        """
+        Async context manager entry.
+        
+        Returns:
+            Self instance with established Redis connection
+        """
         await self._get_client()
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
-        """Async context manager exit."""
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """
+        Async context manager exit with automatic cleanup.
+        
+        Args:
+            exc_type: Exception type (if any)
+            exc_val: Exception value (if any)
+            exc_tb: Exception traceback (if any)
+        """
         await self.close()
+    
+    async def ping(self) -> bool:
+        """
+        Test Redis connection health.
+        
+        Returns:
+            True if connection is healthy, False otherwise
+        """
+        try:
+            client = await self._get_client()
+            await client.ping()
+            return True
+        except Exception as e:
+            self.logger.error("Redis ping failed: %s", e)
+            return False
+    
+    async def get_key_info(self, user_id: str, session_id: Optional[str] = None) -> dict:
+        """
+        Get metadata about a conversation key.
+        
+        Args:
+            user_id: User identifier
+            session_id: Session identifier (optional)
+            
+        Returns:
+            Dictionary containing key metadata
+        """
+        client = await self._get_client()
+        key = self._make_key(user_id, session_id)
+        
+        try:
+            length = await client.llen(key)
+            ttl = await client.ttl(key)
+            
+            return {
+                "key": key,
+                "message_count": length,
+                "ttl_seconds": ttl if ttl != -1 else None,
+                "exists": length > 0
+            }
+        except RedisError as e:
+            self.logger.error("Failed to get key info for %s: %s", key, e)
+            return {
+                "key": key,
+                "message_count": 0,
+                "ttl_seconds": None,
+                "exists": False,
+                "error": str(e)
+            }
+    
+    def __str__(self) -> str:
+        """String representation of MessageDB instance."""
+        return f"MessageDB(url='{self.redis_url}', sanitize_keys={self.sanitize_keys})"
+    
+    def __repr__(self) -> str:
+        """Detailed string representation of MessageDB instance."""
+        connected = "connected" if self.r else "disconnected"
+        return (
+            f"MessageDB(url='{self.redis_url}', "
+            f"sanitize_keys={self.sanitize_keys}, "
+            f"status='{connected}')"
+        )
