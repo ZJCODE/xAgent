@@ -56,17 +56,6 @@ curl -X POST "http://localhost:8010/chat" \
     "user_message": "Who are you?",
     "stream": false
   }'
-
-# Advanced request with custom parameters
-curl -X POST "http://localhost:8010/chat" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user123",
-    "session_id": "session456", 
-    "user_message": "Analyze recent AI trends and provide insights",
-    "history_count": 20,
-    "max_iter": 15
-  }'
 ```
 
 or start a Streamlit web interface to interact with the agent server:
