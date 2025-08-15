@@ -39,8 +39,8 @@ dependencies = [
 ]
 
 [project.scripts]
-xagent-server = "xagent.core.server:main"
-xagent-cli = "xagent.core.cli:main"
+xagent-server = "xagent.interfaces.server:main"
+xagent-cli = "xagent.interfaces.cli:main"
 xagent-web = "xagent.frontend.launcher:main"
 
 [project.urls]

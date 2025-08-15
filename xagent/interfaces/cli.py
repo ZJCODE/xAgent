@@ -4,12 +4,12 @@ import argparse
 import asyncio
 import uuid
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-from ..core.base import BaseAgentRunner
+from .base import BaseAgentRunner
 from ..core.session import Session
 
 
@@ -232,7 +232,6 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
         os.makedirs(config_dir)
     
     # Use the default configuration from BaseAgentRunner
-    from ..core.base import BaseAgentRunner
     dummy_runner = BaseAgentRunner()
     default_config = dummy_runner._get_default_config()
     
