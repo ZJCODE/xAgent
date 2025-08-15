@@ -199,13 +199,17 @@ async def fetch_weather(city: str) -> str:
 
 ```
 
-You can override the default tool name and description using the `function_tool` decorator:
+You can override the default tool name and description and add parameter descriptions using the `function_tool` decorator:
 
 ```python
-@function_tool(name="custom_square", description="Calculate the square of a number")
+@function_tool(name="custom_square", 
+               description="Calculate the square of a number",
+               param_descriptions={"n": "The number to square"}
 def calculate_square(n: int) -> int:
+    """Calculate the square of a number."""
     return n * n
 ```
+
 
 ### 3. Start the Server
 
@@ -435,7 +439,6 @@ agent:
 - `float` - floating-point type
 - `bool` - boolean type
 - `list` - list type
-- `dict` - dictionary type
 
 
 Important Notes:
