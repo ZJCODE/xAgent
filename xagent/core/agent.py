@@ -519,7 +519,7 @@ class Agent:
             self.logger.debug(f"Request body: {request_body}")
 
             try:
-                async with httpx.AsyncClient(timeout=60.0) as client:  # 增加超时时间
+                async with httpx.AsyncClient(timeout=600.0) as client:  # 增加超时时间
                     response = await client.post(chat_url, json=request_body)
                     
                     self.logger.debug(f"HTTP response status: {response.status_code}")
