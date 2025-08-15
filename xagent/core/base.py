@@ -1,74 +1,150 @@
-import os
-import yaml
+# Standard library imports
 import importlib.util
+import os
 import sys
-from typing import Optional, Dict, Any, Type, List
-from dotenv import load_dotenv
-from pydantic import BaseModel, create_model
+from typing import Any, Dict, List, Optional, Type
 
+# Third-party imports
+import yaml
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field, create_model
+
+# Local imports
 from ..core.agent import Agent
 from ..db.message import MessageDB
 from ..tools import TOOL_REGISTRY
 
 
-class BaseAgentRunner:
-    """Base class for agent runners with common configuration and initialization logic."""
+class BaseAgentConfig:
+    """Configuration constants for BaseAgentRunner."""
     
-    def __init__(self, config_path: Optional[str] = None, toolkit_path: Optional[str] = None):
+    DEFAULT_AGENT_NAME = "Agent"
+    DEFAULT_MODEL = "gpt-4o-mini"
+    DEFAULT_HOST = "0.0.0.0"
+    DEFAULT_PORT = 8010
+    DEFAULT_SYSTEM_PROMPT = (
+        "You are a helpful assistant. Your task is to assist users "
+        "with their queries and tasks."
+    )
+    DYNAMIC_TOOLKIT_MODULE_NAME = "xagent_dynamic_toolkit"
+    
+    # Type mappings for dynamic model creation
+    TYPE_MAPPING = {
+        "str": str,
+        "int": int,
+        "float": float,
+        "bool": bool,
+        "list": list,
+        "dict": dict,
+    }
+
+
+class BaseAgentRunner:
+    """
+    Base class for agent runners with common configuration and initialization logic.
+    
+    This class provides a standardized way to:
+    - Load and validate agent configurations from YAML files
+    - Initialize agents with tools, MCP servers, and sub-agents
+    - Manage message databases and toolkit registries
+    - Create dynamic Pydantic models from schema definitions
+    
+    Attributes:
+        config: Loaded configuration dictionary
+        agent: Initialized Agent instance
+        message_db: Optional MessageDB instance
+        toolkit_path: Path to additional toolkit directory
+    """
+    
+    def __init__(
+        self, 
+        config_path: Optional[str] = None, 
+        toolkit_path: Optional[str] = None
+    ):
         """
         Initialize BaseAgentRunner.
         
         Args:
-            config_path: Path to configuration file (if None, uses default configuration)
-            toolkit_path: Path to toolkit directory (if None, no additional tools will be loaded)
+            config_path: Path to configuration file. If None, uses default configuration
+            toolkit_path: Path to toolkit directory. If None, no additional tools loaded
+            
+        Raises:
+            yaml.YAMLError: If configuration file is invalid
+            ImportError: If toolkit module cannot be loaded
         """
-        # Load environment variables
+        # Load environment variables first
         load_dotenv(override=True)
         
-        # Persist toolkit path for dynamic loading
+        # Store paths for later use
         self.toolkit_path = toolkit_path
         
-        # Load configuration
+        # Load and validate configuration
         self.config = self._load_config(config_path)
         
-        # Initialize components
-        self.agent = self._initialize_agent()
+        # Initialize components in dependency order
         self.message_db = self._initialize_message_db()
+        self.agent = self._initialize_agent()
         
     def _load_config(self, cfg_path: Optional[str]) -> Dict[str, Any]:
         """
-        Load YAML configuration file.
+        Load YAML configuration file with error handling.
         
         Args:
-            cfg_path: Path to config file (if None, uses default configuration)
+            cfg_path: Path to config file. If None, uses default configuration
             
         Returns:
             Configuration dictionary
+            
+        Raises:
+            yaml.YAMLError: If YAML file is malformed
+            FileNotFoundError: If specified config file doesn't exist
         """
-        # If no config path provided, use default configuration
         if cfg_path is None:
             return self._get_default_config()
         
-        # Check if the specified config file exists
-        if os.path.isfile(cfg_path):
+        if not os.path.isfile(cfg_path):
+            raise FileNotFoundError(f"Configuration file not found: {cfg_path}")
+        
+        try:
             with open(cfg_path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f)
-        else:
-            # Use default configuration if file doesn't exist
-            return self._get_default_config()
+                config = yaml.safe_load(f)
+                return self._validate_config(config)
+        except yaml.YAMLError as e:
+            raise yaml.YAMLError(f"Invalid YAML in config file {cfg_path}: {e}")
+    
+    def _validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate and normalize configuration dictionary.
+        
+        Args:
+            config: Raw configuration dictionary
+            
+        Returns:
+            Validated and normalized configuration
+        """
+        if not isinstance(config, dict):
+            raise ValueError("Configuration must be a dictionary")
+        
+        # Ensure required sections exist
+        if "agent" not in config:
+            config["agent"] = {}
+        if "server" not in config:
+            config["server"] = {}
+        
+        return config
     
     def _get_default_config(self) -> Dict[str, Any]:
         """
-        Return default configuration when no config file is found.
+        Return default configuration when no config file is provided.
         
         Returns:
-            Default configuration dictionary
+            Default configuration dictionary with sensible defaults
         """
         return {
             "agent": {
-                "name": "Agent",
-                "system_prompt": "You are a helpful assistant. Your task is to assist users with their queries and tasks.",
-                "model": "gpt-4o-mini",
+                "name": BaseAgentConfig.DEFAULT_AGENT_NAME,
+                "system_prompt": BaseAgentConfig.DEFAULT_SYSTEM_PROMPT,
+                "model": BaseAgentConfig.DEFAULT_MODEL,
                 "capabilities": {
                     "tools": ["web_search"],  # Default tools
                     "mcp_servers": []  # Default MCP servers
@@ -76,57 +152,84 @@ class BaseAgentRunner:
                 "local": True
             },
             "server": {
-                "host": "0.0.0.0",
-                "port": 8010
+                "host": BaseAgentConfig.DEFAULT_HOST,
+                "port": BaseAgentConfig.DEFAULT_PORT
             }
         }
     
     def _load_toolkit_registry(self, toolkit_path: Optional[str]) -> Dict[str, Any]:
-        """Dynamically load TOOLKIT_REGISTRY from a toolkit directory.
-        Only a directory path is supported; do not pass __init__.py.
-        Returns empty dict if unavailable or on error.
+        """
+        Dynamically load TOOLKIT_REGISTRY from a toolkit directory.
+        
+        Args:
+            toolkit_path: Path to toolkit directory (only directory paths supported)
+            
+        Returns:
+            Dictionary containing loaded toolkit registry, empty if unavailable
+            
+        Note:
+            Only directory paths are supported; do not pass __init__.py directly.
+            Returns empty dict if loading fails or toolkit is unavailable.
         """
         if not toolkit_path:
             return {}
+            
         try:
-            # Resolve relative paths against this file's directory
-            def resolve_path(p: str) -> str:
-                if os.path.isabs(p):
-                    return p
-                if os.path.exists(p):
-                    return p
-                base = os.path.dirname(os.path.abspath(__file__))
-                candidate = os.path.join(base, p)
-                return candidate
-
-            tp = resolve_path(toolkit_path)
-
-            # Require a directory
-            if not os.path.isdir(tp):
+            resolved_path = self._resolve_toolkit_path(toolkit_path)
+            
+            if not self._is_valid_toolkit_directory(resolved_path):
                 return {}
-
-            init_path = os.path.join(tp, "__init__.py")
-            if not os.path.isfile(init_path):
-                return {}
-
-            # Mark as a package so relative imports inside __init__.py work
-            spec = importlib.util.spec_from_file_location(
-                "xagent_dynamic_toolkit",
-                init_path,
-                submodule_search_locations=[tp],
-            )
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                sys.modules["xagent_dynamic_toolkit"] = module
-                spec.loader.exec_module(module)  # type: ignore[attr-defined]
-                registry = getattr(module, "TOOLKIT_REGISTRY", {})
-                if isinstance(registry, dict):
-                    return registry
+            
+            return self._import_toolkit_module(resolved_path)
+            
         except Exception as e:
             print(f"Warning: failed to load TOOLKIT_REGISTRY from {toolkit_path}: {e}")
-        return {}
+            return {}
     
-    def _create_output_model_from_schema(self, output_schema: Optional[Dict[str, Any]]) -> Optional[Type[BaseModel]]:
+    def _resolve_toolkit_path(self, toolkit_path: str) -> str:
+        """Resolve relative toolkit paths against this file's directory."""
+        if os.path.isabs(toolkit_path):
+            return toolkit_path
+        if os.path.exists(toolkit_path):
+            return toolkit_path
+        
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(base_dir, toolkit_path)
+    
+    def _is_valid_toolkit_directory(self, path: str) -> bool:
+        """Check if path is a valid toolkit directory with __init__.py."""
+        return (
+            os.path.isdir(path) and 
+            os.path.isfile(os.path.join(path, "__init__.py"))
+        )
+    
+    def _import_toolkit_module(self, toolkit_path: str) -> Dict[str, Any]:
+        """Import toolkit module and extract TOOLKIT_REGISTRY."""
+        init_path = os.path.join(toolkit_path, "__init__.py")
+        
+        # Create module spec with submodule search locations for relative imports
+        spec = importlib.util.spec_from_file_location(
+            BaseAgentConfig.DYNAMIC_TOOLKIT_MODULE_NAME,
+            init_path,
+            submodule_search_locations=[toolkit_path],
+        )
+        
+        if not spec or not spec.loader:
+            return {}
+        
+        # Load and execute module
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[BaseAgentConfig.DYNAMIC_TOOLKIT_MODULE_NAME] = module
+        spec.loader.exec_module(module)  # type: ignore[attr-defined]
+        
+        # Extract registry
+        registry = getattr(module, "TOOLKIT_REGISTRY", {})
+        return registry if isinstance(registry, dict) else {}
+    
+    def _create_output_model_from_schema(
+        self, 
+        output_schema: Optional[Dict[str, Any]]
+    ) -> Optional[Type[BaseModel]]:
         """
         Create a dynamic Pydantic BaseModel from YAML output_schema configuration.
         
@@ -135,6 +238,9 @@ class BaseAgentRunner:
             
         Returns:
             Dynamic Pydantic BaseModel class or None if no schema provided
+            
+        Raises:
+            ValueError: If schema format is invalid
         """
         if not output_schema:
             return None
@@ -146,82 +252,76 @@ class BaseAgentRunner:
             if not fields_config:
                 return None
             
-            # Build field definitions for create_model
-            field_definitions = {}
-            for field_name, field_config in fields_config.items():
-                field_type = field_config.get("type", "str")
-                field_description = field_config.get("description", "")
-                
-                # Map string type names to actual Python types
-                type_mapping = {
-                    "str": str,
-                    "int": int,
-                    "float": float,
-                    "bool": bool,
-                    "list": list,
-                    "dict": dict,
-                }
-                
-                python_type = type_mapping.get(field_type, str)
-                
-                # Handle list types with items specification
-                if field_type == "list" and "items" in field_config:
-                    items_type = field_config["items"]
-                    items_python_type = type_mapping.get(items_type, str)
-                    # Create List[items_type] annotation
-                    python_type = List[items_python_type]
-                
-                # Create field definition (type, default_value, Field(...))
-                from pydantic import Field
-                field_definitions[field_name] = (python_type, Field(description=field_description))
-            
-            # Create the dynamic model
-            dynamic_model = create_model(class_name, **field_definitions)
-            return dynamic_model
+            field_definitions = self._build_field_definitions(fields_config)
+            return create_model(class_name, **field_definitions)
             
         except Exception as e:
             print(f"Warning: failed to create output model from schema: {e}")
             return None
     
+    def _build_field_definitions(self, fields_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build field definitions for create_model from fields configuration.
+        
+        Args:
+            fields_config: Dictionary of field configurations
+            
+        Returns:
+            Dictionary of field definitions suitable for create_model
+        """
+        field_definitions = {}
+        
+        for field_name, field_config in fields_config.items():
+            field_type = field_config.get("type", "str")
+            field_description = field_config.get("description", "")
+            
+            python_type = self._get_python_type(field_type, field_config)
+            field_definitions[field_name] = (
+                python_type, 
+                Field(description=field_description)
+            )
+        
+        return field_definitions
+    
+    def _get_python_type(self, field_type: str, field_config: Dict[str, Any]) -> Type:
+        """
+        Convert string type name to Python type, handling complex types.
+        
+        Args:
+            field_type: String representation of the type
+            field_config: Complete field configuration
+            
+        Returns:
+            Python type for the field
+        """
+        python_type = BaseAgentConfig.TYPE_MAPPING.get(field_type, str)
+        
+        # Handle list types with items specification
+        if field_type == "list" and "items" in field_config:
+            items_type = field_config["items"]
+            items_python_type = BaseAgentConfig.TYPE_MAPPING.get(items_type, str)
+            python_type = List[items_python_type]
+        
+        return python_type
+    
     def _initialize_agent(self) -> Agent:
-        """Initialize the agent with tools and configuration."""
+        """
+        Initialize the agent with tools and configuration.
+        
+        Returns:
+            Configured Agent instance
+            
+        Raises:
+            KeyError: If required configuration is missing
+            ImportError: If tool cannot be loaded
+        """
         agent_cfg = self.config.get("agent", {})
         
-        # Load tools from built-in registry and optional toolkit registry
-        capabilities = agent_cfg.get("capabilities", {})
-        tool_names = capabilities.get("tools", [])
-        mcp_servers = capabilities.get("mcp_servers", [])
-        
-        # Support legacy format for backward compatibility
-        if "tools" in agent_cfg and "tools" not in capabilities:
-            tool_names = agent_cfg.get("tools", [])
-        if "mcp_servers" in agent_cfg and "mcp_servers" not in capabilities:
-            mcp_servers = agent_cfg.get("mcp_servers", [])
-        
-        toolkit_registry = self._load_toolkit_registry(self.toolkit_path)
-        combined_registry: Dict[str, Any] = {**TOOL_REGISTRY, **toolkit_registry}
-        tools = [combined_registry[name] for name in tool_names if name in combined_registry]
-        
-        # Process sub_agents configuration
-        sub_agents = None
-        if "sub_agents" in agent_cfg:
-            sub_agents = []
-            for agent_config in agent_cfg["sub_agents"]:
-                if isinstance(agent_config, dict):
-                    # Convert dict to tuple format
-                    sub_agents.append((
-                        agent_config.get("name", ""),
-                        agent_config.get("description", ""),
-                        agent_config.get("server_url", "")
-                    ))
-                elif isinstance(agent_config, (list, tuple)) and len(agent_config) == 3:
-                    # Already in tuple format
-                    sub_agents.append(tuple(agent_config))
-        
-        # Create output model from schema if provided
-        output_type = None
-        if "output_schema" in agent_cfg:
-            output_type = self._create_output_model_from_schema(agent_cfg["output_schema"])
+        # Load tools and servers
+        tools = self._load_agent_tools(agent_cfg)
+        mcp_servers = self._get_mcp_servers(agent_cfg)
+        sub_agents = self._process_sub_agents_config(agent_cfg)
+        output_type = self._get_output_type(agent_cfg)
 
         return Agent(
             name=agent_cfg.get("name"),
@@ -233,8 +333,89 @@ class BaseAgentRunner:
             output_type=output_type,
         )
     
+    def _load_agent_tools(self, agent_cfg: Dict[str, Any]) -> List[Any]:
+        """Load tools from built-in registry and optional toolkit registry."""
+        capabilities = agent_cfg.get("capabilities", {})
+        tool_names = capabilities.get("tools", [])
+        
+        # Support legacy format for backward compatibility
+        if "tools" in agent_cfg and "tools" not in capabilities:
+            tool_names = agent_cfg.get("tools", [])
+        
+        # Combine registries
+        toolkit_registry = self._load_toolkit_registry(self.toolkit_path)
+        combined_registry: Dict[str, Any] = {**TOOL_REGISTRY, **toolkit_registry}
+        
+        # Load requested tools
+        tools = []
+        for name in tool_names:
+            if name in combined_registry:
+                tools.append(combined_registry[name])
+            else:
+                print(f"Warning: Tool '{name}' not found in registry")
+        
+        return tools
+    
+    def _get_mcp_servers(self, agent_cfg: Dict[str, Any]) -> List[str]:
+        """Extract MCP servers configuration with backward compatibility."""
+        capabilities = agent_cfg.get("capabilities", {})
+        mcp_servers = capabilities.get("mcp_servers", [])
+        
+        # Support legacy format for backward compatibility
+        if "mcp_servers" in agent_cfg and "mcp_servers" not in capabilities:
+            mcp_servers = agent_cfg.get("mcp_servers", [])
+        
+        return mcp_servers
+    
+    def _process_sub_agents_config(
+        self, 
+        agent_cfg: Dict[str, Any]
+    ) -> Optional[List[tuple[str, str, str]]]:
+        """Process sub_agents configuration into standardized format."""
+        if "sub_agents" not in agent_cfg:
+            return None
+        
+        sub_agents = []
+        for agent_config in agent_cfg["sub_agents"]:
+            normalized_config = self._normalize_sub_agent_config(agent_config)
+            if normalized_config:
+                sub_agents.append(normalized_config)
+        
+        return sub_agents if sub_agents else None
+    
+    def _normalize_sub_agent_config(
+        self, 
+        agent_config: Any
+    ) -> Optional[tuple[str, str, str]]:
+        """Normalize sub-agent configuration to tuple format."""
+        if isinstance(agent_config, dict):
+            return (
+                agent_config.get("name", ""),
+                agent_config.get("description", ""),
+                agent_config.get("server_url", "")
+            )
+        elif isinstance(agent_config, (list, tuple)) and len(agent_config) == 3:
+            return tuple(agent_config)
+        else:
+            print(f"Warning: Invalid sub-agent config format: {agent_config}")
+            return None
+    
+    def _get_output_type(self, agent_cfg: Dict[str, Any]) -> Optional[Type[BaseModel]]:
+        """Get output type from configuration schema."""
+        if "output_schema" in agent_cfg:
+            return self._create_output_model_from_schema(agent_cfg["output_schema"])
+        return None
+    
     def _initialize_message_db(self) -> Optional[MessageDB]:
-        """Initialize message database based on configuration."""
+        """
+        Initialize message database based on configuration.
+        
+        Returns:
+            MessageDB instance if non-local mode, None for local mode
+            
+        Note:
+            Local mode (local=True) returns None to avoid database dependencies
+        """
         agent_cfg = self.config.get("agent", {})
-        local = agent_cfg.get("local", True)
-        return None if local else MessageDB()
+        is_local = agent_cfg.get("local", True)
+        return None if is_local else MessageDB()
