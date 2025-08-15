@@ -59,15 +59,6 @@ class ReplyType(Enum):
     ERROR = "error"
 
 
-class ErrorMessages:
-    """Centralized error messages for better maintainability."""
-    
-    UNKNOWN_REPLY_TYPE = "Sorry, I encountered an error while processing your request."
-    MAX_ITER_EXCEEDED = "Sorry, I could not generate a response after multiple attempts."
-    GENERAL_ERROR = "Sorry, something went wrong."
-    STREAM_TYPE_NOT_RECOGNIZED = "Stream response event_type is not recognized."
-    NO_VALID_OUTPUT = "No valid output from model response."
-
 class Agent:
     """
     Base class for creating an AI agent that can interact with users, manage tools, and handle multi-step reasoning.
@@ -222,15 +213,15 @@ class Agent:
                     await self._handle_tool_calls(response, session, input_messages)
                 else:
                     self.logger.error("Unknown reply type: %s", reply_type)
-                    return ErrorMessages.UNKNOWN_REPLY_TYPE
+                    return "Sorry, I encountered an error while processing your request."
 
             # If no valid reply after max_iter attempts
             self.logger.error("Failed to generate response after %d attempts", max_iter)
-            return ErrorMessages.MAX_ITER_EXCEEDED
+            return "Sorry, I could not generate a response after multiple attempts."
 
         except Exception as e:
             self.logger.exception("Agent chat error: %s", e)
-            return ErrorMessages.GENERAL_ERROR
+            return "Sorry, something went wrong."
 
     def as_tool(
         self, 
@@ -402,7 +393,7 @@ class Agent:
                 
                 # 如果没有有效输出，记录警告并返回错误
                 self.logger.warning("Model response contains no valid output: %s", response)
-                return ReplyType.ERROR, ErrorMessages.NO_VALID_OUTPUT
+                return ReplyType.ERROR, "No valid output from model response."
             else:
                 
                 # Get the third event to determine the stream type
@@ -427,7 +418,7 @@ class Agent:
                 else:
                     self.logger.warning("Stream response event_type is not recognized: %s", event_type)
                     async def stream_generator():
-                        yield ErrorMessages.STREAM_TYPE_NOT_RECOGNIZED
+                        yield "Stream response event_type is not recognized."
                     # 返回一个生成器，避免直接返回错误信息
                     return ReplyType.ERROR, stream_generator()
                     

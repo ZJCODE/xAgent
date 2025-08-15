@@ -14,16 +14,6 @@ class SessionConfig:
     DEFAULT_SESSION_ID = "default_session"
     DEFAULT_MESSAGE_COUNT = 20
     MAX_LOCAL_HISTORY = 100
-    
-    # Log message templates
-    LOG_ADDING_TO_DB = "Adding %d messages to DB"
-    LOG_ADDING_TO_LOCAL = "Adding %d messages to local session"
-    LOG_FETCHING_FROM_DB = "Fetching last %d messages from DB"
-    LOG_FETCHING_FROM_LOCAL = "Fetching last %d messages from local session"
-    LOG_CLEARING_DB = "Clearing history in DB"
-    LOG_CLEARING_LOCAL = "Clearing local session history"
-    LOG_POPPING_FROM_DB = "Popping last message from DB"
-    LOG_POPPING_FROM_LOCAL = "Popping last message from local session"
 
 class Session:
     """
@@ -127,13 +117,13 @@ class Session:
     
     async def _add_messages_to_db(self, messages: List[Message]) -> None:
         """Add messages to database backend."""
-        self.logger.info(SessionConfig.LOG_ADDING_TO_DB, len(messages))
+        self.logger.info("Adding %d messages to DB", len(messages))
         await self.message_db.add_messages(self.user_id, messages, self.session_id)
     
     async def _add_messages_to_local(self, messages: List[Message]) -> None:
         """Add messages to local memory storage with history management."""
         session_key = self._get_session_key()
-        self.logger.info(SessionConfig.LOG_ADDING_TO_LOCAL, len(messages))
+        self.logger.info("Adding %d messages to local session", len(messages))
         
         # Add messages and manage history size
         Session._local_messages[session_key].extend(messages)
@@ -174,13 +164,13 @@ class Session:
     
     async def _get_messages_from_db(self, count: int) -> List[Message]:
         """Get messages from database backend."""
-        self.logger.info(SessionConfig.LOG_FETCHING_FROM_DB, count)
+        self.logger.info("Fetching last %d messages from DB", count)
         return await self.message_db.get_messages(self.user_id, self.session_id, count)
     
     async def _get_messages_from_local(self, count: int) -> List[Message]:
         """Get messages from local memory storage."""
         session_key = self._get_session_key()
-        self.logger.info(SessionConfig.LOG_FETCHING_FROM_LOCAL, count)
+        self.logger.info("Fetching last %d messages from local session", count)
         messages = Session._local_messages[session_key]
         return messages[-count:] if messages else []
 
@@ -205,13 +195,13 @@ class Session:
     
     async def _clear_db_session(self) -> None:
         """Clear session history in database."""
-        self.logger.info(SessionConfig.LOG_CLEARING_DB)
+        self.logger.info("Clearing history in DB")
         await self.message_db.clear_history(self.user_id, self.session_id)
     
     async def _clear_local_session(self) -> None:
         """Clear session history in local memory."""
         session_key = self._get_session_key()
-        self.logger.info(SessionConfig.LOG_CLEARING_LOCAL)
+        self.logger.info("Clearing local session history")
         Session._local_messages[session_key] = []
 
     async def pop_message(self) -> Optional[Message]:
@@ -241,13 +231,13 @@ class Session:
     
     async def _pop_message_from_db(self) -> Optional[Message]:
         """Pop message from database backend."""
-        self.logger.info(SessionConfig.LOG_POPPING_FROM_DB)
+        self.logger.info("Popping last message from DB")
         return await self.message_db.pop_message(self.user_id, self.session_id)
     
     async def _pop_message_from_local(self) -> Optional[Message]:
         """Pop message from local memory storage, skipping tool messages."""
         session_key = self._get_session_key()
-        self.logger.info(SessionConfig.LOG_POPPING_FROM_LOCAL)
+        self.logger.info("Popping last message from local session")
         
         messages = Session._local_messages[session_key]
         while messages:
