@@ -41,7 +41,7 @@ dependencies = [
 [project.scripts]
 xagent-server = "xagent.interfaces.server:main"
 xagent-cli = "xagent.interfaces.cli:main"
-xagent-web = "xagent.frontend.launcher:main"
+xagent-web = "xagent.interfaces.web_launcher:main"
 
 [project.urls]
 Repository = "https://github.com/ZJCODE/xagent"

@@ -837,7 +837,9 @@ xAgent/
 │   │   ├── __init__.py       # Interface exports
 │   │   ├── base.py           # Base interface classes
 │   │   ├── cli.py            # Command line interface
-│   │   └── server.py         # HTTP Agent Server (FastAPI)
+│   │   ├── server.py         # HTTP Agent Server (FastAPI)
+│   │   ├── web.py            # Streamlit chat application
+│   │   └── web_launcher.py   # Web interface launcher
 │   ├── db/                   # Message storage layer
 │   │   ├── __init__.py       # Database exports
 │   │   ├── base_messages.py  # Abstract message storage interface
@@ -855,14 +857,10 @@ xAgent/
 │   │   ├── tool_decorator.py # Function tool decorator
 │   │   ├── mcp_convertor.py  # MCP protocol conversion
 │   │   └── image_upload.py   # Image processing utilities
-│   ├── multi/                # Multi-agent support
-│   │   ├── __init__.py       # Multi-agent exports
-│   │   ├── swarm.py          # Agent swarm coordination
-│   │   └── workflow.py       # Workflow management
-│   └── frontend/             # Web interface components
-│       ├── __init__.py       # Frontend exports
-│       ├── app.py            # Streamlit chat application
-│       └── launcher.py       # Web interface launcher
+│   └── multi/                # Multi-agent support
+│       ├── __init__.py       # Multi-agent exports
+│       ├── swarm.py          # Agent swarm coordination
+│       └── workflow.py       # Workflow management
 ├── 🛠️ toolkit/               # Custom tool ecosystem
 │   ├── __init__.py           # Toolkit registry
 │   ├── tools.py              # Custom tools (char_count, etc.)
