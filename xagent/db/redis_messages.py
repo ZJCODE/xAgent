@@ -218,7 +218,7 @@ class MessageStorageRedis(MessageStorageBase):
         # Normalize input
         normalized_messages = self._normalize_messages_input(messages)
         if not normalized_messages:
-            self.logger.debug("No messages to add, skipping operation")
+            self.logger.info("No messages to add, skipping operation")
             return
 
         # Execute atomic operation
@@ -229,7 +229,7 @@ class MessageStorageRedis(MessageStorageBase):
             await self._execute_add_messages_pipeline(
                 client, key, normalized_messages, ttl, max_len, reset_ttl
             )
-            self.logger.debug(
+            self.logger.info(
                 "Added %d messages to key %s", len(normalized_messages), key
             )
         except RedisError as e:
