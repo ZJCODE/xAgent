@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, create_model
 
 # Local imports
 from ..core.agent import Agent
-from ..db.message import MessageDB
+from ..db import MessageStorageLocal,MessageStorageRedis,MessageStorageBase
 from ..tools import TOOL_REGISTRY
 
 
@@ -52,7 +52,7 @@ class BaseAgentRunner:
     Attributes:
         config: Loaded configuration dictionary
         agent: Initialized Agent instance
-        message_db: Optional MessageDB instance
+        message_storage: Optional MessageDB instance
         toolkit_path: Path to additional toolkit directory
     """
     
@@ -82,7 +82,7 @@ class BaseAgentRunner:
         self.config = self._load_config(config_path)
         
         # Initialize components in dependency order
-        self.message_db = self._initialize_message_db()
+        self.message_storage = self._initialize_message_storage()
         self.agent = self._initialize_agent()
         
     def _load_config(self, cfg_path: Optional[str]) -> Dict[str, Any]:
@@ -406,7 +406,7 @@ class BaseAgentRunner:
             return self._create_output_model_from_schema(agent_cfg["output_schema"])
         return None
     
-    def _initialize_message_db(self) -> Optional[MessageDB]:
+    def _initialize_message_storage(self) -> Optional[MessageStorageBase]:
         """
         Initialize message database based on configuration.
         
@@ -417,5 +417,11 @@ class BaseAgentRunner:
             Local mode (local=True) returns None to avoid database dependencies
         """
         agent_cfg = self.config.get("agent", {})
-        is_local = agent_cfg.get("local", True)
-        return None if is_local else MessageDB()
+        message_storage = agent_cfg.get("message_storage", "local")
+
+        message_storage_map = {
+            "local": MessageStorageLocal(),  # Local mode uses in-memory storage
+            "redis": MessageStorageRedis(),
+        }
+
+        return message_storage_map.get(message_storage, MessageStorageLocal())

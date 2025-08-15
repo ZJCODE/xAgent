@@ -42,7 +42,7 @@ agent:
       description: "Strategic planner for breaking down goals into actionable steps, dependencies, and timelines"
       server_url: "http://localhost:8014"
   
-  local: true
+  message_storage: "local"
 
 server:
   host: "0.0.0.0"

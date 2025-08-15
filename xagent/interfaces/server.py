@@ -93,7 +93,7 @@ class HTTPAgentServer(BaseAgentRunner):
                 session = Session(
                     user_id=input_data.user_id,
                     session_id=input_data.session_id,
-                    message_db=self.message_db
+                    message_storage=self.message_storage
                 )
                 
                 # Streaming mode via Server-Sent Events
@@ -162,7 +162,7 @@ class HTTPAgentServer(BaseAgentRunner):
                 session = Session(
                     user_id=input_data.user_id,
                     session_id=input_data.session_id,
-                    message_db=self.message_db
+                    message_storage=self.message_storage
                 )
                 
                 await session.clear_session()

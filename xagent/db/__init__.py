@@ -1,3 +1,5 @@
-from .message import MessageDB
+from .base_messages import MessageStorageBase
+from .redis_messages import MessageStorageRedis
+from .local_messages import MessageStorageLocal
 
-__all__ = ["MessageDB"]
+__all__ = ["MessageStorageBase", "MessageStorageRedis", "MessageStorageLocal"]

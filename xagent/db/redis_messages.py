@@ -1,7 +1,7 @@
 # Standard library imports
 import logging
 import os
-from typing import Final, List, Optional, Union
+from typing import Dict, Final, List, Optional, Union
 from urllib.parse import quote
 
 # Third-party imports
@@ -9,14 +9,15 @@ import redis.asyncio as redis
 from redis.exceptions import RedisError
 
 # Local imports
+from .base_messages import MessageStorageBase
 from ..schemas import Message
 
 # Module logger
 logger = logging.getLogger(__name__)
 
 
-class MessageDBConfig:
-    """Configuration constants for MessageDB class."""
+class MessageStorageRedisConfig:
+    """Configuration constants for MessageStorageRedis class."""
     
     # Redis key constants
     MSG_PREFIX: Final[str] = "chat"
@@ -32,7 +33,7 @@ class MessageDBConfig:
     DEFAULT_MAX_HISTORY: Final[int] = 200
     
     # Redis client settings
-    CLIENT_NAME: Final[str] = "xagent-message-db"
+    CLIENT_NAME: Final[str] = "xagent-message-storage"
     
     # Message preview settings
     MESSAGE_PREVIEW_LENGTH: Final[int] = 120
@@ -41,7 +42,7 @@ class MessageDBConfig:
     URL_SAFE_CHARS: Final[str] = "-._~"
 
 
-class MessageDB:
+class MessageStorageRedis(MessageStorageBase):
     """
     Redis-based message storage backend for conversation history.
 
@@ -128,11 +129,11 @@ class MessageDB:
         return redis.Redis.from_url(
             self.redis_url,
             decode_responses=True,
-            health_check_interval=MessageDBConfig.HEALTH_CHECK_INTERVAL,
-            socket_connect_timeout=MessageDBConfig.SOCKET_CONNECT_TIMEOUT,
-            socket_timeout=MessageDBConfig.SOCKET_TIMEOUT,
+            health_check_interval=MessageStorageRedisConfig.HEALTH_CHECK_INTERVAL,
+            socket_connect_timeout=MessageStorageRedisConfig.SOCKET_CONNECT_TIMEOUT,
+            socket_timeout=MessageStorageRedisConfig.SOCKET_TIMEOUT,
             retry_on_timeout=True,
-            client_name=MessageDBConfig.CLIENT_NAME,
+            client_name=MessageStorageRedisConfig.CLIENT_NAME,
         )
     
     async def _validate_connection(self) -> None:
@@ -145,19 +146,19 @@ class MessageDB:
             self.r = None  # Reset client on failure
             raise RedisError(f"Failed to establish Redis connection: {e}") from e
 
-    def _make_key(self, user_id: str, session_id: Optional[str] = None) -> str:
+    def _make_key(self, user_id: str, session_id: str) -> str:
         """
         Generate Redis key with optional sanitization.
         
         Args:
             user_id: User identifier (required)
-            session_id: Session identifier (optional)
+            session_id: Session identifier (required)
             
         Returns:
-            Redis key in format 'chat:<user_id>' or 'chat:<user_id>:<session_id>'
+            Redis key in format 'chat:<user_id>:<session_id>'
             
         Raises:
-            ValueError: If user_id is empty or invalid
+            ValueError: If user_id or session_id is empty or invalid
             
         Note:
             When sanitize_keys is enabled, user_id and session_id are URL-encoded
@@ -166,32 +167,28 @@ class MessageDB:
         if not user_id or not isinstance(user_id, str):
             raise ValueError("user_id must be a non-empty string")
         
+        if not session_id or not isinstance(session_id, str):
+            raise ValueError("session_id must be a non-empty string")
+        
         # Sanitize identifiers if requested
         sanitized_user_id = self._sanitize_identifier(user_id)
-        sanitized_session_id = None
-        
-        if session_id:
-            if not isinstance(session_id, str):
-                raise ValueError("session_id must be a string when provided")
-            sanitized_session_id = self._sanitize_identifier(session_id)
+        sanitized_session_id = self._sanitize_identifier(session_id)
         
         # Build key
-        if sanitized_session_id:
-            return f"{MessageDBConfig.MSG_PREFIX}:{sanitized_user_id}:{sanitized_session_id}"
-        return f"{MessageDBConfig.MSG_PREFIX}:{sanitized_user_id}"
+        return f"{MessageStorageRedisConfig.MSG_PREFIX}:{sanitized_user_id}:{sanitized_session_id}"
     
     def _sanitize_identifier(self, identifier: str) -> str:
         """Sanitize identifier for Redis key usage."""
         if self.sanitize_keys:
-            return quote(identifier, safe=MessageDBConfig.URL_SAFE_CHARS)
+            return quote(identifier, safe=MessageStorageRedisConfig.URL_SAFE_CHARS)
         return identifier
 
     async def add_messages(
         self,
         user_id: str,
         messages: Union[Message, List[Message]],
-        session_id: Optional[str] = None,
-        ttl: int = MessageDBConfig.DEFAULT_TTL,
+        session_id: str,
+        ttl: int = MessageStorageRedisConfig.DEFAULT_TTL,
         *,
         max_len: Optional[int] = None,
         reset_ttl: bool = True,
@@ -202,7 +199,7 @@ class MessageDB:
         Args:
             user_id: User identifier
             messages: Single Message object or list of Message objects
-            session_id: Session identifier (optional)
+            session_id: Session identifier
             ttl: Expiration time in seconds
             max_len: Maximum history length (triggers trimming if exceeded)
             reset_ttl: Whether to refresh expiration time (sliding window)
@@ -283,15 +280,15 @@ class MessageDB:
     async def get_messages(
         self, 
         user_id: str, 
-        session_id: Optional[str] = None, 
-        count: int = MessageDBConfig.DEFAULT_MESSAGE_COUNT
+        session_id: str, 
+        count: int = MessageStorageRedisConfig.DEFAULT_MESSAGE_COUNT
     ) -> List[Message]:
         """
         Retrieve recent messages from conversation history.
         
         Args:
             user_id: User identifier
-            session_id: Session identifier (optional)
+            session_id: Session identifier
             count: Number of recent messages to retrieve
             
         Returns:
@@ -344,24 +341,24 @@ class MessageDB:
     
     def _create_message_preview(self, raw_message: str) -> str:
         """Create a safe preview of raw message for logging."""
-        if len(raw_message) <= MessageDBConfig.MESSAGE_PREVIEW_LENGTH:
+        if len(raw_message) <= MessageStorageRedisConfig.MESSAGE_PREVIEW_LENGTH:
             return repr(raw_message)
         return repr(
-            raw_message[:MessageDBConfig.MESSAGE_PREVIEW_LENGTH] + "..."
+            raw_message[:MessageStorageRedisConfig.MESSAGE_PREVIEW_LENGTH] + "..."
         )
 
     async def trim_history(
         self, 
         user_id: str, 
-        session_id: Optional[str] = None, 
-        max_len: int = MessageDBConfig.DEFAULT_MAX_HISTORY
+        session_id: str, 
+        max_len: int = MessageStorageRedisConfig.DEFAULT_MAX_HISTORY
     ) -> None:
         """
         Trim conversation history to maximum length.
         
         Args:
             user_id: User identifier
-            session_id: Session identifier (optional)
+            session_id: Session identifier
             max_len: Maximum number of messages to retain
             
         Raises:
@@ -387,15 +384,15 @@ class MessageDB:
     async def set_expire(
         self, 
         user_id: str, 
-        session_id: Optional[str] = None, 
-        ttl: int = MessageDBConfig.DEFAULT_TTL
+        session_id: str, 
+        ttl: int = MessageStorageRedisConfig.DEFAULT_TTL
     ) -> None:
         """
         Set expiration time for conversation history.
         
         Args:
             user_id: User identifier
-            session_id: Session identifier (optional)
+            session_id: Session identifier
             ttl: Time to live in seconds
             
         Raises:
@@ -415,13 +412,13 @@ class MessageDB:
             self.logger.error("Failed to set expire for key %s: %s", key, e)
             raise
 
-    async def clear_history(self, user_id: str, session_id: Optional[str] = None) -> None:
+    async def clear_history(self, user_id: str, session_id: str) -> None:
         """
         Clear all messages from conversation history.
         
         Args:
             user_id: User identifier
-            session_id: Session identifier (optional)
+            session_id: Session identifier
             
         Raises:
             RedisError: If Redis operation fails
@@ -436,7 +433,7 @@ class MessageDB:
             self.logger.error("Failed to clear history for key %s: %s", key, e)
             raise
 
-    async def pop_message(self, user_id: str, session_id: Optional[str] = None) -> Optional[Message]:
+    async def pop_message(self, user_id: str, session_id: str) -> Optional[Message]:
         """
         Remove and return the last non-tool message from history.
         
@@ -445,7 +442,7 @@ class MessageDB:
         
         Args:
             user_id: User identifier
-            session_id: Session identifier (optional)
+            session_id: Session identifier
             
         Returns:
             The removed Message object (non-tool), or None if history is empty
@@ -552,13 +549,13 @@ class MessageDB:
             self.logger.error("Redis ping failed: %s", e)
             return False
     
-    async def get_key_info(self, user_id: str, session_id: Optional[str] = None) -> dict:
+    async def get_key_info(self, user_id: str, session_id: str) -> dict:
         """
         Get metadata about a conversation key.
         
         Args:
             user_id: User identifier
-            session_id: Session identifier (optional)
+            session_id: Session identifier
             
         Returns:
             Dictionary containing key metadata
@@ -586,6 +583,26 @@ class MessageDB:
                 "error": str(e)
             }
     
+    def get_session_info(self, user_id: str, session_id: str) -> Dict[str, str]:
+        """
+        Get session information for MessageDB.
+        
+        Args:
+            user_id: User identifier
+            session_id: Session identifier
+            
+        Returns:
+            Dictionary containing session metadata
+        """
+        return {
+            "user_id": user_id,
+            "session_id": session_id,
+            "backend": "redis",
+            "session_key": f"{user_id}:{session_id}",
+            "redis_url": self.redis_url,
+            "sanitize_keys": str(self.sanitize_keys)
+        }
+
     def __str__(self) -> str:
         """String representation of MessageDB instance."""
         return f"MessageDB(url='{self.redis_url}', sanitize_keys={self.sanitize_keys})"

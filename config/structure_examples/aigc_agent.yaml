@@ -27,7 +27,7 @@ agent:
         items: "str"
         description: "List of relevant tags"
 
-  local: true
+  message_storage: "local"
 
 server:
   host: "0.0.0.0"

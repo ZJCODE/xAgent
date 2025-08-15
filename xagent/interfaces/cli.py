@@ -65,7 +65,7 @@ class CLIAgent(BaseAgentRunner):
         session = Session(
             user_id=user_id,
             session_id=session_id,
-            message_db=self.message_db
+            message_storage=self.message_storage
         )
         
         print(f"🤖 Welcome to xAgent CLI!")
@@ -172,7 +172,7 @@ class CLIAgent(BaseAgentRunner):
         session = Session(
             user_id=user_id,
             session_id=session_id,
-            message_db=self.message_db
+            message_storage=self.message_storage
         )
         
         response = await self.agent(

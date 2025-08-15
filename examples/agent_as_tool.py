@@ -7,7 +7,7 @@ agents that can be composed together for complex tasks.
 
 import asyncio
 from xagent.core import Agent, Session
-from xagent.db import MessageDB
+from xagent.db import MessageStorageRedis
 from xagent.tools import web_search
 
 async def agent_as_tool_example():
@@ -26,17 +26,17 @@ async def agent_as_tool_example():
     )
     
     # Convert agents to tools
-    message_db = MessageDB()
+    message_storage = MessageStorageRedis()
     research_tool = researcher_agent.as_tool(
         name="researcher",
         description="Research topics and provide detailed analysis",
-        message_db=message_db
+        message_storage=message_storage
     )
     
     writing_tool = writing_agent.as_tool(
         name="content_writer",
         description="Write and edit content",
-        message_db=message_db
+        message_storage=message_storage
     )
     
     # Main coordinator agent with specialist tools

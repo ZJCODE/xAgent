@@ -57,7 +57,7 @@ class TestSession:
         
         assert session.user_id == SessionConfig.DEFAULT_USER_ID
         assert session.session_id == SessionConfig.DEFAULT_SESSION_ID
-        assert session.message_db is None
+        assert session.message_storage is None
         assert session.logger.name.startswith("Session[default_user:default_session]")
 
     def test_init_with_custom_values(self):
@@ -66,12 +66,12 @@ class TestSession:
         session = Session(
             user_id="test_user",
             session_id="test_session",
-            message_db=mock_db
+            message_storage=mock_db
         )
         
         assert session.user_id == "test_user"
         assert session.session_id == "test_session"
-        assert session.message_db is mock_db
+        assert session.message_storage is mock_db
         assert session.logger.name.startswith("Session[test_user:test_session]")
 
     def test_session_key_generation(self):
@@ -121,7 +121,7 @@ class TestSession:
         session = Session(
             user_id="user1", 
             session_id="session1",
-            message_db=mock_db
+            message_storage=mock_db
         )
         
         await session.add_messages(self.test_message_1)
@@ -158,7 +158,7 @@ class TestSession:
         session = Session(
             user_id="user1",
             session_id="session1", 
-            message_db=mock_db
+            message_storage=mock_db
         )
         
         messages = await session.get_messages(5)
@@ -200,7 +200,7 @@ class TestSession:
         session = Session(
             user_id="user1",
             session_id="session1",
-            message_db=mock_db
+            message_storage=mock_db
         )
         
         await session.clear_session()
@@ -237,7 +237,7 @@ class TestSession:
         session = Session(
             user_id="user1",
             session_id="session1",
-            message_db=mock_db
+            message_storage=mock_db
         )
         
         popped = await session.pop_message()
@@ -277,7 +277,7 @@ class TestSession:
         session = Session(
             user_id="user1",
             session_id="session1",
-            message_db=mock_db
+            message_storage=mock_db
         )
         
         count = await session.get_message_count()
@@ -317,7 +317,7 @@ class TestSession:
         session_db = Session(
             user_id="user2",
             session_id="session2",
-            message_db=mock_db
+            message_storage=mock_db
         )
         info_db = session_db.get_session_info()
         
@@ -411,7 +411,7 @@ class TestSession:
         session_db = Session(
             user_id="test_user",
             session_id="test_session", 
-            message_db=mock_db
+            message_storage=mock_db
         )
         repr_str_db = repr(session_db)
         assert repr_str_db == "Session(user_id='test_user', session_id='test_session', backend='database')"
@@ -429,7 +429,7 @@ class TestSession:
         session = Session(
             user_id="user1",
             session_id="session1",
-            message_db=mock_db
+            message_storage=mock_db
         )
         
         # Test add_messages error handling (should not raise)

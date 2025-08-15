@@ -1,9 +1,9 @@
 # Standard library imports
 import logging
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 # Local imports
-from ..db import MessageDB
+from ..db import MessageStorageBase,MessageStorageLocal
 from ..schemas import Message
 
 
@@ -20,32 +20,25 @@ class Session:
     Session class to manage user sessions and message history.
     
     This class provides a unified interface for managing conversation history
-    across different storage backends (local memory or database). It supports:
+    using any MessageStorageBase implementation. It supports:
     - Adding messages to session history
     - Retrieving recent messages with count limits
     - Clearing session history
     - Popping messages from history
-    - Automatic history size management for local storage
+    - Automatic history size management (depending on message_storage backend)
     
     Attributes:
         user_id: Unique identifier for the user
         session_id: Unique identifier for the session
-        message_db: Optional database backend for persistent storage
+        message_storage: MessageStorageBase instance for message message_storage
         logger: Logger instance for this session
-    
-    Class Attributes:
-        _local_messages: Class-level storage for local message history
-                        Format: {(user_id, session_id): [Message, ...]}
     """
     
-    # Class-level storage for local message history
-    _local_messages: Dict[Tuple[str, str], List[Message]] = {}
-
     def __init__(
         self,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        message_db: Optional[MessageDB] = None
+        message_storage: Optional[MessageStorageBase] = None
     ):
         """
         Initialize a Session instance.
@@ -53,34 +46,24 @@ class Session:
         Args:
             user_id: Unique identifier for the user. Defaults to "default_user"
             session_id: Unique identifier for the session. Defaults to "default_session"
-            message_db: Optional database backend. If None, uses local memory storage
+            message_storage: MessageStorageBase instance (LocalDB, MessageDB, or custom implementation).
+                    If None, creates a new LocalDB instance.
             
-        Note:
-            When using local storage, session data persists only during the
-            application lifetime and is shared across all Session instances.
         """
         self.user_id = user_id or SessionConfig.DEFAULT_USER_ID
         self.session_id = session_id or SessionConfig.DEFAULT_SESSION_ID
-        self.message_db = message_db
         
-        # Initialize local storage if using memory backend
-        if not self.message_db:
-            self._ensure_local_session_exists()
+        # Use provided message_storage or default to LocalDB
+        if message_storage is not None:
+            self.message_storage = message_storage
+        else:
+            # Default to LocalDB
+            self.message_storage = MessageStorageLocal()
         
         # Create logger with session context
         self.logger = logging.getLogger(
             f"{self.__class__.__name__}[{self.user_id}:{self.session_id}]"
         )
-    
-    def _ensure_local_session_exists(self) -> None:
-        """Ensure local session storage exists for this session."""
-        session_key = self._get_session_key()
-        if session_key not in Session._local_messages:
-            Session._local_messages[session_key] = []
-    
-    def _get_session_key(self) -> Tuple[str, str]:
-        """Get the session key for local storage."""
-        return (self.user_id, self.session_id)
 
     async def add_messages(self, messages: Union[Message, List[Message]]) -> None:
         """
@@ -93,16 +76,13 @@ class Session:
             Exception: If database operation fails (logged but not re-raised)
             
         Note:
-            For local storage, automatically trims history to MAX_LOCAL_HISTORY
+            For local message_storage, automatically trims history to MAX_LOCAL_HISTORY
             to prevent memory issues.
         """
         normalized_messages = self._normalize_messages_input(messages)
         
         try:
-            if self.message_db:
-                await self._add_messages_to_db(normalized_messages)
-            else:
-                await self._add_messages_to_local(normalized_messages)
+            await self.message_storage.add_messages(self.user_id, normalized_messages, self.session_id)
         except Exception as e:
             self.logger.error("Failed to add messages: %s", e)
     
@@ -115,26 +95,6 @@ class Session:
             return [messages]
         return messages
     
-    async def _add_messages_to_db(self, messages: List[Message]) -> None:
-        """Add messages to database backend."""
-        self.logger.info("Adding %d messages to DB", len(messages))
-        await self.message_db.add_messages(self.user_id, messages, self.session_id)
-    
-    async def _add_messages_to_local(self, messages: List[Message]) -> None:
-        """Add messages to local memory storage with history management."""
-        session_key = self._get_session_key()
-        self.logger.info("Adding %d messages to local session", len(messages))
-        
-        # Add messages and manage history size
-        Session._local_messages[session_key].extend(messages)
-        self._trim_local_history(session_key)
-    
-    def _trim_local_history(self, session_key: Tuple[str, str]) -> None:
-        """Trim local history to maximum allowed size."""
-        messages = Session._local_messages[session_key]
-        if len(messages) > SessionConfig.MAX_LOCAL_HISTORY:
-            Session._local_messages[session_key] = messages[-SessionConfig.MAX_LOCAL_HISTORY:]
-
     async def get_messages(self, count: int = SessionConfig.DEFAULT_MESSAGE_COUNT) -> List[Message]:
         """
         Get the last `count` messages from the session history.
@@ -154,56 +114,27 @@ class Session:
             raise ValueError("Message count must be positive")
         
         try:
-            if self.message_db:
-                return await self._get_messages_from_db(count)
-            else:
-                return await self._get_messages_from_local(count)
+            return await self.message_storage.get_messages(self.user_id, self.session_id, count)
         except Exception as e:
             self.logger.error("Failed to get messages: %s", e)
             return []
     
-    async def _get_messages_from_db(self, count: int) -> List[Message]:
-        """Get messages from database backend."""
-        self.logger.info("Fetching last %d messages from DB", count)
-        return await self.message_db.get_messages(self.user_id, self.session_id, count)
-    
-    async def _get_messages_from_local(self, count: int) -> List[Message]:
-        """Get messages from local memory storage."""
-        session_key = self._get_session_key()
-        self.logger.info("Fetching last %d messages from local session", count)
-        messages = Session._local_messages[session_key]
-        return messages[-count:] if messages else []
-
     async def clear_session(self) -> None:
         """
         Clear the session history.
         
         This will remove all messages from the current session.
         For database backend, calls the database clear method.
-        For local storage, clears the in-memory message list.
+        For local message_storage, clears the in-memory message list.
         
         Raises:
             Exception: If database operation fails (logged but not re-raised)
         """
         try:
-            if self.message_db:
-                await self._clear_db_session()
-            else:
-                await self._clear_local_session()
+            await self.message_storage.clear_history(self.user_id, self.session_id)
         except Exception as e:
             self.logger.error("Failed to clear session: %s", e)
     
-    async def _clear_db_session(self) -> None:
-        """Clear session history in database."""
-        self.logger.info("Clearing history in DB")
-        await self.message_db.clear_history(self.user_id, self.session_id)
-    
-    async def _clear_local_session(self) -> None:
-        """Clear session history in local memory."""
-        session_key = self._get_session_key()
-        self.logger.info("Clearing local session history")
-        Session._local_messages[session_key] = []
-
     async def pop_message(self) -> Optional[Message]:
         """
         Pop the last message from the session history.
@@ -217,38 +148,14 @@ class Session:
             or if the session is empty.
             
         Note:
-            For local storage, this modifies the in-memory message list.
-            For database storage, this calls the database pop method.
+            For local message_storage, this modifies the in-memory message list.
+            For database message_storage, this calls the database pop method.
         """
         try:
-            if self.message_db:
-                return await self._pop_message_from_db()
-            else:
-                return await self._pop_message_from_local()
+            return await self.message_storage.pop_message(self.user_id, self.session_id)
         except Exception as e:
             self.logger.error("Failed to pop message: %s", e)
             return None
-    
-    async def _pop_message_from_db(self) -> Optional[Message]:
-        """Pop message from database backend."""
-        self.logger.info("Popping last message from DB")
-        return await self.message_db.pop_message(self.user_id, self.session_id)
-    
-    async def _pop_message_from_local(self) -> Optional[Message]:
-        """Pop message from local memory storage, skipping tool messages."""
-        session_key = self._get_session_key()
-        self.logger.info("Popping last message from local session")
-        
-        messages = Session._local_messages[session_key]
-        while messages:
-            msg = messages.pop()
-            if not self._is_tool_message(msg):
-                return msg
-        return None
-    
-    def _is_tool_message(self, message: Message) -> bool:
-        """Check if a message is a tool-related message."""
-        return bool(getattr(message, 'tool_call', None))
     
     async def get_message_count(self) -> int:
         """
@@ -258,15 +165,7 @@ class Session:
             Total number of messages in the session history
         """
         try:
-            if self.message_db:
-                # Assuming MessageDB has a count method, otherwise get all and count
-                messages = await self.message_db.get_messages(
-                    self.user_id, self.session_id, float('inf')
-                )
-                return len(messages)
-            else:
-                session_key = self._get_session_key()
-                return len(Session._local_messages[session_key])
+            return await self.message_storage.get_message_count(self.user_id, self.session_id)
         except Exception as e:
             self.logger.error("Failed to get message count: %s", e)
             return 0
@@ -278,7 +177,7 @@ class Session:
         Returns:
             True if session contains messages, False otherwise
         """
-        return await self.get_message_count() > 0
+        return await self.message_storage.has_messages(self.user_id, self.session_id)
     
     def get_session_info(self) -> Dict[str, str]:
         """
@@ -287,27 +186,8 @@ class Session:
         Returns:
             Dictionary containing session metadata
         """
-        return {
-            "user_id": self.user_id,
-            "session_id": self.session_id,
-            "backend": "database" if self.message_db else "local",
-            "session_key": f"{self.user_id}:{self.session_id}"
-        }
+        return self.message_storage.get_session_info(self.user_id, self.session_id)
     
-    @classmethod
-    def get_all_local_sessions(cls) -> List[Tuple[str, str]]:
-        """
-        Get all local session keys.
-        
-        Returns:
-            List of (user_id, session_id) tuples for all local sessions
-        """
-        return list(cls._local_messages.keys())
-    
-    @classmethod
-    def clear_all_local_sessions(cls) -> None:
-        """Clear all local session data."""
-        cls._local_messages.clear()
     
     def __str__(self) -> str:
         """String representation of the session."""
@@ -315,5 +195,5 @@ class Session:
     
     def __repr__(self) -> str:
         """Detailed string representation of the session."""
-        backend = "database" if self.message_db else "local"
-        return f"Session(user_id='{self.user_id}', session_id='{self.session_id}', backend='{backend}')"
+        message_storage_type = type(self.message_storage).__name__
+        return f"Session(user_id='{self.user_id}', session_id='{self.session_id}', message_storage='{message_storage_type}')"

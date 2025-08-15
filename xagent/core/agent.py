@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 # Local imports
 from ..core import Session
-from ..db import MessageDB
+from ..db import MessageStorageBase
 from ..schemas import Message, ToolCall
 from ..utils.mcp_convertor import MCPTool
 from ..utils.tool_decorator import function_tool
@@ -227,14 +227,14 @@ class Agent:
         self, 
         name: Optional[str] = None, 
         description: Optional[str] = None,
-        message_db: Optional[MessageDB] = None
+        message_storage: Optional[MessageStorageBase] = None
     ):
         """
         Convert the agent into an OpenAI tool function.
         Args:
             name (str): The name of the tool function.
             description (str): A brief description of what the tool does.
-            message_db (Optional[MessageDB]): Optional message database for storing messages.
+            message_storage (Optional[MessageStorageBase]): Optional message database for storing messages.
         Returns:
             function: An asynchronous function that can be used as an OpenAI tool.
         """
@@ -256,7 +256,7 @@ class Agent:
                                    image_source=image_source,
                                    session=Session(user_id=f"agent_{self.name}_as_tool", 
                                                    session_id=f"{uuid.uuid4()}",
-                                                    message_db=message_db
+                                                    message_storage=message_storage
                                                    ))
 
         return tool_func

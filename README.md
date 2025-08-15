@@ -739,11 +739,11 @@ async def agent_as_tool_example():
     )
     
     # Convert agent to tool
-    message_db = MessageDB()
+    message_storage = MessageDB()
     research_tool = researcher_agent.as_tool(
         name="researcher",
         description="Research topics and provide detailed analysis",
-        message_db=message_db
+        message_storage=message_storage
     )
     
     # Main coordinator agent with specialist tools
@@ -775,7 +775,7 @@ from xagent.db import MessageDB
 
 async def chat_with_persistence():
     # Initialize Redis-backed message storage
-    message_db = MessageDB()
+    message_storage = MessageDB()
     
     # Create agent
     agent = Agent(
@@ -787,7 +787,7 @@ async def chat_with_persistence():
     session = Session(
         user_id="user123", 
         session_id="persistent_session",
-        message_db=message_db
+        message_storage=message_storage
     )
 
     # Chat with automatic message persistence
@@ -871,7 +871,7 @@ Agent(
 **Key Methods:**
 - `async chat(user_message, session, **kwargs) -> str | BaseModel`: Main chat interface
 - `async __call__(user_message, session, **kwargs) -> str | BaseModel`: Shorthand for chat
-- `as_tool(name, description, message_db) -> Callable`: Convert agent to tool
+- `as_tool(name, description, message_storage) -> Callable`: Convert agent to tool
 
 **Chat Method Parameters:**
 - `user_message`: The user's message (string or Message object)
@@ -949,7 +949,7 @@ Manages conversation history and persistence with operations.
 Session(
     user_id: str,
     session_id: Optional[str] = None,
-    message_db: Optional[MessageDB] = None
+    message_storage: Optional[MessageDB] = None
 )
 ```
 
@@ -965,12 +965,12 @@ Redis-backed message persistence layer.
 
 ```python
 # Initialize with environment variables or defaults
-message_db = MessageDB()
+message_storage = MessageDB()
 
 # Usage with session
 session = Session(
     user_id="user123",
-    message_db=message_db
+    message_storage=message_storage
 )
 ```
 
