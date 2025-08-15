@@ -8,7 +8,7 @@ synchronous or asynchronous, and how xAgent handles them automatically.
 import asyncio
 import httpx
 from xagent.utils.tool_decorator import function_tool
-from xagent.core import Agent, Session
+from xagent.core import Agent
 
 # Sync tools - automatically converted to async
 @function_tool()
@@ -43,12 +43,11 @@ async def main():
         model="gpt-4.1-mini"
     )
     
-    session = Session(user_id="user123")
-    
     # Agent handles all tools automatically - sync tools run in thread pool
     response = await agent.chat(
-        "Calculate the square of 15, format 'hello world' in title case, and get weather for Tokyo",
-        session
+        user_message="Calculate the square of 15, format 'hello world' in title case, and get weather for Tokyo",
+        user_id="user123",
+        session_id="session456"
     )
     print(response)
 

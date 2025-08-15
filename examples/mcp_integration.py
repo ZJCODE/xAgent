@@ -6,7 +6,7 @@ servers for dynamic tool loading and management.
 """
 
 import asyncio
-from xagent.core import Agent, Session
+from xagent.core import Agent
 from xagent.utils.mcp_convertor import MCPTool
 
 async def mcp_integration_example():
@@ -18,10 +18,12 @@ async def mcp_integration_example():
         model="gpt-4.1-mini"
     )
     
-    session = Session(user_id="user123")
-    
     # Use MCP tools automatically
-    response = await agent.chat("Use the available MCP tools to help me", session)
+    response = await agent.chat(
+        user_message="Use the available MCP tools to help me",
+        user_id="user123",
+        session_id="session456"
+    )
     print(response)
 
 async def mcp_with_local_tools():
@@ -59,11 +61,10 @@ async def mcp_with_local_tools():
         system_prompt="You have access to both local and MCP tools. Use them as needed."
     )
     
-    session = Session(user_id="user123")
-    
     response = await agent.chat(
-        "Calculate 15 * 23 using the calculator, and if you have access to other tools, show me what they can do",
-        session
+        user_message="Calculate 15 * 23 using the calculator, and if you have access to other tools, show me what they can do",
+        user_id="user123",
+        session_id="session456"
     )
     print(response)
 

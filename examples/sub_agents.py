@@ -6,7 +6,7 @@ agents that can be composed together for complex tasks.
 """
 
 import asyncio
-from xagent.core import Agent, Session
+from xagent.core import Agent
 from xagent.db import MessageDB
 from xagent.tools import web_search
 
@@ -35,12 +35,11 @@ async def agent_as_tool_example():
         model="gpt-4.1"
     )
     
-    session = Session(user_id="user123")
-    
     # Complex multi-step task
     response = await coordinator.chat(
-        "Research the latest advancements in AI technology and write a brief summary",
-        session
+        user_message="Research the latest advancements in AI technology and write a brief summary",
+        user_id="user123",
+        session_id="session456"
     )
     print(response)
 

@@ -9,7 +9,7 @@ import asyncio
 import time
 import httpx
 from xagent.utils.tool_decorator import function_tool
-from xagent.core import Agent, Session
+from xagent.core import Agent
 
 # Understanding Automatic Async Conversion Examples
 
@@ -137,16 +137,15 @@ async def demo_concurrent_tools():
         simple_math        # Runs in thread pool
     ])
     
-    session = Session(user_id="demo")
-    
     # All tools execute concurrently when called by agent
     # - sync tools don't block the event loop
     # - async tools run directly for optimal I/O performance
     # - total execution time = max(individual_times), not sum
     
     response = await agent.chat(
-        "Calculate sum of squares for 1000, fetch https://httpbin.org/json, and add 5+3",
-        session
+        user_message="Calculate sum of squares for 1000, fetch https://httpbin.org/json, and add 5+3",
+        user_id="demo",
+        session_id="demo_session"
     )
     return response
 
@@ -172,9 +171,12 @@ async def basic_tool_development():
 
     # Use with agent
     agent = Agent(tools=[my_sync_tool, my_async_tool])
-    session = Session(user_id="user123")
     
-    response = await agent.chat("Use both tools to process 'hello world'", session)
+    response = await agent.chat(
+        user_message="Use both tools to process 'hello world'",
+        user_id="user123",
+        session_id="session456"
+    )
     return response
 
 async def main():

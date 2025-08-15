@@ -7,7 +7,7 @@ using Pydantic models for type-safe responses.
 
 import asyncio
 from pydantic import BaseModel
-from xagent.core import Agent, Session
+from xagent.core import Agent
 from xagent.tools import web_search
 
 class WeatherReport(BaseModel):
@@ -31,12 +31,11 @@ async def get_structured_response():
                   tools=[web_search], 
                   output_type=WeatherReport) # You can set a default output type here or leave it None
     
-    session = Session(user_id="user123")
-    
     # Request structured output for weather
     weather_data = await agent.chat(
-        "what's the weather like in Hangzhou?",
-        session
+        user_message="what's the weather like in Hangzhou?",
+        user_id="user123",
+        session_id="session456"
     )
     
     print(f"Location: {weather_data.location}")
@@ -46,7 +45,12 @@ async def get_structured_response():
 
 
     # Request structured output for mathematical reasoning (overrides output_type)
-    reply = await agent.chat("how can I solve 8x + 7 = -23", session, output_type=MathReasoning) # Override output_type for this call
+    reply = await agent.chat(
+        user_message="how can I solve 8x + 7 = -23",
+        user_id="user123", 
+        session_id="session456",
+        output_type=MathReasoning
+    ) # Override output_type for this call
     for index, step in enumerate(reply.steps):
         print(f"Step {index + 1}: {step.explanation} => Output: {step.output}")
     print("Final Answer:", reply.final_answer)
