@@ -34,6 +34,8 @@ class AgentConfig:
     
     DEFAULT_NAME = "default_agent"
     DEFAULT_MODEL = "gpt-4.1-mini"
+    DEFAULT_USER_ID = "default_user"
+    DEFAULT_SESSION_ID = "default_session"
     DEFAULT_HISTORY_COUNT = 16
     DEFAULT_MAX_ITER = 10
     MCP_CACHE_TTL = 300  # 5 minutes
@@ -146,8 +148,8 @@ class Agent:
     async def __call__(
         self,
         user_message: Union[Message, str],
-        user_id: str = "default_user",
-        session_id: str = "default_session",
+        user_id: str = AgentConfig.DEFAULT_USER_ID,
+        session_id: str = AgentConfig.DEFAULT_SESSION_ID,
         history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         image_source: Optional[str] = None,
@@ -170,8 +172,8 @@ class Agent:
     async def chat(
         self,
         user_message: Union[Message, str],
-        user_id: str = "default_user",
-        session_id: str = "default_session",
+        user_id: str = AgentConfig.DEFAULT_USER_ID,
+        session_id: str = AgentConfig.DEFAULT_SESSION_ID,
         history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         image_source: Optional[str] = None,
