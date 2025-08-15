@@ -814,16 +814,20 @@ xAgent/
 ├── 🤖 xagent/                # Core async agent framework
 │   ├── __init__.py           # Package initialization and exports
 │   ├── __version__.py        # Version information
-│   ├── core/                 # Agent and session management
-│   │   ├── __init__.py       # Core exports (Agent, Session, HTTPAgentServer)
-│   │   ├── agent.py          # Main Agent class with chat
-│   │   ├── session.py        # Session management with operations
-│   │   ├── server.py         # Standalone HTTP Agent Server
+│   ├── core/                 # Core agent and session management
+│   │   ├── __init__.py       # Core exports (Agent, Session)
+│   │   ├── agent.py          # Main Agent class with chat functionality
+│   │   └── session.py        # Session management with operations
+│   ├── interfaces/           # User interfaces and servers
+│   │   ├── __init__.py       # Interface exports
+│   │   ├── base.py           # Base interface classes
 │   │   ├── cli.py            # Command line interface
-│   │   └── base.py           # Base classes and utilities
-│   ├── db/                   # Database layer (Redis)
+│   │   └── server.py         # HTTP Agent Server (FastAPI)
+│   ├── db/                   # Message storage layer
 │   │   ├── __init__.py       # Database exports
-│   │   └── message.py        # Message persistence
+│   │   ├── base_messages.py  # Abstract message storage interface
+│   │   ├── local_messages.py # In-memory message storage
+│   │   └── redis_messages.py # Redis-based message persistence
 │   ├── schemas/              # Data models and types (Pydantic)
 │   │   ├── __init__.py       # Schema exports
 │   │   └── message.py        # Message and ToolCall models
@@ -831,25 +835,32 @@ xAgent/
 │   │   ├── __init__.py       # Tool registry (web_search, draw_image)
 │   │   ├── openai_tool.py    # OpenAI tool integrations
 │   │   └── mcp_demo/         # MCP demo server and client
-│   ├── utils/                # Utility functions
+│   ├── utils/                # Utility functions and helpers
+│   │   ├── __init__.py       # Utility exports
+│   │   ├── tool_decorator.py # Function tool decorator
+│   │   ├── mcp_convertor.py  # MCP protocol conversion
+│   │   └── image_upload.py   # Image processing utilities
 │   ├── multi/                # Multi-agent support
 │   │   ├── __init__.py       # Multi-agent exports
 │   │   ├── swarm.py          # Agent swarm coordination
 │   │   └── workflow.py       # Workflow management
 │   └── frontend/             # Web interface components
+│       ├── __init__.py       # Frontend exports
 │       ├── app.py            # Streamlit chat application
 │       └── launcher.py       # Web interface launcher
 ├── 🛠️ toolkit/               # Custom tool ecosystem
 │   ├── __init__.py           # Toolkit registry
-│   ├── tools.py              # Custom tools (char_count)
-│   ├── mcp_server.py         # Main MCP server
+│   ├── tools.py              # Custom tools (char_count, etc.)
+│   └── mcp_server.py         # Main MCP server implementation
 ├── ⚙️ config/                # Configuration files
-│   ├── agent.yaml            # Agent server configuration
+│   ├── agent.yaml            # Default agent configuration
 │   ├── structure_examples/   # Structured output examples
-│   └── sub_agents_example/   # Sub-agent configuration examples
+│   └── sub_agents_example/   # Multi-agent system examples
 ├── 📝 examples/              # Usage examples and demos
 ├── 🧪 tests/                 # Comprehensive test suite
-├── 📁 logs/                  # Log files
+├── 📁 logs/                  # Application log files
+├── 📦 dist/                  # Distribution packages
+└── 📄 pyproject.toml         # Project configuration
 ```
 
 ## 🤖 API Reference
