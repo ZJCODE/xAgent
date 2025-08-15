@@ -1,46 +1,47 @@
-import time
-from turtle import st
-from typing import Optional, AsyncGenerator, Union, List
+# Standard library imports
+import asyncio
 import json
 import logging
-import asyncio
+import time
 import uuid
 from enum import Enum
-from dotenv import load_dotenv
-from pydantic import BaseModel
-import httpx
+from typing import AsyncGenerator, List, Optional, Union
 
+# Third-party imports
+import httpx
+from dotenv import load_dotenv
 from langfuse import observe
 from langfuse.openai import AsyncOpenAI
+from pydantic import BaseModel
 
-from ..schemas import Message,ToolCall
-from ..db import MessageDB
+# Local imports
 from ..core import Session
-from ..utils.tool_decorator import function_tool
+from ..db import MessageDB
+from ..schemas import Message, ToolCall
 from ..utils.mcp_convertor import MCPTool
+from ..utils.tool_decorator import function_tool
 
 load_dotenv(override=True)
 
-# Initialize logging(only needs to be done once)
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
-class ReplyType(Enum):
-    SIMPLE_REPLY = "simple_reply"
-    STRUCTURED_REPLY = "structured_reply"
-    TOOL_CALL = "tool_call"
-    ERROR = "error"
 
-class Agent:
-    """
-    Base class for creating an AI agent that can interact with users, manage tools, and handle multi-step reasoning.
-    """
-
+class AgentConfig:
+    """Configuration constants for Agent class."""
+    
     DEFAULT_NAME = "default_agent"
     DEFAULT_MODEL = "gpt-4.1-mini"
-
+    DEFAULT_HISTORY_COUNT = 16
+    DEFAULT_MAX_ITER = 10
+    MCP_CACHE_TTL = 300  # 5 minutes
+    HTTP_TIMEOUT = 600.0  # 10 minutes
+    TOOL_RESULT_PREVIEW_LENGTH = 20
+    ERROR_RESPONSE_PREVIEW_LENGTH = 200
+    
     DEFAULT_SYSTEM_PROMPT = (
         "**Context Information:**\n"
         "- Current user_id: {user_id}\n"
@@ -49,66 +50,112 @@ class Agent:
     )
 
 
+class ReplyType(Enum):
+    """Types of replies the agent can generate."""
+    
+    SIMPLE_REPLY = "simple_reply"
+    STRUCTURED_REPLY = "structured_reply"
+    TOOL_CALL = "tool_call"
+    ERROR = "error"
+
+
+class ErrorMessages:
+    """Centralized error messages for better maintainability."""
+    
+    UNKNOWN_REPLY_TYPE = "Sorry, I encountered an error while processing your request."
+    MAX_ITER_EXCEEDED = "Sorry, I could not generate a response after multiple attempts."
+    GENERAL_ERROR = "Sorry, something went wrong."
+    STREAM_TYPE_NOT_RECOGNIZED = "Stream response event_type is not recognized."
+    NO_VALID_OUTPUT = "No valid output from model response."
+
+class Agent:
+    """
+    Base class for creating an AI agent that can interact with users, manage tools, and handle multi-step reasoning.
+    
+    This class provides a comprehensive framework for building AI agents with the following capabilities:
+    - Multi-turn conversation handling
+    - Tool integration and execution
+    - MCP (Model Context Protocol) server support
+    - Sub-agent delegation
+    - Structured output generation
+    - Streaming responses
+    """
+
     def __init__(
         self, 
         name: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        description: Optional[str] = None, # simple description of the agent for tool conversion , what the Agent does
+        description: Optional[str] = None,
         model: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
-        tools: Optional[list] = None,
-        mcp_servers: Optional[Union[str, list]] = None,
-        sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None,  # (name, description, server_url) or Agent instances
-        output_type: type[BaseModel] = None
+        tools: Optional[List] = None,
+        mcp_servers: Optional[Union[str, List[str]]] = None,
+        sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None,
+        output_type: Optional[type[BaseModel]] = None
     ):
         """
         Initialize the Agent with optional parameters.
+        
         Args:
-            name (Optional[str]): The name of the agent.
-            system_prompt (Optional[str]): Custom system prompt to prepend to the default.
-            description (Optional[str]): Simple description of the agent for tool conversion.
-            model (Optional[str]): The OpenAI model to use, defaults to DEFAULT_MODEL.
-            client (Optional[AsyncOpenAI]): Custom OpenAI client instance, defaults to a new AsyncOpenAI instance.
-            tools (Optional[list]): List of tool functions to register with the agent.
-            mcp_servers (Optional[Union[str, list]]): MCP server URLs to fetch tools from.
-            sub_agents (Optional[List[Union[tuple[str, str, str], 'Agent']]]): List of sub-agents to convert to tools.
-            output_type (type[BaseModel]): Pydantic model for structured output, can be overridden in chat method.
-
-        Initializes the agent with a name, system prompt, description, model, and tools.
-        If no name is provided, it defaults to "default_agent". The system prompt is a combination of a default prompt and any custom prompt provided.
-        The agent can also register tools, fetch tools from MCP servers, and convert sub-agents into tools.
+            name: The name of the agent
+            system_prompt: Custom system prompt to prepend to the default
+            description: Simple description of the agent for tool conversion
+            model: The OpenAI model to use
+            client: Custom OpenAI client instance
+            tools: List of tool functions to register
+            mcp_servers: MCP server URLs to fetch tools from
+            sub_agents: List of sub-agents to convert to tools
+            output_type: Pydantic model for structured output
         """
-        self.name: str = name or self.DEFAULT_NAME
-        self.system_prompt: str = self.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
-        self.description: str = description
-        self.model: str = model or self.DEFAULT_MODEL
-        self.client: AsyncOpenAI = client or AsyncOpenAI()
+        # Basic configuration
+        self.name = name or AgentConfig.DEFAULT_NAME
+        self.description = description
+        self.model = model or AgentConfig.DEFAULT_MODEL
+        self.client = client or AsyncOpenAI()
+        self.output_type = output_type
+        
+        # System prompt setup
+        self.system_prompt = AgentConfig.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
+        
+        # Tool management
         self.tools: dict = {}
-        self._register_tools(tools or [])
-        self.mcp_servers: list = mcp_servers or []
         self.mcp_tools: dict = {}
         self.mcp_tools_last_updated: Optional[float] = None
-        self.mcp_cache_ttl: int = 300  # 5 minutes
-        self.agent_tools = self._convert_sub_agents_to_tools(sub_agents)
-        self._register_tools(self.agent_tools)
-        self.output_type: type[BaseModel] = output_type
+        self.mcp_cache_ttl = AgentConfig.MCP_CACHE_TTL
+        
+        # Initialize components
         self.logger = logging.getLogger(self.__class__.__name__)
-        if self.agent_tools:
-            self.logger.info("Registered agent tools: %s", [tool.tool_spec['name'] for tool in self.agent_tools])
+        self.mcp_servers = self._normalize_mcp_servers(mcp_servers)
+        
+        # Register tools
+        self._register_tools(tools or [])
+        
+        # Convert and register sub-agents as tools
+        agent_tools = self._convert_sub_agents_to_tools(sub_agents)
+        if agent_tools:
+            self._register_tools(agent_tools)
+            self.logger.info("Registered agent tools: %s", 
+                           [tool.tool_spec['name'] for tool in agent_tools])
+
+    def _normalize_mcp_servers(self, mcp_servers: Optional[Union[str, List[str]]]) -> List[str]:
+        """Normalize MCP servers input to a list."""
+        if not mcp_servers:
+            return []
+        if isinstance(mcp_servers, str):
+            return [mcp_servers]
+        return list(mcp_servers)
 
     async def __call__(
-            self,
-            user_message: Message | str,
-            session: Session,
-            history_count: int = 16,
-            max_iter: int = 5,
-            image_source: Optional[str] = None,
-            output_type: type[BaseModel] = None,
-            stream=False
-    ) -> str | BaseModel | AsyncGenerator[str, None]:
-        """
-        Call the agent to generate a reply based on the user message and session.
-        """
+        self,
+        user_message: Union[Message, str],
+        session: Session,
+        history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
+        max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
+        image_source: Optional[str] = None,
+        output_type: Optional[type[BaseModel]] = None,
+        stream: bool = False
+    ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
+        """Call the agent to generate a reply based on the user message and session."""
         return await self.chat(
             user_message=user_message,
             session=session,
@@ -122,30 +169,29 @@ class Agent:
     @observe()
     async def chat(
         self,
-        user_message: Message | str,
+        user_message: Union[Message, str],
         session: Session,
-        history_count: int = 16,
-        max_iter: int = 10,
+        history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
+        max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         image_source: Optional[str] = None,
-        output_type: type[BaseModel] = None,
-        stream=False
-    ) -> str | BaseModel | AsyncGenerator[str, None]:
+        output_type: Optional[type[BaseModel]] = None,
+        stream: bool = False
+    ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """
         Generate a reply from the agent given a user message and session.
 
         Args:
-            user_message (Message | str): The latest user message.
-            session (Session): The session object managing message history.
-            history_count (int, optional): Number of previous messages to include. Defaults to 20.
-            max_iter (int, optional): Maximum model call attempts. Defaults to 10.
-            image_source (Optional[str], optional): Source of the image, if any can be a URL or File path or base64 string.
-            output_type (type[BaseModel], optional): Pydantic model for structured output. Defaults to the Agent setting but can be overridden in chat().
-            stream (bool, optional): Whether to stream the response. Defaults to False.
+            user_message: The latest user message
+            session: The session object managing message history
+            history_count: Number of previous messages to include
+            max_iter: Maximum model call attempts
+            image_source: Source of the image, if any (URL, file path, or base64 string)
+            output_type: Pydantic model for structured output
+            stream: Whether to stream the response
 
         Returns:
-            str | BaseModel | AsyncGenerator[str, None]: The agent's reply or error message.
+            The agent's reply, structured output, or error message
         """
-
         if output_type is None:
             output_type = self.output_type
             
@@ -163,7 +209,6 @@ class Agent:
             input_messages = [msg.to_dict() for msg in await session.get_messages(history_count)]
 
             for attempt in range(max_iter):
-
                 reply_type, response = await self._call_model(input_messages, session, output_type, stream)
 
                 if reply_type == ReplyType.SIMPLE_REPLY:
@@ -177,17 +222,22 @@ class Agent:
                     await self._handle_tool_calls(response, session, input_messages)
                 else:
                     self.logger.error("Unknown reply type: %s", reply_type)
-                    return "Sorry, I encountered an error while processing your request."
+                    return ErrorMessages.UNKNOWN_REPLY_TYPE
 
             # If no valid reply after max_iter attempts
             self.logger.error("Failed to generate response after %d attempts", max_iter)
-            return "Sorry, I could not generate a response after multiple attempts."
+            return ErrorMessages.MAX_ITER_EXCEEDED
 
         except Exception as e:
             self.logger.exception("Agent chat error: %s", e)
-            return "Sorry, something went wrong."
+            return ErrorMessages.GENERAL_ERROR
 
-    def as_tool(self,name: str = None, description: str = None,message_db: Optional[MessageDB] = None):
+    def as_tool(
+        self, 
+        name: Optional[str] = None, 
+        description: Optional[str] = None,
+        message_db: Optional[MessageDB] = None
+    ):
         """
         Convert the agent into an OpenAI tool function.
         Args:
@@ -352,7 +402,7 @@ class Agent:
                 
                 # 如果没有有效输出，记录警告并返回错误
                 self.logger.warning("Model response contains no valid output: %s", response)
-                return ReplyType.ERROR, "No valid output from model response."
+                return ReplyType.ERROR, ErrorMessages.NO_VALID_OUTPUT
             else:
                 
                 # Get the third event to determine the stream type
@@ -377,7 +427,7 @@ class Agent:
                 else:
                     self.logger.warning("Stream response event_type is not recognized: %s", event_type)
                     async def stream_generator():
-                        yield "Stream response event_type is not recognized."
+                        yield ErrorMessages.STREAM_TYPE_NOT_RECOGNIZED
                     # 返回一个生成器，避免直接返回错误信息
                     return ReplyType.ERROR, stream_generator()
                     
@@ -448,10 +498,17 @@ class Agent:
                 )
             )
 
+            def _format_tool_result_preview(result: str) -> str:
+                """Format tool result for preview in content."""
+                result_str = str(result)
+                if len(result_str) <= AgentConfig.TOOL_RESULT_PREVIEW_LENGTH:
+                    return result_str
+                return result_str[:AgentConfig.TOOL_RESULT_PREVIEW_LENGTH] + '...'
+
             tool_res_msg = Message(
                 type="function_call_output",
                 role="tool",
-                content=f"Tool `{name}` result: {str(result) if len(str(result)) < 20 else str(result)[:20] + '...'}",
+                content=f"Tool `{name}` result: {_format_tool_result_preview(result)}",
                 tool_call=ToolCall(
                     call_id=getattr(tool_call, "call_id", "001"),
                     output=json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
@@ -478,7 +535,12 @@ class Agent:
         return input_messages
     
 
-    def _convert_http_agent_to_tool(self, server: str, name: str = None, description: str = None):
+    def _convert_http_agent_to_tool(
+        self, 
+        server: str, 
+        name: Optional[str] = None, 
+        description: Optional[str] = None
+    ):
         """
         Convert an HTTP-based agent into an OpenAI tool function.
         Args:
@@ -519,7 +581,7 @@ class Agent:
             self.logger.debug(f"Request body: {request_body}")
 
             try:
-                async with httpx.AsyncClient(timeout=600.0) as client:  # 增加超时时间
+                async with httpx.AsyncClient(timeout=AgentConfig.HTTP_TIMEOUT) as client:
                     response = await client.post(chat_url, json=request_body)
                     
                     self.logger.debug(f"HTTP response status: {response.status_code}")
@@ -539,7 +601,7 @@ class Agent:
                                 
                         except json.JSONDecodeError as e:
                             error_msg = f"Invalid JSON response from HTTP Agent: {str(e)}"
-                            self.logger.error(f"{error_msg}. Response text: {response.text[:200]}...")
+                            self.logger.error(f"{error_msg}. Response text: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}...")
                             return error_msg
                             
                     elif response.status_code == 500:
@@ -548,13 +610,13 @@ class Agent:
                             error_detail = error_data.get("detail", "Internal server error")
                             error_msg = f"HTTP Agent internal error: {error_detail}"
                         except:
-                            error_msg = f"HTTP Agent internal error: {response.text[:200]}"
+                            error_msg = f"HTTP Agent internal error: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}"
                         
                         self.logger.error(error_msg)
                         return error_msg
                         
                     else:
-                        error_msg = f"HTTP Agent error {response.status_code}: {response.text[:200]}"
+                        error_msg = f"HTTP Agent error {response.status_code}: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}"
                         self.logger.error(error_msg)
                         return error_msg
                         
