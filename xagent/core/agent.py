@@ -198,8 +198,17 @@ class Agent:
             function: An asynchronous function that can be used as an OpenAI tool.
         """
 
-        async def tool_func(task: str, expected_output: str, context: Optional[str] = None, image_source: Optional[str] = None):
-            user_message = f"### Shared Contents :\n{context}\n\n### User Input:\n{task}" if context else task
+        @function_tool(
+            name=name or self.name,
+            description=description or self.description,
+            param_descriptions={
+                "input": "A clear, focused instruction or question for the agent, sufficient to complete the task independently, with any necessary resources included.",
+                "expected_output": "Specification of the desired output format, structure, or content type.",
+                "image_source": "Optional image for analysis. Can be a URL (http/https) or base64 encoded image string."
+            }
+        )
+        async def tool_func(input: str, expected_output: str,image_source: Optional[str] = None):
+            user_message = f"### User Input:\n{input}"
             if expected_output:
                 user_message += f"\n\n### Expected Output:\n{expected_output}"
             return await self.chat(user_message=user_message,
@@ -208,7 +217,6 @@ class Agent:
                                                    session_id=f"{uuid.uuid4()}",
                                                     message_db=message_db
                                                    ))
-        tool_func.tool_spec = self._agent_tool_spec(name=name or self.name, description=description or self.description)
 
         return tool_func
 
@@ -481,8 +489,17 @@ class Agent:
             function: An asynchronous function that can be used as an OpenAI tool.
         """
 
-        async def tool_func(task: str, expected_output: str, context: Optional[str] = None, image_source: Optional[str] = None):
-            user_message = f"### Shared Contents:\n{context}\n\n### User Input:\n{task}" if context else task
+        @function_tool(
+            name=name,
+            description=description,
+            param_descriptions={
+                "input": "A clear, focused instruction or question for the agent, sufficient to complete the task independently, with any necessary resources included.",
+                "expected_output": "Specification of the desired output format, structure, or content type.",
+                "image_source": "Optional image for analysis. Can be a URL (http/https) or base64 encoded image string."
+            }
+        )
+        async def tool_func(input: str, expected_output: str, image_source: Optional[str] = None):
+            user_message = f"### User Input:\n{input}"
             if expected_output:
                 user_message += f"\n\n### Expected Output:\n{expected_output}"
             
@@ -560,43 +577,5 @@ class Agent:
                 error_msg = f"Unexpected error calling HTTP Agent: {str(e)}"
                 self.logger.exception(error_msg)
                 return error_msg
-        
-        tool_func.tool_spec = self._agent_tool_spec(name=name or self.name, description=description or self.description)
 
         return tool_func
-
-    @staticmethod
-    def _agent_tool_spec(name: str = None, description: str = None):
-        """
-        Get the tool specification for the agent.
-        Returns:
-            dict: A dictionary representing the OpenAI tool specification for the agent.
-        """
-        return {
-                "type": "function",
-                "name": name,
-                "description": description,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "task": {
-                            "type": "string",
-                            "description": "Clear, actionable instruction or specific question for the agent. Keep it focused and concise."
-                        },
-                        "expected_output": {
-                            "type": "string",
-                            "description": "Specification of the desired output format, structure, or content type."
-                        },
-                        "context": {
-                            "type": "string",
-                            "description": "Optional context to share with the agent, such as previous messages, user preferences, or background information that helps complete the task."
-                        },
-                        "image_source": {
-                            "type": "string",
-                            "description": "Optional image for analysis. Can be a URL (http/https) or base64 encoded image string."
-                        }
-                    },
-                    "required": ["task", "expected_output"],
-                    "additionalProperties": False
-                }
-            }

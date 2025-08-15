@@ -8,7 +8,30 @@ import sys
 import subprocess
 import os
 import argparse
+import socket
 from pathlib import Path
+
+
+def is_port_available(host, port):
+    """Check if a port is available on the given host."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            result = sock.bind((host, port))
+            return True
+    except (OSError, socket.error):
+        return False
+
+
+def find_available_port(host, start_port, max_attempts=100):
+    """Find an available port starting from start_port."""
+    port = start_port
+    for _ in range(max_attempts):
+        if is_port_available(host, port):
+            return port
+        port += 1
+    raise RuntimeError(f"Could not find an available port after {max_attempts} attempts starting from {start_port}")
+
 
 def main():
     """Launch the Streamlit app using streamlit run command."""
@@ -31,6 +54,19 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    # Convert port to integer
+    requested_port = int(args.port)
+    
+    # Find an available port starting from the requested port
+    try:
+        available_port = find_available_port(args.host, requested_port)
+        if available_port != requested_port:
+            print(f"⚠️  Port {requested_port} is occupied, using port {available_port} instead")
+    except RuntimeError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    
     # Get the directory where this launcher script is located
     script_dir = Path(__file__).parent
     app_path = script_dir / "app.py"
@@ -49,14 +85,14 @@ def main():
         sys.executable, "-m", "streamlit", "run", 
         str(app_path),
         "--server.headless", "true",
-        "--server.port", args.port,
+        "--server.port", str(available_port),
         "--server.address", args.host
     ]
     
     try:
         # Launch streamlit
         print("🚀 Starting xAgent Web UI...")
-        print(f"📍 The web interface will be available at: http://{args.host}:{args.port}")
+        print(f"📍 The web interface will be available at: http://{args.host}:{available_port}")
         print(f"🔗 Agent server URL: {args.agent_server}")
         print("🔧 Use Ctrl+C to stop the server")
         print()
