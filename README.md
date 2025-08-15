@@ -156,12 +156,16 @@ agent:
   ...
 ```
 
-If you use Redis, you can set `local` to `false` (make sure to configure `REDIS_URL` in the `.env` file). This way, when deploying multiple services, the conversation can remain consistent even if requests are routed to different service instances.
+If you use Redis, you can set `message_storage` to `redis` (make sure to configure `REDIS_URL` in the `.env` file). 
+
+This way, when deploying multiple services, the conversation can remain consistent even if requests are routed to different service instances.
+
+default value is `local`, which means the agent will use in-memory storage for messages and history.
 
 ```yaml
 agent:
   ...
-  local: false
+  message_storage: "redis"  # Use Redis for message persistence
   ...
 ```
 
@@ -319,7 +323,7 @@ agent:
       description: "Expert agent for writing tasks, including content creation and editing"
       server_url: "http://localhost:8012"
 
-  local: true
+  message_storage: "local"
 
 server:
   host: "0.0.0.0"
@@ -346,7 +350,7 @@ agent:
     mcp_servers:
       - "http://localhost:8002/mcp/"
   
-  local: true
+  message_storage: "local"
 
 server:
   host: "0.0.0.0"
@@ -372,7 +376,7 @@ agent:
     mcp_servers:
       - "http://localhost:8003/mcp/"
   
-  local: true
+  message_storage: "local"
 
 server:
   host: "0.0.0.0"
@@ -726,7 +730,7 @@ if __name__ == "__main__":
 ```python
 import asyncio
 from xagent.core import Agent, Session
-from xagent.db import MessageDB
+from xagent.db import MessageStorageLocal
 from xagent.tools import web_search
 
 async def agent_as_tool_example():
@@ -739,7 +743,7 @@ async def agent_as_tool_example():
     )
     
     # Convert agent to tool
-    message_storage = MessageDB()
+    message_storage = MessageStorageLocal()
     research_tool = researcher_agent.as_tool(
         name="researcher",
         description="Research topics and provide detailed analysis",
@@ -771,11 +775,11 @@ asyncio.run(agent_as_tool_example())
 ```python
 import asyncio
 from xagent.core import Agent, Session
-from xagent.db import MessageDB
+from xagent.db import MessageStorageRedis
 
 async def chat_with_persistence():
     # Initialize Redis-backed message storage
-    message_storage = MessageDB()
+    message_storage = MessageStorageRedis()
     
     # Create agent
     agent = Agent(
@@ -949,7 +953,7 @@ Manages conversation history and persistence with operations.
 Session(
     user_id: str,
     session_id: Optional[str] = None,
-    message_storage: Optional[MessageDB] = None
+    message_storage: Optional[MessageStorageBase] = None
 )
 ```
 
@@ -959,20 +963,6 @@ Session(
 - `async clear_session() -> None`: Clear conversation history
 - `async pop_message() -> Optional[Message]`: Remove last non-tool message
 
-#### 🗄️ MessageDB
-
-Redis-backed message persistence layer.
-
-```python
-# Initialize with environment variables or defaults
-message_storage = MessageDB()
-
-# Usage with session
-session = Session(
-    user_id="user123",
-    message_storage=message_storage
-)
-```
 
 ### Important Considerations
 
