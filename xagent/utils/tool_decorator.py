@@ -3,62 +3,106 @@ import asyncio
 import functools
 import inspect
 import sys
-from typing import Any, Callable, Dict, List, Literal, Optional, Union, get_args, get_origin, get_type_hints
+import enum
+from typing import Any, Callable, Dict, Literal, Optional, Union, get_args, get_origin, get_type_hints
 
 
-class TypeMappingError(Exception):
-    """Exception raised when type mapping fails."""
-    pass
+def _create_async_wrapper(func: Callable) -> Callable:
+    """
+    Create an async wrapper for a function using first principles approach.
+    
+    Key principles:
+    1. Preserve function identity and metadata
+    2. Efficient async/sync detection
+    3. Robust error handling
+    4. Optimal execution strategy based on context
+    """
+    # If already async, return as-is (zero-cost abstraction)
+    if asyncio.iscoroutinefunction(func):
+        return func
+    
+    # Cache the check for asyncio.to_thread availability (avoid repeated hasattr calls)
+    _has_to_thread = hasattr(asyncio, "to_thread")
+    
+    @functools.wraps(func)
+    async def async_wrapper(*args, **kwargs):
+        """Async wrapper that handles both sync and async execution contexts."""
+        try:
+            # Check if we're in an async context
+            loop = asyncio.get_running_loop()
+            
+            # Execute in thread pool to avoid blocking the event loop
+            if _has_to_thread:
+                # asyncio.to_thread is more efficient and preferred (Python 3.9+)
+                return await asyncio.to_thread(func, *args, **kwargs)
+            else:
+                # Fallback to run_in_executor for older Python versions
+                return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+                
+        except RuntimeError:
+            # No event loop running - execute synchronously
+            # This handles cases where the function is called outside async context
+            return func(*args, **kwargs)
+        except Exception as e:
+            # Preserve original exception context and stack trace
+            raise e from None
+    
+    return async_wrapper
 
 
 def python_type_to_openai_type(py_type: Any) -> Dict[str, Any]:
     """Convert Python types to OpenAI function call parameter schema."""
+    # Enums -> enum schema based on member values
+    if inspect.isclass(py_type) and issubclass(py_type, enum.Enum):
+        values = [m.value for m in py_type]
+        if values:
+            base_type = "boolean" if isinstance(values[0], bool) else "integer" if isinstance(values[0], int) else "number" if isinstance(values[0], float) else "string"
+            return {"type": base_type, "enum": values}
+        return {"type": "string", "enum": []}
+
     # Basic type mappings
     basic_types = {
-        int: {"type": "integer"},
-        float: {"type": "number"},
-        bool: {"type": "boolean"},
-        str: {"type": "string"},
-        list: {"type": "array", "items": {"type": "string"}},
-        dict: {"type": "object"},
+        int: {"type": "integer"}, float: {"type": "number"}, bool: {"type": "boolean"}, 
+        str: {"type": "string"}, list: {"type": "array", "items": {"type": "string"}}, 
+        dict: {"type": "object"}
     }
-    
-    # Handle basic types
     if py_type in basic_types:
         return basic_types[py_type]
-    
+
     origin = get_origin(py_type)
     args = get_args(py_type)
-    
-    # Handle Literal types
-    if origin is Literal:
-        if not args:
-            return {"type": "string"}
-        first_val = args[0]
-        base_type = {str: "string", int: "integer", float: "number", bool: "boolean"}.get(type(first_val), "string")
+
+    # Literal
+    if origin is Literal and args:
+        base_type = "boolean" if isinstance(args[0], bool) else "integer" if isinstance(args[0], int) else "number" if isinstance(args[0], float) else "string"
         return {"type": base_type, "enum": list(args)}
-    
-    # Handle Union types (including Optional)
+
+    # Union and Optional
     if origin is Union:
-        if len(args) == 2 and type(None) in args:
-            # Optional type
-            non_none_type = args[0] if args[1] is type(None) else args[1]
-            return python_type_to_openai_type(non_none_type)
-        # Use first non-None type for complex unions
-        for arg in args:
-            if arg is not type(None):
-                return python_type_to_openai_type(arg)
-    
-    # Handle List types
-    if origin is list:
+        non_none_args = [a for a in args if a is not type(None)]
+        if non_none_args:
+            return python_type_to_openai_type(non_none_args[0])
+
+    # Python 3.10+ union syntax (X | Y)
+    if sys.version_info >= (3, 10) and hasattr(py_type, "__args__"):
+        union_args = getattr(py_type, "__args__", ())
+        if union_args:
+            return python_type_to_openai_type(union_args[0])
+
+    # Sequence-like -> array
+    if origin in (list, set, tuple):
         item_schema = python_type_to_openai_type(args[0]) if args else {"type": "string"}
         return {"type": "array", "items": item_schema}
-    
-    # Handle Python 3.10+ union syntax
-    if sys.version_info >= (3, 10) and hasattr(py_type, '__class__') and py_type.__class__.__name__ == 'UnionType':
-        return python_type_to_openai_type(py_type.__args__[0]) if py_type.__args__ else {"type": "string"}
-    
-    # Fallback
+
+    # Mapping/Dict -> object
+    if origin in (dict,):
+        if len(args) == 2:
+            # Check if key type is string-like
+            key_type = args[0]
+            if key_type in (Any, str) or (get_origin(key_type) is Literal and all(isinstance(a, str) for a in get_args(key_type))):
+                return {"type": "object", "additionalProperties": python_type_to_openai_type(args[1])}
+        return {"type": "object"}
+
     return {"type": "string"}
 
 
@@ -106,27 +150,19 @@ def function_tool(
                 "additionalProperties": False
             }
         }
-        
         if strict:
             tool_spec["strict"] = True
-        
-        # Create async wrapper
-        if asyncio.iscoroutinefunction(func):
-            async_func = func
-        else:
-            @functools.wraps(func)
-            async def async_func(*args, **kwargs):
-                try:
-                    loop = asyncio.get_running_loop()
-                    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
-                except RuntimeError:
-                    return func(*args, **kwargs)
-        
+
+        # Create async wrapper using first principles approach
+        async_func = _create_async_wrapper(func)
+
         # Attach metadata
         async_func.tool_spec = tool_spec
         async_func.__name__ = func.__name__
         async_func.__doc__ = func.__doc__
-        
+        async_func.__module__ = func.__module__
+        async_func.__qualname__ = getattr(func, "__qualname__", func.__name__)
+
         return async_func
-    
+
     return decorator
