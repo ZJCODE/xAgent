@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from langfuse import observe
 from langfuse.openai import AsyncOpenAI
 from pydantic import BaseModel
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Local imports
 from ..components import MessageStorageBase, MessageStorageLocal
@@ -43,6 +44,11 @@ class AgentConfig:
     HTTP_TIMEOUT = 600.0  # 10 minutes
     TOOL_RESULT_PREVIEW_LENGTH = 20
     ERROR_RESPONSE_PREVIEW_LENGTH = 200
+    
+    # Retry configuration
+    RETRY_ATTEMPTS = 3
+    RETRY_MIN_WAIT = 1
+    RETRY_MAX_WAIT = 60
     
     DEFAULT_SYSTEM_PROMPT = (
         "**Context Information:**\n"
@@ -362,6 +368,10 @@ class Agent:
         self._tool_specs_cache = None
 
     @observe()
+    @retry(
+        stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
+        wait=wait_exponential(multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT)
+    )
     async def _register_mcp_servers(self, mcp_servers: Optional[Union[str, list]]) -> None:
         """
         Register tools from MCP servers, updating the local cache if needed.
@@ -400,6 +410,10 @@ class Agent:
         await self.message_storage.add_messages(user_id, session_id, model_msg)
 
     @observe()
+    @retry(
+        stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
+        wait=wait_exponential(multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT)
+    )
     async def _call_model(self, input_msgs: list, user_id: str, session_id: str,
                           output_type: type[BaseModel] = None, stream: bool = False) -> tuple[ReplyType, object]:
         """
@@ -650,29 +664,37 @@ class Agent:
             if image_source:
                 payload["image_source"] = image_source
             
+            # 带重试的HTTP请求函数
+            @retry(
+                stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
+                wait=wait_exponential(multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT)
+            )
+            async def make_http_request():
+                async with httpx.AsyncClient(timeout=AgentConfig.HTTP_TIMEOUT) as client:
+                    return await client.post(f"{server}/chat", json=payload)
+            
             # 发送请求并处理响应
             try:
-                async with httpx.AsyncClient(timeout=AgentConfig.HTTP_TIMEOUT) as client:
-                    response = await client.post(f"{server}/chat", json=payload)
-                    
-                    # 成功响应处理
-                    if response.status_code == 200:
-                        data = response.json()
-                        reply = data.get("reply", "")
-                        if reply:
-                            return reply
-                        return "Empty reply from HTTP Agent"
-                    
-                    # 错误响应处理
-                    if response.status_code == 500:
-                        try:
-                            error_detail = response.json().get("detail", "Internal server error")
-                            return f"HTTP Agent internal error: {error_detail}"
-                        except:
-                            return f"HTTP Agent internal error: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}"
-                    
-                    return f"HTTP Agent error {response.status_code}: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}"
-                    
+                response = await make_http_request()
+                
+                # 成功响应处理
+                if response.status_code == 200:
+                    data = response.json()
+                    reply = data.get("reply", "")
+                    if reply:
+                        return reply
+                    return "Empty reply from HTTP Agent"
+                
+                # 错误响应处理
+                if response.status_code == 500:
+                    try:
+                        error_detail = response.json().get("detail", "Internal server error")
+                        return f"HTTP Agent internal error: {error_detail}"
+                    except:
+                        return f"HTTP Agent internal error: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}"
+                
+                return f"HTTP Agent error {response.status_code}: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}"
+                
             except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError) as e:
                 error_type = type(e).__name__.replace('Exception', '').replace('Error', '')
                 return f"HTTP Agent {error_type.lower()}: {str(e)}"
