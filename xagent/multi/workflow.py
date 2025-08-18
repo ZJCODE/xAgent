@@ -395,8 +395,8 @@ class Workflow:
     
     async def run_hybrid(
         self,
-        stages: List[Dict[str, Any]],
         task: str,
+        stages: List[Dict[str, Any]],
         user_id: Optional[str] = "default_user"
     ) -> Dict[str, Any]:
         """
