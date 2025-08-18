@@ -697,21 +697,20 @@ class Workflow:
                 {
                     "pattern": "sequential",
                     "agents": [researcher, planner],
-                    "task": "Research and plan for topic: {original_task}",
-                    "name": "research_planning"
+                    "task": "Research and plan: {original_task}",
+                    "name": "research_phase"
                 },
                 {
-                    "pattern": "graph", 
-                    "agents": [expert1, expert2, expert3, synthesizer],
-                    "dependencies": {"expert2": ["expert1"], "expert3": ["expert1"], "synthesizer": ["expert2", "expert3"]},
-                    "task": "Analyze this research: {previous_result}",
-                    "name": "expert_analysis"
+                    "pattern": "parallel", 
+                    "agents": [expert1, expert2, expert3],
+                    "task": "Review this research: {previous_result}",
+                    "name": "expert_review"
                 },
                 {
                     "pattern": "sequential",
-                    "agents": [reviewer],
-                    "task": "Review final report: {previous_result}",
-                    "name": "final_review"
+                    "agents": [synthesizer],
+                    "task": "Create final report from: {previous_result}",
+                    "name": "final_synthesis"
                 }
             ]
         """
