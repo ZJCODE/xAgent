@@ -22,18 +22,16 @@ class MessageStorageLocal(MessageStorageBase):
     messages, compatible with the MessageDB interface. It supports:
     
     Features:
-    - Multi-agent and multi-user isolation
     - Multi-user and multi-session isolation
     - Automatic history trimming to manage memory usage
     - Session-based message storage
     - Compatible interface with MessageDB
     
     Storage Format:
-    - Keys: (agent_id, user_id, session_id) tuples
+    - Keys: (user_id, session_id) tuples
     - Values: Lists of Message objects
     
     Attributes:
-        agent_id: Agent identifier for namespace isolation
         _messages: Dictionary storing messages for each session
         logger: Logger instance for this class
     
@@ -43,18 +41,14 @@ class MessageStorageLocal(MessageStorageBase):
         is not required.
     """
 
-    def __init__(self, agent_id: Optional[str] = None):
+    def __init__(self):
         """
         Initialize LocalDB instance.
-        
-        Args:
-            agent_id: Agent identifier for namespace isolation. If None, uses 'default_agent'
         """
-        self.agent_id = agent_id or "default_agent"
-        self._messages: Dict[Tuple[str, str, str], List[Message]] = {}
+        self._messages: Dict[Tuple[str, str], List[Message]] = {}
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
 
-    def _get_session_key(self, user_id: str, session_id: str) -> Tuple[str, str, str]:
+    def _get_session_key(self, user_id: str, session_id: str) -> Tuple[str, str]:
         """
         Get the session key for local storage.
         
@@ -63,16 +57,16 @@ class MessageStorageLocal(MessageStorageBase):
             session_id: Session identifier
             
         Returns:
-            Tuple of (agent_id, user_id, session_id)
+            Tuple of (user_id, session_id)
         """
-        return (self.agent_id, user_id, session_id)
+        return (user_id, session_id)
 
-    def _ensure_session_exists(self, session_key: Tuple[str, str, str]) -> None:
+    def _ensure_session_exists(self, session_key: Tuple[str, str]) -> None:
         """Ensure session storage exists for the given session key."""
         if session_key not in self._messages:
             self._messages[session_key] = []
 
-    def _trim_history(self, session_key: Tuple[str, str, str]) -> None:
+    def _trim_history(self, session_key: Tuple[str, str]) -> None:
         """Trim local history to maximum allowed size."""
         messages = self._messages[session_key]
         if len(messages) > MessageStorageLocalConfig.MAX_LOCAL_HISTORY:
@@ -209,16 +203,7 @@ class MessageStorageLocal(MessageStorageBase):
         """Check if a message is a tool-related message."""
         return bool(getattr(message, 'tool_call', None))
 
-    def set_agent_id(self, agent_id: str) -> None:
-        """Set the agent_id for this storage instance."""
-        if not agent_id or not isinstance(agent_id, str):
-            raise ValueError("agent_id must be a non-empty string")
-        
-        self.agent_id = agent_id.strip()
-        
-        self.logger.info(
-            "Setting agent_id as '%s'", self.agent_id
-        )
+
 
     async def get_message_count(self, user_id: str, session_id: str) -> int:
         """
@@ -248,12 +233,12 @@ class MessageStorageLocal(MessageStorageBase):
         """
         return await self.get_message_count(user_id, session_id) > 0
 
-    def get_all_sessions(self) -> List[Tuple[str, str, str]]:
+    def get_all_sessions(self) -> List[Tuple[str, str]]:
         """
         Get all session keys.
         
         Returns:
-            List of (agent_id, user_id, session_id) tuples for all sessions
+            List of (user_id, session_id) tuples for all sessions
         """
         return list(self._messages.keys())
 
@@ -277,16 +262,15 @@ class MessageStorageLocal(MessageStorageBase):
         return {
             "user_id": user_id,
             "session_id": session_id,
-            "agent_id": self.agent_id,
             "backend": "local",
-            "session_key": f"{session_key[0]}:{session_key[1]}:{session_key[2]}",
+            "session_key": f"{session_key[0]}:{session_key[1]}",
             "message_count": str(len(self._messages.get(session_key, [])))
         }
 
     def __str__(self) -> str:
         """String representation of the LocalDB."""
-        return f"LocalDB(agent_id='{self.agent_id}', sessions={len(self._messages)})"
+        return f"LocalDB(sessions={len(self._messages)})"
 
     def __repr__(self) -> str:
         """Detailed string representation of the LocalDB."""
-        return f"LocalDB(agent_id='{self.agent_id}', sessions={len(self._messages)}, total_messages={sum(len(msgs) for msgs in self._messages.values())})"
+        return f"LocalDB(sessions={len(self._messages)}, total_messages={sum(len(msgs) for msgs in self._messages.values())})"

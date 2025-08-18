@@ -47,7 +47,6 @@ class MessageStorageRedis(MessageStorageBase):
     conversation messages using Redis as the backend. It supports:
     
     Features:
-    - Multi-agent and multi-user isolation
     - Multi-user and multi-session isolation  
     - Automatic message expiration (TTL)
     - History trimming to manage memory usage
@@ -57,13 +56,12 @@ class MessageStorageRedis(MessageStorageBase):
     - URL-safe key sanitization (optional)
     
     Storage Format:
-    - Keys: "chat:<agent_id>:<user_id>:<session_id>"
+    - Keys: "chat:<user_id>:<session_id>"
     - Values: JSON-serialized Message objects in Redis lists
     - Expiration: Configurable TTL with sliding window support
     
     Attributes:
         redis_url: Redis connection URL
-        agent_id: Agent identifier for namespace isolation
         r: Redis client instance (lazy-initialized)
         sanitize_keys: Whether to URL-encode keys for safety
         logger: Logger instance for this class
@@ -72,7 +70,6 @@ class MessageStorageRedis(MessageStorageBase):
     def __init__(
         self, 
         redis_url: Optional[str] = None,
-        agent_id: Optional[str] = None,
         *, 
         sanitize_keys: bool = False
     ):
@@ -81,7 +78,6 @@ class MessageStorageRedis(MessageStorageBase):
         
         Args:
             redis_url: Redis connection URL. If None, reads from REDIS_URL environment variable
-            agent_id: Agent identifier for namespace isolation. If None, uses 'default_agent'
             sanitize_keys: Whether to URL-encode keys for safety. Defaults to False
         
         Raises:
@@ -92,7 +88,6 @@ class MessageStorageRedis(MessageStorageBase):
             blocking the constructor with network operations.
         """
         self.redis_url = self._get_redis_url(redis_url)
-        self.agent_id = agent_id or "default_agent"
         self.r: Optional[redis.Redis] = None
         self.sanitize_keys = sanitize_keys
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
@@ -150,20 +145,20 @@ class MessageStorageRedis(MessageStorageBase):
 
     def _make_key(self, user_id: str, session_id: str) -> str:
         """
-        Generate Redis key with agent namespace and optional sanitization.
+        Generate Redis key with optional sanitization.
         
         Args:
             user_id: User identifier (required)
             session_id: Session identifier (required)
             
         Returns:
-            Redis key in format 'chat:<agent_id>:<user_id>:<session_id>'
+            Redis key in format 'chat:<user_id>:<session_id>'
             
         Raises:
             ValueError: If user_id or session_id is empty or invalid
             
         Note:
-            When sanitize_keys is enabled, agent_id, user_id and session_id are URL-encoded
+            When sanitize_keys is enabled, user_id and session_id are URL-encoded
             to ensure compatibility with Redis key naming conventions.
         """
         if not user_id or not isinstance(user_id, str):
@@ -173,12 +168,11 @@ class MessageStorageRedis(MessageStorageBase):
             raise ValueError("session_id must be a non-empty string")
         
         # Sanitize identifiers if requested
-        sanitized_agent_id = self._sanitize_identifier(self.agent_id)
         sanitized_user_id = self._sanitize_identifier(user_id)
         sanitized_session_id = self._sanitize_identifier(session_id)
         
-        # Build key with agent namespace
-        return f"{MessageStorageRedisConfig.MSG_PREFIX}:{sanitized_agent_id}:{sanitized_user_id}:{sanitized_session_id}"
+        # Build key without agent namespace
+        return f"{MessageStorageRedisConfig.MSG_PREFIX}:{sanitized_user_id}:{sanitized_session_id}"
     
     def _sanitize_identifier(self, identifier: str) -> str:
         """Sanitize identifier for Redis key usage."""
@@ -501,16 +495,7 @@ class MessageStorageRedis(MessageStorageBase):
         """Check if a message is tool-related."""
         return bool(getattr(message, 'tool_call', None))
 
-    def set_agent_id(self, agent_id: str) -> None:
-        """Set the agent_id for this storage instance."""
-        if not agent_id or not isinstance(agent_id, str):
-            raise ValueError("agent_id must be a non-empty string")
-    
-        self.agent_id = agent_id.strip()
-        
-        self.logger.info(
-            "Setting agent_id as '%s'", self.agent_id
-        )
+
 
     async def close(self) -> None:
         """
@@ -611,22 +596,21 @@ class MessageStorageRedis(MessageStorageBase):
         return {
             "user_id": user_id,
             "session_id": session_id,
-            "agent_id": self.agent_id,
             "backend": "redis",
-            "session_key": f"{self.agent_id}:{user_id}:{session_id}",
+            "session_key": f"{user_id}:{session_id}",
             "redis_url": self.redis_url,
             "sanitize_keys": str(self.sanitize_keys)
         }
 
     def __str__(self) -> str:
         """String representation of MessageDB instance."""
-        return f"MessageDB(agent_id='{self.agent_id}', url='{self.redis_url}', sanitize_keys={self.sanitize_keys})"
+        return f"MessageDB(url='{self.redis_url}', sanitize_keys={self.sanitize_keys})"
     
     def __repr__(self) -> str:
         """Detailed string representation of MessageDB instance."""
         connected = "connected" if self.r else "disconnected"
         return (
-            f"MessageDB(agent_id='{self.agent_id}', url='{self.redis_url}', "
+            f"MessageDB(url='{self.redis_url}', "
             f"sanitize_keys={self.sanitize_keys}, "
             f"status='{connected}')"
         )

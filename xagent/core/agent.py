@@ -85,7 +85,6 @@ class Agent:
         name: Optional[str] = None,
         system_prompt: Optional[str] = None,
         description: Optional[str] = None,
-        agent_id: Optional[str] = None,
         model: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[List] = None,
@@ -101,7 +100,6 @@ class Agent:
             name: The name of the agent
             system_prompt: Custom system prompt to prepend to the default
             description: Simple description of the agent for tool conversion
-            agent_id: Unique identifier for the agent
             model: The OpenAI model to use
             client: Custom OpenAI client instance
             tools: List of tool functions to register
@@ -111,7 +109,6 @@ class Agent:
             message_storage: MessageStorageBase instance for message storage
         """
         # Basic configuration
-        self.agent_id = agent_id or str(uuid.uuid4())
         self.name = name or AgentConfig.DEFAULT_NAME
         self.description = description
         self.model = model or AgentConfig.DEFAULT_MODEL
@@ -123,8 +120,6 @@ class Agent:
             self.message_storage = message_storage
         else:
             self.message_storage = MessageStorageLocal()
-
-        self.message_storage.set_agent_id(self.name + "_" + self.agent_id)
         
         # System prompt setup
         self.system_prompt = AgentConfig.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
@@ -255,6 +250,9 @@ class Agent:
         Returns:
             The agent's reply, structured output, or error message
         """
+        
+        session_id = f"{self.name}_{session_id}"
+
         if output_type is None:
             output_type = self.output_type
             
