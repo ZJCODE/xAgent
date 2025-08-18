@@ -821,6 +821,127 @@ asyncio.run(chat_with_persistence())
 
 you can implement your own message storage by inheriting from `MessageStorageBase` and implementing the required methods like `add_messages`, `get_messages`, etc.
 
+## 🔄 Multi-Agent Workflows
+
+xAgent provides powerful workflow orchestration patterns for coordinating multiple agents to solve complex tasks. Choose the right pattern based on your task requirements.
+
+### Workflow Patterns
+
+| Pattern | Use Case | Example |
+|---------|----------|---------|
+| **Sequential** | Pipeline processing, step-by-step refinement | Research → Analysis → Summary |
+| **Parallel** | Consensus building, multi-perspective analysis | Multiple experts solving same problem |
+| **Graph** | Complex dependencies, fan-out/fan-in patterns | A→B, A→C, B&C→D |
+| **Hybrid** | Multi-stage workflows combining patterns | Research (Sequential) → Expert Review (Parallel) → Final Report (Sequential) |
+
+### Quick Start
+
+```python
+import asyncio
+from xagent import Agent
+from xagent.multi.workflow import Workflow
+
+async def workflow_example():
+    # Create specialized agents
+    researcher = Agent(name="Researcher", description="Research specialist")
+    analyst = Agent(name="Analyst", description="Data analysis expert")
+    writer = Agent(name="Writer", description="Content writing specialist")
+    
+    # Initialize workflow orchestrator
+    workflow = Workflow()
+    
+    # 1. Sequential: A → B → C
+    result = await workflow.run_sequential(
+        agents=[researcher, analyst, writer],
+        task="Research AI trends and write a summary report"
+    )
+    print("Sequential result:", result.result)
+    
+    # 2. Parallel: All agents work on same task
+    result = await workflow.run_parallel(
+        agents=[researcher, analyst, writer],
+        task="What are the key benefits of renewable energy?"
+    )
+    print("Parallel consensus:", result.result)
+    
+    # 3. Graph: Complex dependencies
+    dependencies = {
+        "Analyst": ["Researcher"],      # Analyst depends on Researcher
+        "Writer": ["Researcher", "Analyst"]  # Writer depends on both
+    }
+    result = await workflow.run_graph(
+        agents=[researcher, analyst, writer],
+        dependencies=dependencies,
+        task="Create comprehensive market analysis"
+    )
+    print("Graph result:", result.result)
+
+asyncio.run(workflow_example())
+```
+
+### Advanced: Hybrid Workflows
+
+Combine multiple patterns into sophisticated multi-stage workflows:
+
+```python
+async def hybrid_workflow_example():
+    # Create workflow stages
+    stages = [
+        {
+            "pattern": "sequential",
+            "agents": [researcher, planner],
+            "task": "Research and plan: {original_task}",
+            "name": "research_phase"
+        },
+        {
+            "pattern": "parallel", 
+            "agents": [expert1, expert2, expert3],
+            "task": "Review this research: {previous_result}",
+            "name": "expert_review"
+        },
+        {
+            "pattern": "sequential",
+            "agents": [synthesizer],
+            "task": "Create final report from: {previous_result}",
+            "name": "final_synthesis"
+        }
+    ]
+    
+    workflow = Workflow()
+    result = await workflow.run_hybrid(
+        task="Analyze the future of electric vehicles",
+        stages=stages
+    )
+    
+    print("Final result:", result["final_result"])
+    print("Execution time:", result["total_execution_time"])
+
+asyncio.run(hybrid_workflow_example())
+```
+
+### Pattern Selection Guide
+
+**Choose Sequential when:**
+- Tasks require step-by-step processing
+- Each step builds on the previous one
+- You need progressive refinement
+
+**Choose Parallel when:**
+- You want multiple perspectives on the same problem
+- Need consensus or validation
+- Quality assurance through redundancy
+
+**Choose Graph when:**
+- Tasks have complex dependencies
+- Need parallel execution where possible
+- Fan-out/fan-in patterns required
+
+**Choose Hybrid when:**
+- Multi-stage complex workflows
+- Different stages need different patterns
+- Maximum flexibility and control
+
+For more examples, see the `examples/` directory with complete workflow demonstrations.
 
 ## 🏗️ Architecture
 
