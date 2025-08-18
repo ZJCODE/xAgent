@@ -429,7 +429,7 @@ class Agent:
             if output_type is not None:
                 response = await self.client.responses.parse(
                     model=self.model,
-                    tools=tool_specs,
+                    tools=tool_specs if tool_specs else [],
                     input=messages,
                     text_format=output_type
                 )
