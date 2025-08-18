@@ -593,13 +593,13 @@ class Agent:
         """
         Convert an HTTP-based agent into an OpenAI tool function.
         Args:
-            server (str): The URL of the HTTP agent server.
+            server (str): The base URL of the HTTP agent server.
             name (str): The name of the tool function.
             description (str): A brief description of what the tool does.
         Returns:
             function: An asynchronous function that can be used as an OpenAI tool.
         """
-
+        
         @function_tool(
             name=name,
             description=description,
@@ -610,83 +610,51 @@ class Agent:
             }
         )
         async def tool_func(input: str, expected_output: str, image_source: Optional[str] = None):
+            # 构建消息和请求体
             user_message = f"### User Input:\n{input}"
             if expected_output:
                 user_message += f"\n\n### Expected Output:\n{expected_output}"
             
-            request_body = {
+            payload = {
                 "user_id": f"http_agent_tool_{name or 'default'}_{uuid.uuid4().hex[:8]}",
                 "session_id": f"session_{uuid.uuid4().hex[:8]}",
                 "user_message": user_message,
-                "stream": False  # 工具调用不使用流式响应
+                "stream": False
             }
             
             if image_source:
-                request_body["image_source"] = image_source
+                payload["image_source"] = image_source
             
-            chat_url = f"{server}/chat"
-            
-            self.logger.info(f"Calling HTTP Agent at: {chat_url}")
-            self.logger.debug(f"Request body: {request_body}")
-
+            # 发送请求并处理响应
             try:
                 async with httpx.AsyncClient(timeout=AgentConfig.HTTP_TIMEOUT) as client:
-                    response = await client.post(chat_url, json=request_body)
+                    response = await client.post(f"{server}/chat", json=payload)
                     
-                    self.logger.debug(f"HTTP response status: {response.status_code}")
-                    
+                    # 成功响应处理
                     if response.status_code == 200:
+                        data = response.json()
+                        reply = data.get("reply", "")
+                        if reply:
+                            return reply
+                        return "Empty reply from HTTP Agent"
+                    
+                    # 错误响应处理
+                    if response.status_code == 500:
                         try:
-                            response_data = response.json()
-                            reply = response_data.get("reply", "")
-                            
-                            if reply:
-                                self.logger.info(f"HTTP Agent '{name}' responded successfully")
-                                return reply
-                            else:
-                                error_msg = "Empty reply from HTTP Agent"
-                                self.logger.warning(error_msg)
-                                return error_msg
-                                
-                        except json.JSONDecodeError as e:
-                            error_msg = f"Invalid JSON response from HTTP Agent: {str(e)}"
-                            self.logger.error(f"{error_msg}. Response text: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}...")
-                            return error_msg
-                            
-                    elif response.status_code == 500:
-                        try:
-                            error_data = response.json()
-                            error_detail = error_data.get("detail", "Internal server error")
-                            error_msg = f"HTTP Agent internal error: {error_detail}"
+                            error_detail = response.json().get("detail", "Internal server error")
+                            return f"HTTP Agent internal error: {error_detail}"
                         except:
-                            error_msg = f"HTTP Agent internal error: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}"
-                        
-                        self.logger.error(error_msg)
-                        return error_msg
-                        
-                    else:
-                        error_msg = f"HTTP Agent error {response.status_code}: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}"
-                        self.logger.error(error_msg)
-                        return error_msg
-                        
-            except httpx.ConnectError as e:
-                error_msg = f"Cannot connect to HTTP Agent at {chat_url}: {str(e)}"
-                self.logger.error(error_msg)
-                return error_msg
-                
-            except httpx.TimeoutException as e:
-                error_msg = f"HTTP Agent request timeout: {str(e)}"
-                self.logger.error(error_msg)
-                return error_msg
-                
-            except httpx.RequestError as e:
-                error_msg = f"HTTP Agent request error: {str(e)}"
-                self.logger.error(error_msg)
-                return error_msg
-                
+                            return f"HTTP Agent internal error: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}"
+                    
+                    return f"HTTP Agent error {response.status_code}: {response.text[:AgentConfig.ERROR_RESPONSE_PREVIEW_LENGTH]}"
+                    
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError) as e:
+                error_type = type(e).__name__.replace('Exception', '').replace('Error', '')
+                return f"HTTP Agent {error_type.lower()}: {str(e)}"
+            except json.JSONDecodeError as e:
+                return f"Invalid JSON response: {str(e)}"
             except Exception as e:
-                error_msg = f"Unexpected error calling HTTP Agent: {str(e)}"
-                self.logger.exception(error_msg)
-                return error_msg
+                self.logger.exception(f"HTTP Agent call failed: {e}")
+                return f"Unexpected error: {str(e)}"
 
         return tool_func
