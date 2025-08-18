@@ -20,13 +20,6 @@ class WorkflowPatternType(Enum):
     PARALLEL = "parallel"
 
 
-class ParallelPatternType(Enum):
-    """Types of parallel execution patterns based on first principles."""
-    DATA_PARALLEL = "data_parallel"      # Same operation, different data subsets
-    TASK_PARALLEL = "task_parallel"      # Different operations, same data  
-    BROADCAST = "broadcast"              # Same operation, same data (redundancy)
-
-
 class WorkflowResult:
     """Result container for workflow execution."""
     
@@ -143,136 +136,66 @@ class SequentialPipeline(BaseWorkflowPattern):
         )
 
 
-class ParallelPatternType(Enum):
-    """Types of parallel execution patterns based on first principles."""
-    DATA_PARALLEL = "data_parallel"      # Same operation, different data subsets
-    TASK_PARALLEL = "task_parallel"      # Different operations, same data  
-    BROADCAST = "broadcast"              # Same operation, same data (redundancy)
-
-
 class ParallelPattern(BaseWorkflowPattern):
     """
-    Redesigned Parallel Pattern based on fundamental parallelism principles.
+    Parallel Pattern for consensus building, validation, and multi-perspective synthesis.
     
-    Three core patterns aligned with computational theory:
+    Same input, same processing (redundancy for reliability and diverse perspectives)
+    - Use case: Critical decisions, consensus building, error reduction, multi-perspective analysis
+    - Example: Multiple agents independently solve same problem for validation or provide different expert perspectives
     
-    1. DATA_PARALLEL: Divide data/content, same processing logic
-       - Use case: Process multiple documents, analyze large datasets
-       - Example: 10 agents each analyze 100 news articles
-    
-    2. TASK_PARALLEL: Same input, different specialized processing
-       - Use case: Multi-perspective analysis, expert specialization
-       - Example: Legal, financial, technical review of same contract
-    
-    3. BROADCAST: Same input, same processing (redundancy for reliability)
-       - Use case: Critical decisions, consensus building, error reduction
-       - Example: Multiple agents independently solve same problem for validation
-    
-    Key insight: The pattern type determines the aggregation strategy automatically.
+    Key capabilities:
+    1. Consensus Building: When agents provide similar solutions, build consensus or select the best
+    2. Multi-Perspective Synthesis: When agents provide different valid perspectives, integrate insights
+    3. Quality Validation: Evaluate and validate the quality of all responses
+    4. Comprehensive Analysis: Combine consensus building with synthesis for robust results
     """
     
     def __init__(
         self, 
-        worker_agents: List[Agent], 
-        pattern_type: ParallelPatternType,
+        agents: List[Agent], 
         name: Optional[str] = None
     ):
         """
-        Initialize parallel pattern.
+        Initialize parallel pattern for broadcast consensus building.
         
         Args:
-            worker_agents: Agents that perform the actual work
-            pattern_type: Type of parallel execution pattern
+            agents: Agents that perform the actual work
             name: Optional name for the pattern
         """
-        # Create internal coordinator agent based on pattern type
-        coordinator_name = f"coordinator_{pattern_type.value}_{uuid.uuid4().hex[:8]}"
-        coordinator_prompt = self._get_coordinator_system_prompt(pattern_type)
+        # Create internal coordinator agent for consensus building
+        validator_name = f"consensus_validator_{uuid.uuid4().hex[:8]}"
         
-        self.coordinator_agent = Agent(
-            name=coordinator_name,
-            system_prompt=coordinator_prompt,
-            description=f"Coordinator agent for {pattern_type.value} pattern"
+        self.consensus_validator = Agent(
+            name=validator_name,
+            description="Consensus validator and synthesizer agent for parallel processing"
         )
         
-        all_agents = worker_agents + [self.coordinator_agent]
+        all_agents = agents + [self.consensus_validator]
         super().__init__(all_agents, name)
-        self.worker_agents = worker_agents
-        self.pattern_type = pattern_type
-    
-    def _get_coordinator_system_prompt(self, pattern_type: ParallelPatternType) -> str:
-        """
-        Generate specialized system prompts for coordinator agents based on pattern type.
-        
-        Args:
-            pattern_type: The type of parallel pattern
-            
-        Returns:
-            str: Tailored system prompt for the coordinator agent
-        """
-        if pattern_type == ParallelPatternType.DATA_PARALLEL:
-            return """
-You are a Data Summarizer and Merger. Your role is to:
-1. Combine results from multiple data processing workers
-2. Identify patterns and insights across all data chunks
-3. Create comprehensive summaries that capture key findings
-4. Merge information without losing important details
-5. Present unified conclusions from distributed data analysis
-
-Focus on synthesis and pattern recognition across data subsets.
-            """
-        
-        elif pattern_type == ParallelPatternType.TASK_PARALLEL:
-            return """
-You are a Multi-Perspective Synthesizer. Your role is to:
-1. Integrate different expert perspectives on the same topic
-2. Resolve conflicts between different viewpoints
-3. Create well-rounded, comprehensive responses
-4. Highlight complementary insights and trade-offs
-5. Balance different approaches into cohesive conclusions
-
-Focus on synthesis and integration of diverse expert opinions.
-            """
-        
-        elif pattern_type == ParallelPatternType.BROADCAST:
-            return """
-You are a Consensus Builder and Validator. Your role is to:
-1. Analyze multiple independent solutions to the same problem
-2. Identify consensus among different responses
-3. Validate the quality and accuracy of solutions
-4. Select the best response when consensus isn't reached
-5. Explain reasoning for final choices
-
-Focus on validation, consensus building, and quality assessment.
-            """
-        
-        else:
-            return "You are a coordinator agent responsible for aggregating and synthesizing results from multiple worker agents."
+        self.agents = agents
     
     async def execute(
         self,
         task: Union[str, Message],
-        data_chunks: Optional[List[str]] = None,  # For DATA_PARALLEL
-        task_specifications: Optional[List[str]] = None,  # For TASK_PARALLEL  
         max_concurrent: int = 10
     ) -> WorkflowResult:
         """
-        Execute parallel pattern based on the specified type.
+        Execute broadcast pattern.
         
         Args:
-            task: Main task or data to be processed
-            data_chunks: For DATA_PARALLEL - list of data subsets for each agent
-            task_specifications: For TASK_PARALLEL - list of specialized tasks for each agent
+            task: Task to be processed by all agents
             max_concurrent: Maximum concurrent worker executions
             
         Returns:
-            WorkflowResult with appropriately aggregated output
+            WorkflowResult with consensus or best validated output
         """
         start_time = time.time()
         self._validate_agents()
         
-        # Determine worker inputs based on pattern type
-        worker_inputs = await self._prepare_inputs(task, data_chunks, task_specifications)
+        # Prepare inputs - same task for all agents in parallel mode
+        task_str = str(task)
+        worker_inputs = [task_str] * len(self.agents)
         
         # Execute workers in parallel
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -286,24 +209,24 @@ Focus on validation, consensus building, and quality assessment.
                     self.logger.error(f"Worker {agent.name} failed: {e}")
                     return (agent.name, f"Error: {e}")
         
-        self.logger.info(f"Executing {self.pattern_type.value} pattern with {len(self.worker_agents)} workers")
+        self.logger.info(f"Executing broadcast pattern with {len(self.agents)} workers")
         
         worker_tasks = [
             execute_worker(agent, input_task) 
-            for agent, input_task in zip(self.worker_agents, worker_inputs)
+            for agent, input_task in zip(self.agents, worker_inputs)
         ]
         
         worker_results = await asyncio.gather(*worker_tasks)
         
-        # Aggregate results using pattern-specific strategy
-        final_result = await self._aggregate_by_pattern(worker_results, str(task))
+        # Aggregate results 
+        final_result = await self._aggregate_parallel_results(worker_results, str(task))
         
         execution_time = time.time() - start_time
         
         metadata = {
-            "worker_agents": [agent.name for agent in self.worker_agents],
-            "coordinator_agent": self.coordinator_agent.name,
-            "pattern_type": self.pattern_type.value,
+            "agents": [agent.name for agent in self.agents],
+            "consensus_validator": self.consensus_validator.name,
+            "pattern_type": "parallel",
             "worker_results": dict(worker_results)
         }
         
@@ -313,182 +236,58 @@ Focus on validation, consensus building, and quality assessment.
             pattern=WorkflowPatternType.PARALLEL,
             metadata=metadata
         )
-    
-    async def _prepare_inputs(
-        self, 
-        task: Union[str, Message], 
-        data_chunks: Optional[List[str]] = None,
-        task_specifications: Optional[List[str]] = None
-    ) -> List[str]:
-        """
-        Prepare inputs for workers based on pattern type.
-        """
-        task_str = str(task)
-        
-        if self.pattern_type == ParallelPatternType.DATA_PARALLEL:
-            if not data_chunks:
-                raise ValueError("DATA_PARALLEL requires data_chunks parameter")
-            if len(data_chunks) != len(self.worker_agents):
-                raise ValueError(f"Number of data chunks ({len(data_chunks)}) must match number of workers ({len(self.worker_agents)})")
-            return [f"{task_str}\n\nData to process:\n{chunk}" for chunk in data_chunks]
-        
-        elif self.pattern_type == ParallelPatternType.TASK_PARALLEL:
-            if not task_specifications:
-                # Auto-generate task specifications based on agent names/roles
-                task_specifications = await self._generate_task_specifications(task_str)
-            if len(task_specifications) != len(self.worker_agents):
-                raise ValueError(f"Number of task specifications ({len(task_specifications)}) must match number of workers ({len(self.worker_agents)})")
-            return task_specifications
-        
-        elif self.pattern_type == ParallelPatternType.BROADCAST:
-            # Same task for all workers
-            return [task_str] * len(self.worker_agents)
-        
-        else:
-            raise ValueError(f"Unknown pattern type: {self.pattern_type}")
-    
-    async def _generate_task_specifications(self, task: str) -> List[str]:
-        """
-        Auto-generate specialized task specifications for TASK_PARALLEL mode.
-        """
-        agent_names = [agent.name for agent in self.worker_agents]
-        
-        specification_prompt = f"""
-        You need to create {len(self.worker_agents)} specialized task specifications for different agents to work on the same input in parallel.
-        
-        Original task: {task}
-        
-        Available agents: {', '.join(agent_names)}
-        
-        Create {len(self.worker_agents)} different specialized approaches/perspectives that:
-        1. Each focus on a different aspect or angle of the task
-        2. Are complementary and together provide comprehensive coverage
-        3. Are specific enough that different agents can work independently
-        
-        Format as JSON array: ["specification 1", "specification 2", ...]
-        
-        Each specification should be a complete task description that includes the original context plus the specific focus area.
-        """
-        
-        response = await self.coordinator_agent.chat(specification_prompt)
-        
-        try:
-            specifications = json.loads(response)
-            if isinstance(specifications, list) and len(specifications) == len(self.worker_agents):
-                return specifications
-        except json.JSONDecodeError:
-            pass
-        
-        # Fallback: simple role-based specifications
-        return [f"{task}\n\nPlease approach this from the perspective of: {agent.name}" 
-                for agent in self.worker_agents]
-    
-    async def _aggregate_by_pattern(
+
+    async def _aggregate_parallel_results(
         self, 
         worker_results: List[Tuple[str, str]], 
         original_task: str
     ) -> str:
-        """
-        Aggregate results using pattern-specific strategies.
-        """
-        results = [result for _, result in worker_results]
-        
-        if self.pattern_type == ParallelPatternType.DATA_PARALLEL:
-            # Concatenate or merge data processing results
-            return await self._aggregate_data_parallel_results(worker_results, original_task)
-        
-        elif self.pattern_type == ParallelPatternType.TASK_PARALLEL:
-            # Synthesize different perspectives/aspects
-            return await self._aggregate_task_parallel_results(worker_results, original_task)
-        
-        elif self.pattern_type == ParallelPatternType.BROADCAST:
-            # Check for consensus or select best result
-            return await self._aggregate_broadcast_results(worker_results, original_task)
-        
-        else:
-            raise ValueError(f"Unknown pattern type: {self.pattern_type}")
-    
-    async def _aggregate_data_parallel_results(
-        self, 
-        worker_results: List[Tuple[str, str]], 
-        original_task: str
-    ) -> str:
-        """Merge and summarize results from data parallel processing."""
-        combined_results = "\n\n---\n\n".join([
-            f"Results from {name}:\n{result}" 
-            for name, result in worker_results
-        ])
-        
-        merge_prompt = f"""
-        You are acting as a summarizer. Combine the following data processing results into a comprehensive summary:
-        
-        Original task: {original_task}
-        
-        {combined_results}
-        
-        Provide a unified summary that incorporates insights from all data chunks.
-        Focus on merging information and identifying patterns across all chunks.
-        """
-        
-        return await self.coordinator_agent.chat(merge_prompt)
-    
-    async def _aggregate_task_parallel_results(
-        self, 
-        worker_results: List[Tuple[str, str]], 
-        original_task: str
-    ) -> str:
-        """Synthesize and integrate results from task parallel processing (different perspectives)."""
-        perspective_results = "\n\n---\n\n".join([
-            f"Perspective from {name}:\n{result}" 
-            for name, result in worker_results
-        ])
-        
-        synthesis_prompt = f"""
-        You are acting as a synthesizer. Integrate the following different perspectives on the same task:
-        
-        Original task: {original_task}
-        
-        {perspective_results}
-        
-        Provide a comprehensive response that:
-        1. Integrates insights from all perspectives
-        2. Resolves any conflicts between different viewpoints  
-        3. Delivers a well-rounded, multi-faceted final answer
-        4. Highlights complementary insights and trade-offs
-        """
-        
-        return await self.coordinator_agent.chat(synthesis_prompt)
-    
-    async def _aggregate_broadcast_results(
-        self, 
-        worker_results: List[Tuple[str, str]], 
-        original_task: str
-    ) -> str:
-        """Validate consensus and select best result from broadcast processing."""
+        """Enhanced consensus validation and synthesis from parallel processing."""
         results = [result for _, result in worker_results]
         
         # Check for perfect consensus
         if len(set(results)) == 1:
             return results[0]
         
-        # Build consensus or validate best result
-        consensus_prompt = f"""
-        You are acting as a validator. Multiple agents independently worked on the same task. 
-        Analyze their results for consensus or select the best response:
+        # Enhanced aggregation with both consensus and synthesis capabilities
+        perspective_results = "\n\n---\n\n".join([
+            f"Agent {name}'s perspective:\n{result}" 
+            for name, result in worker_results
+        ])
         
-        Original task: {original_task}
-        
-        Results:
-        {chr(10).join([f"{i+1}. Agent {name}: {result}" for i, (name, result) in enumerate(worker_results)])}
-        
-        Your validation approach:
-        1. If there's clear consensus among results, summarize the agreed-upon answer
-        2. If results differ significantly, evaluate quality and select the superior response
-        3. Explain your reasoning for the final choice
-        4. Highlight any important minority opinions that should be considered
+        prompt = f"""
+You are acting as both a validator and synthesizer. Multiple agents independently worked on the same task.
+Your role is to analyze their results and provide the best possible response through either consensus building or synthesis.
+
+Original task: {original_task}
+
+Agent Results:
+{chr(10).join([f"{i+1}. Agent {name}: {result}" for i, (name, result) in enumerate(worker_results)])}
+
+---
+
+Detailed Perspectives:
+{perspective_results}
+
+Your comprehensive approach:
+
+CONSENSUS ANALYSIS:
+1. If there's clear consensus among results, summarize the agreed-upon answer
+2. If results differ significantly, evaluate quality and select the superior response
+3. Explain your reasoning for the final choice
+4. Highlight any important minority opinions that should be considered
+
+SYNTHESIS CAPABILITIES:
+When results represent different valid perspectives rather than competing answers:
+1. Integrate insights from all perspectives
+2. Resolve any conflicts between different viewpoints  
+3. Deliver a well-rounded, multi-faceted final answer
+4. Highlight complementary insights and trade-offs
+
+Choose the most appropriate approach (consensus or synthesis) based on the nature of the responses, and provide a comprehensive final answer.
         """
         
-        return await self.coordinator_agent.chat(consensus_prompt)
+        return await self.consensus_validator.chat(prompt)
 
 
 class Workflow:
@@ -531,84 +330,24 @@ class Workflow:
         
         return result
     
-    async def run_data_parallel(
+    async def run_parallel(
         self,
-        worker_agents: List[Agent],
-        task: Union[str, Message],
-        data_chunks: List[str],
-        max_concurrent: int = 10
-    ) -> WorkflowResult:
-        """
-        Directly execute data parallel processing in one call.
-        
-        Args:
-            worker_agents: Agents that process different data chunks
-            task: Main task description
-            data_chunks: List of data subsets for each agent
-            max_concurrent: Maximum concurrent worker executions
-            
-        Returns:
-            WorkflowResult with aggregated output
-        """
-        pattern = ParallelPattern(worker_agents, ParallelPatternType.DATA_PARALLEL, f"{self.name}_data_parallel")
-        result = await pattern.execute(task, data_chunks=data_chunks, max_concurrent=max_concurrent)
-        self.execution_history.append(result)
-        
-        self.logger.info(
-            f"Workflow {pattern.name} completed in {result.execution_time:.2f}s "
-            f"using {result.pattern.value} pattern"
-        )
-        
-        return result
-    
-    async def run_task_parallel(
-        self,
-        worker_agents: List[Agent],
-        task: Union[str, Message],
-        task_specifications: Optional[List[str]] = None,
-        max_concurrent: int = 10
-    ) -> WorkflowResult:
-        """
-        Directly execute task parallel processing in one call.
-        
-        Args:
-            worker_agents: Specialized agents for different aspects
-            task: Main task to be analyzed from different perspectives
-            task_specifications: Optional specific tasks for each agent
-            max_concurrent: Maximum concurrent worker executions
-            
-        Returns:
-            WorkflowResult with synthesized output
-        """
-        pattern = ParallelPattern(worker_agents, ParallelPatternType.TASK_PARALLEL, f"{self.name}_task_parallel")
-        result = await pattern.execute(task, task_specifications=task_specifications, max_concurrent=max_concurrent)
-        self.execution_history.append(result)
-        
-        self.logger.info(
-            f"Workflow {pattern.name} completed in {result.execution_time:.2f}s "
-            f"using {result.pattern.value} pattern"
-        )
-        
-        return result
-    
-    async def run_broadcast(
-        self,
-        worker_agents: List[Agent],
+        agents: List[Agent],
         task: Union[str, Message],
         max_concurrent: int = 10
     ) -> WorkflowResult:
         """
-        Directly execute broadcast processing in one call.
+        Directly execute parallel processing in one call.
         
         Args:
-            worker_agents: Multiple agents for redundant processing
+            agents: Multiple agents for redundant processing
             task: Task to be processed by all agents
             max_concurrent: Maximum concurrent worker executions
             
         Returns:
             WorkflowResult with consensus or best validated output
         """
-        pattern = ParallelPattern(worker_agents, ParallelPatternType.BROADCAST, f"{self.name}_broadcast")
+        pattern = ParallelPattern(agents, f"{self.name}_parallel")
         result = await pattern.execute(task, max_concurrent=max_concurrent)
         self.execution_history.append(result)
         
