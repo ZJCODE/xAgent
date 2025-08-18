@@ -82,10 +82,10 @@ class Agent:
 
     def __init__(
         self, 
-        agent_id: Optional[str] = None,
         name: Optional[str] = None,
         system_prompt: Optional[str] = None,
         description: Optional[str] = None,
+        agent_id: Optional[str] = None,
         model: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[List] = None,
@@ -101,6 +101,7 @@ class Agent:
             name: The name of the agent
             system_prompt: Custom system prompt to prepend to the default
             description: Simple description of the agent for tool conversion
+            agent_id: Unique identifier for the agent
             model: The OpenAI model to use
             client: Custom OpenAI client instance
             tools: List of tool functions to register

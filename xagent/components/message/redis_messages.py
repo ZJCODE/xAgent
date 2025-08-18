@@ -502,33 +502,14 @@ class MessageStorageRedis(MessageStorageBase):
         return bool(getattr(message, 'tool_call', None))
 
     def set_agent_id(self, agent_id: str) -> None:
-        """
-        Set or update the agent ID for this message storage instance.
-        
-        This method allows dynamic modification of the agent namespace,
-        which is useful for scenarios where the agent identity changes
-        or when reusing storage instances for different agents.
-        
-        Args:
-            agent_id: New agent identifier for namespace isolation
-            
-        Raises:
-            ValueError: If agent_id is empty or invalid
-            
-        Note:
-            Changing the agent_id affects all subsequent operations.
-            Existing messages under the old agent_id will not be accessible
-            until the agent_id is changed back.
-        """
+        """Set the agent_id for this storage instance."""
         if not agent_id or not isinstance(agent_id, str):
             raise ValueError("agent_id must be a non-empty string")
-        
-        old_agent_id = self.agent_id
+    
         self.agent_id = agent_id.strip()
         
         self.logger.info(
-            "Agent ID changed from '%s' to '%s'", 
-            old_agent_id, self.agent_id
+            "Setting agent_id as '%s'", self.agent_id
         )
 
     async def close(self) -> None:

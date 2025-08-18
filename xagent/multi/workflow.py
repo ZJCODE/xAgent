@@ -393,3 +393,115 @@ class Workflow:
         
         return result
     
+    async def run_hybrid(
+        self,
+        stages: List[Dict[str, Any]],
+        task: str,
+        user_id: Optional[str] = "default_user"
+    ) -> Dict[str, Any]:
+        """
+        Execute a hybrid workflow with multiple stages combining sequential and parallel patterns.
+        
+        Args:
+            stages: List of stage configurations, each containing:
+                - pattern: "sequential" or "parallel"
+                - agents: List of agents for this stage
+                - task: Task string (can include placeholders like {previous_result} and {original_task})
+                - name: Optional stage name
+                - kwargs: Additional arguments for the pattern
+            task: The original task that will replace {original_task} placeholders
+            user_id: User identifier for the workflow
+            
+        Returns:
+            Dict containing all stage results and metadata
+            
+        Example:
+            stages = [
+                {
+                    "pattern": "sequential",
+                    "agents": [researcher, planner],
+                    "task": "Research and plan for topic: {original_task}",
+                    "name": "research_planning"
+                },
+                {
+                    "pattern": "parallel", 
+                    "agents": [expert1, expert2, expert3],
+                    "task": "Analyze this research: {previous_result}",
+                    "name": "expert_analysis"
+                },
+                {
+                    "pattern": "sequential",
+                    "agents": [synthesizer, reviewer],
+                    "task": "Synthesize analysis into final report: {previous_result}",
+                    "name": "final_synthesis"
+                }
+            ]
+        """
+        if not stages:
+            raise ValueError("At least one stage is required")
+        
+        results = {}
+        previous_result = None
+        total_time = 0.0
+        
+        for i, stage_config in enumerate(stages):
+            stage_name = stage_config.get("name", f"stage_{i+1}")
+            pattern = stage_config.get("pattern", "sequential")
+            agents = stage_config.get("agents", [])
+            task_template = stage_config.get("task", "")
+            stage_kwargs = stage_config.get("kwargs", {})
+            
+            self.logger.info(f"Executing hybrid stage {i+1}/{len(stages)}: {stage_name} ({pattern})")
+            
+            # Prepare task string with variable substitution
+            mid_stage_task = task_template.format(
+                previous_result=previous_result or "",
+                original_task=task,
+                **stage_kwargs
+            )
+            
+            # Execute the appropriate pattern
+            if pattern == "sequential":
+                result = await self.run_sequential(
+                    agents=agents,
+                    task=mid_stage_task,
+                    user_id=user_id,
+                    **{k: v for k, v in stage_kwargs.items() if k not in ['previous_result', 'original_task']}
+                )
+            elif pattern == "parallel":
+                result = await self.run_parallel(
+                    agents=agents,
+                    task=mid_stage_task,
+                    user_id=user_id,
+                    **{k: v for k, v in stage_kwargs.items() if k not in ['previous_result', 'original_task']}
+                )
+            else:
+                raise ValueError(f"Unsupported pattern: {pattern}")
+            
+            # Store stage result
+            results[stage_name] = {
+                "pattern": pattern,
+                "result": result.result,
+                "execution_time": result.execution_time,
+                "metadata": result.metadata
+            }
+            
+            previous_result = result.result
+            total_time += result.execution_time
+            
+            self.logger.info(f"Stage {stage_name} completed in {result.execution_time:.2f}s")
+        
+        # Compile final results
+        hybrid_results = {
+            "stages": results,
+            "final_result": previous_result,
+            "total_execution_time": total_time,
+            "workflow_pattern": "hybrid",
+            "stages_executed": len(stages),
+            "stage_patterns": [stage.get("pattern", "sequential") for stage in stages]
+        }
+        
+        self.logger.info(f"Hybrid workflow completed in {total_time:.2f}s with {len(stages)} stages")
+        
+        return hybrid_results
+    
