@@ -38,6 +38,7 @@ class AgentConfig:
     DEFAULT_SESSION_ID = "default_session"
     DEFAULT_HISTORY_COUNT = 16
     DEFAULT_MAX_ITER = 10
+    DEFAULT_MAX_CONCURRENT_TOOLS = 10  # Maximum concurrent tool calls
     MCP_CACHE_TTL = 300  # 5 minutes
     HTTP_TIMEOUT = 600.0  # 10 minutes
     TOOL_RESULT_PREVIEW_LENGTH = 20
@@ -195,9 +196,10 @@ class Agent:
         session_id: str = AgentConfig.DEFAULT_SESSION_ID,
         history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
+        max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[str] = None,
         output_type: Optional[type[BaseModel]] = None,
-        stream: bool = False
+        stream: bool = False,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """Call the agent to generate a reply based on the user message."""
         return await self.chat(
@@ -206,6 +208,7 @@ class Agent:
             session_id=session_id,
             history_count=history_count,
             max_iter=max_iter,
+            max_concurrent_tools=max_concurrent_tools,
             image_source=image_source,
             output_type=output_type,
             stream=stream
@@ -219,6 +222,7 @@ class Agent:
         session_id: str = AgentConfig.DEFAULT_SESSION_ID,
         history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
+        max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[str] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False
@@ -232,6 +236,7 @@ class Agent:
             session_id: Session identifier for message storage
             history_count: Number of previous messages to include
             max_iter: Maximum model call attempts
+            max_concurrent_tools: Maximum number of concurrent tool calls
             image_source: Source of the image, if any (URL, file path, or base64 string)
             output_type: Pydantic model for structured output
             stream: Whether to stream the response
@@ -266,7 +271,7 @@ class Agent:
                     await self._store_model_reply(response.model_dump_json(), user_id, session_id)
                     return response
                 elif reply_type == ReplyType.TOOL_CALL:
-                    await self._handle_tool_calls(response, user_id, session_id, input_messages)
+                    await self._handle_tool_calls(response, user_id, session_id, input_messages, max_concurrent_tools)
                 else:
                     self.logger.error("Unknown reply type: %s", reply_type)
                     return "Sorry, I encountered an error while processing your request."
@@ -487,14 +492,15 @@ class Agent:
             return ReplyType.ERROR, f"Model call error: {str(e)}"
     
     @observe()
-    async def _handle_tool_calls(self, tool_calls: list, user_id: str, session_id: str, input_messages: list) -> None:
+    async def _handle_tool_calls(self, tool_calls: list, user_id: str, session_id: str, input_messages: list, max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS) -> None:
         """
-        Handle tool calls by executing them concurrently.
+        Handle tool calls by executing them concurrently with concurrency limit.
         Args:
             tool_calls (list): List of tool call messages to process.
             user_id (str): User identifier for message storage.
             session_id (str): Session identifier for message storage.
             input_messages (list): List of input messages to update with tool call results.
+            max_concurrent_tools (int): Maximum number of concurrent tool calls.
         Returns:
             None: This method modifies input_messages in place and does not return a value.
         """
@@ -502,8 +508,23 @@ class Agent:
         if tool_calls is None or not tool_calls:
             return None
 
-        tasks = [self._act(tc, user_id, session_id) for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
+        # Filter function calls only
+        function_calls = [tc for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
+        
+        if not function_calls:
+            return None
+
+        # Create semaphore to limit concurrent tool calls
+        semaphore = asyncio.Semaphore(max_concurrent_tools)
+        
+        async def execute_with_semaphore(tool_call):
+            async with semaphore:
+                return await self._act(tool_call, user_id, session_id)
+
+        # Execute tool calls with concurrency limit
+        tasks = [execute_with_semaphore(tc) for tc in function_calls]
         results = await asyncio.gather(*tasks)
+        
         # Safely add all tool messages after concurrent execution
         for tool_messages in results:
             if tool_messages:
