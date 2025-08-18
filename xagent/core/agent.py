@@ -250,8 +250,10 @@ class Agent:
         Returns:
             The agent's reply, structured output, or error message
         """
-        
-        session_id = f"{self.name}_{session_id}"
+
+        # Create agent-scoped session ID with consistent formatting
+        agent_prefix = self.name.lower().replace(' ', '_').replace('-', '_')
+        session_id = f"{agent_prefix}:{session_id}"
 
         if output_type is None:
             output_type = self.output_type

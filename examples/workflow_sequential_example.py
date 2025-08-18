@@ -13,30 +13,32 @@ Use cases:
 import asyncio
 from xagent import Agent
 from xagent.multi.workflow import Workflow
+from xagent.tools import web_search
 
 
 async def main():
     # Create specialized agents for different steps
     research_agent = Agent(
         name="Research Agent",
-        description="Specializes in gathering and organizing information on given topics"
+        system_prompt="Specializes in gathering and organizing information on given topics",
+        tools=[web_search],  # Use web search tool for research
     )
-    
-    analysis_agent = Agent(
-        name="Analysis Agent", 
-        description="Analyzes research data and identifies key insights and patterns"
+
+    writer_agent = Agent(
+        name="Writer Agent",
+        system_prompt="Drafts and refines written content based on research findings"
     )
-    
-    summary_agent = Agent(
-        name="Summary Agent",
-        description="Creates clear, concise summaries from analytical findings"
+
+    editor_agent = Agent(
+        name="Editor Agent",
+        system_prompt="Reviews and edits written content for clarity, coherence, and style"
     )
-    
+
     # Create workflow orchestrator
     workflow = Workflow(name="research_pipeline")
     
     # Define the task
-    task = "Research the impact of artificial intelligence on the job market in 2024"
+    task = "Research the impact of artificial intelligence on the job market in 2025"
     
     print("🚀 Starting Sequential Workflow Example")
     print(f"Task: {task}")
@@ -45,7 +47,7 @@ async def main():
     try:
         # Execute sequential workflow
         result = await workflow.run_sequential(
-            agents=[research_agent, analysis_agent, summary_agent],
+            agents=[research_agent, writer_agent, editor_agent],
             task=task,
             intermediate_results=True,  # Include intermediate results in metadata
             user_id="demo_user"

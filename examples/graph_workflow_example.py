@@ -21,10 +21,10 @@ async def example_branch_converge():
     print("=== Branch-Converge Pattern (A->B, A&B->C, A->D) ===")
     
     # Create agents
-    agent_A = Agent(name="A", description="Initial analyzer")
-    agent_B = Agent(name="B", description="Path 1 processor") 
-    agent_C = Agent(name="C", description="Convergence synthesizer")
-    agent_D = Agent(name="D", description="Path 2 processor")
+    agent_A = Agent(name="A", system_prompt="Initial analyzer")
+    agent_B = Agent(name="B", system_prompt="Path 1 processor") 
+    agent_C = Agent(name="C", system_prompt="Convergence synthesizer")
+    agent_D = Agent(name="D", system_prompt="Path 2 processor")
     
     # Define dependencies: A->B, A&B->C, A->D
     dependencies = {
@@ -58,11 +58,11 @@ async def example_fan_out_fan_in():
     print("=== Fan-out/Fan-in Pattern (A -> [B,C,D] -> E) ===")
     
     # Create agents
-    agent_A = Agent(name="A", description="Initial research agent")
-    agent_B = Agent(name="B", description="Technical analysis expert")
-    agent_C = Agent(name="C", description="Market analysis expert")
-    agent_D = Agent(name="D", description="Risk analysis expert")
-    agent_E = Agent(name="E", description="Final synthesizer")
+    agent_A = Agent(name="A", system_prompt="Initial research agent")
+    agent_B = Agent(name="B", system_prompt="Technical analysis expert")
+    agent_C = Agent(name="C", system_prompt="Market analysis expert")
+    agent_D = Agent(name="D", system_prompt="Risk analysis expert")
+    agent_E = Agent(name="E", system_prompt="Final synthesizer")
     
     # Define dependencies: A -> [B,C,D] -> E
     dependencies = {
@@ -96,13 +96,13 @@ async def example_complex_graph():
     
     # Create agents
     agents = [
-        Agent(name="A", description="Initial data collector"),
-        Agent(name="B", description="Data processor 1"),
-        Agent(name="C", description="Data processor 2"),
-        Agent(name="D", description="Data integrator"),
-        Agent(name="E", description="Analysis engine 1"),
-        Agent(name="F", description="Analysis engine 2"),
-        Agent(name="G", description="Final report generator")
+        Agent(name="A", system_prompt="Initial data collector"),
+        Agent(name="B", system_prompt="Data processor 1"),
+        Agent(name="C", system_prompt="Data processor 2"),
+        Agent(name="D", system_prompt="Data integrator"),
+        Agent(name="E", system_prompt="Analysis engine 1"),
+        Agent(name="F", system_prompt="Analysis engine 2"),
+        Agent(name="G", system_prompt="Final report generator")
     ]
     
     # Define complex dependencies
@@ -140,16 +140,16 @@ async def example_hybrid_with_graph():
     print("=== Hybrid Workflow with Graph Stage ===")
     
     # Create agents for different stages
-    researcher = Agent(name="researcher", description="Research specialist")
-    planner = Agent(name="planner", description="Strategic planner")
-    
-    expert1 = Agent(name="expert1", description="Domain expert 1")
-    expert2 = Agent(name="expert2", description="Domain expert 2") 
-    expert3 = Agent(name="expert3", description="Domain expert 3")
-    synthesizer = Agent(name="synthesizer", description="Knowledge synthesizer")
-    
-    reviewer = Agent(name="reviewer", description="Quality reviewer")
-    
+    researcher = Agent(name="researcher", system_prompt="Research specialist")
+    planner = Agent(name="planner", system_prompt="Strategic planner")
+
+    expert1 = Agent(name="expert1", system_prompt="Domain expert 1")
+    expert2 = Agent(name="expert2", system_prompt="Domain expert 2")
+    expert3 = Agent(name="expert3", system_prompt="Domain expert 3")
+    synthesizer = Agent(name="synthesizer", system_prompt="Knowledge synthesizer")
+
+    reviewer = Agent(name="reviewer", system_prompt="Quality reviewer")
+
     # Define hybrid workflow stages
     stages = [
         {

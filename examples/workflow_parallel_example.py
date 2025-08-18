@@ -101,9 +101,9 @@ async def simple_consensus_example():
     print("-" * 50)
     
     # Create multiple instances of similar agents for consensus
-    solver1 = Agent(name="Math Solver 1", description="Mathematical problem solver")
-    solver2 = Agent(name="Math Solver 2", description="Mathematical problem solver") 
-    solver3 = Agent(name="Math Solver 3", description="Mathematical problem solver")
+    solver1 = Agent(name="Math Solver 1", system_prompt="Mathematical problem solver")
+    solver2 = Agent(name="Math Solver 2", system_prompt="Mathematical problem solver") 
+    solver3 = Agent(name="Math Solver 3", system_prompt="Mathematical problem solver")
     
     workflow = Workflow(name="math_consensus")
     
