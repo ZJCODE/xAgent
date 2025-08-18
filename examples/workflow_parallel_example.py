@@ -20,22 +20,22 @@ async def main():
     # Create specialized agents with different perspectives
     technical_analyst = Agent(
         name="Technical Analyst",
-        description="Analyzes technical feasibility, implementation challenges, and engineering considerations"
+        system_prompt="Analyzes technical feasibility, implementation challenges, and engineering considerations"
     )
     
     business_analyst = Agent(
         name="Business Analyst", 
-        description="Focuses on business impact, market opportunities, and commercial viability"
+        system_prompt="Focuses on business impact, market opportunities, and commercial viability"
     )
     
     risk_analyst = Agent(
         name="Risk Analyst",
-        description="Identifies potential risks, compliance issues, and mitigation strategies"
+        system_prompt="Identifies potential risks, compliance issues, and mitigation strategies"
     )
     
     financial_analyst = Agent(
         name="Financial Analyst",
-        description="Evaluates financial implications, costs, ROI, and budget considerations"
+        system_prompt="Evaluates financial implications, costs, ROI, and budget considerations"
     )
     
     # Create workflow orchestrator

@@ -178,7 +178,7 @@ class ParallelWorkflow(BaseWorkflow):
         
         self.consensus_validator = Agent(
             name=validator_name,
-            description="Consensus validator and synthesizer agent for parallel processing"
+            system_prompt="Consensus validator and synthesizer agent for parallel processing"
         )
         
         all_agents = agents + [self.consensus_validator]
