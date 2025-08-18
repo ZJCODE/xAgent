@@ -1,18 +1,14 @@
 """Workflow management for multi-agent coordination."""
 
 import asyncio
-import json
 import logging
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Union, Tuple
-from collections import Counter, defaultdict
+from typing import Any, Dict, List, Optional, Tuple
 import uuid
 import time
 
 from ..core.agent import Agent
-from ..schemas import Message
-
 
 class WorkflowPatternType(Enum):
     """Types of workflow orchestration patterns."""
@@ -40,7 +36,7 @@ class WorkflowResult:
         return f"WorkflowResult(pattern={self.pattern.value}, time={self.execution_time:.2f}s)"
 
 
-class BaseWorkflowPattern(ABC):
+class BaseWorkflow(ABC):
     """Abstract base class for workflow patterns."""
     
     def __init__(self, agents: List[Agent], name: Optional[str] = None):
@@ -49,7 +45,7 @@ class BaseWorkflowPattern(ABC):
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
     
     @abstractmethod
-    async def execute(self, task: Union[str, Message], **kwargs) -> WorkflowResult:
+    async def execute(self, user_id: str, task: str, image_source: Optional[str] = None, **kwargs) -> WorkflowResult:
         """Execute the workflow pattern."""
         pass
     
@@ -63,7 +59,7 @@ class BaseWorkflowPattern(ABC):
                 raise TypeError(f"Agent at index {i} must be an instance of Agent")
 
 
-class SequentialPipeline(BaseWorkflowPattern):
+class SequentialWorkflow(BaseWorkflow):
     """
     Sequential Pipeline Pattern: Agent A → Agent B → Agent C → Result
     
@@ -79,7 +75,9 @@ class SequentialPipeline(BaseWorkflowPattern):
     
     async def execute(
         self, 
-        task: Union[str, Message], 
+        user_id: str,
+        task: str, 
+        image_source: Optional[str] = None,
         intermediate_results: bool = False
     ) -> WorkflowResult:
         """
@@ -90,7 +88,8 @@ class SequentialPipeline(BaseWorkflowPattern):
         nature of sequential processing.
         
         Args:
-            task: Initial task or message for the first agent
+            task: Initial task string for the first agent
+            image_source: Optional image source (URL, file path, or base64 string)
             intermediate_results: Whether to include intermediate results in metadata
             
         Returns:
@@ -106,9 +105,19 @@ class SequentialPipeline(BaseWorkflowPattern):
             self.logger.info(f"Executing agent {i+1}/{len(self.agents)}: {agent.name}")
             
             try:
-                # Each agent processes the current input (original task for first agent, 
-                # previous agent's output for subsequent agents)
-                result = await agent.chat(current_input)
+                if i == 0:
+                    result = await agent.chat(
+                        user_message=current_input, 
+                        user_id=user_id, 
+                        session_id=str(uuid.uuid4()),
+                        image_source=image_source
+                    )
+                else:
+                    result = await agent.chat(
+                        user_message=current_input, 
+                        user_id=user_id, 
+                        session_id=str(uuid.uuid4())
+                    )
                 results.append(result)
                 
                 # The output becomes the input for the next agent
@@ -136,7 +145,7 @@ class SequentialPipeline(BaseWorkflowPattern):
         )
 
 
-class ParallelPattern(BaseWorkflowPattern):
+class ParallelWorkflow(BaseWorkflow):
     """
     Parallel Pattern for consensus building, validation, and multi-perspective synthesis.
     
@@ -177,14 +186,17 @@ class ParallelPattern(BaseWorkflowPattern):
     
     async def execute(
         self,
-        task: Union[str, Message],
-        max_concurrent: int = 10
+        user_id: str,
+        task: str,
+        image_source: Optional[str] = None,
+        max_concurrent: int = 10,
     ) -> WorkflowResult:
         """
         Execute broadcast pattern.
         
         Args:
-            task: Task to be processed by all agents
+            task: Task string to be processed by all agents
+            image_source: Optional image source (URL, file path, or base64 string)
             max_concurrent: Maximum concurrent worker executions
             
         Returns:
@@ -203,14 +215,19 @@ class ParallelPattern(BaseWorkflowPattern):
         async def execute_worker(agent: Agent, input_task: str) -> Tuple[str, str]:
             async with semaphore:
                 try:
-                    result = await agent.chat(input_task)
+                    result = await agent.chat(
+                        user_message=input_task,
+                        user_id=user_id,
+                        session_id=str(uuid.uuid4()),
+                        image_source=image_source
+                    )
                     return (agent.name, result)
                 except Exception as e:
                     self.logger.error(f"Worker {agent.name} failed: {e}")
                     return (agent.name, f"Error: {e}")
-        
-        self.logger.info(f"Executing broadcast pattern with {len(self.agents)} workers")
-        
+
+        self.logger.info(f"Executing parallel pattern with {len(self.agents)} workers")
+
         worker_tasks = [
             execute_worker(agent, input_task) 
             for agent, input_task in zip(self.agents, worker_inputs)
@@ -219,8 +236,12 @@ class ParallelPattern(BaseWorkflowPattern):
         worker_results = await asyncio.gather(*worker_tasks)
         
         # Aggregate results 
-        final_result = await self._aggregate_parallel_results(worker_results, str(task))
-        
+        final_result = await self._aggregate_parallel_results(
+            user_id=user_id,
+            worker_results=worker_results,
+            original_task=task
+        )
+
         execution_time = time.time() - start_time
         
         metadata = {
@@ -239,6 +260,7 @@ class ParallelPattern(BaseWorkflowPattern):
 
     async def _aggregate_parallel_results(
         self, 
+        user_id: str,
         worker_results: List[Tuple[str, str]], 
         original_task: str
     ) -> str:
@@ -287,7 +309,7 @@ When results represent different valid perspectives rather than competing answer
 Choose the most appropriate approach (consensus or synthesis) based on the nature of the responses, and provide a comprehensive final answer.
         """
         
-        return await self.consensus_validator.chat(prompt)
+        return await self.consensus_validator.chat(user_message=prompt, user_id=user_id, session_id=str(uuid.uuid4()))
 
 
 class Workflow:
@@ -299,13 +321,13 @@ class Workflow:
     def __init__(self, name: Optional[str] = None):
         self.name = name or f"workflow_{uuid.uuid4().hex[:8]}"
         self.logger = logging.getLogger("Workflow")
-        self.execution_history: List[WorkflowResult] = []
-    
+
     # Direct execution methods - simplified API
     async def run_sequential(
         self,
         agents: List[Agent],
-        task: Union[str, Message],
+        task: str,
+        image_source: Optional[str] = None,
         intermediate_results: bool = False
     ) -> WorkflowResult:
         """
@@ -313,14 +335,20 @@ class Workflow:
         
         Args:
             agents: List of agents to execute in sequence
-            task: Initial task for the first agent
+            task: Initial task string for the first agent
+            image_source: Optional image source (URL, file path, or base64 string)
             intermediate_results: Whether to include intermediate results in metadata
             
         Returns:
             WorkflowResult with final output and execution metadata
         """
-        pattern = SequentialPipeline(agents, f"{self.name}_sequential")
-        result = await pattern.execute(task, intermediate_results=intermediate_results)
+        pattern = SequentialWorkflow(agents, f"{self.name}_sequential")
+        result = await pattern.execute(
+            user_id="default_user",
+            task=task, 
+            image_source=image_source,
+            intermediate_results=intermediate_results
+        )
         self.execution_history.append(result)
         
         self.logger.info(
@@ -333,7 +361,8 @@ class Workflow:
     async def run_parallel(
         self,
         agents: List[Agent],
-        task: Union[str, Message],
+        task: str,
+        image_source: Optional[str] = None,
         max_concurrent: int = 10
     ) -> WorkflowResult:
         """
@@ -341,14 +370,20 @@ class Workflow:
         
         Args:
             agents: Multiple agents for redundant processing
-            task: Task to be processed by all agents
+            task: Task string to be processed by all agents
+            image_source: Optional image source (URL, file path, or base64 string)
             max_concurrent: Maximum concurrent worker executions
             
         Returns:
             WorkflowResult with consensus or best validated output
         """
-        pattern = ParallelPattern(agents, f"{self.name}_parallel")
-        result = await pattern.execute(task, max_concurrent=max_concurrent)
+        pattern = ParallelWorkflow(agents, f"{self.name}_parallel")
+        result = await pattern.execute(
+            user_id="default_user",
+            task=task, 
+            image_source=image_source,
+            max_concurrent=max_concurrent
+        )
         self.execution_history.append(result)
         
         self.logger.info(
@@ -358,18 +393,3 @@ class Workflow:
         
         return result
     
-    def get_execution_stats(self) -> Dict[str, Any]:
-        """Get statistics about workflow executions."""
-        if not self.execution_history:
-            return {"total_executions": 0}
-        
-        pattern_counts = Counter(result.pattern for result in self.execution_history)
-        avg_execution_time = sum(result.execution_time for result in self.execution_history) / len(self.execution_history)
-        
-        return {
-            "total_executions": len(self.execution_history),
-            "pattern_usage": {pattern.value: count for pattern, count in pattern_counts.items()},
-            "average_execution_time": avg_execution_time,
-            "fastest_execution": min(result.execution_time for result in self.execution_history),
-            "slowest_execution": max(result.execution_time for result in self.execution_history)
-        }
