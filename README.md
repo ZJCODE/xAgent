@@ -258,6 +258,7 @@ curl -X POST "http://localhost:8010/chat" \
     "user_message": "Based on our previous conversation, summarize what you know about me",
     "history_count": 25,
     "max_iter": 15,
+    "max_concurrent_tools": 5,
     "stream": false
   }'
 ```
@@ -273,6 +274,7 @@ curl -X POST "http://localhost:8010/chat" \
 | `stream` | boolean | `false` | Enable streaming response via Server-Sent Events |
 | `history_count` | integer | `16` | Number of previous messages to include in context |
 | `max_iter` | integer | `10` | Maximum model call attempts for complex reasoning |
+| `max_concurrent_tools` | integer | `10` | Maximum number of concurrent tool calls |
 
 #### Parameter Usage Guidelines
 
