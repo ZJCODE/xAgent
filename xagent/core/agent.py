@@ -124,7 +124,7 @@ class Agent:
         else:
             self.message_storage = MessageStorageLocal()
 
-        self.message_storage.set_agent_id(self.agent_id)
+        self.message_storage.set_agent_id(self.name + "_" + self.agent_id)
         
         # System prompt setup
         self.system_prompt = AgentConfig.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")

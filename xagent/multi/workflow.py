@@ -14,6 +14,7 @@ class WorkflowPatternType(Enum):
     """Types of workflow orchestration patterns."""
     SEQUENTIAL = "sequential"
     PARALLEL = "parallel"
+    GRAPH = "graph"
 
 
 class WorkflowResult:
@@ -312,6 +313,231 @@ Choose the most appropriate approach (consensus or synthesis) based on the natur
         return await self.consensus_validator.chat(user_message=prompt, user_id=user_id, session_id=str(uuid.uuid4()))
 
 
+class GraphWorkflow(BaseWorkflow):
+    """
+    Graph-based workflow that supports complex dependency patterns with parallel execution.
+    
+    Features:
+    - Automatic detection of parallelizable nodes
+    - Topological sorting for execution order
+    - Parallel execution of independent nodes
+    - Support for complex patterns like A->B, A&B->C, fan-out/fan-in, etc.
+    """
+    
+    def __init__(
+        self, 
+        agents: List[Agent], 
+        dependencies: Dict[str, List[str]], 
+        name: Optional[str] = None,
+        max_concurrent: int = 10
+    ):
+        """
+        Initialize graph workflow.
+        
+        Args:
+            agents: List of agents with their names as identifiers
+            dependencies: Dict mapping agent names to their input dependencies
+                Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]} 
+                This creates: A -> B -> C, A -> D (B and D can run in parallel)
+            max_concurrent: Maximum concurrent executions
+        """
+        super().__init__(agents, name)
+        self.agent_map = {agent.name: agent for agent in agents}
+        self.dependencies = dependencies
+        self.max_concurrent = max_concurrent
+        
+        # Validate dependencies
+        self._validate_dependencies()
+    
+    def _validate_dependencies(self):
+        """Validate that all dependencies refer to existing agents."""
+        for agent_name, deps in self.dependencies.items():
+            if agent_name not in self.agent_map:
+                raise ValueError(f"Agent '{agent_name}' in dependencies not found in agents list")
+            for dep in deps:
+                if dep not in self.agent_map:
+                    raise ValueError(f"Dependency '{dep}' for agent '{agent_name}' not found in agents list")
+    
+    async def execute(
+        self, 
+        user_id: str, 
+        task: str, 
+        image_source: Optional[str] = None,
+        **kwargs
+    ) -> WorkflowResult:
+        """
+        Execute the graph workflow with parallel optimization.
+        
+        Args:
+            task: Initial task string
+            image_source: Optional image source for the first agents
+            
+        Returns:
+            WorkflowResult with final output and execution metadata
+        """
+        start_time = time.time()
+        self._validate_agents()
+        
+        # Get execution layers (groups of agents that can run in parallel)
+        execution_layers = self._get_execution_layers()
+        
+        results = {}
+        layer_results = []
+        
+        # Execute each layer
+        for layer_idx, layer_agents in enumerate(execution_layers):
+            self.logger.info(f"Executing layer {layer_idx + 1}/{len(execution_layers)} with {len(layer_agents)} agents")
+            
+            # Execute agents in current layer in parallel
+            layer_tasks = []
+            for agent_name in layer_agents:
+                agent = self.agent_map[agent_name]
+                input_text = self._prepare_agent_input(agent_name, task, results)
+                
+                # Only pass image_source to first layer agents with no dependencies
+                agent_image_source = image_source if not self.dependencies.get(agent_name, []) else None
+                
+                layer_tasks.append(
+                    self._execute_agent(agent, input_text, user_id, agent_image_source)
+                )
+            
+            # Execute layer in parallel with concurrency control
+            semaphore = asyncio.Semaphore(self.max_concurrent)
+            
+            async def execute_with_semaphore(task_coro, agent_name):
+                async with semaphore:
+                    try:
+                        return agent_name, await task_coro
+                    except Exception as e:
+                        self.logger.error(f"Agent {agent_name} failed: {e}")
+                        return agent_name, f"Error: {e}"
+            
+            layer_task_results = await asyncio.gather(*[
+                execute_with_semaphore(task_coro, agent_name) 
+                for task_coro, agent_name in zip(layer_tasks, layer_agents)
+            ])
+            
+            # Store layer results
+            layer_result = {}
+            for agent_name, result in layer_task_results:
+                results[agent_name] = result
+                layer_result[agent_name] = result
+            
+            layer_results.append({
+                "layer": layer_idx + 1,
+                "agents": layer_agents,
+                "results": layer_result
+            })
+            
+            self.logger.info(f"Layer {layer_idx + 1} completed")
+        
+        execution_time = time.time() - start_time
+        
+        # Find final agents (those with no dependents)
+        final_agents = self._get_final_agents()
+        
+        # If single final agent, return its result; otherwise combine results
+        if len(final_agents) == 1:
+            final_result = results[final_agents[0]]
+        else:
+            final_result = {agent: results[agent] for agent in final_agents}
+        
+        metadata = {
+            "execution_layers": execution_layers,
+            "layer_results": layer_results,
+            "dependencies": self.dependencies,
+            "all_results": results,
+            "final_agents": final_agents,
+            "total_agents": len(self.agents),
+            "total_layers": len(execution_layers)
+        }
+        
+        return WorkflowResult(
+            result=final_result,
+            execution_time=execution_time,
+            pattern=WorkflowPatternType.GRAPH,
+            metadata=metadata
+        )
+    
+    def _get_execution_layers(self) -> List[List[str]]:
+        """
+        Group agents into layers where each layer can be executed in parallel.
+        Uses topological sorting with level-based grouping.
+        """
+        # Calculate in-degrees
+        in_degree = {agent: 0 for agent in self.agent_map.keys()}
+        for agent, deps in self.dependencies.items():
+            in_degree[agent] = len(deps)
+        
+        # Initialize queue with agents that have no dependencies
+        queue = [agent for agent, degree in in_degree.items() if degree == 0]
+        layers = []
+        
+        while queue:
+            # Current layer: all agents with no remaining dependencies
+            current_layer = queue[:]
+            layers.append(current_layer)
+            queue = []
+            
+            # Process current layer and update in-degrees
+            for agent in current_layer:
+                # Find all agents that depend on current agent
+                for dependent, deps in self.dependencies.items():
+                    if agent in deps:
+                        in_degree[dependent] -= 1
+                        if in_degree[dependent] == 0:
+                            queue.append(dependent)
+        
+        return layers
+    
+    def _prepare_agent_input(self, agent_name: str, original_task: str, results: Dict[str, str]) -> str:
+        """Prepare input text for an agent based on its dependencies."""
+        deps = self.dependencies.get(agent_name, [])
+        
+        if not deps:
+            # No dependencies, use original task
+            return original_task
+        elif len(deps) == 1:
+            # Single dependency, use its result
+            return results[deps[0]]
+        else:
+            # Multiple dependencies, combine them
+            dep_results = []
+            for dep in deps:
+                dep_results.append(f"Result from {dep}:\n{results[dep]}")
+            
+            combined_input = f"Original task: {original_task}\n\n" + "\n\n".join(dep_results)
+            return combined_input
+    
+    async def _execute_agent(
+        self, 
+        agent: Agent, 
+        input_text: str, 
+        user_id: str, 
+        image_source: Optional[str] = None
+    ) -> str:
+        """Execute a single agent."""
+        return await agent.chat(
+            user_message=input_text,
+            user_id=user_id,
+            session_id=str(uuid.uuid4()),
+            image_source=image_source
+        )
+    
+    def _get_final_agents(self) -> List[str]:
+        """Get agents that have no dependents (final output agents)."""
+        all_deps = set()
+        for deps in self.dependencies.values():
+            all_deps.update(deps)
+        
+        final_agents = []
+        for agent_name in self.agent_map.keys():
+            if agent_name not in all_deps:
+                final_agents.append(agent_name)
+        
+        return final_agents
+
+
 class Workflow:
     """
     Main workflow orchestrator that supports multiple orchestration patterns.
@@ -400,14 +626,15 @@ class Workflow:
         user_id: Optional[str] = "default_user"
     ) -> Dict[str, Any]:
         """
-        Execute a hybrid workflow with multiple stages combining sequential and parallel patterns.
+        Execute a hybrid workflow with multiple stages combining sequential, parallel, and graph patterns.
         
         Args:
             stages: List of stage configurations, each containing:
-                - pattern: "sequential" or "parallel"
+                - pattern: "sequential", "parallel", or "graph"
                 - agents: List of agents for this stage
                 - task: Task string (can include placeholders like {previous_result} and {original_task})
                 - name: Optional stage name
+                - dependencies: Required for graph pattern - dict mapping agent names to their dependencies
                 - kwargs: Additional arguments for the pattern
             task: The original task that will replace {original_task} placeholders
             user_id: User identifier for the workflow
@@ -424,16 +651,17 @@ class Workflow:
                     "name": "research_planning"
                 },
                 {
-                    "pattern": "parallel", 
-                    "agents": [expert1, expert2, expert3],
+                    "pattern": "graph", 
+                    "agents": [expert1, expert2, expert3, synthesizer],
+                    "dependencies": {"expert2": ["expert1"], "expert3": ["expert1"], "synthesizer": ["expert2", "expert3"]},
                     "task": "Analyze this research: {previous_result}",
                     "name": "expert_analysis"
                 },
                 {
                     "pattern": "sequential",
-                    "agents": [synthesizer, reviewer],
-                    "task": "Synthesize analysis into final report: {previous_result}",
-                    "name": "final_synthesis"
+                    "agents": [reviewer],
+                    "task": "Review final report: {previous_result}",
+                    "name": "final_review"
                 }
             ]
         """
@@ -475,8 +703,17 @@ class Workflow:
                     user_id=user_id,
                     **{k: v for k, v in stage_kwargs.items() if k not in ['previous_result', 'original_task']}
                 )
+            elif pattern == "graph":
+                dependencies = stage_config.get("dependencies", {})
+                result = await self.run_graph(
+                    agents=agents,
+                    dependencies=dependencies,
+                    task=mid_stage_task,
+                    user_id=user_id,
+                    **{k: v for k, v in stage_kwargs.items() if k not in ['previous_result', 'original_task', 'dependencies']}
+                )
             else:
-                raise ValueError(f"Unsupported pattern: {pattern}")
+                raise ValueError(f"Unsupported pattern: {pattern}. Supported patterns: sequential, parallel, graph")
             
             # Store stage result
             results[stage_name] = {
@@ -504,4 +741,63 @@ class Workflow:
         self.logger.info(f"Hybrid workflow completed in {total_time:.2f}s with {len(stages)} stages")
         
         return hybrid_results
+    
+    async def run_graph(
+        self,
+        agents: List[Agent],
+        dependencies: Dict[str, List[str]],
+        task: str,
+        image_source: Optional[str] = None,
+        max_concurrent: Optional[int] = 10,
+        user_id: Optional[str] = "default_user"
+    ) -> WorkflowResult:
+        """
+        Execute a graph-based workflow with automatic parallel optimization.
+        
+        Args:
+            agents: List of agents to be used in the workflow
+            dependencies: Dict mapping agent names to their dependencies
+                Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
+                This creates: A -> B -> C, A -> D (B and D can run in parallel)
+            task: Original task string
+            image_source: Optional image source for root agents
+            max_concurrent: Maximum concurrent executions
+            user_id: User identifier
+            
+        Returns:
+            WorkflowResult with final output and execution metadata
+            
+        Example:
+            # A->B, A&B->C, A->D pattern where B and D can run in parallel
+            dependencies = {
+                "B": ["A"],      # B depends on A
+                "C": ["A", "B"], # C depends on both A and B  
+                "D": ["A"]       # D depends on A (can run parallel with B)
+            }
+            
+            result = await workflow.run_graph(
+                agents=[agent_A, agent_B, agent_C, agent_D],
+                dependencies=dependencies,
+                task="Original task"
+            )
+        """
+        pattern = GraphWorkflow(
+            agents=agents, 
+            dependencies=dependencies,
+            name=f"{self.name}_graph",
+            max_concurrent=max_concurrent
+        )
+        
+        result = await pattern.execute(
+            user_id=user_id,
+            task=task,
+            image_source=image_source
+        )
+        
+        self.logger.info(
+            f"Graph workflow {pattern.name} completed in {result.execution_time:.2f}s "
+            f"with {result.metadata['total_layers']} execution layers"
+        )
+        
+        return result
     
