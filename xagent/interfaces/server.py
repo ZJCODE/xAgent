@@ -24,6 +24,8 @@ class AgentInput(BaseModel):
     history_count: Optional[int] = 16
     # Maximum model call attempts
     max_iter: Optional[int] = 10
+    # Maximum number of concurrent tool calls
+    max_concurrent_tools: Optional[int] = 10
 
 
 class ClearSessionInput(BaseModel):
@@ -99,6 +101,7 @@ class HTTPAgentServer(BaseAgentRunner):
                                 session_id=input_data.session_id,
                                 history_count=input_data.history_count,
                                 max_iter=input_data.max_iter,
+                                max_concurrent_tools=input_data.max_concurrent_tools,
                                 image_source=input_data.image_source,
                                 stream=True
                             )
@@ -130,6 +133,7 @@ class HTTPAgentServer(BaseAgentRunner):
                     session_id=input_data.session_id,
                     history_count=input_data.history_count,
                     max_iter=input_data.max_iter,
+                    max_concurrent_tools=input_data.max_concurrent_tools,
                     image_source=input_data.image_source
                 )
                 

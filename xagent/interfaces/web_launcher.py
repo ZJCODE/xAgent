@@ -69,11 +69,11 @@ def main():
     
     # Get the directory where this launcher script is located
     script_dir = Path(__file__).parent
-    app_path = script_dir / "app.py"
+    app_path = script_dir / "web.py"
     
-    # Ensure the app.py file exists
+    # Ensure the web.py file exists
     if not app_path.exists():
-        print(f"Error: Could not find app.py at {app_path}")
+        print(f"Error: Could not find web.py at {app_path}")
         sys.exit(1)
     
     # Set environment variables for the Streamlit app
