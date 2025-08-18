@@ -619,6 +619,66 @@ class Workflow:
         
         return result
     
+    async def run_graph(
+        self,
+        agents: List[Agent],
+        dependencies: Dict[str, List[str]],
+        task: str,
+        image_source: Optional[str] = None,
+        max_concurrent: Optional[int] = 10,
+        user_id: Optional[str] = "default_user"
+    ) -> WorkflowResult:
+        """
+        Execute a graph-based workflow with automatic parallel optimization.
+        
+        Args:
+            agents: List of agents to be used in the workflow
+            dependencies: Dict mapping agent names to their dependencies
+                Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
+                This creates: A -> B -> C, A -> D (B and D can run in parallel)
+            task: Original task string
+            image_source: Optional image source for root agents
+            max_concurrent: Maximum concurrent executions
+            user_id: User identifier
+            
+        Returns:
+            WorkflowResult with final output and execution metadata
+            
+        Example:
+            # A->B, A&B->C, A->D pattern where B and D can run in parallel
+            dependencies = {
+                "B": ["A"],      # B depends on A
+                "C": ["A", "B"], # C depends on both A and B  
+                "D": ["A"]       # D depends on A (can run parallel with B)
+            }
+            
+            result = await workflow.run_graph(
+                agents=[agent_A, agent_B, agent_C, agent_D],
+                dependencies=dependencies,
+                task="Original task"
+            )
+        """
+        pattern = GraphWorkflow(
+            agents=agents, 
+            dependencies=dependencies,
+            name=f"{self.name}_graph",
+            max_concurrent=max_concurrent
+        )
+        
+        result = await pattern.execute(
+            user_id=user_id,
+            task=task,
+            image_source=image_source
+        )
+        
+        self.logger.info(
+            f"Graph workflow {pattern.name} completed in {result.execution_time:.2f}s "
+            f"with {result.metadata['total_layers']} execution layers"
+        )
+        
+        return result
+    
+
     async def run_hybrid(
         self,
         task: str,
@@ -741,63 +801,3 @@ class Workflow:
         self.logger.info(f"Hybrid workflow completed in {total_time:.2f}s with {len(stages)} stages")
         
         return hybrid_results
-    
-    async def run_graph(
-        self,
-        agents: List[Agent],
-        dependencies: Dict[str, List[str]],
-        task: str,
-        image_source: Optional[str] = None,
-        max_concurrent: Optional[int] = 10,
-        user_id: Optional[str] = "default_user"
-    ) -> WorkflowResult:
-        """
-        Execute a graph-based workflow with automatic parallel optimization.
-        
-        Args:
-            agents: List of agents to be used in the workflow
-            dependencies: Dict mapping agent names to their dependencies
-                Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
-                This creates: A -> B -> C, A -> D (B and D can run in parallel)
-            task: Original task string
-            image_source: Optional image source for root agents
-            max_concurrent: Maximum concurrent executions
-            user_id: User identifier
-            
-        Returns:
-            WorkflowResult with final output and execution metadata
-            
-        Example:
-            # A->B, A&B->C, A->D pattern where B and D can run in parallel
-            dependencies = {
-                "B": ["A"],      # B depends on A
-                "C": ["A", "B"], # C depends on both A and B  
-                "D": ["A"]       # D depends on A (can run parallel with B)
-            }
-            
-            result = await workflow.run_graph(
-                agents=[agent_A, agent_B, agent_C, agent_D],
-                dependencies=dependencies,
-                task="Original task"
-            )
-        """
-        pattern = GraphWorkflow(
-            agents=agents, 
-            dependencies=dependencies,
-            name=f"{self.name}_graph",
-            max_concurrent=max_concurrent
-        )
-        
-        result = await pattern.execute(
-            user_id=user_id,
-            task=task,
-            image_source=image_source
-        )
-        
-        self.logger.info(
-            f"Graph workflow {pattern.name} completed in {result.execution_time:.2f}s "
-            f"with {result.metadata['total_layers']} execution layers"
-        )
-        
-        return result
-    
