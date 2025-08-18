@@ -328,7 +328,8 @@ class Workflow:
         agents: List[Agent],
         task: str,
         image_source: Optional[str] = None,
-        intermediate_results: bool = False
+        intermediate_results: Optional[bool] = False,
+        user_id: Optional[str] = "default_user"
     ) -> WorkflowResult:
         """
         Directly execute a sequential pipeline in one call.
@@ -344,7 +345,7 @@ class Workflow:
         """
         pattern = SequentialWorkflow(agents, f"{self.name}_sequential")
         result = await pattern.execute(
-            user_id="default_user",
+            user_id=user_id,
             task=task, 
             image_source=image_source,
             intermediate_results=intermediate_results
@@ -362,7 +363,8 @@ class Workflow:
         agents: List[Agent],
         task: str,
         image_source: Optional[str] = None,
-        max_concurrent: int = 10
+        max_concurrent: Optional[int] = 10,
+        user_id: Optional[str] = "default_user"
     ) -> WorkflowResult:
         """
         Directly execute parallel processing in one call.
@@ -378,12 +380,12 @@ class Workflow:
         """
         pattern = ParallelWorkflow(agents, f"{self.name}_parallel")
         result = await pattern.execute(
-            user_id="default_user",
+            user_id=user_id,
             task=task, 
             image_source=image_source,
             max_concurrent=max_concurrent
         )
-        
+
         self.logger.info(
             f"Workflow {pattern.name} completed in {result.execution_time:.2f}s "
             f"using {result.pattern.value} pattern"
