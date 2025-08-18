@@ -123,6 +123,10 @@ class Agent:
         self.mcp_tools_last_updated: Optional[float] = None
         self.mcp_cache_ttl = AgentConfig.MCP_CACHE_TTL
         
+        # Tool specs cache
+        self._tool_specs_cache: Optional[list] = None
+        self._tools_last_updated: Optional[float] = None
+        
         # Initialize components
         self.logger = logging.getLogger(self.__class__.__name__)
         self.mcp_servers = self._normalize_mcp_servers(mcp_servers)
@@ -144,6 +148,45 @@ class Agent:
         if isinstance(mcp_servers, str):
             return [mcp_servers]
         return list(mcp_servers)
+
+    @property
+    def cached_tool_specs(self):
+        """
+        Returns the cached tool specifications, rebuilding if necessary.
+        """
+        if self._should_rebuild_cache():
+            self._rebuild_tool_cache()
+        return self._tool_specs_cache
+
+    def _should_rebuild_cache(self) -> bool:
+        """
+        Determine if the tool specs cache should be rebuilt.
+        Returns:
+        - True if the cache is empty or tools have changed
+        - False if the cache is valid
+        """
+        # If the cache is empty, we need to rebuild
+        if self._tool_specs_cache is None:
+            return True
+
+        # If the MCP tools have been updated, we need to rebuild
+        if self.mcp_tools_last_updated and (
+            self._tools_last_updated is None or 
+            self.mcp_tools_last_updated > self._tools_last_updated
+        ):
+            return True
+        
+        return False
+
+    def _rebuild_tool_cache(self):
+        """
+        Rebuild the tool specs cache.
+        This method collects all tools from both local and MCP sources,
+        and updates the cache with their specifications.
+        """
+        all_tools = list(self.tools.values()) + list(self.mcp_tools.values())
+        self._tool_specs_cache = [fn.tool_spec for fn in all_tools] if all_tools else None
+        self._tools_last_updated = time.time()
 
     async def __call__(
         self,
@@ -305,6 +348,9 @@ class Agent:
                 raise TypeError(f"Tool function '{fn.tool_spec['name']}' must be async.")
             if fn.tool_spec['name'] not in self.tools:
                 self.tools[fn.tool_spec['name']] = fn
+        
+        # 注册新工具后使缓存失效
+        self._tool_specs_cache = None
 
     @observe()
     async def _register_mcp_servers(self, mcp_servers: Optional[Union[str, list]]) -> None:
@@ -367,9 +413,8 @@ class Agent:
             )
         }
 
-        # 预先构建工具规格列表，避免重复计算
-        all_tools = list(self.tools.values()) + list(self.mcp_tools.values())
-        tool_specs = [fn.tool_spec for fn in all_tools] if all_tools else None
+        # 使用智能缓存的工具规格
+        tool_specs = self.cached_tool_specs
         
         # 预处理消息
         messages = [system_msg] + self._sanitize_input_messages(input_msgs)
