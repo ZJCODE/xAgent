@@ -349,7 +349,6 @@ class Workflow:
             image_source=image_source,
             intermediate_results=intermediate_results
         )
-        self.execution_history.append(result)
         
         self.logger.info(
             f"Workflow {pattern.name} completed in {result.execution_time:.2f}s "
@@ -384,7 +383,6 @@ class Workflow:
             image_source=image_source,
             max_concurrent=max_concurrent
         )
-        self.execution_history.append(result)
         
         self.logger.info(
             f"Workflow {pattern.name} completed in {result.execution_time:.2f}s "
