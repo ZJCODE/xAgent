@@ -159,6 +159,28 @@ class MessageStorageBase(ABC):
             "session_key": f"{user_id}:{session_id}"
         }
 
+    @abstractmethod
+    def set_agent_id(self, agent_id: str) -> None:
+        """
+        Set or update the agent ID for this message storage instance.
+        
+        This method allows dynamic modification of the agent namespace,
+        which is useful for scenarios where the agent identity changes
+        or when reusing storage instances for different agents.
+        
+        Args:
+            agent_id: New agent identifier for namespace isolation
+            
+        Raises:
+            ValueError: If agent_id is empty or invalid
+            
+        Note:
+            Changing the agent_id affects all subsequent operations.
+            Existing messages under the old agent_id will not be accessible
+            until the agent_id is changed back.
+        """
+        pass
+
     def __str__(self) -> str:
         """String representation of the storage backend."""
         return f"{self.__class__.__name__}()"

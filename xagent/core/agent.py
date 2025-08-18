@@ -76,6 +76,7 @@ class Agent:
 
     def __init__(
         self, 
+        agent_id: Optional[str] = None,
         name: Optional[str] = None,
         system_prompt: Optional[str] = None,
         description: Optional[str] = None,
@@ -103,6 +104,7 @@ class Agent:
             message_storage: MessageStorageBase instance for message storage
         """
         # Basic configuration
+        self.agent_id = agent_id or str(uuid.uuid4())
         self.name = name or AgentConfig.DEFAULT_NAME
         self.description = description
         self.model = model or AgentConfig.DEFAULT_MODEL
@@ -114,6 +116,8 @@ class Agent:
             self.message_storage = message_storage
         else:
             self.message_storage = MessageStorageLocal()
+
+        self.message_storage.set_agent_id(self.agent_id)
         
         # System prompt setup
         self.system_prompt = AgentConfig.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
