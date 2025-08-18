@@ -173,11 +173,9 @@ class ParallelWorkflow(BaseWorkflow):
             agents: Agents that perform the actual work
             name: Optional name for the pattern
         """
-        # Create internal coordinator agent for consensus building
-        validator_name = f"consensus_validator_{uuid.uuid4().hex[:8]}"
         
         self.consensus_validator = Agent(
-            name=validator_name,
+            name="consensus_validator",
             system_prompt="Consensus validator and synthesizer agent for parallel processing"
         )
         
