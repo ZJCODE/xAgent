@@ -570,7 +570,7 @@ class Agent:
                 user_message += f"\n\n### Expected Output:\n{expected_output}"
             
             request_body = {
-                "user_id": f"http_tool_{uuid.uuid4().hex[:8]}",
+                "user_id": f"http_agent_tool_{name or 'default'}_{uuid.uuid4().hex[:8]}",
                 "session_id": f"session_{uuid.uuid4().hex[:8]}",
                 "user_message": user_message,
                 "stream": False  # 工具调用不使用流式响应
