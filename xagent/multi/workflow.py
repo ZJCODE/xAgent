@@ -398,7 +398,12 @@ class GraphWorkflow(BaseWorkflow):
                 agent_image_source = image_source if not self.dependencies.get(agent_name, []) else None
                 
                 layer_tasks.append(
-                    self._execute_agent(agent, input_text, user_id, agent_image_source)
+                    agent.chat(
+                        user_message=input_text,
+                        user_id=user_id,
+                        session_id=str(uuid.uuid4()),
+                        image_source=agent_image_source
+                    )
                 )
             
             # Execute layer in parallel with concurrency control
@@ -508,21 +513,6 @@ class GraphWorkflow(BaseWorkflow):
             
             combined_input = f"Original task: {original_task}\n\n" + "\n\n".join(dep_results)
             return combined_input
-    
-    async def _execute_agent(
-        self, 
-        agent: Agent, 
-        input_text: str, 
-        user_id: str, 
-        image_source: Optional[str] = None
-    ) -> str:
-        """Execute a single agent."""
-        return await agent.chat(
-            user_message=input_text,
-            user_id=user_id,
-            session_id=str(uuid.uuid4()),
-            image_source=image_source
-        )
     
     def _get_final_agents(self) -> List[str]:
         """Get agents that have no dependents (final output agents)."""
