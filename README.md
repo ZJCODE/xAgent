@@ -770,14 +770,13 @@ xAgent is built with a modular architecture:
 
 ### Key Features
 
-- **� Easy to Use** - Simple API for quick prototyping
+- **🚀 Easy to Use** - Simple API for quick prototyping
 - **⚡ High Performance** - Async/await throughout, concurrent tool execution
 - **🔧 Extensible** - Custom tools, MCP integration, plugin system
 - **🌐 Multiple Interfaces** - CLI, HTTP API, web interface
 - **💾 Persistent** - Redis-backed conversation storage
 - **🤖 Multi-Agent** - Hierarchical agent systems and workflows
 - **📊 Observable** - Built-in logging and monitoring
-```
 
 **Key Methods:**
 - `async chat(user_message, user_id, session_id, **kwargs) -> str | BaseModel`: Main chat interface
