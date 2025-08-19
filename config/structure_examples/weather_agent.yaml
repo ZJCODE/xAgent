@@ -18,7 +18,7 @@ agent:
         type: "int"
         description: "Temperature in degrees Celsius"
 
-  local: true
+  message_storage: "local"
 
 server:
   host: "0.0.0.0"
