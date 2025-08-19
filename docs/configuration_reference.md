@@ -168,11 +168,11 @@ server:
 
 ```bash
 # Start sub-agents first (bottom-up approach)
-xagent-server --config research.yaml &
-xagent-server --config writer.yaml &
+xagent-server --config research.yaml > logs/research_agent.log 2>&1 &
+xagent-server --config writer.yaml > logs/writing_agent.log 2>&1 &
 
 # Start coordinator agent
-xagent-server --config coordinator.yaml &
+xagent-server --config coordinator.yaml > logs/coordinator_agent.log 2>&1 &
 
 # Verify all agents are running
 curl http://localhost:8010/health  # Coordinator
