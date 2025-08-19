@@ -252,12 +252,26 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
     if config_dir and not os.path.exists(config_dir):
         os.makedirs(config_dir)
     
-    # Use the default configuration from BaseAgentRunner
-    dummy_runner = BaseAgentRunner()
-    default_config = dummy_runner._get_default_config()
+    # Default configuration written directly as YAML string to preserve field order
+    default_config_yaml = """agent:
+  name: Agent
+  system_prompt: |
+    You are a helpful assistant. Your task is to assist users
+    with their queries and tasks.
+  model: gpt-4o-mini
+  capabilities:
+    tools:
+      - web_search
+    mcp_servers: []
+  message_storage: local
+
+server:
+  host: 0.0.0.0
+  port: 8010
+"""
     
     with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
+        f.write(default_config_yaml)
     
     # Create default toolkit directory
     toolkit_dir = "my_toolkit"
