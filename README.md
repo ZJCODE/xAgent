@@ -19,7 +19,7 @@ xAgent provides a complete AI assistant experience with text and image processin
 - [💻 Command Line Interface](#-command-line-interface)
 - [🤖 Python API](#-python-api)
 - [🔄 Multi-Agent Workflows](#-multi-agent-workflows)
-- [� Documentation](#-documentation)
+- [📚 Documentation](#-documentation)
 - [🤝 Contributing](#-contributing)
 - [📄 License](#-license)
 
@@ -154,7 +154,7 @@ server:
   port: 8010
 ```
 
-more advanced configurations can be found in [Configuration Reference](docs/advanced_features.md).
+more advanced configurations can be found in [Configuration Reference](docs/configuration_reference.md).
 
 ### Custom Tools
 
@@ -207,7 +207,7 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
-For advanced configurations including multi-agent systems and structured outputs, see [Configuration Reference](docs/advanced_features.md).
+For advanced configurations including multi-agent systems and structured outputs, see [Configuration Reference](docs/configuration_reference.md).
 
 ## 🌐 Web Interface
 
@@ -322,7 +322,7 @@ async def streaming_example():
 asyncio.run(streaming_example())
 ```
 
-For more advanced examples including multi-agent systems and workflow orchestration, see [Configuration Reference](docs/advanced_features.md).
+For more advanced examples including multi-agent systems and workflow orchestration, see [Configuration Reference](docs/configuration_reference.md).
 
 ### Adding Custom Tools
 
