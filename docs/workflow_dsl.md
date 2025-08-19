@@ -1,37 +1,37 @@
 # Workflow DSL (Domain Specific Language) Support
 
-xAgent 现在支持使用直观的 DSL 语法来定义工作流依赖关系，让复杂的依赖关系变得更加简洁和易读。
+xAgent now supports using intuitive DSL syntax to define workflow dependencies, making complex dependency relationships more concise and readable.
 
-## 语法概览
+## Syntax Overview
 
-DSL 使用箭头符号和与符号 `&` 来表示依赖关系：
+DSL uses arrow symbols and the ampersand symbol `&` to represent dependencies:
 
-- **ASCII 箭头 `->`**: `A->B` (推荐使用，兼容性更好)
+- **ASCII Arrow `->`**: `A->B`
 
-基本语法规则：
-- `A->B`: B 依赖于 A
-- `A->B->C`: 链式依赖，A->B，B->C
-- `A->B, A->C`: 并行分支，B和C都依赖于A
-- `A&B->C`: C 依赖于 A 和 B
-- `->A`: A 是根节点（无依赖）
+Basic syntax rules:
+- `A->B`: B depends on A
+- `A->B->C`: Chain dependencies, A->B, B->C
+- `A->B, A->C`: Parallel branches, both B and C depend on A
+- `A&B->C`: C depends on both A and B
+- `->A`: A is a root node (no dependencies)
 
-## 基本语法
+## Basic Syntax
 
-### 1. 简单依赖
+### 1. Simple Dependencies
 ```python
-# DSL 语法
+# DSL syntax
 dependencies = "A->B"
 
-# 等效的字典语法
+# Equivalent dictionary syntax
 dependencies = {"B": ["A"]}
 ```
 
-### 2. 链式依赖
+### 2. Chain Dependencies
 ```python
-# DSL 语法
+# DSL syntax
 dependencies = "A->B->C->D"
 
-# 等效的字典语法
+# Equivalent dictionary syntax
 dependencies = {
     "B": ["A"],
     "C": ["B"],
@@ -39,33 +39,33 @@ dependencies = {
 }
 ```
 
-### 3. 并行分支
+### 3. Parallel Branches
 ```python
-# DSL 语法
+# DSL syntax
 dependencies = "A->B, A->C"
 
-# 等效的字典语法
+# Equivalent dictionary syntax
 dependencies = {
     "B": ["A"],
     "C": ["A"]
 }
 ```
 
-### 4. 多依赖合并
+### 4. Multiple Dependencies Merge
 ```python
-# DSL 语法
+# DSL syntax
 dependencies = "A&B->C"
 
-# 等效的字典语法
+# Equivalent dictionary syntax
 dependencies = {"C": ["A", "B"]}
 ```
 
-### 5. 复杂工作流
+### 5. Complex Workflows
 ```python
-# DSL 语法
+# DSL syntax
 dependencies = "A->B, A->C, B&C->D, A->E, D&E->F"
 
-# 等效的字典语法
+# Equivalent dictionary syntax
 dependencies = {
     "B": ["A"],
     "C": ["A"],
@@ -75,21 +75,21 @@ dependencies = {
 }
 ```
 
-## 使用示例
+## Usage Examples
 
-### 基本用法
+### Basic Usage
 
 ```python
 from xagent.core.agent import Agent
 from xagent.multi.workflow import Workflow
 
-# 创建 agents
+# Create agents
 researcher = Agent(name="researcher", system_prompt="Research agent")
 analyzer = Agent(name="analyzer", system_prompt="Analysis agent")
 planner = Agent(name="planner", system_prompt="Planning agent")
 synthesizer = Agent(name="synthesizer", system_prompt="Synthesis agent")
 
-# 使用 DSL 定义工作流
+# Define workflow using DSL
 workflow = Workflow()
 
 result = await workflow.run_graph(
@@ -99,40 +99,40 @@ result = await workflow.run_graph(
 )
 ```
 
-### 研究工作流示例
+### Research Workflow Example
 
 ```python
-# 研究工作流：数据收集 -> 分析/计划 -> 报告撰写
+# Research workflow: Data collection -> Analysis/Planning -> Report writing
 
 dependencies = "collect_data->analyze_data, collect_data->create_plan, analyze_data&create_plan->write_report"
 
-# 这创建了以下执行图：
-# collect_data (第1层)
-# ├── analyze_data (第2层，并行)
-# └── create_plan (第2层，并行)
-# └── write_report (第3层，等待前两个完成)
+# This creates the following execution graph:
+# collect_data (Layer 1)
+# ├── analyze_data (Layer 2, parallel)
+# └── create_plan (Layer 2, parallel)
+# └── write_report (Layer 3, waits for previous two to complete)
 ```
 
-### 软件开发工作流示例
+### Software Development Workflow Example
 
 ```python
-# 软件开发工作流
+# Software development workflow
 
-# 依赖关系定义
+# Dependency definition
 dependencies = "requirements->design, requirements->research, design&research->implementation, implementation->testing, testing->deployment"
 
-# 执行图：
-# requirements (第1层)
-# ├── design (第2层，并行)
-# └── research (第2层，并行)
-# └── implementation (第3层，等待 design & research)
-# └── testing (第4层)
-# └── deployment (第5层)
+# Execution graph:
+# requirements (Layer 1)
+# ├── design (Layer 2, parallel)
+# └── research (Layer 2, parallel)
+# └── implementation (Layer 3, waits for design & research)
+# └── testing (Layer 4)
+# └── deployment (Layer 5)
 ```
 
-## 混合工作流中的 DSL
+## DSL in Hybrid Workflows
 
-DSL 也可以在混合工作流中使用：
+DSL can also be used in hybrid workflows:
 
 ```python
 stages = [
@@ -157,95 +157,95 @@ result = await workflow.run_hybrid(
 )
 ```
 
-## 语法验证
+## Syntax Validation
 
-DSL 包含内置的语法验证：
+DSL includes built-in syntax validation:
 
 ```python
 from xagent.multi.workflow import validate_dsl_syntax, parse_dependencies_dsl
 
-# 验证语法
+# Validate syntax
 is_valid, error_message = validate_dsl_syntax("A->B, A->C, B&C->D")
 if not is_valid:
-    print(f"语法错误: {error_message}")
+    print(f"Syntax error: {error_message}")
 
-# 解析为字典
+# Parse to dictionary
 dependencies_dict = parse_dependencies_dsl("A->B, A->C, B&C->D")
 print(dependencies_dict)
-# 输出: {'B': ['A'], 'C': ['A'], 'D': ['B', 'C']}
+# Output: {'B': ['A'], 'C': ['A'], 'D': ['B', 'C']}
 ```
 
-## 常见模式
+## Common Patterns
 
-### 1. Fan-out 模式（扇出）
+### 1. Fan-out Pattern
 ```python
-# 一个输入，多个并行输出
+# One input, multiple parallel outputs
 "input->process1, input->process2, input->process3"
 ```
 
-### 2. Fan-in 模式（扇入）
+### 2. Fan-in Pattern
 ```python
-# 多个输入，一个输出
+# Multiple inputs, one output
 "source1&source2&source3->combiner"
 ```
 
-### 3. Pipeline 模式（管道）
+### 3. Pipeline Pattern
 ```python
-# 严格的序列处理
+# Strict sequential processing
 "stage1->stage2->stage3->stage4"
 ```
 
-### 4. Diamond 模式（菱形）
+### 4. Diamond Pattern
 ```python
-# 分支后合并
+# Branch then merge
 "start->branch1, start->branch2, branch1&branch2->end"
 ```
 
-### 5. Complex DAG 模式
+### 5. Complex DAG Pattern
 ```python
-# 复杂有向无环图
+# Complex Directed Acyclic Graph
 "A->B, A->C, B->D, C->D, B&C->E, D&E->F"
 ```
 
-## 错误处理
+## Error Handling
 
-常见的语法错误和解决方案：
+Common syntax errors and solutions:
 
-### 错误1：箭头不完整
+### Error 1: Incomplete Arrow
 ```python
-# ❌ 错误
-"A->"  # 缺少目标
+# ❌ Wrong
+"A->"  # Missing target
 
-# ✅ 正确
+# ✅ Correct
 "A->B"
 ```
 
-### 错误2：空依赖
+### Error 2: Empty Dependencies
 ```python
-# ❌ 错误
-"A&->B"  # 空依赖
+# ❌ Wrong
+"A&->B"  # Empty dependency
 
-# ✅ 正确
+# ✅ Correct
 "A&C->B"
 ```
 
-### 错误3：双箭头语法
+### Error 3: Double Arrow Syntax
 ```python
-# ❌ 错误
-"A-->B"  # 使用了双箭头
+# ❌ Wrong
+"A-->B"  # Using double arrow
 
-# ✅ 正确
+# ✅ Correct
 "A->B"
 ```
 
-## 优势
+## Advantages
 
-### 1. 可读性强
+### 1. High Readability
 ```python
-# DSL: 一眼就能看懂依赖关系
+# DSL: Dependencies are immediately clear
 "research->analysis, research->planning, analysis&planning->synthesis"
 
-# Dictionary: 需要仔细阅读
+# Dictionary: Requires careful reading
 {
     "analysis": ["research"],
     "planning": ["research"], 
@@ -253,43 +253,43 @@ print(dependencies_dict)
 }
 ```
 
-### 2. 简洁性
-复杂的依赖关系用 DSL 表示更加简洁，特别是链式依赖。
+### 2. Conciseness
+Complex dependency relationships are more concise when expressed with DSL, especially chain dependencies.
 
-### 3. 直观性
-箭头和与符号的使用符合人类的思维习惯，更容易理解和维护。
+### 3. Intuitiveness
+The use of arrows and ampersand symbols aligns with human thinking patterns, making it easier to understand and maintain.
 
-### 4. 兼容性
-DSL 与现有的字典格式完全兼容，可以无缝迁移。
+### 4. Compatibility
+DSL is fully compatible with existing dictionary formats, allowing seamless migration.
 
-## 最佳实践
+## Best Practices
 
-1. **使用描述性的 agent 名称**：使用有意义的名称如 `data_collector`, `analyzer` 而不是 `A`, `B`
+1. **Use descriptive agent names**: Use meaningful names like `data_collector`, `analyzer` instead of `A`, `B`
 
-2. **合理分组规则**：将相关的依赖关系放在一起
+2. **Group related rules appropriately**: Keep related dependencies together
    ```python
-   # 好的做法
+   # Good practice
    "collect->analyze, collect->plan, analyze&plan->report"
    
-   # 不太好的做法  
+   # Not so good
    "collect->analyze, plan->report, collect->plan, analyze->report"
    ```
 
-3. **适当使用空格**：增加可读性
+3. **Use appropriate spacing**: Improve readability
    ```python
-   # 推荐
+   # Recommended
    "A -> B, A -> C, B & C -> D"
    
-   # 也可以
+   # Also acceptable
    "A->B, A->C, B&C->D"
    ```
 
-4. **验证复杂的 DSL**：对于复杂的工作流，先验证语法
+4. **Validate complex DSL**: For complex workflows, validate syntax first
    ```python
    dsl = "complex->workflow->with->many->dependencies"
    is_valid, error = validate_dsl_syntax(dsl)
    if not is_valid:
-       print(f"请检查语法: {error}")
+       print(f"Please check syntax: {error}")
    ```
 
-这个 DSL 扩展使得 xAgent 的工作流定义更加直观和用户友好，特别适合复杂的多 agent 协调场景。
+This DSL extension makes xAgent's workflow definition more intuitive and user-friendly, particularly suitable for complex multi-agent coordination scenarios.
