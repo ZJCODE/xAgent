@@ -26,6 +26,11 @@ dependencies = "A->B"
 dependencies = {"B": ["A"]}
 ```
 
+**Graph Structure:**
+```
+A ──→ B
+```
+
 ### 2. Chain Dependencies
 ```python
 # DSL syntax
@@ -37,6 +42,11 @@ dependencies = {
     "C": ["B"],
     "D": ["C"]
 }
+```
+
+**Graph Structure:**
+```
+A ──→ B ──→ C ──→ D
 ```
 
 ### 3. Parallel Branches
@@ -51,6 +61,13 @@ dependencies = {
 }
 ```
 
+**Graph Structure:**
+```
+     ┌──→ B
+A ───┤
+     └──→ C
+```
+
 ### 4. Multiple Dependencies Merge
 ```python
 # DSL syntax
@@ -58,6 +75,13 @@ dependencies = "A&B->C"
 
 # Equivalent dictionary syntax
 dependencies = {"C": ["A", "B"]}
+```
+
+**Graph Structure:**
+```
+A ───┐
+     ├──→ C
+B ───┘
 ```
 
 ### 5. Complex Workflows
@@ -73,6 +97,14 @@ dependencies = {
     "E": ["A"],
     "F": ["D", "E"]
 }
+```
+
+**Graph Structure:**
+```
+     ┌──→ B ───┐
+A ───┤         ├──→ D ───┐
+     ├──→ C ───┘         ├──→ F
+     └──→ E ─────────────┘
 ```
 
 ## Usage Examples
