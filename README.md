@@ -355,8 +355,6 @@ async def streaming_example():
 asyncio.run(streaming_example())
 ```
 
-For more advanced examples including multi-agent systems and workflow orchestration, see [Configuration Reference](docs/configuration_reference.md).
-
 ### Adding Custom Tools
 
 ```python
