@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-最终综合测试：验证 DSL 同时支持 → 和 -> 的所有功能
+DSL comprehensive test: verify all DSL functionality with ASCII arrows
 """
 
 import asyncio
@@ -15,41 +15,29 @@ from xagent.multi.workflow import Workflow, parse_dependencies_dsl, validate_dsl
 
 
 def test_dsl_comprehensive():
-    """综合测试 DSL 功能"""
-    print("🔬 Comprehensive DSL Test (→ and -> support)")
+    """Comprehensive DSL functionality test"""
+    print("🔬 Comprehensive DSL Test")
     print("=" * 60)
     
-    # 测试所有支持的模式
+    # Test all supported patterns
     test_cases = [
-        # 基本测试
-        ("Simple Unicode", "A→B", {"B": ["A"]}),
-        ("Simple ASCII", "A->B", {"B": ["A"]}),
+        # Basic tests
+        ("Simple", "A->B", {"B": ["A"]}),
         
-        # 链式测试
-        ("Chain Unicode", "A→B→C", {"B": ["A"], "C": ["B"]}),
-        ("Chain ASCII", "A->B->C", {"B": ["A"], "C": ["B"]}),
+        # Chain tests  
+        ("Chain", "A->B->C", {"B": ["A"], "C": ["B"]}),
         
-        # 并行测试
-        ("Parallel Unicode", "A→B, A→C", {"B": ["A"], "C": ["A"]}),
-        ("Parallel ASCII", "A->B, A->C", {"B": ["A"], "C": ["A"]}),
+        # Parallel tests
+        ("Parallel", "A->B, A->C", {"B": ["A"], "C": ["A"]}),
         
-        # 多依赖测试
-        ("Multi-dep Unicode", "A&B→C", {"C": ["A", "B"]}),
-        ("Multi-dep ASCII", "A&B->C", {"C": ["A", "B"]}),
+        # Multi-dependency tests
+        ("Multi-dep", "A&B->C", {"C": ["A", "B"]}),
         
-        # 复杂模式测试
-        ("Complex Unicode", "A→B, A→C, B&C→D", {"B": ["A"], "C": ["A"], "D": ["B", "C"]}),
-        ("Complex ASCII", "A->B, A->C, B&C->D", {"B": ["A"], "C": ["A"], "D": ["B", "C"]}),
+        # Complex pattern tests
+        ("Complex", "A->B, A->C, B&C->D", {"B": ["A"], "C": ["A"], "D": ["B", "C"]}),
         
-        # 混合箭头测试
-        ("Mixed arrows 1", "A→B, B->C", {"B": ["A"], "C": ["B"]}),
-        ("Mixed arrows 2", "A->B→C->D", {"B": ["A"], "C": ["B"], "D": ["C"]}),
-        ("Mixed complex", "A→B, A->C, B&C->D", {"B": ["A"], "C": ["A"], "D": ["B", "C"]}),
-        
-        # 真实世界示例
-        ("Research flow Unicode", "research→analysis, research→planning, analysis&planning→synthesis", 
-         {"analysis": ["research"], "planning": ["research"], "synthesis": ["analysis", "planning"]}),
-        ("Research flow ASCII", "research->analysis, research->planning, analysis&planning->synthesis",
+        # Real world examples
+        ("Research flow", "research->analysis, research->planning, analysis&planning->synthesis", 
          {"analysis": ["research"], "planning": ["research"], "synthesis": ["analysis", "planning"]}),
     ]
     
@@ -86,13 +74,11 @@ def test_dsl_comprehensive():
     print("-" * 30)
     
     error_cases = [
-        ("Empty target Unicode", "A→", False),
-        ("Empty target ASCII", "A->", False),
+        ("Empty target", "A->", False),
         ("Invalid double dash", "A-->B", False),
         ("Invalid double arrow", "A->>B", False),
-        ("Empty dependency", "A&→B", False),
-        ("Root node Unicode", "→B", True),  # Should be valid
-        ("Root node ASCII", "->B", True),   # Should be valid
+        ("Empty dependency", "A&->B", False),
+        ("Root node", "->B", True),   # Should be valid
     ]
     
     error_success = 0
@@ -114,7 +100,7 @@ def test_dsl_comprehensive():
     print(f"\n🎯 Overall Results: {total_success}/{total_tests} tests passed")
     
     if total_success == total_tests:
-        print("🎉 All tests passed! DSL support for both → and -> is working perfectly!")
+        print("🎉 All tests passed! DSL support is working perfectly!")
         return True
     else:
         print("❌ Some tests failed. Please check the implementation.")
@@ -122,12 +108,12 @@ def test_dsl_comprehensive():
 
 
 async def test_dsl_workflow_integration():
-    """测试 DSL 与工作流的集成"""
+    """Test DSL workflow integration"""
     print("\n" + "=" * 60)
     print("🔗 DSL Workflow Integration Test")
     print("=" * 60)
     
-    # 创建简单的测试 agents
+    # Create simple test agents
     agent_a = Agent(name="agent_a", system_prompt="Test agent A")
     agent_b = Agent(name="agent_b", system_prompt="Test agent B")
     agent_c = Agent(name="agent_c", system_prompt="Test agent C")
@@ -136,24 +122,22 @@ async def test_dsl_workflow_integration():
     
     # 测试不同的箭头格式
     test_cases = [
-        ("Unicode arrows", "agent_a→agent_b→agent_c"),
         ("ASCII arrows", "agent_a->agent_b->agent_c"),
-        ("Mixed arrows", "agent_a→agent_b->agent_c"),
     ]
     
-    print("Testing different arrow formats in actual workflows:")
+    print("Testing arrow formats in actual workflows:")
     
     for name, dsl in test_cases:
         print(f"\n🔬 {name}: '{dsl}'")
         
         try:
-            # 验证语法
+            # Validate syntax
             is_valid, error = validate_dsl_syntax(dsl)
             if not is_valid:
                 print(f"   ❌ Syntax error: {error}")
                 continue
             
-            # 解析依赖
+            # Parse dependencies
             deps = parse_dependencies_dsl(dsl)
             print(f"   📋 Parsed dependencies: {deps}")
             
@@ -185,8 +169,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     if parse_success:
         print("✅ All comprehensive tests passed!")
-        print("🎯 DSL now supports both → (Unicode) and -> (ASCII) arrows!")
-        print("🔧 Users can use either format or mix them as needed.")
+        print("🎯 DSL now supports ASCII arrows (->)!")
         print("📚 Check the updated documentation for usage examples.")
     else:
         print("❌ Some tests failed. Please review the implementation.")

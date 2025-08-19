@@ -97,7 +97,7 @@ async def test_dsl_integration():
         {
             "pattern": "graph",
             "agents": [planner, report_writer],
-            "dependencies": "planner→report_writer",  # Simple DSL in hybrid
+            "dependencies": "planner->report_writer",  # Simple DSL in hybrid
             "task": "Create plan and report based on: {previous_result}",
             "name": "planning_phase"
         }

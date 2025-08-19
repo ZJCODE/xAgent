@@ -2,12 +2,12 @@
 Sequential Workflow Example
 
 This example demonstrates how to use the Sequential Workflow pattern
-where agents process tasks in a pipeline: Agent A → Agent B → Agent C → Result
+where agents process tasks in a pipeline: Agent A -> Agent B -> Agent C -> Result
 
 Use cases:
-- Multi-step task decomposition (research → analysis → summary)
-- Progressive refinement (draft → review → polish)
-- Chain of reasoning (premise → logic → conclusion)
+- Multi-step task decomposition (research -> analysis -> summary)
+- Progressive refinement (draft -> review -> polish)
+- Chain of reasoning (premise -> logic -> conclusion)
 """
 
 import asyncio

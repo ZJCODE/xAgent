@@ -2,7 +2,7 @@
 """
 Example demonstrating the DSL (Domain Specific Language) support for workflow dependencies.
 
-This example shows how to use arrow notation (→) and ampersand (&) to define
+This example shows how to use arrow notation (->) and ampersand (&) to define
 complex workflow dependencies in a more intuitive way.
 """
 
@@ -23,17 +23,11 @@ async def demonstrate_dsl_parsing():
     
     # Example DSL strings
     examples = [
-        "A→B",                    # Simple: A depends on nothing, B depends on A (Unicode arrow)
-        "A->B",                   # Simple: Same as above but with ASCII arrow
-        "A→B→C",                  # Chain: A→B→C (Unicode)
-        "A->B->C",                # Chain: Same as above but with ASCII arrows
-        "A→B, A→C",               # Parallel: A→B and A→C (B and C can run in parallel)
-        "A->B, A->C",             # Parallel: Same as above but with ASCII arrows
-        "A→B, A→C, B&C→D",        # Complex: A→B, A→C, then D depends on both B and C
-        "A->B, A->C, B&C->D",     # Complex: Same as above but with ASCII arrows
-        "research→analysis, research→planning, analysis&planning→synthesis",  # Real workflow (Unicode)
-        "research->analysis, research->planning, analysis&planning->synthesis",  # Real workflow (ASCII)
-        "A→B, B->C, C→D",         # Mixed: Using both arrow types in one DSL string
+        "A->B",                   # Simple: A depends on nothing, B depends on A
+        "A->B->C",                # Chain: A->B->C
+        "A->B, A->C",             # Parallel: A->B and A->C (B and C can run in parallel)
+        "A->B, A->C, B&C->D",     # Complex: A->B, A->C, then D depends on both B and C
+        "research->analysis, research->planning, analysis&planning->synthesis",  # Real workflow
     ]
     
     for dsl in examples:
@@ -88,7 +82,7 @@ async def run_workflow_with_dsl():
     )
     
     # Define workflow using DSL (using ASCII arrows for better compatibility)
-    # researcher → analyzer, researcher → planner, analyzer&planner → synthesizer
+    # researcher -> analyzer, researcher -> planner, analyzer&planner -> synthesizer
     dsl_dependencies = "researcher->analyzer, researcher->planner, analyzer&planner->synthesizer"
     
     print(f"Using DSL: '{dsl_dependencies}'")
@@ -121,19 +115,13 @@ async def compare_dsl_vs_dict():
     print("=== DSL vs Dictionary Comparison ===\n")
     
     # Complex workflow pattern
-    print("Complex workflow: A→B, A→C, B&C→D, A→E, D&E→F")
+    print("Complex workflow: A->B, A->C, B&C->D, A->E, D&E->F")
     print()
     
-    # DSL version (Unicode arrows)
-    unicode_dsl = "A→B, A→C, B&C→D, A→E, D&E→F"
-    print("DSL Version (Unicode arrows):")
-    print(f"  '{unicode_dsl}'")
-    print()
-    
-    # DSL version (ASCII arrows)
-    ascii_dsl = "A->B, A->C, B&C->D, A->E, D&E->F"
-    print("DSL Version (ASCII arrows):")
-    print(f"  '{ascii_dsl}'")
+    # DSL version
+    dsl = "A->B, A->C, B&C->D, A->E, D&E->F"
+    print("DSL Version:")
+    print(f"  '{dsl}'")
     print()
     
     # Dictionary version
@@ -148,29 +136,22 @@ async def compare_dsl_vs_dict():
     print(f"  {dict_version}")
     print()
     
-    # Verify they're all equivalent
-    parsed_unicode = parse_dependencies_dsl(unicode_dsl)
-    parsed_ascii = parse_dependencies_dsl(ascii_dsl)
+    # Verify they're equivalent
+    parsed_dsl = parse_dependencies_dsl(dsl)
     
-    print("Parsed Unicode DSL:")
-    print(f"  {parsed_unicode}")
+    print("Parsed DSL:")
+    print(f"  {parsed_dsl}")
     print()
     
-    print("Parsed ASCII DSL:")
-    print(f"  {parsed_ascii}")
+    print(f"DSL == Dictionary: {parsed_dsl == dict_version}")
     print()
     
-    print(f"Unicode DSL == Dictionary: {parsed_unicode == dict_version}")
-    print(f"ASCII DSL == Dictionary: {parsed_ascii == dict_version}")
-    print(f"Unicode DSL == ASCII DSL: {parsed_unicode == parsed_ascii}")
-    print()
-    
-    # Show mixed arrow usage
-    mixed_dsl = "A→B, B->C, C→D"
-    parsed_mixed = parse_dependencies_dsl(mixed_dsl)
-    print("Mixed Arrow Usage:")
-    print(f"  DSL: '{mixed_dsl}'")
-    print(f"  Parsed: {parsed_mixed}")
+    # Show simple DSL usage
+    simple_dsl = "A->B, B->C, C->D"
+    parsed_simple = parse_dependencies_dsl(simple_dsl)
+    print("Simple DSL Usage:")
+    print(f"  DSL: '{simple_dsl}'")
+    print(f"  Parsed: {parsed_simple}")
     print(f"  ✅ Both arrow types can be used together!")
 
 
@@ -180,20 +161,14 @@ async def test_error_handling():
     
     # Test invalid DSL strings
     invalid_examples = [
-        "A→",                     # Missing target (Unicode)
-        "A->",                    # Missing target (ASCII)
-        "→B",                     # Missing source (Unicode) - should be valid
-        "->B",                    # Missing source (ASCII) - should be valid
-        "A→B→",                   # Incomplete chain (Unicode)
-        "A->B->",                 # Incomplete chain (ASCII)
-        "A&→B",                   # Empty dependency (Unicode)
-        "A&->B",                  # Empty dependency (ASCII)
+        "A->",                    # Missing target
+        "->B",                    # Missing source - should be valid
+        "A->B->",                 # Incomplete chain
+        "A&->B",                  # Empty dependency
         "A-->B",                  # Double dash (should be invalid)
         "A->>B",                  # Dash with double > (should be invalid)
-        "A→B→C→D→E→F→G→H→I→J",    # Very long chain (should work)
-        "A->B->C->D->E->F->G->H->I->J",  # Very long chain ASCII (should work)
-        "A→B, B→C, C→A",          # Circular dependency (will be caught at runtime)
-        "A->B, B->C, C->A",       # Circular dependency ASCII (will be caught at runtime)
+        "A->B->C->D->E->F->G->H->I->J",  # Very long chain (should work)
+        "A->B, B->C, C->A",       # Circular dependency (will be caught at runtime)
     ]
     
     for dsl in invalid_examples:

@@ -17,30 +17,30 @@ def parse_dependencies_dsl(dsl_string: str) -> Dict[str, List[str]]:
     Parse DSL string to dependency dictionary.
     
     Supported syntax:
-    - A→B or A->B: A depends on nothing, B depends on A
-    - A→B→C or A->B->C: A→B, B→C (sequential chain)
-    - A→B, A→C or A->B, A->C: A→B and A→C (parallel branches)
-    - A&B→C or A&B->C: C depends on both A and B
-    - Complex: A→B, A→C, B&C→D or A->B, A->C, B&C->D
+    - A->B: A depends on nothing, B depends on A
+    - A->B->C: A->B, B->C (sequential chain)
+    - A->B, A->C: A->B and A->C (parallel branches)
+    - A&B->C: C depends on both A and B
+    - Complex: A->B, A->C, B&C->D
     
     Args:
-        dsl_string: DSL string like "A→B, A→C, B&C→D" or "A->B, A->C, B&C->D"
+        dsl_string: DSL string like "A->B, A->C, B&C->D"
         
     Returns:
         Dict mapping agent names to their dependencies
         
     Examples:
-        "A→B" or "A->B" -> {"B": ["A"]}
-        "A→B→C" or "A->B->C" -> {"B": ["A"], "C": ["B"]}
-        "A→B, A→C" or "A->B, A->C" -> {"B": ["A"], "C": ["A"]}
-        "A→B, B&C→D" or "A->B, B&C->D" -> {"B": ["A"], "D": ["B", "C"]}
+        "A->B" -> {"B": ["A"]}
+        "A->B->C" -> {"B": ["A"], "C": ["B"]}
+        "A->B, A->C" -> {"B": ["A"], "C": ["A"]}
+        "A->B, B&C->D" -> {"B": ["A"], "D": ["B", "C"]}
     """
     if not dsl_string or not dsl_string.strip():
         return {}
     
     dependencies = {}
     
-    # Normalize arrows: convert -> to → for consistent processing
+    # Normalize arrows: convert -> to → for consistent processing (internally)
     normalized_dsl = dsl_string.replace('->', '→')
     
     # Split by comma to get individual rules
@@ -50,11 +50,11 @@ def parse_dependencies_dsl(dsl_string: str) -> Dict[str, List[str]]:
         if not rule:
             continue
         
-        # Handle chain syntax (A→B→C becomes A→B, B→C)
+        # Handle chain syntax (A->B->C becomes A->B, B->C)
         if rule.count('→') > 1:
             # Split into chain segments
             segments = [seg.strip() for seg in rule.split('→')]
-            # Create pairs: A→B→C becomes [(A,B), (B,C)]
+            # Create pairs: A->B->C becomes [(A,B), (B,C)]
             for i in range(len(segments) - 1):
                 left_part = segments[i]
                 right_part = segments[i + 1]

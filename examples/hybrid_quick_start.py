@@ -36,7 +36,7 @@ async def quick_start():
     stages = [
         # Stage 1: Sequential Research
         {
-            "pattern": "sequential",  # researcher → analyst
+            "pattern": "sequential",  # researcher -> analyst
             "agents": [researcher, analyst],
             "task": "Research international expansion for: {original_task}",
             "name": "research"
@@ -73,7 +73,7 @@ async def quick_start():
     print("=" * 40)
     print(f"⏱️ Total time: {result['total_execution_time']:.1f} seconds")
     print(f"🏗️ Stages: {result['stages_executed']}")
-    print(f"📊 Pattern: {' → '.join(result['stage_patterns'])}")
+    print(f"📊 Pattern: {' -> '.join(result['stage_patterns'])}")
     print()
     print("🎯 FINAL DECISION:")
     print(result['final_result'])
@@ -89,7 +89,7 @@ async def main():
     
     print("\n✅ Tutorial Complete!")
     print("\n💡 What happened:")
-    print("1. Researcher → Analyst (Sequential: context building)")
+    print("1. Researcher -> Analyst (Sequential: context building)")
     print("2. CFO + COO + CMO (Parallel: multiple expert perspectives)")  
     print("3. CEO (Sequential: final decision)")
     print("\n🎉 You just ran a hybrid workflow!")
