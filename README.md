@@ -961,7 +961,7 @@ dependencies = {
 }
 
 # You can now use intuitive arrows!
-dependencies = "researcher→analyst, researcher→planner, analyst&planner→synthesizer"
+dependencies = "researcher->analyst, researcher->planner, analyst&planner->synthesizer"
 ```
 
 #### DSL Patterns
