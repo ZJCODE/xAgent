@@ -1,5 +1,6 @@
 import uvicorn
 import argparse
+import logging
 from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -48,6 +49,9 @@ class HTTPAgentServer(BaseAgentRunner):
         # Initialize the base agent runner
         super().__init__(config_path, toolkit_path)
         
+        # Initialize logger
+        self.logger = logging.getLogger(f"{self.__class__.__name__}")
+        
         # Initialize FastAPI app
         self.app = self._create_app()
         
@@ -70,6 +74,7 @@ class HTTPAgentServer(BaseAgentRunner):
         @app.get("/health")
         async def health_check():
             """Health check endpoint."""
+            self.logger.debug("Health check requested")
             return {"status": "healthy", "service": "xAgent HTTP Server"}
         
         @app.post("/chat")
@@ -90,9 +95,14 @@ class HTTPAgentServer(BaseAgentRunner):
             Returns:
                 Agent response or streaming SSE when input_data.stream is True
             """
+            self.logger.info(
+                "Chat request from user %s, session %s, stream=%s", 
+                input_data.user_id, input_data.session_id, input_data.stream
+            )
             try:
                 # Streaming mode via Server-Sent Events
                 if input_data.stream:
+                    self.logger.debug("Enabling streaming response for user %s", input_data.user_id)
                     async def event_generator():
                         try:
                             response = await self.agent(
@@ -121,6 +131,7 @@ class HTTPAgentServer(BaseAgentRunner):
                                     yield f"data: {json.dumps({'message': str(response)})}\n\n"
                                 yield "data: [DONE]\n\n"
                         except Exception as e:
+                            self.logger.error("Streaming error for user %s: %s", input_data.user_id, e)
                             # Stream error as SSE, client can handle gracefully
                             yield f"data: {json.dumps({'error': str(e)})}\n\n"
                             yield "data: [DONE]\n\n"
@@ -137,6 +148,8 @@ class HTTPAgentServer(BaseAgentRunner):
                     image_source=input_data.image_source
                 )
                 
+                self.logger.debug("Chat response generated for user %s", input_data.user_id)
+                
                 # Handle different response types properly
                 if hasattr(response, 'model_dump'):  # Pydantic BaseModel
                     return {"reply": response.model_dump()}
@@ -144,6 +157,7 @@ class HTTPAgentServer(BaseAgentRunner):
                     return {"reply": str(response)}
                 
             except Exception as e:
+                self.logger.error("Agent processing error for user %s: %s", input_data.user_id, e)
                 raise HTTPException(status_code=500, detail=f"Agent processing error: {str(e)}")
         
         @app.post("/clear_session")
@@ -157,15 +171,28 @@ class HTTPAgentServer(BaseAgentRunner):
             Returns:
                 Success confirmation
             """
+            self.logger.info(
+                "Clear session request for user %s, session %s", 
+                input_data.user_id, input_data.session_id
+            )
             try:
                 await self.message_storage.clear_history(
                     user_id=input_data.user_id,
                     session_id=input_data.session_id
                 )
                 
+                self.logger.debug(
+                    "Session %s for user %s cleared successfully", 
+                    input_data.session_id, input_data.user_id
+                )
+                
                 return {"status": "success", "message": f"Session {input_data.session_id} for user {input_data.user_id} cleared"}
                 
             except Exception as e:
+                self.logger.error(
+                    "Failed to clear session %s for user %s: %s", 
+                    input_data.session_id, input_data.user_id, e
+                )
                 raise HTTPException(status_code=500, detail=f"Failed to clear session: {str(e)}")
 
     
@@ -183,10 +210,10 @@ class HTTPAgentServer(BaseAgentRunner):
         host = host or server_cfg.get("host", "0.0.0.0")
         port = port or server_cfg.get("port", 8010)
         
-        print(f"Starting xAgent HTTP Server on {host}:{port}")
-        print(f"Agent: {self.agent.name}")
-        print(f"Model: {self.agent.model}")
-        print(f"Tools: {len(self.agent.tools)} loaded")
+        self.logger.info("Starting xAgent HTTP Server on %s:%s", host, port)
+        self.logger.info("Agent: %s", self.agent.name)
+        self.logger.info("Model: %s", self.agent.model)
+        self.logger.info("Tools: %d loaded", len(self.agent.tools))
         
         uvicorn.run(
             self.app,
@@ -219,6 +246,9 @@ app = None  # Will be initialized when first accessed
 
 def main():
     """Main entry point for xagent-server command."""
+    # Initialize basic logging for main entry point
+    logger = logging.getLogger("xAgent.HTTPServer.main")
+    
     parser = argparse.ArgumentParser(description="xAgent HTTP Server")
     parser.add_argument("--config", default=None, help="Config file path (if not specified, uses default configuration)")
     parser.add_argument("--toolkit_path", default=None, help="Toolkit directory path (if not specified, no additional tools will be loaded)")
@@ -231,7 +261,7 @@ def main():
         server = HTTPAgentServer(config_path=args.config, toolkit_path=args.toolkit_path)
         server.run(host=args.host, port=args.port)
     except Exception as e:
-        print(f"Failed to start server: {e}")
+        logger.error("Failed to start server: %s", e)
         raise
 
 
