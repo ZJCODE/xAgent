@@ -44,11 +44,11 @@ async def test_dsl_integration():
     
     # 测试不同的 DSL 模式
     workflow = Workflow("dsl_test_workflow")
-    
-    print("\n1️⃣ Testing Simple Chain (A→B→C)")
+
+    print("\n1️⃣ Testing Simple Chain (A->B->C)")
     print("-" * 30)
-    
-    simple_dsl = "data_collector→analyzer→report_writer"
+
+    simple_dsl = "data_collector->analyzer->report_writer"
     print(f"DSL: {simple_dsl}")
     
     try:
@@ -62,11 +62,11 @@ async def test_dsl_integration():
         print(f"🎯 Final result preview: {str(result.result)[:100]}...")
     except Exception as e:
         print(f"❌ Error in chain workflow: {e}")
-    
-    print("\n2️⃣ Testing Parallel Branches (A→B, A→C, B&C→D)")
+
+    print("\n2️⃣ Testing Parallel Branches (A->B, A->C, B&C->D)")
     print("-" * 30)
-    
-    complex_dsl = "data_collector→analyzer, data_collector→planner, analyzer&planner→report_writer"
+
+    complex_dsl = "data_collector->analyzer, data_collector->planner, analyzer&planner->report_writer"
     print(f"DSL: {complex_dsl}")
     
     try:
@@ -120,8 +120,8 @@ async def test_dsl_integration():
     
     # 显示等效性
     from xagent.multi.workflow import parse_dependencies_dsl
-    
-    test_dsl = "A→B, A→C, B&C→D, A→E, D&E→F"
+
+    test_dsl = "A->B, A->C, B&C->D, A->E, D&E->F"
     expected_dict = {
         "B": ["A"],
         "C": ["A"],
