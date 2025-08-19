@@ -30,6 +30,14 @@ class CLIAgent(BaseAgentRunner):
             # Suppress most logging except critical errors
             logging.getLogger().setLevel(logging.CRITICAL)
             logging.getLogger("xagent").setLevel(logging.CRITICAL)
+            # Suppress warnings from third-party libraries
+            logging.getLogger("langfuse").setLevel(logging.CRITICAL)
+            logging.getLogger("urllib3").setLevel(logging.CRITICAL)
+            logging.getLogger("httpx").setLevel(logging.CRITICAL)
+            logging.getLogger("openai").setLevel(logging.CRITICAL)
+            # Suppress all warnings when not in verbose mode
+            import warnings
+            warnings.filterwarnings("ignore")
         else:
             # Enable verbose logging
             logging.getLogger().setLevel(logging.INFO)
