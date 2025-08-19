@@ -19,25 +19,11 @@ class BaseAgentConfig:
     """Configuration constants for BaseAgentRunner."""
     
     DEFAULT_AGENT_NAME = "Agent"
+    DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
     DEFAULT_MODEL = "gpt-4o-mini"
+    DEFAULT_MESSAGE_STORAGE = "local"
     DEFAULT_HOST = "0.0.0.0"
     DEFAULT_PORT = 8010
-    DEFAULT_SYSTEM_PROMPT = (
-        "You are a helpful assistant. Your task is to assist users "
-        "with their queries and tasks."
-    )
-    DYNAMIC_TOOLKIT_MODULE_NAME = "xagent_dynamic_toolkit"
-    
-    # Type mappings for dynamic model creation
-    TYPE_MAPPING = {
-        "str": str,
-        "int": int,
-        "float": float,
-        "bool": bool,
-        "list": list,
-        "dict": dict,
-    }
-
 
 class BaseAgentRunner:
     """
@@ -149,7 +135,7 @@ class BaseAgentRunner:
                     "tools": ["web_search"],  # Default tools
                     "mcp_servers": []  # Default MCP servers
                 },
-                "message_storage": "local",  # Default to local message storage
+                "message_storage": BaseAgentConfig.DEFAULT_MESSAGE_STORAGE,
             },
             "server": {
                 "host": BaseAgentConfig.DEFAULT_HOST,
@@ -205,11 +191,14 @@ class BaseAgentRunner:
     
     def _import_toolkit_module(self, toolkit_path: str) -> Dict[str, Any]:
         """Import toolkit module and extract TOOLKIT_REGISTRY."""
+
+        DYNAMIC_TOOLKIT_MODULE_NAME = "xagent_dynamic_toolkit"
+
         init_path = os.path.join(toolkit_path, "__init__.py")
-        
+
         # Create module spec with submodule search locations for relative imports
         spec = importlib.util.spec_from_file_location(
-            BaseAgentConfig.DYNAMIC_TOOLKIT_MODULE_NAME,
+            DYNAMIC_TOOLKIT_MODULE_NAME,
             init_path,
             submodule_search_locations=[toolkit_path],
         )
@@ -219,7 +208,7 @@ class BaseAgentRunner:
         
         # Load and execute module
         module = importlib.util.module_from_spec(spec)
-        sys.modules[BaseAgentConfig.DYNAMIC_TOOLKIT_MODULE_NAME] = module
+        sys.modules[DYNAMIC_TOOLKIT_MODULE_NAME] = module
         spec.loader.exec_module(module)  # type: ignore[attr-defined]
         
         # Extract registry
@@ -294,12 +283,23 @@ class BaseAgentRunner:
         Returns:
             Python type for the field
         """
-        python_type = BaseAgentConfig.TYPE_MAPPING.get(field_type, str)
-        
+
+        # Type mappings for dynamic model creation
+        TYPE_MAPPING = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+        }
+
+        python_type = TYPE_MAPPING.get(field_type, str)
+
         # Handle list types with items specification
         if field_type == "list" and "items" in field_config:
             items_type = field_config["items"]
-            items_python_type = BaseAgentConfig.TYPE_MAPPING.get(items_type, str)
+            items_python_type = TYPE_MAPPING.get(items_type, str)
             python_type = List[items_python_type]
         
         return python_type
