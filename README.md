@@ -843,9 +843,9 @@ from xagent.multi.workflow import Workflow
 
 async def workflow_example():
     # Create specialized agents
-    researcher = Agent(name="Researcher", description="Research specialist")
-    analyst = Agent(name="Analyst", description="Data analysis expert")
-    writer = Agent(name="Writer", description="Content writing specialist")
+    researcher = Agent(name="Researcher", system_prompt="Research specialist")
+    analyst = Agent(name="Analyst", system_prompt="Data analysis expert")
+    writer = Agent(name="Writer", system_prompt="Content writing specialist")
     
     # Initialize workflow orchestrator
     workflow = Workflow()
@@ -864,14 +864,19 @@ async def workflow_example():
     )
     print("Parallel consensus:", result.result)
     
-    # 3. Graph: Complex dependencies
+    # 3. Graph: Complex dependencies with DSL support
+    # Traditional dictionary format
     dependencies = {
         "Analyst": ["Researcher"],      # Analyst depends on Researcher
         "Writer": ["Researcher", "Analyst"]  # Writer depends on both
     }
+    
+    # NEW: DSL format (more intuitive!)
+    dependencies_dsl = "Researcher→Analyst, Researcher&Analyst→Writer"
+    
     result = await workflow.run_graph(
         agents=[researcher, analyst, writer],
-        dependencies=dependencies,
+        dependencies=dependencies_dsl,  # Use DSL format
         task="Create comprehensive market analysis"
     )
     print("Graph result:", result.result)
@@ -940,6 +945,71 @@ asyncio.run(hybrid_workflow_example())
 - Multi-stage complex workflows
 - Different stages need different patterns
 - Maximum flexibility and control
+
+### 🎯 Graph Workflow DSL (Domain Specific Language)
+
+**NEW**: xAgent now supports an intuitive DSL for defining complex workflow dependencies using arrow notation!
+
+#### Basic DSL Syntax
+
+```python
+# Instead of writing complex dictionaries...
+dependencies = {
+    "analyst": ["researcher"],
+    "planner": ["researcher"], 
+    "synthesizer": ["analyst", "planner"]
+}
+
+# You can now use intuitive arrows!
+dependencies = "researcher→analyst, researcher→planner, analyst&planner→synthesizer"
+```
+
+#### DSL Patterns
+
+| DSL Pattern | Description | Generated Dependencies |
+|-------------|-------------|----------------------|
+| `A→B` | B depends on A | `{"B": ["A"]}` |
+| `A→B→C` | Chain: A→B, B→C | `{"B": ["A"], "C": ["B"]}` |
+| `A→B, A→C` | Parallel branches | `{"B": ["A"], "C": ["A"]}` |
+| `A&B→C` | C depends on both A and B | `{"C": ["A", "B"]}` |
+| `A→B, A→C, B&C→D` | Complex fan-out/fan-in | `{"B": ["A"], "C": ["A"], "D": ["B", "C"]}` |
+
+#### Real-World DSL Examples
+
+```python
+# Research workflow
+research_flow = "collect_data→analyze_data, collect_data→create_plan, analyze_data&create_plan→write_report"
+
+# Software development workflow  
+dev_flow = "requirements→design, requirements→research, design&research→implementation, implementation→testing, testing→deployment"
+
+# Content creation workflow
+content_flow = "research→outline, research→gather_sources, outline&gather_sources→draft, draft→review→final"
+
+# Using DSL in workflows
+result = await workflow.run_graph(
+    agents=[researcher, analyzer, planner, writer],
+    dependencies=research_flow,  # Use DSL directly!
+    task="Create comprehensive market analysis"
+)
+```
+
+#### DSL Validation
+
+```python
+from xagent.multi.workflow import validate_dsl_syntax, parse_dependencies_dsl
+
+# Validate before use
+is_valid, error = validate_dsl_syntax("A→B, A→C, B&C→D")
+if not is_valid:
+    print(f"DSL Error: {error}")
+
+# Parse to see the result
+deps = parse_dependencies_dsl("A→B, A→C, B&C→D")
+print(deps)  # {'B': ['A'], 'C': ['A'], 'D': ['B', 'C']}
+```
+
+For detailed DSL documentation, see [docs/workflow_dsl.md](docs/workflow_dsl.md).
 
 For more examples, see the `examples/` directory with complete workflow demonstrations.
 
@@ -1097,7 +1167,7 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
-#### � Message Storage
+#### Message Storage
 
 xAgent provides flexible message storage options for conversation persistence.
 

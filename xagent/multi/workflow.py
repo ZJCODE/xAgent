@@ -2,13 +2,155 @@
 
 import asyncio
 import logging
+import re
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 import uuid
 import time
 
 from ..core.agent import Agent
+
+
+def parse_dependencies_dsl(dsl_string: str) -> Dict[str, List[str]]:
+    """
+    Parse DSL string to dependency dictionary.
+    
+    Supported syntax:
+    - A→B: A depends on nothing, B depends on A
+    - A→B→C: A→B, B→C (sequential chain)
+    - A→B, A→C: A→B and A→C (parallel branches)
+    - A&B→C: C depends on both A and B
+    - Complex: A→B, A→C, B&C→D
+    
+    Args:
+        dsl_string: DSL string like "A→B, A→C, B&C→D"
+        
+    Returns:
+        Dict mapping agent names to their dependencies
+        
+    Examples:
+        "A→B" -> {"B": ["A"]}
+        "A→B→C" -> {"B": ["A"], "C": ["B"]}
+        "A→B, A→C" -> {"B": ["A"], "C": ["A"]}
+        "A→B, B&C→D" -> {"B": ["A"], "D": ["B", "C"]}
+    """
+    if not dsl_string or not dsl_string.strip():
+        return {}
+    
+    dependencies = {}
+    
+    # Split by comma to get individual rules
+    rules = [rule.strip() for rule in dsl_string.split(',')]
+    
+    for rule in rules:
+        if not rule:
+            continue
+        
+        # Handle chain syntax (A→B→C becomes A→B, B→C)
+        if rule.count('→') > 1:
+            # Split into chain segments
+            segments = [seg.strip() for seg in rule.split('→')]
+            # Create pairs: A→B→C becomes [(A,B), (B,C)]
+            for i in range(len(segments) - 1):
+                left_part = segments[i]
+                right_part = segments[i + 1]
+                
+                if not right_part:
+                    continue
+                
+                # Parse left part (dependencies) - handle & for multiple dependencies
+                if '&' in left_part:
+                    deps = [dep.strip() for dep in left_part.split('&')]
+                else:
+                    deps = [left_part.strip()] if left_part else []
+                
+                target = right_part.strip()
+                
+                if target:
+                    if target in dependencies:
+                        # Merge dependencies if target already exists
+                        existing_deps = set(dependencies[target])
+                        new_deps = set(deps)
+                        dependencies[target] = list(existing_deps.union(new_deps))
+                    else:
+                        dependencies[target] = deps
+        else:
+            # Single arrow rule
+            if '→' in rule:
+                left_part, right_part = rule.split('→', 1)
+                left_part = left_part.strip()
+                right_part = right_part.strip()
+                
+                # Parse left part (dependencies) - handle & for multiple dependencies
+                if '&' in left_part:
+                    deps = [dep.strip() for dep in left_part.split('&')]
+                else:
+                    deps = [left_part.strip()] if left_part else []
+                
+                # Parse right part (target) - currently only support single target
+                target = right_part.strip()
+                
+                if target:
+                    if target in dependencies:
+                        # Merge dependencies if target already exists
+                        existing_deps = set(dependencies[target])
+                        new_deps = set(deps)
+                        dependencies[target] = list(existing_deps.union(new_deps))
+                    else:
+                        dependencies[target] = deps
+    
+    return dependencies
+
+
+def validate_dsl_syntax(dsl_string: str) -> Tuple[bool, str]:
+    """
+    Validate DSL syntax.
+    
+    Args:
+        dsl_string: DSL string to validate
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not dsl_string or not dsl_string.strip():
+        return True, ""
+    
+    try:
+        # Check for valid characters (letters, numbers, underscore, arrow, ampersand, comma, space)
+        valid_pattern = re.compile(r'^[a-zA-Z0-9_→&,\s]+$')
+        if not valid_pattern.match(dsl_string):
+            return False, "Invalid characters in DSL string. Only letters, numbers, underscore, →, &, comma, and spaces are allowed."
+        
+        # Split by comma to get individual rules
+        rules = [rule.strip() for rule in dsl_string.split(',')]
+        for rule in rules:
+            if not rule:
+                continue
+            if '→' not in rule:
+                return False, f"Each rule must contain at least one arrow (→). Invalid rule: '{rule}'"
+            
+            # Handle chain syntax (multiple arrows)
+            segments = [seg.strip() for seg in rule.split('→')]
+            
+            # Check that we don't have empty segments
+            for i, segment in enumerate(segments):
+                if not segment and i != 0:  # Allow empty first segment (e.g., "→B")
+                    return False, f"Empty segment in rule: '{rule}'"
+                
+                # Check for valid agent names (no empty names after splitting by &)
+                if segment and '&' in segment:
+                    deps = [dep.strip() for dep in segment.split('&')]
+                    for dep in deps:
+                        if not dep:
+                            return False, f"Empty dependency name in rule: '{rule}'"
+        
+        # Try to parse to ensure it's valid
+        parse_dependencies_dsl(dsl_string)
+        return True, ""
+        
+    except Exception as e:
+        return False, f"DSL parsing error: {str(e)}"
 
 class WorkflowPatternType(Enum):
     """Types of workflow orchestration patterns."""
@@ -325,7 +467,7 @@ class GraphWorkflow(BaseWorkflow):
     def __init__(
         self, 
         agents: List[Agent], 
-        dependencies: Dict[str, List[str]], 
+        dependencies: Union[Dict[str, List[str]], str], 
         name: Optional[str] = None,
         max_concurrent: int = 10
     ):
@@ -334,14 +476,29 @@ class GraphWorkflow(BaseWorkflow):
         
         Args:
             agents: List of agents with their names as identifiers
-            dependencies: Dict mapping agent names to their input dependencies
-                Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]} 
-                This creates: A -> B -> C, A -> D (B and D can run in parallel)
+            dependencies: Either:
+                - Dict mapping agent names to their input dependencies
+                  Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
+                - DSL string with arrow notation
+                  Example: "A→B, A→C, B&C→D"
             max_concurrent: Maximum concurrent executions
         """
         super().__init__(agents, name)
         self.agent_map = {agent.name: agent for agent in agents}
-        self.dependencies = dependencies
+        
+        # Parse dependencies based on type
+        if isinstance(dependencies, str):
+            # Validate DSL syntax first
+            is_valid, error_msg = validate_dsl_syntax(dependencies)
+            if not is_valid:
+                raise ValueError(f"Invalid DSL syntax: {error_msg}")
+            
+            self.dependencies = parse_dependencies_dsl(dependencies)
+            self.dsl_string = dependencies
+        else:
+            self.dependencies = dependencies
+            self.dsl_string = None
+            
         self.max_concurrent = max_concurrent
         
         # Validate dependencies
@@ -610,7 +767,7 @@ class Workflow:
     async def run_graph(
         self,
         agents: List[Agent],
-        dependencies: Dict[str, List[str]],
+        dependencies: Union[Dict[str, List[str]], str],
         task: str,
         image_source: Optional[str] = None,
         max_concurrent: Optional[int] = 10,
@@ -621,9 +778,11 @@ class Workflow:
         
         Args:
             agents: List of agents to be used in the workflow
-            dependencies: Dict mapping agent names to their dependencies
-                Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
-                This creates: A -> B -> C, A -> D (B and D can run in parallel)
+            dependencies: Either:
+                - Dict mapping agent names to their dependencies
+                  Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
+                - DSL string with arrow notation
+                  Example: "A→B, A→C, B&C→D"
             task: Original task string
             image_source: Optional image source for root agents
             max_concurrent: Maximum concurrent executions
@@ -632,13 +791,16 @@ class Workflow:
         Returns:
             WorkflowResult with final output and execution metadata
             
-        Example:
-            # A->B, A&B->C, A->D pattern where B and D can run in parallel
+        Examples:
+            # Dictionary format
             dependencies = {
                 "B": ["A"],      # B depends on A
                 "C": ["A", "B"], # C depends on both A and B  
                 "D": ["A"]       # D depends on A (can run parallel with B)
             }
+            
+            # DSL format (equivalent to above)
+            dependencies = "A→B, A&B→C, A→D"
             
             result = await workflow.run_graph(
                 agents=[agent_A, agent_B, agent_C, agent_D],
@@ -682,7 +844,8 @@ class Workflow:
                 - agents: List of agents for this stage
                 - task: Task string (can include placeholders like {previous_result} and {original_task})
                 - name: Optional stage name
-                - dependencies: Required for graph pattern - dict mapping agent names to their dependencies
+                - dependencies: Required for graph pattern - either dict mapping agent names to their dependencies
+                  or DSL string like "A→B, A→C, B&C→D"
                 - kwargs: Additional arguments for the pattern
             task: The original task that will replace {original_task} placeholders
             user_id: User identifier for the workflow
@@ -705,8 +868,9 @@ class Workflow:
                     "name": "expert_review"
                 },
                 {
-                    "pattern": "sequential",
-                    "agents": [synthesizer],
+                    "pattern": "graph",
+                    "agents": [analyzer, synthesizer, validator],
+                    "dependencies": "analyzer→synthesizer, analyzer→validator, synthesizer&validator→final",
                     "task": "Create final report from: {previous_result}",
                     "name": "final_synthesis"
                 }
