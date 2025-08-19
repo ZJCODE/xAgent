@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "myxagent"
-version = "0.2.8"
+version = "0.2.9"
 description = "Multi-Modal AI Agent System"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { text = "MIT" }
@@ -21,21 +21,30 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi>=0.116.1,<1.0.0",
-    "uvicorn>=0.35.0,<0.36", 
-    "httpx>=0.28.1,<0.29",            
-    "pydantic>=2.11.7,<3",            
-    "streamlit>=1.47.1,<2",           
-    "redis>=6.2.0,<7",                
-    "boto3>=1.39.17,<2",              
-    "openai>=1.98.0,<2",              
-    "langfuse>=3.2.1,<4",             
-    "fastmcp>=2.10.6,<3",             
-    "python-dotenv>=1.1.1,<2",        
-    "pyyaml>=6.0.2,<7",               
-    "tenacity>=9.1.2,<10",            
-    "watchdog>=6.0.0,<7",        
-    "requests>=2.32.0,<3",            
+    # Core frameworks
+    "fastapi>=0.116.1",
+    "pydantic>=2.11.7",
+    "uvicorn>=0.35.0",
+    
+    # AI/ML and agents
+    "openai>=1.98.0",
+    "fastmcp>=2.10.6",
+    "langfuse>=3.2.1",
+    
+    # HTTP clients
+    "httpx>=0.28.1",
+    "requests>=2.32.0",
+    
+    # Data storage
+    "redis>=6.2.0",
+    "boto3>=1.39.17",
+    
+    # UI and utilities
+    "streamlit>=1.47.1",
+    "python-dotenv>=1.1.1",
+    "pyyaml>=6.0.2",
+    "tenacity>=9.1.2",
+    "watchdog>=6.0.0",
 ]
 
 [project.scripts]
