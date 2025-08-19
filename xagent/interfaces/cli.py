@@ -61,22 +61,49 @@ class CLIAgent(BaseAgentRunner):
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
         session_id = session_id or f"cli_session_{uuid.uuid4().hex[:8]}"
         
-        print(f"🤖 Welcome to xAgent CLI!")
-        config_msg = f"Loading agent configuration from {self.config_path}" if self.config_path else "Using default configuration"
-        print(config_msg)
-        print(f"Agent: {self.agent.name}")
-        print(f"Model: {self.agent.model}")
-        print(f"Tools: {len(self.agent.tools)} loaded")
-        print(f"Session: {session_id}")
-        print(f"Verbose mode: {'Enabled' if verbose_mode else 'Disabled'}")
-        print(f"Streaming: {'Enabled' if stream else 'Disabled'}")
+        # Display welcome banner
+        print("╭" + "─" * 58 + "╮")
+        print("│" + " " * 18 + "🤖 Welcome to xAgent CLI!" + " " * 15 + "│")
+        print("╰" + "─" * 58 + "╯")
+        
+        # Configuration information
+        config_msg = f"📁 Config: {self.config_path}" if self.config_path else "📁 Config: Default configuration"
+        print(f"\n{config_msg}")
+        
+        # Agent information in a clean format
+        print(f"🤖 Agent: {self.agent.name}")
+        print(f"🧠 Model: {self.agent.model}")
+        
+        # Tools information
+        total_tools = len(self.agent.tools)
+        mcp_tools_count = len(self.agent.mcp_tools) if self.agent.mcp_tools else 0
+        if mcp_tools_count > 0:
+            print(f"🛠️  Tools: {total_tools} built-in + {mcp_tools_count} MCP tools")
+        else:
+            print(f"🛠️  Tools: {total_tools} loaded")
+        
+        # Session information
+        print(f"🔗 Session: {session_id}")
+        
+        # Status indicators
+        status_indicators = []
+        status_indicators.append(f"{'🟢' if verbose_mode else '🔇'} Verbose: {'On' if verbose_mode else 'Off'}")
+        status_indicators.append(f"{'🌊' if stream else '📄'} Stream: {'On' if stream else 'Off'}")
+        print(f"⚙️  Status: {' | '.join(status_indicators)}")
+        
+        # Performance tip
         if verbose_mode and stream:
-            print("ℹ️  Note: Verbose mode is enabled. Consider using 'stream off' for better log readability.")
-        print("Type 'exit', 'quit', or 'bye' to end the session.")
-        print("Type 'clear' to clear the session history.")
-        print("Type 'stream on/off' to toggle streaming mode.")
-        print("Type 'help' for available commands.")
-        print("-" * 50)
+            print("💡 Tip: Use 'stream off' for better log readability in verbose mode")
+        
+        # Quick start guide
+        print(f"\n{'─' * 60}")
+        print("🚀 Quick Start:")
+        print("  • Type your message to chat with the agent")
+        print("  • Use 'help' to see all available commands")
+        print("  • Use 'exit', 'quit', or 'bye' to end session")
+        print("  • Use 'clear' to reset conversation history")
+        print("  • Use 'stream on/off' to toggle response streaming")
+        print("─" * 60)
         
         while True:
             try:
@@ -85,11 +112,14 @@ class CLIAgent(BaseAgentRunner):
                 
                 # Handle special commands
                 if user_input.lower() in ['exit', 'quit', 'bye']:
-                    print("👋 Goodbye!")
+                    print("\n╭───────────────────────────────────────╮")
+                    print("│  👋 Thank you for using xAgent CLI!   │")
+                    print("│         See you next time! 🚀         │")
+                    print("╰───────────────────────────────────────╯")
                     break
                 elif user_input.lower() == 'clear':
                     await self.message_storage.clear_history(user_id, session_id)
-                    print("🧹 Session history cleared.")
+                    print("🧹 ✨ Conversation history cleared. Fresh start!")
                     continue
                 elif user_input.lower().startswith('stream '):
                     # Handle stream toggle command
@@ -97,10 +127,10 @@ class CLIAgent(BaseAgentRunner):
                     if len(stream_cmd) == 2:
                         if stream_cmd[1] == 'on':
                             stream = True
-                            print("🌊 Streaming mode enabled.")
+                            print("🌊 ✨ Streaming mode enabled.")
                         elif stream_cmd[1] == 'off':
                             stream = False
-                            print("📄 Streaming mode disabled.")
+                            print("📄 ✨ Streaming mode disabled.")
                         else:
                             print("⚠️  Usage: stream on/off")
                     else:
@@ -110,6 +140,7 @@ class CLIAgent(BaseAgentRunner):
                     self._show_help()
                     continue
                 elif not user_input:
+                    print("💭 Please enter a message to chat with the agent.")
                     continue
                 
                 # Process the message
@@ -125,28 +156,40 @@ class CLIAgent(BaseAgentRunner):
                     # Check if response is a generator (streaming) or a string
                     if hasattr(response_generator, '__aiter__'):
                         print("🤖 Agent: ", end="", flush=True)
+                        chunk_count = 0
                         async for chunk in response_generator:
                             if chunk:
                                 print(chunk, end="", flush=True)
+                                chunk_count += 1
                         print()  # Add newline after streaming is complete
+                        if chunk_count == 0:
+                            print("   (No response received)")
                     else:
                         # Fallback for non-streaming response
                         print("🤖 Agent: " + str(response_generator))
                 else:
                     # Handle non-streaming response
+                    print("🤖 Agent: ", end="", flush=True)
                     response = await self.agent(
                         user_message=user_input,
                         user_id=user_id,
                         session_id=session_id,
                         stream=False
                     )
-                    print("🤖 Agent: " + str(response))
+                    print(str(response))
                 
             except KeyboardInterrupt:
-                print("\n\n👋 Session interrupted. Goodbye!")
+                print("\n\n╭─────────────────────────────────────╮")
+                print("│  👋 Session interrupted by user    │")
+                print("│      Thank you for using xAgent!   │")
+                print("╰─────────────────────────────────────╯")
                 break
             except Exception as e:
-                print(f"\n❌ Error: {e}")
+                print(f"\n❌ Oops! An error occurred: {e}")
+                if verbose_mode:
+                    import traceback
+                    print("🔍 Debug trace:")
+                    traceback.print_exc()
     
     async def chat_single(self, message: str, user_id: str = None, session_id: str = None):
         """
@@ -175,18 +218,26 @@ class CLIAgent(BaseAgentRunner):
     
     def _show_help(self):
         """Show help information."""
-        print("\n📋 Available commands:")
-        print("  exit, quit, bye  - Exit the chat session")
-        print("  clear           - Clear session history")
-        print("  stream on/off   - Toggle streaming mode")
-        print("  help            - Show this help message")
-        print("\n🔧 Available tools:")
-        for tool_name in self.agent.tools.keys():
-            print(f"  - {tool_name}")
+        print("\n╭─ 📋 Commands ─────────────────────────────────────────────╮")
+        print("│ exit, quit, bye    Exit the chat session                  │")
+        print("│ clear              Clear conversation history             │")
+        print("│ stream on/off      Toggle streaming response mode         │")
+        print("│ help               Show this help message                 │")
+        print("╰───────────────────────────────────────────────────────────╯")
+        
+        print("\n╭─ 🔧 Built-in Tools ───────────────────────────────────────╮")
+        if self.agent.tools:
+            for i, tool_name in enumerate(self.agent.tools.keys(), 1):
+                print(f"│ {i:2d}. {tool_name:<50}    │")
+        else:
+            print("│ No built-in tools available                              │")
+        print("╰───────────────────────────────────────────────────────────╯")
+        
         if self.agent.mcp_tools:
-            print("\n🌐 MCP tools:")
-            for tool_name in self.agent.mcp_tools.keys():
-                print(f"  - {tool_name}")
+            print("\n╭─ 🌐 MCP Tools ────────────────────────────────────────────╮")
+            for i, tool_name in enumerate(self.agent.mcp_tools.keys(), 1):
+                print(f"│ {i:2d}. {tool_name:<50} │")
+            print("╰───────────────────────────────────────────────────────────╯")
     
     def create_default_config(self, config_path: str = "config/agent.yaml"):
         """
@@ -205,8 +256,14 @@ class CLIAgent(BaseAgentRunner):
         with open(config_path, 'w', encoding='utf-8') as f:
             yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
         
-        print(f"✅ Default configuration created at: {config_path}")
-        print("You can edit this file to customize your agent settings.")
+        print("╭─────────────────────────────────────────────────────────╮")
+        print("│ ✅ Configuration Created Successfully!                  │")
+        print("╰─────────────────────────────────────────────────────────╯")
+        print(f"📁 Location: {config_path}")
+        print("📝 Next steps:")
+        print("  • Edit the configuration file to customize your agent")
+        print("  • Use 'xagent-cli --config {config_path}' to load it")
+        print("  • See documentation for all available options")
 
 
 def create_default_config_file(config_path: str = "config/agent.yaml"):
@@ -228,8 +285,14 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
     with open(config_path, 'w', encoding='utf-8') as f:
         yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
     
-    print(f"✅ Default configuration created at: {config_path}")
-    print("You can edit this file to customize your agent settings.")
+    print("╭─────────────────────────────────────────────────────────╮")
+    print("│ ✅ Configuration Created Successfully!                  │")
+    print("╰─────────────────────────────────────────────────────────╯")
+    print(f"📁 Location: {config_path}")
+    print("📝 Next steps:")
+    print("  • Edit the configuration file to customize your agent")
+    print(f"  • Use 'xagent-cli --config {config_path}' to load it")
+    print("  • See documentation for all available options")
 
 
 def main():
