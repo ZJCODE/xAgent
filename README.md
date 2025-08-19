@@ -560,6 +560,8 @@ asyncio.run(chat_with_persistence())
 
 you can implement your own message storage by inheriting from `MessageStorageBase` and implementing the required methods like `add_messages`, `get_messages`, etc.
 
+For detailed guidance, see the [Message Storage Inheritance](docs/message_storage_inheritance.md) documentation.
+
 ## 🔄 Multi-Agent Workflows
 
 xAgent enables powerful multi-agent coordination patterns for complex tasks.
