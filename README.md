@@ -302,9 +302,10 @@ $ xagent-cli
 |--------|-------------|---------|
 | `--config` | Configuration file path | `--config my_config.yaml` |
 | `--toolkit_path` | Custom toolkit directory | `--toolkit_path my_toolkit` |
+| `--user_id` | User ID for session | `--user_id user123` |
+| `--session_id` | Session ID for chat | `--session_id session456`
 | `--ask` | Ask single question and exit | `--ask "Hello world"` |
-| `--verbose` | Enable verbose logging | `--verbose` |
-| `--no-stream` | Disable streaming | `--no-stream` |
+| `--verbose`, `-v` | Enable verbose logging | `--verbose` |
 
 ## 🤖 Python API
 

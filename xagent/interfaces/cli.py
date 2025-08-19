@@ -305,7 +305,6 @@ def main():
     parser.add_argument("--user_id", help="User ID for the session")
     parser.add_argument("--session_id", help="Session ID for the chat")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    parser.add_argument("--no-stream", action="store_true", help="Disable streaming response (default: streaming enabled)")
     
     # Special commands as optional arguments
     parser.add_argument("--ask", metavar="MESSAGE", help="Ask a single question instead of starting interactive chat")
@@ -343,13 +342,10 @@ def main():
             verbose=args.verbose
         )
         
-        # Determine stream setting - if --no-stream is specified, use False
-        # Otherwise, let chat_interactive decide based on verbose mode
-        stream_setting = None if not args.no_stream else False
+        # Start interactive chat
         asyncio.run(cli_agent.chat_interactive(
             user_id=args.user_id,
-            session_id=args.session_id,
-            stream=stream_setting
+            session_id=args.session_id
         ))
             
     except Exception as e:
