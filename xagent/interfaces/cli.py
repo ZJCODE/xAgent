@@ -239,36 +239,10 @@ class CLIAgent(BaseAgentRunner):
                 print(f"│ {i:2d}. {tool_name:<50} │")
             print("╰───────────────────────────────────────────────────────────╯")
     
-    def create_default_config(self, config_path: str = "config/agent.yaml"):
-        """
-        Create a default configuration file.
-        
-        Args:
-            config_path: Path where to create the config file
-        """
-        # Create directory if it doesn't exist
-        config_dir = os.path.dirname(config_path)
-        if config_dir and not os.path.exists(config_dir):
-            os.makedirs(config_dir)
-        
-        default_config = self._get_default_config()
-        
-        with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
-        
-        print("╭─────────────────────────────────────────────────────────╮")
-        print("│ ✅ Configuration Created Successfully!                  │")
-        print("╰─────────────────────────────────────────────────────────╯")
-        print(f"📁 Location: {config_path}")
-        print("📝 Next steps:")
-        print("  • Edit the configuration file to customize your agent")
-        print("  • Use 'xagent-cli --config {config_path}' to load it")
-        print("  • See documentation for all available options")
-
 
 def create_default_config_file(config_path: str = "config/agent.yaml"):
     """
-    Create a default configuration file.
+    Create a default configuration file and toolkit directory structure.
     
     Args:
         config_path: Path where to create the config file
@@ -285,13 +259,52 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
     with open(config_path, 'w', encoding='utf-8') as f:
         yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
     
+    # Create default toolkit directory
+    toolkit_dir = "my_toolkit"
+    if not os.path.exists(toolkit_dir):
+        os.makedirs(toolkit_dir)
+    
+    # Create __init__.py file
+    init_content = """from .tools import *
+
+TOOLKIT_REGISTRY = {
+    "calculate_square": calculate_square,
+    "fetch_weather": fetch_weather
+}
+"""
+    
+    with open(os.path.join(toolkit_dir, "__init__.py"), 'w', encoding='utf-8') as f:
+        f.write(init_content)
+    
+    # Create tools.py file
+    tools_content = """import asyncio
+from xagent.utils.tool_decorator import function_tool
+
+@function_tool()
+def calculate_square(n: int) -> int:
+    \"\"\"Calculate the square of a number.\"\"\"
+    return n * n
+
+@function_tool()
+async def fetch_weather(city: str) -> str:
+    \"\"\"Fetch weather data from an API.\"\"\"
+    # Simulate API call
+    await asyncio.sleep(0.5)
+    return f"Weather in {city}: 22°C, Sunny"
+"""
+    
+    with open(os.path.join(toolkit_dir, "tools.py"), 'w', encoding='utf-8') as f:
+        f.write(tools_content)
+    
     print("╭─────────────────────────────────────────────────────────╮")
-    print("│ ✅ Configuration Created Successfully!                  │")
+    print("│ ✅ Configuration and Toolkit Created Successfully!      │")
     print("╰─────────────────────────────────────────────────────────╯")
-    print(f"📁 Location: {config_path}")
+    print(f"📁 Config: {config_path}")
+    print(f"🛠️  Toolkit: {toolkit_dir}/")
     print("📝 Next steps:")
     print("  • Edit the configuration file to customize your agent")
-    print(f"  • Use 'xagent-cli --config {config_path}' to load it")
+    print(f"  • Use 'xagent-cli --config {config_path} --toolkit_path {toolkit_dir}' to load them")
+    print("  • Add more tools to my_toolkit/tools.py and update TOOLKIT_REGISTRY")
     print("  • See documentation for all available options")
 
 
@@ -309,7 +322,6 @@ def main():
     # Special commands as optional arguments
     parser.add_argument("--ask", metavar="MESSAGE", help="Ask a single question instead of starting interactive chat")
     parser.add_argument("--init", action="store_true", help="Create default configuration file and exit")
-    parser.add_argument("--init-config", default="config/agent.yaml", help="Config file path to create when using --init")
     
     # Parse arguments
     args = parser.parse_args()
@@ -317,7 +329,7 @@ def main():
     try:
         # Handle init command
         if args.init:
-            create_default_config_file(args.init_config)
+            create_default_config_file("config/agent.yaml")
             return
         
         # Handle single question

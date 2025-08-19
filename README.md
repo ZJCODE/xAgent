@@ -158,7 +158,18 @@ more advanced configurations can be found in [Configuration Reference](docs/conf
 
 ### Custom Tools
 
-Create custom tools in `my_toolkit/`:
+Initialize your project with default toolkit structure:
+
+```bash
+# Create default config and toolkit structure
+xagent-cli --init
+```
+
+This creates:
+- `config/agent.yaml` - Configuration file
+- `my_toolkit/` - Custom tools directory with examples
+
+Example toolkit structure:
 
 ```python
 # my_toolkit/__init__.py
@@ -170,6 +181,7 @@ TOOLKIT_REGISTRY = {
 }
 
 # my_toolkit/tools.py
+import asyncio
 from xagent.utils.tool_decorator import function_tool
 
 @function_tool()
@@ -188,7 +200,8 @@ async def fetch_weather(city: str) -> str:
 ### Start with Custom Config
 
 ```bash
-xagent-server --config agent_config.yaml --toolkit_path my_toolkit
+# Use the generated config and toolkit
+xagent-server --config config/agent.yaml --toolkit_path my_toolkit
 ```
 
 ### API Usage
@@ -305,6 +318,7 @@ $ xagent-cli
 | `--user_id` | User ID for session | `--user_id user123` |
 | `--session_id` | Session ID for chat | `--session_id session456`
 | `--ask` | Ask single question and exit | `--ask "Hello world"` |
+| `--init` | Create default config and toolkit | `--init` |
 | `--verbose`, `-v` | Enable verbose logging | `--verbose` |
 
 ## 🤖 Python API
