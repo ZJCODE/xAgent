@@ -17,31 +17,34 @@ def parse_dependencies_dsl(dsl_string: str) -> Dict[str, List[str]]:
     Parse DSL string to dependency dictionary.
     
     Supported syntax:
-    - A→B: A depends on nothing, B depends on A
-    - A→B→C: A→B, B→C (sequential chain)
-    - A→B, A→C: A→B and A→C (parallel branches)
-    - A&B→C: C depends on both A and B
-    - Complex: A→B, A→C, B&C→D
+    - A→B or A->B: A depends on nothing, B depends on A
+    - A→B→C or A->B->C: A→B, B→C (sequential chain)
+    - A→B, A→C or A->B, A->C: A→B and A→C (parallel branches)
+    - A&B→C or A&B->C: C depends on both A and B
+    - Complex: A→B, A→C, B&C→D or A->B, A->C, B&C->D
     
     Args:
-        dsl_string: DSL string like "A→B, A→C, B&C→D"
+        dsl_string: DSL string like "A→B, A→C, B&C→D" or "A->B, A->C, B&C->D"
         
     Returns:
         Dict mapping agent names to their dependencies
         
     Examples:
-        "A→B" -> {"B": ["A"]}
-        "A→B→C" -> {"B": ["A"], "C": ["B"]}
-        "A→B, A→C" -> {"B": ["A"], "C": ["A"]}
-        "A→B, B&C→D" -> {"B": ["A"], "D": ["B", "C"]}
+        "A→B" or "A->B" -> {"B": ["A"]}
+        "A→B→C" or "A->B->C" -> {"B": ["A"], "C": ["B"]}
+        "A→B, A→C" or "A->B, A->C" -> {"B": ["A"], "C": ["A"]}
+        "A→B, B&C→D" or "A->B, B&C->D" -> {"B": ["A"], "D": ["B", "C"]}
     """
     if not dsl_string or not dsl_string.strip():
         return {}
     
     dependencies = {}
     
+    # Normalize arrows: convert -> to → for consistent processing
+    normalized_dsl = dsl_string.replace('->', '→')
+    
     # Split by comma to get individual rules
-    rules = [rule.strip() for rule in dsl_string.split(',')]
+    rules = [rule.strip() for rule in normalized_dsl.split(',')]
     
     for rule in rules:
         if not rule:
@@ -108,7 +111,7 @@ def validate_dsl_syntax(dsl_string: str) -> Tuple[bool, str]:
     Validate DSL syntax.
     
     Args:
-        dsl_string: DSL string to validate
+        dsl_string: DSL string to validate (supports both → and -> arrows)
         
     Returns:
         Tuple of (is_valid, error_message)
@@ -117,18 +120,26 @@ def validate_dsl_syntax(dsl_string: str) -> Tuple[bool, str]:
         return True, ""
     
     try:
-        # Check for valid characters (letters, numbers, underscore, arrow, ampersand, comma, space)
-        valid_pattern = re.compile(r'^[a-zA-Z0-9_→&,\s]+$')
+        # Check for valid characters and patterns
+        # First check for invalid arrow patterns like --, ->, ->>, etc.
+        if '--' in dsl_string or '->>' in dsl_string or '<<-' in dsl_string:
+            return False, "Invalid arrow patterns detected. Use → or -> (single dash followed by >)."
+        
+        # Check for valid characters (letters, numbers, underscore, arrows, ampersand, comma, space, hyphen, >)
+        valid_pattern = re.compile(r'^[a-zA-Z0-9_→&,\s\-\>]+$')
         if not valid_pattern.match(dsl_string):
-            return False, "Invalid characters in DSL string. Only letters, numbers, underscore, →, &, comma, and spaces are allowed."
+            return False, "Invalid characters in DSL string. Only letters, numbers, underscore, →, ->, &, comma, and spaces are allowed."
+        
+        # Normalize arrows for consistent processing
+        normalized_dsl = dsl_string.replace('->', '→')
         
         # Split by comma to get individual rules
-        rules = [rule.strip() for rule in dsl_string.split(',')]
+        rules = [rule.strip() for rule in normalized_dsl.split(',')]
         for rule in rules:
             if not rule:
                 continue
             if '→' not in rule:
-                return False, f"Each rule must contain at least one arrow (→). Invalid rule: '{rule}'"
+                return False, f"Each rule must contain at least one arrow (→ or ->). Invalid rule: '{rule}'"
             
             # Handle chain syntax (multiple arrows)
             segments = [seg.strip() for seg in rule.split('→')]
@@ -479,8 +490,8 @@ class GraphWorkflow(BaseWorkflow):
             dependencies: Either:
                 - Dict mapping agent names to their input dependencies
                   Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
-                - DSL string with arrow notation
-                  Example: "A→B, A→C, B&C→D"
+                - DSL string with arrow notation (supports both → and ->)
+                  Example: "A→B, A→C, B&C→D" or "A->B, A->C, B&C->D"
             max_concurrent: Maximum concurrent executions
         """
         super().__init__(agents, name)
@@ -781,8 +792,8 @@ class Workflow:
             dependencies: Either:
                 - Dict mapping agent names to their dependencies
                   Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
-                - DSL string with arrow notation
-                  Example: "A→B, A→C, B&C→D"
+                - DSL string with arrow notation (supports both → and ->)
+                  Example: "A→B, A→C, B&C→D" or "A->B, A->C, B&C->D"
             task: Original task string
             image_source: Optional image source for root agents
             max_concurrent: Maximum concurrent executions
@@ -799,8 +810,11 @@ class Workflow:
                 "D": ["A"]       # D depends on A (can run parallel with B)
             }
             
-            # DSL format (equivalent to above)
+            # DSL format with Unicode arrow (equivalent to above)
             dependencies = "A→B, A&B→C, A→D"
+            
+            # DSL format with ASCII arrow (equivalent to above)
+            dependencies = "A->B, A&B->C, A->D"
             
             result = await workflow.run_graph(
                 agents=[agent_A, agent_B, agent_C, agent_D],

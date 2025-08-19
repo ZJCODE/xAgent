@@ -181,6 +181,52 @@ class TestWorkflowDSL(unittest.TestCase):
         }
         self.assertEqual(result, expected)
     
+    def test_both_arrow_types(self):
+        """Test that both → and -> arrows work equivalently."""
+        # Test pairs of equivalent DSL strings
+        test_pairs = [
+            ("A→B", "A->B"),
+            ("A→B→C", "A->B->C"),
+            ("A→B, A→C", "A->B, A->C"),
+            ("A&B→C", "A&B->C"),
+            ("A→B, A→C, B&C→D", "A->B, A->C, B&C->D"),
+        ]
+        
+        for unicode_dsl, ascii_dsl in test_pairs:
+            unicode_result = parse_dependencies_dsl(unicode_dsl)
+            ascii_result = parse_dependencies_dsl(ascii_dsl)
+            self.assertEqual(unicode_result, ascii_result, 
+                           f"Results should match for '{unicode_dsl}' and '{ascii_dsl}'")
+            
+            # Both should be valid
+            unicode_valid, _ = validate_dsl_syntax(unicode_dsl)
+            ascii_valid, _ = validate_dsl_syntax(ascii_dsl)
+            self.assertTrue(unicode_valid, f"'{unicode_dsl}' should be valid")
+            self.assertTrue(ascii_valid, f"'{ascii_dsl}' should be valid")
+    
+    def test_mixed_arrow_usage(self):
+        """Test mixing both arrow types in the same DSL string."""
+        mixed_dsl = "A→B, B->C, C→D"
+        result = parse_dependencies_dsl(mixed_dsl)
+        expected = {"B": ["A"], "C": ["B"], "D": ["C"]}
+        self.assertEqual(result, expected)
+        
+        is_valid, _ = validate_dsl_syntax(mixed_dsl)
+        self.assertTrue(is_valid)
+    
+    def test_invalid_arrow_patterns(self):
+        """Test that invalid arrow patterns are rejected."""
+        invalid_patterns = [
+            "A-->B",    # Double dash
+            "A->>B",    # Dash with double >
+            "A<<-B",    # Wrong direction
+        ]
+        
+        for pattern in invalid_patterns:
+            is_valid, error = validate_dsl_syntax(pattern)
+            self.assertFalse(is_valid, f"'{pattern}' should be invalid but was accepted")
+            self.assertIn("arrow", error.lower())
+    
     def test_edge_cases(self):
         """Test edge cases and potential issues."""
         # Single agent (no dependencies)

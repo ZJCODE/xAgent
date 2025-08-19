@@ -4,20 +4,26 @@ xAgent 现在支持使用直观的 DSL 语法来定义工作流依赖关系，�
 
 ## 语法概览
 
-DSL 使用箭头符号 `→` 和与符号 `&` 来表示依赖关系：
+DSL 使用箭头符号和与符号 `&` 来表示依赖关系，支持两种箭头格式：
 
-- `A→B`: B 依赖于 A
-- `A→B→C`: 链式依赖，A→B，B→C
-- `A→B, A→C`: 并行分支，B和C都依赖于A
-- `A&B→C`: C 依赖于 A 和 B
-- `→A`: A 是根节点（无依赖）
+- **Unicode 箭头 `→`**: `A→B` (推荐用于文档和展示)
+- **ASCII 箭头 `->`**: `A->B` (推荐用于代码，更好的兼容性)
+
+基本语法规则：
+- `A→B` 或 `A->B`: B 依赖于 A
+- `A→B→C` 或 `A->B->C`: 链式依赖，A→B，B→C
+- `A→B, A→C` 或 `A->B, A->C`: 并行分支，B和C都依赖于A
+- `A&B→C` 或 `A&B->C`: C 依赖于 A 和 B
+- `→A` 或 `->A`: A 是根节点（无依赖）
+- **混合使用**: `A→B, B->C, C→D` (可以在同一个 DSL 字符串中混合使用两种箭头)
 
 ## 基本语法
 
 ### 1. 简单依赖
 ```python
-# DSL 语法
-dependencies = "A→B"
+# DSL 语法 (两种箭头等效)
+dependencies = "A→B"      # Unicode 箭头
+dependencies = "A->B"     # ASCII 箭头
 
 # 等效的字典语法
 dependencies = {"B": ["A"]}
@@ -26,7 +32,8 @@ dependencies = {"B": ["A"]}
 ### 2. 链式依赖
 ```python
 # DSL 语法
-dependencies = "A→B→C→D"
+dependencies = "A→B→C→D"     # Unicode
+dependencies = "A->B->C->D"  # ASCII
 
 # 等效的字典语法
 dependencies = {
@@ -39,7 +46,8 @@ dependencies = {
 ### 3. 并行分支
 ```python
 # DSL 语法
-dependencies = "A→B, A→C"
+dependencies = "A→B, A→C"     # Unicode
+dependencies = "A->B, A->C"   # ASCII
 
 # 等效的字典语法
 dependencies = {
@@ -51,7 +59,8 @@ dependencies = {
 ### 4. 多依赖合并
 ```python
 # DSL 语法
-dependencies = "A&B→C"
+dependencies = "A&B→C"      # Unicode
+dependencies = "A&B->C"     # ASCII
 
 # 等效的字典语法
 dependencies = {"C": ["A", "B"]}
@@ -60,7 +69,8 @@ dependencies = {"C": ["A", "B"]}
 ### 5. 复杂工作流
 ```python
 # DSL 语法
-dependencies = "A→B, A→C, B&C→D, A→E, D&E→F"
+dependencies = "A→B, A→C, B&C→D, A→E, D&E→F"      # Unicode
+dependencies = "A->B, A->C, B&C->D, A->E, D&E->F"  # ASCII
 
 # 等效的字典语法
 dependencies = {
@@ -70,6 +80,13 @@ dependencies = {
     "E": ["A"],
     "F": ["D", "E"]
 }
+```
+
+### 6. 混合箭头使用
+```python
+# 可以在同一个 DSL 字符串中混合使用两种箭头
+dependencies = "A→B, B->C, C→D->E"
+# 解析结果: {"B": ["A"], "C": ["B"], "D": ["C"], "E": ["D"]}
 ```
 
 ## 使用示例
@@ -86,11 +103,27 @@ analyzer = Agent(name="analyzer", system_prompt="Analysis agent")
 planner = Agent(name="planner", system_prompt="Planning agent")
 synthesizer = Agent(name="synthesizer", system_prompt="Synthesis agent")
 
-# 使用 DSL 定义工作流
+# 使用 DSL 定义工作流 (可以选择任一箭头格式)
 workflow = Workflow()
+
+# Unicode 箭头版本
 result = await workflow.run_graph(
     agents=[researcher, analyzer, planner, synthesizer],
     dependencies="researcher→analyzer, researcher→planner, analyzer&planner→synthesizer",
+    task="Research AI impact on education and create implementation plan"
+)
+
+# ASCII 箭头版本 (等效)
+result = await workflow.run_graph(
+    agents=[researcher, analyzer, planner, synthesizer],
+    dependencies="researcher->analyzer, researcher->planner, analyzer&planner->synthesizer",
+    task="Research AI impact on education and create implementation plan"
+)
+
+# 混合使用版本
+result = await workflow.run_graph(
+    agents=[researcher, analyzer, planner, synthesizer],
+    dependencies="researcher→analyzer, researcher->planner, analyzer&planner->synthesizer",
     task="Research AI impact on education and create implementation plan"
 )
 ```
@@ -99,7 +132,12 @@ result = await workflow.run_graph(
 
 ```python
 # 研究工作流：数据收集 → 分析/计划 → 报告撰写
+
+# Unicode 版本
 dependencies = "collect_data→analyze_data, collect_data→create_plan, analyze_data&create_plan→write_report"
+
+# ASCII 版本 (等效)
+dependencies = "collect_data->analyze_data, collect_data->create_plan, analyze_data&create_plan->write_report"
 
 # 这创建了以下执行图：
 # collect_data (第1层)
@@ -112,7 +150,12 @@ dependencies = "collect_data→analyze_data, collect_data→create_plan, analyze
 
 ```python
 # 软件开发工作流
+
+# Unicode 版本
 dependencies = "requirements→design, requirements→research, design&research→implementation, implementation→testing, testing→deployment"
+
+# ASCII 版本 (推荐用于代码)
+dependencies = "requirements->design, requirements->research, design&research->implementation, implementation->testing, testing->deployment"
 
 # 执行图：
 # requirements (第1层)

@@ -968,23 +968,23 @@ dependencies = "researcher→analyst, researcher→planner, analyst&planner→sy
 
 | DSL Pattern | Description | Generated Dependencies |
 |-------------|-------------|----------------------|
-| `A→B` | B depends on A | `{"B": ["A"]}` |
-| `A→B→C` | Chain: A→B, B→C | `{"B": ["A"], "C": ["B"]}` |
-| `A→B, A→C` | Parallel branches | `{"B": ["A"], "C": ["A"]}` |
-| `A&B→C` | C depends on both A and B | `{"C": ["A", "B"]}` |
-| `A→B, A→C, B&C→D` | Complex fan-out/fan-in | `{"B": ["A"], "C": ["A"], "D": ["B", "C"]}` |
+| `A→B` or `A->B` | B depends on A | `{"B": ["A"]}` |
+| `A→B→C` or `A->B->C` | Chain: A→B, B→C | `{"B": ["A"], "C": ["B"]}` |
+| `A→B, A→C` or `A->B, A->C` | Parallel branches | `{"B": ["A"], "C": ["A"]}` |
+| `A&B→C` or `A&B->C` | C depends on both A and B | `{"C": ["A", "B"]}` |
+| `A→B, A→C, B&C→D` or `A->B, A->C, B&C->D` | Complex fan-out/fan-in | `{"B": ["A"], "C": ["A"], "D": ["B", "C"]}` |
 
 #### Real-World DSL Examples
 
 ```python
-# Research workflow
+# Research workflow (Unicode arrows)
 research_flow = "collect_data→analyze_data, collect_data→create_plan, analyze_data&create_plan→write_report"
 
-# Software development workflow  
-dev_flow = "requirements→design, requirements→research, design&research→implementation, implementation→testing, testing→deployment"
+# Software development workflow (ASCII arrows - recommended for code)
+dev_flow = "requirements->design, requirements->research, design&research->implementation, implementation->testing, testing->deployment"
 
-# Content creation workflow
-content_flow = "research→outline, research→gather_sources, outline&gather_sources→draft, draft→review→final"
+# Content creation workflow (mixed arrows - both work)
+content_flow = "research→outline, research->gather_sources, outline&gather_sources->draft, draft->review→final"
 
 # Using DSL in workflows
 result = await workflow.run_graph(
@@ -999,14 +999,19 @@ result = await workflow.run_graph(
 ```python
 from xagent.multi.workflow import validate_dsl_syntax, parse_dependencies_dsl
 
-# Validate before use
-is_valid, error = validate_dsl_syntax("A→B, A→C, B&C→D")
-if not is_valid:
-    print(f"DSL Error: {error}")
+# Both arrow types are valid
+unicode_dsl = "A→B, A→C, B&C→D"
+ascii_dsl = "A->B, A->C, B&C->D"
+mixed_dsl = "A→B, B->C, C→D"
 
-# Parse to see the result
-deps = parse_dependencies_dsl("A→B, A→C, B&C→D")
-print(deps)  # {'B': ['A'], 'C': ['A'], 'D': ['B', 'C']}
+# Validate before use
+for dsl in [unicode_dsl, ascii_dsl, mixed_dsl]:
+    is_valid, error = validate_dsl_syntax(dsl)
+    if not is_valid:
+        print(f"DSL Error: {error}")
+    else:
+        deps = parse_dependencies_dsl(dsl)
+        print(f"Parsed: {deps}")
 ```
 
 For detailed DSL documentation, see [docs/workflow_dsl.md](docs/workflow_dsl.md).
