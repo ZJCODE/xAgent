@@ -73,25 +73,6 @@ server:
 | `message_storage` | string | `"local"` | Message persistence: "local" or "redis" |
 | `output_schema` | object | `null` | Structured output schema definition |
 
-### System Prompt Best Practices
-
-```yaml
-agent:
-  system_prompt: |
-    You are [ROLE], a [SPECIALIZATION].
-    
-    Your responsibilities:
-    - [Primary responsibility]
-    - [Secondary responsibility]
-    - [Additional responsibilities]
-    
-    Guidelines:
-    - [Behavioral guideline 1]
-    - [Behavioral guideline 2]
-    - [Communication style]
-    
-    When [CONDITION], always [ACTION].
-```
 
 ## Server Configuration
 
