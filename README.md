@@ -39,7 +39,7 @@ export OPENAI_API_KEY=your_openai_api_key
 xagent-cli
 
 # Or quickly ask a question
-xagent-cli --ask "What's the weather like today?"
+xagent-cli --ask "who are you?"
 
 ```
 
