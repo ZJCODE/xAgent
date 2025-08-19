@@ -407,22 +407,23 @@ class BaseAgentRunner:
             return self._create_output_model_from_schema(agent_cfg["output_schema"])
         return None
     
-    def _initialize_message_storage(self) -> Optional[MessageStorageBase]:
+    def _initialize_message_storage(self) -> MessageStorageBase:
         """
         Initialize message database based on configuration.
         
         Returns:
-            MessageDB instance if non-local mode, None for local mode
+            MessageStorageBase instance (MessageStorageLocal or MessageStorageRedis)
             
         Note:
-            Local mode (local=True) returns None to avoid database dependencies
+            Returns appropriate storage backend based on configuration.
+            Defaults to MessageStorageLocal if storage type is not recognized.
         """
         agent_cfg = self.config.get("agent", {})
         message_storage = agent_cfg.get("message_storage", "local")
 
         message_storage_map = {
-            "local": MessageStorageLocal(),  # Local mode uses in-memory storage
-            "redis": MessageStorageRedis(),
+            "local": MessageStorageLocal,  # Local mode uses in-memory storage
+            "redis": MessageStorageRedis,
         }
 
-        return message_storage_map.get(message_storage, MessageStorageLocal())
+        return message_storage_map.get(message_storage, MessageStorageLocal)()
