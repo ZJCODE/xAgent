@@ -40,7 +40,7 @@ xagent-cli
 
 # Or quickly ask a question
 xagent-cli --ask "who are you?"
-xagent-cli --ask "what's the weather in Hangzhou?" -v
+xagent-cli --ask "what's the weather in Hangzhou and Shanghai?" -v
 ```
 
 That's it!
