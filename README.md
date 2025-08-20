@@ -759,7 +759,10 @@ For detailed workflow patterns and examples, see [Multi-Agent Workflows](docs/wo
 - [examples/demo](examples/demo) - Complete usage examples and demos
 - [examples/config/](examples/config/) - Configuration file templates
 - [examples/toolkit/](examples/toolkit/) - Custom tool development examples
-- [examples/docker/](examples/docker/) - Production deployment with Docker
+
+### Deployment
+
+- [deploy/docker/](deploy/docker/) - Production deployment with Docker and Docker Compose
 
 ### Architecture Overview
 
