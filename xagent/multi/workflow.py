@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 import uuid
 import time
+from pydantic import BaseModel
 
 from ..core.agent import Agent
 
@@ -311,7 +312,8 @@ class ParallelWorkflow(BaseWorkflow):
     def __init__(
         self, 
         agents: List[Agent], 
-        name: Optional[str] = None
+        name: Optional[str] = None,
+        output_type: type[BaseModel] | None = None,
     ):
         """
         Initialize parallel pattern for broadcast consensus building.
@@ -319,11 +321,13 @@ class ParallelWorkflow(BaseWorkflow):
         Args:
             agents: Agents that perform the actual work
             name: Optional name for the pattern
+            output_type: Optional output type for the consensus validator (default is None, which uses Agent's default output type)
         """
         
         self.consensus_validator = Agent(
             name="consensus_validator",
-            system_prompt="Consensus validator and synthesizer agent for parallel processing"
+            system_prompt="Consensus validator and synthesizer agent for parallel processing",
+            output_type=output_type
         )
         
         all_agents = agents + [self.consensus_validator]
@@ -429,12 +433,9 @@ Your role is to analyze their results and provide the best possible response thr
 
 Original task: {original_task}
 
-Agent Results:
-{chr(10).join([f"{i+1}. Agent {name}: {result}" for i, (name, result) in enumerate(worker_results)])}
-
 ---
 
-Detailed Perspectives:
+Agent Results (Detailed Perspectives) :
 {perspective_results}
 
 Your comprehensive approach:
