@@ -1,0 +1,13 @@
+services:
+  xagent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8010:8010"
+    env_file:
+      - .env
+    volumes:
+      - ./config:/app/config
+      - ./my_toolkit:/app/my_toolkit
+      - ./scripts:/app/scripts

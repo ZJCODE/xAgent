@@ -1,0 +1,27 @@
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore environment files
+.env
+.env.example
+
+# Ignore Docker-related files
+docker-compose.yml
+Dockerfile
+
+# Ignore local development files
+*.local
+
+# Ignore logs
+*.log
+
+# Ignore any other files or directories that should not be included in the Docker image
+*.tmp
+*.bak
+*.swp
+*.DS_Store
+node_modules/
+venv/
+env/

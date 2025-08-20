@@ -756,9 +756,10 @@ For detailed workflow patterns and examples, see [Multi-Agent Workflows](docs/wo
 - [Workflow DSL](docs/workflow_dsl.md) - Domain-specific language for defining agent dependencies
 
 ### Examples
-- [examples/](examples/) - Complete usage examples and demos
-- [config/](config/) - Configuration file templates
-- [toolkit/](toolkit/) - Custom tool development examples
+- [examples/demo](examples/demo) - Complete usage examples and demos
+- [examples/config/](examples/config/) - Configuration file templates
+- [examples/toolkit/](examples/toolkit/) - Custom tool development examples
+- [examples/docker/](examples/docker/) - Production deployment with Docker
 
 ### Architecture Overview
 

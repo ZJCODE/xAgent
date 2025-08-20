@@ -1,11 +1,7 @@
 import random
 from fastmcp import FastMCP
 
-from vocabulary.vocabulary import Vocabulary
-
 mcp = FastMCP(name="MCP Server")
-
-vocabulary = Vocabulary()
 
 ## Tools
 
@@ -28,25 +24,6 @@ def get_user_details(user_id: str = None) -> str:
     # user_id will be injected by the server, not provided by the LLM
     return "current user is Jun, 31 years old, lives in Hangzhou, China , hobby is reading books"
 
-@mcp.tool(enabled=True)
-def look_up_word(word: str, user_id: str) -> str:
-    """when user asks for a word definition or meaning, use this tool to look it up."""
-    try:
-        result = vocabulary.lookup_word(word=word, user_id=user_id)
-        result = f"Definition of '{word}':\n {result}"
-    except Exception as e:
-        result = f"Error looking up word: {str(e)}"
-    return result
-
-@mcp.tool(enabled=True)
-def get_vocabulary(user_id: str, n: int) -> list[str]:
-    """when user asks for vocabulary list for review or study, use this tool to retrieve it."""
-    try:
-        vocabularies = vocabulary.get_vocabulary(user_id=user_id, n=n, exclude_known=True)
-        vocabularies = [f"Vocabulary:\n {vocab}" for vocab in vocabularies]
-    except Exception as e:
-        vocabularies = [f"Error retrieving vocabulary: {str(e)}"]
-    return vocabularies
 
 ## Resources
 
