@@ -122,7 +122,7 @@ async def simple_consensus_example():
 
 if __name__ == "__main__":
     # Run the main multi-perspective example
-    asyncio.run(main())
+    # asyncio.run(main())
     
     # Run the simple consensus example
     asyncio.run(simple_consensus_example())

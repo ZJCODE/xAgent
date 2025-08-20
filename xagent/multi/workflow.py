@@ -422,8 +422,8 @@ class ParallelWorkflow(BaseWorkflow):
             return results[0]
         
         # Enhanced aggregation with both consensus and synthesis capabilities
-        perspective_results = "\n\n---\n\n".join([
-            f"Agent {name}'s perspective:\n{result}" 
+        perspective_results = "\n\n----------\n\n".join([
+            f"Agent {name}'s perspective:\n\n{result}" 
             for name, result in worker_results
         ])
         
@@ -433,9 +433,10 @@ Your role is to analyze their results and provide the best possible response thr
 
 Original task: {original_task}
 
----
+----------
 
 Agent Results (Detailed Perspectives) :
+
 {perspective_results}
 
 Your comprehensive approach:
@@ -741,6 +742,7 @@ class Workflow:
         task: str,
         image_source: Optional[str] = None,
         max_concurrent: Optional[int] = 10,
+        output_type: type[BaseModel] | None = None,
         user_id: Optional[str] = "default_user"
     ) -> WorkflowResult:
         """
@@ -751,11 +753,12 @@ class Workflow:
             task: Task string to be processed by all agents
             image_source: Optional image source (URL, file path, or base64 string)
             max_concurrent: Maximum concurrent worker executions
-            
+            output_type: Expected output type for the workflow
+            user_id: User identifier
         Returns:
             WorkflowResult with consensus or best validated output
         """
-        pattern = ParallelWorkflow(agents, f"{self.name}_parallel")
+        pattern = ParallelWorkflow(agents=agents, name=f"{self.name}_parallel", output_type=output_type)
         result = await pattern.execute(
             user_id=user_id,
             task=task, 
