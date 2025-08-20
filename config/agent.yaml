@@ -9,6 +9,8 @@ agent:
       - "web_search"  # Built-in web search
       - "draw_image"  # Built-in image generation (need set AWS credentials in .env)
       - "char_count"  # Custom tool for counting characters
+    mcp_servers:
+      - "http://localhost:8001/mcp/"  # Example MCP server
       
   message_storage: "redis"  # Use Redis for message storage currently supported  local or redis
   

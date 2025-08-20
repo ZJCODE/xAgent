@@ -148,6 +148,8 @@ agent:
       - "web_search"      # Built-in web search
       - "draw_image"      # Built-in image generation (need set aws credentials for image upload)
       - "custom_tool"     # Your custom tools
+    mcp_servers:
+      - "http://localhost:8001/mcp/"  # Example MCP server
 
 server:
   host: "0.0.0.0"
