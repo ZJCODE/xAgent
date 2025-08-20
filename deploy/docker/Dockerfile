@@ -4,7 +4,7 @@ FROM python:3.12-slim-bookworm
 WORKDIR /app
 
 # Install myxagent directly
-RUN pip install --no-cache-dir myxagent
+RUN pip install --no-cache-dir myxagent -i https://mirrors.aliyun.com/pypi/simple
 
 # Copy the application code
 COPY . .

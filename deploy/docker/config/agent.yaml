@@ -5,8 +5,8 @@ agent:
   capabilities:
     tools:
       - "web_search"      # Built-in web search
-      - "draw_image"      # Built-in image generation (requires AWS credentials for image upload)
-      - "custom_tool"     # Your custom tools
+      - "calculate_square"     # Your custom tools
+      - "fetch_weather"   # Custom tool to fetch weather information
     mcp_servers:
       - "http://localhost:8001/mcp/"  # Example MCP server
 
