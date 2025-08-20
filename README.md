@@ -35,7 +35,7 @@ pip install myxagent
 # Set your OpenAI API key
 export OPENAI_API_KEY=your_openai_api_key
 
-# Start interactive CLI chat
+# Start interactive CLI chat with default agent 
 xagent-cli
 
 # Or quickly ask a question
@@ -50,7 +50,7 @@ That's it!
 The easiest way to deploy xAgent in production is through the HTTP server. Once you start the server, you can interact with your AI agent via HTTP API.
 
 ```bash
-# Start the HTTP server
+# Start the HTTP server with default agent configuration
 xagent-server
 
 # Server runs at http://localhost:8010
@@ -74,6 +74,11 @@ Or launch web interface
 xagent-web
 ```
 
+### Docker Deployment
+
+For production deployments, you can use Docker to run xAgent with all dependencies.
+
+Find the Docker setup in the `deploy/docker/` directory. [See the Docker README](deploy/docker/README.md) for detailed instructions.
 
 ## 🔧 Installation
 
