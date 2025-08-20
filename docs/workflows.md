@@ -6,6 +6,7 @@ xAgent provides powerful workflow orchestration patterns for coordinating multip
 
 | Pattern | Use Case | Example |
 |---------|----------|---------|
+| **Auto** | Intelligent automatic workflow generation | AI determines optimal agents and dependencies |
 | **Sequential** | Pipeline processing, step-by-step refinement | Research -> Analysis -> Summary |
 | **Parallel** | Consensus building, multi-perspective analysis | Multiple experts solving same problem |
 | **Graph** | Complex dependencies, fan-out/fan-in patterns | A->B, A->C, B&C->D |
@@ -26,6 +27,14 @@ async def workflow_example():
     
     # Initialize workflow orchestrator
     workflow = Workflow()
+    
+    # 0. Auto: Let AI decide the optimal workflow!
+    result = await workflow.run_auto(
+        task="Research AI trends, analyze market data, and write a comprehensive business strategy report"
+    )
+    print("Auto workflow result:", result.result)
+    print(f"AI created {result.metadata['agent_count']} specialized agents")
+    print(f"Reasoning: {result.metadata['agent_selection_reasoning']}")
     
     # 1. Sequential: A -> B -> C
     result = await workflow.run_sequential(
@@ -61,7 +70,62 @@ async def workflow_example():
 asyncio.run(workflow_example())
 ```
 
+## Workflow Pattern Comparison
+
+| Aspect | Auto ⭐ | Sequential | Parallel | Graph | Hybrid |
+|--------|---------|------------|----------|-------|--------|
+| **Setup Time** | 0 mins | 15-30 mins | 10-20 mins | 30-60 mins | 60+ mins |
+| **Expertise Required** | None | Medium | Medium | High | High |
+| **Optimization** | AI-powered | Manual | Manual | Manual | Manual |
+| **Scalability** | Automatic | Fixed | Fixed | Fixed | Fixed |
+| **Agent Design** | AI-generated | Manual | Manual | Manual | Manual |
+| **Dependencies** | AI-optimized | N/A | N/A | Manual | Manual |
+| **Best For** | Any complex task | Simple pipelines | Consensus | Complex deps | Multi-stage |
+| **Result Quality** | Highest | Good | Good | Very Good | Very Good |
+
 ## Pattern Selection Guide
+
+### Auto Workflows ⭐ **RECOMMENDED**
+
+**Choose Auto when:**
+- You want optimal results with minimal setup
+- Task complexity is unknown or variable
+- You need intelligent agent specialization
+- You want automatic dependency optimization
+
+**Key Benefits:**
+- **Zero Configuration**: No need to design agents or dependencies
+- **Intelligent Analysis**: AI analyzes task complexity to determine optimal agent count (2-6)
+- **Specialized Agents**: Each agent gets a role perfectly suited for the task
+- **Optimal Dependencies**: AI creates efficient execution patterns with maximum parallelization
+- **Structured Output**: Uses Pydantic models for reliable agent and dependency generation
+
+**Example Use Cases:**
+- Any complex task where you want the best results
+- Business strategy development
+- Research and analysis projects
+- Content creation workflows
+- Technical architecture design
+
+```python
+# Auto workflow - the easiest and most powerful option
+result = await workflow.run_auto(
+    task="Develop a go-to-market strategy for a new SaaS product in the healthcare space"
+)
+
+# AI automatically:
+# 1. Analyzes task complexity
+# 2. Creates 4-5 specialized agents (e.g., Market Researcher, Product Strategist, etc.)
+# 3. Designs optimal dependencies for parallel execution
+# 4. Executes the workflow efficiently
+
+print(f"Generated {result.metadata['agent_count']} agents:")
+for agent in result.metadata['generated_agents']:
+    print(f"- {agent['name']}: {agent['system_prompt'][:100]}...")
+
+print(f"Dependencies: {result.metadata['generated_dependencies']}")
+print(f"Result: {result.result}")
+```
 
 ### Sequential Workflows
 
@@ -171,6 +235,79 @@ asyncio.run(hybrid_workflow_example())
 ```
 
 ## Real-World Examples
+
+### Auto Workflow Examples ⭐
+
+```python
+async def auto_workflow_examples():
+    workflow = Workflow()
+    
+    # Simple task - AI creates 2-3 agents
+    result = await workflow.run_auto(
+        task="Write a blog post about renewable energy benefits"
+    )
+    print(f"Simple task: {result.metadata['agent_count']} agents created")
+    
+    # Complex task - AI creates 4-6 specialized agents
+    result = await workflow.run_auto(
+        task="""Develop a comprehensive digital transformation strategy for a traditional 
+        manufacturing company, including technology assessment, implementation roadmap, 
+        ROI analysis, risk management, and change management plan"""
+    )
+    print(f"Complex task: {result.metadata['agent_count']} agents created")
+    print(f"AI reasoning: {result.metadata['agent_selection_reasoning']}")
+    
+    # Technical task - AI creates specialized technical agents
+    result = await workflow.run_auto(
+        task="""Design a scalable microservices architecture for a real-time 
+        financial trading platform with sub-millisecond latency requirements"""
+    )
+    print(f"Technical task: {result.metadata['agent_count']} agents created")
+    
+    return result.result
+
+# Run auto workflow
+asyncio.run(auto_workflow_examples())
+```
+
+### Auto Workflow Advanced Features
+
+#### Task Complexity Analysis
+```python
+# Auto workflow intelligently scales agent count based on task complexity
+simple_task = "Write a product description"  # → 2-3 agents
+moderate_task = "Create marketing strategy with market analysis"  # → 3-4 agents  
+complex_task = "Design enterprise digital transformation roadmap"  # → 4-6 agents
+
+workflow = Workflow()
+result = await workflow.run_auto(task=complex_task)
+print(f"Complexity analysis: {result.metadata['agent_selection_reasoning']}")
+```
+
+#### Structured Agent Generation
+Auto workflow uses Pydantic models for reliable agent creation:
+```python
+# Internally uses these structures for reliable generation:
+class AgentDependency(BaseModel):
+    agent_name: str
+    depends_on: List[str]
+
+class DependenciesSpec(BaseModel):
+    agent_dependencies: List[AgentDependency]
+    explanation: str
+```
+
+#### Metadata and Analytics
+```python
+result = await workflow.run_auto(task="Complex business analysis")
+
+# Rich metadata available
+print(f"Agents created: {result.metadata['agent_count']}")
+print(f"Generation time: {result.metadata['agent_generation_time']:.2f}s")
+print(f"Dependencies time: {result.metadata['dependencies_generation_time']:.2f}s")
+print(f"Execution layers: {result.metadata['total_layers']}")
+print(f"Dependencies: {result.metadata['generated_dependencies']}")
+```
 
 ### Content Creation Workflow
 

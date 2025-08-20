@@ -10,6 +10,8 @@
 
 xAgent provides a complete AI assistant experience with text and image processing, tool execution, HTTP server, web interface, and streaming CLI. Perfect for both quick prototypes and production deployments.
 
+Also includes advanced features like multi-agent workflows even with **intelligent automatic workflow generation** that analyzes your task and creates optimal multi-agent coordination patterns.
+
 ## 📋 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
@@ -41,6 +43,7 @@ xagent-cli
 # Or quickly ask a question
 xagent-cli --ask "who are you?"
 xagent-cli --ask "what's the weather in Hangzhou and Shanghai?" -v
+
 ```
 
 That's it!
@@ -571,16 +574,26 @@ For detailed guidance, see the [Message Storage Inheritance](docs/message_storag
 
 ## 🔄 Multi-Agent Workflows
 
-xAgent enables powerful multi-agent coordination patterns for complex tasks.
+xAgent features **intelligent automatic workflow generation** that analyzes your task and creates optimal multi-agent coordination patterns.
+
+### ⭐ Auto Workflow - The Smart Choice
+
+**Why Auto Workflow?**
+- **Zero Configuration**: Just describe your task, AI handles the rest
+- **Intelligent Agent Design**: AI creates 2-6 specialized agents based on task complexity
+- **Optimal Dependencies**: Automatic dependency optimization for maximum parallel execution
+- **Structured Generation**: Uses Pydantic models for reliable agent and workflow creation
+- **Best Results**: Combines the power of multiple expert agents automatically
 
 ### Workflow Patterns
 
-| Pattern | Use Case | Example |
-|---------|----------|---------|
-| **Sequential** | Pipeline processing | Research -> Analysis -> Summary |
-| **Parallel** | Multiple perspectives | Expert panel reviews |
-| **Graph** | Complex dependencies | A->B, A->C, B&C->D |
-| **Hybrid** | Multi-stage workflows | Sequential + Parallel + Graph stages |
+| Pattern | Use Case | Setup Required | AI Optimization |
+|---------|----------|----------------|-----------------|
+| **Auto** ⭐ | Any complex task | None - just describe the task | Full AI analysis and optimization |
+| **Sequential** | Pipeline processing | Manual agent design | None |
+| **Parallel** | Multiple perspectives | Manual agent design | None |
+| **Graph** | Complex dependencies | Manual agent + dependency design | None |
+| **Hybrid** | Multi-stage workflows | Manual stage configuration | None |
 
 ### Quick Example
 
@@ -590,6 +603,30 @@ from xagent import Agent
 from xagent.multi.workflow import Workflow
 
 async def workflow_example():
+    workflow = Workflow()
+    
+    # 🌟 AUTO WORKFLOW - Recommended for best results!
+    # Just describe your task, AI creates optimal agents and dependencies
+    result = await workflow.run_auto(
+        task="Develop a comprehensive go-to-market strategy for a new SaaS product targeting healthcare providers"
+    )
+    
+    print(f"✅ AI created {result.metadata['agent_count']} specialized agents:")
+    for agent in result.metadata['generated_agents']:
+        print(f"  • {agent['name']}: {agent['system_prompt'][:80]}...")
+    
+    print(f"🔗 Generated dependencies: {result.metadata['generated_dependencies']}")
+    print(f"🧠 AI reasoning: {result.metadata['agent_selection_reasoning']}")
+    print(f"📊 Result: {result.result}")
+    
+    # 🔍 Compare with manual approach
+    print(f"⏱️ Auto workflow time: {result.execution_time:.2f}s")
+    print(f"🎯 Agent optimization: Automatic")
+    print(f"🧩 Dependency optimization: Automatic")
+    print(f"⚙️ Configuration needed: None")
+    
+    # Manual workflows (for specific control needs)
+    # Note: Requires extensive setup and domain expertise
     # Create specialized agents with detailed expertise
     market_researcher = Agent(
         name="MarketResearcher",
@@ -781,8 +818,11 @@ xAgent is built with a modular architecture:
 
 ### Key Features
 
+- **🌟 Auto Workflow** - Revolutionary AI-powered automatic workflow generation with zero configuration
 - **🚀 Easy to Use** - Simple API for quick prototyping
 - **⚡ High Performance** - Async/await throughout, concurrent tool execution
+- **🧠 Intelligent Agent Design** - AI creates optimal specialist teams (2-6 agents) based on task complexity
+- **🔗 Smart Dependencies** - Automatic dependency optimization for maximum parallel execution
 - **🔧 Extensible** - Custom tools, MCP integration, plugin system
 - **🌐 Multiple Interfaces** - CLI, HTTP API, web interface
 - **💾 Persistent** - Redis-backed conversation storage
