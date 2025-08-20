@@ -9,7 +9,6 @@ from typing import AsyncGenerator, List, Optional, Union
 
 # Third-party imports
 import httpx
-from dotenv import load_dotenv
 from langfuse import observe
 from langfuse.openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -20,8 +19,6 @@ from ..components import MessageStorageBase, MessageStorageLocal
 from ..schemas import Message, ToolCall
 from ..utils.mcp_convertor import MCPTool
 from ..utils.tool_decorator import function_tool
-
-load_dotenv(override=True)
 
 # Configure logging
 logging.basicConfig(

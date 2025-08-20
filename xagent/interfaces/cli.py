@@ -1,13 +1,10 @@
 import os
-import yaml
 import argparse
 import asyncio
 import uuid
 import logging
 from typing import Optional
 from dotenv import load_dotenv
-
-load_dotenv(override=True)
 
 from .base import BaseAgentRunner
 
@@ -34,10 +31,6 @@ class CLIAgent(BaseAgentRunner):
             # Suppress most logging except critical errors
             logging.getLogger().setLevel(logging.CRITICAL)
             logging.getLogger("xagent").setLevel(logging.CRITICAL)
-            # Suppress warnings from third-party libraries
-            logging.getLogger("urllib3").setLevel(logging.CRITICAL)
-            logging.getLogger("httpx").setLevel(logging.CRITICAL)
-            logging.getLogger("openai").setLevel(logging.CRITICAL)
             # Suppress all warnings when not in verbose mode
             import warnings
             warnings.filterwarnings("ignore")
@@ -346,6 +339,7 @@ def main():
     parser.add_argument("--user_id", help="User ID for the session")
     parser.add_argument("--session_id", help="Session ID for the chat")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--env", default=".env", help="Path to .env file")
     
     # Special commands as optional arguments
     parser.add_argument("--ask", metavar="MESSAGE", help="Ask a single question instead of starting interactive chat")
@@ -353,6 +347,15 @@ def main():
     
     # Parse arguments
     args = parser.parse_args()
+    
+    # Load .env file (default: .env in current directory)
+    if os.path.exists(args.env):
+        load_dotenv(args.env, override=True)
+        if args.verbose:
+            print(f"\n✅ Loaded .env file from: {args.env}\n")
+    else:
+        if args.verbose:
+            print(f"\n⚠️  .env file not found: {args.env}\n")
     
     try:
         # Handle init command

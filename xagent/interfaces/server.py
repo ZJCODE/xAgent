@@ -1,14 +1,13 @@
 import uvicorn
 import argparse
 import logging
+import os
 from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import json
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
-
-load_dotenv(override=True)
 
 from .base import BaseAgentRunner
 
@@ -254,8 +253,16 @@ def main():
     parser.add_argument("--toolkit_path", default=None, help="Toolkit directory path (if not specified, no additional tools will be loaded)")
     parser.add_argument("--host", default=None, help="Host to bind to")
     parser.add_argument("--port", type=int, default=None, help="Port to bind to")
+    parser.add_argument("--env", default=".env", help="Path to .env file")
     
     args = parser.parse_args()
+    
+    # Load .env file (default: .env in current directory)
+    if os.path.exists(args.env):
+        load_dotenv(args.env, override=True)
+        logger.info("Loaded .env file from: %s", args.env)
+    else:
+        logger.warning(".env file not found: %s", args.env)
     
     try:
         server = HTTPAgentServer(config_path=args.config, toolkit_path=args.toolkit_path)
