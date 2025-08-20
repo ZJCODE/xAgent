@@ -604,9 +604,9 @@ from xagent.multi.workflow import Workflow
 
 async def workflow_example():
     workflow = Workflow()
-    
-    # 🌟 AUTO WORKFLOW - Recommended for best results!
-    # Just describe your task, AI creates optimal agents and dependencies
+
+    # 🌟 AUTO WORKFLOW - Just describe your task, AI creates optimal agents and dependencies
+
     result = await workflow.run_auto(
         task="Develop a comprehensive go-to-market strategy for a new SaaS product targeting healthcare providers"
     )
@@ -614,20 +614,12 @@ async def workflow_example():
     print(f"✅ AI created {result.metadata['agent_count']} specialized agents:")
     for agent in result.metadata['generated_agents']:
         print(f"  • {agent['name']}: {agent['system_prompt'][:80]}...")
-    
     print(f"🔗 Generated dependencies: {result.metadata['generated_dependencies']}")
     print(f"🧠 AI reasoning: {result.metadata['agent_selection_reasoning']}")
     print(f"📊 Result: {result.result}")
     
-    # 🔍 Compare with manual approach
-    print(f"⏱️ Auto workflow time: {result.execution_time:.2f}s")
-    print(f"🎯 Agent optimization: Automatic")
-    print(f"🧩 Dependency optimization: Automatic")
-    print(f"⚙️ Configuration needed: None")
-    
     # Manual workflows (for specific control needs)
-    # Note: Requires extensive setup and domain expertise
-    # Create specialized agents with detailed expertise
+
     market_researcher = Agent(
         name="MarketResearcher",
         system_prompt="""You are a senior market research analyst with 10+ years of experience. 
