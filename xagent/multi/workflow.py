@@ -40,20 +40,17 @@ def parse_dependencies_dsl(dsl_string: str) -> Dict[str, List[str]]:
     
     dependencies = {}
     
-    # Normalize arrows: convert -> to → for consistent processing (internally)
-    normalized_dsl = dsl_string.replace('->', '→')
-    
     # Split by comma to get individual rules
-    rules = [rule.strip() for rule in normalized_dsl.split(',')]
+    rules = [rule.strip() for rule in dsl_string.split(',')]
     
     for rule in rules:
         if not rule:
             continue
         
         # Handle chain syntax (A->B->C becomes A->B, B->C)
-        if rule.count('→') > 1:
+        if rule.count('->') > 1:
             # Split into chain segments
-            segments = [seg.strip() for seg in rule.split('→')]
+            segments = [seg.strip() for seg in rule.split('->')]
             # Create pairs: A->B->C becomes [(A,B), (B,C)]
             for i in range(len(segments) - 1):
                 left_part = segments[i]
@@ -80,8 +77,8 @@ def parse_dependencies_dsl(dsl_string: str) -> Dict[str, List[str]]:
                         dependencies[target] = deps
         else:
             # Single arrow rule
-            if '→' in rule:
-                left_part, right_part = rule.split('→', 1)
+            if '->' in rule:
+                left_part, right_part = rule.split('->', 1)
                 left_part = left_part.strip()
                 right_part = right_part.strip()
                 
@@ -111,7 +108,7 @@ def validate_dsl_syntax(dsl_string: str) -> Tuple[bool, str]:
     Validate DSL syntax.
     
     Args:
-        dsl_string: DSL string to validate (supports both → and -> arrows)
+        dsl_string: DSL string to validate (supports -> arrows)
         
     Returns:
         Tuple of (is_valid, error_message)
@@ -123,30 +120,27 @@ def validate_dsl_syntax(dsl_string: str) -> Tuple[bool, str]:
         # Check for valid characters and patterns
         # First check for invalid arrow patterns like --, ->, ->>, etc.
         if '--' in dsl_string or '->>' in dsl_string or '<<-' in dsl_string:
-            return False, "Invalid arrow patterns detected. Use → or -> (single dash followed by >)."
+            return False, "Invalid arrow patterns detected. Use -> (single dash followed by >)."
         
         # Check for valid characters (letters, numbers, underscore, arrows, ampersand, comma, space, hyphen, >)
-        valid_pattern = re.compile(r'^[a-zA-Z0-9_→&,\s\-\>]+$')
+        valid_pattern = re.compile(r'^[a-zA-Z0-9_&,\s\-\>]+$')
         if not valid_pattern.match(dsl_string):
-            return False, "Invalid characters in DSL string. Only letters, numbers, underscore, →, ->, &, comma, and spaces are allowed."
-        
-        # Normalize arrows for consistent processing
-        normalized_dsl = dsl_string.replace('->', '→')
+            return False, "Invalid characters in DSL string. Only letters, numbers, underscore, ->, &, comma, and spaces are allowed."
         
         # Split by comma to get individual rules
-        rules = [rule.strip() for rule in normalized_dsl.split(',')]
+        rules = [rule.strip() for rule in dsl_string.split(',')]
         for rule in rules:
             if not rule:
                 continue
-            if '→' not in rule:
-                return False, f"Each rule must contain at least one arrow (→ or ->). Invalid rule: '{rule}'"
+            if '->' not in rule:
+                return False, f"Each rule must contain at least one arrow (->). Invalid rule: '{rule}'"
             
             # Handle chain syntax (multiple arrows)
-            segments = [seg.strip() for seg in rule.split('→')]
+            segments = [seg.strip() for seg in rule.split('->')]
             
             # Check that we don't have empty segments
             for i, segment in enumerate(segments):
-                if not segment and i != 0:  # Allow empty first segment (e.g., "→B")
+                if not segment and i != 0:  # Allow empty first segment (e.g., "->B")
                     return False, f"Empty segment in rule: '{rule}'"
                 
                 # Check for valid agent names (no empty names after splitting by &)
@@ -215,16 +209,16 @@ class BaseWorkflow(ABC):
 
 class SequentialWorkflow(BaseWorkflow):
     """
-    Sequential Pipeline Pattern: Agent A → Agent B → Agent C → Result
+    Sequential Pipeline Pattern: Agent A -> Agent B -> Agent C -> Result
     
     Pure sequential processing where each agent's output becomes the next agent's input.
     This is the fundamental nature of pipeline processing - there's no meaningful scenario
     where you wouldn't want context passing in a sequential workflow.
     
     Use cases:
-    - Multi-step task decomposition (research → analysis → summary)
-    - Progressive refinement (draft → review → polish)
-    - Chain of reasoning (premise → logic → conclusion)
+    - Multi-step task decomposition (research -> analysis -> summary)
+    - Progressive refinement (draft -> review -> polish)
+    - Chain of reasoning (premise -> logic -> conclusion)
     """
     
     async def execute(
@@ -490,8 +484,8 @@ class GraphWorkflow(BaseWorkflow):
             dependencies: Either:
                 - Dict mapping agent names to their input dependencies
                   Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
-                - DSL string with arrow notation (supports both → and ->)
-                  Example: "A→B, A→C, B&C→D" or "A->B, A->C, B&C->D"
+                - DSL string with arrow notation
+                  Example: "A->B, A->C, B&C->D"
             max_concurrent: Maximum concurrent executions
         """
         super().__init__(agents, name)
@@ -792,8 +786,8 @@ class Workflow:
             dependencies: Either:
                 - Dict mapping agent names to their dependencies
                   Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
-                - DSL string with arrow notation (supports both → and ->)
-                  Example: "A→B, A→C, B&C→D" or "A->B, A->C, B&C->D"
+                - DSL string with arrow notation
+                  Example: "A->B, A->C, B&C->D"
             task: Original task string
             image_source: Optional image source for root agents
             max_concurrent: Maximum concurrent executions
@@ -810,10 +804,7 @@ class Workflow:
                 "D": ["A"]       # D depends on A (can run parallel with B)
             }
             
-            # DSL format with Unicode arrow (equivalent to above)
-            dependencies = "A→B, A&B→C, A→D"
-            
-            # DSL format with ASCII arrow (equivalent to above)
+            # DSL format (equivalent to above)
             dependencies = "A->B, A&B->C, A->D"
             
             result = await workflow.run_graph(
@@ -859,7 +850,7 @@ class Workflow:
                 - task: Task string (can include placeholders like {previous_result} and {original_task})
                 - name: Optional stage name
                 - dependencies: Required for graph pattern - either dict mapping agent names to their dependencies
-                  or DSL string like "A→B, A→C, B&C→D"
+                  or DSL string like "A->B, A->C, B&C->D"
                 - kwargs: Additional arguments for the pattern
             task: The original task that will replace {original_task} placeholders
             user_id: User identifier for the workflow
@@ -883,8 +874,8 @@ class Workflow:
                 },
                 {
                     "pattern": "graph",
-                    "agents": [analyzer, synthesizer, validator],
-                    "dependencies": "analyzer→synthesizer, analyzer→validator, synthesizer&validator→final",
+                    "agents": [analyzer, synthesizer, validator, writer],
+                    "dependencies": "analyzer->synthesizer, analyzer->validator, synthesizer&validator->writer",
                     "task": "Create final report from: {previous_result}",
                     "name": "final_synthesis"
                 }
