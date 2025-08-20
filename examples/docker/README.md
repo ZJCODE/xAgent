@@ -2,22 +2,9 @@
 
 ## Overview
 
-This project sets up an HTTP agent using the `myxagent` package, leveraging Docker for easy deployment and management. The agent is capable of processing requests and interacting with various tools defined in the project.
+This is a sample project (a basic scaffold ) demonstrating how to set up and run an HTTP agent using Docker.
 
-## Project Structure
-
-The project consists of the following files and directories:
-
-- **docker-compose.yml**: Defines the services, networks, and volumes for the Docker application.
-- **Dockerfile**: Contains instructions to build the Docker image for the application.
-- **requirements.txt**: Lists the Python dependencies required for the project.
-- **.env.example**: Provides an example of environment variables needed for the application.
-- **.env**: Contains environment variables used by the application.
-- **.dockerignore**: Specifies files and directories to ignore when building the Docker image.
-- **config/agent.yaml**: Configuration settings for the `myxagent` HTTP agent.
-- **my_toolkit/**: Contains custom tools for the agent.
-- **scripts/**: Includes entry point and utility scripts for the Docker container.
-- **README.md**: Documentation for the project.
+The project utilizes the `myxagent` package to create a flexible and powerful agent capable of handling various tasks.
 
 ## Getting Started
 
@@ -92,11 +79,3 @@ curl -X POST "http://localhost:8010/chat" \
 ## Custom Tools
 
 You can define custom tools in the `my_toolkit/tools.py` file. These tools can be utilized by the agent during its operation.
-
-## Contributing
-
-Contributions are welcome! Please follow the standard Git workflow for submitting changes.
-
-## License
-
-This project is licensed under the MIT License. See the LICENSE file for details.
