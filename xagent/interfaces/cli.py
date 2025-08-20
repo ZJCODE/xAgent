@@ -274,8 +274,9 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
   capabilities:
     tools:
       - web_search
-      - calculate_square
-    mcp_servers: []
+      - calculate_square # Custom tool
+    mcp_servers:
+      - http://localhost:8001/mcp/  # Example MCP server
   message_storage: local
 
 server:
