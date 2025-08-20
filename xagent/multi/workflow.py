@@ -7,10 +7,41 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 import uuid
 import time
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core.agent import Agent
 from ..utils.workflow_dsl import parse_dependencies_dsl, validate_dsl_syntax
+
+
+# Auto mode structured output models
+class AgentSpec(BaseModel):
+    """Specification for an agent in auto mode."""
+    name: str = Field(description="Agent name (must be unique)")
+    system_prompt: str = Field(description="System prompt for the agent")
+
+
+class AgentsList(BaseModel):
+    """List of agent specifications for auto mode."""
+    agents: List[AgentSpec] = Field(description="List of agents optimized for the task (number determined by task complexity)")
+    reasoning: str = Field(description="Explanation of why this number of agents was chosen")
+
+
+class AgentDependency(BaseModel):
+    """Single agent dependency specification."""
+    agent_name: str = Field(description="Name of the agent")
+    depends_on: List[str] = Field(description="List of agent names this agent depends on")
+
+
+class DependenciesSpec(BaseModel):
+    """Dependencies specification for auto mode with nested BaseModel structure."""
+    agent_dependencies: List[AgentDependency] = Field(
+        description="List of agent dependencies. Each entry specifies an agent and what it depends on."
+    )
+    explanation: str = Field(description="Brief explanation of the workflow structure and dependency reasoning")
+    
+    def to_dict(self) -> Dict[str, List[str]]:
+        """Convert to dictionary format for workflow execution."""
+        return {dep.agent_name: dep.depends_on for dep in self.agent_dependencies if dep.depends_on}
 
 
 class WorkflowPatternType(Enum):
@@ -272,13 +303,33 @@ class ParallelWorkflow(BaseWorkflow):
         """Enhanced consensus validation and synthesis from parallel processing."""
         results = [result for _, result in worker_results]
         
-        # Check for perfect consensus
-        if len(set(results)) == 1:
-            return results[0]
+        # Check for perfect consensus - handle both string and structured results
+        try:
+            # For string results, we can use set comparison
+            if all(isinstance(result, str) for result in results):
+                if len(set(results)) == 1:
+                    return results[0]
+            else:
+                # For structured results (Pydantic models), compare by converting to dict
+                result_dicts = []
+                for result in results:
+                    if hasattr(result, 'model_dump'):
+                        result_dicts.append(result.model_dump())
+                    elif hasattr(result, 'dict'):
+                        result_dicts.append(result.dict())
+                    else:
+                        result_dicts.append(str(result))
+                
+                # Check if all structured results are identical
+                if len(result_dicts) > 1 and all(rd == result_dicts[0] for rd in result_dicts[1:]):
+                    return results[0]
+        except (TypeError, AttributeError):
+            # Fallback: if comparison fails, proceed to aggregation
+            pass
         
         # Enhanced aggregation with both consensus and synthesis capabilities
         perspective_results = "\n\n----------\n\n".join([
-            f"Agent {name}'s perspective:\n\n{result}" 
+            f"Agent {name}'s perspective:\n\n{self._format_result_for_display(result)}" 
             for name, result in worker_results
         ])
         
@@ -313,6 +364,28 @@ Choose the most appropriate approach (consensus or synthesis) based on the natur
         """
         
         return await self.consensus_validator.chat(user_message=prompt, user_id=user_id, session_id=str(uuid.uuid4()))
+
+    def _format_result_for_display(self, result) -> str:
+        """Format result for display, handling both string and structured outputs."""
+        if isinstance(result, str):
+            return result
+        elif hasattr(result, 'model_dump_json'):
+            # Pydantic v2 models
+            return result.model_dump_json(indent=2)
+        elif hasattr(result, 'json'):
+            # Pydantic v1 models
+            return result.json(indent=2)
+        elif hasattr(result, 'model_dump'):
+            # Pydantic v2 models without json serialization
+            import json
+            return json.dumps(result.model_dump(), indent=2)
+        elif hasattr(result, 'dict'):
+            # Pydantic v1 models without json serialization
+            import json
+            return json.dumps(result.dict(), indent=2)
+        else:
+            # Fallback to string representation
+            return str(result)
 
 
 class GraphWorkflow(BaseWorkflow):
@@ -816,3 +889,210 @@ class Workflow:
         self.logger.info(f"Hybrid workflow completed in {total_time:.2f}s with {len(stages)} stages")
         
         return hybrid_results
+
+    async def run_auto(
+        self,
+        task: str,
+        image_source: Optional[str] = None,
+        user_id: Optional[str] = "default_user"
+    ) -> WorkflowResult:
+        """
+        Execute an automatic workflow that dynamically generates optimal agents and dependencies.
+        
+        This method:
+        1. Uses ParallelWorkflow (3 parallel designers) to generate optimal number of agents (2-6) for the task
+        2. Uses ParallelWorkflow (3 parallel designers) to generate optimal dependencies dictionary
+        3. Executes the task using GraphWorkflow with generated agents and dependencies
+        
+        The number of agents is dynamically determined based on task complexity:
+        - Simple tasks: 2-3 agents
+        - Moderate complexity: 3-4 agents
+        - Complex multi-domain tasks: 4-6 agents
+        
+        Args:
+            task: The task to be executed
+            image_source: Optional image source (URL, file path, or base64 string)
+            user_id: User identifier
+            
+        Returns:
+            WorkflowResult with final output and execution metadata including:
+            - generated_agents: List of created agents with their specifications
+            - agent_count: Number of agents created
+            - agent_selection_reasoning: Explanation for chosen number of agents
+            - generated_dependencies: The dependency dictionary used
+            - dependencies_explanation: Explanation of the workflow structure
+        """
+        start_time = time.time()
+        self.logger.info(f"Starting auto workflow for task: {task[:100]}...")
+        
+        # Step 1: Generate optimal agents using parallel workflow
+        agent_generators = [
+            Agent(
+                name="agent_designer_1",
+                system_prompt="""You are an expert AI agent designer. Analyze the given task and design the optimal number of agents with distinct roles and capabilities. 
+Consider task complexity to determine if 2-6 agents are needed. Focus on task decomposition, specialized expertise, and complementary skills. 
+Each agent should have a unique name and specific system prompt. Create agents that can work together effectively.
+Provide reasoning for why this specific number of agents was chosen.""",
+                output_type=AgentsList
+            ),
+            Agent(
+                name="agent_designer_2", 
+                system_prompt="""You are a workflow optimization specialist. Analyze the task complexity and create the right number of specialized agents (2-6) with optimal role distribution.
+Focus on efficiency, coverage, and synergy between agents. Design clear responsibilities and expertise areas for each agent.
+Ensure the agents can handle different aspects of the task comprehensively without redundancy.
+Explain your reasoning for the chosen number of agents.""",
+                output_type=AgentsList
+            ),
+            Agent(
+                name="agent_designer_3",
+                system_prompt="""You are a multi-agent system architect. Design the optimal number of agents (2-6) with perfect role separation and task alignment.
+Focus on scalability, robustness, and task-specific optimization. Each agent should have distinct capabilities and clear boundaries.
+Create agents that maximize task completion quality and efficiency while avoiding unnecessary complexity.
+Justify why this specific number of agents is ideal for the task.""",
+                output_type=AgentsList
+            )
+        ]
+        
+        agent_design_prompt = f"""
+Task to analyze: {task}
+
+Design the optimal number of agents (between 2-6) for this specific task. Consider:
+- Task complexity and scope
+- Required expertise domains
+- Natural task decomposition boundaries
+- Efficiency vs thoroughness trade-offs
+- Coordination overhead
+- Parallel execution opportunities
+
+For simple tasks: 2-3 agents may suffice
+For moderate complexity: 3-4 agents for good coverage
+For complex multi-domain tasks: 4-6 agents for comprehensive handling
+
+Return the optimal number of agents with unique names, specific system prompts, and clear reasoning for your choice.
+"""
+        
+        agents_result = await self.run_parallel(
+            agents=agent_generators,
+            task=agent_design_prompt,
+            image_source=image_source,
+            output_type=AgentsList,
+            user_id=user_id
+        )
+        
+        # Extract the best agent design from parallel results
+        best_agents_spec = agents_result.result
+        self.logger.info(f"Generated {len(best_agents_spec.agents)} optimal agents")
+        self.logger.info(f"Agent selection reasoning: {best_agents_spec.reasoning}")
+        
+        # Step 2: Generate optimal dependencies using parallel workflow
+        dependencies_generators = [
+            Agent(
+                name="dependencies_designer_1",
+                system_prompt="""You are a workflow dependencies expert. Analyze the task and agent capabilities to create optimal dependency patterns.
+Focus on efficiency, parallelization opportunities, and logical flow. Return a list of agent dependencies with each entry specifying agent name and what it depends on.
+Consider which agents can work in parallel and which need sequential dependencies. Use exact agent names from the provided list.""",
+                output_type=DependenciesSpec
+            ),
+            Agent(
+                name="dependencies_designer_2",
+                system_prompt="""You are a dependency optimization specialist. Create dependency patterns that maximize parallel execution while maintaining logical order.
+Focus on minimizing bottlenecks, optimizing throughput, and ensuring proper information flow between agents.
+Design efficient execution patterns with clear dependencies. Return structured dependency specifications.""",
+                output_type=DependenciesSpec
+            ),
+            Agent(
+                name="dependencies_designer_3",
+                system_prompt="""You are a workflow efficiency expert. Design dependency patterns that balance parallelism with dependency requirements.
+Focus on optimal resource utilization, execution time minimization, and logical task flow.
+Create patterns that ensure quality while maximizing efficiency. Return structured dependency list format.""",
+                output_type=DependenciesSpec
+            )
+        ]
+        
+        # Prepare agent information for dependencies generation
+        agent_info = "\n".join([
+            f"Agent: {spec.name}\nRole: {spec.system_prompt[:200]}..."
+            for spec in best_agents_spec.agents
+        ])
+        
+        dependencies_design_prompt = f"""
+Task: {task}
+
+Available Agents:
+{agent_info}
+
+Create an optimal dependency pattern for these agents to execute the task efficiently.
+Consider:
+- Which agents can work in parallel
+- Which agents need outputs from others
+- Optimal execution flow
+- Minimizing bottlenecks
+- Maximizing parallelization
+
+Return a list of agent dependencies where each entry specifies:
+- agent_name: the name of the agent
+- depends_on: list of agent names this agent depends on (empty list if no dependencies)
+
+Example format:
+[
+  {{"agent_name": "B", "depends_on": ["A"]}},
+  {{"agent_name": "C", "depends_on": ["A", "B"]}},
+  {{"agent_name": "D", "depends_on": ["A"]}}
+]
+
+Use exact agent names from the list above. Include all agents in the list.
+Return the dependencies specification and brief explanation.
+"""
+        
+        dependencies_result = await self.run_parallel(
+            agents=dependencies_generators,
+            task=dependencies_design_prompt,
+            output_type=DependenciesSpec,
+            user_id=user_id
+        )
+        
+        best_dependencies_spec = dependencies_result.result
+        self.logger.info(f"Generated dependencies pattern: {best_dependencies_spec.to_dict()}")
+        
+        # Step 3: Create actual agents from specifications
+        actual_agents = []
+        for agent_spec in best_agents_spec.agents:
+            actual_agent = Agent(
+                name=agent_spec.name,
+                system_prompt=agent_spec.system_prompt
+            )
+            actual_agents.append(actual_agent)
+        
+        # Step 4: Execute the task using GraphWorkflow
+        final_result = await self.run_graph(
+            agents=actual_agents,
+            dependencies=best_dependencies_spec.to_dict(),
+            task=task,
+            image_source=image_source,
+            user_id=user_id
+        )
+        
+        # Update metadata with auto workflow information
+        auto_metadata = {
+            **final_result.metadata,
+            "auto_workflow": True,
+            "generated_agents": [{"name": spec.name, "system_prompt": spec.system_prompt} for spec in best_agents_spec.agents],
+            "agent_count": len(best_agents_spec.agents),
+            "agent_selection_reasoning": best_agents_spec.reasoning,
+            "generated_dependencies": best_dependencies_spec.to_dict(),
+            "dependencies_explanation": best_dependencies_spec.explanation,
+            "agent_generation_time": agents_result.execution_time,
+            "dependencies_generation_time": dependencies_result.execution_time,
+            "total_auto_time": time.time() - start_time
+        }
+        
+        final_result.metadata = auto_metadata
+        
+        self.logger.info(
+            f"Auto workflow completed in {time.time() - start_time:.2f}s "
+            f"(agent gen: {agents_result.execution_time:.2f}s, "
+            f"dependencies gen: {dependencies_result.execution_time:.2f}s, "
+            f"execution: {final_result.execution_time:.2f}s)"
+        )
+        
+        return final_result
