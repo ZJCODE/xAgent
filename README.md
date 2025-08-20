@@ -78,7 +78,7 @@ xagent-web
 
 For production deployments, you can use Docker to run xAgent with all dependencies.
 
-Find the Docker setup in the `deploy/docker/` directory. [See the Docker README](deploy/docker/README.md) for detailed instructions.
+Find the Docker setup in the `deploy/docker/` directory. See the [Docker README](deploy/docker/README.md) for detailed instructions.
 
 ## 🔧 Installation
 
