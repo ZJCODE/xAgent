@@ -586,18 +586,21 @@ xAgent features **intelligent automatic workflow generation** that analyzes your
 | **Graph** | Complex dependencies | Manual agent + dependency design | None |
 | **Hybrid** | Multi-stage workflows | Manual stage configuration | None |
 
-### Quick Example
+### Quick Start Examples
+
+
+### 🌟 Auto Workflow (AI-Powered)
+
+Zero configuration required - AI automatically creates optimal agent teams:
 
 ```python
 import asyncio
-from xagent import Agent
 from xagent.multi.workflow import Workflow
 
-async def workflow_example():
+async def auto_workflow_example():
     workflow = Workflow()
-
-    # 🌟 AUTO WORKFLOW - Just describe your task, AI creates optimal agents and dependencies
-
+    
+    # AI creates optimal agents and dependencies automatically
     result = await workflow.run_auto(
         task="Develop a comprehensive go-to-market strategy for a new SaaS product targeting healthcare providers"
     )
@@ -608,119 +611,190 @@ async def workflow_example():
     print(f"🔗 Generated dependencies: {result.metadata['generated_dependencies']}")
     print(f"🧠 AI reasoning: {result.metadata['agent_selection_reasoning']}")
     print(f"📊 Result: {result.result}")
-    
-    # Manual workflows (for specific control needs)
 
-    market_researcher = Agent(
-        name="MarketResearcher",
-        system_prompt="""You are a senior market research analyst with 10+ years of experience. 
-        Your expertise includes:
-        - Industry trend analysis and forecasting
-        - Competitive landscape assessment
-        - Market size estimation and growth projections
-        - Consumer behavior analysis
-        - Technology adoption patterns
-        
-        Always provide data-driven insights with specific metrics, sources, and actionable recommendations.""",
-        model="gpt-4o"
-    )
+asyncio.run(auto_workflow_example())
+```
+
+
+<details>
+<summary><b>🤖 Agent Definitions (Click to expand)</b></summary>
+
+```python
+from xagent import Agent
+
+# Market Research Specialist
+market_researcher = Agent(
+    name="MarketResearcher",
+    system_prompt="""You are a senior market research analyst with 10+ years of experience. 
+    Your expertise includes:
+    - Industry trend analysis and forecasting
+    - Competitive landscape assessment
+    - Market size estimation and growth projections
+    - Consumer behavior analysis
+    - Technology adoption patterns
     
-    data_scientist = Agent(
-        name="DataScientist", 
-        system_prompt="""You are a senior data scientist specializing in business intelligence and predictive analytics.
-        Your core competencies:
-        - Statistical analysis and hypothesis testing
-        - Predictive modeling and machine learning
-        - Data visualization and storytelling
-        - Risk assessment and scenario planning
-        - Performance metrics and KPI development
-        
-        Transform raw research into quantitative insights, identify patterns, and build predictive models.""",
-        model="gpt-4o"
-    )
+    Always provide data-driven insights with specific metrics, sources, and actionable recommendations.""",
+    model="gpt-4o"
+)
+
+# Data Science Specialist
+data_scientist = Agent(
+    name="DataScientist", 
+    system_prompt="""You are a senior data scientist specializing in business intelligence and predictive analytics.
+    Your core competencies:
+    - Statistical analysis and hypothesis testing
+    - Predictive modeling and machine learning
+    - Data visualization and storytelling
+    - Risk assessment and scenario planning
+    - Performance metrics and KPI development
     
-    business_writer = Agent(
-        name="BusinessWriter",
-        system_prompt="""You are an executive business writer and strategic communications expert.
-        Your specializations:
-        - Executive summary creation
-        - Strategic recommendation development
-        - Stakeholder communication
-        - Risk and opportunity assessment
-        - Implementation roadmap design
-        
-        Create compelling, actionable business reports that drive decision-making at the C-level.""",
-        model="gpt-4o"
-    )
+    Transform raw research into quantitative insights, identify patterns, and build predictive models.""",
+    model="gpt-4o"
+)
+
+# Business Writing Specialist
+business_writer = Agent(
+    name="BusinessWriter",
+    system_prompt="""You are an executive business writer and strategic communications expert.
+    Your specializations:
+    - Executive summary creation
+    - Strategic recommendation development
+    - Stakeholder communication
+    - Risk and opportunity assessment
+    - Implementation roadmap design
     
-    financial_analyst = Agent(
-        name="FinancialAnalyst",
-        system_prompt="""You are a CFA-certified financial analyst with expertise in valuation and investment analysis.
-        Your focus areas:
-        - Financial modeling and valuation
-        - Investment risk assessment
-        - ROI and NPV calculations
-        - Capital allocation strategies
-        - Market opportunity sizing
-        
-        Provide detailed financial analysis with concrete numbers, projections, and investment recommendations.""",
-        model="gpt-4o"
-    )
+    Create compelling, actionable business reports that drive decision-making at the C-level.""",
+    model="gpt-4o"
+)
+
+# Financial Analysis Specialist
+financial_analyst = Agent(
+    name="FinancialAnalyst",
+    system_prompt="""You are a CFA-certified financial analyst with expertise in valuation and investment analysis.
+    Your focus areas:
+    - Financial modeling and valuation
+    - Investment risk assessment
+    - ROI and NPV calculations
+    - Capital allocation strategies
+    - Market opportunity sizing
     
-    strategy_consultant = Agent(
-        name="StrategyConsultant",
-        system_prompt="""You are a senior strategy consultant from a top-tier consulting firm.
-        Your expertise includes:
-        - Strategic planning and execution
-        - Business model innovation
-        - Competitive strategy development
-        - Organizational transformation
-        - Change management
-        
-        Synthesize complex information into clear strategic recommendations with implementation timelines.""",
-        model="gpt-4o"
-    )
+    Provide detailed financial analysis with concrete numbers, projections, and investment recommendations.""",
+    model="gpt-4o"
+)
+
+# Strategy Consulting Specialist
+strategy_consultant = Agent(
+    name="StrategyConsultant",
+    system_prompt="""You are a senior strategy consultant from a top-tier consulting firm.
+    Your expertise includes:
+    - Strategic planning and execution
+    - Business model innovation
+    - Competitive strategy development
+    - Organizational transformation
+    - Change management
     
+    Synthesize complex information into clear strategic recommendations with implementation timelines.""",
+    model="gpt-4o"
+)
+
+# Quality Assurance Specialist
+quality_reviewer = Agent(
+    name="QualityReviewer",
+    system_prompt="""You are a senior partner-level consultant specializing in quality assurance and risk management.
+    Your responsibilities:
+    - Strategic recommendation validation
+    - Risk identification and mitigation
+    - Stakeholder impact assessment
+    - Implementation feasibility review
+    - Compliance and regulatory considerations
+    
+    Ensure all recommendations are practical, well-researched, and aligned with business objectives.""",
+    model="gpt-4o"
+)
+```
+</details>
+
+### 📋 Sequential Workflow
+
+Pipeline processing where each agent builds on the previous output:
+
+```python
+import asyncio
+from xagent.multi.workflow import Workflow
+
+async def sequential_workflow_example():
     workflow = Workflow()
     
-    # Sequential workflow - Research to Analysis to Report Pipeline
+    # Research → Analysis → Report Pipeline
     result = await workflow.run_sequential(
         agents=[market_researcher, data_scientist, business_writer],
         task="Analyze the electric vehicle charging infrastructure market opportunity in North America for 2024-2027"
     )
-    print("Sequential Pipeline Result:", result.result)
     
-    # Parallel workflow - Multiple expert perspectives on same challenge
+    print("Sequential Pipeline Result:", result.result)
+
+asyncio.run(sequential_workflow_example())
+```
+
+### 🔄 Parallel Workflow
+
+Multiple expert perspectives on the same challenge:
+
+```python
+import asyncio
+from xagent.multi.workflow import Workflow
+
+async def parallel_workflow_example():
+    workflow = Workflow()
+    
+    # Multiple experts analyze the same problem simultaneously
     result = await workflow.run_parallel(
         agents=[financial_analyst, strategy_consultant, data_scientist],
         task="Evaluate the investment potential and strategic implications of generative AI adoption in enterprise software companies"
     )
-    print("Expert Panel Analysis:", result.result)
     
-    # Graph workflow - Complex dependency analysis
+    print("Expert Panel Analysis:", result.result)
+
+asyncio.run(parallel_workflow_example())
+```
+
+### 🕸️ Graph Workflow
+
+Complex dependency networks with conditional execution:
+
+```python
+import asyncio
+from xagent.multi.workflow import Workflow
+
+async def graph_workflow_example():
+    workflow = Workflow()
+    
+    # Complex dependency analysis
     dependencies = "MarketResearcher->DataScientist, MarketResearcher->FinancialAnalyst, DataScientist&FinancialAnalyst->StrategyConsultant, StrategyConsultant->BusinessWriter"
+    
     result = await workflow.run_graph(
         agents=[market_researcher, data_scientist, financial_analyst, strategy_consultant, business_writer],
         dependencies=dependencies,
         task="Develop a comprehensive go-to-market strategy for a B2B SaaS startup entering the healthcare analytics space"
     )
+    
     print("Strategic Analysis Result:", result.result)
+
+asyncio.run(graph_workflow_example())
+```
+
+### 🔀 Hybrid Workflow
+
+Multi-stage workflows combining different patterns:
+
+```python
+import asyncio
+from xagent.multi.workflow import Workflow
+
+async def hybrid_workflow_example():
+    workflow = Workflow()
     
-    # Hybrid workflow - Multi-stage comprehensive business analysis
-    quality_reviewer = Agent(
-        name="QualityReviewer",
-        system_prompt="""You are a senior partner-level consultant specializing in quality assurance and risk management.
-        Your responsibilities:
-        - Strategic recommendation validation
-        - Risk identification and mitigation
-        - Stakeholder impact assessment
-        - Implementation feasibility review
-        - Compliance and regulatory considerations
-        
-        Ensure all recommendations are practical, well-researched, and aligned with business objectives.""",
-        model="gpt-4o"
-    )
-    
+    # Multi-stage comprehensive business analysis
     stages = [
         {
             "pattern": "sequential",
@@ -747,9 +821,10 @@ async def workflow_example():
         task="Develop a digital transformation strategy for a traditional manufacturing company looking to implement IoT and predictive maintenance solutions",
         stages=stages
     )
+    
     print("Comprehensive Strategy Report:", result["final_result"])
 
-asyncio.run(workflow_example())
+asyncio.run(hybrid_workflow_example())
 ```
 
 ### DSL Syntax
