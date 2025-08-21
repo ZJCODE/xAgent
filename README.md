@@ -232,6 +232,17 @@ curl -X POST "http://localhost:8010/chat" \
     "user_message": "Calculate the square of 15"
   }'
 
+# Image analysis with URL
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "alice",
+    "session_id": "image_session", 
+    "user_message": "What do you see in this image?",
+    "image_source": "https://example.com/image.jpg"
+  }'
+
+
 # Different user, different session
 curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
@@ -373,13 +384,23 @@ async def main():
         model="gpt-4.1-mini"
     )
 
-    # Chat interaction
+    # Text chat interaction
     response = await agent.chat(
         user_message="Hello, how are you?",
         user_id="user123", 
         session_id="session456"
     )
     print(response)
+    
+    # Image analysis with URL
+    response = await agent.chat(
+        user_message="What do you see in this image?",
+        user_id="user123",
+        session_id="session456",
+        image_source="https://example.com/image.jpg"
+    )
+    print(response)
+    
 
 asyncio.run(main())
 ```
