@@ -748,6 +748,7 @@ async def parallel_workflow_example():
     workflow = Workflow()
     
     # Multiple experts analyze the same problem simultaneously
+    # Note: Can set output_type for structured consensus validation
     result = await workflow.run_parallel(
         agents=[financial_analyst, strategy_consultant, data_scientist],
         task="Evaluate the investment potential and strategic implications of generative AI adoption in enterprise software companies"
@@ -795,6 +796,7 @@ async def hybrid_workflow_example():
     workflow = Workflow()
     
     # Multi-stage comprehensive business analysis
+    # Note: Tasks can include placeholders like {previous_result} and {original_task}
     stages = [
         {
             "pattern": "sequential",
