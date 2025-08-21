@@ -59,9 +59,31 @@ HTTP server for agent interactions with REST API endpoints.
 ```python
 HTTPAgentServer(
     config_path: Optional[str] = None,
-    toolkit_path: Optional[str] = None
+    toolkit_path: Optional[str] = None,
+    agent: Optional[Agent] = None
 )
 ```
+
+The HTTPAgentServer can be initialized in two ways:
+
+1. **Traditional approach** using configuration files:
+```python
+server = HTTPAgentServer(config_path="config.yaml")
+server.run()
+```
+
+2. **Direct agent approach** using a pre-configured Agent instance:
+```python
+agent = Agent(name="MyAgent", tools=[web_search])
+server = HTTPAgentServer(agent=agent)
+server.run()
+```
+
+#### Constructor Parameters
+
+- `config_path`: Path to configuration file (ignored if agent is provided)
+- `toolkit_path`: Path to toolkit directory (ignored if agent is provided)
+- `agent`: Pre-configured Agent instance to use directly
 
 #### API Endpoints
 

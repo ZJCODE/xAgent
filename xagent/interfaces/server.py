@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 
 from .base import BaseAgentRunner
+from ..core.agent import Agent
 
 
 class AgentInput(BaseModel):
@@ -35,18 +36,46 @@ class ClearSessionInput(BaseModel):
 
 
 class HTTPAgentServer(BaseAgentRunner):
-    """HTTP Agent Server for xAgent."""
+    """
+    HTTP Agent Server for xAgent.
     
-    def __init__(self, config_path: Optional[str] = None, toolkit_path: Optional[str] = None):
+    This server can be initialized in two ways:
+    1. Using configuration files (traditional approach)
+    2. Using a pre-configured Agent instance (new approach)
+    
+    Examples:
+        Traditional approach with config:
+        >>> server = HTTPAgentServer(config_path="config.yaml")
+        >>> server.run()
+        
+        Direct agent approach:
+        >>> agent = Agent(name="MyAgent", tools=[web_search])
+        >>> server = HTTPAgentServer(agent=agent)
+        >>> server.run()
+    """
+    
+    def __init__(
+        self, 
+        config_path: Optional[str] = None, 
+        toolkit_path: Optional[str] = None,
+        agent: Optional[Agent] = None
+    ):
         """
         Initialize HTTPAgentServer.
         
         Args:
             config_path: Path to configuration file (if None, uses default configuration)
             toolkit_path: Path to toolkit directory (if None, no additional tools will be loaded)
+            agent: Pre-configured Agent instance (if provided, config_path and toolkit_path are ignored)
         """
-        # Initialize the base agent runner
-        super().__init__(config_path, toolkit_path)
+        if agent is not None:
+            # Use the provided agent directly
+            self.agent = agent
+            self.config = {"server": {"host": "0.0.0.0", "port": 8010}}  # Minimal server config
+            self.message_storage = self.agent.message_storage
+        else:
+            # Initialize the base agent runner using config
+            super().__init__(config_path, toolkit_path)
         
         # Initialize logger
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
@@ -265,7 +294,11 @@ def main():
         logger.warning(".env file not found: %s", args.env)
     
     try:
-        server = HTTPAgentServer(config_path=args.config, toolkit_path=args.toolkit_path)
+        server = HTTPAgentServer(
+            config_path=args.config, 
+            toolkit_path=args.toolkit_path,
+            agent=None  # Command line interface does not support direct agent passing
+        )
         server.run(host=args.host, port=args.port)
     except Exception as e:
         logger.error("Failed to start server: %s", e)

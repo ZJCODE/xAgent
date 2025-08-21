@@ -576,15 +576,6 @@ For detailed guidance, see the [Message Storage Inheritance](docs/message_storag
 
 xAgent features **intelligent automatic workflow generation** that analyzes your task and creates optimal multi-agent coordination patterns.
 
-### Auto Workflow - The Smart Choice
-
-**Why Auto Workflow?**
-- **Zero Configuration**: Just describe your task, AI handles the rest
-- **Intelligent Agent Design**: AI creates 2-6 specialized agents based on task complexity
-- **Optimal Dependencies**: Automatic dependency optimization for maximum parallel execution
-- **Structured Generation**: Uses Pydantic models for reliable agent and workflow creation
-- **Best Results**: Combines the power of multiple expert agents automatically
-
 ### Workflow Patterns
 
 | Pattern | Use Case | Setup Required | AI Optimization |
