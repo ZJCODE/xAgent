@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "myxagent"
-version = "0.2.13"
+version = "0.2.14"
 description = "Multi-Modal AI Agent System"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { text = "MIT" }
@@ -58,4 +58,4 @@ Issues = "https://github.com/ZJCODE/xagent/issues"
 Homepage = "https://github.com/ZJCODE/xagent#readme"
 
 [tool.setuptools]
-packages = {find = {include = ["xagent*", "toolkit*"], exclude = ["examples*", "tests*"]}}
+packages = {find = {include = ["xagent*"], exclude = ["examples*", "tests*", "docs*"]}}
