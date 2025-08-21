@@ -8,7 +8,7 @@
 
 > **🚀 A powerful and easy-to-use AI Agent system with real-time streaming responses**
 
-xAgent provides a complete AI assistant experience with text and image processing, tool execution, HTTP server, web interface, and streaming CLI. Perfect for both quick prototypes and production deployments.
+xAgent provides a complete AI assistant experience with text and image processing, tool execution, HTTP server, web interface, and streaming CLI. **Production-ready with full multi-user and multi-session support** - perfect for both quick prototypes and enterprise deployments.
 
 Also includes advanced features like multi-agent workflows even with **intelligent automatic workflow generation** that analyzes your task and creates optimal multi-agent coordination patterns.
 
@@ -50,7 +50,7 @@ That's it!
 
 ### HTTP Server
 
-The easiest way to deploy xAgent in production is through the HTTP server. Once you start the server, you can interact with your AI agent via HTTP API.
+The easiest way to deploy xAgent in production is through the HTTP server. **Production-ready with full multi-user and multi-session support** - handle thousands of concurrent users with isolated conversation histories.
 
 ```bash
 # Start the HTTP server with default agent configuration
@@ -58,6 +58,12 @@ xagent-server
 
 # Server runs at http://localhost:8010
 ```
+
+**Multi-User & Multi-Session Features:**
+- **Isolated Sessions**: Each `user_id` + `session_id` combination maintains separate conversation history
+- **Concurrent Users**: Handle multiple users simultaneously with async processing
+- **Session Management**: Users can have multiple active sessions for different conversations
+- **Persistent Storage**: Redis-backed storage ensures conversation continuity across server restarts
 
 Chat via HTTP API
 
@@ -217,7 +223,7 @@ xagent-server --config config/agent.yaml --toolkit_path my_toolkit
 ### API Usage
 
 ```bash
-# Simple chat
+# Multi-user chat examples
 curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
   -d '{
@@ -226,12 +232,30 @@ curl -X POST "http://localhost:8010/chat" \
     "user_message": "Calculate the square of 15"
   }'
 
-# Streaming response
+# Different user, different session
 curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "user123",
-    "session_id": "session456",
+    "user_id": "alice",
+    "session_id": "work_session", 
+    "user_message": "What is the weather in Tokyo?"
+  }'
+
+# Same user, different session for separate conversation
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "alice",
+    "session_id": "personal_session", 
+    "user_message": "Help me plan a vacation"
+  }'
+
+# Streaming response for any user/session
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "bob",
+    "session_id": "session789",
     "user_message": "Tell me a story",
     "stream": true
   }'
@@ -908,6 +932,9 @@ xAgent is built with a modular architecture:
 ### Key Features
 
 - **🌟 Auto Workflow** - Revolutionary AI-powered automatic workflow generation with zero configuration
+- **🏢 Production Ready** - Multi-user and multi-session support with enterprise-grade reliability
+- **👥 Multi-User Support** - Concurrent user handling with isolated sessions and conversation histories
+- **🔄 Multi-Session Management** - Each user can maintain multiple independent conversation sessions
 - **🚀 Easy to Use** - Simple API for quick prototyping
 - **⚡ High Performance** - Async/await throughout, concurrent tool execution
 - **🧠 Intelligent Agent Design** - AI creates optimal specialist teams (2-6 agents) based on task complexity
