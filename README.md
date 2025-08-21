@@ -232,17 +232,6 @@ curl -X POST "http://localhost:8010/chat" \
     "user_message": "Calculate the square of 15"
   }'
 
-# Image analysis with URL
-curl -X POST "http://localhost:8010/chat" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "alice",
-    "session_id": "image_session", 
-    "user_message": "What do you see in this image?",
-    "image_source": "https://example.com/image.jpg"
-  }'
-
-
 # Different user, different session
 curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
@@ -259,6 +248,16 @@ curl -X POST "http://localhost:8010/chat" \
     "user_id": "alice",
     "session_id": "personal_session", 
     "user_message": "Help me plan a vacation"
+  }'
+
+# Image analysis with URL
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "alice",
+    "session_id": "image_session", 
+    "user_message": "What do you see in this image?",
+    "image_source": "https://example.com/image.jpg"
   }'
 
 # Streaming response for any user/session
