@@ -1,7 +1,7 @@
-from xagent.core.server import HTTPAgentServer
+from xagent.core.server import AgentHTTPServer
 
 # Create and run the HTTP Agent Server
-server = HTTPAgentServer("config/agent.yaml")
+server = AgentHTTPServer("config/agent.yaml")
 
 # Run the server
 server.run(host="0.0.0.0", port=8010)

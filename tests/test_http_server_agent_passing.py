@@ -1,17 +1,17 @@
 """
-Test script to verify HTTPAgentServer agent passing functionality.
+Test script to verify AgentHTTPServer agent passing functionality.
 """
 
 import asyncio
 from xagent.core.agent import Agent
-from xagent.interfaces.server import HTTPAgentServer
+from xagent.interfaces.server import AgentHTTPServer
 from xagent.components import MessageStorageLocal
 
 
 def test_agent_passing():
-    """Test that HTTPAgentServer can accept pre-configured Agent instances."""
+    """Test that AgentHTTPServer can accept pre-configured Agent instances."""
     
-    print("Testing HTTPAgentServer with custom Agent...")
+    print("Testing AgentHTTPServer with custom Agent...")
     
     # Create a simple test agent
     test_agent = Agent(
@@ -25,7 +25,7 @@ def test_agent_passing():
     # Test 1: Direct constructor with agent parameter
     print("Test 1: Direct constructor with agent parameter")
     try:
-        server1 = HTTPAgentServer(agent=test_agent)
+        server1 = AgentHTTPServer(agent=test_agent)
         assert server1.agent.name == "TestAgent"
         assert server1.agent.model == "gpt-4o-mini"
         print("✅ Direct constructor test passed")
@@ -37,8 +37,8 @@ def test_agent_passing():
     print("Test 2: Verify from_agent method removal")
     try:
         # This should raise AttributeError since we removed the method
-        hasattr(HTTPAgentServer, 'from_agent')
-        if not hasattr(HTTPAgentServer, 'from_agent'):
+        hasattr(AgentHTTPServer, 'from_agent')
+        if not hasattr(AgentHTTPServer, 'from_agent'):
             print("✅ from_agent method successfully removed")
         else:
             print("❌ from_agent method still exists")
@@ -65,7 +65,7 @@ def test_agent_passing():
         print(f"❌ Server configuration test failed: {e}")
         return False
     
-    print("\n🎉 All tests passed! HTTPAgentServer agent passing functionality works correctly.")
+    print("\n🎉 All tests passed! AgentHTTPServer agent passing functionality works correctly.")
     return True
 
 
@@ -76,7 +76,7 @@ def test_traditional_approach():
     
     try:
         # This should still work as before
-        server = HTTPAgentServer()  # Using default config
+        server = AgentHTTPServer()  # Using default config
         assert server.agent is not None
         assert server.config is not None
         print("✅ Traditional approach test passed")
@@ -88,7 +88,7 @@ def test_traditional_approach():
 
 def main():
     """Run all tests."""
-    print("HTTPAgentServer Agent Passing Functionality Tests")
+    print("AgentHTTPServer Agent Passing Functionality Tests")
     print("=" * 50)
     
     success = True

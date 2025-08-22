@@ -52,30 +52,30 @@ Agent(
 - `output_type`: Pydantic model for structured output
 - `message_storage`: MessageStorageBase instance for conversation persistence
 
-### HTTPAgentServer Class
+### AgentHTTPServer Class
 
 HTTP server for agent interactions with REST API endpoints.
 
 ```python
-HTTPAgentServer(
+AgentHTTPServer(
     config_path: Optional[str] = None,
     toolkit_path: Optional[str] = None,
     agent: Optional[Agent] = None
 )
 ```
 
-The HTTPAgentServer can be initialized in two ways:
+The AgentHTTPServer can be initialized in two ways:
 
 1. **Traditional approach** using configuration files:
 ```python
-server = HTTPAgentServer(config_path="config.yaml")
+server = AgentHTTPServer(config_path="config.yaml")
 server.run()
 ```
 
 2. **Direct agent approach** using a pre-configured Agent instance:
 ```python
 agent = Agent(name="MyAgent", tools=[web_search])
-server = HTTPAgentServer(agent=agent)
+server = AgentHTTPServer(agent=agent)
 server.run()
 ```
 

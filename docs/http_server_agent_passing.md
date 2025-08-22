@@ -1,16 +1,16 @@
-# HTTPAgentServer with Custom Agent
+# AgentHTTPServer with Custom Agent
 
-The HTTPAgentServer now supports direct Agent instance passing, providing more flexibility in agent configuration.
+The AgentHTTPServer now supports direct Agent instance passing, providing more flexibility in agent configuration.
 
 ## Usage Examples
 
 ### Traditional Config-Based Approach
 
 ```python
-from xagent.interfaces import HTTPAgentServer
+from xagent.interfaces import AgentHTTPServer
 
 # Create server with config file
-server = HTTPAgentServer(config_path="agent.yaml")
+server = AgentHTTPServer(config_path="agent.yaml")
 server.run()
 ```
 
@@ -18,7 +18,7 @@ server.run()
 
 ```python
 from xagent.core import Agent
-from xagent.interfaces import HTTPAgentServer
+from xagent.interfaces import AgentHTTPServer
 from xagent.tools import web_search, draw_image
 
 # Create custom agent
@@ -30,7 +30,7 @@ agent = Agent(
 )
 
 # Create server with agent
-server = HTTPAgentServer(agent=agent)
+server = AgentHTTPServer(agent=agent)
 
 # Start server
 server.run()
@@ -40,7 +40,7 @@ server.run()
 
 ```python
 from xagent.core import Agent
-from xagent.interfaces import HTTPAgentServer
+from xagent.interfaces import AgentHTTPServer
 from xagent.tools import web_search, draw_image
 from xagent.components import MessageStorageRedis
 
@@ -65,12 +65,12 @@ def create_creative_agent():
 
 # Start research agent server on port 8010
 research_agent = create_research_agent()
-research_server = HTTPAgentServer(agent=research_agent)
+research_server = AgentHTTPServer(agent=research_agent)
 # research_server.run(host="localhost", port=8010)
 
 # Start creative agent server on port 8011
 creative_agent = create_creative_agent()
-creative_server = HTTPAgentServer(agent=creative_agent)
+creative_server = AgentHTTPServer(agent=creative_agent)
 # creative_server.run(host="localhost", port=8011)
 ```
 

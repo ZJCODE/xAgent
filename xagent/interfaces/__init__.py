@@ -1,3 +1,3 @@
-from .server import HTTPAgentServer
-from .cli import CLIAgent
-__all__ = ["HTTPAgentServer", "CLIAgent"]
+from .server import AgentHTTPServer
+from .cli import AgentCLI
+__all__ = ["AgentHTTPServer", "AgentCLI"]

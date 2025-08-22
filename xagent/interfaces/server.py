@@ -35,7 +35,7 @@ class ClearSessionInput(BaseModel):
     session_id: str
 
 
-class HTTPAgentServer(BaseAgentRunner):
+class AgentHTTPServer(BaseAgentRunner):
     """
     HTTP Agent Server for xAgent.
     
@@ -45,12 +45,12 @@ class HTTPAgentServer(BaseAgentRunner):
     
     Examples:
         Traditional approach with config:
-        >>> server = HTTPAgentServer(config_path="config.yaml")
+        >>> server = AgentHTTPServer(config_path="config.yaml")
         >>> server.run()
         
         Direct agent approach:
         >>> agent = Agent(name="MyAgent", tools=[web_search])
-        >>> server = HTTPAgentServer(agent=agent)
+        >>> server = AgentHTTPServer(agent=agent)
         >>> server.run()
     """
     
@@ -61,7 +61,7 @@ class HTTPAgentServer(BaseAgentRunner):
         agent: Optional[Agent] = None
     ):
         """
-        Initialize HTTPAgentServer.
+        Initialize AgentHTTPServer.
         
         Args:
             config_path: Path to configuration file (if None, uses default configuration)
@@ -259,7 +259,7 @@ def get_app() -> FastAPI:
     global _server_instance
     if _server_instance is None:
         # Use default configuration when used as module
-        _server_instance = HTTPAgentServer()
+        _server_instance = AgentHTTPServer()
     return _server_instance.app
 
 
@@ -294,7 +294,7 @@ def main():
         logger.warning(".env file not found: %s", args.env)
     
     try:
-        server = HTTPAgentServer(
+        server = AgentHTTPServer(
             config_path=args.config, 
             toolkit_path=args.toolkit_path,
             agent=None  # Command line interface does not support direct agent passing

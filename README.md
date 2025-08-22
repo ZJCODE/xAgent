@@ -646,7 +646,7 @@ Launch an HTTP server by directly passing a pre-configured Agent instance:
 ```python
 import asyncio
 from xagent.core import Agent
-from xagent.interfaces.server import HTTPAgentServer
+from xagent.interfaces.server import AgentHTTPServer
 from xagent.tools import web_search
 
 # Create a custom agent with specific tools and configuration
@@ -658,7 +658,7 @@ agent = Agent(
 )
 
 # Start HTTP server with the agent
-server = HTTPAgentServer(agent=agent)
+server = AgentHTTPServer(agent=agent)
 server.run(host="0.0.0.0", port=8010)
 
 # Server is now running at http://localhost:8010

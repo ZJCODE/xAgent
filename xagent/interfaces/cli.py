@@ -9,12 +9,12 @@ from dotenv import load_dotenv
 from .base import BaseAgentRunner
 
 
-class CLIAgent(BaseAgentRunner):
+class AgentCLI(BaseAgentRunner):
     """CLI Agent for xAgent."""
     
     def __init__(self, config_path: Optional[str] = None, toolkit_path: Optional[str] = None, verbose: bool = False):
         """
-        Initialize CLIAgent.
+        Initialize AgentCLI.
         
         Args:
             config_path: Path to configuration file (if None, uses default configuration)
@@ -365,12 +365,12 @@ def main():
         
         # Handle single question
         if args.ask:
-            cli_agent = CLIAgent(
+            agent_cli = AgentCLI(
                 config_path=args.config,
                 toolkit_path=args.toolkit_path,
                 verbose=args.verbose
             )
-            response = asyncio.run(cli_agent.chat_single(
+            response = asyncio.run(agent_cli.chat_single(
                 message=args.ask,
                 user_id=args.user_id,
                 session_id=args.session_id
@@ -379,14 +379,14 @@ def main():
             return
         
         # Default behavior: start interactive chat
-        cli_agent = CLIAgent(
+        agent_cli = AgentCLI(
             config_path=args.config,
             toolkit_path=args.toolkit_path,
             verbose=args.verbose
         )
         
         # Start interactive chat
-        asyncio.run(cli_agent.chat_interactive(
+        asyncio.run(agent_cli.chat_interactive(
             user_id=args.user_id,
             session_id=args.session_id
         ))

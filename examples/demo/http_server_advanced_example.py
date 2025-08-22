@@ -1,11 +1,11 @@
 """
-Advanced example showing how to create specialized agents for HTTPAgentServer.
+Advanced example showing how to create specialized agents for AgentHTTPServer.
 This demonstrates various configuration patterns and use cases.
 """
 
 import asyncio
 from xagent.core.agent import Agent
-from xagent.interfaces.server import HTTPAgentServer
+from xagent.interfaces.server import AgentHTTPServer
 from xagent.components import MessageStorageLocal, MessageStorageRedis
 from xagent.tools import web_search, draw_image
 from xagent.utils import function_tool
@@ -120,7 +120,7 @@ def run_agent_server(agent_type: str, port: int = 8010):
     agent = agent_creators[agent_type]()
     
     # Create server with the agent
-    server = HTTPAgentServer(agent=agent)
+    server = AgentHTTPServer(agent=agent)
     
     print(f"Starting {agent.name} on http://localhost:{port}")
     print(f"Agent specialization: {agent_type}")

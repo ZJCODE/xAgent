@@ -1,11 +1,11 @@
 """
-Example demonstrating HTTPAgentServer with a custom pre-configured Agent.
-This shows how to create an Agent with specific settings and pass it directly to HTTPAgentServer.
+Example demonstrating AgentHTTPServer with a custom pre-configured Agent.
+This shows how to create an Agent with specific settings and pass it directly to AgentHTTPServer.
 """
 
 import asyncio
 from xagent.core.agent import Agent
-from xagent.interfaces.server import HTTPAgentServer
+from xagent.interfaces.server import AgentHTTPServer
 from xagent.components import MessageStorageLocal
 from xagent.tools import web_search, draw_image
 
@@ -33,14 +33,14 @@ def create_custom_agent():
 
 
 def main():
-    """Demonstrate creating HTTPAgentServer with a custom agent."""
+    """Demonstrate creating AgentHTTPServer with a custom agent."""
     
     # Create custom agent
     custom_agent = create_custom_agent()
     
     # Create server with custom agent
-    print("Creating HTTPAgentServer with custom agent...")
-    server = HTTPAgentServer(agent=custom_agent)
+    print("Creating AgentHTTPServer with custom agent...")
+    server = AgentHTTPServer(agent=custom_agent)
     
     print(f"Server created successfully!")
     print(f"Agent name: {server.agent.name}")

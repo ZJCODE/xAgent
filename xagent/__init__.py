@@ -5,7 +5,7 @@ A powerful multi-modal AI Agent system with modern architecture.
 """
 
 from .core import Agent
-from .interfaces import HTTPAgentServer, CLIAgent
+from .interfaces import AgentHTTPServer, AgentCLI
 from .schemas import Message
 from .components import MessageStorageBase, MessageStorageRedis, MessageStorageLocal
 from .utils import function_tool
@@ -18,8 +18,8 @@ __all__ = [
     "Agent", 
 
     # interfaces
-    "HTTPAgentServer",
-    "CLIAgent",
+    "AgentHTTPServer",
+    "AgentCLI",
     
     # Data models
     "Message",
