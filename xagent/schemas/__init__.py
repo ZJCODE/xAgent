@@ -1,3 +1,3 @@
-from .message import Message,ToolCall
+from .message import Message,ToolCall, RoleType, MessageType
 
-__all__ = ["Message","ToolCall"]
+__all__ = ["Message","ToolCall", "RoleType", "MessageType"]

@@ -1,6 +1,7 @@
 import time
 from pydantic import BaseModel, Field
 from typing import Optional
+from enum import Enum
 
 from ..utils.image_upload import upload_image
 
@@ -32,10 +33,22 @@ class MultiModalContent(BaseModel):
     voice: Optional[VoiceContent] = Field(None, description="Voice content associated with the message")
     document: Optional[DocumentContent] = Field(None, description="Document content associated with the message")
 
+class MessageType(Enum):
+    Message = "message"
+    FUNCTION_CALL = "function_call"
+    FUNCTION_CALL_OUTPUT = "function_call_output"
+
+class RoleType(Enum):
+    """Enum for different roles in the system."""
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    TOOL = "tool"
+
 class Message(BaseModel):
     """Message model for communication between roles."""
-    type: str = Field("message", description="Type of message (e.g., message, function_call)")
-    role: str = Field(..., description="The role of the sender (e.g., user, assistant)")
+    type: MessageType = Field(MessageType.Message, description="Type of message (e.g., message, function_call)")
+    role: RoleType = Field(RoleType.USER, description="The role of the sender (e.g., user, assistant)")
     content: str = Field(..., description="The content of the message")
     timestamp: float = Field(default_factory=time.time, description="The timestamp of when the message was sent")
     tool_call: Optional[ToolCall] = Field(None, description="tool/function calls associated with the message")
@@ -45,7 +58,7 @@ class Message(BaseModel):
     def create(
         cls,
         content: str,
-        role: Optional[str] = "user",
+        role: Optional[RoleType] = RoleType.USER,
         image_source: Optional[str] = None,
     ) -> "Message":
         """
@@ -89,10 +102,10 @@ class Message(BaseModel):
 
     def to_dict(self) -> dict:
         """Convert the message to a dictionary, including tool call if present."""
-        if self.type == "message":
+        if self.type == MessageType.Message:
             if self.multimodal and self.multimodal.image:
                 return {
-                    "role": self.role,
+                    "role": self.role.value,
                     "content": [
                         {"type": "input_text", "text": self.content},
                         {
@@ -102,13 +115,13 @@ class Message(BaseModel):
                     ],
                 }
             return {
-                "role": self.role,
+                "role": self.role.value,
                 "content": self.content,
             }
-        elif self.type in ["function_call", "function_call_output"]:
+        elif self.type in [MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT]:
             result = {
             "call_id": self.tool_call.call_id,
-            "type": self.type,
+            "type": self.type.value,
             "name": self.tool_call.name,
             "arguments": self.tool_call.arguments,
             "output": self.tool_call.output

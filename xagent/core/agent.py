@@ -16,7 +16,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Local imports
 from ..components import MessageStorageBase, MessageStorageLocal
-from ..schemas import Message, ToolCall
+from ..schemas import Message, ToolCall,RoleType, MessageType
 from ..utils.mcp_convertor import MCPTool
 from ..utils.tool_decorator import function_tool
 
@@ -400,11 +400,11 @@ class Agent:
 
     async def _store_user_message(self, user_message: Message | str, user_id: str, session_id: str, image_source: Optional[str]) -> None:
         if isinstance(user_message, str):
-            user_message = Message.create(content=user_message, role="user", image_source=image_source)
+            user_message = Message.create(content=user_message, role=RoleType.USER, image_source=image_source)
         await self.message_storage.add_messages(user_id, session_id, user_message)
 
     async def _store_model_reply(self, reply_text: str, user_id: str, session_id: str) -> None:
-        model_msg = Message.create(content=reply_text, role="assistant")
+        model_msg = Message.create(content=reply_text, role=RoleType.ASSISTANT)
         await self.message_storage.add_messages(user_id, session_id, model_msg)
 
     @observe()
@@ -574,8 +574,8 @@ class Agent:
                 result = f"Tool error: {e}"
 
             tool_call_msg = Message(
-                type="function_call",
-                role="tool", 
+                type=MessageType.FUNCTION_CALL,
+                role=RoleType.TOOL,
                 content=f"Calling tool: `{name}` with args: {args}",
                 tool_call=ToolCall(
                     call_id=getattr(tool_call, "call_id", ""),
@@ -592,8 +592,8 @@ class Agent:
                 return result_str[:AgentConfig.TOOL_RESULT_PREVIEW_LENGTH] + '...'
 
             tool_res_msg = Message(
-                type="function_call_output",
-                role="tool",
+                type=MessageType.FUNCTION_CALL_OUTPUT,
+                role=RoleType.TOOL,
                 content=f"Tool `{name}` result: {_format_tool_result_preview(result)}",
                 tool_call=ToolCall(
                     call_id=getattr(tool_call, "call_id", "001"),
@@ -616,7 +616,7 @@ class Agent:
         Returns:
             list: Sanitized list of input messages with no leading function call outputs.
         """
-        while input_messages and input_messages[0].get("type") == "function_call_output":
+        while input_messages and input_messages[0].get("type") == MessageType.FUNCTION_CALL_OUTPUT:
             input_messages.pop(0)
         return input_messages
     

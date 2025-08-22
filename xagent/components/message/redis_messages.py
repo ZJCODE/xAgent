@@ -10,7 +10,7 @@ from redis.exceptions import RedisError
 
 # Local imports
 from .base_messages import MessageStorageBase
-from ...schemas import Message
+from ...schemas import Message,MessageType
 
 
 class MessageStorageRedisConfig:
@@ -492,9 +492,8 @@ class MessageStorageRedis(MessageStorageBase):
             self.logger.debug("Skipping tool message for key %s", key)
     
     def _is_tool_message(self, message: Message) -> bool:
-        """Check if a message is tool-related."""
-        return bool(getattr(message, 'tool_call', None))
-
+        """Check if a message is a tool-related message."""
+        return message.type in {MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT}
 
 
     async def close(self) -> None:
