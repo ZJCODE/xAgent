@@ -145,7 +145,7 @@ xagent-server
 ```
 
 <details>
-<summary>🤖 Initialize Project Config (Automatic)</b></summary>
+<summary><b>Initialize Project Config (Automatic)</b></summary>
 
 Create default config and toolkit structure, run below command:
 
