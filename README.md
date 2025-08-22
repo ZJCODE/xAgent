@@ -59,7 +59,7 @@ xagent-server
 # Server runs at http://localhost:8010
 ```
 
-> if you want to customize the agent, create a config file and custom tools (see [Basic Configuration](#basic-configuration) and [Custom Tools](#custom-tools) sections).
+> if you want to customize the agent, read more at [Http Server](#http-server)
 
 Chat via HTTP API
 
