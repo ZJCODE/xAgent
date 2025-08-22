@@ -48,7 +48,7 @@ xagent-cli --ask "what's the weather in Hangzhou and Shanghai?" -v
 
 That's it!
 
-### HTTP Server
+### Starting the HTTP Server
 
 The easiest way to deploy xAgent in production is through the HTTP server. **Production-ready with full multi-user and multi-session support** - handle thousands of concurrent users with isolated conversation histories.
 
@@ -59,7 +59,7 @@ xagent-server
 # Server runs at http://localhost:8010
 ```
 
-> if you want to customize the agent, read more at [Http Server](#http-server)
+> if you want to customize the agent, read more at [🌐 HTTP Server](#http-server)
 
 Chat via HTTP API
 
