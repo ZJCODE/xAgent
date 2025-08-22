@@ -181,7 +181,7 @@ server:
   port: 8010
 ```
 
-more advanced configurations can be found in [Configuration Reference](docs/configuration_reference.md).
+For advanced configurations including structured outputs and multi-agent systems, see [Configuration Reference](docs/configuration_reference.md).
 
 ### Custom Tools
 
@@ -271,7 +271,6 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
-For advanced configurations including multi-agent systems and structured outputs, see [Configuration Reference](docs/configuration_reference.md).
 
 ## 🌐 Web Interface
 
