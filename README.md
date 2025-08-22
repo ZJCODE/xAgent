@@ -260,6 +260,19 @@ curl -X POST "http://localhost:8010/chat" \
     "image_source": "https://example.com/image.jpg"
   }'
 
+# Multiple images can be sent as a list
+curl -X POST "http://localhost:8010/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "alice",
+    "session_id": "image_session",
+    "user_message": "What do you see in these images?",
+    "image_source": [
+      "https://example.com/image1.jpg",
+      "https://example.com/image2.jpg"
+    ]
+  }'
+
 # Streaming response for any user/session
 curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
@@ -398,7 +411,18 @@ async def main():
         image_source="https://example.com/image.jpg"
     )
     print(response)
-    
+
+    # Multiple images can be sent as a list
+    response = await agent.chat(
+        user_message="What do you see in these images?",
+        user_id="user123",
+        session_id="session456",
+        image_source=[
+            "https://example.com/image1.jpg",
+            "https://example.com/image2.jpg"
+        ]
+    )
+    print(response)
 
 asyncio.run(main())
 ```
@@ -976,7 +1000,7 @@ xAgent is built with a modular architecture:
 - `session_id`: Session identifier for message storage (default: "default_session")
 - `history_count`: Number of previous messages to include (default: 16)
 - `max_iter`: Maximum model call attempts (default: 10)
-- `image_source`: Optional image for analysis (URL, path, or base64)
+- `image_source`: Optional image(s) for analysis (URL, path, or base64)
 - `output_type`: Pydantic model for structured output
 - `stream`: Enable streaming response (default: False)
 
