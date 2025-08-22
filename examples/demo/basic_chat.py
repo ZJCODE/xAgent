@@ -33,6 +33,26 @@ async def main():
     )
     print(response)
 
+    # with Image source
+    response = await agent.chat(
+        user_message="Analyze this image for me.",
+        user_id="user123",
+        session_id="session_single_image",
+        image_source="https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Atlantic_near_Faroe_Islands.jpg/960px-Atlantic_near_Faroe_Islands.jpg"  # Example image URL
+    )
+
+    print(response)
+
+    # with multiple images
+    response = await agent.chat(
+        user_message="Analyze these images for me.",
+        user_id="user123",
+        session_id="session_multiple_images",
+        image_source=["https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Atlantic_near_Faroe_Islands.jpg/960px-Atlantic_near_Faroe_Islands.jpg", "https://upload.wikimedia.org/wikipedia/commons/thumb/4/48/Augustine_volcano_Jan_24_2006_-_Cyrus_Read.jpg/960px-Augustine_volcano_Jan_24_2006_-_Cyrus_Read.jpg"]  # Example image URLs
+    )
+
+    print(response)
+
 # Run the async function
 if __name__ == "__main__":
     asyncio.run(main())

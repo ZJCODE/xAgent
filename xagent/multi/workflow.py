@@ -80,7 +80,7 @@ class BaseWorkflow(ABC):
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
     
     @abstractmethod
-    async def execute(self, user_id: str, task: str, image_source: Optional[str] = None, **kwargs) -> WorkflowResult:
+    async def execute(self, user_id: str, task: str, image_source: Optional[Union[str, List[str]]] = None, **kwargs) -> WorkflowResult:
         """Execute the workflow pattern."""
         pass
     
@@ -112,7 +112,7 @@ class SequentialWorkflow(BaseWorkflow):
         self, 
         user_id: str,
         task: str, 
-        image_source: Optional[str] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
         intermediate_results: bool = False
     ) -> WorkflowResult:
         """
@@ -224,7 +224,7 @@ class ParallelWorkflow(BaseWorkflow):
         self,
         user_id: str,
         task: str,
-        image_source: Optional[str] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
         max_concurrent: int = 10,
     ) -> WorkflowResult:
         """
@@ -232,7 +232,7 @@ class ParallelWorkflow(BaseWorkflow):
         
         Args:
             task: Task string to be processed by all agents
-            image_source: Optional image source (URL, file path, or base64 string)
+            image_source: Optional image source (URL, file path, base64 string, or list of these)
             max_concurrent: Maximum concurrent worker executions
             
         Returns:
@@ -452,7 +452,7 @@ class GraphWorkflow(BaseWorkflow):
         self, 
         user_id: str, 
         task: str, 
-        image_source: Optional[str] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
         **kwargs
     ) -> WorkflowResult:
         """
@@ -460,7 +460,7 @@ class GraphWorkflow(BaseWorkflow):
         
         Args:
             task: Initial task string
-            image_source: Optional image source for the first agents
+            image_source: Optional image source(s) for the first agents
             
         Returns:
             WorkflowResult with final output and execution metadata
@@ -633,7 +633,7 @@ class Workflow:
         self,
         agents: List[Agent],
         task: str,
-        image_source: Optional[str] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
         intermediate_results: Optional[bool] = False,
         user_id: Optional[str] = "default_user"
     ) -> WorkflowResult:
@@ -668,7 +668,7 @@ class Workflow:
         self,
         agents: List[Agent],
         task: str,
-        image_source: Optional[str] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
         max_concurrent: Optional[int] = 10,
         output_type: type[BaseModel] | None = None,
         user_id: Optional[str] = "default_user"
@@ -706,7 +706,7 @@ class Workflow:
         agents: List[Agent],
         dependencies: Union[Dict[str, List[str]], str],
         task: str,
-        image_source: Optional[str] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
         max_concurrent: Optional[int] = 10,
         user_id: Optional[str] = "default_user"
     ) -> WorkflowResult:
@@ -893,7 +893,7 @@ class Workflow:
     async def run_auto(
         self,
         task: str,
-        image_source: Optional[str] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
         user_id: Optional[str] = "default_user"
     ) -> WorkflowResult:
         """

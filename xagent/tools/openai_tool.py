@@ -2,7 +2,7 @@ import base64
 import tempfile
 import os
 from dotenv import load_dotenv
-from typing import Optional, List
+from typing import Optional, List, Union
 
 load_dotenv(override=True)
 
@@ -14,7 +14,12 @@ from xagent.utils.image_upload import upload_image as s3_upload_image
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
-@function_tool()
+@function_tool(name="web_search",
+               description="Search the web using a search engine.",
+               param_descriptions={
+                     "search_query": "The query to search for on the web."
+               }
+)
 @observe()
 async def web_search(search_query: str) -> str:
     "when the user wants to search the web using a search engine, use this tool"
@@ -34,9 +39,15 @@ async def web_search(search_query: str) -> str:
     return (getattr(response, "output_text", "") or "").strip()
 
 
-@function_tool()
+@function_tool(name="draw_image", 
+               description="Generate an image based on a prompt, optionally using reference images.",
+               param_descriptions={
+                     "prompt": "The text prompt describing the image to generate.",
+                     "reference_image_source": "Optional reference image(s) to guide the generation. Can be a URL or base64 encoded string, or a list of these."
+               }
+)
 @observe()
-async def draw_image(prompt: str, reference_image_source: Optional[List[str]|str] = None) -> str:
+async def draw_image(prompt: str, reference_image_source: Optional[List[str]] = None) -> str:
     """
     when the user wants to generate an image based on a prompt, use this tool,if user mentioned some images, use them as reference
     """
@@ -46,9 +57,6 @@ async def draw_image(prompt: str, reference_image_source: Optional[List[str]|str
         return ""
     
     if reference_image_source:
-        if isinstance(reference_image_source, str):
-            reference_image_source = [reference_image_source]
-            
         content = [{"type": "input_text", "text": clean_prompt}]
         for img_url in reference_image_source:
             content.append({
@@ -106,9 +114,11 @@ def upload_image(image_path: str) -> str:
 
 if __name__ == "__main__":
 
-    import asyncio
-    search_result = asyncio.run(web_search("What is the weather like today in hangzhou?"))
-    print("Search Result:", search_result)
+    # import asyncio
+    # search_result = asyncio.run(web_search("What is the weather like today in hangzhou?"))
+    # print("Search Result:", search_result)
 
-    image_url = asyncio.run(draw_image("A beautiful sunset over the mountains"))
-    print("Generated Image URL:", image_url)
+    # image_url = asyncio.run(draw_image("A beautiful sunset over the mountains"))
+    # print("Generated Image URL:", image_url)
+
+    print(draw_image.tool_spec)

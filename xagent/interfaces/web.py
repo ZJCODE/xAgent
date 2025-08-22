@@ -1,7 +1,7 @@
 import sys
 import os
 import time
-from typing import Optional
+from typing import Optional, Union, List
 import streamlit as st
 import asyncio
 import re
@@ -24,7 +24,7 @@ class AgentHTTPClient:
     def __init__(self, base_url: str = "http://localhost:8010"):
         self.base_url = base_url.rstrip('/')
         
-    async def chat(self, user_message: str, user_id: str, session_id: str, image_source: Optional[str] = None):
+    async def chat(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]] = None):
         """发送聊天消息到Agent服务"""
         try:
             payload = {
@@ -50,7 +50,7 @@ class AgentHTTPClient:
         except httpx.RequestError as e:
             raise Exception(f"网络请求失败: {str(e)}")
     
-    async def chat_stream(self, user_message: str, user_id: str, session_id: str, image_source: Optional[str] = None):
+    async def chat_stream(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]] = None):
         """发送聊天消息到Agent服务（流式输出）"""
         try:
             payload = {

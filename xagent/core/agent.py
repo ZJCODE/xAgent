@@ -145,62 +145,16 @@ class Agent:
             self.logger.info("Registered agent tools: %s", 
                            [tool.tool_spec['name'] for tool in agent_tools])
 
-    def _normalize_mcp_servers(self, mcp_servers: Optional[Union[str, List[str]]]) -> List[str]:
-        """Normalize MCP servers input to a list."""
-        if not mcp_servers:
-            return []
-        if isinstance(mcp_servers, str):
-            return [mcp_servers]
-        return list(mcp_servers)
-
-    @property
-    def cached_tool_specs(self):
-        """
-        Returns the cached tool specifications, rebuilding if necessary.
-        """
-        if self._should_rebuild_cache():
-            self._rebuild_tool_cache()
-        return self._tool_specs_cache
-
-    def _should_rebuild_cache(self) -> bool:
-        """
-        Determine if the tool specs cache should be rebuilt.
-        Returns:
-        - True if the cache is empty or tools have changed
-        - False if the cache is valid
-        """
-        # If the cache is empty, we need to rebuild
-        if self._tool_specs_cache is None:
-            return True
-
-        # If the MCP tools have been updated, we need to rebuild
-        if self.mcp_tools_last_updated and (
-            self._tools_last_updated is None or 
-            self.mcp_tools_last_updated > self._tools_last_updated
-        ):
-            return True
-        
-        return False
-
-    def _rebuild_tool_cache(self):
-        """
-        Rebuild the tool specs cache.
-        This method collects all tools from both local and MCP sources,
-        and updates the cache with their specifications.
-        """
-        all_tools = list(self.tools.values()) + list(self.mcp_tools.values())
-        self._tool_specs_cache = [fn.tool_spec for fn in all_tools] if all_tools else None
-        self._tools_last_updated = time.time()
 
     async def __call__(
         self,
-        user_message: Union[Message, str],
+        user_message: str,
         user_id: str = AgentConfig.DEFAULT_USER_ID,
         session_id: str = AgentConfig.DEFAULT_SESSION_ID,
         history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-        image_source: Optional[str] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
@@ -220,13 +174,13 @@ class Agent:
     @observe()
     async def chat(
         self,
-        user_message: Union[Message, str],
+        user_message: str,
         user_id: str = AgentConfig.DEFAULT_USER_ID,
         session_id: str = AgentConfig.DEFAULT_SESSION_ID,
         history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-        image_source: Optional[str] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
@@ -240,7 +194,7 @@ class Agent:
             history_count: Number of previous messages to include
             max_iter: Maximum model call attempts
             max_concurrent_tools: Maximum number of concurrent tool calls
-            image_source: Source of the image, if any (URL, file path, or base64 string)
+            image_source: Source of the image, if any (URL, file path, or base64 string, or list of these)
             output_type: Pydantic model for structured output
             stream: Whether to stream the response
 
@@ -312,10 +266,10 @@ class Agent:
             param_descriptions={
                 "input": "A clear, focused instruction or question for the agent, sufficient to complete the task independently, with any necessary resources included.",
                 "expected_output": "Specification of the desired output format, structure, or content type.",
-                "image_source": "Optional image for analysis. Can be a URL (http/https) or base64 encoded image string."
+                "image_source": "Optional list of image URLs, file paths, or base64 strings to be included in the message. If provided, these images will be used as context for the agent's response."
             }
         )
-        async def tool_func(input: str, expected_output: str,image_source: Optional[str] = None):
+        async def tool_func(input: str, expected_output: str,image_source: Optional[List[str]] = None):
             user_message = f"### User Input:\n{input}"
             if expected_output:
                 user_message += f"\n\n### Expected Output:\n{expected_output}"
@@ -398,9 +352,8 @@ class Agent:
         
         self.mcp_tools_last_updated = now
 
-    async def _store_user_message(self, user_message: Message | str, user_id: str, session_id: str, image_source: Optional[str]) -> None:
-        if isinstance(user_message, str):
-            user_message = Message.create(content=user_message, role=RoleType.USER, image_source=image_source)
+    async def _store_user_message(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]]) -> None:
+        user_message = Message.create(content=user_message, role=RoleType.USER, image_source=image_source)
         await self.message_storage.add_messages(user_id, session_id, user_message)
 
     async def _store_model_reply(self, reply_text: str, user_id: str, session_id: str) -> None:
@@ -621,6 +574,54 @@ class Agent:
         return input_messages
     
 
+    def _normalize_mcp_servers(self, mcp_servers: Optional[Union[str, List[str]]]) -> List[str]:
+        """Normalize MCP servers input to a list."""
+        if not mcp_servers:
+            return []
+        if isinstance(mcp_servers, str):
+            return [mcp_servers]
+        return list(mcp_servers)
+
+    @property
+    def cached_tool_specs(self):
+        """
+        Returns the cached tool specifications, rebuilding if necessary.
+        """
+        if self._should_rebuild_cache():
+            self._rebuild_tool_cache()
+        return self._tool_specs_cache
+
+    def _should_rebuild_cache(self) -> bool:
+        """
+        Determine if the tool specs cache should be rebuilt.
+        Returns:
+        - True if the cache is empty or tools have changed
+        - False if the cache is valid
+        """
+        # If the cache is empty, we need to rebuild
+        if self._tool_specs_cache is None:
+            return True
+
+        # If the MCP tools have been updated, we need to rebuild
+        if self.mcp_tools_last_updated and (
+            self._tools_last_updated is None or 
+            self.mcp_tools_last_updated > self._tools_last_updated
+        ):
+            return True
+        
+        return False
+
+    def _rebuild_tool_cache(self):
+        """
+        Rebuild the tool specs cache.
+        This method collects all tools from both local and MCP sources,
+        and updates the cache with their specifications.
+        """
+        all_tools = list(self.tools.values()) + list(self.mcp_tools.values())
+        self._tool_specs_cache = [fn.tool_spec for fn in all_tools] if all_tools else None
+        self._tools_last_updated = time.time()
+
+
     def _convert_http_agent_to_tool(
         self, 
         server: str, 
@@ -643,10 +644,10 @@ class Agent:
             param_descriptions={
                 "input": "A clear, focused instruction or question for the agent, sufficient to complete the task independently, with any necessary resources included.",
                 "expected_output": "Specification of the desired output format, structure, or content type.",
-                "image_source": "Optional image for analysis. Can be a URL (http/https) or base64 encoded image string."
+                "image_source": "Optional list of image URLs, file paths, or base64 strings to be included in the message. If provided, these images will be used as context for the agent's response."
             }
         )
-        async def tool_func(input: str, expected_output: str, image_source: Optional[str] = None):
+        async def tool_func(input: str, expected_output: str, image_source: Optional[List[str]] = None):
             # 构建消息和请求体
             user_message = f"### User Input:\n{input}"
             if expected_output:

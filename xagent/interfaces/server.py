@@ -2,7 +2,7 @@ import uvicorn
 import argparse
 import logging
 import os
-from typing import Optional
+from typing import Optional, Union, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import json
@@ -18,7 +18,7 @@ class AgentInput(BaseModel):
     user_id: str
     session_id: str
     user_message: str
-    image_source: Optional[str] = None
+    image_source: Optional[Union[str, List[str]]] = None
     # Enable server-side streaming when true
     stream: Optional[bool] = False
     # Number of previous messages to include in conversation history
@@ -115,7 +115,7 @@ class HTTPAgentServer(BaseAgentRunner):
                     - user_id: Unique identifier for the user
                     - session_id: Unique identifier for the conversation session
                     - user_message: The user's message content
-                    - image_source: Optional image for analysis (URL, file path, or base64)
+                    - image_source: Optional image(s) for analysis (URL, file path, base64, or list of these)
                     - stream: Whether to enable streaming response (default: False)
                     - history_count: Number of previous messages to include (default: 16)
                     - max_iter: Maximum model call attempts (default: 10)

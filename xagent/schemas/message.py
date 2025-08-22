@@ -1,6 +1,6 @@
 import time
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Union, List
 from enum import Enum
 
 from ..utils.image_upload import upload_image
@@ -29,9 +29,9 @@ class DocumentContent(BaseModel):
 
 class MultiModalContent(BaseModel):
     """Represents multi-modal content in a message."""
-    image: Optional[ImageContent] = Field(None, description="Image content associated with the message")
-    voice: Optional[VoiceContent] = Field(None, description="Voice content associated with the message")
-    document: Optional[DocumentContent] = Field(None, description="Document content associated with the message")
+    image: Optional[Union[ImageContent, List[ImageContent]]] = Field(None, description="Image content associated with the message")
+    voice: Optional[Union[VoiceContent, List[VoiceContent]]] = Field(None, description="Voice content associated with the message")
+    document: Optional[Union[DocumentContent, List[DocumentContent]]] = Field(None, description="Document content associated with the message")
 
 class MessageType(Enum):
     Message = "message"
@@ -59,39 +59,50 @@ class Message(BaseModel):
         cls,
         content: str,
         role: Optional[RoleType] = RoleType.USER,
-        image_source: Optional[str] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
     ) -> "Message":
         """
         Create a message with optional image content.
         Args:
             content (str): The text content of the message.
             role (Optional[str]): The role of the sender (default is "user").
-            image_source (Optional[str]): The URL or file path or base64 string of the image to be included in the message.
+            image_source (Optional[Union[str, List[str]]]): The URL, file path, base64 string, or list of these for images to be included in the message.
         Returns:
-            Message: An instance of the Message class with the provided content and optional image.
+            Message: An instance of the Message class with the provided content and optional image(s).
 
         Raises:
-            ValueError: If both image_url and image_source are provided.
+            ValueError: If image upload fails.
 
         Usage:
             # Create a text message
             msg = Message.create("Hello, world!")
             # Create a message with specific role
             msg = Message.create("Hello, world!", role="assistant")
-            # Create a message with an image URL
+            # Create a message with a single image URL
             msg = Message.create("Hello, world!", image_source="https://example.com/image.jpg")
+            # Create a message with multiple images
+            msg = Message.create("Hello, world!", image_source=["image1.jpg", "image2.jpg"])
         """
         multimodal = None
         if image_source:
-            if not (image_source.startswith("http") or image_source.startswith("data:image/")):
-                uploaded_url = upload_image(image_source)
-                if uploaded_url:
-                    image_source = uploaded_url
-                else:
-                    raise ValueError("Image upload failed, please check the image source.")
-            multimodal = MultiModalContent(
-                image=ImageContent(format="jpeg", source=image_source)
-            )
+            # Handle single image or list of images
+            sources = image_source if isinstance(image_source, list) else [image_source]
+            image_contents = []
+            
+            for source in sources:
+                processed_source = source
+                if not (source.startswith("http") or source.startswith("data:image/")):
+                    uploaded_url = upload_image(source)
+                    if uploaded_url:
+                        processed_source = uploaded_url
+                    else:
+                        raise ValueError(f"Image upload failed for source: {source}")
+                
+                image_contents.append(ImageContent(format="jpeg", source=processed_source))
+            
+            # Use single ImageContent if only one image, otherwise use list
+            image_content = image_contents[0] if len(image_contents) == 1 else image_contents
+            multimodal = MultiModalContent(image=image_content)
 
         return cls(
             role=role,
@@ -104,15 +115,18 @@ class Message(BaseModel):
         """Convert the message to a dictionary, including tool call if present."""
         if self.type == MessageType.Message:
             if self.multimodal and self.multimodal.image:
+                content = [{"type": "input_text", "text": self.content}]
+                
+                # Handle single image or list of images
+                images = self.multimodal.image if isinstance(self.multimodal.image, list) else [self.multimodal.image]
+                for image in images:
+                    content.append({
+                        "type": "input_image",
+                        "image_url": image.source,
+                    })
                 return {
                     "role": self.role.value,
-                    "content": [
-                        {"type": "input_text", "text": self.content},
-                        {
-                            "type": "input_image",
-                            "image_url": self.multimodal.image.source,
-                        },
-                    ],
+                    "content": content,
                 }
             return {
                 "role": self.role.value,

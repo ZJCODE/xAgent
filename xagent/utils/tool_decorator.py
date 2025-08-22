@@ -83,11 +83,16 @@ def python_type_to_openai_type(py_type: Any) -> Dict[str, Any]:
         if non_none_args:
             return python_type_to_openai_type(non_none_args[0])
 
-    # Python 3.10+ union syntax (X | Y)
-    if sys.version_info >= (3, 10) and hasattr(py_type, "__args__"):
-        union_args = getattr(py_type, "__args__", ())
-        if union_args:
-            return python_type_to_openai_type(union_args[0])
+    # Python 3.10+ union syntax (X | Y) - check for types.UnionType
+    if sys.version_info >= (3, 10):
+        import types
+        if isinstance(py_type, types.UnionType):
+            union_args = getattr(py_type, "__args__", ())
+            if union_args:
+                # Handle union by taking the first non-None type
+                non_none_args = [a for a in union_args if a is not type(None)]
+                if non_none_args:
+                    return python_type_to_openai_type(non_none_args[0])
 
     # Sequence-like -> array
     if origin in (list, set, tuple):
