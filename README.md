@@ -59,6 +59,8 @@ xagent-server
 # Server runs at http://localhost:8010
 ```
 
+if you want to customize the agent, create a config file and custom tools (see [Basic Configuration](#basic-configuration) and [Custom Tools](#custom-tools) sections).
+
 **Multi-User & Multi-Session Features:**
 - **Isolated Sessions**: Each `user_id` + `session_id` combination maintains separate conversation history
 - **Concurrent Users**: Handle multiple users simultaneously with async processing
@@ -148,6 +150,21 @@ xagent-server
 # Server runs at http://localhost:8010
 ```
 
+<details>
+<summary>🤖 Initialize Project Config (Automatic)</b></summary>
+Initialize your project with default config and toolkit structure:
+
+```bash
+# Create default config and toolkit structure
+xagent-cli --init
+```
+
+This creates:
+- `config/agent.yaml` - Configuration file
+- `my_toolkit/` - Custom tools directory with examples
+</details>
+
+
 ### Basic Configuration
 
 Create `agent_config.yaml`:
@@ -174,18 +191,7 @@ more advanced configurations can be found in [Configuration Reference](docs/conf
 
 ### Custom Tools
 
-Initialize your project with default toolkit structure:
-
-```bash
-# Create default config and toolkit structure
-xagent-cli --init
-```
-
-This creates:
-- `config/agent.yaml` - Configuration file
-- `my_toolkit/` - Custom tools directory with examples
-
-Example toolkit structure:
+Create `my_toolkit/` directory with `__init__.py` and `tools.py`:
 
 ```python
 # my_toolkit/__init__.py
