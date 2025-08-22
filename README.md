@@ -403,35 +403,6 @@ async def main():
 asyncio.run(main())
 ```
 
-### HTTP Server with Agent Instance
-
-Launch an HTTP server by directly passing a pre-configured Agent instance:
-
-```python
-import asyncio
-from xagent.core import Agent
-from xagent.interfaces.server import HTTPAgentServer
-from xagent.tools import web_search
-
-# Create a custom agent with specific tools and configuration
-agent = Agent(
-    name="MyCustomAgent",
-    system_prompt="You are a helpful research assistant specialized in web search and analysis.",
-    model="gpt-4o",
-    tools=[web_search]
-)
-
-# Start HTTP server with the agent
-server = HTTPAgentServer(agent=agent)
-server.run(host="0.0.0.0", port=8010)
-
-# Server is now running at http://localhost:8010
-# You can interact via API:
-# curl -X POST "http://localhost:8010/chat" \
-#   -H "Content-Type: application/json" \
-#   -d '{"user_id": "user123", "session_id": "session456", "user_message": "Hello!"}'
-```
-
 ### Streaming Responses
 
 ```python
@@ -643,6 +614,36 @@ asyncio.run(chat_with_persistence())
 you can implement your own message storage by inheriting from `MessageStorageBase` and implementing the required methods like `add_messages`, `get_messages`, etc.
 
 For detailed guidance, see the [Message Storage Inheritance](docs/message_storage_inheritance.md) documentation.
+
+### HTTP Server with Agent Instance
+
+Launch an HTTP server by directly passing a pre-configured Agent instance:
+
+```python
+import asyncio
+from xagent.core import Agent
+from xagent.interfaces.server import HTTPAgentServer
+from xagent.tools import web_search
+
+# Create a custom agent with specific tools and configuration
+agent = Agent(
+    name="MyCustomAgent",
+    system_prompt="You are a helpful research assistant specialized in web search and analysis.",
+    model="gpt-4o",
+    tools=[web_search]
+)
+
+# Start HTTP server with the agent
+server = HTTPAgentServer(agent=agent)
+server.run(host="0.0.0.0", port=8010)
+
+# Server is now running at http://localhost:8010
+# You can interact via API:
+# curl -X POST "http://localhost:8010/chat" \
+#   -H "Content-Type: application/json" \
+#   -d '{"user_id": "user123", "session_id": "session456", "user_message": "Hello!"}'
+```
+
 
 ## 🔄 Multi-Agent Workflows
 
