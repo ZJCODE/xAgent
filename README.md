@@ -146,10 +146,10 @@ xagent-server
 
 <details>
 <summary>🤖 Initialize Project Config (Automatic)</b></summary>
-Initialize your project with default config and toolkit structure:
 
-```bash
-# Create default config and toolkit structure
+Create default config and toolkit structure, run below command:
+
+```bash 
 xagent-cli --init
 ```
 
