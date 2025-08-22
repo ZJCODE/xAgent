@@ -198,6 +198,30 @@ def display_chat_history():
             else:
                 # 其他类型，转换为字符串显示
                 st.text(str(content))
+            
+            # 显示多张历史图片（如果有）
+            if "image_paths" in message and message["image_paths"]:
+                st.caption("附带的图片:")
+                # 使用columns来并排显示多张图片
+                cols = st.columns(min(len(message["image_paths"]), 3))  # 最多3列
+                for i, img_path in enumerate(message["image_paths"]):
+                    try:
+                        with open(img_path, 'rb') as f:
+                            img_bytes = f.read()
+                        col_idx = i % 3
+                        with cols[col_idx]:
+                            st.image(img_bytes, caption=f"图片 {i+1}", width=150)
+                    except Exception as e:
+                        st.error(f"无法加载图片 {i+1}: {str(e)}")
+            
+            # 兼容旧版本的单张图片显示
+            elif "image_path" in message and message["image_path"]:
+                try:
+                    with open(message["image_path"], 'rb') as f:
+                        img_bytes = f.read()
+                    st.image(img_bytes, caption="附带图片", width=200)
+                except Exception as e:
+                    st.error(f"无法加载图片: {str(e)}")
                 
             if "timestamp" in message:
                 st.caption(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(message['timestamp']))}")
@@ -286,8 +310,8 @@ def main():
     display_chat_history()
     
     # 聊天输入和图片上传移动到底部
-    image_path = None
-    image_bytes = None
+    image_paths = []
+    image_bytes_list = []
     prompt = None
     
     with st._bottom:
@@ -297,15 +321,16 @@ def main():
                 st.subheader("对话输入")
                 prompt = st.chat_input("Type here your question...")
             with right_col:
-                uploaded_image = st.file_uploader("上传图片（可选，支持jpg/png）", type=["jpg", "jpeg", "png"])
-                if uploaded_image is not None:
-                    image_bytes = uploaded_image.read()
-                    # 保存到临时文件
-                    suffix = "." + uploaded_image.type.split('/')[-1]
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                        tmp_file.write(image_bytes)
-                        image_path = tmp_file.name
-                    # st.image(image_bytes, caption=None, width=50)
+                uploaded_images = st.file_uploader("上传图片（可选，支持jpg/png，可多选）", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+                if uploaded_images is not None and len(uploaded_images) > 0:
+                    for uploaded_image in uploaded_images:
+                        image_bytes = uploaded_image.read()
+                        image_bytes_list.append(image_bytes)
+                        # 保存到临时文件
+                        suffix = "." + uploaded_image.type.split('/')[-1]
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                            tmp_file.write(image_bytes)
+                            image_paths.append(tmp_file.name)
         else:
             prompt = st.chat_input("Type here your question...")
 
@@ -315,8 +340,9 @@ def main():
         with st.chat_message("user"):
             # 新增：对用户输入内容做图片宽度限制
             st.markdown(render_markdown_with_img_limit(prompt), unsafe_allow_html=True)
-            if image_bytes:
-                st.image(image_bytes, caption="本次消息附带图片", width=200)
+            if image_bytes_list:
+                for i, image_bytes in enumerate(image_bytes_list):
+                    st.image(image_bytes, caption=f"图片 {i+1}", width=200)
         
         # 添加用户消息到历史
         user_message = {
@@ -324,8 +350,8 @@ def main():
             "content": prompt,
             "timestamp": time.time()
         }
-        if image_path:
-            user_message["image_path"] = image_path
+        if image_paths:
+            user_message["image_paths"] = image_paths
         st.session_state.messages.append(user_message)
         
         # 生成助手回复
@@ -347,7 +373,7 @@ def main():
                             user_message=prompt,
                             user_id=st.session_state.user_id,
                             session_id=st.session_state.session_id,
-                            image_source=image_path if image_path else None
+                            image_source=image_paths if image_paths else None
                         ):
                             # 收到第一个chunk时，清除"正在思考..."提示
                             if not first_chunk_received:
@@ -392,7 +418,7 @@ def main():
                                 user_message=prompt,
                                 user_id=st.session_state.user_id,
                                 session_id=st.session_state.session_id,
-                                image_source=image_path if image_path else None
+                                image_source=image_paths if image_paths else None
                             )
                         )
                         
