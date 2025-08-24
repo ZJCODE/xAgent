@@ -26,6 +26,12 @@ Also includes advanced features like multi-agent workflows even with **intellige
 - [📄 License](#-license)
 
 
+## Roadmap
+
+- [ ] Add Memory Support 🚀
+- [ ] Add Voice Support
+- [ ] Workflow Add Service Support
+
 ## 🚀 Quick Start
 
 Get up and running with xAgent in just a few commands:
