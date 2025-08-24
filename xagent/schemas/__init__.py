@@ -1,12 +1,5 @@
 from .message import Message,ToolCall, RoleType, MessageType
-from .memory import (
-	MemoryType,
-	BaseMemory,
-	WorkingMemory,
-	FactualMemory,
-	EpisodicMemory,
-	SemanticMemory,
-)
+from .memory import MemoryType,MemoryPiece,MemoryExtraction
 
 __all__ = [
 	"Message",
@@ -14,9 +7,6 @@ __all__ = [
 	"RoleType",
 	"MessageType",
 	"MemoryType",
-	"BaseMemory",
-	"WorkingMemory",
-	"FactualMemory",
-	"EpisodicMemory",
-	"SemanticMemory",
+    "MemoryPiece",
+    "MemoryExtraction"
 ]

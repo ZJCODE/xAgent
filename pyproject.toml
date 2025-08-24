@@ -37,6 +37,7 @@ dependencies = [
     
     # Data storage
     "redis>=6.2.0",
+    "chromadb>=1.0.20",
     "boto3>=1.39.17",
     
     # UI and utilities

@@ -1,65 +1,70 @@
-import time
-from typing import Optional, Dict, Any, List
 from enum import Enum
-from uuid import uuid4
-
-from pydantic import BaseModel, Field
-
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
 
 class MemoryType(Enum):
     """Types of memory supported by the system."""
 
     WORKING = "working"    # Short-term, task or session-specific memory.
                            # Examples:
-                           #   - "Current task is to book a restaurant"
-                           #   - "User mentioned they are planning a trip"
+                           #   - "Current task: schedule a meeting with Dr. Smith at 3 PM"
+                           #   - "User just provided a new delivery address for this order"
+                           #   - "Session context: user is comparing two products"
+                           #   - "User mentioned they are planning a trip to Paris next month"
 
     PROFILE = "profile"    # Stored knowledge about users, preferences
                            # Examples:
-                           #   - "User prefers Italian food"
-                           #   - "User's birthday is in July"
-                           #   - "User lives in Shanghai"
+                           #   - "User prefers Italian food and vegetarian options"
+                           #   - "User's birthday: July 15"
+                           #   - "User lives in Shanghai, China"
+                           #   - "User generally enjoys cheerful, informal conversations"
+                           #   - "User's preferred contact method: email"
+                           #   - "User is a premium member since 2022"
 
     EPISODIC = "episodic"  # Past interactions and experiences
                            # Examples:
-                           #   - "Helped user find a nearby coffee shop on 2024-03-10"
+                           #   - "On 2024-03-10, helped user find a nearby coffee shop"
                            #   - "User asked about weather last weekend"
+                           #   - "User previously requested a refund for order #12345"
+                           #   - "User shared positive feedback after using the booking service"
+                           #   - "User reported an issue with login on 2024-04-01"
 
-    SEMANTIC = "semantic"  # Understanding of concepts and their relationships and world knowledge
+    SEMANTIC = "semantic"  # General world knowledge, facts, concepts, and their relationships (semantic memory)
                            # Examples:
-                           #   - "A reservation is needed for popular restaurants"
-                           #   - "Rainy weather may affect outdoor plans"
-                           #   - "Morning is usually a busy time for traffic"
+                           #   - "Paris is the capital of France"
+                           #   - "A reservation is required for popular restaurants during weekends"
+                           #   - "Water boils at 100°C under standard atmospheric pressure"
+                           #   - "Rainy weather may affect outdoor plans and traffic conditions"
+                           #   - "Express shipping is faster but more expensive than standard shipping"
+                           #   - "A valid ID is needed for hotel check-in"
+                           #   - "Dogs are mammals"
 
-    PROCEDURAL = "procedural"  # how-to, tool usage patterns
+    PROCEDURAL = "procedural"  # How-to, tool usage patterns
                            # Examples:
-                           #   - "To book a restaurant, you need to check availability"
+                           #   - "To book a restaurant, check availability, select time, and confirm reservation"
                            #   - "Use the search function to find relevant documents"
+                           #   - "Reset password by clicking 'Forgot Password' and following the instructions"
+                           #   - "To cancel an order, go to 'My Orders' and select 'Cancel'"
 
-class Memory(BaseModel):
-    """Unified memory model for all types of memories."""
-    
-    id: str = Field(default_factory=lambda: str(uuid4()), description="UUID for the memory")
-    user_id: str = Field(..., description="User identifier")
-    type: MemoryType = Field(..., description="Type of memory")
-    content: str = Field(..., description="The memory content as text")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional metadata")
-    created_at: float = Field(default_factory=time.time, description="Creation timestamp")
-    updated_at: Optional[float] = Field(None, description="Last update timestamp")
-    embedding: Optional[List[float]] = Field(None, description="Vector embedding for semantic search")
+    META = "meta"            # Memory about memory itself (meta-memory)
+                            # Examples:
+                            #   - "The user often forgets to mention important details in requests"
+                            #   - "This type of question usually requires multiple confirmations from the user"
+                            #   - "The user tends to seek multiple options before making a decision"
+                            #   - "User's preferences have changed over time, especially regarding travel"
+                            #   - "User frequently revisits previous conversations for reference"
 
-    def touch(self) -> None:
-        """Update the updated_at timestamp to now."""
-        self.updated_at = time.time()
+class MemoryPiece(BaseModel):
+    """Schema for memory objects."""
+    content: str
+    type: MemoryType
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize the memory to a plain dict."""
-        data = self.model_dump()
-        data["type"] = self.type.value
-        return data
+class MemoryExtraction(BaseModel):
+    """Schema for memory extraction results."""
+    memories: List[MemoryPiece]
 
 
-__all__ = [
-    "MemoryType",
-    "Memory",
-]
+class QueryPreprocessResult(BaseModel):
+    """Schema for query preprocessing results."""
+    original_query: str
+    rewritten_queries: List[str]
