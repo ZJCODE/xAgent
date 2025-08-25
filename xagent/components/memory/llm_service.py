@@ -306,7 +306,7 @@ Examples of queries that DON'T NEED rewriting:
 
         try:
             response = await self.openai_client.responses.parse(
-                model="gpt-4.1-nano",
+                model=self.model,
                 input=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
