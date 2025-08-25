@@ -176,8 +176,19 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
             )
 
         self.logger.debug("Preprocessing query: %s", query[:100] + "..." if len(query) > 100 else query)
+        
+        # Import datetime to get current date
+        from datetime import datetime
+        current_date = datetime.now().strftime("%Y-%m-%d (%A)")
+        
+        # Embed current date in context
+        date_context = f"Current date: {current_date}"
         if query_context:
-            self.logger.debug("Using query context for preprocessing, length: %d", len(query_context))
+            query_context = f"{date_context}\n{query_context}"
+            self.logger.debug("Using query context with current date for preprocessing, length: %d", len(query_context))
+        else:
+            query_context = date_context
+            self.logger.debug("Using current date as query context for preprocessing")
         
         system_prompt = """You are an expert query preprocessing system. Your task is to analyze the given query and generate:
 
@@ -194,20 +205,17 @@ Guidelines:
 """
 
         # Build user prompt with context if available
-        if query_context:
-            user_prompt = f"""Preprocess this query for memory retrieval:
+        user_prompt = f"""Preprocess this query for memory retrieval:
 
 Context: {query_context}
 
 Query: {query}
 
 Use the context to better understand the query intent and generate more targeted rewritten queries."""
-        else:
-            user_prompt = f"Preprocess this query for memory retrieval:\n\nQuery: {query}"
 
         try:
             response = await self.openai_client.responses.parse(
-                model=self.model,
+                model="gpt-4.1-nano",
                 input=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}

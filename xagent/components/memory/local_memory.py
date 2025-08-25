@@ -94,6 +94,8 @@ class MemoryStorageLocal(MemoryStorageBase):
         
         # Preprocess the query to get variations and keywords
         preprocessed = await self.llm_service.preprocess_query(query, query_context,enable_query_process)
+
+        self.logger.info("Preprocessed query: original='%s', rewritten=%s", preprocessed.original_query, preprocessed.rewritten_queries)
         
         # Prepare all query texts for batch processing
         query_texts = [preprocessed.original_query]

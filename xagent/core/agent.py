@@ -239,7 +239,7 @@ class Agent:
             retrieved_memories = []
             if self.enable_memory:
                 pre_chat = input_messages[-3:-1] # Use last 4 messages for memory retrieval memory and memory storage
-                retrieved_memories = await self.memory_storage.retrieve(user_id=user_id, query=user_message, limit=5, query_context=f"pre_chat:{pre_chat}",enable_query_process=False)
+                retrieved_memories = await self.memory_storage.retrieve(user_id=user_id, query=user_message, limit=5, query_context=f"pre_chat:{pre_chat}",enable_query_process=True)
 
             for attempt in range(max_iter):
 
