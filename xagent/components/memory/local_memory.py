@@ -107,24 +107,53 @@ class MemoryStorageLocal(MemoryStorageBase):
         self.logger.debug("Searching with %d query variations in batch", len(query_texts))
         
         try:
-            # Use ChromaDB's batch query capability
-            results = self.collection.query(
+            # First, specifically query for PROFILE memories to ensure we have some
+            profile_results = self.collection.query(
+                query_texts=query_texts,
+                n_results=limit,  # Get enough PROFILE memories
+                where={
+                    "$and": [
+                        {"user_id": user_id},
+                        {"memory_type": "profile"}
+                    ]
+                },
+                include=["documents", "metadatas", "distances"]
+            )
+            
+            # Then query for all memories (including PROFILE again, which will be deduplicated)
+            all_results = self.collection.query(
                 query_texts=query_texts,
                 n_results=min(limit * 2, 20),  # Get more results to account for deduplication
                 where={"user_id": user_id},
                 include=["documents", "metadatas", "distances"]
             )
             
-            # Collect memories with recall count and best distance
+            # Collect memories with recall count and best distance from both queries
             memory_stats = {}
             
-            if results.get("documents"):
-                # Process results from all queries
+            # Process PROFILE results first
+            if profile_results.get("documents"):
                 for ids, docs, metas, distances in zip(
-                    results["ids"],
-                    results["documents"], 
-                    results["metadatas"], 
-                    results["distances"]
+                    profile_results["ids"],
+                    profile_results["documents"], 
+                    profile_results["metadatas"], 
+                    profile_results["distances"]
+                ):
+                    for doc_id, content, metadata, distance in zip(ids, docs, metas, distances):
+                        memory_stats[doc_id] = {
+                            "content": content,
+                            "metadata": metadata,
+                            "best_distance": distance,
+                            "recall_count": 1,
+                        }
+            
+            # Process all results, updating existing entries or adding new ones
+            if all_results.get("documents"):
+                for ids, docs, metas, distances in zip(
+                    all_results["ids"],
+                    all_results["documents"], 
+                    all_results["metadatas"], 
+                    all_results["distances"]
                 ):
                     for doc_id, content, metadata, distance in zip(ids, docs, metas, distances):
                         if doc_id not in memory_stats:
@@ -132,21 +161,43 @@ class MemoryStorageLocal(MemoryStorageBase):
                                 "content": content,
                                 "metadata": metadata,
                                 "best_distance": distance,
-                                "recall_count": 1,
+                                "recall_count": 1
                             }
                         else:
-                            # Update recall count and best distance
+                            # Update recall count and best distance for existing entries
                             memory_stats[doc_id]["recall_count"] += 1
                             if distance < memory_stats[doc_id]["best_distance"]:
                                 memory_stats[doc_id]["best_distance"] = distance
             
-            # Convert to list and sort by recall count (desc) then by best distance (asc)
+            # Convert to list and separate by memory type
             memories = list(memory_stats.values())
-            memories.sort(key=lambda x: (-x["recall_count"], x["best_distance"]))
             
-            # Limit results and format output
+            # Separate PROFILE and other memories
+            profile_memories = [m for m in memories if m["metadata"].get("memory_type") == "profile"]
+            other_memories = [m for m in memories if m["metadata"].get("memory_type") != "profile"]
+            
+            # Sort each group by recall count (desc) then by best distance (asc)
+            profile_memories.sort(key=lambda x: (-x["recall_count"], x["best_distance"]))
+            other_memories.sort(key=lambda x: (-x["recall_count"], x["best_distance"]))
+            
+            # Ensure PROFILE memories occupy at least half of the results
+            target_profile_count = max(limit // 2, 1)  # At least 1 PROFILE, or half of limit
+            actual_profile_count = min(len(profile_memories), target_profile_count)
+            remaining_slots = limit - actual_profile_count
+            
+            # Select memories: prioritize PROFILE, then fill remaining with others
+            selected_memories = profile_memories[:actual_profile_count]
+            if remaining_slots > 0:
+                selected_memories.extend(other_memories[:remaining_slots])
+            
+            # If we don't have enough PROFILE memories, fill remaining slots with more others
+            if len(selected_memories) < limit and len(other_memories) > remaining_slots:
+                additional_needed = limit - len(selected_memories)
+                selected_memories.extend(other_memories[remaining_slots:remaining_slots + additional_needed])
+            
+            # Format output
             final_memories = []
-            for memory in memories[:limit]:
+            for memory in selected_memories:
                 # Remove created_timestamp and user_id from metadata
                 filtered_metadata = {k: v for k, v in memory["metadata"].items() 
                                    if k not in ["created_timestamp", "user_id"]}
@@ -155,7 +206,11 @@ class MemoryStorageLocal(MemoryStorageBase):
                     "metadata": filtered_metadata
                 })
             
-            self.logger.debug("Retrieved %d memories from %d query variations for user %s, sorted by recall count and distance", 
+            profile_count = sum(1 for m in final_memories if m["metadata"].get("memory_type") == "profile")
+            self.logger.debug("Memory distribution: %d PROFILE, %d others (target: %d PROFILE minimum) - used dedicated PROFILE query", 
+                             profile_count, len(final_memories) - profile_count, target_profile_count)
+            
+            self.logger.debug("Retrieved %d memories from %d query variations for user %s, with balanced memory type distribution", 
                              len(final_memories), len(query_texts), user_id)
             return final_memories
             
