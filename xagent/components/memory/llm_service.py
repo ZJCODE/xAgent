@@ -190,33 +190,47 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
             query_context = date_context
             self.logger.debug("Using current date as query context for preprocessing")
         
-        system_prompt = """You are an expert query preprocessing system. Your task is to analyze the given query and generate:
+        system_prompt = """You are an expert query preprocessing system. Your task is to analyze the given query and determine if it needs context-based rewriting for better memory retrieval.
 
-**Rewritten Queries**: Create 2-4 simple alternative formulations of the query that capture the EXACT same meaning but use different words or phrasing. This helps retrieve semantically similar memories even when exact wording doesn't match.
+**Key Principle**: Only generate rewritten queries when the original query is ambiguous or unclear by itself and requires context to be properly understood.
 
-Guidelines:
-- Keep rewritten queries SIMPLE and CLEAR
-- Maintain the EXACT same meaning and intent as the original query
-- Use simple synonyms and alternative phrasings
-- Avoid complex or technical language unless the original query uses it
-- Do not change the scope or specificity of the original query
-- Each rewrite should be easily understandable and straightforward
+**When to Rewrite (generate 2-3 rewritten queries)**:
+- The query contains ambiguous pronouns (e.g., "he", "she", "it", "that", "this") that need context to identify the referent
+- The query uses relative time expressions without clear reference (e.g., "yesterday", "last time", "before", "earlier") that need context to determine the actual time
+- The query contains unclear references that depend on conversation context (e.g., "the project", "our discussion", "that issue")
+- The query is a follow-up question that doesn't make sense without previous context
 
-**IMPORTANT**: For very short queries, interjections, exclamations, or ambiguous expressions (like "哦", "oh", "hmm", "好的", "ok", etc.), do NOT try to expand or interpret them into questions or requests. Instead:
-- If the query is too short or ambiguous to meaningfully rewrite, return an EMPTY list of rewritten queries
-- Only rewrite if there are clear synonyms or alternative phrasings that maintain the exact same meaning
-- Do not assume what the user "might mean" or try to be helpful by changing the intent
+**When NOT to Rewrite (return EMPTY list)**:
+- The query is complete and self-contained, even if short
+- The query is clear and specific by itself
+- The query contains concrete nouns, specific names, or clear concepts
+- Simple expressions, confirmations, or interjections (e.g., "ok", "thanks", "sure", "yes")
+- Complete questions that don't require additional context to understand
 
-If context is provided, use it to better understand the query intent but still keep rewrites simple and maintain exact meaning."""
+**For Rewriting**: When context is needed, use the provided context to resolve ambiguities and create 2-3 clear, specific variations that maintain the exact intent but resolve the unclear references."""
 
         # Build user prompt with context if available
-        user_prompt = f"""Preprocess this query for memory retrieval:
+        user_prompt = f"""Analyze this query and determine if it needs context-based rewriting:
 
 Context: {query_context}
 
 Query: "{query}"
 
-IMPORTANT: Only generate rewritten queries if they maintain the EXACT same meaning as the original. For very short, ambiguous, or interjection-type queries, it's better to return an empty list than to change the meaning. Generate alternative phrasings only if they are true synonyms or equivalent expressions."""
+CRITICAL DECISION: Does this query contain ambiguous references, pronouns, or unclear elements that require the provided context to be properly understood?
+
+- If YES: Generate 2-3 rewritten queries that resolve the ambiguities using the context
+- If NO: Return an EMPTY list (the query is clear and self-contained)
+
+Examples of queries that NEED rewriting:
+- "what did he say yesterday?" (ambiguous pronoun + relative time)
+- "that project we discussed" (unclear reference)
+- "what happened next?" (depends on previous context)
+
+Examples of queries that DON'T NEED rewriting:
+- "Python programming tips" (clear and specific)
+- "how to use Docker" (complete question)
+- "machine learning algorithms" (specific topic)
+- "ok" (simple confirmation)"""
 
         try:
             response = await self.openai_client.responses.parse(
