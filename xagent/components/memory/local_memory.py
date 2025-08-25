@@ -47,57 +47,28 @@ class LocalMemory(MemoryStore):
         
         # Extract structured memories from content
         extracted_memories = await self.llm_service.extract_memories_from_content(content)
+        now = datetime.now()
         
-        # Store each extracted memory piece
-        memory_ids = []
+        # Prepare data for batch storage
         documents = []
         metadatas = []
+        
+        # Process extracted memories
         for memory_piece in extracted_memories.memories:
-            memory_id = str(uuid.uuid4())
-            
-            # Prepare metadata
-            now = datetime.now()
-            meta = {
-                "user_id": user_id, 
-                "created_at": now.isoformat(),
-                "created_timestamp": now.timestamp(),
-                "memory_type": memory_piece.type.value,
-            }
-            if metadata:
-                meta.update(metadata)
-
-            memory_ids.append(memory_id)
             documents.append(memory_piece.content)
-            metadatas.append(meta)
-
-        if memory_ids:
-            self.collection.upsert(
-                documents=documents,
-                metadatas=metadatas,
-                ids=memory_ids
-            )
-            self.logger.debug("Stored %d extracted memory pieces for user %s", len(memory_ids), user_id)
+            metadatas.append(self._create_base_metadata(user_id, memory_piece.type.value, metadata, now))
 
         # If no memories were extracted, store the original content as working memory
-        if not memory_ids:
-            memory_id = str(uuid.uuid4())
-            now = datetime.now()
-            meta = {
-                "user_id": user_id, 
-                "created_at": now.isoformat(),
-                "created_timestamp": now.timestamp(),
-                "memory_type": MemoryType.WORKING.value,
-            }
-            if metadata:
-                meta.update(metadata)
-            
-            self.collection.upsert(
-                documents=[content.strip()],
-                metadatas=[meta],
-                ids=[memory_id]
-            )
-            memory_ids.append(memory_id)
+        if not documents:
+            documents = [content.strip()]
+            metadatas = [self._create_base_metadata(user_id, MemoryType.WORKING.value, metadata, now)]
             self.logger.debug("No structured memories extracted, stored as working memory for user %s", user_id)
+        
+        # Batch store all memories
+        memory_ids = self._batch_store_memories(documents, metadatas)
+        
+        log_msg = f"Stored {len(memory_ids)} {'extracted memory pieces' if len(memory_ids) > 1 else 'memory piece'} for user {user_id}"
+        self.logger.debug(log_msg)
         
         return memory_ids[0] if len(memory_ids) == 1 else str(memory_ids)
     
@@ -118,7 +89,6 @@ class LocalMemory(MemoryStore):
         if preprocessed.rewritten_queries:
             query_texts.extend(preprocessed.rewritten_queries)
         
-        
         self.logger.debug("Searching with %d query variations in batch", len(query_texts))
         
         try:
@@ -133,30 +103,25 @@ class LocalMemory(MemoryStore):
             # Collect memories with recall count and best distance
             memory_stats = {}
             
-            if results["documents"]:
+            if results.get("documents"):
                 # Process results from all queries
-                for query_idx, (ids, docs, metas, distances) in enumerate(zip(
+                for ids, docs, metas, distances in zip(
                     results["ids"],
                     results["documents"], 
                     results["metadatas"], 
                     results["distances"]
-                )):
-                    matched_query = query_texts[query_idx] if query_idx < len(query_texts) else "unknown"
-                    
+                ):
                     for doc_id, content, metadata, distance in zip(ids, docs, metas, distances):
                         if doc_id not in memory_stats:
                             memory_stats[doc_id] = {
-                                "id": doc_id,
                                 "content": content,
                                 "metadata": metadata,
                                 "best_distance": distance,
                                 "recall_count": 1,
-                                "matched_queries": [matched_query]
                             }
                         else:
                             # Update recall count and best distance
                             memory_stats[doc_id]["recall_count"] += 1
-                            memory_stats[doc_id]["matched_queries"].append(matched_query)
                             if distance < memory_stats[doc_id]["best_distance"]:
                                 memory_stats[doc_id]["best_distance"] = distance
             
@@ -164,13 +129,11 @@ class LocalMemory(MemoryStore):
             memories = list(memory_stats.values())
             memories.sort(key=lambda x: (-x["recall_count"], x["best_distance"]))
             
-            # Limit results and remove internal fields
-            final_memories = []
-            for memory in memories[:limit]:
-                final_memories.append({
-                    "content": memory["content"],
-                    "metadata": memory["metadata"],
-                })
+            # Limit results and format output
+            final_memories = [
+                {"content": memory["content"], "metadata": memory["metadata"]}
+                for memory in memories[:limit]
+            ]
             
             self.logger.debug("Retrieved %d memories from %d query variations for user %s, sorted by recall count and distance", 
                              len(final_memories), len(query_texts), user_id)
@@ -179,109 +142,108 @@ class LocalMemory(MemoryStore):
         except Exception as e:
             self.logger.error("Error in batch query search: %s", str(e))
             # Fallback to single query search
-            try:
-                results = self.collection.query(
-                    query_texts=[preprocessed.original_query],
-                    n_results=limit,
-                    where={"user_id": user_id},
-                    include=["documents", "metadatas"]
-                )
-                
-                memories = []
-                if results["documents"]:
-                    for ids, docs, metas in zip(results["ids"], results["documents"], results["metadatas"]):
-                        for doc_id, content, metadata in zip(ids, docs, metas):
-                            memories.append({
-                                "content": content,
-                                "metadata": metadata,
-                            })
-                
-                self.logger.debug("Fallback: Retrieved %d memories for user %s", len(memories), user_id)
-                return memories
-                
-            except Exception as fallback_e:
-                self.logger.error("Fallback query also failed: %s", str(fallback_e))
-                return []
+            return await self._fallback_retrieve(preprocessed.original_query, user_id, limit)
+
+    async def _fallback_retrieve(self, query: str, user_id: str, limit: int) -> List[Dict[str, Any]]:
+        """Fallback retrieval method using single query."""
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=limit,
+                where={"user_id": user_id},
+                include=["documents", "metadatas"]
+            )
+            
+            memories = self._format_memory_results(results)
+            self.logger.debug("Fallback: Retrieved %d memories for user %s", len(memories), user_id)
+            return memories
+            
+        except Exception as fallback_e:
+            self.logger.error("Fallback query also failed: %s", str(fallback_e))
+            return []
 
 
     async def extract_meta(self, user_id: str, days: int = 1) -> List[str]:
-        """Extract meta memory from recent memories and store it. Returns list of memory IDs.
-        
-        Args:
-            user_id: The user ID to extract meta memory for
-            days: Number of days to look back for memory extraction (default: 1 for today only)
-        
-        Returns:
-            List of memory IDs for the stored meta memories
-        """
+        """Extract meta memory from recent memories and store it. Returns list of memory IDs."""
         self.logger.info("Extracting and storing meta memory for user: %s (last %d day(s))", user_id, days)
         
-        # Get recent memories
+        # Get recent memories and extract meta memory
         recent_memories = await self._get_recent_memories(user_id, days)
-        # Extract meta memory from recent memories
         meta_memory = await self.llm_service.extract_meta_memory_from_recent(recent_memories)
         
-        memory_ids = []
-        now = datetime.now()
+        if not meta_memory.contents:
+            self.logger.debug("No meta memory contents extracted for user %s", user_id)
+            return []
+
+        # Prepare batch data
+        documents = []
+        metadatas = []
         
-        # Store all meta contents separately (each content piece as individual document)
-        if meta_memory.contents:
-            content_ids = []
-            content_documents = []
-            content_metadatas = []
-            
-            for i, piece in enumerate(meta_memory.contents):
-                content_id = str(uuid.uuid4())
-                
-                # Update source description based on days
-                source_description = "daily_meta_extraction" if days == 1 else f"{days}_day_meta_extraction"
-                
-                content_meta = {
-                    "user_id": user_id,
-                    "created_at": now.isoformat(),
-                    "created_timestamp": now.timestamp(),
-                    "memory_type": piece.type.value,  # Use the MetaMemoryType value
-                    "source": source_description,
-                    "days_covered": days,  # Track how many days this meta memory covers
-                }
-                
-                content_ids.append(content_id)
-                content_documents.append(piece.content)
-                content_metadatas.append(content_meta)
-            
-            # Batch insert all meta contents
-            self.collection.upsert(
-                documents=content_documents,
-                metadatas=content_metadatas,
-                ids=content_ids
-            )
-            memory_ids.extend(content_ids)
-            self.logger.debug("Stored %d meta content pieces for user %s", len(content_ids), user_id)
+        for piece in meta_memory.contents:
+            documents.append(piece.content)
+            meta = self._create_base_metadata(user_id, piece.type.value, {}, datetime.now())
+            metadatas.append(meta)
         
-        self.logger.debug("Stored meta memory for user %s: %d total documents", user_id, len(memory_ids))
+        # Batch store all meta contents
+        memory_ids = self._batch_store_memories(documents, metadatas)
+        
+        self.logger.debug("Stored %d meta content pieces for user %s", len(memory_ids), user_id)
         return memory_ids
 
+
+    def _create_base_metadata(self, user_id: str, memory_type: str, 
+                             additional_metadata: Optional[Dict[str, Any]] = None,
+                             timestamp: Optional[datetime] = None) -> Dict[str, Any]:
+        """Create base metadata for memory storage."""
+        now = timestamp or datetime.now()
+        meta = {
+            "user_id": user_id,
+            "created_at": now.isoformat(),
+            "created_timestamp": now.timestamp(),
+            "memory_type": memory_type,
+        }
+        if additional_metadata:
+            meta.update(additional_metadata)
+        return meta
+    
+    def _batch_store_memories(self, documents: List[str], metadatas: List[Dict[str, Any]], 
+                             ids: Optional[List[str]] = None) -> List[str]:
+        """Batch store multiple memories and return memory IDs."""
+        if not ids:
+            ids = [str(uuid.uuid4()) for _ in documents]
+        
+        self.collection.upsert(
+            documents=documents,
+            metadatas=metadatas,
+            ids=ids
+        )
+        return ids
+    
+    def _format_memory_results(self, results: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Format ChromaDB results into standard memory format."""
+        memories = []
+        if results.get("documents"):
+            for doc_id, content, metadata in zip(
+                results["ids"], 
+                results["documents"], 
+                results["metadatas"]
+            ):
+                memories.append({
+                    "content": content,
+                    "metadata": metadata,
+                })
+        return memories
+
     async def _get_recent_memories(self, user_id: str, days: int = 1) -> List[Dict[str, Any]]:
-        """Get all memories for a user created within the last N days.
-        
-        Args:
-            user_id: The user ID to retrieve memories for
-            days: Number of days to look back (default: 1 for today only)
-        
-        Returns:
-            List of memories within the specified time range
-        """
+        """Get all memories for a user created within the last N days."""
         self.logger.info("Retrieving last %d day(s) memories for user: %s", days, user_id)
         
-        # Calculate start time (N days ago at 00:00:00)
+        # Calculate time range
         start_date = datetime.now() - timedelta(days=days-1)
         start_timestamp = start_date.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        
-        # End time is now
         end_timestamp = datetime.now().timestamp()
         
         try:
-            # Query memories for the user created within the specified time range
             results = self.collection.get(
                 where={
                     "$and": [
@@ -294,7 +256,7 @@ class LocalMemory(MemoryStore):
             )
             
             memories = []
-            if results["documents"]:
+            if results.get("documents"):
                 for doc_id, content, metadata in zip(results["ids"], results["documents"], results["metadatas"]):
                     memories.append({
                         "id": doc_id,
