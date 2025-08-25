@@ -72,6 +72,7 @@ class MemoryStorageLocal(MemoryStorageBase):
         # If no memories were extracted, do not store anything
         if not documents:
             self.logger.debug("No structured memories extracted, nothing stored for user %s", user_id)
+            return ""  # Return empty string when no memories extracted
         
         # Batch store all memories
         memory_ids = self._batch_store_memories(documents, metadatas)
