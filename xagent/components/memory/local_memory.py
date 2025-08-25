@@ -8,7 +8,7 @@ from datetime import datetime
 import dotenv
 from openai import AsyncOpenAI
 
-from ...schemas.memory import MemoryType, MemoryExtraction,QueryPreprocessResult
+from ...schemas.memory import MemoryType, MemoryExtraction, MetaMemory, MetaMemoryPiece, MetaMemoryType, QueryPreprocessResult
 from .base_memory import MemoryStore
 
 dotenv.load_dotenv(override=True)
@@ -57,9 +57,11 @@ class LocalMemory(MemoryStore):
             memory_id = str(uuid.uuid4())
             
             # Prepare metadata
+            now = datetime.now()
             meta = {
                 "user_id": user_id, 
-                "created_at": datetime.now().isoformat(),
+                "created_at": now.isoformat(),
+                "created_timestamp": now.timestamp(),
                 "memory_type": memory_piece.type.value,
             }
             if metadata:
@@ -80,9 +82,11 @@ class LocalMemory(MemoryStore):
         # If no memories were extracted, store the original content as working memory
         if not memory_ids:
             memory_id = str(uuid.uuid4())
+            now = datetime.now()
             meta = {
                 "user_id": user_id, 
-                "created_at": datetime.now().isoformat(),
+                "created_at": now.isoformat(),
+                "created_timestamp": now.timestamp(),
                 "memory_type": MemoryType.WORKING.value,
             }
             if metadata:
@@ -212,7 +216,6 @@ For each piece of extracted memory, classify it into one of these types:
 - EPISODIC: Past interactions and experiences with timestamps
 - SEMANTIC: General world knowledge, facts, concepts
 - PROCEDURAL: How-to instructions, tool usage patterns
-- META: Memory about memory itself, patterns about the user's behavior
 
 Guidelines:
 1. Extract multiple memory pieces if the content contains diverse information
@@ -242,7 +245,166 @@ If the content doesn't contain any meaningful information worth storing as memor
             self.logger.error("Error extracting memories: %s", str(e))
             # Fallback: return empty extraction
             return MemoryExtraction(memories=[])
+
+    async def extract_meta_memory_from_today(self, user_id: str) -> MetaMemory:
+        """Extract meta-level insights from today's memories using LLM."""
+        self.logger.debug("Extracting meta memory from today's memories for user: %s", user_id)
         
+        # Get all today's memories first
+        today_memories = await self.get_today_memories(user_id)
+        
+        if not today_memories:
+            self.logger.debug("No memories found for today for user: %s", user_id)
+            return MetaMemory(contents=[])
+        
+        # Combine all memory contents for analysis
+        memory_contents = []
+        for memory in today_memories:
+            content = memory["content"]
+            memory_type = memory["metadata"].get("memory_type", "unknown")
+            created_at = memory["metadata"].get("created_at", "unknown")
+            memory_contents.append(f"[{memory_type.upper()}] ({created_at}): {content}")
+        
+        combined_content = "\n".join(memory_contents)
+        
+        system_prompt = """You are an expert meta-memory analyst. Your task is to analyze a collection of memories from today and extract high-level insights, patterns, and meta-information about the user's day.
+
+Generate a list of specific meta-memory pieces that capture different aspects or insights. Each piece should be classified as META type and focus on creating insights such as:
+- Overall themes or patterns in the user's activities today
+- User's mood, preferences, or behavioral patterns observed
+- Important relationships or connections between different memories
+- Insights about the user's goals, interests, or decision-making patterns
+- Notable changes in behavior or preferences compared to typical patterns
+- Summary of key achievements, challenges, or experiences from today
+- Emerging trends or patterns in the user's interactions
+
+Each meta-memory piece should be:
+1. High-level and synthesized (not just a summary of individual memories)
+2. Focused on patterns, insights, and meta-information
+3. Useful for understanding the user's overall context and state
+4. Written in a way that would be valuable for future interactions
+
+If the memories are too sparse or unrelated to generate meaningful meta-insights, create a few basic content pieces about the day's key themes."""
+
+        user_prompt = f"""Analyze these memories from today and extract meta-level insights:
+
+Today's Memories:
+{combined_content}
+
+Extract meaningful meta-memory insights about patterns, themes, user state, and high-level observations from today's activities. Each insight should be classified as META type."""
+
+        try:
+            response = await self.openai_client.responses.parse(
+                model=self.model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                text_format=MetaMemory,
+                temperature=0.3
+            )
+            
+            extracted_meta = response.output_parsed
+            self.logger.debug("Successfully extracted meta memory from %d today's memories", len(today_memories))
+            return extracted_meta
+        except Exception as e:
+            self.logger.error("Error extracting meta memory: %s", str(e))
+            # Fallback: return basic meta content pieces
+            memory_types = ', '.join(set(m['metadata'].get('memory_type', 'unknown') for m in today_memories))
+            return MetaMemory(
+                contents=[
+                    MetaMemoryPiece(
+                        content=f"Today involved {len(today_memories)} recorded activities across various contexts", 
+                        type=MetaMemoryType.META
+                    ),
+                    MetaMemoryPiece(
+                        content=f"Memory types included: {memory_types}",
+                        type=MetaMemoryType.META
+                    )
+                ]
+            )
+
+    async def extract_and_store_meta_memory(self, user_id: str) -> List[str]:
+        """Extract meta memory from today's memories and store it. Returns list of memory IDs."""
+        self.logger.info("Extracting and storing meta memory for user: %s", user_id)
+        
+        # Extract meta memory from today's memories
+        meta_memory = await self.extract_meta_memory_from_today(user_id)
+        
+        memory_ids = []
+        now = datetime.now()
+        
+        # Store all meta contents separately (each content piece as individual document)
+        if meta_memory.contents:
+            content_ids = []
+            content_documents = []
+            content_metadatas = []
+            
+            for i, piece in enumerate(meta_memory.contents):
+                content_id = str(uuid.uuid4())
+                content_meta = {
+                    "user_id": user_id,
+                    "created_at": now.isoformat(),
+                    "created_timestamp": now.timestamp(),
+                    "memory_type": piece.type.value,  # Use the MetaMemoryType value
+                    "source": "daily_meta_extraction",
+                    "content_index": i,  # Track the order of insights
+                    "total_content_pieces": len(meta_memory.contents),
+                }
+                
+                content_ids.append(content_id)
+                content_documents.append(piece.content)
+                content_metadatas.append(content_meta)
+            
+            # Batch insert all meta contents
+            self.collection.upsert(
+                documents=content_documents,
+                metadatas=content_metadatas,
+                ids=content_ids
+            )
+            memory_ids.extend(content_ids)
+            self.logger.debug("Stored %d meta content pieces for user %s", len(content_ids), user_id)
+        
+        self.logger.debug("Stored meta memory for user %s: %d total documents", user_id, len(memory_ids))
+        return memory_ids
+
+    
+    async def get_today_memories(self, user_id: str) -> List[Dict[str, Any]]:
+        """Get all memories for a user created today."""
+        self.logger.info("Retrieving today's memories for user: %s", user_id)
+        
+        # Get today's date range as timestamps
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999).timestamp()
+        
+        try:
+            # Query memories for the user created today using timestamp comparison
+            results = self.collection.get(
+                where={
+                    "$and": [
+                        {"user_id": user_id},
+                        {"created_timestamp": {"$gte": today_start}},
+                        {"created_timestamp": {"$lte": today_end}}
+                    ]
+                },
+                include=["documents", "metadatas"]
+            )
+            
+            memories = []
+            if results["documents"]:
+                for doc_id, content, metadata in zip(results["ids"], results["documents"], results["metadatas"]):
+                    memories.append({
+                        "id": doc_id,
+                        "content": content,
+                        "metadata": metadata,
+                    })
+            
+            self.logger.debug("Retrieved %d memories for today for user %s", len(memories), user_id)
+            return memories
+            
+        except Exception as e:
+            self.logger.error("Error retrieving today's memories: %s", str(e))
+            return []        
 
     async def preprocess_query(self, query: str) -> QueryPreprocessResult:
         """Preprocess query to generate variations and extract keywords for better memory retrieval."""

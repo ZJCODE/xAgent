@@ -1,3 +1,4 @@
+from curses import meta
 from enum import Enum
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
@@ -46,13 +47,8 @@ class MemoryType(Enum):
                            #   - "Reset password by clicking 'Forgot Password' and following the instructions"
                            #   - "To cancel an order, go to 'My Orders' and select 'Cancel'"
 
-    META = "meta"            # Memory about memory itself (meta-memory)
-                            # Examples:
-                            #   - "The user often forgets to mention important details in requests"
-                            #   - "This type of question usually requires multiple confirmations from the user"
-                            #   - "The user tends to seek multiple options before making a decision"
-                            #   - "User's preferences have changed over time, especially regarding travel"
-                            #   - "User frequently revisits previous conversations for reference"
+class MetaMemoryType(Enum):
+    META = "meta"          # High-level summaries and insights derived from other memory types.
 
 class MemoryPiece(BaseModel):
     """Schema for memory objects."""
@@ -63,6 +59,14 @@ class MemoryExtraction(BaseModel):
     """Schema for memory extraction results."""
     memories: List[MemoryPiece]
 
+class MetaMemoryPiece(BaseModel):
+    """Schema for memory objects."""
+    content: str
+    type: MetaMemoryType
+
+class MetaMemory(BaseModel):
+    """Schema for meta information about memory pieces."""
+    contents: List[MetaMemoryPiece]
 
 class QueryPreprocessResult(BaseModel):
     """Schema for query preprocessing results."""
