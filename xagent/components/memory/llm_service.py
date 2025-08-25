@@ -55,11 +55,16 @@ FOCUS ON THE LAST USER MESSAGE - EXTRACT ONLY WHAT'S TRULY WORTH REMEMBERING:
    - Routine activities that show patterns (like regular exercise)
    - Meal plans or food choices that might indicate preferences
    - Exercise routines or fitness activities mentioned
+   - **DATE & TIME FORMAT**: If the activity/plan involves a specific date or time, include both in the content:
+     * Date: YYYY-MM-DD format
+     * Time: Include specific times like "8:00 PM", "tonight", "morning", etc.
+     * Example: "User plans to exercise at 8:00 PM on 2025-08-25" or "User has dinner tonight on 2025-08-25"
 
 **CONTEXT INTEGRATION**: 
 - Use previous messages to understand WHEN the final user message refers to (e.g., if previous message mentioned "tonight" and final message mentions exercise, understand it's for tonight)
 - Use previous messages to understand the SETTING or SITUATION of the final user message
 - Extract temporal context from the conversation flow to make the final message more meaningful
+- **IMPORTANT**: For EPISODIC memories involving dates or times, always include the specific date in YYYY-MM-DD format and preserve any time information in the content (e.g., "User plans to exercise at 8:00 PM on 2025-08-25" instead of "User plans to exercise tonight")
 
 **STRICT EXTRACTION CRITERIA**:
 - IGNORE: Previous user messages and ALL assistant responses (they are context only)
@@ -69,8 +74,10 @@ FOCUS ON THE LAST USER MESSAGE - EXTRACT ONLY WHAT'S TRULY WORTH REMEMBERING:
 - EXTRACT: Information from the final message that would help personalize future interactions
 
 **EXAMPLES**:
-- If conversation shows "I want fried chicken tonight" then "I also need to use the elliptical machine", extract: "User plans to exercise on elliptical machine tonight" (EPISODIC) and "User does elliptical machine exercise" (PROFILE if it suggests a routine)
-- If user mentions specific meal + exercise combo, this might indicate a lifestyle pattern worth remembering
+- If conversation shows "I want fried chicken tonight" then "I also need to use the elliptical machine", extract: "User plans to exercise on elliptical machine tonight on 2025-08-25" (EPISODIC) and "User does elliptical machine exercise" (PROFILE if it suggests a routine)
+- If user says "I have a meeting at 3:00 PM tomorrow", extract: "User has meeting at 3:00 PM on 2025-08-26" (EPISODIC)
+- If user mentions "dinner at 8:00 PM tonight", extract: "User has dinner at 8:00 PM tonight on 2025-08-25" (EPISODIC)
+- For date and time-specific activities, always include both: "User has appointment at 10:00 AM on 2025-08-30" not "User has appointment next week"
 
 **QUALITY OVER QUANTITY**: 
 - Better to extract NOTHING than to extract trivial information
