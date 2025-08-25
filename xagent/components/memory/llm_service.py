@@ -192,22 +192,22 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
         
         system_prompt = """You are an expert query preprocessing system. Your task is to analyze the given query and determine if it needs context-based rewriting for better memory retrieval.
 
-**Key Principle**: Only generate rewritten queries when the original query is ambiguous or unclear by itself and requires context to be properly understood.
+**CRITICAL PRINCIPLE**: Only generate rewritten queries when the original query is genuinely ambiguous and CANNOT be understood without external context.
 
 **When to Rewrite (generate 2-3 rewritten queries)**:
-- The query contains ambiguous pronouns (e.g., "he", "she", "it", "that", "this") that need context to identify the referent
-- The query uses relative time expressions without clear reference (e.g., "yesterday", "last time", "before", "earlier") that need context to determine the actual time
-- The query contains unclear references that depend on conversation context (e.g., "the project", "our discussion", "that issue")
-- The query is a follow-up question that doesn't make sense without previous context
+- The query contains pronouns that refer to someone/something NOT mentioned in the query itself (e.g., "what did he say?" where "he" is not identified)
+- The query uses relative time expressions that cannot be resolved without knowing the current context (e.g., "what happened yesterday?" without any date reference)
+- The query refers to previous conversations or events that are not self-contained (e.g., "continue that discussion", "what was the outcome?")
+- The query is clearly a follow-up that depends on prior context (e.g., "and then what?", "how about the other one?")
 
 **When NOT to Rewrite (return EMPTY list)**:
-- The query is complete and self-contained, even if short
-- The query is clear and specific by itself
-- The query contains concrete nouns, specific names, or clear concepts
-- Simple expressions, confirmations, or interjections (e.g., "ok", "thanks", "sure", "yes")
-- Complete questions that don't require additional context to understand
+- Instructions, commands, or statements that are complete (e.g., "your name is X", "start doing Y")
+- Questions that are self-contained and clear (e.g., "how to use Python", "what is machine learning")
+- Queries with specific topics, names, or concepts that don't need external reference
+- Simple expressions, acknowledgments, or standalone statements
+- ANY query that makes sense by itself, even if it could theoretically be expanded
 
-**For Rewriting**: When context is needed, use the provided context to resolve ambiguities and create 2-3 clear, specific variations that maintain the exact intent but resolve the unclear references."""
+**IMPORTANT**: Err on the side of NOT rewriting. Only rewrite if the query is truly incomprehensible without additional context."""
 
         # Build user prompt with context if available
         user_prompt = f"""Analyze this query and determine if it needs context-based rewriting:
@@ -216,21 +216,27 @@ Context: {query_context}
 
 Query: "{query}"
 
-CRITICAL DECISION: Does this query contain ambiguous references, pronouns, or unclear elements that require the provided context to be properly understood?
+CRITICAL DECISION: Is this query genuinely ambiguous and incomprehensible without external context?
 
-- If YES: Generate 2-3 rewritten queries that resolve the ambiguities using the context
-- If NO: Return an EMPTY list (the query is clear and self-contained)
+Ask yourself:
+1. Can I understand what this query means just by reading it?
+2. Does it contain unclear pronouns that refer to unidentified entities?
+3. Is it a fragment that depends on previous conversation?
+
+- If the query is clear and self-contained (even if simple): Return EMPTY list
+- If the query genuinely cannot be understood without context: Generate 2-3 rewritten queries
 
 Examples of queries that NEED rewriting:
-- "what did he say yesterday?" (ambiguous pronoun + relative time)
-- "that project we discussed" (unclear reference)
-- "what happened next?" (depends on previous context)
+- "what did he tell you?" (who is "he"?)
+- "continue from where we left off" (what previous discussion?)
+- "how did that turn out?" (what specific event?)
 
 Examples of queries that DON'T NEED rewriting:
-- "Python programming tips" (clear and specific)
-- "how to use Docker" (complete question)
-- "machine learning algorithms" (specific topic)
-- "ok" (simple confirmation)"""
+- "from now on, your name is X" (clear instruction)
+- "Python programming tips" (clear topic)  
+- "what is machine learning" (complete question)
+- "start the process" (clear command)
+- "thanks" (simple expression)"""
 
         try:
             response = await self.openai_client.responses.parse(
