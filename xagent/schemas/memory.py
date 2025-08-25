@@ -6,13 +6,6 @@ from pydantic import BaseModel
 class MemoryType(Enum):
     """Types of memory supported by the system."""
 
-    WORKING = "working"    # Short-term, task or session-specific memory.
-                           # Examples:
-                           #   - "Current task: schedule a meeting with Dr. Smith at 3 PM"
-                           #   - "User just provided a new delivery address for this order"
-                           #   - "Session context: user is comparing two products"
-                           #   - "User mentioned they are planning a trip to Paris next month"
-
     PROFILE = "profile"    # Stored knowledge about users, preferences
                            # Examples:
                            #   - "User prefers Italian food and vegetarian options"
@@ -30,22 +23,7 @@ class MemoryType(Enum):
                            #   - "User shared positive feedback after using the booking service"
                            #   - "User reported an issue with login on 2024-04-01"
 
-    SEMANTIC = "semantic"  # General world knowledge, facts, concepts, and their relationships (semantic memory)
-                           # Examples:
-                           #   - "Paris is the capital of France"
-                           #   - "A reservation is required for popular restaurants during weekends"
-                           #   - "Water boils at 100°C under standard atmospheric pressure"
-                           #   - "Rainy weather may affect outdoor plans and traffic conditions"
-                           #   - "Express shipping is faster but more expensive than standard shipping"
-                           #   - "A valid ID is needed for hotel check-in"
-                           #   - "Dogs are mammals"
 
-    PROCEDURAL = "procedural"  # How-to, tool usage patterns
-                           # Examples:
-                           #   - "To book a restaurant, check availability, select time, and confirm reservation"
-                           #   - "Use the search function to find relevant documents"
-                           #   - "Reset password by clicking 'Forgot Password' and following the instructions"
-                           #   - "To cancel an order, go to 'My Orders' and select 'Cancel'"
 
 class MetaMemoryType(Enum):
     META = "meta"          # High-level summaries and insights derived from other memory types.

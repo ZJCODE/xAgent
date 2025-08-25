@@ -32,27 +32,57 @@ class MemoryLLMService:
         """
         self.logger.debug("Extracting memories from content, length: %d", len(content))
         
-        system_prompt = """You are an expert memory extraction system. Your task is to analyze the given content and extract meaningful memory pieces that can be stored for future reference.
+        system_prompt = """You are an expert memory extraction system. Your task is to analyze conversation content and extract ONLY the truly important memory pieces from the LAST user message that should be remembered long-term.
 
-For each piece of extracted memory, classify it into one of these types:
-- PROFILE: Knowledge about users, preferences, personal information
-- EPISODIC: Past interactions and experiences with timestamps
-- SEMANTIC: General world knowledge, facts, concepts
-- PROCEDURAL: How-to instructions, tool usage patterns
+KEY INSTRUCTION: When given conversation format with multiple exchanges, ONLY extract memories from the FINAL user message. Previous messages provide context to help understand the final message better.
 
-Guidelines:
-1. Extract multiple memory pieces if the content contains diverse information
-2. Each memory piece should be self-contained and meaningful
-3. Write memory content in SIMPLE, CLEAR sentences
-4. Use straightforward language that is easy to understand
-5. Avoid complex or technical jargon unless necessary
-6. Keep each memory piece concise but complete
-7. Don't extract memories for trivial or temporary information
-8. Focus on information that would be useful for future interactions
+FOCUS ON THE LAST USER MESSAGE - EXTRACT ONLY WHAT'S TRULY WORTH REMEMBERING:
 
-If the content doesn't contain any meaningful information worth storing as memory, return an empty list."""
+**CRITICAL PRINCIPLE**: Be HIGHLY SELECTIVE. Only extract information from the final user message that is genuinely important for future interactions with this specific user.
 
-        user_prompt = f"Analyze this content and extract meaningful memories:\n\n{content}"
+**CONTEXT USAGE**: Use previous messages to understand the context and timing of the final user message, but do NOT extract memories from previous messages.
+
+1. **PROFILE**: Only extract NEW or UPDATED personal information from the last user message
+   - Personal habits, routines, or lifestyle patterns mentioned in the final message
+   - Preferences about activities, food, exercise, or daily life from the final message
+   - Health-related activities or constraints mentioned in the final message
+   - Personal goals or commitments expressed in the final message
+   - Regular activities or schedules revealed in the final message
+
+2. **EPISODIC**: Only extract significant activities or plans from the last user message
+   - Specific plans or activities mentioned for today/tonight/specific times
+   - Important events or commitments the user shared in the final message
+   - Routine activities that show patterns (like regular exercise)
+   - Meal plans or food choices that might indicate preferences
+   - Exercise routines or fitness activities mentioned
+
+**CONTEXT INTEGRATION**: 
+- Use previous messages to understand WHEN the final user message refers to (e.g., if previous message mentioned "tonight" and final message mentions exercise, understand it's for tonight)
+- Use previous messages to understand the SETTING or SITUATION of the final user message
+- Extract temporal context from the conversation flow to make the final message more meaningful
+
+**STRICT EXTRACTION CRITERIA**:
+- IGNORE: Previous user messages and ALL assistant responses (they are context only)
+- IGNORE: Casual mentions that don't reveal patterns or preferences
+- EXTRACT: Activities from the final message that show user's lifestyle patterns
+- EXTRACT: Plans from the final message that indicate user's priorities or routines
+- EXTRACT: Information from the final message that would help personalize future interactions
+
+**EXAMPLES**:
+- If conversation shows "I want fried chicken tonight" then "I also need to use the elliptical machine", extract: "User plans to exercise on elliptical machine tonight" (EPISODIC) and "User does elliptical machine exercise" (PROFILE if it suggests a routine)
+- If user mentions specific meal + exercise combo, this might indicate a lifestyle pattern worth remembering
+
+**QUALITY OVER QUANTITY**: 
+- Better to extract NOTHING than to extract trivial information
+- Focus on information from the final message that reveals user's habits, preferences, or important activities
+- Consider temporal context from previous messages to make the final message more meaningful"""
+
+        user_prompt = f"""Analyze the conversation below and extract ONLY truly important information from the LAST user message. Use previous messages as context to understand timing and situation, but extract memories ONLY from the final user message.
+
+Conversation:
+{content}
+
+Extract meaningful memories from the LAST user message only. Use previous messages to understand context (like timing, situation) but do not extract from them."""
 
         try:
             response = await self.openai_client.responses.parse(
@@ -99,25 +129,46 @@ If the content doesn't contain any meaningful information worth storing as memor
         
         combined_content = "\n".join(memory_contents)
         
-        system_prompt = """You are an expert meta-memory analyst. Your task is to analyze a collection of memories and extract high-level insights, patterns, and meta-information about the user's activities.
+        system_prompt = """You are an expert meta-memory analyst. Your task is to analyze a collection of memories and extract high-level insights, patterns, and meta-information focusing on the user's PROFILE and EPISODIC experiences.
 
-Generate a list of specific meta-memory pieces that capture different aspects or insights. Each piece should be classified as META type and focus on creating insights such as:
-- Overall themes or patterns in the user's activities
-- User's mood, preferences, or behavioral patterns observed
-- Important relationships or connections between different memories
-- Insights about the user's goals, interests, or decision-making patterns
-- Notable changes in behavior or preferences compared to typical patterns
-- Summary of key achievements, challenges, or experiences
-- Emerging trends or patterns in the user's interactions
-- Temporal patterns or evolution across the activities
+ANALYZE PATTERNS ACROSS TWO CORE MEMORY TYPES:
+
+**PROFILE PATTERNS**:
+- Consistent preferences, traits, and characteristics emerging across interactions
+- Evolution of user's personal information, preferences, or habits over time
+- Behavioral patterns and communication style preferences
+- Personal context patterns that affect interaction quality
+- Lifestyle patterns, routines, and personal circumstances
+- Relationship patterns and social interaction preferences
+- Goals, aspirations, and value patterns expressed over time
+
+**EPISODIC PATTERNS**:
+- Recurring themes in user's experiences and interactions
+- Temporal patterns in user's activities, needs, and requests
+- Emotional states and satisfaction patterns across different interactions
+- Notable achievements, challenges, or milestone events
+- Problem-solving patterns and help-seeking behaviors
+- Feedback patterns and service interaction outcomes
+- Seasonal or cyclical patterns in user's activities
+- Evolution of user's experiences and interaction success
+
+GENERATE META-INSIGHTS ABOUT:
+- Overall themes connecting PROFILE and EPISODIC information
+- User's evolving personal context and interaction patterns
+- Patterns that would improve future personalization and interaction quality
+- Important connections between user's personal characteristics and their experiences
+- Notable changes or consistency in user behavior, preferences, and life circumstances
+- Key insights about the user's personal journey, growth, and changing needs
+- Relationship between user's stated preferences (PROFILE) and actual experiences (EPISODIC)
 
 Each meta-memory piece should be:
-1. High-level and synthesized (not just a summary of individual memories)
-2. Focused on patterns, insights, and meta-information
-3. Useful for understanding the user's overall context and state
-4. Written in a way that would be valuable for future interactions
+1. High-level and synthesized (not just summaries of individual memories)
+2. Focused on patterns across PROFILE and EPISODIC domains
+3. Useful for understanding the user's comprehensive personal context
+4. Written to enhance future personalized interactions based on learned patterns
+5. Connecting personal characteristics with actual experiences and outcomes
 
-If the memories are too sparse or unrelated to generate meaningful meta-insights, create a few basic content pieces about the key themes."""
+If the memories don't reveal meaningful patterns across PROFILE and EPISODIC types, create basic insights about the key personal themes present."""
 
         user_prompt = f"""Analyze these memories and extract meta-level insights:
 
