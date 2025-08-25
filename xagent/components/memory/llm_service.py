@@ -196,9 +196,10 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
 
 **When to Rewrite (generate 2-3 rewritten queries)**:
 - The query contains pronouns that refer to someone/something NOT mentioned in the query itself (e.g., "what did he say?" where "he" is not identified)
-- The query uses relative time expressions that cannot be resolved without knowing the current context (e.g., "what happened yesterday?" without any date reference)
+- The query uses relative time expressions that need current date context to be specific (e.g., "yesterday", "tomorrow", "last week", "day after tomorrow", "next month")
 - The query refers to previous conversations or events that are not self-contained (e.g., "continue that discussion", "what was the outcome?")
-- The query is clearly a follow-up that depends on prior context (e.g., "and then what?", "how about the other one?")
+- The query is clearly a follow-up that depends on prior context (e.g., "and then what?", "how about the other one?", "what about it?" as a follow-up)
+- The query is a fragment or incomplete expression that needs context (e.g., "day after tomorrow?", "that one?", "how about it?")
 
 **When NOT to Rewrite (return EMPTY list)**:
 - Instructions, commands, or statements that are complete (e.g., "your name is X", "start doing Y")
@@ -221,22 +222,27 @@ CRITICAL DECISION: Is this query genuinely ambiguous and incomprehensible withou
 Ask yourself:
 1. Can I understand what this query means just by reading it?
 2. Does it contain unclear pronouns that refer to unidentified entities?
-3. Is it a fragment that depends on previous conversation?
+3. Does it contain relative time expressions that need current date context (like "yesterday", "tomorrow", "day after tomorrow", "last week")?
+4. Is it a fragment or follow-up that depends on previous conversation?
 
 - If the query is clear and self-contained (even if simple): Return EMPTY list
-- If the query genuinely cannot be understood without context: Generate 2-3 rewritten queries
+- If the query contains relative time expressions or genuinely cannot be understood without context: Generate 2-3 rewritten queries
 
 Examples of queries that NEED rewriting:
 - "what did he tell you?" (who is "he"?)
 - "continue from where we left off" (what previous discussion?)
 - "how did that turn out?" (what specific event?)
+- "tomorrow's weather" (which specific date?)
+- "day after tomorrow?" (what about the day after tomorrow - which date?)
+- "yesterday's meeting" (which specific date?)
 
 Examples of queries that DON'T NEED rewriting:
 - "from now on, your name is X" (clear instruction)
 - "Python programming tips" (clear topic)  
 - "what is machine learning" (complete question)
 - "start the process" (clear command)
-- "thanks" (simple expression)"""
+- "thanks" (simple expression)
+- "weather on 2025-08-27" (specific date given)"""
 
         try:
             response = await self.openai_client.responses.parse(
