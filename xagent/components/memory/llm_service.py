@@ -32,7 +32,15 @@ class MemoryLLMService:
         """
         self.logger.debug("Extracting memories from content, length: %d", len(content))
         
-        system_prompt = """You are an expert memory extraction system. Your task is to analyze conversation content and extract ONLY the truly important memory pieces from the LAST user message that should be remembered long-term.
+        # Get current date for context
+        from datetime import datetime
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        
+        system_prompt = f"""You are an expert memory extraction system. Your task is to analyze conversation content and extract ONLY the truly important memory pieces from the LAST user message that should be remembered long-term.
+
+CURRENT DATE: {current_date}
+
+Use this date to properly contextualize time references in the conversation (e.g., "tonight", "tomorrow", "yesterday").
 
 KEY INSTRUCTION: When given conversation format with multiple exchanges, ONLY extract memories from the FINAL user message. Previous messages provide context to help understand the final message better.
 
