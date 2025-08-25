@@ -143,10 +143,15 @@ class MemoryStorageLocal(MemoryStorageBase):
             memories.sort(key=lambda x: (-x["recall_count"], x["best_distance"]))
             
             # Limit results and format output
-            final_memories = [
-                {"content": memory["content"], "metadata": memory["metadata"]}
-                for memory in memories[:limit]
-            ]
+            final_memories = []
+            for memory in memories[:limit]:
+                # Remove created_timestamp and user_id from metadata
+                filtered_metadata = {k: v for k, v in memory["metadata"].items() 
+                                   if k not in ["created_timestamp", "user_id"]}
+                final_memories.append({
+                    "content": memory["content"], 
+                    "metadata": filtered_metadata
+                })
             
             self.logger.debug("Retrieved %d memories from %d query variations for user %s, sorted by recall count and distance", 
                              len(final_memories), len(query_texts), user_id)
@@ -246,9 +251,12 @@ class MemoryStorageLocal(MemoryStorageBase):
                 results["documents"], 
                 results["metadatas"]
             ):
+                # Remove created_timestamp and user_id from metadata
+                filtered_metadata = {k: v for k, v in metadata.items() 
+                                   if k not in ["created_timestamp", "user_id"]}
                 memories.append({
                     "content": content,
-                    "metadata": metadata,
+                    "metadata": filtered_metadata,
                 })
         return memories
 
