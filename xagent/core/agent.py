@@ -249,7 +249,6 @@ class Agent:
                     if not stream:
                         await self._store_model_reply(str(response), user_id, session_id)
                         if self.enable_memory:
-                            logging.info("Storing memory for user %s", user_id)
                             asyncio.create_task(
                                 self.memory_storage.store(user_id, f"pre_chat:{pre_chat}, user_message:{user_message}, assistant_reply:{response}")
                             )
@@ -257,7 +256,6 @@ class Agent:
                 elif reply_type == ReplyType.STRUCTURED_REPLY:
                     await self._store_model_reply(response.model_dump_json(), user_id, session_id)
                     if self.enable_memory:
-                        logging.info("Storing memory for user %s", user_id)
                         asyncio.create_task(
                             self.memory_storage.store(user_id, f"pre_chat:{pre_chat}, user_message:{user_message}, assistant_reply:{response.model_dump_json()}")
                         )
