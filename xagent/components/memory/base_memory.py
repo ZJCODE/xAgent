@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any
 
-class MemoryStore(ABC):
+class MemoryStorageBase(ABC):
     """Abstract interface for memory storage operations."""
     
     @abstractmethod
@@ -16,7 +16,10 @@ class MemoryStore(ABC):
     async def retrieve(self, 
                  user_id: str, 
                  query: str,
-                 limit: int = 5) -> Optional[List[str]]:
+                 limit: int = 5,
+                 query_context: Optional[str] = None,
+                 enable_query_process: bool = False
+                 ) -> Optional[List[str]]:
         """Retrieve relevant memories based on query."""
         pass
 
@@ -25,4 +28,9 @@ class MemoryStore(ABC):
                       user_id: str, 
                       days: int = 1) -> Optional[List[str]]:
         """Extract metadata from memories within a time frame."""
+        pass
+
+    @abstractmethod
+    async def clear(self, user_id: str) -> None:
+        """Clear all memories for a user."""
         pass

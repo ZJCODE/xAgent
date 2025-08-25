@@ -6,19 +6,30 @@ import uuid
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 import dotenv
+from langfuse import observe
+from pathlib import Path
 
-from ...schemas.memory import MemoryType
-from .base_memory import MemoryStore
+from .base_memory import MemoryStorageBase
 from .llm_service import MemoryLLMService
 
 dotenv.load_dotenv(override=True)
 
-class LocalMemory(MemoryStore):
+class MemoryStorageLocal(MemoryStorageBase):
     """Local memory implementation using ChromaDB with LLM-powered memory extraction."""
     
-    def __init__(self, collection_name: str = "xagent_memory"):
+    def __init__(self, 
+                 path: str = None,
+                 collection_name: str = "xagent_memory"):
         # Initialize logger
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
+        
+        # Use default path if none provided
+        if path is None:
+            path = os.path.expanduser('~/.xagent/chroma')
+            logging.info("No path provided, using default path: %s", path)
+        
+        # Ensure the directory exists
+        Path(path).mkdir(parents=True, exist_ok=True)
         
         # Initialize LLM service
         self.llm_service = MemoryLLMService()
@@ -30,7 +41,7 @@ class LocalMemory(MemoryStore):
         )
         
         # Initialize ChromaDB client and collection
-        self.chroma_client = chromadb.Client()
+        self.chroma_client = chromadb.PersistentClient(path=path)
         self.collection = self.chroma_client.get_or_create_collection(
             name=collection_name,
             embedding_function=self.openai_ef
@@ -58,11 +69,9 @@ class LocalMemory(MemoryStore):
             documents.append(memory_piece.content)
             metadatas.append(self._create_base_metadata(user_id, memory_piece.type.value, metadata, now))
 
-        # If no memories were extracted, store the original content as working memory
+        # If no memories were extracted, do not store anything
         if not documents:
-            documents = [content.strip()]
-            metadatas = [self._create_base_metadata(user_id, MemoryType.WORKING.value, metadata, now)]
-            self.logger.debug("No structured memories extracted, stored as working memory for user %s", user_id)
+            self.logger.debug("No structured memories extracted, nothing stored for user %s", user_id)
         
         # Batch store all memories
         memory_ids = self._batch_store_memories(documents, metadatas)
@@ -75,12 +84,15 @@ class LocalMemory(MemoryStore):
     async def retrieve(self, 
                  user_id: str, 
                  query: str,
-                 limit: int = 5) -> List[Dict[str, Any]]:
+                 limit: int = 5,
+                 query_context: Optional[str] = None,
+                 enable_query_process: bool = False
+                 ) -> List[Dict[str, Any]]:
         """Retrieve relevant memories based on query using query preprocessing for better results."""
         self.logger.info("Retrieving memories for user: %s, query: %s, limit: %d", user_id, query[:50] + "..." if len(query) > 50 else query, limit)
         
         # Preprocess the query to get variations and keywords
-        preprocessed = await self.llm_service.preprocess_query(query)
+        preprocessed = await self.llm_service.preprocess_query(query, query_context,enable_query_process)
         
         # Prepare all query texts for batch processing
         query_texts = [preprocessed.original_query]
@@ -143,6 +155,10 @@ class LocalMemory(MemoryStore):
             self.logger.error("Error in batch query search: %s", str(e))
             # Fallback to single query search
             return await self._fallback_retrieve(preprocessed.original_query, user_id, limit)
+
+    async def clear(self, user_id: str) -> None:
+        """Clear all memories for a user."""
+        self.collection.delete(where={"user_id": user_id})
 
     async def _fallback_retrieve(self, query: str, user_id: str, limit: int) -> List[Dict[str, Any]]:
         """Fallback retrieval method using single query."""

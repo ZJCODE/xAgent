@@ -1,6 +1,7 @@
 import logging
-from typing import List, Dict, Any
-from openai import AsyncOpenAI
+from typing import List, Dict, Any, Optional
+from langfuse.openai import AsyncOpenAI
+from langfuse import observe
 
 from ...schemas.memory import MemoryExtraction, MetaMemory, MetaMemoryPiece, MetaMemoryType, QueryPreprocessResult
 
@@ -19,6 +20,7 @@ class MemoryLLMService:
         self.model = model
         self.logger.info("MemoryLLMService initialized with model: %s", model)
     
+    @observe()
     async def extract_memories_from_content(self, content: str) -> MemoryExtraction:
         """Extract structured memories from raw content using LLM.
         
@@ -33,7 +35,6 @@ class MemoryLLMService:
         system_prompt = """You are an expert memory extraction system. Your task is to analyze the given content and extract meaningful memory pieces that can be stored for future reference.
 
 For each piece of extracted memory, classify it into one of these types:
-- WORKING: Short-term, task or session-specific memory
 - PROFILE: Knowledge about users, preferences, personal information
 - EPISODIC: Past interactions and experiences with timestamps
 - SEMANTIC: General world knowledge, facts, concepts
@@ -41,9 +42,13 @@ For each piece of extracted memory, classify it into one of these types:
 
 Guidelines:
 1. Extract multiple memory pieces if the content contains diverse information
-2. Each memory piece should be self-contained and meaningfull
-3. Don't extract memories for trivial or temporary information
-4. Focus on information that would be useful for future interactions
+2. Each memory piece should be self-contained and meaningful
+3. Write memory content in SIMPLE, CLEAR sentences
+4. Use straightforward language that is easy to understand
+5. Avoid complex or technical jargon unless necessary
+6. Keep each memory piece concise but complete
+7. Don't extract memories for trivial or temporary information
+8. Focus on information that would be useful for future interactions
 
 If the content doesn't contain any meaningful information worth storing as memory, return an empty list."""
 
@@ -68,6 +73,7 @@ If the content doesn't contain any meaningful information worth storing as memor
             # Fallback: return empty extraction
             return MemoryExtraction(memories=[])
 
+    @observe()
     async def extract_meta_memory_from_recent(self, recent_memories: List[Dict[str, Any]]) -> MetaMemory:
         """Extract meta-level insights from recent memories using LLM.
         
@@ -151,27 +157,53 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
                 ]
             )
 
-    async def preprocess_query(self, query: str) -> QueryPreprocessResult:
+    @observe()
+    async def preprocess_query(self, query: str, query_context: Optional[str] = None, enable:bool = False) -> QueryPreprocessResult:
         """Preprocess query to generate variations and extract keywords for better memory retrieval.
         
         Args:
             query: Original query string
+            query_context: Additional context about the query (conversation history, current task, etc.)
             
         Returns:
             QueryPreprocessResult containing original query and variations
         """
+
+        if not enable:
+            return QueryPreprocessResult(
+                original_query=query,
+                rewritten_queries=[]
+            )
+
         self.logger.debug("Preprocessing query: %s", query[:100] + "..." if len(query) > 100 else query)
+        if query_context:
+            self.logger.debug("Using query context for preprocessing, length: %d", len(query_context))
         
         system_prompt = """You are an expert query preprocessing system. Your task is to analyze the given query and generate:
 
-**Rewritten Queries**: Create 2-4 alternative formulations of the query that capture the same intent but use different words or phrasing. This helps retrieve semantically similar memories even when exact wording doesn't match.
+**Rewritten Queries**: Create 2-4 simple alternative formulations of the query that capture the EXACT same meaning but use different words or phrasing. This helps retrieve semantically similar memories even when exact wording doesn't match.
 
 Guidelines:
-- Rewritten queries should maintain the original intent while using different vocabulary
-- Include both more specific and more general variations
+- Keep rewritten queries SIMPLE and CLEAR
+- Maintain the EXACT same meaning and intent as the original query
+- Use simple synonyms and alternative phrasings
+- Avoid complex or technical language unless the original query uses it
+- Do not change the scope or specificity of the original query
+- Each rewrite should be easily understandable and straightforward
+- If context is provided, use it to better understand the query intent but keep rewrites simple
 """
 
-        user_prompt = f"Preprocess this query for memory retrieval:\n\nQuery: {query}"
+        # Build user prompt with context if available
+        if query_context:
+            user_prompt = f"""Preprocess this query for memory retrieval:
+
+Context: {query_context}
+
+Query: {query}
+
+Use the context to better understand the query intent and generate more targeted rewritten queries."""
+        else:
+            user_prompt = f"Preprocess this query for memory retrieval:\n\nQuery: {query}"
 
         try:
             response = await self.openai_client.responses.parse(

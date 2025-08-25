@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Local imports
-from ..components import MessageStorageBase, MessageStorageLocal
+from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageBase, MemoryStorageLocal
 from ..schemas import Message, ToolCall,RoleType, MessageType
 from ..utils.mcp_convertor import MCPTool
 from ..utils.tool_decorator import function_tool
@@ -51,7 +51,8 @@ class AgentConfig:
         "**Context Information:**\n"
         "- Current user_id: {user_id}\n"
         "- Current date: {date}\n" 
-        "- Current timezone: {timezone}\n\n\n"
+        "- Current timezone: {timezone}\n\n"
+        "- Retrieve relevant memories for user: {retrieved_memories}\n\n\n"
     )
 
 
@@ -88,7 +89,9 @@ class Agent:
         mcp_servers: Optional[Union[str, List[str]]] = None,
         sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None,
         output_type: Optional[type[BaseModel]] = None,
-        message_storage: Optional[MessageStorageBase] = None
+        message_storage: Optional[MessageStorageBase] = None,
+        memory_storage: Optional[MemoryStorageBase] = None,
+        enable_memory: bool = True,
     ):
         """
         Initialize the Agent with optional parameters.
@@ -104,6 +107,8 @@ class Agent:
             sub_agents: List of sub-agents to convert to tools
             output_type: Pydantic model for structured output
             message_storage: MessageStorageBase instance for message storage
+            memory_storage: MemoryStorageBase instance for long-term memory
+            enable_memory: Whether to enable memory storage and retrieval
         """
         # Basic configuration
         self.name = name or AgentConfig.DEFAULT_NAME
@@ -117,6 +122,12 @@ class Agent:
             self.message_storage = message_storage
         else:
             self.message_storage = MessageStorageLocal()
+        
+        # Memory setup
+        if memory_storage is not None:
+            self.memory_storage = memory_storage
+        else:
+            self.memory_storage = MemoryStorageLocal(collection_name = self.name)
         
         # System prompt setup
         self.system_prompt = AgentConfig.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
@@ -145,6 +156,8 @@ class Agent:
             self.logger.info("Registered agent tools: %s", 
                            [tool.tool_spec['name'] for tool in agent_tools])
 
+        # Memory enable flag
+        self.enable_memory = enable_memory
 
     async def __call__(
         self,
@@ -221,16 +234,31 @@ class Agent:
 
             # Build input messages once outside the loop
             input_messages = [msg.to_dict() for msg in await self.message_storage.get_messages(user_id, session_id, history_count)]
+            
+            # 1. 优化：并行启动内存检索，不阻塞主流程
+            retrieved_memories = []
+            if self.enable_memory:
+                pre_chat = input_messages[-5:-1] # Use last 4 messages for memory retrieval memory and memory storage
+                retrieved_memories = await self.memory_storage.retrieve(user_id=user_id, query=user_message, limit=5, query_context=f"pre_chat:{pre_chat}",enable_query_process=False)
 
             for attempt in range(max_iter):
-                reply_type, response = await self._call_model(input_messages, user_id, session_id, output_type, stream)
+
+                reply_type, response = await self._call_model(input_messages, user_id, session_id, output_type, stream, retrieved_memories)
 
                 if reply_type == ReplyType.SIMPLE_REPLY:
                     if not stream:
                         await self._store_model_reply(str(response), user_id, session_id)
+                        if self.enable_memory:
+                            asyncio.create_task(
+                                self.memory_storage.store(user_id, f"pre_chat:{pre_chat}, user_message:{user_message}, assistant_reply:{response}")
+                            )
                     return response
                 elif reply_type == ReplyType.STRUCTURED_REPLY:
                     await self._store_model_reply(response.model_dump_json(), user_id, session_id)
+                    if self.enable_memory:
+                        asyncio.create_task(
+                            self.memory_storage.store(user_id, f"pre_chat:{pre_chat}, user_message:{user_message}, assistant_reply:{response.model_dump_json()}")
+                        )
                     return response
                 elif reply_type == ReplyType.TOOL_CALL:
                     await self._handle_tool_calls(response, user_id, session_id, input_messages, max_concurrent_tools)
@@ -365,8 +393,11 @@ class Agent:
         stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
         wait=wait_exponential(multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT)
     )
-    async def _call_model(self, input_msgs: list, user_id: str, session_id: str,
-                          output_type: type[BaseModel] = None, stream: bool = False) -> tuple[ReplyType, object]:
+    async def _call_model(self, input_msgs: list, 
+                          user_id: str, session_id: str,
+                          output_type: type[BaseModel] = None, stream: bool = False,
+                          retrieved_memories: Optional[List[dict]] = None
+                          ) -> tuple[ReplyType, object]:
         """
         Call the AI model with the provided input messages.
         Args:
@@ -383,9 +414,12 @@ class Agent:
             "content": self.system_prompt.format(
                 user_id=user_id, 
                 date=time.strftime('%Y-%m-%d'), 
-                timezone=time.tzname[0]
+                timezone=time.tzname[0],
+                retrieved_memories=retrieved_memories or "No relevant memories found."
             )
         }
+
+        print("system_msg:",system_msg)
 
         # 使用智能缓存的工具规格
         tool_specs = self.cached_tool_specs
