@@ -234,6 +234,10 @@ class MemoryStorageLocal(MemoryStorageBase):
             metadatas=metadatas,
             ids=ids
         )
+
+        logging.info("Batch stored %d memories", len(ids))
+        logging.info("Memory Documents %s", documents)
+
         return ids
     
     def _format_memory_results(self, results: Dict[str, Any]) -> List[Dict[str, Any]]:

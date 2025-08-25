@@ -238,7 +238,7 @@ class Agent:
             # 1. 优化：并行启动内存检索，不阻塞主流程
             retrieved_memories = []
             if self.enable_memory:
-                pre_chat = input_messages[-5:-1] # Use last 4 messages for memory retrieval memory and memory storage
+                pre_chat = input_messages[-3:-1] # Use last 4 messages for memory retrieval memory and memory storage
                 retrieved_memories = await self.memory_storage.retrieve(user_id=user_id, query=user_message, limit=5, query_context=f"pre_chat:{pre_chat}",enable_query_process=False)
 
             for attempt in range(max_iter):
@@ -249,6 +249,7 @@ class Agent:
                     if not stream:
                         await self._store_model_reply(str(response), user_id, session_id)
                         if self.enable_memory:
+                            logging.info("Storing memory for user %s", user_id)
                             asyncio.create_task(
                                 self.memory_storage.store(user_id, f"pre_chat:{pre_chat}, user_message:{user_message}, assistant_reply:{response}")
                             )
@@ -256,6 +257,7 @@ class Agent:
                 elif reply_type == ReplyType.STRUCTURED_REPLY:
                     await self._store_model_reply(response.model_dump_json(), user_id, session_id)
                     if self.enable_memory:
+                        logging.info("Storing memory for user %s", user_id)
                         asyncio.create_task(
                             self.memory_storage.store(user_id, f"pre_chat:{pre_chat}, user_message:{user_message}, assistant_reply:{response.model_dump_json()}")
                         )
@@ -474,6 +476,13 @@ class Agent:
                                 if content:
                                     yield content
                         await self._store_model_reply(event.response.output[0].content[0].text, user_id, session_id)
+
+                        if self.enable_memory:
+                            logging.info("Storing memory for user %s", user_id)
+                            asyncio.create_task(
+                                self.memory_storage.store(user_id, f"pre_chat:{input_msgs[-3:]}, assistant_reply:{response}")
+                            )
+
                     return ReplyType.SIMPLE_REPLY, stream_generator()
                 elif event_type == "function_call":
                     async for event in response:
