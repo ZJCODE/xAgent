@@ -201,17 +201,22 @@ Guidelines:
 - Avoid complex or technical language unless the original query uses it
 - Do not change the scope or specificity of the original query
 - Each rewrite should be easily understandable and straightforward
-- If context is provided, use it to better understand the query intent but keep rewrites simple
-"""
+
+**IMPORTANT**: For very short queries, interjections, exclamations, or ambiguous expressions (like "哦", "oh", "hmm", "好的", "ok", etc.), do NOT try to expand or interpret them into questions or requests. Instead:
+- If the query is too short or ambiguous to meaningfully rewrite, return an EMPTY list of rewritten queries
+- Only rewrite if there are clear synonyms or alternative phrasings that maintain the exact same meaning
+- Do not assume what the user "might mean" or try to be helpful by changing the intent
+
+If context is provided, use it to better understand the query intent but still keep rewrites simple and maintain exact meaning."""
 
         # Build user prompt with context if available
         user_prompt = f"""Preprocess this query for memory retrieval:
 
 Context: {query_context}
 
-Query: {query}
+Query: "{query}"
 
-Use the context to better understand the query intent and generate more targeted rewritten queries."""
+IMPORTANT: Only generate rewritten queries if they maintain the EXACT same meaning as the original. For very short, ambiguous, or interjection-type queries, it's better to return an empty list than to change the meaning. Generate alternative phrasings only if they are true synonyms or equivalent expressions."""
 
         try:
             response = await self.openai_client.responses.parse(
