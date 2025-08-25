@@ -251,15 +251,17 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
 - The query refers to previous conversations or events that are not self-contained (e.g., "continue that discussion", "what was the outcome?")
 - The query is clearly a follow-up that depends on prior context (e.g., "and then what?", "how about the other one?", "what about it?" as a follow-up)
 - The query is a fragment or incomplete expression that needs context (e.g., "day after tomorrow?", "that one?", "how about it?")
+- The query appears to be a follow-up or continuation of a previous topic but lacks explicit context (e.g., "what about philosophy?" after discussing book recommendations, "about programming?" after discussing topics)
+- The query uses implicit references or elliptical expressions that depend on previous context
 
 **When NOT to Rewrite (return EMPTY list)**:
 - Instructions, commands, or statements that are complete (e.g., "your name is X", "start doing Y")
 - Questions that are self-contained and clear (e.g., "how to use Python", "what is machine learning")
 - Queries with specific topics, names, or concepts that don't need external reference
 - Simple expressions, acknowledgments, or standalone statements
-- ANY query that makes sense by itself, even if it could theoretically be expanded
+- Complete questions even if they could benefit from context
 
-**IMPORTANT**: Err on the side of NOT rewriting. Only rewrite if the query is truly incomprehensible without additional context."""
+**IMPORTANT**: Pay attention to contextual clues. If the conversation history shows a clear topic being discussed and the query appears to be asking for more information on a related subtopic, this likely needs rewriting."""
 
         # Build user prompt with context if available
         user_prompt = f"""Analyze this query and determine if it needs context-based rewriting:
@@ -275,9 +277,12 @@ Ask yourself:
 2. Does it contain unclear pronouns that refer to unidentified entities?
 3. Does it contain relative time expressions that need current date context (like "yesterday", "tomorrow", "day after tomorrow", "last week")?
 4. Is it a fragment or follow-up that depends on previous conversation?
+5. Does it appear to be asking for more information on a subtopic of a previous discussion?
+
+IMPORTANT: Look at the conversation context. If the context shows a previous discussion about a topic (like book recommendations) and the current query seems to be asking about a related subtopic (like "what about philosophy?" meaning "what about philosophy-related books?"), this indicates the query needs context-based rewriting.
 
 - If the query is clear and self-contained (even if simple): Return EMPTY list
-- If the query contains relative time expressions or genuinely cannot be understood without context: Generate 2-3 rewritten queries
+- If the query contains relative time expressions, depends on previous context, or is a follow-up question about a subtopic: Generate 2-3 rewritten queries
 
 Examples of queries that NEED rewriting:
 - "what did he tell you?" (who is "he"?)
@@ -286,6 +291,9 @@ Examples of queries that NEED rewriting:
 - "tomorrow's weather" (which specific date?)
 - "day after tomorrow?" (what about the day after tomorrow - which date?)
 - "yesterday's meeting" (which specific date?)
+- "what about philosophy?" after discussing book recommendations (asking about philosophy books specifically)
+- "about programming?" after discussing topics (asking about programming specifically)
+- "how about that one?" (which one?)
 
 Examples of queries that DON'T NEED rewriting:
 - "from now on, your name is X" (clear instruction)
@@ -293,7 +301,8 @@ Examples of queries that DON'T NEED rewriting:
 - "what is machine learning" (complete question)
 - "start the process" (clear command)
 - "thanks" (simple expression)
-- "weather on 2025-08-27" (specific date given)"""
+- "weather on 2025-08-27" (specific date given)
+- "recommend some philosophy books" (complete request)"""
 
         try:
             response = await self.openai_client.responses.parse(
