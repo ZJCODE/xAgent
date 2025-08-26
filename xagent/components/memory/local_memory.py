@@ -204,11 +204,18 @@ class MemoryStorageLocal(MemoryStorageBase):
             # Use ChromaDB's batch query capability
             results = self.collection.query(
                 query_texts=query_texts,
-                n_results=min(limit * 2, 20),  # Get more results to account for deduplication
+                n_results=min(limit, 20), 
                 where={"user_id": user_id},
                 include=["documents", "metadatas", "distances"]
             )
-            
+
+            results_keyword_match = self.collection.get(
+                limit=min(limit, 20), 
+                where={"user_id": user_id},
+                where_document={"$or": [{"$contains": kw} for kw in preprocessed.keywords] } if preprocessed.keywords else None,
+                include=["documents", "metadatas"]
+            )
+
             # Collect memories with recall count and best distance
             memory_stats = {}
             
@@ -237,10 +244,27 @@ class MemoryStorageLocal(MemoryStorageBase):
             # Convert to list and sort by recall count (desc) then by best distance (asc)
             memories = list(memory_stats.values())
             memories.sort(key=lambda x: (-x["recall_count"], x["best_distance"]))
-            
+
+            memories_enhanced = []
+            if results_keyword_match.get("documents"):
+                for doc_id, content, metadata in zip(
+                    results_keyword_match["ids"], 
+                    results_keyword_match["documents"], 
+                    results_keyword_match["metadatas"]
+                ):
+                    if doc_id not in memory_stats:
+                        memories_enhanced.append({
+                            "content": content,
+                            "metadata": metadata,
+                            "best_distance": None,
+                            "recall_count": 1,
+                        })
+
+            self.logger.info("Batch query search found %d unique memories, %d from keyword match (excluding overlaps), raw keyword matches count: %d",
+                             len(memories), len(memories_enhanced), len(results_keyword_match.get("documents", [])))
             # Limit results and format output
             final_memories = []
-            for memory in memories[:limit]:
+            for memory in memories[:limit] + memories_enhanced:
                 # Remove created_timestamp and user_id from metadata
                 filtered_metadata = {k: v for k, v in memory["metadata"].items() 
                                    if k not in ["created_timestamp", "user_id"]}
