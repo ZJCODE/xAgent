@@ -10,7 +10,7 @@ from langfuse import observe
 from pathlib import Path
 
 from .base_memory import MemoryStorageBase
-from .llm_service import MemoryLLMService
+from .llm.llm_service import MemoryLLMService
 
 dotenv.load_dotenv(override=True)
 
@@ -209,12 +209,15 @@ class MemoryStorageLocal(MemoryStorageBase):
                 include=["documents", "metadatas", "distances"]
             )
 
-            results_keyword_match = self.collection.get(
-                limit=min(limit, 20), 
-                where={"user_id": user_id},
-                where_document={"$or": [{"$contains": kw} for kw in preprocessed.keywords] } if preprocessed.keywords else None,
-                include=["documents", "metadatas"]
-            )
+            if preprocessed.keywords:
+                results_keyword_match = self.collection.get(
+                    limit=min(limit, 20), 
+                    where={"user_id": user_id},
+                    where_document={"$or": [{"$contains": kw} for kw in preprocessed.keywords] } if preprocessed.keywords else None,
+                    include=["documents", "metadatas"]
+                )
+            else:
+                results_keyword_match = {"ids": [], "documents": [], "metadatas": []}
 
             # Collect memories with recall count and best distance
             memory_stats = {}

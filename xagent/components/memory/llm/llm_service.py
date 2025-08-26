@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 from langfuse.openai import AsyncOpenAI
 from langfuse import observe
 
-from ...schemas.memory import MemoryExtraction, MetaMemory, MetaMemoryPiece, MetaMemoryType, QueryPreprocessResult
+from ....schemas.memory import MemoryExtraction, MetaMemory, MetaMemoryPiece, MetaMemoryType, QueryPreprocessResult
 
 
 class MemoryLLMService:
