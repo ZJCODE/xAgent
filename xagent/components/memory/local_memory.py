@@ -66,12 +66,12 @@ class MemoryStorageLocal(MemoryStorageBase):
         self.logger.info("LocalMemory initialized with collection: %s", collection_name)
     
     async def add(self,
-                  user_id:str,
-                  messages:List[Dict[str, Any]]
+                  user_id: str,
+                  messages: List[Dict[str, Any]]
                   ):
         """
         Add new messages to user's session memory.
-        When messages reach a threshold, trigger storage to long-term memory and keep only the latest 2 messages.
+        When messages reach a threshold, or if a keyword is detected, trigger storage to long-term memory and keep only the latest 2 messages.
         
         Args:
             user_id: User identifier 
@@ -80,37 +80,63 @@ class MemoryStorageLocal(MemoryStorageBase):
         if not messages:
             self.logger.debug("No messages provided for user %s", user_id)
             return
-        
+
+        # 关键词列表（中英文）
+        trigger_keywords = [
+            # 中文 - 直接指令
+            "记住", "记得", "记一下", "记下来", "记录一下", "帮我记", 
+            "请记住", "请帮我记住", "保存一下", "存下来", "备忘一下", "写下来",
+
+            # 中文 - 偏好/事实
+            "我喜欢", "我爱", "我讨厌", "我最喜欢", "我常", "我是",
+
+            # 英文 - 直接指令
+            "remember this", "remember that", "please remember", "help me remember",
+            "note this", "note this down", "make a note", "save this", 
+            "keep this", "log this", "store this", "write this down",
+
+            # 英文 - 偏好/事实
+            "I like", "I love", "I hate", "I prefer", "my favorite is", "I usually", "I am"
+        ]
+
         if user_id not in self._user_messages:
             self._user_messages[user_id] = []
-            
+
         # Add new messages to user's temporary storage
         self._user_messages[user_id].extend(messages)
         message_count = len(self._user_messages[user_id])
-        
+
         self.logger.debug("Added %d messages for user %s, total messages: %d", 
                          len(messages), user_id, message_count)
-        
-        # Check if threshold is reached
-        if message_count >= self.memory_threshold:
-            self.logger.info("Message threshold (%d) reached for user %s, triggering memory storage", 
-                           self.memory_threshold, user_id)
-            
+
+        # 只监测 role 为 'user' 的消息是否有关键词触发，逆序遍历（从最新一条开始）
+        keyword_triggered = False
+        for msg in reversed(messages):
+            if msg.get("role", "") != "user":
+                continue
+            content = msg.get("content", "")
+            if any(kw.lower() in content.lower() for kw in trigger_keywords):
+                keyword_triggered = True
+                self.logger.info("Keyword trigger detected in user message for user %s: %s", user_id, content)
+                break
+
+        # Check if threshold is reached or keyword is triggered
+        if message_count >= self.memory_threshold or keyword_triggered:
+            self.logger.info("Triggering memory storage for user %s (reason: %s)", 
+                            user_id, "keyword" if keyword_triggered else "threshold")
             try:
                 # Convert messages to conversation format for storage
                 conversation_content = self._format_messages_for_storage(self._user_messages[user_id])
 
-                self.logger.info("Formatted conversation content %s", conversation_content)
-
                 # Store conversation to long-term memory
                 await self.store(user_id, conversation_content)
-                
+
                 # Keep only the most recent messages
                 self._user_messages[user_id] = self._user_messages[user_id][-self.keep_recent:]
-                
+
                 self.logger.info("Stored %d messages to long-term memory for user %s, kept %d recent messages", 
                                message_count - self.keep_recent, user_id, self.keep_recent)
-                
+
             except Exception as e:
                 self.logger.error("Failed to store messages to long-term memory for user %s: %s", user_id, str(e))
                 # If storage fails, still trim to prevent memory overflow

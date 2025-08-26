@@ -22,6 +22,7 @@ class BaseAgentConfig:
     DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
     DEFAULT_MODEL = "gpt-4o-mini"
     DEFAULT_MESSAGE_STORAGE = "local"
+    DEFAULT_ENABLE_MEMORY = False
     DEFAULT_HOST = "0.0.0.0"
     DEFAULT_PORT = 8010
 
@@ -136,6 +137,7 @@ class BaseAgentRunner:
                     "mcp_servers": []  # Default MCP servers
                 },
                 "message_storage": BaseAgentConfig.DEFAULT_MESSAGE_STORAGE,
+                "enable_memory": BaseAgentConfig.DEFAULT_ENABLE_MEMORY
             },
             "server": {
                 "host": BaseAgentConfig.DEFAULT_HOST,
@@ -332,6 +334,7 @@ class BaseAgentRunner:
             sub_agents=sub_agents,
             output_type=output_type,
             message_storage=self.message_storage,
+            enable_memory=agent_cfg.get("enable_memory", False)
         )
     
     def _load_agent_tools(self, agent_cfg: Dict[str, Any]) -> List[Any]:

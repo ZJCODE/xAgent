@@ -415,8 +415,6 @@ class Agent:
             )
         }
 
-        print("system_msg:",system_msg)
-
         # 使用智能缓存的工具规格
         tool_specs = self.cached_tool_specs
         
