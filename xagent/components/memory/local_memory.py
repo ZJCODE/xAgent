@@ -142,34 +142,6 @@ class MemoryStorageLocal(MemoryStorageBase):
                 # If storage fails, still trim to prevent memory overflow
                 self._user_messages[user_id] = self._user_messages[user_id][-self.keep_recent:]
 
-    def _format_messages_for_storage(self, messages: List[Dict[str, Any]]) -> str:
-        """
-        Format messages into a conversation string suitable for memory storage.
-        
-        Args:
-            messages: List of message dictionaries
-            
-        Returns:
-            Formatted conversation string
-        """
-        conversation_lines = []
-        
-        for msg in messages:
-            role = msg.get('role', 'unknown')
-            content = msg.get('content', '')
-            
-            # Format based on role
-            if role == 'user':
-                conversation_lines.append(f"User: {content}")
-            elif role == 'assistant':
-                conversation_lines.append(f"Assistant: {content}")
-            elif role == 'system':
-                conversation_lines.append(f"System: {content}")
-            else:
-                conversation_lines.append(f"{role.title()}: {content}")
-        
-        return "\n\n".join(conversation_lines)
-
 
     async def store(self, 
               user_id: str, 
@@ -317,24 +289,6 @@ class MemoryStorageLocal(MemoryStorageBase):
         """Clear all memories for a user."""
         self.collection.delete(where={"user_id": user_id})
 
-    async def _fallback_retrieve(self, query: str, user_id: str, limit: int) -> List[Dict[str, Any]]:
-        """Fallback retrieval method using single query."""
-        try:
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=limit,
-                where={"user_id": user_id},
-                include=["documents", "metadatas"]
-            )
-            
-            memories = self._format_memory_results(results)
-            self.logger.debug("Fallback: Retrieved %d memories for user %s", len(memories), user_id)
-            return memories
-            
-        except Exception as fallback_e:
-            self.logger.error("Fallback query also failed: %s", str(fallback_e))
-            return []
-
 
     async def extract_meta(self, user_id: str, days: int = 1) -> List[str]:
         """Extract meta memory from recent memories and store it. Returns list of memory IDs."""
@@ -362,6 +316,54 @@ class MemoryStorageLocal(MemoryStorageBase):
         
         self.logger.debug("Stored %d meta content pieces for user %s", len(memory_ids), user_id)
         return memory_ids
+
+
+    async def _fallback_retrieve(self, query: str, user_id: str, limit: int) -> List[Dict[str, Any]]:
+        """Fallback retrieval method using single query."""
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=limit,
+                where={"user_id": user_id},
+                include=["documents", "metadatas"]
+            )
+            
+            memories = self._format_memory_results(results)
+            self.logger.debug("Fallback: Retrieved %d memories for user %s", len(memories), user_id)
+            return memories
+            
+        except Exception as fallback_e:
+            self.logger.error("Fallback query also failed: %s", str(fallback_e))
+            return []
+
+
+    def _format_messages_for_storage(self, messages: List[Dict[str, Any]]) -> str:
+        """
+        Format messages into a conversation string suitable for memory storage.
+        
+        Args:
+            messages: List of message dictionaries
+            
+        Returns:
+            Formatted conversation string
+        """
+        conversation_lines = []
+        
+        for msg in messages:
+            role = msg.get('role', 'unknown')
+            content = msg.get('content', '')
+            
+            # Format based on role
+            if role == 'user':
+                conversation_lines.append(f"User: {content}")
+            elif role == 'assistant':
+                conversation_lines.append(f"Assistant: {content}")
+            elif role == 'system':
+                conversation_lines.append(f"System: {content}")
+            else:
+                conversation_lines.append(f"{role.title()}: {content}")
+        
+        return "\n\n".join(conversation_lines)
 
 
     def _create_base_metadata(self, user_id: str, memory_type: str, 
