@@ -260,8 +260,8 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
         
         system_prompt = f"""You are a query preprocessing expert. Your task is to analyze a query and:
 
-1. Extract 2-4 relevant keywords that would help find related memories (both in English and Chinese)
-2. Generate 1-3 improved query variations for better memory retrieval
+1. Extract 1-2 relevant keywords that would help find related memories (both in English and Chinese)
+2. Generate 1-2 improved query variations for better memory retrieval
 
 CURRENT DATE: {current_date}
 
@@ -283,7 +283,7 @@ CURRENT DATE: {current_date}
 - Query: "tomorrow's meeting" → Keywords: ["2025-08-27", "meeting", "scheduled"]
 - Query: "what did he say?" → Use context to replace "he" with specific person
 - Query: "what's your opinion on that?" → Use context to clarify "that"
-- Query: "exercise routine" → Keywords: ["exercise", "routine", "workout", "fitness"]"""
+- Query: "exercise routine" → Keywords: ["exercise", "workout"]"""
 
         user_prompt = f"""Context: {context_info}
 

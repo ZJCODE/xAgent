@@ -99,7 +99,9 @@ class MemoryStorageLocal(MemoryStorageBase):
             try:
                 # Convert messages to conversation format for storage
                 conversation_content = self._format_messages_for_storage(self._user_messages[user_id])
-                
+
+                self.logger.info("Formatted conversation content %s", conversation_content)
+
                 # Store conversation to long-term memory
                 await self.store(user_id, conversation_content)
                 

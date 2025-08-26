@@ -91,7 +91,7 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         message_storage: Optional[MessageStorageBase] = None,
         memory_storage: Optional[MemoryStorageBase] = None,
-        enable_memory: bool = True,
+        enable_memory: bool = False,
     ):
         """
         Initialize the Agent with optional parameters.
