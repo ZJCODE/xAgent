@@ -50,3 +50,4 @@ class QueryPreprocessResult(BaseModel):
     """Schema for query preprocessing results."""
     original_query: str
     rewritten_queries: List[str]
+    keywords: List[str]

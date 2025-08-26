@@ -4,11 +4,22 @@ from typing import List, Optional, Dict, Any
 class MemoryStorageBase(ABC):
     """Abstract interface for memory storage operations."""
     
+
+    @abstractmethod
+    async def add(self,
+                  user_id:str,
+                  messages:List[Dict[str, Any]]
+                  ):
+        """
+        Add multiple memory pieces for a user.
+        When messages reach a threshold, trigger store operation.
+        """
+        pass
+
     @abstractmethod
     async def store(self, 
               user_id: str, 
-              content: str,
-              metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
+              content: str) -> Optional[str]:
         """Store memory content and return memory ID."""
         pass
 

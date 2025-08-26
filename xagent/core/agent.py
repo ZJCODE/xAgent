@@ -234,13 +234,16 @@ class Agent:
 
             # Build input messages once outside the loop
             input_messages = [msg.to_dict() for msg in await self.message_storage.get_messages(user_id, session_id, history_count)]
+
+            messages_without_tool = [input for input in input_messages if input.get("role") != RoleType.TOOL.value]
             
             retrieved_memories = []
             if self.enable_memory:
-                pre_chat = input_messages[-3:] # Use last 4 messages for memory retrieval memory and memory storage
+                pre_chat = messages_without_tool[-3:] # Use last 4 messages for memory retrieval memory and memory storage
                 retrieved_memories = await self.memory_storage.retrieve(user_id=user_id, query=user_message, limit=5, 
                                                                         query_context=f"pre_chat:{pre_chat}",enable_query_process=True)
-                asyncio.create_task(self.memory_storage.store(user_id, f"messages:{pre_chat}"))
+                
+                asyncio.create_task(self.memory_storage.add(user_id=user_id, messages=messages_without_tool[-2:])) # Store last 2 messages asynchronously
 
             for attempt in range(max_iter):
 

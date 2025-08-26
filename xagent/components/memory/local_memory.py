@@ -15,11 +15,20 @@ from .llm_service import MemoryLLMService
 dotenv.load_dotenv(override=True)
 
 class MemoryStorageLocal(MemoryStorageBase):
-    """Local memory implementation using ChromaDB with LLM-powered memory extraction."""
+    """Local memory implementation using ChromaDB with LLM-powered memory extraction.
+    
+    Args:
+        path: Path to ChromaDB storage directory. Defaults to ~/.xagent/chroma
+        collection_name: Name of the ChromaDB collection. Defaults to 'xagent_memory'
+        memory_threshold: Number of messages to trigger long-term storage. Defaults to 10
+        keep_recent: Number of recent messages to keep after storage. Defaults to 2
+    """
     
     def __init__(self, 
                  path: str = None,
-                 collection_name: str = "xagent_memory"):
+                 collection_name: str = "xagent_memory",
+                 memory_threshold: int = 10,
+                 keep_recent: int = 2):
         # Initialize logger
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         
@@ -47,12 +56,96 @@ class MemoryStorageLocal(MemoryStorageBase):
             embedding_function=self.openai_ef
         )
         
+        # Initialize user's temporary message storage
+        self._user_messages = {}
+        
+        # Memory management configuration
+        self.memory_threshold = memory_threshold  # Store to long-term memory when reaching this many messages
+        self.keep_recent = keep_recent  # Keep this many most recent messages after storage
+        
         self.logger.info("LocalMemory initialized with collection: %s", collection_name)
     
+    async def add(self,
+                  user_id:str,
+                  messages:List[Dict[str, Any]]
+                  ):
+        """
+        Add new messages to user's session memory.
+        When messages reach a threshold, trigger storage to long-term memory and keep only the latest 2 messages.
+        
+        Args:
+            user_id: User identifier 
+            messages: List of message dictionaries with 'role', 'content', etc.
+        """
+        if not messages:
+            self.logger.debug("No messages provided for user %s", user_id)
+            return
+        
+        if user_id not in self._user_messages:
+            self._user_messages[user_id] = []
+            
+        # Add new messages to user's temporary storage
+        self._user_messages[user_id].extend(messages)
+        message_count = len(self._user_messages[user_id])
+        
+        self.logger.debug("Added %d messages for user %s, total messages: %d", 
+                         len(messages), user_id, message_count)
+        
+        # Check if threshold is reached
+        if message_count >= self.memory_threshold:
+            self.logger.info("Message threshold (%d) reached for user %s, triggering memory storage", 
+                           self.memory_threshold, user_id)
+            
+            try:
+                # Convert messages to conversation format for storage
+                conversation_content = self._format_messages_for_storage(self._user_messages[user_id])
+                
+                # Store conversation to long-term memory
+                await self.store(user_id, conversation_content)
+                
+                # Keep only the most recent messages
+                self._user_messages[user_id] = self._user_messages[user_id][-self.keep_recent:]
+                
+                self.logger.info("Stored %d messages to long-term memory for user %s, kept %d recent messages", 
+                               message_count - self.keep_recent, user_id, self.keep_recent)
+                
+            except Exception as e:
+                self.logger.error("Failed to store messages to long-term memory for user %s: %s", user_id, str(e))
+                # If storage fails, still trim to prevent memory overflow
+                self._user_messages[user_id] = self._user_messages[user_id][-self.keep_recent:]
+
+    def _format_messages_for_storage(self, messages: List[Dict[str, Any]]) -> str:
+        """
+        Format messages into a conversation string suitable for memory storage.
+        
+        Args:
+            messages: List of message dictionaries
+            
+        Returns:
+            Formatted conversation string
+        """
+        conversation_lines = []
+        
+        for msg in messages:
+            role = msg.get('role', 'unknown')
+            content = msg.get('content', '')
+            
+            # Format based on role
+            if role == 'user':
+                conversation_lines.append(f"User: {content}")
+            elif role == 'assistant':
+                conversation_lines.append(f"Assistant: {content}")
+            elif role == 'system':
+                conversation_lines.append(f"System: {content}")
+            else:
+                conversation_lines.append(f"{role.title()}: {content}")
+        
+        return "\n\n".join(conversation_lines)
+
+
     async def store(self, 
               user_id: str, 
-              content: str,
-              metadata: Optional[Dict[str, Any]] = None) -> str:
+              content: str) -> str:
         """Store memory content with LLM-based extraction and return memory ID."""
         self.logger.info("Storing memory for user: %s, content length: %d", user_id, len(content))
         
@@ -67,7 +160,7 @@ class MemoryStorageLocal(MemoryStorageBase):
         # Process extracted memories
         for memory_piece in extracted_memories.memories:
             documents.append(memory_piece.content)
-            metadatas.append(self._create_base_metadata(user_id, memory_piece.type.value, metadata, now))
+            metadatas.append(self._create_base_metadata(user_id, memory_piece.type.value, None, now))
 
         # If no memories were extracted, do not store anything
         if not documents:
@@ -95,7 +188,8 @@ class MemoryStorageLocal(MemoryStorageBase):
         # Preprocess the query to get variations and keywords
         preprocessed = await self.llm_service.preprocess_query(query, query_context,enable_query_process)
 
-        self.logger.info("Preprocessed query: original='%s', rewritten=%s", preprocessed.original_query, preprocessed.rewritten_queries)
+        self.logger.info("Preprocessed query: original='%s', rewritten=%s, keywords=%s", 
+                         preprocessed.original_query, preprocessed.rewritten_queries, preprocessed.keywords)
         
         # Prepare all query texts for batch processing
         query_texts = [preprocessed.original_query]

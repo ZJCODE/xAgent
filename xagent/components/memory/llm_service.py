@@ -36,68 +36,72 @@ class MemoryLLMService:
         from datetime import datetime
         current_date = datetime.now().strftime("%Y-%m-%d")
         
-        system_prompt = f"""You are an expert memory extraction system. Your task is to analyze conversation content and extract ONLY the truly important memory pieces from the LAST user message that should be remembered long-term.
+
+        system_prompt = f"""You are an expert memory extraction system. Your task is to analyze conversation content and extract truly important memory pieces that should be remembered long-term.
 
 CURRENT DATE: {current_date}
 
 Use this date to properly contextualize time references in the conversation (e.g., "tonight", "tomorrow", "yesterday").
 
-KEY INSTRUCTION: When given conversation format with multiple exchanges, ONLY extract memories from the FINAL user message. Previous messages provide context to help understand the final message better.
+**CRITICAL PRINCIPLE**: Be HIGHLY SELECTIVE. Only extract information that is genuinely important for future interactions with this specific user.
 
-FOCUS ON THE LAST USER MESSAGE - EXTRACT ONLY WHAT'S TRULY WORTH REMEMBERING:
+**LANGUAGE REQUIREMENT**: Extract and store memories in the user's original language.
 
-**CRITICAL PRINCIPLE**: Be HIGHLY SELECTIVE. Only extract information from the final user message that is genuinely important for future interactions with this specific user.
+EXTRACT IMPORTANT INFORMATION FROM THE CONVERSATION:
 
-**CONTEXT USAGE**: Use previous messages to understand the context and timing of the final user message, but do NOT extract memories from previous messages.
+1. **PROFILE**: Extract personal information, preferences, and patterns revealed throughout the conversation
+   - Personal habits, routines, or lifestyle patterns mentioned
+   - Preferences about activities, food, exercise, or daily life
+   - Health-related activities or constraints mentioned
+   - Personal goals or commitments expressed
+   - Regular activities or schedules revealed
+   - Skills, expertise, or professional information shared
+   - Personal relationships or family information mentioned
 
-1. **PROFILE**: Only extract NEW or UPDATED personal information from the last user message
-   - Personal habits, routines, or lifestyle patterns mentioned in the final message
-   - Preferences about activities, food, exercise, or daily life from the final message
-   - Health-related activities or constraints mentioned in the final message
-   - Personal goals or commitments expressed in the final message
-   - Regular activities or schedules revealed in the final message
-
-2. **EPISODIC**: Only extract significant activities or plans from the last user message
+2. **EPISODIC**: Extract significant activities, plans, or events from the conversation
    - Specific plans or activities mentioned for today/tonight/specific times
-   - Important events or commitments the user shared in the final message
+   - Important events or commitments the user shared
    - Routine activities that show patterns (like regular exercise)
    - Meal plans or food choices that might indicate preferences
    - Exercise routines or fitness activities mentioned
+   - Meetings, appointments, or scheduled activities
    - **DATE & TIME FORMAT**: If the activity/plan involves a specific date or time, include both in the content:
      * Date: YYYY-MM-DD format
      * Time: Include specific times like "8:00 PM", "tonight", "morning", etc.
      * Example: "User plans to exercise at 8:00 PM on 2025-08-25" or "User has dinner tonight on 2025-08-25"
 
 **CONTEXT INTEGRATION**: 
-- Use previous messages to understand WHEN the final user message refers to (e.g., if previous message mentioned "tonight" and final message mentions exercise, understand it's for tonight)
-- Use previous messages to understand the SETTING or SITUATION of the final user message
-- Extract temporal context from the conversation flow to make the final message more meaningful
-- **IMPORTANT**: For EPISODIC memories involving dates or times, always include the specific date in YYYY-MM-DD format and preserve any time information in the content (e.g., "User plans to exercise at 8:00 PM on 2025-08-25" instead of "User plans to exercise tonight")
+- Use the full conversation to understand context, timing, and relationships between different pieces of information
+- Extract temporal context from the conversation flow to make information more meaningful
+- Connect related information mentioned across different parts of the conversation
+- **IMPORTANT**: For EPISODIC memories involving dates or times, always include the specific date in YYYY-MM-DD format and preserve any time information in the content
 
-**STRICT EXTRACTION CRITERIA**:
-- IGNORE: Previous user messages and ALL assistant responses (they are context only)
+**EXTRACTION CRITERIA**:
+- FOCUS: User messages that reveal personal information, preferences, plans, or important activities
+- IGNORE: Assistant responses unless they contain user-confirmed information
 - IGNORE: Casual mentions that don't reveal patterns or preferences
-- EXTRACT: Activities from the final message that show user's lifestyle patterns
-- EXTRACT: Plans from the final message that indicate user's priorities or routines
-- EXTRACT: Information from the final message that would help personalize future interactions
+- EXTRACT: Information that would help personalize future interactions
+- EXTRACT: Plans, activities, and commitments that show user's lifestyle and priorities
+- EXTRACT: Personal context that affects how the user prefers to interact
 
 **EXAMPLES**:
-- If conversation shows "I want fried chicken tonight" then "I also need to use the elliptical machine", extract: "User plans to exercise on elliptical machine tonight on 2025-08-25" (EPISODIC) and "User does elliptical machine exercise" (PROFILE if it suggests a routine)
-- If user says "I have a meeting at 3:00 PM tomorrow", extract: "User has meeting at 3:00 PM on 2025-08-26" (EPISODIC)
-- If user mentions "dinner at 8:00 PM tonight", extract: "User has dinner at 8:00 PM tonight on 2025-08-25" (EPISODIC)
+- If user mentions "I exercise every morning at 7 AM", extract: "User exercises every morning at 7:00 AM" (PROFILE)
+- If user says "I have a meeting tomorrow at 3:00 PM", extract: "User has meeting at 3:00 PM on 2025-08-26" (EPISODIC)
+- If user mentions "I'm vegetarian and prefer Italian food", extract: "User is vegetarian and prefers Italian food" (PROFILE)
+- If user says "I work as a software engineer", extract: "User works as a software engineer" (PROFILE)
 - For date and time-specific activities, always include both: "User has appointment at 10:00 AM on 2025-08-30" not "User has appointment next week"
 
 **QUALITY OVER QUANTITY**: 
 - Better to extract NOTHING than to extract trivial information
-- Focus on information from the final message that reveals user's habits, preferences, or important activities
-- Consider temporal context from previous messages to make the final message more meaningful"""
+- Focus on information that reveals user's habits, preferences, important activities, or personal context
+- Prioritize information that would improve future personalized interactions"""
 
-        user_prompt = f"""Analyze the conversation below and extract ONLY truly important information from the LAST user message. Use previous messages as context to understand timing and situation, but extract memories ONLY from the final user message.
+        user_prompt = f"""Analyze the conversation below and extract truly important information that should be remembered for future interactions.
 
 Conversation:
 {content}
 
-Extract meaningful memories from the LAST user message only. Use previous messages to understand context (like timing, situation) but do not extract from them."""
+Extract meaningful memories from the conversation that reveal the user's preferences, habits, plans, and important personal context. All extracted memories must be in the user's original language as used in the conversation."""
 
         try:
             response = await self.openai_client.responses.parse(
@@ -224,100 +228,67 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
             )
 
     @observe()
-    async def preprocess_query(self, query: str, query_context: Optional[str] = None, enable:bool = False) -> QueryPreprocessResult:
-        """Preprocess query to generate variations and extract keywords for better memory retrieval.
+    async def preprocess_query(self, query: str, query_context: Optional[str] = None, enable: bool = False) -> QueryPreprocessResult:
+        """Preprocess query using LLM to generate variations and extract keywords for better memory retrieval.
         
         Args:
             query: Original query string
             query_context: Additional context about the query (conversation history, current task, etc.)
+            enable: Whether to enable query preprocessing
             
         Returns:
-            QueryPreprocessResult containing original query and variations
+            QueryPreprocessResult containing original query, variations, and keywords
         """
-
+        
         if not enable:
             return QueryPreprocessResult(
                 original_query=query,
-                rewritten_queries=[]
+                rewritten_queries=[],
+                keywords=[]
             )
 
-        self.logger.debug("Preprocessing query: %s", query[:100] + "..." if len(query) > 100 else query)
+        self.logger.debug("Preprocessing query with LLM: %s", query[:100] + "..." if len(query) > 100 else query)
         
-        # Import datetime to get current date
         from datetime import datetime
+        
         current_date = datetime.now().strftime("%Y-%m-%d (%A)")
         
-        # Embed current date in context
-        date_context = f"Current date: {current_date}"
+        # Prepare context
+        context_info = f"Current date: {current_date}"
         if query_context:
-            query_context = f"{date_context}\n{query_context}"
-            self.logger.debug("Using query context with current date for preprocessing, length: %d", len(query_context))
-        else:
-            query_context = date_context
-            self.logger.debug("Using current date as query context for preprocessing")
+            context_info = f"{context_info}\nContext: {query_context}"
         
-        system_prompt = """You are an expert query preprocessing system. Your task is to analyze the given query and determine if it needs context-based rewriting for better memory retrieval.
+        system_prompt = f"""You are a query preprocessing expert. Your task is to analyze a query and:
 
-**CRITICAL PRINCIPLE**: Only generate rewritten queries when the original query is genuinely ambiguous and CANNOT be understood without external context.
+1. Extract 3-8 relevant keywords that would help find related memories(both in English and Chinese)
+2. Generate 1-3 improved query variations for better memory retrieval
 
-**When to Rewrite (generate 2-3 rewritten queries)**:
-- The query contains pronouns that refer to someone/something NOT mentioned in the query itself (e.g., "what did he say?" where "he" is not identified)
-- The query uses relative time expressions that need current date context to be specific (e.g., "yesterday", "tomorrow", "last week", "day after tomorrow", "next month")
-- The query refers to previous conversations or events that are not self-contained (e.g., "continue that discussion", "what was the outcome?")
-- The query is clearly a follow-up that depends on prior context (e.g., "and then what?", "how about the other one?", "what about it?" as a follow-up)
-- The query is a fragment or incomplete expression that needs context (e.g., "day after tomorrow?", "that one?", "how about it?")
-- The query appears to be a follow-up or continuation of a previous topic but lacks explicit context (e.g., "what about philosophy?" after discussing book recommendations, "about programming?" after discussing topics)
-- The query uses implicit references or elliptical expressions that depend on previous context
+CURRENT DATE: {current_date}
 
-**When NOT to Rewrite (return EMPTY list)**:
-- Instructions, commands, or statements that are complete (e.g., "your name is X", "start doing Y")
-- Questions that are self-contained and clear (e.g., "how to use Python", "what is machine learning")
-- Queries with specific topics, names, or concepts that don't need external reference
-- Simple expressions, acknowledgments, or standalone statements
-- Complete questions even if they could benefit from context
+**KEYWORD EXTRACTION**:
+- Focus on meaningful content words, entities, concepts
+- Include temporal expressions (convert relative time to specific dates when possible)
+- Ignore stop words and filler words  
+- Support both English and Chinese
+- For time references like "tomorrow", "yesterday", convert to specific dates
 
-**IMPORTANT**: Pay attention to contextual clues. If the conversation history shows a clear topic being discussed and the query appears to be asking for more information on a related subtopic, this likely needs rewriting."""
+**QUERY REWRITING**:
+- Resolve ambiguous references using context
+- Expand abbreviated expressions
+- Add specificity while preserving intent
+- Convert relative time to absolute time when beneficial
+- Generate variations that would match different memory phrasings
 
-        # Build user prompt with context if available
-        user_prompt = f"""Analyze this query and determine if it needs context-based rewriting:
+**EXAMPLES**:
+- Query: "tomorrow's meeting" → Keywords: ["2025-08-27", "meeting", "scheduled"] + Variations: ["2025-08-27 meeting", "meeting scheduled for tomorrow"]
+- Query: "what did he say?" → Use context to replace "he" with specific person
+- Query: "exercise routine" → Keywords: ["exercise", "routine", "workout", "fitness"] + Variations: ["workout routine", "fitness exercise plan"]"""
 
-Context: {query_context}
+        user_prompt = f"""Context: {context_info}
 
 Query: "{query}"
 
-CRITICAL DECISION: Is this query genuinely ambiguous and incomprehensible without external context?
-
-Ask yourself:
-1. Can I understand what this query means just by reading it?
-2. Does it contain unclear pronouns that refer to unidentified entities?
-3. Does it contain relative time expressions that need current date context (like "yesterday", "tomorrow", "day after tomorrow", "last week")?
-4. Is it a fragment or follow-up that depends on previous conversation?
-5. Does it appear to be asking for more information on a subtopic of a previous discussion?
-
-IMPORTANT: Look at the conversation context. If the context shows a previous discussion about a topic (like book recommendations) and the current query seems to be asking about a related subtopic (like "what about philosophy?" meaning "what about philosophy-related books?"), this indicates the query needs context-based rewriting.
-
-- If the query is clear and self-contained (even if simple): Return EMPTY list
-- If the query contains relative time expressions, depends on previous context, or is a follow-up question about a subtopic: Generate 2-3 rewritten queries
-
-Examples of queries that NEED rewriting:
-- "what did he tell you?" (who is "he"?)
-- "continue from where we left off" (what previous discussion?)
-- "how did that turn out?" (what specific event?)
-- "tomorrow's weather" (which specific date?)
-- "day after tomorrow?" (what about the day after tomorrow - which date?)
-- "yesterday's meeting" (which specific date?)
-- "what about philosophy?" after discussing book recommendations (asking about philosophy books specifically)
-- "about programming?" after discussing topics (asking about programming specifically)
-- "how about that one?" (which one?)
-
-Examples of queries that DON'T NEED rewriting:
-- "from now on, your name is X" (clear instruction)
-- "Python programming tips" (clear topic)  
-- "what is machine learning" (complete question)
-- "start the process" (clear command)
-- "thanks" (simple expression)
-- "weather on 2025-08-27" (specific date given)
-- "recommend some philosophy books" (complete request)"""
+Extract relevant keywords and generate improved query variations for memory retrieval."""
 
         try:
             response = await self.openai_client.responses.parse(
@@ -330,25 +301,25 @@ Examples of queries that DON'T NEED rewriting:
                 temperature=0.3
             )
             
-            preprocessed = response.output_parsed
-            if preprocessed:
-                # Ensure original_query is set
-                preprocessed.original_query = query
-                self.logger.debug("Successfully preprocessed query: %d rewritten queries", 
-                                len(preprocessed.rewritten_queries))
-                return preprocessed
+            result = response.output_parsed
+            if result:
+                result.original_query = query
+                self.logger.debug("LLM preprocessing successful: %d queries, %d keywords", 
+                                len(result.rewritten_queries), len(result.keywords))
+                return result
             else:
-                # Fallback if parsing failed
-                self.logger.warning("Query preprocessing returned no result, using fallback")
+                # Fallback
+                self.logger.warning("LLM preprocessing failed, using fallback")
                 return QueryPreprocessResult(
                     original_query=query,
-                    rewritten_queries=[]
+                    rewritten_queries=[],
+                    keywords=[]
                 )
                 
         except Exception as e:
-            self.logger.error("Error preprocessing query: %s", str(e))
-            # Fallback: return basic preprocessing
+            self.logger.error("Error in LLM query preprocessing: %s", str(e))
             return QueryPreprocessResult(
                 original_query=query,
-                rewritten_queries=[]
+                rewritten_queries=[],
+                keywords=[]
             )
