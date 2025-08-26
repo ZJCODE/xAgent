@@ -45,7 +45,6 @@ class MemoryStorageLocal(MemoryStorageBase):
 
         # Initialize OpenAI embedding function
         self.openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=os.environ.get("OPENAI_API_KEY"),
             model_name="text-embedding-3-small"
         )
         
