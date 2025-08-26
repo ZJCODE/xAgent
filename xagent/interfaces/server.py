@@ -99,6 +99,14 @@ class AgentHTTPServer(BaseAgentRunner):
     def _add_routes(self, app: FastAPI) -> None:
         """Add API routes to the FastAPI application."""
         
+
+        @app.get("/i/health", tags=["Health"])
+        async def health_check():
+            """
+            Health check endpoint to verify if the API is running.
+            """
+            return "ok"
+
         @app.get("/health")
         async def health_check():
             """Health check endpoint."""
