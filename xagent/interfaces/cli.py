@@ -271,7 +271,7 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
     mcp_servers:
       - http://localhost:8001/mcp/  # Example MCP server
   message_storage: local
-  enable_memory: true
+  enable_memory: false
 
 server:
   host: 0.0.0.0
