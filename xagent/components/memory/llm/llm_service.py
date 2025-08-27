@@ -276,22 +276,11 @@ REWRITE RULES - Rewrite when query has:
 - Pronouns with known referents ("he said" → "John said")
 - Relative time ("yesterday" → "2025-08-26")
 - Vague references ("that meeting" → specific meeting name)
-- Fragment questions lacking clear intent but inferable from context
+- If query is complete and clear return empty list for rewritten_queries
+- Never answer the query, only rewrite if necessary
 
-CONTEXT-BASED COMPLETION:
-- Use conversation history to infer missing parts
-- If previous query was "what did I do X", then "what about Y" → "what did I do Y"
-- If previous query was action-based, preserve the action pattern for follow-ups
-- Preserve the action pattern from context
-
-COMPLETION PATTERNS:
-- "X?" → infer action from context or default to "what about X"
-- "what about X" → infer action from previous query pattern
-- Time fragments → complete based on conversation context
-
-If query is complete and clear → rewritten_queries: []
-
-OUTPUT: Preprocessed data for search, never answer the query."""
+NEVER ANSWER THE QUERY OR RAISE QUESTIONS. ONLY PREPROCESS FOR SEARCH.
+"""
 
         user_prompt = f"""Context: {context_info}
 
