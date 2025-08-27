@@ -27,6 +27,8 @@ class AgentInput(BaseModel):
     max_iter: Optional[int] = 10
     # Maximum number of concurrent tool calls
     max_concurrent_tools: Optional[int] = 10
+    # Whether to enable memory storage and retrieval
+    enable_memory: Optional[bool] = False
 
 
 class ClearSessionInput(BaseModel):
@@ -127,6 +129,7 @@ class AgentHTTPServer(BaseAgentRunner):
                     - stream: Whether to enable streaming response (default: False)
                     - history_count: Number of previous messages to include (default: 16)
                     - max_iter: Maximum model call attempts (default: 10)
+                    - enable_memory: Whether to enable memory storage and retrieval (default: False)
                 
             Returns:
                 Agent response or streaming SSE when input_data.stream is True
@@ -149,7 +152,8 @@ class AgentHTTPServer(BaseAgentRunner):
                                 max_iter=input_data.max_iter,
                                 max_concurrent_tools=input_data.max_concurrent_tools,
                                 image_source=input_data.image_source,
-                                stream=True
+                                stream=True,
+                                enable_memory=input_data.enable_memory
                             )
                             # If the agent returns an async generator, stream deltas
                             if hasattr(response, "__aiter__"):
@@ -181,7 +185,8 @@ class AgentHTTPServer(BaseAgentRunner):
                     history_count=input_data.history_count,
                     max_iter=input_data.max_iter,
                     max_concurrent_tools=input_data.max_concurrent_tools,
-                    image_source=input_data.image_source
+                    image_source=input_data.image_source,
+                    enable_memory=input_data.enable_memory
                 )
                 
                 self.logger.debug("Chat response generated for user %s", input_data.user_id)

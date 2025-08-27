@@ -259,43 +259,45 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
         if query_context:
             context_info = f"{context_info}\nContext: {query_context}"
         
-        system_prompt = f"""You are a query preprocessing assistant. Your ONLY task is to help improve memory retrieval by:
+        system_prompt = f"""You are a query preprocessor for memory search optimization. Current date: {current_date}
 
-1. Extracting key search terms from the query
-2. Only rewriting the query if it contains unclear references that can be resolved with context
+TASKS:
+1. Extract 2-4 key searchable terms (entities, concepts, dates)
+2. Rewrite queries that need clarification or completion based on context
 
-CURRENT DATE: {current_date}
+KEYWORD RULES:
+- Convert relative time → specific dates ("tomorrow" → "2025-08-27")
+- Extract meaningful content words, not stop words
+- Support multilingual queries (Chinese, English, etc.)
 
-**CRITICAL**: Do NOT attempt to answer the query or provide solutions. Only preprocess it for better memory search.
+REWRITE RULES - Rewrite when query has:
+- Incomplete questions needing context inference ("this morning?" + previous "what did I do yesterday" → "what did I do this morning")
+- Follow-up questions ("what about today" after "what did I do yesterday" → "what did I do today")
+- Pronouns with known referents ("he said" → "John said")
+- Relative time ("yesterday" → "2025-08-26")
+- Vague references ("that meeting" → specific meeting name)
+- Fragment questions lacking clear intent but inferable from context
 
-**KEYWORD EXTRACTION**:
-- Extract 2-3 meaningful content words, entities, or concepts
-- Convert relative time to specific dates (e.g., "tomorrow" → "2025-08-27")
-- Support both English and Chinese
-- Focus on searchable terms
+CONTEXT-BASED COMPLETION:
+- Use conversation history to infer missing parts
+- If previous query was "what did I do X", then "what about Y" → "what did I do Y"
+- If previous query was action-based, preserve the action pattern for follow-ups
+- Preserve the action pattern from context
 
-**QUERY REWRITING** (Only when necessary):
-- ONLY rewrite if the query contains unclear references like:
-  * Pronouns (he, she, it, they) that can be resolved from context
-  * Relative time (yesterday, tomorrow, last week) that should be converted to specific dates
-  * Vague references (that, this, the thing we discussed) that can be clarified from context
-- If the query is already clear and specific, return it unchanged
-- Keep the original question structure and intent
+COMPLETION PATTERNS:
+- "X?" → infer action from context or default to "what about X"
+- "what about X" → infer action from previous query pattern
+- Time fragments → complete based on conversation context
 
-**EXAMPLES**:
-- "what did he say yesterday?" + Context: "talking about John" → NEEDS REWRITE: "what did John say on 2025-08-26?"
-- "my meeting tomorrow" → NEEDS REWRITE: "my meeting on 2025-08-27"
-- "what is my exercise routine?" → NO REWRITE NEEDED (already clear)
-- "tell me about my work schedule" → NO REWRITE NEEDED (already clear)
-- "that project we discussed" → Only rewrite if context clarifies what "that project" refers to
+If query is complete and clear → rewritten_queries: []
 
-**REMEMBER**: You are ONLY preprocessing for search, not answering questions. Only rewrite when the query has unclear references."""
+OUTPUT: Preprocessed data for search, never answer the query."""
 
         user_prompt = f"""Context: {context_info}
 
 Query to preprocess: "{query}"
 
-Task: Extract keywords and only rewrite query if it has unclear references that need context. Do not answer the question."""
+Task: Extract keywords and rewrite query if it needs completion based on conversation context. If this is a follow-up question (like "this morning?" after "what did I do yesterday"), infer the complete intent from the conversation pattern. Do not answer the question."""
 
         try:
             response = await self.openai_client.responses.parse(

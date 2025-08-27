@@ -35,7 +35,7 @@ class MemoryStorageLocal(MemoryStorageBase):
         # Use default path if none provided
         if path is None:
             path = os.path.expanduser('~/.xagent/chroma')
-            logging.info("No path provided, using default path: %s", path)
+            self.logger.info("No path provided, using default path: %s", path)
         
         # Ensure the directory exists
         Path(path).mkdir(parents=True, exist_ok=True)
@@ -209,10 +209,16 @@ class MemoryStorageLocal(MemoryStorageBase):
             )
 
             if preprocessed.keywords:
+                # Build keyword query - use $or only if multiple keywords, otherwise use simple $contains
+                if len(preprocessed.keywords) > 1:
+                    keyword_query = {"$or": [{"$contains": kw} for kw in preprocessed.keywords]}
+                else:
+                    keyword_query = {"$contains": preprocessed.keywords[0]}
+                    
                 results_keyword_match = self.collection.get(
                     limit=min(limit, 20), 
                     where={"user_id": user_id},
-                    where_document={"$or": [{"$contains": kw} for kw in preprocessed.keywords] } if preprocessed.keywords else None,
+                    where_document=keyword_query,
                     include=["documents", "metadatas"]
                 )
             else:
@@ -398,11 +404,18 @@ class MemoryStorageLocal(MemoryStorageBase):
         """Format ChromaDB results into standard memory format."""
         memories = []
         if results.get("documents"):
-            for doc_id, content, metadata in zip(
-                results["ids"], 
-                results["documents"], 
-                results["metadatas"]
-            ):
+            # Handle both single query and batch query results
+            ids = results["ids"]
+            documents = results["documents"] 
+            metadatas = results["metadatas"]
+            
+            # Flatten if nested (batch query results)
+            if isinstance(ids[0], list):
+                ids = [item for sublist in ids for item in sublist]
+                documents = [item for sublist in documents for item in sublist]
+                metadatas = [item for sublist in metadatas for item in sublist]
+            
+            for doc_id, content, metadata in zip(ids, documents, metadatas):
                 # Remove created_timestamp and user_id from metadata
                 filtered_metadata = {k: v for k, v in metadata.items() 
                                    if k not in ["created_timestamp", "user_id"]}

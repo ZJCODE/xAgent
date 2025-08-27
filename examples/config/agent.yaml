@@ -13,7 +13,6 @@ agent:
       - "http://localhost:8001/mcp/"  # Example MCP server
       
   message_storage: "redis"  # Use Redis for message storage currently supported  local or redis
-  enable_memory: true
   
 server:
   host: "0.0.0.0"

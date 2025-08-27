@@ -46,7 +46,7 @@ class AgentCLI(BaseAgentRunner):
         # Store config_path for CLI-specific functionality
         self.config_path = config_path if config_path and os.path.isfile(config_path) else None
         
-    async def chat_interactive(self, user_id: str = None, session_id: str = None, stream: bool = None):
+    async def chat_interactive(self, user_id: str = None, session_id: str = None, stream: bool = None, enable_memory: bool = False):
         """
         Start an interactive chat session.
         
@@ -54,6 +54,7 @@ class AgentCLI(BaseAgentRunner):
             user_id: User ID for the session
             session_id: Session ID for the chat
             stream: Enable streaming response (default: True, but False when verbose mode is enabled)
+            enable_memory: Whether to enable memory storage and retrieval (default: False)
         """
         # If stream is not explicitly set, determine based on verbose mode
         if stream is None:
@@ -155,7 +156,8 @@ class AgentCLI(BaseAgentRunner):
                         user_message=user_input,
                         user_id=user_id,
                         session_id=session_id,
-                        stream=True
+                        stream=True,
+                        enable_memory=enable_memory
                     )
                     
                     # Check if response is a generator (streaming) or a string
@@ -179,7 +181,8 @@ class AgentCLI(BaseAgentRunner):
                         user_message=user_input,
                         user_id=user_id,
                         session_id=session_id,
-                        stream=False
+                        stream=False,
+                        enable_memory=enable_memory
                     )
                     print(str(response))
                 
@@ -196,7 +199,7 @@ class AgentCLI(BaseAgentRunner):
                     print("🔍 Debug trace:")
                     traceback.print_exc()
     
-    async def chat_single(self, message: str, user_id: str = None, session_id: str = None):
+    async def chat_single(self, message: str, user_id: str = None, session_id: str = None, enable_memory: bool = False):
         """
         Process a single message and return the response.
         
@@ -204,6 +207,7 @@ class AgentCLI(BaseAgentRunner):
             message: The message to process
             user_id: User ID for the session
             session_id: Session ID for the chat
+            enable_memory: Whether to enable memory storage and retrieval (default: False)
             
         Returns:
             Agent response string
@@ -216,7 +220,8 @@ class AgentCLI(BaseAgentRunner):
             user_message=message,
             user_id=user_id,
             session_id=session_id,
-            stream=False
+            stream=False,
+            enable_memory=enable_memory
         )
         
         return response
@@ -271,7 +276,6 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
     mcp_servers:
       - http://localhost:8001/mcp/  # Example MCP server
   message_storage: local
-  enable_memory: false
 
 server:
   host: 0.0.0.0
@@ -341,6 +345,7 @@ def main():
     parser.add_argument("--session_id", help="Session ID for the chat")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument("--env", default=".env", help="Path to .env file")
+    parser.add_argument("--enable_memory", action="store_true", default=False, help="Enable memory storage and retrieval (default: False)")
     
     # Special commands as optional arguments
     parser.add_argument("--ask", metavar="MESSAGE", help="Ask a single question instead of starting interactive chat")
@@ -374,7 +379,8 @@ def main():
             response = asyncio.run(agent_cli.chat_single(
                 message=args.ask,
                 user_id=args.user_id,
-                session_id=args.session_id
+                session_id=args.session_id,
+                enable_memory=args.enable_memory
             ))
             print(response)
             return
@@ -389,7 +395,8 @@ def main():
         # Start interactive chat
         asyncio.run(agent_cli.chat_interactive(
             user_id=args.user_id,
-            session_id=args.session_id
+            session_id=args.session_id,
+            enable_memory=args.enable_memory
         ))
             
     except Exception as e:

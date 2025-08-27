@@ -24,13 +24,14 @@ class AgentHTTPClient:
     def __init__(self, base_url: str = "http://localhost:8010"):
         self.base_url = base_url.rstrip('/')
         
-    async def chat(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]] = None):
+    async def chat(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]] = None, enable_memory: bool = False):
         """发送聊天消息到Agent服务"""
         try:
             payload = {
                 "user_id": user_id,
                 "session_id": session_id,
-                "user_message": user_message
+                "user_message": user_message,
+                "enable_memory": enable_memory
             }
             if image_source:
                 payload["image_source"] = image_source
@@ -50,14 +51,15 @@ class AgentHTTPClient:
         except httpx.RequestError as e:
             raise Exception(f"网络请求失败: {str(e)}")
     
-    async def chat_stream(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]] = None):
+    async def chat_stream(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]] = None, enable_memory: bool = False):
         """发送聊天消息到Agent服务（流式输出）"""
         try:
             payload = {
                 "user_id": user_id,
                 "session_id": session_id,
                 "user_message": user_message,
-                "stream": True
+                "stream": True,
+                "enable_memory": enable_memory
             }
             if image_source:
                 payload["image_source"] = image_source
@@ -155,6 +157,9 @@ def init_session_state():
     
     if "enable_streaming" not in st.session_state:
         st.session_state.enable_streaming = True
+    
+    if "enable_memory" not in st.session_state:
+        st.session_state.enable_memory = False
 
 def create_http_client(agent_server_url: str):
     """创建 HTTP 客户端实例"""
@@ -261,6 +266,12 @@ def main():
         enable_streaming = st.checkbox("启用流式输出", value=st.session_state.enable_streaming)
         if enable_streaming != st.session_state.enable_streaming:
             st.session_state.enable_streaming = enable_streaming
+            st.rerun()
+        
+        # 新增：内存功能控制
+        enable_memory = st.checkbox("启用内存功能", value=st.session_state.enable_memory)
+        if enable_memory != st.session_state.enable_memory:
+            st.session_state.enable_memory = enable_memory
             st.rerun()
         
         # 应用配置按钮
@@ -373,7 +384,8 @@ def main():
                             user_message=prompt,
                             user_id=st.session_state.user_id,
                             session_id=st.session_state.session_id,
-                            image_source=image_paths if image_paths else None
+                            image_source=image_paths if image_paths else None,
+                            enable_memory=st.session_state.enable_memory
                         ):
                             # 收到第一个chunk时，清除"正在思考..."提示
                             if not first_chunk_received:
@@ -418,7 +430,8 @@ def main():
                                 user_message=prompt,
                                 user_id=st.session_state.user_id,
                                 session_id=st.session_state.session_id,
-                                image_source=image_paths if image_paths else None
+                                image_source=image_paths if image_paths else None,
+                                enable_memory=st.session_state.enable_memory
                             )
                         )
                         

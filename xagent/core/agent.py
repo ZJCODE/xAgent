@@ -91,7 +91,6 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         message_storage: Optional[MessageStorageBase] = None,
         memory_storage: Optional[MemoryStorageBase] = None,
-        enable_memory: bool = False,
     ):
         """
         Initialize the Agent with optional parameters.
@@ -108,7 +107,6 @@ class Agent:
             output_type: Pydantic model for structured output
             message_storage: MessageStorageBase instance for message storage
             memory_storage: MemoryStorageBase instance for long-term memory
-            enable_memory: Whether to enable memory storage and retrieval
         """
         # Basic configuration
         self.name = name or AgentConfig.DEFAULT_NAME
@@ -156,9 +154,6 @@ class Agent:
             self.logger.info("Registered agent tools: %s", 
                            [tool.tool_spec['name'] for tool in agent_tools])
 
-        # Memory enable flag
-        self.enable_memory = enable_memory
-
     async def __call__(
         self,
         user_message: str,
@@ -170,6 +165,7 @@ class Agent:
         image_source: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
+        enable_memory: bool = False,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """Call the agent to generate a reply based on the user message."""
         return await self.chat(
@@ -181,7 +177,8 @@ class Agent:
             max_concurrent_tools=max_concurrent_tools,
             image_source=image_source,
             output_type=output_type,
-            stream=stream
+            stream=stream,
+            enable_memory=enable_memory
         )
 
     @observe()
@@ -195,7 +192,8 @@ class Agent:
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
-        stream: bool = False
+        stream: bool = False,
+        enable_memory: bool = False
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """
         Generate a reply from the agent given a user message.
@@ -210,6 +208,7 @@ class Agent:
             image_source: Source of the image, if any (URL, file path, or base64 string, or list of these)
             output_type: Pydantic model for structured output
             stream: Whether to stream the response
+            enable_memory: Whether to enable memory storage and retrieval
 
         Returns:
             The agent's reply, structured output, or error message
@@ -238,7 +237,7 @@ class Agent:
             messages_without_tool = [input for input in input_messages if input.get("role") != RoleType.TOOL.value]
             
             retrieved_memories = []
-            if self.enable_memory:
+            if enable_memory:
                 pre_chat = messages_without_tool[-3:] # Use last 4 messages for memory retrieval memory and memory storage
                 retrieved_memories = await self.memory_storage.retrieve(user_id=user_id, query=user_message, limit=5, 
                                                                         query_context=f"pre_chat:{pre_chat}",enable_query_process=True)
