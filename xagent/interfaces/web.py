@@ -268,8 +268,8 @@ def main():
             st.session_state.enable_streaming = enable_streaming
             st.rerun()
         
-        # 新增：内存功能控制
-        enable_memory = st.checkbox("启用内存功能", value=st.session_state.enable_memory)
+        # 新增：记忆功能控制
+        enable_memory = st.checkbox("启用记忆功能", value=st.session_state.enable_memory)
         if enable_memory != st.session_state.enable_memory:
             st.session_state.enable_memory = enable_memory
             st.rerun()
