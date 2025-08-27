@@ -234,8 +234,8 @@ class Agent:
             # Build input messages once outside the loop
             input_messages = [msg.to_dict() for msg in await self.message_storage.get_messages(user_id, session_id, history_count)]
 
-            messages_without_tool = [input for input in input_messages if input.get("role") != RoleType.TOOL.value]
-            
+            messages_without_tool = [input for input in input_messages if input.get("role") in (RoleType.USER.value, RoleType.ASSISTANT.value)]
+
             retrieved_memories = []
             if enable_memory:
                 pre_chat = messages_without_tool[-3:] # Use last 4 messages for memory retrieval memory and memory storage
