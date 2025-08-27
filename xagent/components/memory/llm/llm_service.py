@@ -8,8 +8,8 @@ from ....schemas.memory import MemoryExtraction, MetaMemory, MetaMemoryPiece, Me
 
 class MemoryLLMService:
     """LLM service for memory-related operations including extraction, meta-memory generation, and query preprocessing."""
-    
-    def __init__(self, model: str = "gpt-4.1-mini"):
+
+    def __init__(self, model: str = "gpt-4.1-mini", mini_model: str = "gpt-4.1-nano"):
         """Initialize the LLM service.
         
         Args:
@@ -18,6 +18,7 @@ class MemoryLLMService:
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         self.openai_client = AsyncOpenAI()
         self.model = model
+        self.mini_model = mini_model
         self.logger.info("MemoryLLMService initialized with model: %s", model)
     
     @observe()
@@ -247,7 +248,7 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
                 keywords=[]
             )
 
-        self.logger.debug("Preprocessing query with LLM: %s", query[:100] + "..." if len(query) > 100 else query)
+        self.logger.debug("Preprocessing query for memory search: %s", query[:100] + "..." if len(query) > 100 else query)
         
         from datetime import datetime
         
@@ -258,42 +259,47 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
         if query_context:
             context_info = f"{context_info}\nContext: {query_context}"
         
-        system_prompt = f"""You are a query preprocessing expert. Your task is to analyze a query and:
+        system_prompt = f"""You are a query preprocessing assistant. Your ONLY task is to help improve memory retrieval by:
 
-1. Extract 2 relevant keywords that would help find related memories (both in English and Chinese)
-2. Generate 2 improved query variations for better memory retrieval
+1. Extracting key search terms from the query
+2. Only rewriting the query if it contains unclear references that can be resolved with context
 
 CURRENT DATE: {current_date}
 
-**KEYWORD EXTRACTION**:
-- Focus on meaningful content words, entities, concepts
-- Include temporal expressions (convert relative time to specific dates when possible)
-- Ignore stop words and filler words  
-- Support both English and Chinese
-- For time references like "tomorrow", "yesterday", convert to specific dates
+**CRITICAL**: Do NOT attempt to answer the query or provide solutions. Only preprocess it for better memory search.
 
-**QUERY REWRITING**:
-- Resolve ambiguous references using context
-- Expand abbreviated expressions
-- Add specificity while preserving intent
-- Convert relative time to absolute time when beneficial
-- Generate variations that would match different memory phrasings
+**KEYWORD EXTRACTION**:
+- Extract 2-3 meaningful content words, entities, or concepts
+- Convert relative time to specific dates (e.g., "tomorrow" → "2025-08-27")
+- Support both English and Chinese
+- Focus on searchable terms
+
+**QUERY REWRITING** (Only when necessary):
+- ONLY rewrite if the query contains unclear references like:
+  * Pronouns (he, she, it, they) that can be resolved from context
+  * Relative time (yesterday, tomorrow, last week) that should be converted to specific dates
+  * Vague references (that, this, the thing we discussed) that can be clarified from context
+- If the query is already clear and specific, return it unchanged
+- Keep the original question structure and intent
 
 **EXAMPLES**:
-- Query: "tomorrow's meeting" → Keywords: ["2025-08-27", "meeting"]
-- Query: "what did he say?" → Use context to replace "he" with specific person
-- Query: "what's your opinion on that?" → Use context to clarify "that"
-- Query: "exercise routine" → Keywords: ["exercise", "workout"]"""
+- "what did he say yesterday?" + Context: "talking about John" → NEEDS REWRITE: "what did John say on 2025-08-26?"
+- "my meeting tomorrow" → NEEDS REWRITE: "my meeting on 2025-08-27"
+- "what is my exercise routine?" → NO REWRITE NEEDED (already clear)
+- "tell me about my work schedule" → NO REWRITE NEEDED (already clear)
+- "that project we discussed" → Only rewrite if context clarifies what "that project" refers to
+
+**REMEMBER**: You are ONLY preprocessing for search, not answering questions. Only rewrite when the query has unclear references."""
 
         user_prompt = f"""Context: {context_info}
 
-Query: "{query}"
+Query to preprocess: "{query}"
 
-Extract relevant keywords and generate improved query variations for memory retrieval."""
+Task: Extract keywords and only rewrite query if it has unclear references that need context. Do not answer the question."""
 
         try:
             response = await self.openai_client.responses.parse(
-                model=self.model,
+                model=self.mini_model,
                 input=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -305,12 +311,12 @@ Extract relevant keywords and generate improved query variations for memory retr
             result = response.output_parsed
             if result:
                 result.original_query = query
-                self.logger.debug("LLM preprocessing successful: %d queries, %d keywords", 
+                self.logger.debug("Query preprocessing successful: %d rewritten queries, %d keywords", 
                                 len(result.rewritten_queries), len(result.keywords))
                 return result
             else:
                 # Fallback
-                self.logger.warning("LLM preprocessing failed, using fallback")
+                self.logger.warning("Query preprocessing failed, using fallback")
                 return QueryPreprocessResult(
                     original_query=query,
                     rewritten_queries=[],
@@ -318,7 +324,7 @@ Extract relevant keywords and generate improved query variations for memory retr
                 )
                 
         except Exception as e:
-            self.logger.error("Error in LLM query preprocessing: %s", str(e))
+            self.logger.error("Error in query preprocessing: %s", str(e))
             return QueryPreprocessResult(
                 original_query=query,
                 rewritten_queries=[],
