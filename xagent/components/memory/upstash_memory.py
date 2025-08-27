@@ -1,6 +1,3 @@
-import chromadb
-import chromadb.utils.embedding_functions as embedding_functions
-from chromadb.config import Settings
 import logging
 import os
 import uuid
@@ -8,7 +5,8 @@ import re
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta, timezone
 import dotenv
-from pathlib import Path
+
+from upstash_vector import Index, Vector
 
 from .base_memory import MemoryStorageBase
 from .utils.llm_service import MemoryLLMService
@@ -16,47 +14,31 @@ from .utils.memory_config import TRIGGER_KEYWORDS, MAX_SCAN_LENGTH
 
 dotenv.load_dotenv(override=True)
 
-class MemoryStorageLocal(MemoryStorageBase):
+class MemoryStorageUpstash(MemoryStorageBase):
     """
-    Local memory storage using ChromaDB with LLM-based memory extraction.
+    Upstash Vector memory storage with LLM-based memory extraction.
     
     Args:
-        path: Path to ChromaDB storage directory. Defaults to ~/.xagent/chroma
-        collection_name: Name of the ChromaDB collection. Defaults to 'xagent_memory'
         memory_threshold: Number of messages to trigger long-term storage. Defaults to 10
         keep_recent: Number of recent messages to keep after storage. Defaults to 2
     """
     
     def __init__(self, 
-                 path: str = None,
-                 collection_name: str = "xagent_memory",
                  memory_threshold: int = 10,
                  keep_recent: int = 2):
         # Initialize logger
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         
-        # Use default path if none provided
-        if path is None:
-            path = os.path.expanduser('~/.xagent/chroma')
-            self.logger.info("No path provided, using default path: %s", path)
-        
-        # Ensure the directory exists
-        Path(path).mkdir(parents=True, exist_ok=True)
-        
         # Initialize LLM service
         self.llm_service = MemoryLLMService()
 
-        # Initialize OpenAI embedding function
-        self.openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-            model_name="text-embedding-3-small"
-        )
-        
-        # Initialize ChromaDB client and collection
-        self.chroma_client = chromadb.PersistentClient(path=path,settings=Settings(anonymized_telemetry=False))
-        self.collection = self.chroma_client.get_or_create_collection(
-            name=collection_name,
-            embedding_function=self.openai_ef
-        )
+        # Initialize Upstash Vector index from environment variables
+        try:
+            self.index = Index.from_env()
+            self.logger.info("Successfully initialized Upstash Vector index")
+        except Exception as e:
+            self.logger.error("Failed to initialize Upstash Vector index: %s", str(e))
+            raise
         
         # Initialize user's temporary message storage
         self._user_messages = {}
@@ -68,7 +50,8 @@ class MemoryStorageLocal(MemoryStorageBase):
         # 编译正则表达式模式，提高匹配性能
         self._compiled_patterns = self._compile_keyword_patterns()
         
-        self.logger.info("LocalMemory initialized with collection: %s", collection_name)
+        self.logger.info("UpstashMemory initialized with threshold: %d, keep_recent: %d", 
+                        memory_threshold, keep_recent)
     
     async def add(self,
                   user_id: str,
@@ -146,30 +129,43 @@ class MemoryStorageLocal(MemoryStorageBase):
               content: str) -> str:
         """Store memory content with LLM-based extraction and return memory ID."""
         self.logger.info("Storing memory for user: %s, content length: %d", user_id, len(content))
+        
         # Extract structured memories from content
         extracted_memories = await self.llm_service.extract_memories_from_content(content)
 
-        # Prepare data for batch storage
-        documents = []
-        metadatas = []
+        # Prepare vectors for batch storage
+        vectors = []
 
         # Process extracted memories
         for memory_piece in extracted_memories.memories:
-            documents.append(memory_piece.content)
-            metadatas.append(self._create_base_metadata(user_id, memory_piece.type.value))
+            memory_id = str(uuid.uuid4())
+            metadata = self._create_base_metadata(user_id, memory_piece.type.value)
+            
+            vector = Vector(
+                id=memory_id,
+                data=memory_piece.content,
+                metadata=metadata
+            )
+            vectors.append(vector)
 
         # If no memories were extracted, do not store anything
-        if not documents:
+        if not vectors:
             self.logger.debug("No structured memories extracted, nothing stored for user %s", user_id)
             return ""  # Return empty string when no memories extracted
 
         # Batch store all memories
-        memory_ids = self._batch_store_memories(documents, metadatas)
+        try:
+            self.index.upsert(vectors=vectors)
+            memory_ids = [v.id for v in vectors]
+            
+            log_msg = f"Stored {len(memory_ids)} {'extracted memory pieces' if len(memory_ids) > 1 else 'memory piece'} for user {user_id}"
+            self.logger.debug(log_msg)
 
-        log_msg = f"Stored {len(memory_ids)} {'extracted memory pieces' if len(memory_ids) > 1 else 'memory piece'} for user {user_id}"
-        self.logger.debug(log_msg)
-
-        return memory_ids[0] if len(memory_ids) == 1 else str(memory_ids)
+            return memory_ids[0] if len(memory_ids) == 1 else str(memory_ids)
+            
+        except Exception as e:
+            self.logger.error("Failed to upsert vectors to Upstash: %s", str(e))
+            raise
     
     async def retrieve(self, 
                  user_id: str, 
@@ -179,97 +175,68 @@ class MemoryStorageLocal(MemoryStorageBase):
                  enable_query_process: bool = False
                  ) -> List[Dict[str, Any]]:
         """Retrieve relevant memories based on query using query preprocessing for better results."""
-        self.logger.info("Retrieving memories for user: %s, query: %s, limit: %d", user_id, query[:50] + "..." if len(query) > 50 else query, limit)
+        self.logger.info("Retrieving memories for user: %s, query: %s, limit: %d", 
+                        user_id, query[:50] + "..." if len(query) > 50 else query, limit)
         
         # Preprocess the query to get variations and keywords
-        preprocessed = await self.llm_service.preprocess_query(query, query_context,enable_query_process)
+        preprocessed = await self.llm_service.preprocess_query(query, query_context, enable_query_process)
 
-        self.logger.info("Preprocessed query: original='%s', rewritten=%s, keywords=%s", 
-                         preprocessed.original_query, preprocessed.rewritten_queries, preprocessed.keywords)
+        self.logger.info("Preprocessed query: original='%s', rewritten=%s", 
+                         preprocessed.original_query, preprocessed.rewritten_queries)
         
-        # Prepare all query texts for batch processing
+        # Prepare all query texts for processing
         query_texts = [preprocessed.original_query]
         
         # Add rewritten queries if available
         if preprocessed.rewritten_queries:
             query_texts.extend(preprocessed.rewritten_queries)
         
-        self.logger.debug("Searching with %d query variations in batch", len(query_texts))
+        self.logger.debug("Searching with %d query variations", len(query_texts))
         
         try:
-            # Use ChromaDB's batch query capability
-            results = self.collection.query(
-                query_texts=query_texts,
-                n_results=min(limit, 20), 
-                where={"user_id": user_id},
-                include=["documents", "metadatas", "distances"]
-            )
-
-            if preprocessed.keywords:
-                # Build keyword query - use $or only if multiple keywords, otherwise use simple $contains
-                if len(preprocessed.keywords) > 1:
-                    keyword_query = {"$or": [{"$contains": kw} for kw in preprocessed.keywords]}
-                else:
-                    keyword_query = {"$contains": preprocessed.keywords[0]}
-                    
-                results_keyword_match = self.collection.get(
-                    limit=min(limit, 20), 
-                    where={"user_id": user_id},
-                    where_document=keyword_query,
-                    include=["documents", "metadatas"]
-                )
-            else:
-                results_keyword_match = {"ids": [], "documents": [], "metadatas": []}
-
-            # Collect memories with recall count and best distance
+            # Collect memories with recall count and best score
             memory_stats = {}
             
-            if results.get("documents"):
-                # Process results from all queries
-                for ids, docs, metas, distances in zip(
-                    results["ids"],
-                    results["documents"], 
-                    results["metadatas"], 
-                    results["distances"]
-                ):
-                    for doc_id, content, metadata, distance in zip(ids, docs, metas, distances):
-                        if doc_id not in memory_stats:
-                            memory_stats[doc_id] = {
-                                "content": content,
-                                "metadata": metadata,
-                                "best_distance": distance,
-                                "recall_count": 1,
-                            }
-                        else:
-                            # Update recall count and best distance
-                            memory_stats[doc_id]["recall_count"] += 1
-                            if distance < memory_stats[doc_id]["best_distance"]:
-                                memory_stats[doc_id]["best_distance"] = distance
-            
-            # Convert to list and sort by recall count (desc) then by best distance (asc)
-            memories = list(memory_stats.values())
-            memories.sort(key=lambda x: (-x["recall_count"], x["best_distance"]))
-
-            memories_enhanced = []
-            if results_keyword_match.get("documents"):
-                for doc_id, content, metadata in zip(
-                    results_keyword_match["ids"], 
-                    results_keyword_match["documents"], 
-                    results_keyword_match["metadatas"]
-                ):
-                    if doc_id not in memory_stats:
-                        memories_enhanced.append({
-                            "content": content,
-                            "metadata": metadata,
-                            "best_distance": None,
+            # Process each query variation with metadata filtering
+            for query_text in query_texts:
+                # Use Upstash Vector's metadata filtering to only get vectors for this user
+                results = self.index.query(
+                    data=query_text,
+                    top_k=min(limit, 20),
+                    filter=f"user_id = '{user_id}'",  # Use Upstash metadata filtering
+                    include_vectors=False,
+                    include_metadata=True,
+                    include_data=True
+                )
+                
+                # Collect statistics for each result
+                for result in results:
+                    vector_id = result.id
+                    score = getattr(result, 'score', 0.0)
+                    
+                    if vector_id not in memory_stats:
+                        memory_stats[vector_id] = {
+                            "content": result.data if hasattr(result, 'data') else "",
+                            "metadata": result.metadata,
+                            "best_score": score,
                             "recall_count": 1,
-                        })
-
-            self.logger.info("Batch query search found %d unique memories, %d from keyword match (excluding overlaps), raw keyword matches count: %d",
-                             len(memories), len(memories_enhanced), len(results_keyword_match.get("documents", [])))
+                        }
+                    else:
+                        # Update recall count and best score
+                        memory_stats[vector_id]["recall_count"] += 1
+                        if score > memory_stats[vector_id]["best_score"]:
+                            memory_stats[vector_id]["best_score"] = score
+            
+            # Convert to list and sort by recall count (desc) then by best score (desc)
+            memories = list(memory_stats.values())
+            memories.sort(key=lambda x: (-x["recall_count"], -x["best_score"]))
+            
+            self.logger.info("Query search found %d unique memories for user %s from %d query variations",
+                           len(memories), user_id, len(query_texts))
+            
             # Limit results and format output
             final_memories = []
-            for memory in memories[:limit] + memories_enhanced:
+            for memory in memories[:limit]:
                 # Remove created_timestamp and user_id from metadata
                 filtered_metadata = {k: v for k, v in memory["metadata"].items() 
                                    if k not in ["created_timestamp", "user_id"]}
@@ -278,22 +245,33 @@ class MemoryStorageLocal(MemoryStorageBase):
                     "metadata": filtered_metadata
                 })
             
-            self.logger.debug("Retrieved %d memories from %d query variations for user %s, sorted by recall count and distance", 
+            self.logger.debug("Retrieved %d memories from %d query variations for user %s, sorted by recall count and score", 
                              len(final_memories), len(query_texts), user_id)
             return final_memories
             
         except Exception as e:
-            self.logger.error("Error in batch query search: %s", str(e))
+            self.logger.error("Error in query search: %s", str(e))
             # Fallback to single query search
             try:
-                results = self.collection.query(
-                    query_texts=[preprocessed.original_query],
-                    n_results=limit,
-                    where={"user_id": user_id},
-                    include=["documents", "metadatas"]
+                results = self.index.query(
+                    data=preprocessed.original_query,
+                    top_k=limit,
+                    filter=f"user_id = '{user_id}'",
+                    include_vectors=False,
+                    include_metadata=True,
+                    include_data=True
                 )
                 
-                memories = self._format_memory_results(results)
+                # Format results
+                memories = []
+                for result in results:
+                    filtered_metadata = {k: v for k, v in result.metadata.items() 
+                                       if k not in ["created_timestamp", "user_id"]}
+                    memories.append({
+                        "content": result.data if hasattr(result, 'data') else "",
+                        "metadata": filtered_metadata,
+                    })
+                
                 self.logger.debug("Fallback: Retrieved %d memories for user %s", len(memories), user_id)
                 return memories
                 
@@ -303,8 +281,51 @@ class MemoryStorageLocal(MemoryStorageBase):
 
     async def clear(self, user_id: str) -> None:
         """Clear all memories for a user."""
-        self.collection.delete(where={"user_id": user_id})
-
+        self.logger.info("Clearing all memories for user: %s", user_id)
+        
+        try:
+            # Use Upstash Vector's delete with metadata filter to delete all vectors for this user
+            # Note: This requires the delete method to support metadata filtering
+            # If not supported, we'll need to query first then delete by IDs
+            try:
+                # Try direct delete with filter (if supported by the SDK)
+                self.index.delete(filter=f"user_id = '{user_id}'")
+                self.logger.info("Deleted all memories for user %s using filter", user_id)
+            except Exception as filter_delete_error:
+                self.logger.warning("Direct filter delete not supported, falling back to query-then-delete: %s", 
+                                  str(filter_delete_error))
+                
+                # Fallback: query all vectors for this user first, then delete by IDs
+                results = self.index.query(
+                    data="",  # Empty query to get general results
+                    top_k=10000,  # Large number to get all results
+                    filter=f"user_id = '{user_id}'",
+                    include_vectors=False,
+                    include_metadata=True,
+                    include_data=True
+                )
+                
+                # Collect IDs of vectors belonging to this user
+                user_vector_ids = [result.id for result in results]
+                
+                # Delete vectors by IDs in batches
+                if user_vector_ids:
+                    batch_size = 100  # Process in batches to avoid potential limits
+                    for i in range(0, len(user_vector_ids), batch_size):
+                        batch_ids = user_vector_ids[i:i + batch_size]
+                        try:
+                            self.index.delete(ids=batch_ids)
+                        except Exception as e:
+                            self.logger.warning("Failed to delete batch %d-%d: %s", 
+                                              i, min(i + batch_size, len(user_vector_ids)), str(e))
+                    
+                    self.logger.info("Deleted %d vectors for user %s", len(user_vector_ids), user_id)
+                else:
+                    self.logger.info("No vectors found for user %s", user_id)
+                
+        except Exception as e:
+            self.logger.error("Error clearing memories for user %s: %s", user_id, str(e))
+            raise
 
     async def extract_meta(self, user_id: str, days: int = 1) -> List[str]:
         """Extract meta memory from recent memories and store it. Returns list of memory IDs."""
@@ -318,20 +339,30 @@ class MemoryStorageLocal(MemoryStorageBase):
             self.logger.debug("No meta memory contents extracted for user %s", user_id)
             return []
 
-        # Prepare batch data
-        documents = []
-        metadatas = []
+        # Prepare vectors for batch storage
+        vectors = []
+        memory_ids = []
         
         for piece in meta_memory.contents:
-            documents.append(piece.content)
-            metadatas.append(self._create_base_metadata(user_id, piece.type.value))
+            memory_id = str(uuid.uuid4())
+            metadata = self._create_base_metadata(user_id, piece.type.value)
+            
+            vector = Vector(
+                id=memory_id,
+                data=piece.content,
+                metadata=metadata
+            )
+            vectors.append(vector)
+            memory_ids.append(memory_id)
         
         # Batch store all meta contents
-        memory_ids = self._batch_store_memories(documents, metadatas)
-        
-        self.logger.debug("Stored %d meta content pieces for user %s", len(memory_ids), user_id)
-        return memory_ids
-
+        try:
+            self.index.upsert(vectors=vectors)
+            self.logger.debug("Stored %d meta content pieces for user %s", len(memory_ids), user_id)
+            return memory_ids
+        except Exception as e:
+            self.logger.error("Failed to store meta memories: %s", str(e))
+            raise
 
     def _compile_keyword_patterns(self) -> List[re.Pattern]:
         """编译关键字正则表达式模式，每个层级合并为一个 alternation 正则"""
@@ -406,7 +437,6 @@ class MemoryStorageLocal(MemoryStorageBase):
         
         return "\n\n".join(conversation_lines)
 
-
     def _create_base_metadata(self, user_id: str, memory_type: str) -> Dict[str, Any]:
         """Create base metadata for memory storage."""
         now = datetime.now(timezone.utc)
@@ -417,75 +447,33 @@ class MemoryStorageLocal(MemoryStorageBase):
             "created_timestamp": now.timestamp(),
             "memory_type": memory_type,
         }
-    
-    def _batch_store_memories(self, documents: List[str], metadatas: List[Dict[str, Any]], 
-                             ids: Optional[List[str]] = None) -> List[str]:
-        """Batch store multiple memories and return memory IDs."""
-        if not ids:
-            ids = [str(uuid.uuid4()) for _ in documents]
-        
-        self.collection.upsert(
-            documents=documents,
-            metadatas=metadatas,
-            ids=ids
-        )
-
-        return ids
-    
-    def _format_memory_results(self, results: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Format ChromaDB results into standard memory format."""
-        memories = []
-        if results.get("documents"):
-            # Handle both single query and batch query results
-            ids = results["ids"]
-            documents = results["documents"] 
-            metadatas = results["metadatas"]
-            
-            # Flatten if nested (batch query results)
-            if isinstance(ids[0], list):
-                ids = [item for sublist in ids for item in sublist]
-                documents = [item for sublist in documents for item in sublist]
-                metadatas = [item for sublist in metadatas for item in sublist]
-            
-            for doc_id, content, metadata in zip(ids, documents, metadatas):
-                # Remove created_timestamp and user_id from metadata
-                filtered_metadata = {k: v for k, v in metadata.items() 
-                                   if k not in ["created_timestamp", "user_id"]}
-                memories.append({
-                    "content": content,
-                    "metadata": filtered_metadata,
-                })
-        return memories
 
     async def _get_recent_memories(self, user_id: str, days: int = 1) -> List[Dict[str, Any]]:
         """Get all memories for a user created within the last N days."""
         self.logger.info("Retrieving last %d day(s) memories for user: %s", days, user_id)
         
-        # Calculate timestamp range - much simpler approach
+        # Calculate timestamp range
         now = datetime.now(timezone.utc)
         start_timestamp = (now - timedelta(days=days)).timestamp()
-        end_timestamp = now.timestamp()
         
         try:
-            results = self.collection.get(
-                where={
-                    "$and": [
-                        {"user_id": user_id},
-                        {"created_timestamp": {"$gte": start_timestamp}},
-                        {"created_timestamp": {"$lte": end_timestamp}}
-                    ]
-                },
-                include=["documents", "metadatas"]
+            # Use Upstash Vector's metadata filtering to get vectors for this user within time range
+            results = self.index.query(
+                data="",  # Empty query to get general results
+                top_k=10000,  # Large number to get all results
+                filter=f"user_id = '{user_id}' AND created_timestamp >= {start_timestamp}",
+                include_vectors=False,
+                include_metadata=True,
+                include_data=True
             )
             
             memories = []
-            if results.get("documents"):
-                for doc_id, content, metadata in zip(results["ids"], results["documents"], results["metadatas"]):
-                    memories.append({
-                        "id": doc_id,
-                        "content": content,
-                        "metadata": metadata,
-                    })
+            for result in results:
+                memories.append({
+                    "id": result.id,
+                    "content": result.data if hasattr(result, 'data') else "",
+                    "metadata": result.metadata,
+                })
             
             self.logger.debug("Retrieved %d memories for last %d day(s) for user %s", len(memories), days, user_id)
             return memories
