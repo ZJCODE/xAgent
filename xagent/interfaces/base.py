@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, create_model
 # Local imports
 from ..core.agent import Agent
 from ..components import MessageStorageLocal,MessageStorageRedis,MessageStorageBase
+from ..components import MemoryStorageBase,MemoryStorageLocal,MemoryStorageUpstash
 from ..tools import TOOL_REGISTRY
 
 
@@ -22,6 +23,7 @@ class BaseAgentConfig:
     DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
     DEFAULT_MODEL = "gpt-4o-mini"
     DEFAULT_MESSAGE_STORAGE = "local"
+    DEFAULT_MEMORY_STORAGE = "local"
     DEFAULT_HOST = "0.0.0.0"
     DEFAULT_PORT = 8010
 
@@ -69,6 +71,7 @@ class BaseAgentRunner:
         
         # Initialize components in dependency order
         self.message_storage = self._initialize_message_storage()
+        self.memory_storage = self._initialize_memory_storage()
         self.agent = self._initialize_agent()
         
     def _load_config(self, cfg_path: Optional[str]) -> Dict[str, Any]:
@@ -135,7 +138,8 @@ class BaseAgentRunner:
                     "tools": ["web_search"],  # Default tools
                     "mcp_servers": []  # Default MCP servers
                 },
-                "message_storage": BaseAgentConfig.DEFAULT_MESSAGE_STORAGE
+                "message_storage": BaseAgentConfig.DEFAULT_MESSAGE_STORAGE,
+                "memory_storage": BaseAgentConfig.DEFAULT_MEMORY_STORAGE
             },
             "server": {
                 "host": BaseAgentConfig.DEFAULT_HOST,
@@ -332,6 +336,7 @@ class BaseAgentRunner:
             sub_agents=sub_agents,
             output_type=output_type,
             message_storage=self.message_storage,
+            memory_storage=self.memory_storage,
         )
     
     def _load_agent_tools(self, agent_cfg: Dict[str, Any]) -> List[Any]:
@@ -427,3 +432,24 @@ class BaseAgentRunner:
         }
 
         return message_storage_map.get(message_storage, MessageStorageLocal)()
+
+    def _initialize_memory_storage(self) -> MemoryStorageBase:
+        """
+        Initialize memory storage based on configuration.
+        
+        Returns:
+            MemoryStorageBase instance (MemoryStorageLocal or MemoryStorageUpstash)
+            
+        Note:
+            Returns appropriate memory backend based on configuration.
+            Defaults to MemoryStorageLocal if storage type is not recognized.
+        """
+        agent_cfg = self.config.get("agent", {})
+        memory_storage = agent_cfg.get("memory_storage", "local")
+
+        memory_storage_map = {
+            "local": MemoryStorageLocal,  # Local mode uses ChromaDB
+            "upstash": MemoryStorageUpstash,
+        }
+
+        return memory_storage_map.get(memory_storage, MemoryStorageLocal)()

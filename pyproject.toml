@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "myxagent"
-version = "0.2.25"
+version = "0.2.26"
 description = "Multi-Modal AI Agent System"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { text = "MIT" }
@@ -38,6 +38,7 @@ dependencies = [
     # Data storage
     "redis>=6.2.0",
     "chromadb>=1.0.20",
+    "upstash_vector>=0.8.0",
     "boto3>=1.39.17",
     
     # UI and utilities
