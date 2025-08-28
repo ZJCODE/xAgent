@@ -11,6 +11,7 @@ from upstash_vector import Index, Vector
 from .base_memory import MemoryStorageBase
 from .utils.llm_service import MemoryLLMService
 from .utils.memory_config import TRIGGER_KEYWORDS, MAX_SCAN_LENGTH
+from .utils.messages_for_memory import RedisMessagesForMemory
 
 dotenv.load_dotenv(override=True)
 
@@ -40,8 +41,13 @@ class MemoryStorageUpstash(MemoryStorageBase):
             self.logger.error("Failed to initialize Upstash Vector index: %s", str(e))
             raise
         
-        # Initialize user's temporary message storage
-        self._user_messages = {}
+        # Initialize Redis-based user message storage
+        try:
+            self.user_messages = RedisMessagesForMemory()
+            self.logger.info("Successfully initialized Redis user message storage for memory")
+        except Exception as e:
+            self.logger.error("Failed to initialize Redis user message storage for memory: %s", str(e))
+            raise
         
         # Memory management configuration
         self.memory_threshold = memory_threshold  # Store to long-term memory when reaching this many messages
@@ -50,7 +56,7 @@ class MemoryStorageUpstash(MemoryStorageBase):
         # 编译正则表达式模式，提高匹配性能
         self._compiled_patterns = self._compile_keyword_patterns()
         
-        self.logger.info("UpstashMemory initialized with threshold: %d, keep_recent: %d", 
+        self.logger.info("MessagesForMemory initialized with threshold: %d, keep_recent: %d", 
                         memory_threshold, keep_recent)
     
     async def add(self,
@@ -69,12 +75,9 @@ class MemoryStorageUpstash(MemoryStorageBase):
             self.logger.debug("No messages provided for user %s", user_id)
             return
 
-        if user_id not in self._user_messages:
-            self._user_messages[user_id] = []
-
-        # Add new messages to user's temporary storage
-        self._user_messages[user_id].extend(messages)
-        message_count = len(self._user_messages[user_id])
+        # Add new messages to user's Redis storage
+        await self.user_messages.add_messages(user_id, messages)
+        message_count = await self.user_messages.get_message_count(user_id)
 
         self.logger.debug("Added %d messages for user %s, total messages: %d", 
                          len(messages), user_id, message_count)
@@ -106,14 +109,17 @@ class MemoryStorageUpstash(MemoryStorageBase):
                             "keyword" if keyword_triggered else "threshold",
                             f" - {trigger_tier}" if trigger_tier else "")
             try:
+                # Get all messages from Redis storage for processing
+                all_user_messages = await self.user_messages.get_messages(user_id)
+                
                 # Convert messages to conversation format for storage
-                conversation_content = self._format_messages_for_storage(self._user_messages[user_id])
+                conversation_content = self._format_messages_for_storage(all_user_messages)
 
                 # Store conversation to long-term memory
                 await self.store(user_id, conversation_content)
 
-                # Keep only the most recent messages
-                self._user_messages[user_id] = self._user_messages[user_id][-self.keep_recent:]
+                # Keep only the most recent messages in Redis
+                await self.user_messages.keep_recent_messages(user_id, self.keep_recent)
 
                 self.logger.info("Stored %d messages to long-term memory for user %s, kept %d recent messages", 
                                message_count - self.keep_recent, user_id, self.keep_recent)
@@ -121,7 +127,7 @@ class MemoryStorageUpstash(MemoryStorageBase):
             except Exception as e:
                 self.logger.error("Failed to store messages to long-term memory for user %s: %s", user_id, str(e))
                 # If storage fails, still trim to prevent memory overflow
-                self._user_messages[user_id] = self._user_messages[user_id][-self.keep_recent:]
+                await self.user_messages.keep_recent_messages(user_id, self.keep_recent)
 
 
     async def store(self, 
@@ -284,6 +290,9 @@ class MemoryStorageUpstash(MemoryStorageBase):
         self.logger.info("Clearing all memories for user: %s", user_id)
         
         try:
+            # Clear temporary messages from Redis
+            await self.user_messages.clear_messages(user_id)
+            
             # Use Upstash Vector's delete with metadata filter to delete all vectors for this user
             # Note: This requires the delete method to support metadata filtering
             # If not supported, we'll need to query first then delete by IDs
@@ -326,6 +335,14 @@ class MemoryStorageUpstash(MemoryStorageBase):
         except Exception as e:
             self.logger.error("Error clearing memories for user %s: %s", user_id, str(e))
             raise
+
+    async def close(self) -> None:
+        """Close Redis connection and cleanup resources."""
+        try:
+            await self.user_messages.close()
+            self.logger.info("MessagesForMemory resources cleaned up successfully")
+        except Exception as e:
+            self.logger.error("Error closing MessagesForMemory resources: %s", str(e))
 
     async def extract_meta(self, user_id: str, days: int = 1) -> List[str]:
         """Extract meta memory from recent memories and store it. Returns list of memory IDs."""
