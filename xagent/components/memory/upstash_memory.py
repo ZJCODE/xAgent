@@ -122,7 +122,7 @@ class MemoryStorageUpstash(MemoryStorageBase):
                 await self.user_messages.keep_recent_messages(user_id, self.keep_recent)
 
                 self.logger.info("Stored %d messages to long-term memory for user %s, kept %d recent messages", 
-                               message_count - self.keep_recent, user_id, self.keep_recent)
+                               message_count - self.keep_recent if message_count > self.keep_recent else message_count, user_id, self.keep_recent)
 
             except Exception as e:
                 self.logger.error("Failed to store messages to long-term memory for user %s: %s", user_id, str(e))
@@ -223,7 +223,6 @@ class MemoryStorageUpstash(MemoryStorageBase):
                 try:
                     await self.delete(list(related_memory_ids))
                     self.logger.info("Deleted %d old memories that were merged", len(related_memory_ids))
-                    self.logger.info("Deleted memory IDs: %s", list(related_memory_ids))
                 except Exception as e:
                     self.logger.error("Error deleting old memories: %s", str(e))
 
