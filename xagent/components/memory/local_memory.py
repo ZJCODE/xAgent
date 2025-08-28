@@ -153,8 +153,6 @@ class MemoryStorageLocal(MemoryStorageBase):
             self.logger.info("No structured memories extracted, nothing stored for user %s", user_id)
             return ""  # Return empty string when no memories extracted
 
-        self.logger.info(f"extracted_memories: {extracted_memories}")
-
         # Collect all related memories for all extracted memories
         all_related_memories = []
         related_memory_ids = set()
@@ -197,8 +195,6 @@ class MemoryStorageLocal(MemoryStorageBase):
             self.logger.error("Error during batch memory query: %s", str(e))
             # Continue without related memories
 
-        self.logger.info(f"all_related_memories: {all_related_memories}")
-
         # Merge all extracted memories with all related memories using LLM (single call)
         try:
             merged_result = await self.llm_service.merge_memories(
@@ -214,8 +210,6 @@ class MemoryStorageLocal(MemoryStorageBase):
         # Prepare data for batch storage of final merged memories
         documents = []
         metadatas = []
-
-        self.logger.info(f"final_memories_to_store: {final_memories_to_store}")
 
         for memory_piece in final_memories_to_store:
             documents.append(memory_piece.content)

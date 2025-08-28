@@ -133,17 +133,76 @@ class MemoryStorageUpstash(MemoryStorageBase):
     async def store(self, 
               user_id: str, 
               content: str) -> str:
-        """Store memory content with LLM-based extraction and return memory ID."""
+        """Store memory content with LLM-based extraction, memory fusion, and return memory ID."""
         self.logger.info("Storing memory for user: %s, content length: %d", user_id, len(content))
-        
         # Extract structured memories from content
         extracted_memories = await self.llm_service.extract_memories_from_content(content)
 
-        # Prepare vectors for batch storage
-        vectors = []
+        if not extracted_memories.memories:
+            self.logger.info("No structured memories extracted, nothing stored for user %s", user_id)
+            return ""  # Return empty string when no memories extracted
 
-        # Process extracted memories
+        self.logger.debug(f"extracted_memories: {extracted_memories}")
+
+        # Collect all related memories for all extracted memories
+        all_related_memories = []
+        related_memory_ids = set()
+
+        # Prepare all queries first (similar to local memory approach)
+        query_data = []
         for memory_piece in extracted_memories.memories:
+            query_data.append(memory_piece.content)
+
+        # Process queries for related memories (Upstash requires individual queries)
+        try:
+            for query_idx, query_content in enumerate(query_data):
+                # Query for related memories (max 2 per memory piece)
+                results = self.index.query(
+                    data=query_content,
+                    top_k=2,  # Max 2 related memories per query
+                    filter=f"user_id = '{user_id}'",
+                    include_vectors=False,
+                    include_metadata=True,
+                    include_data=True
+                )
+
+                # Extract related memories with their IDs for this query
+                for result in results:
+                    if result.id not in related_memory_ids:
+                        related_memory_ids.add(result.id)
+                        related_memory = {
+                            "id": result.id,
+                            "content": result.data if hasattr(result, 'data') else "",
+                            "metadata": result.metadata,
+                            "distance": getattr(result, 'score', 0.0)  # Use score as distance equivalent
+                        }
+                        all_related_memories.append(related_memory)
+
+        except Exception as e:
+            self.logger.error("Error during batch memory query: %s", str(e))
+            # Continue without related memories
+
+        self.logger.debug(f"all_related_memories: {all_related_memories}")
+
+        # Merge all extracted memories with all related memories using LLM (single call)
+        try:
+            merged_result = await self.llm_service.merge_memories(
+                extracted_memories=extracted_memories,
+                related_memories=all_related_memories
+            )
+            final_memories_to_store = merged_result.memories
+        except Exception as e:
+            self.logger.error("Error during memory fusion: %s", str(e))
+            # Fallback: store the original extracted memories without fusion
+            final_memories_to_store = extracted_memories.memories
+
+        # Prepare vectors for batch storage of final merged memories
+        vectors = []
+        memory_ids = []
+
+        self.logger.debug(f"final_memories_to_store: {final_memories_to_store}")
+
+        for memory_piece in final_memories_to_store:
             memory_id = str(uuid.uuid4())
             metadata = self._create_base_metadata(user_id, memory_piece.type.value)
             
@@ -153,19 +212,23 @@ class MemoryStorageUpstash(MemoryStorageBase):
                 metadata=metadata
             )
             vectors.append(vector)
+            memory_ids.append(memory_id)
 
-        # If no memories were extracted, do not store anything
-        if not vectors:
-            self.logger.debug("No structured memories extracted, nothing stored for user %s", user_id)
-            return ""  # Return empty string when no memories extracted
-
-        # Batch store all memories
+        # Batch store all final memories
         try:
             self.index.upsert(vectors=vectors)
-            memory_ids = [v.id for v in vectors]
             
-            log_msg = f"Stored {len(memory_ids)} {'extracted memory pieces' if len(memory_ids) > 1 else 'memory piece'} for user {user_id}"
-            self.logger.debug(log_msg)
+            # Delete old related memories after storing new merged ones
+            if related_memory_ids:
+                try:
+                    await self.delete(list(related_memory_ids))
+                    self.logger.info("Deleted %d old memories that were merged", len(related_memory_ids))
+                    self.logger.info("Deleted memory IDs: %s", list(related_memory_ids))
+                except Exception as e:
+                    self.logger.error("Error deleting old memories: %s", str(e))
+
+            log_msg = f"Stored {len(memory_ids)} {'merged memory pieces' if len(memory_ids) > 1 else 'memory piece'} for user {user_id} (deleted {len(related_memory_ids)} old memories)"
+            self.logger.info(log_msg)
 
             return memory_ids[0] if len(memory_ids) == 1 else str(memory_ids)
             
@@ -335,6 +398,10 @@ class MemoryStorageUpstash(MemoryStorageBase):
         except Exception as e:
             self.logger.error("Error clearing memories for user %s: %s", user_id, str(e))
             raise
+
+    async def delete(self,memory_ids: List[str]):
+        """Delete memories by their IDs."""
+        self.index.delete(ids = memory_ids)
 
     async def close(self) -> None:
         """Close Redis connection and cleanup resources."""

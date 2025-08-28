@@ -45,3 +45,8 @@ class MemoryStorageBase(ABC):
     async def clear(self, user_id: str) -> None:
         """Clear all memories for a user."""
         pass
+
+    @abstractmethod
+    async def delete(self,memory_ids: List[str]):
+        """Delete memories by their IDs."""
+        pass
