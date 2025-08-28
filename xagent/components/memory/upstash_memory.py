@@ -208,7 +208,7 @@ class MemoryStorageUpstash(MemoryStorageBase):
                 # Use Upstash Vector's metadata filtering to only get vectors for this user
                 results = self.index.query(
                     data=query_text,
-                    top_k=min(limit, 20),
+                    top_k=min(limit * 2, 20),
                     filter=f"user_id = '{user_id}'",  # Use Upstash metadata filtering
                     include_vectors=False,
                     include_metadata=True,

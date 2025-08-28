@@ -200,7 +200,7 @@ class MemoryStorageLocal(MemoryStorageBase):
             # Use ChromaDB's batch query capability
             results = self.collection.query(
                 query_texts=query_texts,
-                n_results=min(limit, 20), 
+                n_results=min(limit * 2, 20), 
                 where={"user_id": user_id},
                 include=["documents", "metadatas", "distances"]
             )
