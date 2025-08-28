@@ -2,15 +2,43 @@
 import logging
 import os
 from typing import Dict, Final, List, Optional, Union
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, parse_qs, urlunparse, urlencode
 
 # Third-party imports
 import redis.asyncio as redis
+from redis.asyncio.cluster import RedisCluster
 from redis.exceptions import RedisError
 
 # Local imports
 from .base_messages import MessageStorageBase
 from ...schemas import Message,MessageType
+
+
+def _strip_query_param(url: str, key: str) -> str:
+    """Strip a specific query parameter from a URL."""
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    qs.pop(key, None)
+    new_query = urlencode([(k, v) for k, vs in qs.items() for v in vs])
+    return urlunparse(parsed._replace(query=new_query))
+
+
+def _looks_like_cluster(redis_url: str) -> bool:
+    """Check if the Redis URL indicates cluster mode."""
+    p = urlparse(redis_url)
+    if p.scheme in ("redis+cluster", "rediss+cluster"):
+        return True
+    qs = parse_qs(p.query)
+    flag = (qs.get("cluster", ["false"])[0] or "").lower()
+    return flag in ("1", "true", "yes")
+
+
+def create_redis_client(redis_url: str, **common_kwargs):
+    """Create Redis client supporting both standalone and cluster modes."""
+    if _looks_like_cluster(redis_url):
+        return RedisCluster.from_url(_strip_query_param(redis_url, "cluster"), **common_kwargs)
+    else:
+        return redis.Redis.from_url(redis_url, **common_kwargs)
 
 
 class MessageStorageRedisConfig:
@@ -88,7 +116,7 @@ class MessageStorageRedis(MessageStorageBase):
             blocking the constructor with network operations.
         """
         self.redis_url = self._get_redis_url(redis_url)
-        self.r: Optional[redis.Redis] = None
+        self.r: Optional[Union[redis.Redis, RedisCluster]] = None
         self.sanitize_keys = sanitize_keys
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
     
@@ -102,12 +130,12 @@ class MessageStorageRedis(MessageStorageBase):
             )
         return url
 
-    async def _get_client(self) -> redis.Redis:
+    async def _get_client(self) -> Union[redis.Redis, RedisCluster]:
         """
         Get or create async Redis client with optimized configuration.
         
         Returns:
-            Configured Redis client instance with connection pooling and health checks
+            Configured Redis client instance (standalone or cluster) with connection pooling and health checks
             
         Raises:
             RedisError: If Redis connection fails during initial health check
@@ -115,16 +143,16 @@ class MessageStorageRedis(MessageStorageBase):
         Note:
             The client is cached and reused across method calls. Connection
             parameters are optimized for stability and performance.
+            Supports both standalone Redis and Redis Cluster modes.
         """
         if self.r is None:
             self.r = await self._create_redis_client()
             await self._validate_connection()
         return self.r
     
-    async def _create_redis_client(self) -> redis.Redis:
-        """Create and configure Redis client with optimal settings."""
-        return redis.Redis.from_url(
-            self.redis_url,
+    async def _create_redis_client(self) -> Union[redis.Redis, RedisCluster]:
+        """Create and configure Redis client with optimal settings and cluster support."""
+        common_kwargs = dict(
             decode_responses=True,
             health_check_interval=MessageStorageRedisConfig.HEALTH_CHECK_INTERVAL,
             socket_connect_timeout=MessageStorageRedisConfig.SOCKET_CONNECT_TIMEOUT,
@@ -132,6 +160,8 @@ class MessageStorageRedis(MessageStorageBase):
             retry_on_timeout=True,
             client_name=MessageStorageRedisConfig.CLIENT_NAME,
         )
+        
+        return create_redis_client(self.redis_url, **common_kwargs)
     
     async def _validate_connection(self) -> None:
         """Validate Redis connection with initial ping."""
