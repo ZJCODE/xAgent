@@ -132,10 +132,10 @@ class RedisMessagesForMemory:
                 
                 await pipe.execute()
             
-            self.logger.debug("Added %d messages for user %s", len(messages), user_id)
+            self.logger.info("Added %d messages for user %s", len(messages), user_id)
             
         except RedisError as e:
-            self.logger.error("Failed to add messages for user %s: %s", user_id, e)
+            self.logger.info("Failed to add messages for user %s: %s", user_id, e)
             raise
     
     async def get_messages(self, user_id: str) -> List[Dict[str, Any]]:
