@@ -20,6 +20,7 @@ Also includes advanced features like multi-agent workflows even with **intellige
 - [🌐 Web Interface](#-web-interface)
 - [💻 Command Line Interface](#-command-line-interface)
 - [🤖 Python API](#-python-api)
+- [🧠 Memory System](#-memory-system)
 - [🔄 Multi-Agent Workflows](#-multi-agent-workflows)
 - [📚 Documentation](#-documentation)
 - [🤝 Contributing](#-contributing)
@@ -28,7 +29,6 @@ Also includes advanced features like multi-agent workflows even with **intellige
 
 ## Roadmap
 
-- [ ] Add Memory Support 🚀
 - [ ] Add Voice Support
 - [ ] Workflow Add Service Support
 
@@ -645,6 +645,48 @@ you can implement your own message storage by inheriting from `MessageStorageBas
 
 For detailed guidance, see the [Message Storage Inheritance](docs/message_storage_inheritance.md) documentation.
 
+### Long-term Memory
+
+```python
+import asyncio
+from xagent.core import Agent
+from xagent.components.memory import MemoryStorageLocal
+
+async def memory_example():
+    # Create agent with long-term memory
+    memory_storage = MemoryStorageLocal(
+        collection_name="user_memories", 
+        memory_threshold=5  # Store memories after 5 messages
+    )
+    
+    agent = Agent(
+        name="memory_assistant",
+        system_prompt="You are a helpful assistant with excellent memory.",
+        memory_storage=memory_storage
+    )
+    
+    # First conversation - store user information
+    response1 = await agent.chat(
+        user_message="Hi, I'm Alice. I work as a product manager at Apple and I love Italian food.",
+        user_id="alice_123",
+        session_id="intro",
+        enable_memory=True
+    )
+    print("First response:", response1)
+    
+    # Later conversation - agent remembers Alice's details
+    response2 = await agent.chat(
+        user_message="Can you recommend a good restaurant for lunch?",
+        user_id="alice_123", 
+        session_id="restaurant_request",
+        enable_memory=True
+    )
+    print("Memory-enhanced response:", response2)
+    # Agent will remember Alice's preference for Italian food
+
+asyncio.run(memory_example())
+```
+
 ### HTTP Server with Agent Instance
 
 Launch an HTTP server by directly passing a pre-configured Agent instance:
@@ -673,6 +715,97 @@ server.run(host="0.0.0.0", port=8010)
 #   -H "Content-Type: application/json" \
 #   -d '{"user_id": "user123", "session_id": "session456", "user_message": "Hello!"}'
 ```
+
+## 🧠 Memory System
+
+xAgent includes a powerful memory system that enables agents to store, recall, and utilize long-term memories across conversations. The memory system automatically extracts and stores important information from conversations, allowing agents to maintain context and personalize responses over time.
+
+### Quick Start with Memory
+
+```python
+import asyncio
+from xagent.core import Agent
+
+async def main():
+    # Create agent with memory enabled
+    agent = Agent(
+        name="memory_assistant",
+        system_prompt="You are a helpful assistant with long-term memory."
+    )
+    
+    # Chat with memory enabled
+    response = await agent.chat(
+        user_message="Hi, I'm John. I work as a software engineer at Google and live in San Francisco.",
+        user_id="john_123",
+        session_id="session_1",
+        enable_memory=True  # Enable memory for this conversation
+    )
+    print(response)
+    
+    # In a later conversation, the agent will remember John's details
+    response = await agent.chat(
+        user_message="What do you know about me?",
+        user_id="john_123", 
+        session_id="session_2",
+        enable_memory=True
+    )
+    print(response)  # Agent will recall John's job and location
+
+asyncio.run(main())
+```
+
+### Memory Storage Options
+
+xAgent supports multiple memory storage backends:
+
+- **Local Memory (ChromaDB)**: Default option, stores data locally
+- **Upstash Vector**: Cloud-based vector storage for production
+
+```python
+from xagent.components.memory import MemoryStorageLocal, MemoryStorageUpstash
+
+# Local ChromaDB storage
+local_memory = MemoryStorageLocal(
+    collection_name="my_agent_memory",
+    memory_threshold=10,  # Store after 10 messages or automatically trigger
+    keep_recent=2  # Keep 2 recent messages after storage
+)
+
+# Upstash Vector storage (requires UPSTASH_VECTOR_* env vars)
+upstash_memory = MemoryStorageUpstash(
+    memory_threshold=10,
+    keep_recent=2
+)
+
+# Use with agent
+agent = Agent(
+    name="assistant",
+    memory_storage=local_memory  # or upstash_memory
+)
+```
+
+### Environment Variables for Memory
+
+For Upstash Vector storage, set these environment variables:
+
+```bash
+# Upstash Vector Database
+UPSTASH_VECTOR_REST_URL=your_upstash_vector_url
+UPSTASH_VECTOR_REST_TOKEN=your_upstash_vector_token
+
+# Redis for temporary message storage (with Upstash)
+REDIS_URL=your_redis_url
+```
+
+**Key Features:**
+- ✅ Automatic memory extraction from conversations
+- ✅ Semantic search and retrieval 
+- ✅ Multiple storage backends (Local ChromaDB, Upstash Vector)
+- ✅ Configurable memory thresholds
+- ✅ LLM-powered memory processing
+- ✅ User-isolated memory storage
+
+For detailed memory system documentation, see [Memory Documentation](docs/memory.md).
 
 
 ## 🔄 Multi-Agent Workflows
@@ -957,6 +1090,7 @@ For detailed workflow patterns and examples, see [Multi-Agent Workflows](docs/wo
 ### Core Documentation
 - [Configuration Reference](docs/configuration_reference.md) - Complete YAML configuration guide and examples
 - [API Reference](docs/api_reference.md) - Complete API documentation and parameter reference
+- [Memory System](docs/memory.md) - Long-term memory capabilities and storage backends
 - [Multi-Agent Workflows](docs/workflows.md) - Workflow patterns and orchestration examples
 - [Workflow DSL](docs/workflow_dsl.md) - Domain-specific language for defining agent dependencies
 
