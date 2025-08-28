@@ -144,30 +144,97 @@ class MemoryStorageLocal(MemoryStorageBase):
     async def store(self, 
               user_id: str, 
               content: str) -> str:
-        """Store memory content with LLM-based extraction and return memory ID."""
+        """Store memory content with LLM-based extraction, memory fusion, and return memory ID."""
         self.logger.info("Storing memory for user: %s, content length: %d", user_id, len(content))
         # Extract structured memories from content
         extracted_memories = await self.llm_service.extract_memories_from_content(content)
 
-        # Prepare data for batch storage
+        if not extracted_memories.memories:
+            self.logger.info("No structured memories extracted, nothing stored for user %s", user_id)
+            return ""  # Return empty string when no memories extracted
+
+        self.logger.info(f"extracted_memories: {extracted_memories}")
+
+        # Collect all related memories for all extracted memories
+        all_related_memories = []
+        related_memory_ids = set()
+
+        # Prepare query texts for batch query
+        query_texts = []
+        for memory_piece in extracted_memories.memories:
+            query_texts.append(memory_piece.content)
+
+        # Query for related memories in batch (max 2 per memory piece)
+        try:
+            related_results = self.collection.query(
+                query_texts=query_texts,
+                n_results=2,  # Max 2 related memories per query
+                where={"user_id": user_id},
+                include=["documents", "metadatas", "distances"]
+            )
+
+            if related_results.get("documents"):
+                # Process results from all queries
+                for query_idx, (ids, docs, metas, distances) in enumerate(zip(
+                    related_results["ids"],
+                    related_results["documents"], 
+                    related_results["metadatas"], 
+                    related_results["distances"]
+                )):
+                    # Extract related memories with their IDs for this query
+                    for doc_id, content_rel, metadata, distance in zip(ids, docs, metas, distances):
+                        if doc_id not in related_memory_ids:
+                            related_memory_ids.add(doc_id)
+                            related_memory = {
+                                "id": doc_id,
+                                "content": content_rel,
+                                "metadata": metadata,
+                                "distance": distance
+                            }
+                            all_related_memories.append(related_memory)
+
+        except Exception as e:
+            self.logger.error("Error during batch memory query: %s", str(e))
+            # Continue without related memories
+
+        self.logger.info(f"all_related_memories: {all_related_memories}")
+
+        # Merge all extracted memories with all related memories using LLM (single call)
+        try:
+            merged_result = await self.llm_service.merge_memories(
+                extracted_memories=extracted_memories,
+                related_memories=all_related_memories
+            )
+            final_memories_to_store = merged_result.memories
+        except Exception as e:
+            self.logger.error("Error during memory fusion: %s", str(e))
+            # Fallback: store the original extracted memories without fusion
+            final_memories_to_store = extracted_memories.memories
+
+        # Prepare data for batch storage of final merged memories
         documents = []
         metadatas = []
 
-        # Process extracted memories
-        for memory_piece in extracted_memories.memories:
+        self.logger.info(f"final_memories_to_store: {final_memories_to_store}")
+
+        for memory_piece in final_memories_to_store:
             documents.append(memory_piece.content)
             metadatas.append(self._create_base_metadata(user_id, memory_piece.type.value))
 
-        # If no memories were extracted, do not store anything
-        if not documents:
-            self.logger.debug("No structured memories extracted, nothing stored for user %s", user_id)
-            return ""  # Return empty string when no memories extracted
-
-        # Batch store all memories
+        # Batch store all final memories
         memory_ids = self._batch_store_memories(documents, metadatas)
 
-        log_msg = f"Stored {len(memory_ids)} {'extracted memory pieces' if len(memory_ids) > 1 else 'memory piece'} for user {user_id}"
-        self.logger.debug(log_msg)
+        # Delete old related memories after storing new merged ones
+        if related_memory_ids:
+            try:
+                await self.delete(list(related_memory_ids))
+                self.logger.info("Deleted %d old memories that were merged", len(related_memory_ids))
+                self.logger.info("Deleted memory IDs: %s", list(related_memory_ids))
+            except Exception as e:
+                self.logger.error("Error deleting old memories: %s", str(e))
+
+        log_msg = f"Stored {len(memory_ids)} {'merged memory pieces' if len(memory_ids) > 1 else 'memory piece'} for user {user_id} (deleted {len(related_memory_ids)} old memories)"
+        self.logger.info(log_msg)
 
         return memory_ids[0] if len(memory_ids) == 1 else str(memory_ids)
     
@@ -304,6 +371,11 @@ class MemoryStorageLocal(MemoryStorageBase):
     async def clear(self, user_id: str) -> None:
         """Clear all memories for a user."""
         self.collection.delete(where={"user_id": user_id})
+
+
+    async def delete(self,memory_ids: List[str]):
+        """Delete memories by their IDs."""
+        self.collection.delete(ids = memory_ids)
 
 
     async def extract_meta(self, user_id: str, days: int = 1) -> List[str]:

@@ -12,8 +12,8 @@ agent:
     mcp_servers:
       - "http://localhost:8001/mcp/"  # Example MCP server
       
-  message_storage: "redis"  # Use Redis for message storage currently supported  local or redis
-  memory_storage: "upstash"  # Use Upstash for memory storage currently supported local or upstash
+  message_storage: "local"  # Use Redis for message storage currently supported  local or redis
+  memory_storage: "local"  # Use Upstash for memory storage currently supported local or upstash
   
 server:
   host: "0.0.0.0"

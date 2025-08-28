@@ -321,3 +321,152 @@ Task: Extract keywords and rewrite query if it needs completion based on convers
                 rewritten_queries=[],
                 keywords=[]
             )
+
+    @observe()
+    async def merge_memories(self, extracted_memories: 'MemoryExtraction', related_memories: List[Dict[str, Any]]) -> MemoryExtraction:
+        """Merge extracted memories with related existing memories using LLM.
+        
+        Args:
+            extracted_memories: MemoryExtraction object containing new memories to merge
+            related_memories: List of related existing memories for all extracted memories
+            
+        Returns:
+            MemoryExtraction object containing the merged/updated memories
+        """
+        self.logger.debug("Merging %d extracted memories with %d related memories", 
+                         len(extracted_memories.memories), len(related_memories))
+        
+        if not extracted_memories.memories:
+            # No extracted memories, return empty
+            return MemoryExtraction(memories=[])
+        
+        if not related_memories:
+            # No related memories, return extracted memories as-is
+            return extracted_memories
+        
+        # Get current date for context
+        from datetime import datetime
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        
+        # Format extracted memories for LLM
+        extracted_memory_list = []
+        for i, memory_piece in enumerate(extracted_memories.memories):
+            extracted_memory_list.append(f"Memory {i+1}:\nType: {memory_piece.type.value}\nContent: {memory_piece.content}")
+        
+        extracted_memories_text = "\n\n".join(extracted_memory_list)
+        
+        # Format related memories for LLM
+        related_memory_list = []
+        for i, memory in enumerate(related_memories):
+            content = memory.get("content", "")
+            metadata = memory.get("metadata", {})
+            memory_type = metadata.get("memory_type", "unknown")
+            created_at = metadata.get("created_at", "unknown")
+            related_memory_list.append(f"Type: {memory_type}\nCreated: {created_at}\nContent: {content}")
+        
+        related_memories_text = "\n\n".join(related_memory_list)
+        
+        system_prompt = f"""You are an expert memory fusion system. Your task is to intelligently merge a new memory with related existing memories.
+
+CURRENT DATE: {current_date}
+
+**CRITICAL PRINCIPLE**: Be HIGHLY SELECTIVE and maintain FOCUSED, SPECIFIC memories. Avoid creating overly long or mixed-topic memories.
+
+**CORE PRINCIPLES**:
+1. **PRESERVE VALUABLE INFORMATION**: Never lose important details from either new or existing memories
+2. **ELIMINATE REDUNDANCY**: Merge similar or overlapping information efficiently
+3. **MAINTAIN ACCURACY**: Ensure temporal accuracy and factual consistency
+4. **RESOLVE CONFLICTS**: When contradictory information exists, prioritize newer information
+5. **KEEP MEMORIES FOCUSED**: Each memory should focus on ONE specific topic or closely related preferences
+6. **AVOID INFORMATION OVERLOAD**: Don't combine unrelated preferences into one memory piece
+
+**MEMORY QUALITY STANDARDS**:
+- **FOCUSED**: Each memory should cover ONE specific aspect (e.g., food preferences, exercise habits, communication style)
+- **CONCISE**: Keep memories brief and to the point, not paragraph-long combinations
+- **SPECIFIC**: Focus on specific preferences, habits, or activities rather than general statements
+- **SEPARABLE**: If information can be logically separated into different topics, create separate memories
+
+**MERGE STRATEGIES**:
+
+**FOR PROFILE MEMORIES**:
+- **TOPIC-SPECIFIC MERGING**: Only merge memories about the SAME specific topic
+  - Food preferences: "User is vegetarian" + "User likes Italian food" → "User is vegetarian and prefers Italian food"
+  - Exercise: "User exercises daily" + "User prefers morning workouts" → "User exercises daily, preferring morning workouts"
+  - Communication: "User likes warm conversations" + "User prefers gentle communication" → "User prefers warm and gentle communication"
+- **SEPARATE DIFFERENT TOPICS**: Keep different preference categories as separate memories
+  - DON'T merge: "User likes reading" + "User doesn't like fishing" + "User enjoys sunny weather" → Create 3 separate memories
+- **RESOLVE CONFLICTS**: When memories contradict each other on the SAME topic, use newer information
+- **AVOID MIXING**: Don't create memories that mix communication preferences, activity preferences, and weather preferences
+
+**FOR EPISODIC MEMORIES**:
+- **SAME EVENT/TIME**: Only merge activities that happened at the same time or are part of the same event
+- **SEPARATE EVENTS**: Keep different activities/events as separate memories even if they happened on the same day
+- **TEMPORAL ACCURACY**: Preserve specific dates and times
+
+**SEPARATION CRITERIA** - Create SEPARATE memories when topics are:
+- Different activity categories (reading vs hiking vs fishing)
+- Different preference types (food vs weather vs communication)
+- Different time periods or events
+- Unrelated personal characteristics
+
+**CONFLICT RESOLUTION RULES**:
+1. **DIRECT CONTRADICTIONS**: When memories directly contradict on the SAME topic, ONLY keep the newer information
+2. **PREFERENCE UPDATES**: Treat newer preferences as updates that replace older conflicting ones
+3. **TEMPORAL PRIORITY**: More recent information takes precedence over older information
+4. **NO CONTRADICTION PRESERVATION**: Never output memories that contain contradictory statements about the same topic
+
+**OUTPUT REQUIREMENTS**:
+- Each memory must be focused on ONE specific topic or closely related aspects
+- Keep memories concise and specific
+- Preserve temporal information (dates, times) accurately
+- Maintain the user's original language
+- Use appropriate memory type (PROFILE/EPISODIC)
+- **NEVER mix unrelated topics in the same memory piece**
+- **PREFER multiple focused memories over one comprehensive memory**
+
+**LANGUAGE**: Maintain the user's original language throughout the merge process."""
+
+        user_prompt = f"""Merge these extracted memories with the related existing memories:
+
+EXTRACTED MEMORIES TO PROCESS:
+{extracted_memories_text}
+
+RELATED EXISTING MEMORIES:
+{related_memories_text}
+
+**CRITICAL INSTRUCTIONS**:
+1. If there are CONTRADICTIONS (like "user likes X" vs "user doesn't like X"), prioritize the EXTRACTED memories and discard conflicting information from existing memories
+2. **KEEP MEMORIES FOCUSED**: Create separate, topic-specific memories rather than mixing unrelated information
+3. **AVOID LONG COMBINATIONS**: Don't create paragraph-long memories that mix communication style + activity preferences + weather preferences
+4. **SEPARATE BY TOPIC**: If information covers different topics (e.g., reading, fishing, weather, communication), create separate memories for each topic
+5. **MERGE SIMILAR TOPICS**: If extracted memories and existing memories cover the same topic, merge them intelligently
+6. **PRESERVE ALL VALUE**: Don't lose any valuable information from either extracted or existing memories
+
+**EXAMPLES OF GOOD SEPARATION**:
+- Instead of: "User is willing to share feelings and favorite things with assistant, likes warm and kind communication. User doesn't like fishing, likes to feel warm and relaxed on sunny days, tends to enjoy nature and good times, especially sunny weather. User likes reading and hiking."
+- Create: 
+  * "User is willing to share feelings with assistant and likes warm, kind communication"
+  * "User doesn't like fishing"
+  * "User likes reading and hiking"
+  * "User enjoys sunny weather and tends to appreciate nature and good times"
+
+Analyze relationships between extracted and existing memories, then create the optimal set of FOCUSED, SPECIFIC memories that preserve all valuable information while keeping each memory topic-specific."""
+
+        try:
+            response = await self.openai_client.responses.parse(
+                model=self.model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                text_format=MemoryExtraction,
+                temperature=0.3
+            )
+            
+            merged = response.output_parsed
+            self.logger.debug("Successfully merged memories into %d final memories", len(merged.memories))
+            return merged
+        except Exception as e:
+            self.logger.error("Error merging memories: %s", str(e))
+            # Fallback: return extracted memories as-is
+            return extracted_memories
