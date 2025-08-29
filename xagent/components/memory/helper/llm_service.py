@@ -44,7 +44,14 @@ CURRENT DATE: {current_date}
 
 Use this date to properly contextualize time references in the conversation (e.g., "tonight", "tomorrow", "yesterday").
 
-**CRITICAL PRINCIPLE**: Be HIGHLY SELECTIVE. Only extract information that is genuinely important for future interactions with this specific user.
+**CRITICAL PRINCIPLE**: Be HIGHLY SELECTIVE. Only extract information that is genuinely important for future interactions.
+
+**MULTI-USER HANDLING**: 
+- If the conversation involves multiple users, CLEARLY IDENTIFY each user in the extracted memories
+- Use identifiers like "User A", "User B", specific names, or roles mentioned in the conversation
+- NEVER mix information from different users in the same memory piece
+- Each memory should be attributed to a specific user when multiple users are present
+- If user identity is unclear, use descriptive identifiers based on conversation context
 
 **LANGUAGE REQUIREMENT**: Extract and store memories in the user's original language.
 
@@ -58,6 +65,7 @@ EXTRACT IMPORTANT INFORMATION FROM THE CONVERSATION:
    - Regular activities or schedules revealed
    - Skills, expertise, or professional information shared
    - Personal relationships or family information mentioned
+   - **MULTI-USER FORMAT**: "User [identifier] [information]" - e.g., "User Alice exercises every morning at 7:00 AM"
 
 2. **EPISODIC**: Extract significant activities, plans, or events from the conversation
    - Specific plans or activities mentioned for today/tonight/specific times
@@ -69,40 +77,53 @@ EXTRACT IMPORTANT INFORMATION FROM THE CONVERSATION:
    - **DATE & TIME FORMAT**: If the activity/plan involves a specific date or time, include both in the content:
      * Date: YYYY-MM-DD format
      * Time: Include specific times like "8:00 PM", "tonight", "morning", etc.
-     * Example: "User plans to exercise at 8:00 PM on 2025-08-25" or "User has dinner tonight on 2025-08-25"
+     * Example: "User Alice plans to exercise at 8:00 PM on 2025-08-25" or "User Bob has dinner tonight on 2025-08-25"
+   - **MULTI-USER FORMAT**: Always include user identifier - e.g., "User Alice has meeting at 3:00 PM on 2025-08-26"
 
 **CONTEXT INTEGRATION**: 
 - Use the full conversation to understand context, timing, and relationships between different pieces of information
 - Extract temporal context from the conversation flow to make information more meaningful
 - Connect related information mentioned across different parts of the conversation
 - **IMPORTANT**: For EPISODIC memories involving dates or times, always include the specific date in YYYY-MM-DD format and preserve any time information in the content
+- **USER DISTINCTION**: Carefully track which user mentioned what information throughout the conversation
 
 **EXTRACTION CRITERIA**:
 - FOCUS: User messages that reveal personal information, preferences, plans, or important activities
 - IGNORE: Assistant responses unless they contain user-confirmed information
 - IGNORE: Casual mentions that don't reveal patterns or preferences
-- EXTRACT: Information that would help personalize future interactions
-- EXTRACT: Plans, activities, and commitments that show user's lifestyle and priorities
-- EXTRACT: Personal context that affects how the user prefers to interact
+- EXTRACT: Information that would help personalize future interactions with each specific user
+- EXTRACT: Plans, activities, and commitments that show each user's lifestyle and priorities
+- EXTRACT: Personal context that affects how each user prefers to interact
 
 **EXAMPLES**:
-- If user mentions "I exercise every morning at 7 AM", extract: "User exercises every morning at 7:00 AM" (PROFILE)
-- If user says "I have a meeting tomorrow at 3:00 PM", extract: "User has meeting at 3:00 PM on 2025-08-26" (EPISODIC)
-- If user mentions "I'm vegetarian and prefer Italian food", extract: "User is vegetarian and prefers Italian food" (PROFILE)
-- If user says "I work as a software engineer", extract: "User works as a software engineer" (PROFILE)
-- For date and time-specific activities, always include both: "User has appointment at 10:00 AM on 2025-08-30" not "User has appointment next week"
+- Single user: "User exercises every morning at 7:00 AM" (PROFILE)
+- Multiple users: "User Alice exercises every morning at 7:00 AM" (PROFILE)
+- Single user: "User has meeting at 3:00 PM on 2025-08-26" (EPISODIC)
+- Multiple users: "User Bob has meeting at 3:00 PM on 2025-08-26" (EPISODIC)
+- Multiple users with names: "John is vegetarian and prefers Italian food" (PROFILE)
+- Multiple users with roles: "Manager Sarah prefers email communication" (PROFILE)
 
 **QUALITY OVER QUANTITY**: 
 - Better to extract NOTHING than to extract trivial information
 - Focus on information that reveals user's habits, preferences, important activities, or personal context
-- Prioritize information that would improve future personalized interactions"""
+- Prioritize information that would improve future personalized interactions with each specific user
+- Ensure each memory is clearly attributed to the correct user when multiple users are involved"""
 
         user_prompt = f"""Analyze the conversation below and extract truly important information that should be remembered for future interactions.
+
+**MULTI-USER ANALYSIS INSTRUCTIONS**:
+1. First, determine if this conversation involves one user or multiple users
+2. If multiple users are involved, identify each user by:
+   - Names mentioned in the conversation
+   - Roles or titles mentioned (e.g., "manager", "client", "team lead")
+   - Distinctive identifiers (e.g., "User A", "User B" if names are unclear)
+3. For each extracted memory, CLEARLY attribute it to the specific user
+4. NEVER combine information from different users into the same memory piece
 
 Conversation:
 {content}
 
-Extract meaningful memories from the conversation that reveal the user's preferences, habits, plans, and important personal context. All extracted memories must be in the user's original language as used in the conversation."""
+Extract meaningful memories from the conversation that reveal each user's preferences, habits, plans, and important personal context. All extracted memories must be in the user's original language as used in the conversation and clearly attributed to the correct user when multiple users are present."""
 
         try:
             response = await self.openai_client.responses.parse(

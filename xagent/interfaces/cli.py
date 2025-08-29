@@ -46,7 +46,7 @@ class AgentCLI(BaseAgentRunner):
         # Store config_path for CLI-specific functionality
         self.config_path = config_path if config_path and os.path.isfile(config_path) else None
         
-    async def chat_interactive(self, user_id: str = None, session_id: str = None, stream: bool = None, enable_memory: bool = False):
+    async def chat_interactive(self, user_id: str = None, session_id: str = None, stream: bool = None, memory: bool = False, shared: bool = False):
         """
         Start an interactive chat session.
         
@@ -54,7 +54,8 @@ class AgentCLI(BaseAgentRunner):
             user_id: User ID for the session
             session_id: Session ID for the chat
             stream: Enable streaming response (default: True, but False when verbose mode is enabled)
-            enable_memory: Whether to enable memory storage and retrieval (default: False)
+            memory: Whether to enable memory storage and retrieval (default: False)
+            shared: Whether to enable the agent can share current chat with other user or agent (default: False)
         """
         # If stream is not explicitly set, determine based on verbose mode
         if stream is None:
@@ -95,6 +96,8 @@ class AgentCLI(BaseAgentRunner):
         status_indicators = []
         status_indicators.append(f"{'🟢' if verbose_mode else '🔇'} Verbose: {'On' if verbose_mode else 'Off'}")
         status_indicators.append(f"{'🌊' if stream else '📄'} Stream: {'On' if stream else 'Off'}")
+        status_indicators.append(f"{'�' if memory else '🚫'} Memory: {'On' if memory else 'Off'}")
+        status_indicators.append(f"{'�🤝' if shared else '🔒'} Shared: {'On' if shared else 'Off'}")
         print(f"⚙️  Status: {' | '.join(status_indicators)}")
         
         # Performance tip
@@ -109,6 +112,8 @@ class AgentCLI(BaseAgentRunner):
         print("  • Use 'exit', 'quit', or 'bye' to end session")
         print("  • Use 'clear' to reset conversation history")
         print("  • Use 'stream on/off' to toggle response streaming")
+        print("  • Use 'memory on/off' to toggle memory storage")
+        print("  • Use 'shared on/off' to toggle shared mode")
         print("─" * 60)
         
         while True:
@@ -142,6 +147,36 @@ class AgentCLI(BaseAgentRunner):
                     else:
                         print("⚠️  Usage: stream on/off")
                     continue
+                elif user_input.lower().startswith('memory '):
+                    # Handle memory toggle command
+                    memory_cmd = user_input.lower().split()
+                    if len(memory_cmd) == 2:
+                        if memory_cmd[1] == 'on':
+                            memory = True
+                            print("🧠 ✨ Memory mode enabled.")
+                        elif memory_cmd[1] == 'off':
+                            memory = False
+                            print("🚫 ✨ Memory mode disabled.")
+                        else:
+                            print("⚠️  Usage: memory on/off")
+                    else:
+                        print("⚠️  Usage: memory on/off")
+                    continue
+                elif user_input.lower().startswith('shared '):
+                    # Handle shared toggle command
+                    shared_cmd = user_input.lower().split()
+                    if len(shared_cmd) == 2:
+                        if shared_cmd[1] == 'on':
+                            shared = True
+                            print("🤝 ✨ Shared mode enabled.")
+                        elif shared_cmd[1] == 'off':
+                            shared = False
+                            print("🔒 ✨ Shared mode disabled.")
+                        else:
+                            print("⚠️  Usage: shared on/off")
+                    else:
+                        print("⚠️  Usage: shared on/off")
+                    continue
                 elif user_input.lower() == 'help':
                     self._show_help()
                     continue
@@ -157,7 +192,8 @@ class AgentCLI(BaseAgentRunner):
                         user_id=user_id,
                         session_id=session_id,
                         stream=True,
-                        enable_memory=enable_memory
+                        enable_memory=memory,
+                        shared=shared
                     )
                     
                     # Check if response is a generator (streaming) or a string
@@ -182,7 +218,8 @@ class AgentCLI(BaseAgentRunner):
                         user_id=user_id,
                         session_id=session_id,
                         stream=False,
-                        enable_memory=enable_memory
+                        enable_memory=memory,
+                        shared=shared
                     )
                     print(str(response))
                 
@@ -199,7 +236,7 @@ class AgentCLI(BaseAgentRunner):
                     print("🔍 Debug trace:")
                     traceback.print_exc()
     
-    async def chat_single(self, message: str, user_id: str = None, session_id: str = None, enable_memory: bool = False):
+    async def chat_single(self, message: str, user_id: str = None, session_id: str = None, memory: bool = False, shared: bool = False):
         """
         Process a single message and return the response.
         
@@ -207,7 +244,8 @@ class AgentCLI(BaseAgentRunner):
             message: The message to process
             user_id: User ID for the session
             session_id: Session ID for the chat
-            enable_memory: Whether to enable memory storage and retrieval (default: False)
+            memory: Whether to enable memory storage and retrieval (default: False)
+            shared: Whether to enable the agent can share current chat with other user or agent (default: False)
             
         Returns:
             Agent response string
@@ -221,7 +259,8 @@ class AgentCLI(BaseAgentRunner):
             user_id=user_id,
             session_id=session_id,
             stream=False,
-            enable_memory=enable_memory
+            enable_memory=memory,
+            shared=shared
         )
         
         return response
@@ -232,6 +271,8 @@ class AgentCLI(BaseAgentRunner):
         print("│ exit, quit, bye    Exit the chat session                  │")
         print("│ clear              Clear conversation history             │")
         print("│ stream on/off      Toggle streaming response mode         │")
+        print("│ memory on/off      Toggle memory storage mode             │")
+        print("│ shared on/off      Toggle shared mode for collaboration   │")
         print("│ help               Show this help message                 │")
         print("╰───────────────────────────────────────────────────────────╯")
         
@@ -346,7 +387,6 @@ def main():
     parser.add_argument("--session_id", help="Session ID for the chat")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument("--env", default=".env", help="Path to .env file")
-    parser.add_argument("--enable_memory", action="store_true", default=False, help="Enable memory storage and retrieval (default: False)")
     
     # Special commands as optional arguments
     parser.add_argument("--ask", metavar="MESSAGE", help="Ask a single question instead of starting interactive chat")
@@ -380,8 +420,7 @@ def main():
             response = asyncio.run(agent_cli.chat_single(
                 message=args.ask,
                 user_id=args.user_id,
-                session_id=args.session_id,
-                enable_memory=args.enable_memory
+                session_id=args.session_id
             ))
             print(response)
             return
@@ -396,8 +435,7 @@ def main():
         # Start interactive chat
         asyncio.run(agent_cli.chat_interactive(
             user_id=args.user_id,
-            session_id=args.session_id,
-            enable_memory=args.enable_memory
+            session_id=args.session_id
         ))
             
     except Exception as e:

@@ -53,6 +53,7 @@ class AgentConfig:
         "- Current date: {date}\n" 
         "- Current timezone: {timezone}\n\n"
         "- Retrieve relevant memories for user: {retrieved_memories}\n\n\n"
+        "- Shared context: {shared_context}\n\n"
     )
 
 
@@ -153,6 +154,11 @@ class Agent:
             self._register_tools(agent_tools)
             self.logger.info("Registered agent tools: %s", 
                            [tool.tool_spec['name'] for tool in agent_tools])
+            
+        # Shared
+        self.SHARED_USER_ID = f"{self.name.upper()}_SHARED_USER"
+        self.SHARED_SESSION_ID = f"{self.name.upper()}_SHARED_SESSION"
+        self.SHARED_HISTORY_COUNT = 10
 
     async def __call__(
         self,
@@ -166,6 +172,7 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         enable_memory: bool = False,
+        shared: bool = False
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """Call the agent to generate a reply based on the user message."""
         return await self.chat(
@@ -178,7 +185,8 @@ class Agent:
             image_source=image_source,
             output_type=output_type,
             stream=stream,
-            enable_memory=enable_memory
+            enable_memory=enable_memory,
+            shared=shared
         )
 
     @observe()
@@ -193,7 +201,8 @@ class Agent:
         image_source: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
-        enable_memory: bool = False
+        enable_memory: bool = False,
+        shared: bool = False
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """
         Generate a reply from the agent given a user message.
@@ -209,6 +218,7 @@ class Agent:
             output_type: Pydantic model for structured output
             stream: Whether to stream the response
             enable_memory: Whether to enable memory storage and retrieval
+            shared: Whether to enable the agent can share current chat with other user or agent (like in a group chat or collaboration or multi-user scenarios)
 
         Returns:
             The agent's reply, structured output, or error message
@@ -233,8 +243,25 @@ class Agent:
 
             # Build input messages once outside the loop
             input_messages = [msg.to_dict() for msg in await self.message_storage.get_messages(user_id, session_id, history_count)]
-
             messages_without_tool = [input for input in input_messages if input.get("role") in (RoleType.USER.value, RoleType.ASSISTANT.value)]
+
+            shared_context = None
+            if shared: # usually for group chat or collaboration or agent in an environment with multiple interactions
+                self.logger.info("Shared mode enabled for user_id: %s", user_id) 
+                await self._store_user_message(user_message = f"{user_id} say: {user_message}", 
+                                               user_id = self.SHARED_USER_ID, session_id = self.SHARED_SESSION_ID, image_source=image_source)
+                shared_messages = [msg.to_dict() for msg in await self.message_storage.get_messages(self.SHARED_USER_ID,
+                                                                                                    self.SHARED_SESSION_ID,
+                                                                                                    self.SHARED_HISTORY_COUNT)]
+                shared_messages_without_tool = [input for input in shared_messages if input.get("role") in (RoleType.USER.value, RoleType.ASSISTANT.value)]
+                shared_memories = []
+                if enable_memory:
+                    pre_chat = messages_without_tool[-3:] # Use last 4 messages for shared memory retrieval and memory storage
+                    shared_memories = await self.memory_storage.retrieve(user_id=self.SHARED_USER_ID,
+                                                                            query= f"{user_id} say: {user_message}", limit=5, 
+                                                                            query_context=f"pre_chat:{pre_chat}",enable_query_process=True)
+                    asyncio.create_task(self.memory_storage.add(user_id=self.SHARED_USER_ID, messages=shared_messages_without_tool[-2:])) # Store last 2 shared messages
+                shared_context = f"shared_messages:{shared_messages_without_tool} \n\n shared_memories:{shared_memories}"
 
             retrieved_memories = []
             if enable_memory:
@@ -246,14 +273,18 @@ class Agent:
 
             for attempt in range(max_iter):
 
-                reply_type, response = await self._call_model(input_messages, user_id, session_id, output_type, stream, retrieved_memories)
+                reply_type, response = await self._call_model(input_messages, user_id, session_id, output_type, stream, retrieved_memories, shared_context)
 
                 if reply_type == ReplyType.SIMPLE_REPLY:
                     if not stream:
                         await self._store_model_reply(str(response), user_id, session_id)
+                        if shared:
+                            await self._store_model_reply(str(response), user_id=self.SHARED_USER_ID, session_id=self.SHARED_SESSION_ID)
                     return response
                 elif reply_type == ReplyType.STRUCTURED_REPLY:
                     await self._store_model_reply(response.model_dump_json(), user_id, session_id)
+                    if shared:
+                        await self._store_model_reply(str(response), user_id=self.SHARED_USER_ID, session_id=self.SHARED_SESSION_ID)
                     return response
                 elif reply_type == ReplyType.TOOL_CALL:
                     await self._handle_tool_calls(response, user_id, session_id, input_messages, max_concurrent_tools)
@@ -390,8 +421,10 @@ class Agent:
     )
     async def _call_model(self, input_msgs: list, 
                           user_id: str, session_id: str,
-                          output_type: type[BaseModel] = None, stream: bool = False,
-                          retrieved_memories: Optional[List[dict]] = None
+                          output_type: type[BaseModel] = None, 
+                          stream: bool = False,
+                          retrieved_memories: Optional[List[dict]] = None,
+                          shared_context: Optional[str] = None
                           ) -> tuple[ReplyType, object]:
         """
         Call the AI model with the provided input messages.
@@ -401,6 +434,8 @@ class Agent:
             session_id (str): Session identifier for message storage.
             output_type (type[BaseModel], optional): Pydantic model for structured output.
             stream (bool, optional): Whether to stream the response. Defaults to False.
+            retrieved_memories: Optional[List[dict]], optional: Retrieved memories to include in the request.
+            shared_context: Optional[str], optional: Shared context to include in the request.
         Returns:
             tuple[ReplyType, object]: A tuple containing the reply type and the response object.
         """
@@ -410,7 +445,8 @@ class Agent:
                 user_id=user_id, 
                 date=time.strftime('%Y-%m-%d'), 
                 timezone=time.tzname[0],
-                retrieved_memories=retrieved_memories or "No relevant memories found."
+                retrieved_memories=retrieved_memories or "No relevant memories found.",
+                shared_context=shared_context or "No shared context."
             )
         }
 
@@ -467,7 +503,8 @@ class Agent:
                                 if content:
                                     yield content
                         await self._store_model_reply(event.response.output[0].content[0].text, user_id, session_id)
-
+                        if shared_context:
+                            await self._store_model_reply(event.response.output[0].content[0].text, user_id=self.SHARED_USER_ID, session_id=self.SHARED_SESSION_ID)
                     return ReplyType.SIMPLE_REPLY, stream_generator()
                 elif event_type == "function_call":
                     async for event in response:

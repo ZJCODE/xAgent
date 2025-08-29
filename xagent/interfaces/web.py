@@ -24,14 +24,15 @@ class AgentHTTPClient:
     def __init__(self, base_url: str = "http://localhost:8010"):
         self.base_url = base_url.rstrip('/')
         
-    async def chat(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]] = None, enable_memory: bool = False):
+    async def chat(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]] = None, enable_memory: bool = False, shared: bool = False):
         """发送聊天消息到Agent服务"""
         try:
             payload = {
                 "user_id": user_id,
                 "session_id": session_id,
                 "user_message": user_message,
-                "enable_memory": enable_memory
+                "enable_memory": enable_memory,
+                "shared": shared
             }
             if image_source:
                 payload["image_source"] = image_source
@@ -51,7 +52,7 @@ class AgentHTTPClient:
         except httpx.RequestError as e:
             raise Exception(f"网络请求失败: {str(e)}")
     
-    async def chat_stream(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]] = None, enable_memory: bool = False):
+    async def chat_stream(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]] = None, enable_memory: bool = False, shared: bool = False):
         """发送聊天消息到Agent服务（流式输出）"""
         try:
             payload = {
@@ -59,7 +60,8 @@ class AgentHTTPClient:
                 "session_id": session_id,
                 "user_message": user_message,
                 "stream": True,
-                "enable_memory": enable_memory
+                "enable_memory": enable_memory,
+                "shared": shared
             }
             if image_source:
                 payload["image_source"] = image_source
@@ -160,6 +162,9 @@ def init_session_state():
     
     if "enable_memory" not in st.session_state:
         st.session_state.enable_memory = False
+
+    if "shared" not in st.session_state:
+        st.session_state.shared = False
 
 def create_http_client(agent_server_url: str):
     """创建 HTTP 客户端实例"""
@@ -274,6 +279,12 @@ def main():
             st.session_state.enable_memory = enable_memory
             st.rerun()
         
+        # 新增：共享模式控制
+        shared = st.checkbox("启用共享模式", value=st.session_state.shared)
+        if shared != st.session_state.shared:
+            st.session_state.shared = shared
+            st.rerun()
+        
         # 应用配置按钮
         if st.button("应用配置", type="primary"):
             st.session_state.user_id = user_id
@@ -385,7 +396,8 @@ def main():
                             user_id=st.session_state.user_id,
                             session_id=st.session_state.session_id,
                             image_source=image_paths if image_paths else None,
-                            enable_memory=st.session_state.enable_memory
+                            enable_memory=st.session_state.enable_memory,
+                            shared=st.session_state.shared
                         ):
                             # 收到第一个chunk时，清除"正在思考..."提示
                             if not first_chunk_received:
@@ -431,7 +443,8 @@ def main():
                                 user_id=st.session_state.user_id,
                                 session_id=st.session_state.session_id,
                                 image_source=image_paths if image_paths else None,
-                                enable_memory=st.session_state.enable_memory
+                                enable_memory=st.session_state.enable_memory,
+                                shared=st.session_state.shared
                             )
                         )
                         

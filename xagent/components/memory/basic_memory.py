@@ -100,6 +100,7 @@ class MemoryStorageBasic(MemoryStorageBase):
                 break
 
         # Check if threshold is reached or keyword is triggered
+        self.logger.info(f"message_count:{message_count}, memory_threshold:{self.memory_threshold}, keyword_triggered:{keyword_triggered}, trigger_tier:{trigger_tier}")
         if message_count >= self.memory_threshold or keyword_triggered:
             self.logger.info("Triggering memory storage for user %s (reason: %s%s)", 
                             user_id, 

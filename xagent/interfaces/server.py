@@ -29,6 +29,8 @@ class AgentInput(BaseModel):
     max_concurrent_tools: Optional[int] = 10
     # Whether to enable memory storage and retrieval
     enable_memory: Optional[bool] = False
+    # Whether to enable the agent can share current chat with other user or agent
+    shared: Optional[bool] = False
 
 
 class ClearSessionInput(BaseModel):
@@ -130,13 +132,14 @@ class AgentHTTPServer(BaseAgentRunner):
                     - history_count: Number of previous messages to include (default: 16)
                     - max_iter: Maximum model call attempts (default: 10)
                     - enable_memory: Whether to enable memory storage and retrieval (default: False)
+                    - shared: Whether to enable the agent can share current chat with other user or agent (default: False)
                 
             Returns:
                 Agent response or streaming SSE when input_data.stream is True
             """
             self.logger.info(
-                "Chat request from user %s, session %s, stream=%s", 
-                input_data.user_id, input_data.session_id, input_data.stream
+                "Chat request from user %s, session %s, stream=%s, shared=%s", 
+                input_data.user_id, input_data.session_id, input_data.stream, input_data.shared
             )
             try:
                 # Streaming mode via Server-Sent Events
@@ -153,7 +156,8 @@ class AgentHTTPServer(BaseAgentRunner):
                                 max_concurrent_tools=input_data.max_concurrent_tools,
                                 image_source=input_data.image_source,
                                 stream=True,
-                                enable_memory=input_data.enable_memory
+                                enable_memory=input_data.enable_memory,
+                                shared=input_data.shared
                             )
                             # If the agent returns an async generator, stream deltas
                             if hasattr(response, "__aiter__"):
@@ -186,7 +190,8 @@ class AgentHTTPServer(BaseAgentRunner):
                     max_iter=input_data.max_iter,
                     max_concurrent_tools=input_data.max_concurrent_tools,
                     image_source=input_data.image_source,
-                    enable_memory=input_data.enable_memory
+                    enable_memory=input_data.enable_memory,
+                    shared=input_data.shared
                 )
                 
                 self.logger.debug("Chat response generated for user %s", input_data.user_id)
