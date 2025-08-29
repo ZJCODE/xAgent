@@ -29,8 +29,9 @@ Also includes advanced features like multi-agent workflows even with **intellige
 
 ## Roadmap
 
+- [ ] Shared Memory & Context Support
 - [ ] Add Voice Support
-- [ ] Workflow Add Service Support
+- [ ] Workflow Service Support
 
 ## 🚀 Quick Start
 
@@ -766,7 +767,6 @@ from xagent.components.memory import MemoryStorageLocal, MemoryStorageUpstash
 
 # Local ChromaDB storage
 local_memory = MemoryStorageLocal(
-    collection_name="my_agent_memory",
     memory_threshold=10,  # Store after 10 messages or automatically trigger
     keep_recent=2  # Keep 2 recent messages after storage
 )
