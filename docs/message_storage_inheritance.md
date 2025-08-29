@@ -151,7 +151,7 @@ class MessageStorageRedis(MessageStorageBase):
 #### Configuration Parameters
 ```python
 class MessageStorageRedisConfig:
-    MSG_PREFIX = "chat"             # Redis key prefix
+    MSG_PREFIX = "xagent:chat"             # Redis key prefix
     DEFAULT_TTL = 2592000           # Default expiration time (30 days)
     DEFAULT_MESSAGE_COUNT = 20      # Default number of messages to return
     DEFAULT_MAX_HISTORY = 200       # Default maximum history count

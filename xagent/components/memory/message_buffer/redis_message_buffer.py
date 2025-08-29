@@ -44,7 +44,7 @@ class MessageBufferRedisConfig:
     """Configuration constants for MessageBufferRedis class."""
     
     # Redis key constants
-    USER_MSG_PREFIX = "message_buffer"
+    USER_MSG_PREFIX = "xagent:message_buffer"
     
     # Time constants (in seconds) 
     DEFAULT_TTL = 2592000  # 30 days

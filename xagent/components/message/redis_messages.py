@@ -45,7 +45,7 @@ class MessageStorageRedisConfig:
     """Configuration constants for MessageStorageRedis class."""
     
     # Redis key constants
-    MSG_PREFIX: Final[str] = "chat"
+    MSG_PREFIX: Final[str] = "xagent:chat"
     
     # Time constants (in seconds)
     DEFAULT_TTL: Final[int] = 2592000  # 30 days
