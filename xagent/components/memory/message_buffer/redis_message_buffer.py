@@ -8,6 +8,8 @@ import redis.asyncio as redis
 from redis.asyncio.cluster import RedisCluster
 import dotenv
 
+from .base_message_buffer import MessageBufferBase
+
 dotenv.load_dotenv(override=True)
 
 
@@ -38,11 +40,11 @@ def create_redis_client(redis_url: str, **common_kwargs):
         return redis.Redis.from_url(redis_url, **common_kwargs)
 
 
-class RedisMessagesForMemoryConfig:
-    """Configuration constants for RedisMessagesForMemory class."""
+class MessageBufferRedisConfig:
+    """Configuration constants for MessageBufferRedis class."""
     
     # Redis key constants
-    USER_MSG_PREFIX = "messages_for_memory"
+    USER_MSG_PREFIX = "message_buffer"
     
     # Time constants (in seconds) 
     DEFAULT_TTL = 2592000  # 30 days
@@ -51,43 +53,48 @@ class RedisMessagesForMemoryConfig:
     SOCKET_TIMEOUT = 5
     
     # Redis client settings
-    CLIENT_NAME = "xagent-messages-for-memory"
+    CLIENT_NAME = "xagent-message-buffer"
     
     # Default values
     DEFAULT_MAX_MESSAGES = 100  # Maximum messages to store per user
 
 
-class RedisMessagesForMemory:
+class MessageBufferRedis(MessageBufferBase):
     """
-    Redis-based temporary user message storage for Upstash Memory.
+    Redis-based message buffer implementation.
     
     This class provides Redis storage for temporary user messages that are used
-    by UpstashMemory before they are converted to long-term memory storage.
+    by memory systems before they are converted to long-term memory storage.
     
     Features:
     - Per-user message lists
     - Automatic TTL management
     - Atomic operations for thread safety
     - Connection pooling and error handling
+    - Support for both Redis standalone and cluster modes
     
     Storage Format:
-    - Keys: "upstash_memory:user_messages:<user_id>"
+    - Keys: "message_buffer:<user_id>"
     - Values: JSON-serialized message dictionaries in Redis lists
     """
     
-    def __init__(self, redis_url: Optional[str] = None):
+    def __init__(self, redis_url: Optional[str] = None, max_messages: int = 100):
         """
-        Initialize RedisMessagesForMemory instance.
+        Initialize MessageBufferRedis instance.
         
         Args:
             redis_url: Redis connection URL. If None, reads from REDIS_URL environment variable
+            max_messages: Maximum messages to store per user. Defaults to 100
         
         Raises:
             ValueError: If Redis connection information is not provided
         """
         self.redis_url = self._get_redis_url(redis_url)
+        self.max_messages = max_messages
         self.r: Optional[Union[redis.Redis, RedisCluster]] = None
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
+        
+        self.logger.info("MessageBufferRedis initialized with max_messages: %d", max_messages)
     
     def _get_redis_url(self, redis_url: Optional[str]) -> str:
         """Get Redis URL from parameter or environment variable."""
@@ -110,11 +117,11 @@ class RedisMessagesForMemory:
         """Create and configure Redis client with optimal settings and cluster support."""
         common_kwargs = dict(
             decode_responses=True,
-            health_check_interval=RedisMessagesForMemoryConfig.HEALTH_CHECK_INTERVAL,
-            socket_connect_timeout=RedisMessagesForMemoryConfig.SOCKET_CONNECT_TIMEOUT,
-            socket_timeout=RedisMessagesForMemoryConfig.SOCKET_TIMEOUT,
+            health_check_interval=MessageBufferRedisConfig.HEALTH_CHECK_INTERVAL,
+            socket_connect_timeout=MessageBufferRedisConfig.SOCKET_CONNECT_TIMEOUT,
+            socket_timeout=MessageBufferRedisConfig.SOCKET_TIMEOUT,
             retry_on_timeout=True,
-            client_name=RedisMessagesForMemoryConfig.CLIENT_NAME,
+            client_name=MessageBufferRedisConfig.CLIENT_NAME,
         )
         
         return create_redis_client(self.redis_url, **common_kwargs)
@@ -131,7 +138,7 @@ class RedisMessagesForMemory:
     
     def _make_key(self, user_id: str) -> str:
         """Create Redis key for user messages."""
-        return f"{RedisMessagesForMemoryConfig.USER_MSG_PREFIX}:{user_id}"
+        return f"{MessageBufferRedisConfig.USER_MSG_PREFIX}:{user_id}"
     
     async def add_messages(self, user_id: str, messages: List[Dict[str, Any]]) -> None:
         """
@@ -155,17 +162,17 @@ class RedisMessagesForMemory:
                 pipe.rpush(key, *(json.dumps(msg) for msg in messages))
                 
                 # Trim to max length to prevent memory overflow
-                pipe.ltrim(key, -RedisMessagesForMemoryConfig.DEFAULT_MAX_MESSAGES, -1)
+                pipe.ltrim(key, -self.max_messages, -1)
                 
                 # Set TTL
-                pipe.expire(key, RedisMessagesForMemoryConfig.DEFAULT_TTL)
+                pipe.expire(key, MessageBufferRedisConfig.DEFAULT_TTL)
                 
                 await pipe.execute()
             
-            self.logger.info("Added %d messages for user %s", len(messages), user_id)
+            self.logger.debug("Added %d messages for user %s", len(messages), user_id)
             
         except RedisError as e:
-            self.logger.info("Failed to add messages for user %s: %s", user_id, e)
+            self.logger.error("Failed to add messages for user %s: %s", user_id, e)
             raise
     
     async def get_messages(self, user_id: str) -> List[Dict[str, Any]]:
@@ -271,16 +278,6 @@ class RedisMessagesForMemory:
             self.logger.error("Failed to clear messages for user %s: %s", user_id, e)
             raise
     
-    async def extend_messages(self, user_id: str, messages: List[Dict[str, Any]]) -> None:
-        """
-        Extend existing messages for a user (alias for add_messages for compatibility).
-        
-        Args:
-            user_id: User identifier
-            messages: List of message dictionaries to add
-        """
-        await self.add_messages(user_id, messages)
-    
     async def close(self) -> None:
         """Close Redis connection."""
         if self.r:
@@ -304,6 +301,6 @@ class RedisMessagesForMemory:
             return False
     
     def __repr__(self) -> str:
-        """String representation of RedisMessagesForMemory instance."""
+        """String representation of MessageBufferRedis instance."""
         connected = "connected" if self.r else "disconnected"
-        return f"RedisMessagesForMemory(url='{self.redis_url}', status='{connected}')"
+        return f"MessageBufferRedis(url='{self.redis_url}', status='{connected}', max_messages={self.max_messages})"
