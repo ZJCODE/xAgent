@@ -1,6 +1,5 @@
 import os
 from dotenv import load_dotenv
-from typing import Optional, List
 
 load_dotenv(override=True)
 
@@ -37,44 +36,29 @@ async def web_search(search_query: str) -> str:
 
 
 @function_tool(name="draw_image", 
-               description="Generate an image based on a prompt, optionally using reference images.",
+               description="Generate an image based on a text prompt.",
                param_descriptions={
-                     "prompt": "The text prompt describing the image to generate.",
-                     "reference_image_source": "Optional reference image(s) to guide the generation. Can be a URL or base64 encoded string, or a list of these."
+                     "prompt": "A detailed text prompt describing the image to generate. Include style, subject, composition, colors, and any specific details."
                }
 )
 @observe()
-async def draw_image(prompt: str, reference_image_source: Optional[List[str]] = None) -> str:
+async def draw_image(prompt: str) -> str:
     """
-    when the user wants to generate an image based on a prompt, use this tool,if user mentioned some images, use them as reference
+    when the user wants to generate an image based on a prompt, use this tool
     """
 
     clean_prompt = (prompt or "").strip()
     if not clean_prompt:
         return ""
     
-    if reference_image_source:
-        content = [{"type": "input_text", "text": clean_prompt}]
-        for img_url in reference_image_source:
-            content.append({
-                "type": "input_image",
-                "image_url": img_url,
-            })
-        input = [{
-            "role": "user",
-            "content": content
-        }]
-    else:
-        input = [{
-            "role": "user",
-            "content": clean_prompt
-        }]
-    
     client = AsyncOpenAI()
     response = await client.responses.create(
         model=DEFAULT_MODEL,
         tools=[{"type": "image_generation", "quality": "low"}],
-        input=input,
+        input=[{
+            "role": "user",
+            "content": clean_prompt
+        }],
         tool_choice="required"
     )
 
