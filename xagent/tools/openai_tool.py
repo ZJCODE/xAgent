@@ -1,8 +1,6 @@
-import base64
-import tempfile
 import os
 from dotenv import load_dotenv
-from typing import Optional, List, Union
+from typing import Optional, List
 
 load_dotenv(override=True)
 
@@ -10,7 +8,6 @@ from langfuse import observe
 from langfuse.openai import AsyncOpenAI
 
 from xagent.utils.tool_decorator import function_tool
-from xagent.utils.image_upload import upload_image as s3_upload_image
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
@@ -87,38 +84,8 @@ async def draw_image(prompt: str, reference_image_source: Optional[List[str]] = 
         return ""
 
     image_base64 = image_call.result
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(prefix="generated_", suffix=".png", delete=False) as tmp_file:
-            tmp_file.write(base64.b64decode(image_base64))
-            tmp_path = tmp_file.name
-        # Upload and get URL
-        url = upload_image(tmp_path)
-        return url
-    except Exception:
-        # Fallback to inline base64 image markdown
-        return f'![generated image](data:image/png;base64,{image_base64})'
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-
-def upload_image(image_path: str) -> str:
-    url = s3_upload_image(image_path)
-    if not url:
-        raise Exception("Image upload failed")
-    return url
+    return f"![generated image](data:image/png;base64,{image_base64})"
 
 
 if __name__ == "__main__":
-
-    # import asyncio
-    # search_result = asyncio.run(web_search("What is the weather like today in hangzhou?"))
-    # print("Search Result:", search_result)
-
-    # image_url = asyncio.run(draw_image("A beautiful sunset over the mountains"))
-    # print("Generated Image URL:", image_url)
-
     print(draw_image.tool_spec)

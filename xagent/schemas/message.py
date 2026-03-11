@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Union, List
 from enum import Enum
 
-from ..utils.image_upload import upload_image
+from ..utils.image_upload import file_to_data_uri
 
 class ToolCall(BaseModel):
     """Represents a tool/function call within a message."""
@@ -92,13 +92,27 @@ class Message(BaseModel):
             for source in sources:
                 processed_source = source
                 if not (source.startswith("http") or source.startswith("data:image/")):
-                    uploaded_url = upload_image(source)
-                    if uploaded_url:
-                        processed_source = uploaded_url
+                    data_uri = file_to_data_uri(source)
+                    if data_uri:
+                        processed_source = data_uri
                     else:
-                        raise ValueError(f"Image upload failed for source: {source}")
+                        raise ValueError(f"Failed to convert image to data URI: {source}")
                 
-                image_contents.append(ImageContent(format="jpeg", source=processed_source))
+                # Infer format from source
+                fmt = "png"  # default
+                if "image/jpeg" in processed_source or "image/jpg" in processed_source:
+                    fmt = "jpeg"
+                elif "image/gif" in processed_source:
+                    fmt = "gif"
+                elif "image/webp" in processed_source:
+                    fmt = "webp"
+                elif source.lower().endswith((".jpg", ".jpeg")):
+                    fmt = "jpeg"
+                elif source.lower().endswith(".gif"):
+                    fmt = "gif"
+                elif source.lower().endswith(".webp"):
+                    fmt = "webp"
+                image_contents.append(ImageContent(format=fmt, source=processed_source))
             
             # Use single ImageContent if only one image, otherwise use list
             image_content = image_contents[0] if len(image_contents) == 1 else image_contents

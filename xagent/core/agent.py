@@ -41,6 +41,13 @@ class AgentConfig:
     HTTP_TIMEOUT = 600.0  # 10 minutes
     TOOL_RESULT_PREVIEW_LENGTH = 20
     ERROR_RESPONSE_PREVIEW_LENGTH = 200
+    BASE64_IMAGE_PREFIXES = ("data:image/", "![generated image](data:image/")
+    IMAGE_CAPTION_MODEL = "gpt-4o-mini"  # lightweight vision model for image captioning
+    IMAGE_CAPTION_PROMPT = (
+        "Describe this image in detail for future reference. Include: subject matter, "
+        "composition, colors, style, mood, and any notable details. Be concise but thorough. "
+        "Respond in the same language as the user's original prompt if provided."
+    )
     
     # Retry configuration
     RETRY_ATTEMPTS = 3
@@ -287,7 +294,16 @@ class Agent:
                         await self._store_model_reply(str(response), user_id=self.SHARED_USER_ID, session_id=self.SHARED_SESSION_ID)
                     return response
                 elif reply_type == ReplyType.TOOL_CALL:
-                    await self._handle_tool_calls(response, user_id, session_id, input_messages, max_concurrent_tools)
+                    tool_result = await self._handle_tool_calls(response, user_id, session_id, input_messages, max_concurrent_tools)
+                    if tool_result is not None:
+                        # Tool produced image(s) — store the descriptive summary
+                        # in history (so the model retains context about what was
+                        # generated), but return the real image data to the UI.
+                        image_data, description = tool_result
+                        await self._store_model_reply(description, user_id, session_id)
+                        if shared:
+                            await self._store_model_reply(description, user_id=self.SHARED_USER_ID, session_id=self.SHARED_SESSION_ID)
+                        return image_data
                 else:
                     self.logger.error("Unknown reply type: %s", reply_type)
                     return "Sorry, I encountered an error while processing your request."
@@ -559,13 +575,85 @@ class Agent:
         tasks = [execute_with_semaphore(tc) for tc in function_calls]
         results = await asyncio.gather(*tasks)
         
+        # Collect any generated images and their descriptions from tool results
+        pending_images = []
+        pending_descriptions = []
+
         # Safely add all tool messages after concurrent execution
-        for tool_messages in results:
+        for tool_messages, image_data, description in results:
             if tool_messages:
                 input_messages.extend([msg.to_dict() for msg in tool_messages])
+            if image_data:
+                pending_images.append(image_data)
+            if description:
+                pending_descriptions.append(description)
+
+        # If any tool produced images, return them directly to the user
+        # instead of sending the huge base64 back to the model.
+        if pending_images:
+            return (
+                "\n\n".join(pending_images),       # image data for the UI
+                "\n\n".join(pending_descriptions),  # compact text for history
+            )
+
         return None
 
-    async def _act(self, tool_call, user_id: str, session_id: str) -> Optional[list]:
+    @staticmethod
+    def _is_base64_image(text: str) -> bool:
+        """Check if a string is a base64-encoded image data URI or markdown image."""
+        if not isinstance(text, str):
+            return False
+        return text.startswith(AgentConfig.BASE64_IMAGE_PREFIXES)
+
+    @staticmethod
+    def _extract_data_uri(text: str) -> str:
+        """Extract the raw data URI from either a plain data URI or markdown image syntax."""
+        if text.startswith("!["):
+            # Extract from ![...](data:image/...) markdown
+            start = text.index("(") + 1
+            end = text.rindex(")")
+            return text[start:end]
+        return text
+
+    async def _caption_image(self, image_data_uri: str, prompt_hint: str = "") -> str:
+        """
+        Use a vision model to generate a detailed description of an image.
+        This captures visual details that the generation prompt alone cannot convey.
+
+        Args:
+            image_data_uri: A data:image/... URI string.
+            prompt_hint: The original generation prompt, used as context.
+
+        Returns:
+            A text description of the image, or a fallback if captioning fails.
+        """
+        caption_prompt = AgentConfig.IMAGE_CAPTION_PROMPT
+        if prompt_hint:
+            caption_prompt += f"\n\nOriginal generation prompt: \"{prompt_hint}\""
+
+        try:
+            response = await self.client.responses.create(
+                model=AgentConfig.IMAGE_CAPTION_MODEL,
+                input=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": caption_prompt},
+                        {"type": "input_image", "image_url": image_data_uri},
+                    ]
+                }],
+            )
+            caption = getattr(response, "output_text", "") or ""
+            if caption.strip():
+                return caption.strip()
+        except Exception as e:
+            self.logger.warning("Image captioning failed, falling back to prompt-based description: %s", e)
+
+        # Fallback: use the generation prompt if captioning fails
+        if prompt_hint:
+            return f"Generated image based on prompt: \"{prompt_hint}\""
+        return "An image was generated and displayed to the user."
+
+    async def _act(self, tool_call, user_id: str, session_id: str) -> tuple[Optional[list], Optional[str], Optional[str]]:
         """
         Execute a single tool call and return the messages generated by the tool.
         Args:
@@ -573,14 +661,17 @@ class Agent:
             user_id (str): User identifier for message storage.
             session_id (str): Session identifier for message storage.
         Returns:
-            Optional[list]: A list of messages generated by the tool call, or None if the tool is not found or an error occurs.
+            tuple: (messages_list, image_data_or_none, description_or_none)
+                - messages_list: A list of messages generated by the tool call, or None.
+                - image_data: The raw image markdown if the tool produced an image, else None.
+                - description: A compact text description of the generated image, else None.
         """
         name = getattr(tool_call, "name", None)
         try:
             args = json.loads(getattr(tool_call, "arguments", "{}"))
         except Exception as e:
             self.logger.error("Tool args parse error: %s", e)
-            return None
+            return None, None, None
         func = self.tools.get(name) or self.mcp_tools.get(name)
         if func:
             self.logger.info("Calling tool: %s with args: %s", name, args)
@@ -590,6 +681,27 @@ class Agent:
             except Exception as e:
                 self.logger.error("Tool call error: %s", e)
                 result = f"Tool error: {e}"
+
+            result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+
+            # Detect base64 image results — keep image data for direct delivery
+            # to the user, but store a compact description for the model so it
+            # retains context about what was generated (enabling follow-up like
+            # "convert the previous image to a line drawing").
+            image_data = None
+            model_output = result_str
+            if self._is_base64_image(result_str):
+                image_data = result_str
+                # Use vision model to caption the image — captures details that
+                # the generation prompt alone cannot convey (composition, colors,
+                # style nuances, background elements, etc.)
+                data_uri = self._extract_data_uri(result_str)
+                prompt_hint = args.get("prompt", "")
+                caption = await self._caption_image(data_uri, prompt_hint)
+                model_output = (
+                    f"[Image generated by tool `{name}` and displayed to user. "
+                    f"Image description: {caption}]"
+                )
 
             tool_call_msg = Message(
                 type=MessageType.FUNCTION_CALL,
@@ -615,15 +727,14 @@ class Agent:
                 content=f"Tool `{name}` result: {_format_tool_result_preview(result)}",
                 tool_call=ToolCall(
                     call_id=getattr(tool_call, "call_id", "001"),
-                    output=json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+                    output=model_output
                 )
             )
             await self.message_storage.add_messages(user_id, session_id, [tool_call_msg, tool_res_msg])
             
-            # Return the messages instead of modifying input_messages directly
-            return [tool_call_msg, tool_res_msg]
+            return [tool_call_msg, tool_res_msg], image_data, model_output if image_data else None
 
-        return None
+        return None, None, None
 
     @staticmethod
     def _sanitize_input_messages(input_messages: list) -> list:

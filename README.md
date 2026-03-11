@@ -129,11 +129,7 @@ LANGFUSE_SECRET_KEY=your_langfuse_key
 LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
 LANGFUSE_HOST=https://cloud.langfuse.com
 
-# Image upload to S3
-AWS_ACCESS_KEY_ID=your_aws_access_key_id
-AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
-AWS_REGION=us-east-1
-BUCKET_NAME=your_bucket_name
+
 ```
 
 
@@ -178,7 +174,7 @@ agent:
   capabilities:
     tools:
       - "web_search"      # Built-in web search
-      - "draw_image"      # Built-in image generation (need set aws credentials for image upload)
+      - "draw_image"      # Built-in image generation (returns base64)
       - "custom_tool"     # Your custom tools
     mcp_servers:
       - "http://localhost:8001/mcp/"  # Example MCP server
