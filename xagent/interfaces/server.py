@@ -2,15 +2,21 @@ import uvicorn
 import argparse
 import logging
 import os
+from pathlib import Path
 from typing import Optional, Union, List
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
-from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 
 from .base import BaseAgentRunner
 from ..core.agent import Agent
+
+# Path to bundled static frontend
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 class AgentInput(BaseModel):
@@ -62,7 +68,8 @@ class AgentHTTPServer(BaseAgentRunner):
         self, 
         config_path: Optional[str] = None, 
         toolkit_path: Optional[str] = None,
-        agent: Optional[Agent] = None
+        agent: Optional[Agent] = None,
+        enable_web: bool = True,
     ):
         """
         Initialize AgentHTTPServer.
@@ -71,7 +78,10 @@ class AgentHTTPServer(BaseAgentRunner):
             config_path: Path to configuration file (if None, uses default configuration)
             toolkit_path: Path to toolkit directory (if None, no additional tools will be loaded)
             agent: Pre-configured Agent instance (if provided, config_path and toolkit_path are ignored)
+            enable_web: Whether to serve the built-in web UI at / (default: True)
         """
+        self._enable_web = enable_web
+
         if agent is not None:
             # Use the provided agent directly
             self.agent = agent
@@ -86,6 +96,15 @@ class AgentHTTPServer(BaseAgentRunner):
         
         # Initialize FastAPI app
         self.app = self._create_app()
+
+        # Enable CORS for local development and external frontends
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
         
     def _create_app(self) -> FastAPI:
         """Create and configure FastAPI application."""
@@ -95,10 +114,31 @@ class AgentHTTPServer(BaseAgentRunner):
             version="1.0.0"
         )
         
-        # Add routes
+        # Add API routes
         self._add_routes(app)
+
+        # Serve bundled web UI (unless disabled)
+        if self._enable_web:
+            self._add_web_ui(app)
         
         return app
+
+    def _add_web_ui(self, app: FastAPI) -> None:
+        """Mount static files and root route for the built-in web UI."""
+        if _STATIC_DIR.is_dir():
+            # Root route serves index.html
+            @app.get("/", include_in_schema=False)
+            async def serve_index():
+                index = _STATIC_DIR / "index.html"
+                if index.exists():
+                    return FileResponse(str(index), media_type="text/html")
+                raise HTTPException(status_code=404, detail="Web UI not found")
+
+            # Static assets (CSS, JS, images etc.)
+            app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+            self.logger.info("Web UI available at /")
+        else:
+            self.logger.warning("Static directory not found at %s — web UI disabled", _STATIC_DIR)
     
     def _add_routes(self, app: FastAPI) -> None:
         """Add API routes to the FastAPI application."""
@@ -206,6 +246,43 @@ class AgentHTTPServer(BaseAgentRunner):
                 self.logger.error("Agent processing error for user %s: %s", input_data.user_id, e)
                 raise HTTPException(status_code=500, detail=f"Agent processing error: {str(e)}")
         
+        @app.get("/memory")
+        async def get_memory(
+            user_id: str = Query(..., description="User ID to retrieve memories for"),
+            query: str = Query("recent conversations", description="Search query for memory retrieval"),
+            limit: int = Query(10, ge=1, le=50, description="Maximum number of memories to return"),
+        ):
+            """
+            Retrieve stored memories for a user.
+            
+            Returns:
+                List of memory entries matching the query.
+            """
+            self.logger.info("Memory retrieval for user %s, query=%s, limit=%d", user_id, query, limit)
+            memory_storage = getattr(self.agent, 'memory_storage', None)
+            if memory_storage is None:
+                return {"memories": [], "message": "Memory storage not configured"}
+            try:
+                results = await memory_storage.retrieve(
+                    user_id=user_id,
+                    query=query,
+                    limit=limit,
+                )
+                # Normalise: results may be list of strings or list of dicts
+                memories = []
+                if results:
+                    for item in results:
+                        if isinstance(item, str):
+                            memories.append({"content": item})
+                        elif isinstance(item, dict):
+                            memories.append(item)
+                        else:
+                            memories.append({"content": str(item)})
+                return {"memories": memories}
+            except Exception as e:
+                self.logger.error("Memory retrieval error: %s", e)
+                raise HTTPException(status_code=500, detail=f"Memory retrieval error: {str(e)}")
+
         @app.post("/clear_session")
         async def clear_session(input_data: ClearSessionInput):
             """
@@ -242,13 +319,14 @@ class AgentHTTPServer(BaseAgentRunner):
                 raise HTTPException(status_code=500, detail=f"Failed to clear session: {str(e)}")
 
     
-    def run(self, host: str = None, port: int = None) -> None:
+    def run(self, host: str = None, port: int = None, open_browser: bool = False) -> None:
         """
         Run the HTTP server.
         
         Args:
             host: Host to bind to
             port: Port to bind to
+            open_browser: Whether to auto-open the web UI in the default browser
         """
         server_cfg = self.config.get("server", {})
         
@@ -260,6 +338,18 @@ class AgentHTTPServer(BaseAgentRunner):
         self.logger.info("Agent: %s", self.agent.name)
         self.logger.info("Model: %s", self.agent.model)
         self.logger.info("Tools: %d loaded", len(self.agent.tools))
+        if self._enable_web:
+            self.logger.info("Web UI: enabled at /")
+        else:
+            self.logger.info("Web UI: disabled (--no-web)")
+
+        # Auto-open browser after a short delay so the server has time to start
+        if open_browser and self._enable_web:
+            import threading
+            import webbrowser
+            browse_host = "localhost" if host in ("0.0.0.0", "::") else host
+            url = f"http://{browse_host}:{port}"
+            threading.Timer(1.5, lambda: webbrowser.open(url)).start()
         
         uvicorn.run(
             self.app,
@@ -301,6 +391,10 @@ def main():
     parser.add_argument("--host", default=None, help="Host to bind to")
     parser.add_argument("--port", type=int, default=None, help="Port to bind to")
     parser.add_argument("--env", default=".env", help="Path to .env file")
+    parser.add_argument("--open", action="store_true", dest="open_browser",
+                        help="Auto-open the web UI in the default browser")
+    parser.add_argument("--no-web", action="store_true", dest="no_web",
+                        help="Disable the built-in web UI (API-only mode)")
     
     args = parser.parse_args()
     
@@ -315,9 +409,10 @@ def main():
         server = AgentHTTPServer(
             config_path=args.config, 
             toolkit_path=args.toolkit_path,
-            agent=None  # Command line interface does not support direct agent passing
+            agent=None,  # Command line interface does not support direct agent passing
+            enable_web=not args.no_web,
         )
-        server.run(host=args.host, port=args.port)
+        server.run(host=args.host, port=args.port, open_browser=args.open_browser)
     except Exception as e:
         logger.error("Failed to start server: %s", e)
         raise

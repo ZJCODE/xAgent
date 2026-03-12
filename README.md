@@ -2,7 +2,6 @@
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)](https://streamlit.io/)
 [![Redis](https://img.shields.io/badge/Redis-7.0+-red.svg)](https://redis.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -16,8 +15,7 @@ Also includes advanced features like multi-agent workflows even with **intellige
 
 - [🚀 Quick Start](#-quick-start)
 - [🔧 Installation](#-installation)
-- [🌐 HTTP Server](#-http-server)
-- [🌐 Web Interface](#-web-interface)
+- [🌐 HTTP Server & Web UI](#-http-server--web-ui)
 - [💻 Command Line Interface](#-command-line-interface)
 - [🤖 Python API](#-python-api)
 - [🧠 Memory System](#-memory-system)
@@ -80,10 +78,10 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
-Or launch web interface
+Or open the built-in web chat UI
 
 ```bash
-xagent-web
+xagent-server --open
 ```
 
 ### Docker Deployment
@@ -133,18 +131,21 @@ LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
 
-## 🌐 HTTP Server
+## 🌐 HTTP Server & Web UI
 
-Here's how to run the xAgent HTTP server: 
-
+The HTTP server provides both a REST API and a built-in chat UI — single process, zero extra dependencies.
 
 ### Quick Start
 
 ```bash
-# Start with default settings
+# Start server (API + Web UI at http://localhost:8010)
 xagent-server
 
-# Server runs at http://localhost:8010
+# Auto-open browser
+xagent-server --open
+
+# API-only mode (disable web UI)
+xagent-server --no-web
 ```
 
 <details>
@@ -287,21 +288,6 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
-
-## 🌐 Web Interface
-
-User-friendly Streamlit chat interface for interactive conversations with your AI agent.
-
-```bash
-# Start the chat interface with default settings
-xagent-web
-
-# With custom agent server URL
-xagent-web --agent-server http://localhost:8010
-
-# With custom host and port
-xagent-web --host 0.0.0.0 --port 8501 --agent-server http://localhost:8010
-```
 
 ## 💻 Command Line Interface
 
@@ -1178,7 +1164,6 @@ Special thanks to these amazing open source projects:
 
 - **[OpenAI](https://openai.com/)** - GPT models powering our AI
 - **[FastAPI](https://fastapi.tiangolo.com/)** - Robust async API framework  
-- **[Streamlit](https://streamlit.io/)** - Intuitive web interface
 - **[Redis](https://redis.io/)** - High-performance data storage
 
 ## 📞 Support & Community

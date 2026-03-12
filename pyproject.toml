@@ -40,8 +40,7 @@ dependencies = [
     "chromadb>=1.0.20",
     "upstash_vector>=0.8.0",
     
-    # UI and utilities
-    "streamlit>=1.47.1",
+    # Utilities
     "python-dotenv>=1.1.1",
     "pyyaml>=6.0.2",
     "tenacity>=9.1.2",
@@ -51,7 +50,6 @@ dependencies = [
 [project.scripts]
 xagent-server = "xagent.interfaces.server:main"
 xagent-cli = "xagent.interfaces.cli:main"
-xagent-web = "xagent.interfaces.web_launcher:main"
 
 [project.urls]
 Repository = "https://github.com/ZJCODE/xagent"
@@ -60,3 +58,6 @@ Homepage = "https://github.com/ZJCODE/xagent#readme"
 
 [tool.setuptools]
 packages = {find = {include = ["xagent*"], exclude = ["examples*", "tests*", "docs*"]}}
+
+[tool.setuptools.package-data]
+xagent = ["interfaces/static/**"]
