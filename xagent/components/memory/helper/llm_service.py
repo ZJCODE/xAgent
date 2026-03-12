@@ -1,7 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
-from langfuse.openai import AsyncOpenAI
-from langfuse import observe
+from ....runtime import AsyncOpenAI, observe
 
 from ....schemas.memory import MemoryExtraction, MetaMemory, MetaMemoryPiece, MetaMemoryType, QueryPreprocessResult
 

@@ -3,9 +3,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-from langfuse import observe
-from langfuse.openai import AsyncOpenAI
-
+from xagent.runtime import AsyncOpenAI, observe
 from xagent.utils.tool_decorator import function_tool
 
 DEFAULT_MODEL = "gpt-4o-mini"
@@ -14,7 +12,8 @@ DEFAULT_MODEL = "gpt-4o-mini"
                description="Search the web using a search engine.",
                param_descriptions={
                      "search_query": "The query to search for on the web."
-               }
+               },
+               tier="responses"
 )
 @observe()
 async def web_search(search_query: str) -> str:
@@ -39,7 +38,8 @@ async def web_search(search_query: str) -> str:
                description="Generate an image based on a text prompt.",
                param_descriptions={
                      "prompt": "A detailed text prompt describing the image to generate. Include style, subject, composition, colors, and any specific details."
-               }
+               },
+               tier="responses"
 )
 @observe()
 async def draw_image(prompt: str) -> str:

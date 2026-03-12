@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field, create_model
 # Local imports
 from ..core.agent import Agent
 from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageBase, MemoryStorageLocal
+from ..orchestrator import AgentOrchestrator
+from ..realtime import RealtimeGateway
+from ..responses import ResponsesEngine
+from ..state import ConversationStateStore
+from ..responses.tools import split_tools
 from ..tools import TOOL_REGISTRY
 
 
@@ -72,6 +77,10 @@ class BaseAgentRunner:
         self.message_storage = self._initialize_message_storage()
         self.memory_storage = self._initialize_memory_storage()
         self.agent = self._initialize_agent()
+        self.state_store = self._initialize_state_store()
+        self.responses_engine = self._initialize_responses_engine()
+        self.orchestrator = self._initialize_orchestrator()
+        self.realtime_gateway = self._initialize_realtime_gateway()
         
     def _load_config(self, cfg_path: Optional[str]) -> Dict[str, Any]:
         """
@@ -475,3 +484,33 @@ class BaseAgentRunner:
             return MemoryStorageLocal()
 
         return MemoryStorageLocal()
+
+    def _initialize_state_store(self) -> ConversationStateStore:
+        """Initialize shared state for realtime sessions and conversation records."""
+        return ConversationStateStore(message_storage=self.message_storage)
+
+    def _initialize_responses_engine(self) -> ResponsesEngine:
+        """Initialize the Responses execution runtime."""
+        return ResponsesEngine(agent=self.agent)
+
+    def _initialize_orchestrator(self) -> AgentOrchestrator:
+        """Initialize the system orchestrator."""
+        realtime_tools, _ = split_tools(self.agent.tools.values())
+        realtime_registry = {}
+        for tool in realtime_tools:
+            tool_name = getattr(getattr(tool, "tool_spec", {}), "get", lambda *_: None)("name")
+            if not tool_name:
+                tool_name = getattr(tool, "__name__", "tool")
+            realtime_registry[tool_name] = tool
+        return AgentOrchestrator(
+            responses_engine=self.responses_engine,
+            state_store=self.state_store,
+            realtime_tools=realtime_registry,
+        )
+
+    def _initialize_realtime_gateway(self) -> RealtimeGateway:
+        """Initialize the realtime gateway."""
+        return RealtimeGateway(
+            orchestrator=self.orchestrator,
+            state_store=self.state_store,
+        )

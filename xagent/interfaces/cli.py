@@ -7,6 +7,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from .base import BaseAgentRunner
+from ..orchestrator import OrchestratorContext, TurnInput
 
 
 class AgentCLI(BaseAgentRunner):
@@ -186,42 +187,44 @@ class AgentCLI(BaseAgentRunner):
                 
                 # Process the message
                 if stream:
-                    # Handle streaming response
-                    response_generator = await self.agent(
-                        user_message=user_input,
-                        user_id=user_id,
-                        session_id=session_id,
-                        stream=True,
-                        enable_memory=memory,
-                        shared=shared
+                    print("🤖 Agent: ", end="", flush=True)
+
+                    async def on_stream(delta: str) -> None:
+                        print(delta, end="", flush=True)
+
+                    result = await self.orchestrator.handle_turn(
+                        turn=TurnInput(text=user_input),
+                        context=OrchestratorContext(
+                            user_id=user_id,
+                            conversation_id=session_id,
+                            turn_id=f"turn_{uuid.uuid4().hex[:10]}",
+                            allow_background=False,
+                            stream=True,
+                            enable_memory=memory,
+                        ),
+                        stream_callback=on_stream,
                     )
-                    
-                    # Check if response is a generator (streaming) or a string
-                    if hasattr(response_generator, '__aiter__'):
-                        print("🤖 Agent: ", end="", flush=True)
-                        chunk_count = 0
-                        async for chunk in response_generator:
-                            if chunk:
-                                print(chunk, end="", flush=True)
-                                chunk_count += 1
-                        print()  # Add newline after streaming is complete
-                        if chunk_count == 0:
-                            print("   (No response received)")
-                    else:
-                        # Fallback for non-streaming response
-                        print("🤖 Agent: " + str(response_generator))
+                    if not result.output_text:
+                        print("   (No response received)", end="")
+                    print()
                 else:
                     # Handle non-streaming response
                     print("🤖 Agent: ", end="", flush=True)
-                    response = await self.agent(
-                        user_message=user_input,
-                        user_id=user_id,
-                        session_id=session_id,
-                        stream=False,
-                        enable_memory=memory,
-                        shared=shared
+                    result = await self.orchestrator.handle_turn(
+                        turn=TurnInput(text=user_input),
+                        context=OrchestratorContext(
+                            user_id=user_id,
+                            conversation_id=session_id,
+                            turn_id=f"turn_{uuid.uuid4().hex[:10]}",
+                            allow_background=True,
+                            stream=False,
+                            enable_memory=memory,
+                        ),
                     )
-                    print(str(response))
+                    if result.job_id:
+                        print(f"[background job started: {result.job_id}]")
+                    else:
+                        print(result.output_text or "")
                 
             except KeyboardInterrupt:
                 print("\n\n╭─────────────────────────────────────╮")
@@ -254,16 +257,19 @@ class AgentCLI(BaseAgentRunner):
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
         session_id = session_id or f"cli_session_{uuid.uuid4().hex[:8]}"
         
-        response = await self.agent(
-            user_message=message,
-            user_id=user_id,
-            session_id=session_id,
-            stream=False,
-            enable_memory=memory,
-            shared=shared
+        result = await self.orchestrator.handle_turn(
+            turn=TurnInput(text=message),
+            context=OrchestratorContext(
+                user_id=user_id,
+                conversation_id=session_id,
+                turn_id=f"turn_{uuid.uuid4().hex[:10]}",
+                allow_background=True,
+                stream=False,
+                enable_memory=memory,
+            ),
         )
         
-        return response
+        return result.output_text if not result.job_id else f"[background job started: {result.job_id}]"
     
     def _show_help(self):
         """Show help information."""

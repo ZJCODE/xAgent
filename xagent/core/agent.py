@@ -9,13 +9,12 @@ from typing import AsyncGenerator, List, Optional, Union
 
 # Third-party imports
 import httpx
-from langfuse import observe
-from langfuse.openai import AsyncOpenAI
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Local imports
 from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageBase, MemoryStorageLocal
+from ..runtime import AsyncOpenAI, observe
 from ..schemas import Message, ToolCall,RoleType, MessageType
 from ..utils.mcp_convertor import MCPTool
 from ..utils.tool_decorator import function_tool

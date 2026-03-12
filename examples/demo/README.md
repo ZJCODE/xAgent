@@ -14,6 +14,10 @@ The examples here are the smallest set that still covers xAgent's core capabilit
 - `http_server_with_custom_agent.py`: running `AgentHTTPServer` with a pre-configured local agent
 - `hybrid_quick_start.py`: one high-signal multi-agent workflow example
 - `mcp_integration.py`: combining local tools with MCP tools when an MCP server is available
+- `realtime_client.py`: interactive WebSocket client for the realtime gateway event protocol
+- `realtime_showcase_server.py`: demo server with realtime-tier tools and Responses-tier search
+- `realtime_audio_sender.py`: audio chunk sender for websocket audio commit testing
+- `realtime_walkthrough.md`: step-by-step validation flow for the realtime stack
 
 What is intentionally not in this folder anymore:
 
@@ -28,3 +32,16 @@ pip install -e .
 ```
 
 For cloud deployment, Redis-backed persistence, and advanced workflow DSL details, use the docs in `docs/` instead of adding more demo variants here.
+
+`realtime_client.py` also needs one extra package:
+
+```bash
+pip install websockets
+```
+
+Recommended startup sequence for the realtime demos when `8010` is already occupied:
+
+```bash
+python examples/demo/realtime_showcase_server.py --port 8011
+python examples/demo/realtime_client.py --ws-url ws://127.0.0.1:8011/realtime/ws
+```

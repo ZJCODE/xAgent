@@ -115,7 +115,10 @@ def function_tool(
     name: Optional[str] = None,
     description: Optional[str] = None,
     strict: bool = False,
-    param_descriptions: Optional[Dict[str, str]] = None
+    param_descriptions: Optional[Dict[str, str]] = None,
+    tier: Literal["realtime", "responses"] = "responses",
+    timeout_seconds: Optional[float] = None,
+    requires_confirmation: bool = False,
 ) -> Callable[[Callable], Callable]:
     """Decorator to convert Python functions into OpenAI function call tools."""
     
@@ -163,6 +166,14 @@ def function_tool(
 
         # Attach metadata
         async_func.tool_spec = tool_spec
+        async_func.tool_tier = tier
+        async_func.tool_timeout_seconds = timeout_seconds
+        async_func.tool_requires_confirmation = requires_confirmation
+        async_func.tool_metadata = {
+            "tier": tier,
+            "timeout_seconds": timeout_seconds,
+            "requires_confirmation": requires_confirmation,
+        }
         async_func.__name__ = func.__name__
         async_func.__doc__ = func.__doc__
         async_func.__module__ = func.__module__

@@ -1,10 +1,12 @@
 import uvicorn
 import argparse
+import asyncio
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Optional, Union, List
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +16,13 @@ from dotenv import load_dotenv
 
 from .base import BaseAgentRunner
 from ..core.agent import Agent
+from ..orchestrator import OrchestratorContext, TurnInput
+from ..realtime import RealtimeClientEvent
+from ..responses import ResponsesEngine
+from ..responses.tools import split_tools
+from ..state import ConversationStateStore
+from ..orchestrator import AgentOrchestrator
+from ..realtime import RealtimeGateway
 
 # Path to bundled static frontend
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -43,6 +52,12 @@ class ClearSessionInput(BaseModel):
     """Request body for clear session endpoint."""
     user_id: str
     session_id: str
+
+
+class RealtimeSessionInput(BaseModel):
+    """Request body for realtime session bootstrap."""
+    user_id: str
+    conversation_id: Optional[str] = None
 
 
 class AgentHTTPServer(BaseAgentRunner):
@@ -87,6 +102,25 @@ class AgentHTTPServer(BaseAgentRunner):
             self.agent = agent
             self.config = {"server": {"host": "0.0.0.0", "port": 8010}}  # Minimal server config
             self.message_storage = self.agent.message_storage
+            self.memory_storage = self.agent.memory_storage
+            self.state_store = ConversationStateStore(message_storage=self.message_storage)
+            self.responses_engine = ResponsesEngine(agent=self.agent)
+            realtime_tools, _ = split_tools(self.agent.tools.values())
+            realtime_registry = {}
+            for tool in realtime_tools:
+                tool_name = getattr(getattr(tool, "tool_spec", {}), "get", lambda *_: None)("name")
+                if not tool_name:
+                    tool_name = getattr(tool, "__name__", "tool")
+                realtime_registry[tool_name] = tool
+            self.orchestrator = AgentOrchestrator(
+                responses_engine=self.responses_engine,
+                state_store=self.state_store,
+                realtime_tools=realtime_registry,
+            )
+            self.realtime_gateway = RealtimeGateway(
+                orchestrator=self.orchestrator,
+                state_store=self.state_store,
+            )
         else:
             # Initialize the base agent runner using config
             super().__init__(config_path, toolkit_path)
@@ -185,66 +219,147 @@ class AgentHTTPServer(BaseAgentRunner):
                 # Streaming mode via Server-Sent Events
                 if input_data.stream:
                     self.logger.debug("Enabling streaming response for user %s", input_data.user_id)
+
                     async def event_generator():
+                        queue: asyncio.Queue[dict | str] = asyncio.Queue()
+
+                        async def on_stream(delta: str) -> None:
+                            await queue.put({"delta": delta})
+
+                        async def run_turn() -> None:
+                            try:
+                                result = await self.orchestrator.handle_turn(
+                                    turn=TurnInput(
+                                        text=input_data.user_message,
+                                        image_source=input_data.image_source,
+                                    ),
+                                context=OrchestratorContext(
+                                    user_id=input_data.user_id,
+                                    conversation_id=input_data.session_id,
+                                    turn_id=f"turn_{uuid.uuid4().hex[:10]}",
+                                    history_count=input_data.history_count,
+                                    max_iter=input_data.max_iter,
+                                    max_concurrent_tools=input_data.max_concurrent_tools,
+                                    allow_background=False,
+                                    stream=True,
+                                    enable_memory=input_data.enable_memory,
+                                ),
+                                    stream_callback=on_stream,
+                                )
+                                await queue.put(
+                                    {
+                                        "event": "turn.completed",
+                                        "response_id": result.response_id,
+                                        "message": result.output_text,
+                                    }
+                                )
+                            except Exception as e:
+                                self.logger.error("Streaming error for user %s: %s", input_data.user_id, e)
+                                await queue.put({"error": str(e)})
+                            finally:
+                                await queue.put("[DONE]")
+
+                        runner = asyncio.create_task(run_turn())
+
                         try:
-                            response = await self.agent(
-                                user_message=input_data.user_message,
-                                user_id=input_data.user_id,
-                                session_id=input_data.session_id,
-                                history_count=input_data.history_count,
-                                max_iter=input_data.max_iter,
-                                max_concurrent_tools=input_data.max_concurrent_tools,
-                                image_source=input_data.image_source,
-                                stream=True,
-                                enable_memory=input_data.enable_memory,
-                                shared=input_data.shared
-                            )
-                            # If the agent returns an async generator, stream deltas
-                            if hasattr(response, "__aiter__"):
-                                async for delta in response:
-                                    # Send as SSE data frames
-                                    yield f"data: {json.dumps({'delta': delta})}\n\n"
-                                # Signal completion
-                                yield "data: [DONE]\n\n"
-                            else:
-                                # Fallback when no generator is returned
-                                # Handle structured output properly
-                                if hasattr(response, 'model_dump'):  # Pydantic BaseModel
-                                    yield f"data: {json.dumps({'message': response.model_dump()})}\n\n"
-                                else:  # String response
-                                    yield f"data: {json.dumps({'message': str(response)})}\n\n"
-                                yield "data: [DONE]\n\n"
-                        except Exception as e:
-                            self.logger.error("Streaming error for user %s: %s", input_data.user_id, e)
-                            # Stream error as SSE, client can handle gracefully
-                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                            yield "data: [DONE]\n\n"
+                            while True:
+                                payload = await queue.get()
+                                if payload == "[DONE]":
+                                    yield "data: [DONE]\n\n"
+                                    break
+                                yield f"data: {json.dumps(payload)}\n\n"
+                        finally:
+                            await runner
+
                     return StreamingResponse(event_generator(), media_type="text/event-stream")
                 
                 # Non-streaming mode (default)
-                response = await self.agent(
-                    user_message=input_data.user_message,
-                    user_id=input_data.user_id,
-                    session_id=input_data.session_id,
-                    history_count=input_data.history_count,
-                    max_iter=input_data.max_iter,
-                    max_concurrent_tools=input_data.max_concurrent_tools,
-                    image_source=input_data.image_source,
-                    enable_memory=input_data.enable_memory,
-                    shared=input_data.shared
+                result = await self.orchestrator.handle_turn(
+                    turn=TurnInput(
+                        text=input_data.user_message,
+                        image_source=input_data.image_source,
+                    ),
+                    context=OrchestratorContext(
+                        user_id=input_data.user_id,
+                        conversation_id=input_data.session_id,
+                        turn_id=f"turn_{uuid.uuid4().hex[:10]}",
+                        history_count=input_data.history_count,
+                        max_iter=input_data.max_iter,
+                        max_concurrent_tools=input_data.max_concurrent_tools,
+                        allow_background=True,
+                        stream=False,
+                        enable_memory=input_data.enable_memory,
+                    ),
                 )
                 
                 self.logger.debug("Chat response generated for user %s", input_data.user_id)
-                
-                # Handle different response types properly
-                if hasattr(response, 'model_dump'):  # Pydantic BaseModel
-                    return {"reply": response.model_dump()}
-                else:  # String response
-                    return {"reply": str(response)}
+                if result.job_id:
+                    return {
+                        "mode": result.mode,
+                        "conversation_id": result.conversation_id,
+                        "turn_id": result.turn_id,
+                        "job_id": result.job_id,
+                    }
+                return {
+                    "mode": result.mode,
+                    "conversation_id": result.conversation_id,
+                    "turn_id": result.turn_id,
+                    "response_id": result.response_id,
+                    "reply": result.output_text,
+                }
                 
             except Exception as e:
                 self.logger.error("Agent processing error for user %s: %s", input_data.user_id, e)
                 raise HTTPException(status_code=500, detail=f"Agent processing error: {str(e)}")
+
+        @app.post("/realtime/session")
+        async def create_realtime_session(input_data: RealtimeSessionInput):
+            event = await self.realtime_gateway.open_session(
+                user_id=input_data.user_id,
+                conversation_id=input_data.conversation_id,
+            )
+            return event.model_dump()
+
+        @app.websocket("/realtime/ws")
+        async def realtime_ws(websocket: WebSocket):
+            await websocket.accept()
+            active_session_id: Optional[str] = None
+            sender_task: Optional[asyncio.Task] = None
+
+            async def send_queued_events(session_id: str) -> None:
+                queue = self.realtime_gateway.session_manager.get_event_queue(session_id)
+                while True:
+                    payload = await queue.get()
+                    await websocket.send_json(payload.model_dump())
+
+            try:
+                while True:
+                    message = await websocket.receive_text()
+                    event = RealtimeClientEvent.model_validate_json(message)
+                    responses = await self.realtime_gateway.handle_client_event(event)
+                    for item in responses:
+                        await websocket.send_json(item.model_dump())
+
+                    resolved_session_id = next(
+                        (
+                            item.realtime_session_id
+                            for item in responses
+                            if item.realtime_session_id
+                        ),
+                        event.realtime_session_id,
+                    )
+                    if resolved_session_id and resolved_session_id != active_session_id:
+                        if sender_task is not None:
+                            sender_task.cancel()
+                        active_session_id = resolved_session_id
+                        sender_task = asyncio.create_task(send_queued_events(active_session_id))
+            except WebSocketDisconnect:
+                self.logger.info("Realtime websocket disconnected")
+            finally:
+                if sender_task is not None:
+                    sender_task.cancel()
+                if active_session_id is not None:
+                    await self.realtime_gateway.session_manager.close(active_session_id)
         
         @app.get("/memory")
         async def get_memory(
@@ -282,6 +397,20 @@ class AgentHTTPServer(BaseAgentRunner):
             except Exception as e:
                 self.logger.error("Memory retrieval error: %s", e)
                 raise HTTPException(status_code=500, detail=f"Memory retrieval error: {str(e)}")
+
+        @app.get("/jobs/{job_id}")
+        async def get_job(job_id: str):
+            job = self.orchestrator.job_manager.get_job(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+            return job.model_dump()
+
+        @app.post("/jobs/{job_id}/cancel")
+        async def cancel_job(job_id: str):
+            job = await self.orchestrator.job_manager.cancel_job(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+            return job.model_dump()
 
         @app.post("/clear_session")
         async def clear_session(input_data: ClearSessionInput):
