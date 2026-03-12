@@ -10,6 +10,11 @@ import uuid
 import httpx
 import json
 
+try:
+    from ..utils.image_utils import is_image_output, extract_source
+except ImportError:
+    from xagent.utils.image_utils import is_image_output, extract_source
+
 # 页面配置
 st.set_page_config(
     page_title="对话测试",
@@ -193,13 +198,11 @@ def display_chat_history():
                 # 如果是JSON对象，使用st.json展示
                 st.json(content)
             elif isinstance(content, str):
-                # 判断是否为 base64 图片 markdown
-                if content.startswith("![generated image](data:image/png;base64,"):
-                    prefix = "![generated image]("
-                    suffix = ")"
-                    img_url = content[len(prefix):-len(suffix)]
+                # Check if the content is an image (URL, data URI, or markdown image)
+                if is_image_output(content):
+                    img_src = extract_source(content)
                     st.markdown(
-                        f'<img src="{img_url}" style="max-width:400px;">',
+                        f'<img src="{img_src}" style="max-width:400px;">',
                         unsafe_allow_html=True
                     )
                 else:

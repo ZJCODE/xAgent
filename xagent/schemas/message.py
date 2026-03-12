@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Union, List
 from enum import Enum
 
-from ..utils.image_upload import file_to_data_uri
+from ..utils.image_utils import file_to_data_uri, classify_source, infer_format, ImageSourceType
 
 class ToolCall(BaseModel):
     """Represents a tool/function call within a message."""
@@ -90,28 +90,16 @@ class Message(BaseModel):
             image_contents = []
             
             for source in sources:
-                processed_source = source
-                if not (source.startswith("http") or source.startswith("data:image/")):
-                    data_uri = file_to_data_uri(source)
-                    if data_uri:
-                        processed_source = data_uri
-                    else:
+                source_type = classify_source(source)
+                if source_type == ImageSourceType.FILE:
+                    processed_source = file_to_data_uri(source)
+                    if not processed_source:
                         raise ValueError(f"Failed to convert image to data URI: {source}")
-                
-                # Infer format from source
-                fmt = "png"  # default
-                if "image/jpeg" in processed_source or "image/jpg" in processed_source:
-                    fmt = "jpeg"
-                elif "image/gif" in processed_source:
-                    fmt = "gif"
-                elif "image/webp" in processed_source:
-                    fmt = "webp"
-                elif source.lower().endswith((".jpg", ".jpeg")):
-                    fmt = "jpeg"
-                elif source.lower().endswith(".gif"):
-                    fmt = "gif"
-                elif source.lower().endswith(".webp"):
-                    fmt = "webp"
+                else:
+                    # URL or data URI — usable directly by the model API
+                    processed_source = source
+
+                fmt = infer_format(processed_source)
                 image_contents.append(ImageContent(format=fmt, source=processed_source))
             
             # Use single ImageContent if only one image, otherwise use list

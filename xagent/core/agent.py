@@ -19,6 +19,7 @@ from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageB
 from ..schemas import Message, ToolCall,RoleType, MessageType
 from ..utils.mcp_convertor import MCPTool
 from ..utils.tool_decorator import function_tool
+from ..utils.image_utils import is_image_output, extract_source, extract_image_urls_from_text
 
 # Configure logging
 logging.basicConfig(
@@ -41,7 +42,6 @@ class AgentConfig:
     HTTP_TIMEOUT = 600.0  # 10 minutes
     TOOL_RESULT_PREVIEW_LENGTH = 20
     ERROR_RESPONSE_PREVIEW_LENGTH = 200
-    BASE64_IMAGE_PREFIXES = ("data:image/", "![generated image](data:image/")
     IMAGE_CAPTION_MODEL = "gpt-4o-mini"  # lightweight vision model for image captioning
     IMAGE_CAPTION_PROMPT = (
         "Describe this image in detail for future reference. Include: subject matter, "
@@ -423,8 +423,20 @@ class Agent:
         self.mcp_tools_last_updated = now
 
     async def _store_user_message(self, user_message: str, user_id: str, session_id: str, image_source: Optional[Union[str, List[str]]]) -> None:
-        user_message = Message.create(content=user_message, role=RoleType.USER, image_source=image_source)
-        await self.message_storage.add_messages(user_id, session_id, user_message)
+        # Auto-detect image URLs / data URIs embedded in the message text
+        # so the model receives them as proper vision inputs even when the
+        # caller did not supply an explicit image_source.
+        detected = extract_image_urls_from_text(user_message)
+        if detected:
+            existing = []
+            if image_source:
+                existing = image_source if isinstance(image_source, list) else [image_source]
+            # Merge & deduplicate while preserving order
+            merged = list(dict.fromkeys(existing + detected))
+            image_source = merged
+
+        msg = Message.create(content=user_message, role=RoleType.USER, image_source=image_source)
+        await self.message_storage.add_messages(user_id, session_id, msg)
 
     async def _store_model_reply(self, reply_text: str, user_id: str, session_id: str) -> None:
         model_msg = Message.create(content=reply_text, role=RoleType.ASSISTANT)
@@ -599,21 +611,14 @@ class Agent:
         return None
 
     @staticmethod
-    def _is_base64_image(text: str) -> bool:
-        """Check if a string is a base64-encoded image data URI or markdown image."""
-        if not isinstance(text, str):
-            return False
-        return text.startswith(AgentConfig.BASE64_IMAGE_PREFIXES)
+    def _is_image_output(text: str) -> bool:
+        """Check if a string represents an image (URL, data URI, or markdown image)."""
+        return is_image_output(text)
 
     @staticmethod
-    def _extract_data_uri(text: str) -> str:
-        """Extract the raw data URI from either a plain data URI or markdown image syntax."""
-        if text.startswith("!["):
-            # Extract from ![...](data:image/...) markdown
-            start = text.index("(") + 1
-            end = text.rindex(")")
-            return text[start:end]
-        return text
+    def _extract_image_source(text: str) -> str:
+        """Extract the raw image URL or data URI, unwrapping markdown if present."""
+        return extract_source(text)
 
     async def _caption_image(self, image_data_uri: str, prompt_hint: str = "") -> str:
         """
@@ -684,20 +689,18 @@ class Agent:
 
             result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
 
-            # Detect base64 image results — keep image data for direct delivery
-            # to the user, but store a compact description for the model so it
-            # retains context about what was generated (enabling follow-up like
-            # "convert the previous image to a line drawing").
+            # Detect image results (URL or base64) — keep image data for
+            # direct delivery to the user, but store a compact description
+            # for the model so it retains context about what was generated
+            # (enabling follow-up like "convert the previous image …").
             image_data = None
             model_output = result_str
-            if self._is_base64_image(result_str):
+            if self._is_image_output(result_str):
                 image_data = result_str
-                # Use vision model to caption the image — captures details that
-                # the generation prompt alone cannot convey (composition, colors,
-                # style nuances, background elements, etc.)
-                data_uri = self._extract_data_uri(result_str)
+                # Extract raw URL / data URI and caption via vision model
+                image_src = self._extract_image_source(result_str)
                 prompt_hint = args.get("prompt", "")
-                caption = await self._caption_image(data_uri, prompt_hint)
+                caption = await self._caption_image(image_src, prompt_hint)
                 model_output = (
                     f"[Image generated by tool `{name}` and displayed to user. "
                     f"Image description: {caption}]"
