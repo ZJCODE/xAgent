@@ -129,13 +129,16 @@ cloud_memory = MemoryStorageCloud(
 )
 ```
 
-**Required Environment Variables:**
+If you are using config-driven `storage_mode: "cloud"`, follow the unified checklist in [README Cloud Mode](../README.md#cloud-mode).
+
+If you are instantiating `MemoryStorageCloud` directly in Python, set:
+
 ```bash
 UPSTASH_VECTOR_REST_URL=https://your-database.upstash.io
 UPSTASH_VECTOR_REST_TOKEN=your_token_here
 ```
 
-`REDIS_URL` is optional and only needed if you explicitly inject a Redis-backed temporary message buffer for distributed deployments.
+`REDIS_URL` is only needed if you explicitly inject a Redis-backed temporary message buffer for distributed deployments.
 
 **Advantages:**
 - Scalable cloud storage
@@ -167,11 +170,14 @@ memory = MemoryStorageLocal(
 # OpenAI API (required for embeddings and LLM processing)
 OPENAI_API_KEY=your_openai_api_key
 
-# Upstash Vector (for cloud storage)
+# For config-driven cloud mode, see README Cloud Mode:
+# ../README.md#cloud-mode
+#
+# For direct MemoryStorageCloud usage:
 UPSTASH_VECTOR_REST_URL=your_upstash_vector_url
 UPSTASH_VECTOR_REST_TOKEN=your_upstash_vector_token
 
-# Optional Redis (only for a distributed temporary message buffer)
+# Optional Redis (only when you explicitly inject MessageBufferRedis)
 REDIS_URL=redis://username:password@host:port/database
 
 # Optional: Custom ChromaDB path

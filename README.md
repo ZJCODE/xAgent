@@ -20,12 +20,6 @@ A production-ready AI Agent framework focused on **easy start** and **scalable d
 pip install myxagent
 ```
 
-Optional extras:
-
-```bash
-pip install "myxagent[cloud]"   # Redis + Upstash cloud/distributed integrations
-```
-
 ### 2) Set environment variable
 
 ```bash
@@ -89,9 +83,35 @@ xagent-server --config config/agent.yaml --toolkit_path my_toolkit --open
 ```
 
 If you do not use custom tools, you can omit `--toolkit_path`.
-Cloud storage is optional and only needed when you explicitly choose `storage_mode: "cloud"` for both chat history and memory.
 
 For more YAML options, see [docs/configuration_reference.md](docs/configuration_reference.md).
+
+## Cloud Mode
+
+Use cloud mode when you want shared/distributed conversation history and cloud memory.
+
+### 1) Install cloud dependencies
+
+```bash
+pip install "myxagent[cloud]"
+```
+
+### 2) Set `storage_mode: "cloud"`
+
+```yaml
+agent:
+    storage_mode: "cloud"
+```
+
+### 3) Set required environment variables
+
+```bash
+export REDIS_URL=redis://localhost:6379/0
+export UPSTASH_VECTOR_REST_URL=https://your-database.upstash.io
+export UPSTASH_VECTOR_REST_TOKEN=your_token_here
+```
+
+For config-driven cloud mode, all three are required. If you want local-only execution, keep `storage_mode: "local"` and install `myxagent` only.
 
 ## Most Common Usage
 

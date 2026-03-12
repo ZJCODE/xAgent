@@ -320,7 +320,7 @@ agent:
   storage_mode: "cloud"
 ```
 
-Uses cloud backends for both conversation history and long-term memory. This currently requires `REDIS_URL`, `UPSTASH_VECTOR_REST_URL`, and `UPSTASH_VECTOR_REST_TOKEN`.
+For the complete cloud mode setup, including `pip install "myxagent[cloud]"` and the required `REDIS_URL`, `UPSTASH_VECTOR_REST_URL`, and `UPSTASH_VECTOR_REST_TOKEN`, see [README Cloud Mode](../README.md#cloud-mode).
 
 ## Complete Examples
 

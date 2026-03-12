@@ -13,24 +13,13 @@ This guide helps you go from zero to a working xAgent setup in a few minutes.
 pip install myxagent
 ```
 
-Optional extras:
-
-```bash
-pip install "myxagent[cloud]"   # Redis + Upstash cloud/distributed integrations
-```
-
 ## Set Environment Variables
 
 ```bash
 export OPENAI_API_KEY=your_openai_api_key
 ```
 
-Optional (only if needed):
-
-```bash
-# Redis-backed distributed persistence
-export REDIS_URL=your_redis_url
-```
+If you plan to use cloud mode, follow the unified checklist in [README Cloud Mode](../README.md#cloud-mode).
 
 ## Choose One Start Mode
 
