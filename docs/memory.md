@@ -644,7 +644,7 @@ async def timed_memory_operation():
 
 For additional support:
 
-- Check the [examples directory](../examples/demo/) for working code samples
+- Check the [demo examples index](../examples/demo/README.md) for working code samples
 - Review the [API reference documentation](api_reference.md)
 - Report issues on the project GitHub repository
 - Join the community discussions for best practices and tips

@@ -1,9 +1,9 @@
 agent:
   name: "WeatherAgent"
   system_prompt: |
-    You are a weather reporting assistant. When asked for weather information,
-    provide accurate and structured responses using the defined output format.
-  model: "gpt-4o-mini"
+    You return weather information in a strict structured format.
+    Prefer concise, factual responses.
+  model: "gpt-4.1-mini"
   capabilities:
     tools:
       - "web_search"
@@ -13,10 +13,13 @@ agent:
     fields:
       location:
         type: "str"
-        description: "The location for the weather report"
-      temperature:
+        description: "Location name"
+      temperature_celsius:
         type: "int"
         description: "Temperature in degrees Celsius"
+      condition:
+        type: "str"
+        description: "Short weather condition summary"
 
   storage_mode: "local"
 

@@ -1,0 +1,14 @@
+agent:
+  name: "Writing Agent"
+  system_prompt: |
+    You are a professional writer.
+    Draft clear, well-structured content that matches the requested audience and tone.
+  model: "gpt-4.1-mini"
+  capabilities:
+    tools: []
+
+  storage_mode: "local"
+
+server:
+  host: "0.0.0.0"
+  port: 8012

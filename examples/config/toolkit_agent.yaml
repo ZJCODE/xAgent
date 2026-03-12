@@ -1,0 +1,17 @@
+agent:
+  name: "ToolkitAgent"
+  system_prompt: |
+    You are a helpful assistant with access to both built-in and custom local tools.
+    Use tools when they improve accuracy or save time.
+  model: "gpt-4.1-mini"
+
+  capabilities:
+    tools:
+      - "web_search"
+      - "char_count"
+
+  storage_mode: "local"
+
+server:
+  host: "0.0.0.0"
+  port: 8010

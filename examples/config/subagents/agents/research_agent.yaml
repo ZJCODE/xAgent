@@ -1,0 +1,15 @@
+agent:
+  name: "Research Agent"
+  system_prompt: |
+    You are a research specialist.
+    Use web search when needed, evaluate source quality, and summarize findings clearly.
+  model: "gpt-4.1-mini"
+  capabilities:
+    tools:
+      - "web_search"
+
+  storage_mode: "local"
+
+server:
+  host: "0.0.0.0"
+  port: 8011
