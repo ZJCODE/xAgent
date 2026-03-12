@@ -10,7 +10,7 @@ import time
 from pydantic import BaseModel, Field
 
 from ..core.agent import Agent
-from ..utils.workflow_dsl import parse_dependencies_dsl, validate_dsl_syntax
+from ..utils.workflow_dsl import parse_dependencies_dsl, parse_dependencies_yaml, validate_dsl_syntax
 
 
 # Auto mode structured output models
@@ -414,8 +414,17 @@ class GraphWorkflow(BaseWorkflow):
             dependencies: Either:
                 - Dict mapping agent names to their input dependencies
                   Example: {"B": ["A"], "C": ["A", "B"], "D": ["A"]}
-                - DSL string with arrow notation
+                - Arrow DSL string
                   Example: "A->B, A->C, B&C->D"
+                - YAML string with a ``dependencies`` key
+                  Example::
+
+                      dependencies:
+                        B:
+                          - A
+                        C:
+                          - A
+                          - B
             max_concurrent: Maximum concurrent executions
         """
         super().__init__(agents, name)
@@ -423,13 +432,18 @@ class GraphWorkflow(BaseWorkflow):
         
         # Parse dependencies based on type
         if isinstance(dependencies, str):
-            # Validate DSL syntax first
-            is_valid, error_msg = validate_dsl_syntax(dependencies)
-            if not is_valid:
-                raise ValueError(f"Invalid DSL syntax: {error_msg}")
-            
-            self.dependencies = parse_dependencies_dsl(dependencies)
-            self.dsl_string = dependencies
+            stripped = dependencies.strip()
+            if stripped.startswith("dependencies:") or stripped.startswith("dependencies "):
+                # YAML format
+                self.dependencies = parse_dependencies_yaml(dependencies)
+                self.dsl_string = None
+            else:
+                # Arrow DSL format — validate first
+                is_valid, error_msg = validate_dsl_syntax(dependencies)
+                if not is_valid:
+                    raise ValueError(f"Invalid DSL syntax: {error_msg}")
+                self.dependencies = parse_dependencies_dsl(dependencies)
+                self.dsl_string = dependencies
         else:
             self.dependencies = dependencies
             self.dsl_string = None

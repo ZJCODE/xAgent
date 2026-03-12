@@ -13,7 +13,9 @@ _EXPORTS = {
     "VectorStoreBase": (".base_vector_store", "VectorStoreBase"),
     "VectorDoc": (".base_vector_store", "VectorDoc"),
     "VectorStoreLocal": (".local_vector_store", "VectorStoreLocal"),
-    "VectorStoreUpstash": (".upstach_vector_store", "VectorStoreUpstash"),
+    # Note: upstash_vector_store.py (correct spelling) is the canonical file.
+    # upstach_vector_store.py (legacy typo) is kept for backwards compatibility.
+    "VectorStoreUpstash": (".upstash_vector_store", "VectorStoreUpstash"),
 }
 
 

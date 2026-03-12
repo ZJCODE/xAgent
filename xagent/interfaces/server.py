@@ -2,18 +2,29 @@ import uvicorn
 import argparse
 import logging
 import os
+import warnings
 from pathlib import Path
 from typing import Optional, Union, List
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import json
 from dotenv import load_dotenv
 
 from .base import BaseAgentRunner
 from ..core.agent import Agent
+from ..defaults import (
+    API_MAX_ITER_LIMIT,
+    API_MAX_CONCURRENT_TOOLS_LIMIT,
+    API_MAX_HISTORY_COUNT_LIMIT,
+)
+
+
+class SecurityWarning(UserWarning):
+    """Raised when a potentially insecure configuration is detected."""
+
 
 # Path to bundled static frontend
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -28,11 +39,11 @@ class AgentInput(BaseModel):
     # Enable server-side streaming when true
     stream: Optional[bool] = False
     # Number of previous messages to include in conversation history
-    history_count: Optional[int] = 16
+    history_count: Optional[int] = Field(default=16, ge=1, le=API_MAX_HISTORY_COUNT_LIMIT)
     # Maximum model call attempts
-    max_iter: Optional[int] = 10
+    max_iter: Optional[int] = Field(default=10, ge=1, le=API_MAX_ITER_LIMIT)
     # Maximum number of concurrent tool calls
-    max_concurrent_tools: Optional[int] = 10
+    max_concurrent_tools: Optional[int] = Field(default=10, ge=1, le=API_MAX_CONCURRENT_TOOLS_LIMIT)
     # Whether to enable memory storage and retrieval
     enable_memory: Optional[bool] = False
     # Whether to enable the agent can share current chat with other user or agent
@@ -98,14 +109,28 @@ class AgentHTTPServer(BaseAgentRunner):
         self.app = self._create_app()
 
         # Enable CORS for local development and external frontends
+        cors_origins = self._get_cors_origins()
+        if cors_origins == ["*"]:
+            warnings.warn(
+                "CORS allow_origins=['*'] is insecure for production. "
+                "Set specific origins via the 'server.cors.allow_origins' config key.",
+                SecurityWarning,
+                stacklevel=2,
+            )
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=cors_origins,
             allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type", "Authorization"],
         )
         
+    def _get_cors_origins(self) -> List[str]:
+        """Return CORS allowed origins from config, defaulting to ['*']."""
+        server_cfg = getattr(self, "config", {}).get("server", {})
+        cors_cfg = server_cfg.get("cors", {})
+        return cors_cfg.get("allow_origins", ["*"])
+
     def _create_app(self) -> FastAPI:
         """Create and configure FastAPI application."""
         app = FastAPI(

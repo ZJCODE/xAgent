@@ -95,6 +95,59 @@ def parse_dependencies_dsl(dsl_string: str) -> Dict[str, List[str]]:
     return dependencies
 
 
+def parse_dependencies_yaml(yaml_str: str) -> Dict[str, List[str]]:
+    """
+    Parse a YAML-format dependency specification into a dependency dictionary.
+
+    The YAML string must contain a top-level ``dependencies`` key whose value
+    is a mapping of agent names to their list of prerequisite agent names.
+
+    Args:
+        yaml_str: YAML string, e.g.::
+
+            dependencies:
+              analyzer:
+                - researcher
+              writer:
+                - analyzer
+              reviewer:
+                - writer
+                - researcher
+
+    Returns:
+        Dict mapping agent names to their list of dependency names.
+
+    Examples:
+        >>> yaml_str = "dependencies:\\n  B:\\n    - A\\n  C:\\n    - A\\n    - B\\n"
+        >>> parse_dependencies_yaml(yaml_str)
+        {'B': ['A'], 'C': ['A', 'B']}
+    """
+    import yaml  # pyyaml is a core dependency
+
+    if not yaml_str or not yaml_str.strip():
+        return {}
+
+    data = yaml.safe_load(yaml_str)
+    if not isinstance(data, dict):
+        raise ValueError("YAML workflow spec must be a mapping at the top level.")
+
+    raw = data.get("dependencies", {})
+    if not isinstance(raw, dict):
+        raise ValueError("'dependencies' key must be a mapping of agent -> [deps].")
+
+    result: Dict[str, List[str]] = {}
+    for agent_name, deps in raw.items():
+        if deps is None:
+            result[str(agent_name)] = []
+        elif isinstance(deps, list):
+            result[str(agent_name)] = [str(d) for d in deps]
+        else:
+            raise ValueError(
+                f"Dependencies for agent '{agent_name}' must be a list, got {type(deps).__name__}."
+            )
+    return result
+
+
 def validate_dsl_syntax(dsl_string: str) -> Tuple[bool, str]:
     """
     Validate DSL syntax.

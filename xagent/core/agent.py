@@ -9,53 +9,63 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, List, Optional, Uni
 
 # Third-party imports
 import httpx
-from langfuse import observe
-from langfuse.openai import AsyncOpenAI
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Local imports
 from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageBase, MemoryStorageLocal
-from ..schemas import Message, ToolCall,RoleType, MessageType
+from ..defaults import (
+    DEFAULT_AGENT_NAME,
+    DEFAULT_MODEL,
+    DEFAULT_USER_ID,
+    DEFAULT_SESSION_ID,
+    DEFAULT_HISTORY_COUNT,
+    DEFAULT_MAX_ITER,
+    DEFAULT_MAX_CONCURRENT_TOOLS,
+    MCP_CACHE_TTL,
+    HTTP_TIMEOUT,
+    TOOL_RESULT_PREVIEW_LENGTH,
+    ERROR_RESPONSE_PREVIEW_LENGTH,
+    IMAGE_CAPTION_MODEL,
+    IMAGE_CAPTION_PROMPT,
+    RETRY_ATTEMPTS,
+    RETRY_MIN_WAIT,
+    RETRY_MAX_WAIT,
+    BACKGROUND_TASK_ATTEMPTS,
+    BACKGROUND_TASK_BASE_DELAY,
+    DEFAULT_MAX_BACKGROUND_TASKS,
+)
+from ..observability import observe, get_openai_client
+from ..schemas import Message, ToolCall, RoleType, MessageType
 from .session import normalize_session_id
 from ..utils.tool_decorator import function_tool
 from ..utils.image_utils import is_image_output, extract_source, extract_image_urls_from_text
 
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
-
 class AgentConfig:
     """Configuration constants for Agent class."""
     
-    DEFAULT_NAME = "default_agent"
-    DEFAULT_MODEL = "gpt-4.1-mini"
-    DEFAULT_USER_ID = "default_user"
-    DEFAULT_SESSION_ID = "default_session"
-    DEFAULT_HISTORY_COUNT = 16
-    DEFAULT_MAX_ITER = 10
-    DEFAULT_MAX_CONCURRENT_TOOLS = 10  # Maximum concurrent tool calls
-    MCP_CACHE_TTL = 300  # 5 minutes
-    HTTP_TIMEOUT = 600.0  # 10 minutes
-    TOOL_RESULT_PREVIEW_LENGTH = 20
-    ERROR_RESPONSE_PREVIEW_LENGTH = 200
-    IMAGE_CAPTION_MODEL = "gpt-4o-mini"  # lightweight vision model for image captioning
-    IMAGE_CAPTION_PROMPT = (
-        "Describe this image in detail for future reference. Include: subject matter, "
-        "composition, colors, style, mood, and any notable details. Be concise but thorough. "
-        "Respond in the same language as the user's original prompt if provided."
-    )
+    DEFAULT_NAME = DEFAULT_AGENT_NAME
+    DEFAULT_MODEL = DEFAULT_MODEL
+    DEFAULT_USER_ID = DEFAULT_USER_ID
+    DEFAULT_SESSION_ID = DEFAULT_SESSION_ID
+    DEFAULT_HISTORY_COUNT = DEFAULT_HISTORY_COUNT
+    DEFAULT_MAX_ITER = DEFAULT_MAX_ITER
+    DEFAULT_MAX_CONCURRENT_TOOLS = DEFAULT_MAX_CONCURRENT_TOOLS
+    MCP_CACHE_TTL = MCP_CACHE_TTL
+    HTTP_TIMEOUT = HTTP_TIMEOUT
+    TOOL_RESULT_PREVIEW_LENGTH = TOOL_RESULT_PREVIEW_LENGTH
+    ERROR_RESPONSE_PREVIEW_LENGTH = ERROR_RESPONSE_PREVIEW_LENGTH
+    IMAGE_CAPTION_MODEL = IMAGE_CAPTION_MODEL
+    IMAGE_CAPTION_PROMPT = IMAGE_CAPTION_PROMPT
     
     # Retry configuration
-    RETRY_ATTEMPTS = 3
-    RETRY_MIN_WAIT = 1
-    RETRY_MAX_WAIT = 60
-    BACKGROUND_TASK_ATTEMPTS = 3
-    BACKGROUND_TASK_BASE_DELAY = 0.5
-    DEFAULT_MAX_BACKGROUND_TASKS = 4
+    RETRY_ATTEMPTS = RETRY_ATTEMPTS
+    RETRY_MIN_WAIT = RETRY_MIN_WAIT
+    RETRY_MAX_WAIT = RETRY_MAX_WAIT
+    BACKGROUND_TASK_ATTEMPTS = BACKGROUND_TASK_ATTEMPTS
+    BACKGROUND_TASK_BASE_DELAY = BACKGROUND_TASK_BASE_DELAY
+    DEFAULT_MAX_BACKGROUND_TASKS = DEFAULT_MAX_BACKGROUND_TASKS
     
     DEFAULT_SYSTEM_PROMPT = (
         "**Context Information:**\n"
@@ -118,7 +128,7 @@ class Agent:
         self.name = name or AgentConfig.DEFAULT_NAME
         self.description = description
         self.model = model or AgentConfig.DEFAULT_MODEL
-        self.client = client or AsyncOpenAI()
+        self.client = get_openai_client(client)
         self.output_type = output_type
         
         # Message storage setup
@@ -328,8 +338,18 @@ class Agent:
                     return "Sorry, I encountered an error while processing your request."
 
             # If no valid reply after max_iter attempts
-            self.logger.error("Failed to generate response after %d attempts", max_iter)
-            return "Sorry, I could not generate a response after multiple attempts."
+            self.logger.error(
+                "Agent '%s' reached the maximum iteration limit (%d). "
+                "This usually means a tool is in a loop or the model cannot determine "
+                "how to finish the task. Consider increasing max_iter or simplifying the request.",
+                self.name,
+                max_iter,
+            )
+            return (
+                f"Agent '{self.name}' reached the maximum iteration limit ({max_iter}). "
+                f"This usually means a tool is in a loop or the model cannot determine "
+                f"how to finish the task. Consider increasing max_iter or simplifying the request."
+            )
 
         except Exception as e:
             self.logger.exception("Agent chat error: %s", e)
@@ -548,6 +568,11 @@ class Agent:
                     "Background task permanently failed (%s): %s",
                     description,
                     last_error,
+                    extra={
+                        "task_description": description,
+                        "error": str(last_error),
+                        "attempts": AgentConfig.BACKGROUND_TASK_ATTEMPTS,
+                    },
                 )
 
     def _get_http_client(self, server: str) -> httpx.AsyncClient:
@@ -897,7 +922,7 @@ class Agent:
             return None, None, None
         func = self.tools.get(name) or self.mcp_tools.get(name)
         if func:
-            self.logger.info("Calling tool: %s with args: %s", name, args)
+            self.logger.debug("Calling tool: %s with args: %s", name, args)
 
             try:
                 result = await func(**args)
