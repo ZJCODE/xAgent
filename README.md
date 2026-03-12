@@ -69,6 +69,65 @@ curl -X POST "http://localhost:8010/chat" \
   }'
 ```
 
+```bash
+# Continuous conversation: keep same user_id + session_id
+# Turn 1
+curl -X POST "http://localhost:8010/chat" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "user_id": "alice",
+        "session_id": "daily_chat",
+        "user_message": "Remember that my favorite city is Hangzhou."
+    }'
+
+# Turn 2 (same session)
+curl -X POST "http://localhost:8010/chat" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "user_id": "alice",
+        "session_id": "daily_chat",
+        "user_message": "What is my favorite city?"
+    }'
+```
+
+```bash
+# Image input via image_source (single image)
+curl -X POST "http://localhost:8010/chat" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "user_id": "user123",
+        "session_id": "image_session",
+        "user_message": "Describe this image.",
+        "image_source": "https://example.com/image.jpg"
+    }'
+```
+
+```bash
+# Image input via image_source (multiple images)
+curl -X POST "http://localhost:8010/chat" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "user_id": "user123",
+        "session_id": "image_session",
+        "user_message": "Compare these images.",
+        "image_source": [
+            "https://example.com/image1.jpg",
+            "https://example.com/image2.jpg"
+        ]
+    }'
+```
+
+```bash
+# Image URL directly in message text (no image_source needed)
+curl -X POST "http://localhost:8010/chat" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "user_id": "user123",
+        "session_id": "image_in_message",
+        "user_message": "What do you see in this image? https://example.com/cat.jpg"
+    }'
+```
+
 ### Python API
 
 ```python
@@ -83,6 +142,72 @@ async def main():
         session_id="session456"
     )
     print(response)
+
+asyncio.run(main())
+```
+
+### Continuous Conversation (same session)
+
+Use the same `user_id` and `session_id` to keep context across turns:
+
+```python
+import asyncio
+from xagent.core import Agent
+
+async def main():
+    agent = Agent(model="gpt-4.1-mini")
+
+    user_id = "alice"
+    session_id = "daily_chat"
+
+    reply1 = await agent.chat(
+        user_message="Remember that my favorite city is Hangzhou.",
+        user_id=user_id,
+        session_id=session_id,
+    )
+    print("Turn 1:", reply1)
+
+    reply2 = await agent.chat(
+        user_message="What is my favorite city?",
+        user_id=user_id,
+        session_id=session_id,
+    )
+    print("Turn 2:", reply2)
+
+asyncio.run(main())
+```
+
+### Image Input Support
+
+`image_source` supports a single value or list, and each item can be an image URL, local file path, or base64 data URI.
+
+```python
+import asyncio
+from xagent.core import Agent
+
+async def main():
+    agent = Agent(model="gpt-4.1-mini")
+
+    # Single image URL
+    reply1 = await agent.chat(
+        user_message="What do you see in this image?",
+        user_id="user123",
+        session_id="image_demo",
+        image_source="https://example.com/image.jpg",
+    )
+    print("Single image:", reply1)
+
+    # Multiple images (URL + local path)
+    reply2 = await agent.chat(
+        user_message="Compare these two images.",
+        user_id="user123",
+        session_id="image_demo",
+        image_source=[
+            "https://example.com/image1.jpg",
+            "./local_image.png",
+        ],
+    )
+    print("Multi-image:", reply2)
 
 asyncio.run(main())
 ```
