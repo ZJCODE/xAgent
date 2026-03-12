@@ -1,3 +1,4 @@
+import asyncio
 import chromadb
 import chromadb.utils.embedding_functions as embedding_functions
 from chromadb.config import Settings
@@ -6,11 +7,8 @@ import os
 import uuid
 from typing import List, Optional, Dict, Any
 from pathlib import Path
-import dotenv
 
 from .base_vector_store import VectorStoreBase, VectorDoc
-
-dotenv.load_dotenv(override=True)
 
 
 class VectorStoreLocal(VectorStoreBase):
@@ -80,16 +78,24 @@ class VectorStoreLocal(VectorStoreBase):
             raise ValueError("ids, documents, and metadatas must have the same length")
         
         try:
-            self.collection.upsert(
-                documents=documents,
-                metadatas=metadatas,
-                ids=ids
-            )
+            await asyncio.to_thread(self._upsert_sync, ids, documents, metadatas)
             self.logger.debug("Upserted %d documents to ChromaDB", len(ids))
             
         except Exception as e:
             self.logger.error("Failed to upsert documents: %s", str(e))
             raise
+
+    def _upsert_sync(
+        self,
+        ids: List[str],
+        documents: List[str],
+        metadatas: List[Dict[str, Any]],
+    ) -> None:
+        self.collection.upsert(
+            documents=documents,
+            metadatas=metadatas,
+            ids=ids,
+        )
     
     async def query(self,
                     query_texts: Optional[List[str]] = None,
@@ -131,7 +137,7 @@ class VectorStoreLocal(VectorStoreBase):
                 query_params["where_document"] = keyword_query
             
             # Execute query
-            results = self.collection.query(**query_params)
+            results = await asyncio.to_thread(self._query_sync, query_params)
             
             # Convert results to VectorDoc format
             vector_docs = []
@@ -161,6 +167,9 @@ class VectorStoreLocal(VectorStoreBase):
         except Exception as e:
             self.logger.error("Failed to query documents: %s", str(e))
             raise
+
+    def _query_sync(self, query_params: Dict[str, Any]) -> Dict[str, Any]:
+        return self.collection.query(**query_params)
     
     async def delete(self,
                      ids: List[str]
@@ -176,7 +185,7 @@ class VectorStoreLocal(VectorStoreBase):
             return
         
         try:
-            self.collection.delete(ids=ids)
+            await asyncio.to_thread(self.collection.delete, ids=ids)
             self.logger.debug("Deleted %d documents from ChromaDB", len(ids))
             
         except Exception as e:
@@ -192,7 +201,7 @@ class VectorStoreLocal(VectorStoreBase):
         """
         try:
             chroma_where = self._convert_meta_filter_to_chroma(meta_filter)
-            self.collection.delete(where=chroma_where)
+            await asyncio.to_thread(self.collection.delete, where=chroma_where)
             self.logger.debug("Deleted documents with filter: %s", meta_filter)
             
         except Exception as e:

@@ -153,6 +153,7 @@ workflow = Workflow()
 
 #### Methods
 
+- `async run_auto(task) -> WorkflowResult`: Automatically generate agents, dependencies, and execute the workflow
 - `async run_sequential(agents, task) -> WorkflowResult`: Execute agents in sequence
 - `async run_parallel(agents, task) -> WorkflowResult`: Execute agents in parallel
 - `async run_graph(agents, dependencies, task) -> WorkflowResult`: Execute with complex dependencies

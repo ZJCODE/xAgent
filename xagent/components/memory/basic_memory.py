@@ -5,15 +5,12 @@ import re
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta, timezone
-import dotenv
 
 from .base_memory import MemoryStorageBase
 from .helper.llm_service import MemoryLLMService
 from .config.memory_config import TRIGGER_KEYWORDS, MAX_SCAN_LENGTH
 from .message_buffer import MessageBufferBase
 from .vector_store import VectorStoreBase
-
-dotenv.load_dotenv(override=True)
 
 class MemoryStorageBasic(MemoryStorageBase):
     """

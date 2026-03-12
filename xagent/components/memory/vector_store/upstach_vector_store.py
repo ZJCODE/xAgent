@@ -1,13 +1,11 @@
+import asyncio
 import logging
 import uuid
 from typing import List, Optional, Dict, Any
-import dotenv
 
 from upstash_vector import Index, Vector
 
 from .base_vector_store import VectorStoreBase, VectorDoc
-
-dotenv.load_dotenv(override=True)
 
 
 class VectorStoreUpstash(VectorStoreBase):
@@ -71,7 +69,7 @@ class VectorStoreUpstash(VectorStoreBase):
                 vectors.append(vector)
             
             # Batch upsert
-            self.index.upsert(vectors=vectors)
+            await asyncio.to_thread(self.index.upsert, vectors=vectors)
             self.logger.debug("Upserted %d documents to Upstash Vector", len(ids))
             
         except Exception as e:
@@ -119,7 +117,7 @@ class VectorStoreUpstash(VectorStoreBase):
                     query_params["filter"] = upstash_filter
                 
                 # Execute query
-                results = self.index.query(**query_params)
+                results = await asyncio.to_thread(self.index.query, **query_params)
                 
                 # Convert results to VectorDoc format
                 for result in results:
@@ -156,7 +154,7 @@ class VectorStoreUpstash(VectorStoreBase):
             return
         
         try:
-            self.index.delete(ids=ids)
+            await asyncio.to_thread(self.index.delete, ids=ids)
             self.logger.debug("Deleted %d documents from Upstash Vector", len(ids))
             
         except Exception as e:
@@ -187,7 +185,7 @@ class VectorStoreUpstash(VectorStoreBase):
             }
             
             try:
-                results = self.index.query(**query_params)
+                results = await asyncio.to_thread(self.index.query, **query_params)
                 ids_to_delete = [result.id for result in results]
                 
                 if ids_to_delete:
@@ -269,7 +267,7 @@ class VectorStoreUpstash(VectorStoreBase):
             Dictionary with index information
         """
         try:
-            info = self.index.info()
+            info = await asyncio.to_thread(self.index.info)
             return {
                 "dimension": info.dimension if hasattr(info, 'dimension') else None,
                 "total_vector_count": info.total_vector_count if hasattr(info, 'total_vector_count') else None,
@@ -285,7 +283,7 @@ class VectorStoreUpstash(VectorStoreBase):
         Use with caution!
         """
         try:
-            self.index.reset()
+            await asyncio.to_thread(self.index.reset)
             self.logger.warning("Index has been reset - all vectors deleted!")
             
         except Exception as e:

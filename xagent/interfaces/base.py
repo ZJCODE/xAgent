@@ -1,5 +1,6 @@
 # Standard library imports
 import importlib.util
+import logging
 import os
 import sys
 import warnings
@@ -7,7 +8,6 @@ from typing import Any, Dict, List, Optional, Type
 
 # Third-party imports
 import yaml
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field, create_model
 
 # Local imports
@@ -59,8 +59,7 @@ class BaseAgentRunner:
             yaml.YAMLError: If configuration file is invalid
             ImportError: If toolkit module cannot be loaded
         """
-        # Load environment variables first
-        load_dotenv(override=True)
+        self.logger = logging.getLogger(self.__class__.__name__)
         
         # Store paths for later use
         self.toolkit_path = toolkit_path
@@ -193,7 +192,11 @@ class BaseAgentRunner:
             return self._import_toolkit_module(resolved_path)
             
         except Exception as e:
-            print(f"Warning: failed to load TOOLKIT_REGISTRY from {toolkit_path}: {e}")
+            self.logger.warning(
+                "Failed to load TOOLKIT_REGISTRY from %s: %s",
+                toolkit_path,
+                e,
+            )
             return {}
     
     def _resolve_toolkit_path(self, toolkit_path: str) -> str:
@@ -269,7 +272,7 @@ class BaseAgentRunner:
             return create_model(class_name, **field_definitions)
             
         except Exception as e:
-            print(f"Warning: failed to create output model from schema: {e}")
+            self.logger.warning("Failed to create output model from schema: %s", e)
             return None
     
     def _build_field_definitions(self, fields_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -378,7 +381,7 @@ class BaseAgentRunner:
             if name in combined_registry:
                 tools.append(combined_registry[name])
             else:
-                print(f"Warning: Tool '{name}' not found in registry")
+                self.logger.warning("Tool '%s' not found in registry", name)
         
         return tools
     
@@ -423,7 +426,7 @@ class BaseAgentRunner:
         elif isinstance(agent_config, (list, tuple)) and len(agent_config) == 3:
             return tuple(agent_config)
         else:
-            print(f"Warning: Invalid sub-agent config format: {agent_config}")
+            self.logger.warning("Invalid sub-agent config format: %s", agent_config)
             return None
     
     def _get_output_type(self, agent_cfg: Dict[str, Any]) -> Optional[Type[BaseModel]]:

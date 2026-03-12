@@ -1,12 +1,9 @@
 from typing import Optional
 import logging
-import dotenv
 
 from .basic_memory import MemoryStorageBasic
 from .message_buffer import MessageBufferBase, MessageBufferLocal
 from .vector_store import VectorStoreBase, VectorStoreLocal
-
-dotenv.load_dotenv(override=True)
 
 class MemoryStorageLocal(MemoryStorageBasic):
     """

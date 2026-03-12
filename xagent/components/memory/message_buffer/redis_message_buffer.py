@@ -6,11 +6,8 @@ from urllib.parse import urlparse, parse_qs, urlunparse, urlencode
 from redis.exceptions import RedisError
 import redis.asyncio as redis
 from redis.asyncio.cluster import RedisCluster
-import dotenv
 
 from .base_message_buffer import MessageBufferBase
-
-dotenv.load_dotenv(override=True)
 
 
 def _strip_query_param(url: str, key: str) -> str:

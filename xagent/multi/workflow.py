@@ -444,9 +444,37 @@ class GraphWorkflow(BaseWorkflow):
         for agent_name, deps in self.dependencies.items():
             if agent_name not in self.agent_map:
                 raise ValueError(f"Agent '{agent_name}' in dependencies not found in agents list")
+            if agent_name in deps:
+                raise ValueError(f"Agent '{agent_name}' cannot depend on itself")
             for dep in deps:
                 if dep not in self.agent_map:
                     raise ValueError(f"Dependency '{dep}' for agent '{agent_name}' not found in agents list")
+        self._assert_acyclic_dependencies()
+
+    def _assert_acyclic_dependencies(self) -> None:
+        """Fail fast when the dependency graph contains cycles."""
+        remaining_dependencies = {
+            agent_name: set(self.dependencies.get(agent_name, []))
+            for agent_name in self.agent_map
+        }
+        ready = [agent_name for agent_name, deps in remaining_dependencies.items() if not deps]
+        visited = []
+
+        while ready:
+            current = ready.pop(0)
+            visited.append(current)
+            for dependent, deps in remaining_dependencies.items():
+                if current not in deps:
+                    continue
+                deps.discard(current)
+                if not deps and dependent not in visited and dependent not in ready:
+                    ready.append(dependent)
+
+        if len(visited) != len(self.agent_map):
+            unresolved = sorted(set(self.agent_map) - set(visited))
+            raise ValueError(
+                f"Workflow dependencies contain a cycle or unresolved agents: {unresolved}"
+            )
     
     async def execute(
         self, 
@@ -470,6 +498,12 @@ class GraphWorkflow(BaseWorkflow):
         
         # Get execution layers (groups of agents that can run in parallel)
         execution_layers = self._get_execution_layers()
+        scheduled_agents = {agent_name for layer in execution_layers for agent_name in layer}
+        missing_agents = sorted(set(self.agent_map) - scheduled_agents)
+        if missing_agents:
+            raise RuntimeError(
+                f"Execution planning left unresolved agents: {missing_agents}"
+            )
         
         results = {}
         layer_results = []
@@ -594,11 +628,20 @@ class GraphWorkflow(BaseWorkflow):
             return original_task
         elif len(deps) == 1:
             # Single dependency, use its result
-            return results[deps[0]]
+            dependency = deps[0]
+            if dependency not in results:
+                raise RuntimeError(
+                    f"Missing dependency result for agent '{agent_name}': '{dependency}'"
+                )
+            return str(results[dependency])
         else:
             # Multiple dependencies, combine them
             dep_results = []
             for dep in deps:
+                if dep not in results:
+                    raise RuntimeError(
+                        f"Missing dependency result for agent '{agent_name}': '{dep}'"
+                    )
                 dep_results.append(f"Result from {dep}:\n{results[dep]}")
             
             combined_input = f"Original task: {original_task}\n\n" + "\n\n".join(dep_results)

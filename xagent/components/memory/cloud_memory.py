@@ -1,12 +1,9 @@
 from typing import Optional
 import logging
-import dotenv
 
 from .basic_memory import MemoryStorageBasic
-from .message_buffer import MessageBufferBase, MessageBufferLocal
+from .message_buffer import MessageBufferBase, MessageBufferRedis
 from .vector_store import VectorStoreBase, VectorStoreUpstash
-
-dotenv.load_dotenv(override=True)
 
 class MemoryStorageCloud(MemoryStorageBasic):
     """
@@ -57,8 +54,8 @@ class MemoryStorageCloud(MemoryStorageBasic):
     def _initialize_message_buffer(self, message_buffer: Optional[MessageBufferBase] = None) -> MessageBufferBase:
         """Initialize the message buffer for cloud memory."""
         if message_buffer is None:
-            message_buffer = MessageBufferLocal(max_messages=100)
-            self.logger.info("Using default MessageBufferLocal")
+            message_buffer = MessageBufferRedis(max_messages=100)
+            self.logger.info("Using default MessageBufferRedis")
         else:
             self.logger.info("Using provided message buffer: %s", type(message_buffer).__name__)
         

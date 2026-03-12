@@ -129,7 +129,10 @@ class AgentCLI(BaseAgentRunner):
                     print("╰───────────────────────────────────────╯")
                     break
                 elif user_input.lower() == 'clear':
-                    await self.message_storage.clear_history(user_id, session_id)
+                    await self.message_storage.clear_history(
+                        user_id,
+                        self.agent.normalize_session_id(session_id),
+                    )
                     print("🧹 ✨ Conversation history cleared. Fresh start!")
                     continue
                 elif user_input.lower().startswith('stream '):

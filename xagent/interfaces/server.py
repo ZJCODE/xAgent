@@ -301,7 +301,7 @@ class AgentHTTPServer(BaseAgentRunner):
             try:
                 await self.message_storage.clear_history(
                     user_id=input_data.user_id,
-                    session_id=input_data.session_id
+                    session_id=self.agent.normalize_session_id(input_data.session_id)
                 )
                 
                 self.logger.debug(

@@ -1,14 +1,17 @@
-import os
-from dotenv import load_dotenv
-
-load_dotenv(override=True)
-
 from langfuse import observe
 from langfuse.openai import AsyncOpenAI
 
 from xagent.utils.tool_decorator import function_tool
 
 DEFAULT_MODEL = "gpt-4o-mini"
+_SHARED_CLIENT: AsyncOpenAI | None = None
+
+
+def _get_client() -> AsyncOpenAI:
+    global _SHARED_CLIENT
+    if _SHARED_CLIENT is None:
+        _SHARED_CLIENT = AsyncOpenAI()
+    return _SHARED_CLIENT
 
 @function_tool(name="web_search",
                description="Search the web using a search engine.",
@@ -24,7 +27,7 @@ async def web_search(search_query: str) -> str:
     if not query:
         return ""
     
-    client = AsyncOpenAI()
+    client = _get_client()
     response = await client.responses.create(
         model=DEFAULT_MODEL,
         tools=[{"type": "web_search_preview"},],
@@ -51,7 +54,7 @@ async def draw_image(prompt: str) -> str:
     if not clean_prompt:
         return ""
     
-    client = AsyncOpenAI()
+    client = _get_client()
     response = await client.responses.create(
         model=DEFAULT_MODEL,
         tools=[{"type": "image_generation", "quality": "low"}],

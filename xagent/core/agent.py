@@ -5,7 +5,7 @@ import logging
 import time
 import uuid
 from enum import Enum
-from typing import AsyncGenerator, List, Optional, Union
+from typing import Any, AsyncGenerator, Awaitable, Callable, List, Optional, Union
 
 # Third-party imports
 import httpx
@@ -17,16 +17,16 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 # Local imports
 from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageBase, MemoryStorageLocal
 from ..schemas import Message, ToolCall,RoleType, MessageType
-from ..utils.mcp_convertor import MCPTool
+from .session import normalize_session_id
 from ..utils.tool_decorator import function_tool
 from ..utils.image_utils import is_image_output, extract_source, extract_image_urls_from_text
+
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
-
 
 class AgentConfig:
     """Configuration constants for Agent class."""
@@ -53,14 +53,12 @@ class AgentConfig:
     RETRY_ATTEMPTS = 3
     RETRY_MIN_WAIT = 1
     RETRY_MAX_WAIT = 60
+    BACKGROUND_TASK_ATTEMPTS = 3
+    BACKGROUND_TASK_BASE_DELAY = 0.5
+    DEFAULT_MAX_BACKGROUND_TASKS = 4
     
     DEFAULT_SYSTEM_PROMPT = (
         "**Context Information:**\n"
-        "- Current user_id: {user_id}\n"
-        "- Current date: {date}\n" 
-        "- Current timezone: {timezone}\n\n"
-        "- Retrieve relevant memories for user: {retrieved_memories}\n\n\n"
-        "- Shared context: {shared_context}\n\n"
     )
 
 
@@ -136,7 +134,7 @@ class Agent:
             self.memory_storage = MemoryStorageLocal(collection_name = self.name)
         
         # System prompt setup
-        self.system_prompt = AgentConfig.DEFAULT_SYSTEM_PROMPT + (system_prompt or "")
+        self.system_prompt = system_prompt or ""
         
         # Tool management
         self.tools: dict = {}
@@ -151,6 +149,11 @@ class Agent:
         # Initialize components
         self.logger = logging.getLogger(self.__class__.__name__)
         self.mcp_servers = self._normalize_mcp_servers(mcp_servers)
+        self._http_clients: dict[str, httpx.AsyncClient] = {}
+        self._background_tasks: set[asyncio.Task] = set()
+        self._background_task_semaphore = asyncio.Semaphore(
+            AgentConfig.DEFAULT_MAX_BACKGROUND_TASKS
+        )
         
         # Register tools
         self._register_tools(tools or [])
@@ -166,6 +169,10 @@ class Agent:
         self.SHARED_USER_ID = f"{self.name.upper()}_SHARED_USER"
         self.SHARED_SESSION_ID = f"{self.name.upper()}_SHARED_SESSION"
         self.SHARED_HISTORY_COUNT = 10
+
+    def normalize_session_id(self, session_id: str) -> str:
+        """Return the storage session identifier used by this agent."""
+        return normalize_session_id(self.name, session_id)
 
     async def __call__(
         self,
@@ -232,8 +239,7 @@ class Agent:
         """
 
         # Create agent-scoped session ID with consistent formatting
-        agent_prefix = self.name.lower().replace(' ', '_').replace('-', '_')
-        session_id = f"{agent_prefix}:{session_id}"
+        session_id = self.normalize_session_id(session_id)
 
         if output_type is None:
             output_type = self.output_type
@@ -264,19 +270,32 @@ class Agent:
                 shared_memories = []
                 if enable_memory:
                     pre_chat = messages_without_tool[-3:] # Use last 4 messages for shared memory retrieval and memory storage
+                    shared_query_process = self._should_preprocess_memory_query(
+                        f"{user_id} say: {user_message}",
+                        pre_chat,
+                    )
                     shared_memories = await self.memory_storage.retrieve(user_id=self.SHARED_USER_ID,
                                                                             query= f"{user_id} say: {user_message}", limit=5, 
-                                                                            query_context=f"pre_chat:{pre_chat}",enable_query_process=True)
-                    asyncio.create_task(self.memory_storage.add(user_id=self.SHARED_USER_ID, messages=shared_messages_without_tool[-2:])) # Store last 2 shared messages
+                                                                            query_context=f"pre_chat:{pre_chat}",enable_query_process=shared_query_process)
+                    self._schedule_memory_add(
+                        user_id=self.SHARED_USER_ID,
+                        messages=shared_messages_without_tool[-2:],
+                        description="shared memory sync",
+                    )
                 shared_context = f"shared_messages:{shared_messages_without_tool} \n\n shared_memories:{shared_memories}"
 
             retrieved_memories = []
             if enable_memory:
                 pre_chat = messages_without_tool[-3:] # Use last 4 messages for memory retrieval memory and memory storage
+                query_process = self._should_preprocess_memory_query(user_message, pre_chat)
                 retrieved_memories = await self.memory_storage.retrieve(user_id=user_id, query=user_message, limit=5, 
-                                                                        query_context=f"pre_chat:{pre_chat}",enable_query_process=True)
+                                                                        query_context=f"pre_chat:{pre_chat}",enable_query_process=query_process)
                 
-                asyncio.create_task(self.memory_storage.add(user_id=user_id, messages=messages_without_tool[-2:])) # Store last 2 messages asynchronously
+                self._schedule_memory_add(
+                    user_id=user_id,
+                    messages=messages_without_tool[-2:],
+                    description="conversation memory sync",
+                )
 
             for attempt in range(max_iter):
 
@@ -409,6 +428,8 @@ class Agent:
             mcp_servers = [mcp_servers]
         for url in mcp_servers or []:
             try:
+                from ..utils.mcp_convertor import MCPTool
+
                 mt = MCPTool(url)
                 mcp_tools = await mt.get_openai_tools()
                 for tool in mcp_tools:
@@ -442,6 +463,156 @@ class Agent:
         model_msg = Message.create(content=reply_text, role=RoleType.ASSISTANT)
         await self.message_storage.add_messages(user_id, session_id, model_msg)
 
+    def _build_system_prompt(
+        self,
+        user_id: str,
+        retrieved_memories: Optional[List[dict]] = None,
+        shared_context: Optional[str] = None,
+    ) -> str:
+        """Build the runtime system prompt without formatting user-authored prompt text."""
+        sections = [
+            AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip(),
+            f"- Current user_id: {user_id}",
+            f"- Current date: {time.strftime('%Y-%m-%d')}",
+            f"- Current timezone: {time.tzname[0]}",
+            "",
+            f"- Retrieve relevant memories for user: {retrieved_memories or 'No relevant memories found.'}",
+            "",
+            f"- Shared context: {shared_context or 'No shared context.'}",
+        ]
+        if self.system_prompt:
+            sections.extend(["", self.system_prompt])
+        return "\n".join(sections)
+
+    def _should_preprocess_memory_query(
+        self,
+        query: str,
+        pre_chat: Optional[List[dict]] = None,
+    ) -> bool:
+        """Use heuristics by default to avoid unnecessary LLM query rewriting."""
+        llm_service = getattr(self.memory_storage, "llm_service", None)
+        if llm_service and hasattr(llm_service, "should_preprocess_query"):
+            return llm_service.should_preprocess_query(query, pre_chat)
+        return False
+
+    def _schedule_memory_add(
+        self,
+        user_id: str,
+        messages: List[dict],
+        description: str,
+    ) -> None:
+        """Schedule memory writes on the controlled background runner."""
+        if not messages:
+            return
+        self._schedule_background_task(
+            lambda: self.memory_storage.add(user_id=user_id, messages=messages),
+            description=description,
+        )
+
+    def _schedule_background_task(
+        self,
+        task_factory: Callable[[], Awaitable[Any]],
+        description: str,
+    ) -> None:
+        task = asyncio.create_task(self._run_background_task(task_factory, description))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _run_background_task(
+        self,
+        task_factory: Callable[[], Awaitable[Any]],
+        description: str,
+    ) -> None:
+        async with self._background_task_semaphore:
+            last_error: Optional[Exception] = None
+            for attempt in range(1, AgentConfig.BACKGROUND_TASK_ATTEMPTS + 1):
+                try:
+                    await task_factory()
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    self.logger.warning(
+                        "Background task failed (%s), attempt %d/%d: %s",
+                        description,
+                        attempt,
+                        AgentConfig.BACKGROUND_TASK_ATTEMPTS,
+                        exc,
+                    )
+                    if attempt < AgentConfig.BACKGROUND_TASK_ATTEMPTS:
+                        await asyncio.sleep(
+                            AgentConfig.BACKGROUND_TASK_BASE_DELAY * attempt
+                        )
+
+            if last_error is not None:
+                self.logger.error(
+                    "Background task permanently failed (%s): %s",
+                    description,
+                    last_error,
+                )
+
+    def _get_http_client(self, server: str) -> httpx.AsyncClient:
+        """Reuse long-lived HTTP clients for sub-agent tools."""
+        base_url = server.rstrip("/")
+        client = self._http_clients.get(base_url)
+        if client is None:
+            client = httpx.AsyncClient(base_url=base_url, timeout=AgentConfig.HTTP_TIMEOUT)
+            self._http_clients[base_url] = client
+        return client
+
+    @staticmethod
+    def _classify_stream_event(event) -> Optional[ReplyType]:
+        """Infer the high-level response kind from a stream event."""
+        event_type = getattr(event, "type", None)
+        if event_type == "response.output_text.delta":
+            return ReplyType.SIMPLE_REPLY
+        if event_type and "function_call" in event_type:
+            return ReplyType.TOOL_CALL
+
+        item = getattr(event, "item", None)
+        item_type = getattr(item, "type", None)
+        if item_type == "message":
+            return ReplyType.SIMPLE_REPLY
+        if item_type == "function_call":
+            return ReplyType.TOOL_CALL
+
+        response = getattr(event, "response", None)
+        if response is not None:
+            if getattr(response, "output_text", ""):
+                return ReplyType.SIMPLE_REPLY
+            output = getattr(response, "output", None) or []
+            if any(getattr(output_item, "type", None) == "function_call" for output_item in output):
+                return ReplyType.TOOL_CALL
+
+        return None
+
+    @staticmethod
+    def _extract_stream_text_delta(event) -> str:
+        """Return a text delta from a stream event when present."""
+        if getattr(event, "type", None) == "response.output_text.delta":
+            return getattr(event, "delta", "") or ""
+        return ""
+
+    @staticmethod
+    def _extract_response_text(response, fallback_text: str = "") -> str:
+        """Extract the final text content from a completed model response."""
+        if response is None:
+            return fallback_text
+
+        output_text = getattr(response, "output_text", None)
+        if output_text:
+            return output_text
+
+        output_items = getattr(response, "output", None) or []
+        for output_item in output_items:
+            if getattr(output_item, "type", None) != "message":
+                continue
+            for content_item in getattr(output_item, "content", []) or []:
+                text_value = getattr(content_item, "text", None)
+                if text_value:
+                    return text_value
+
+        return fallback_text
+
     @observe()
     @retry(
         stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
@@ -469,12 +640,10 @@ class Agent:
         """
         system_msg = {
             "role": "system",
-            "content": self.system_prompt.format(
-                user_id=user_id, 
-                date=time.strftime('%Y-%m-%d'), 
-                timezone=time.tzname[0],
-                retrieved_memories=retrieved_memories or "No relevant memories found.",
-                shared_context=shared_context or "No shared context."
+            "content": self._build_system_prompt(
+                user_id=user_id,
+                retrieved_memories=retrieved_memories,
+                shared_context=shared_context,
             )
         }
 
@@ -499,7 +668,7 @@ class Agent:
             else:
                 response = await self.client.responses.create(
                     model=self.model,
-                    tools=tool_specs,
+                    tools=tool_specs or [],
                     input=messages,
                     stream=stream
                 )
@@ -516,40 +685,89 @@ class Agent:
                 self.logger.warning("Model response contains no valid output: %s", response)
                 return ReplyType.ERROR, "No valid output from model response."
             else:
-                
-                # Get the third event to determine the stream type
-                await anext(response, None)  # Skip first event
-                await anext(response, None)  # Skip second event
-                third_event = await anext(response, None)
-                event_type = third_event.item.type if third_event else None
+                prefix_events = []
+                last_response = None
+                stream_kind = None
 
-                if event_type == "message":
+                async for event in response:
+                    prefix_events.append(event)
+                    event_response = getattr(event, "response", None)
+                    if event_response is not None:
+                        last_response = event_response
+                    stream_kind = self._classify_stream_event(event)
+                    if stream_kind is not None:
+                        break
+
+                if stream_kind == ReplyType.SIMPLE_REPLY:
                     async def stream_generator():
+                        nonlocal last_response
+                        text_parts: List[str] = []
+
+                        for event in prefix_events:
+                            event_response = getattr(event, "response", None)
+                            if event_response is not None:
+                                last_response = event_response
+                            content = self._extract_stream_text_delta(event)
+                            if content:
+                                text_parts.append(content)
+                                yield content
+
                         async for event in response:
-                            if event.type == 'response.output_text.delta':
-                                content = event.delta
-                                if content:
-                                    yield content
-                        await self._store_model_reply(event.response.output[0].content[0].text, user_id, session_id)
-                        if shared_context:
-                            await self._store_model_reply(event.response.output[0].content[0].text, user_id=self.SHARED_USER_ID, session_id=self.SHARED_SESSION_ID)
+                            event_response = getattr(event, "response", None)
+                            if event_response is not None:
+                                last_response = event_response
+                            content = self._extract_stream_text_delta(event)
+                            if content:
+                                text_parts.append(content)
+                                yield content
+
+                        final_text = self._extract_response_text(
+                            last_response,
+                            "".join(text_parts),
+                        )
+                        if final_text and not text_parts:
+                            yield final_text
+                        if final_text:
+                            await self._store_model_reply(final_text, user_id, session_id)
+                            if shared_context:
+                                await self._store_model_reply(
+                                    final_text,
+                                    user_id=self.SHARED_USER_ID,
+                                    session_id=self.SHARED_SESSION_ID,
+                                )
+
                     return ReplyType.SIMPLE_REPLY, stream_generator()
-                elif event_type == "function_call":
+
+                if stream_kind == ReplyType.TOOL_CALL:
                     async for event in response:
-                        pass 
-                    return ReplyType.TOOL_CALL, event.response.output
-                else:
-                    self.logger.warning("Stream response event_type is not recognized: %s", event_type)
+                        event_response = getattr(event, "response", None)
+                        if event_response is not None:
+                            last_response = event_response
+
+                    tool_output = getattr(last_response, "output", None) or []
+                    if tool_output:
+                        return ReplyType.TOOL_CALL, tool_output
+
+                    self.logger.warning("Stream response ended without tool output")
+                    return ReplyType.ERROR, "No tool output from model response."
+
+                final_text = self._extract_response_text(last_response)
+                if final_text:
                     async def stream_generator():
-                        yield "Stream response event_type is not recognized."
-                    # 返回一个生成器，避免直接返回错误信息
-                    return ReplyType.ERROR, stream_generator()
+                        yield final_text
+                    return ReplyType.SIMPLE_REPLY, stream_generator()
+
+                self.logger.warning("Stream response contains no recognized output")
+                async def stream_generator():
+                    yield "No valid output from model response."
+                return ReplyType.ERROR, stream_generator()
                     
         except Exception as e:
             self.logger.exception("Model call failed: %s", e)
             if stream:
+                error_message = f"Model call error: {str(e)}"
                 async def stream_generator():
-                    yield f"Model call error: {str(e)}"
+                    yield error_message
                 return ReplyType.ERROR, stream_generator()
             return ReplyType.ERROR, f"Model call error: {str(e)}"
     
@@ -848,8 +1066,8 @@ class Agent:
                 wait=wait_exponential(multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT)
             )
             async def make_http_request():
-                async with httpx.AsyncClient(timeout=AgentConfig.HTTP_TIMEOUT) as client:
-                    return await client.post(f"{server}/chat", json=payload)
+                client = self._get_http_client(server)
+                return await client.post("/chat", json=payload)
             
             # 发送请求并处理响应
             try:

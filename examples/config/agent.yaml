@@ -8,6 +8,7 @@ agent:
   capabilities:
     tools:
       - "web_search"
+      - "draw_image"
 
   storage_mode: "local"
 

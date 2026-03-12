@@ -9,6 +9,20 @@ from ....schemas.memory import MemoryExtraction, MetaMemory, MetaMemoryPiece, Me
 class MemoryLLMService:
     """LLM service for memory-related operations including extraction, meta-memory generation, and query preprocessing."""
 
+    _RELATIVE_TEMPORAL_HINTS = (
+        "today", "tomorrow", "yesterday", "tonight", "this morning", "this afternoon",
+        "this evening", "next week", "last week", "刚才", "今天", "明天", "昨天", "今晚",
+        "这周", "下周", "上周", "早上", "下午",
+    )
+    _FOLLOW_UP_HINTS = (
+        "what about", "how about", "and ", "that ", "this ", "those ", "these ",
+        "then ", "same for", "那", "这个", "那个", "这些", "然后",
+    )
+    _PRONOUN_HINTS = (
+        " he ", " she ", " they ", " it ", " him ", " her ", " them ",
+        "他", "她", "它", "他们", "她们",
+    )
+
     def __init__(self, model: str = "gpt-4.1-mini", mini_model: str = "gpt-4.1-nano"):
         """Initialize the LLM service.
         
@@ -20,6 +34,30 @@ class MemoryLLMService:
         self.model = model
         self.mini_model = mini_model
         self.logger.info("MemoryLLMService initialized with model: %s", model)
+
+    def should_preprocess_query(
+        self,
+        query: str,
+        pre_chat: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
+        """Cheap heuristic to decide whether query rewriting is worth the extra LLM hop."""
+        normalized_query = (query or "").strip()
+        if not normalized_query:
+            return False
+
+        lowered = f" {normalized_query.lower()} "
+        if any(hint in lowered for hint in self._RELATIVE_TEMPORAL_HINTS):
+            return True
+        if any(lowered.strip().startswith(hint) for hint in self._FOLLOW_UP_HINTS):
+            return True
+        if pre_chat and any(hint in lowered for hint in self._PRONOUN_HINTS):
+            return True
+
+        token_count = len(normalized_query.split())
+        if pre_chat and len(normalized_query) <= 24 and token_count <= 5 and normalized_query.endswith("?"):
+            return True
+
+        return False
     
     @observe()
     async def extract_memories_from_content(self, content: str) -> MemoryExtraction:
