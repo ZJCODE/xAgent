@@ -2,6 +2,7 @@
 import importlib.util
 import os
 import sys
+import warnings
 from typing import Any, Dict, List, Optional, Type
 
 # Third-party imports
@@ -11,8 +12,7 @@ from pydantic import BaseModel, Field, create_model
 
 # Local imports
 from ..core.agent import Agent
-from ..components import MessageStorageLocal,MessageStorageRedis,MessageStorageBase
-from ..components import MemoryStorageBase,MemoryStorageLocal,MemoryStorageUpstash
+from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageBase, MemoryStorageLocal
 from ..tools import TOOL_REGISTRY
 
 
@@ -22,8 +22,7 @@ class BaseAgentConfig:
     DEFAULT_AGENT_NAME = "Agent"
     DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
     DEFAULT_MODEL = "gpt-4o-mini"
-    DEFAULT_MESSAGE_STORAGE = "local"
-    DEFAULT_MEMORY_STORAGE = "local"
+    DEFAULT_STORAGE_MODE = "local"
     DEFAULT_HOST = "0.0.0.0"
     DEFAULT_PORT = 8010
 
@@ -40,7 +39,7 @@ class BaseAgentRunner:
     Attributes:
         config: Loaded configuration dictionary
         agent: Initialized Agent instance
-        message_storage: Optional MessageDB instance
+        message_storage: Optional message storage instance
         toolkit_path: Path to additional toolkit directory
     """
     
@@ -138,14 +137,35 @@ class BaseAgentRunner:
                     "tools": ["web_search"],  # Default tools
                     "mcp_servers": []  # Default MCP servers
                 },
-                "message_storage": BaseAgentConfig.DEFAULT_MESSAGE_STORAGE,
-                "memory_storage": BaseAgentConfig.DEFAULT_MEMORY_STORAGE
+                "storage_mode": BaseAgentConfig.DEFAULT_STORAGE_MODE,
             },
             "server": {
                 "host": BaseAgentConfig.DEFAULT_HOST,
                 "port": BaseAgentConfig.DEFAULT_PORT
             }
         }
+
+    def _get_storage_mode(self) -> str:
+        """Resolve the configured storage mode for both messages and memory."""
+        cached_mode = getattr(self, "_storage_mode", None)
+        if cached_mode is not None:
+            return cached_mode
+
+        agent_cfg = self.config.get("agent", {})
+        storage_mode = str(
+            agent_cfg.get("storage_mode", BaseAgentConfig.DEFAULT_STORAGE_MODE)
+        ).strip().lower()
+
+        if storage_mode not in {"local", "cloud"}:
+            warnings.warn(
+                f"Unknown storage_mode '{storage_mode}', falling back to local storage mode.",
+                UserWarning,
+                stacklevel=2,
+            )
+            storage_mode = "local"
+
+        self._storage_mode = storage_mode
+        return storage_mode
     
     def _load_toolkit_registry(self, toolkit_path: Optional[str]) -> Dict[str, Any]:
         """
@@ -414,42 +434,44 @@ class BaseAgentRunner:
     
     def _initialize_message_storage(self) -> MessageStorageBase:
         """
-        Initialize message database based on configuration.
+        Initialize message storage based on the configured storage mode.
         
         Returns:
-            MessageStorageBase instance (MessageStorageLocal or MessageStorageRedis)
+            MessageStorageBase instance for the configured backend
             
         Note:
-            Returns appropriate storage backend based on configuration.
-            Defaults to MessageStorageLocal if storage type is not recognized.
+            Returns the message storage backend selected by `storage_mode`.
+            Defaults to local persistent SQLite storage if the mode is invalid.
         """
-        agent_cfg = self.config.get("agent", {})
-        message_storage = agent_cfg.get("message_storage", "local")
+        storage_mode = self._get_storage_mode()
 
-        message_storage_map = {
-            "local": MessageStorageLocal,  # Local mode uses in-memory storage
-            "redis": MessageStorageRedis,
-        }
+        if storage_mode == "local":
+            return MessageStorageLocal()
+        if storage_mode == "cloud":
+            from ..components import MessageStorageCloud
 
-        return message_storage_map.get(message_storage, MessageStorageLocal)()
+            return MessageStorageCloud()
+
+        return MessageStorageLocal()
 
     def _initialize_memory_storage(self) -> MemoryStorageBase:
         """
-        Initialize memory storage based on configuration.
+        Initialize memory storage based on the configured storage mode.
         
         Returns:
-            MemoryStorageBase instance (MemoryStorageLocal or MemoryStorageUpstash)
+            MemoryStorageBase instance for the configured backend
             
         Note:
-            Returns appropriate memory backend based on configuration.
-            Defaults to MemoryStorageLocal if storage type is not recognized.
+            Returns the memory backend selected by `storage_mode`.
+            Defaults to MemoryStorageLocal if the mode is invalid.
         """
-        agent_cfg = self.config.get("agent", {})
-        memory_storage = agent_cfg.get("memory_storage", "local")
+        storage_mode = self._get_storage_mode()
 
-        memory_storage_map = {
-            "local": MemoryStorageLocal,  # Local mode uses ChromaDB
-            "upstash": MemoryStorageUpstash,
-        }
+        if storage_mode == "cloud":
+            from ..components import MemoryStorageCloud
 
-        return memory_storage_map.get(memory_storage, MemoryStorageLocal)()
+            return MemoryStorageCloud()
+        if storage_mode == "local":
+            return MemoryStorageLocal()
+
+        return MemoryStorageLocal()

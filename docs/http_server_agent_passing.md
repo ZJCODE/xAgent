@@ -42,7 +42,7 @@ server.run()
 from xagent.core import Agent
 from xagent.interfaces import AgentHTTPServer
 from xagent.tools import web_search, draw_image
-from xagent.components import MessageStorageRedis
+from xagent.components import MessageStorageCloud
 
 def create_research_agent():
     """Create specialized research agent."""
@@ -51,7 +51,7 @@ def create_research_agent():
         system_prompt="You are a research specialist.",
         model="gpt-4o-mini",
         tools=[web_search],
-        message_storage=MessageStorageRedis()
+        message_storage=MessageStorageCloud()
     )
 
 def create_creative_agent():

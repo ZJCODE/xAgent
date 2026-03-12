@@ -116,14 +116,14 @@ local_memory = MemoryStorageLocal(
 - Single-user applications
 - Privacy-sensitive deployments
 
-### Upstash Vector Storage
+### Cloud Storage (Upstash Vector)
 
 Cloud-based vector database for production deployments.
 
 ```python
-from xagent.components.memory import MemoryStorageUpstash
+from xagent.components.memory import MemoryStorageCloud
 
-upstash_memory = MemoryStorageUpstash(
+cloud_memory = MemoryStorageCloud(
     memory_threshold=10,
     keep_recent=2
 )
@@ -133,8 +133,9 @@ upstash_memory = MemoryStorageUpstash(
 ```bash
 UPSTASH_VECTOR_REST_URL=https://your-database.upstash.io
 UPSTASH_VECTOR_REST_TOKEN=your_token_here
-REDIS_URL=redis://username:password@host:port/database
 ```
+
+`REDIS_URL` is optional and only needed if you explicitly inject a Redis-backed temporary message buffer for distributed deployments.
 
 **Advantages:**
 - Scalable cloud storage
@@ -170,7 +171,7 @@ OPENAI_API_KEY=your_openai_api_key
 UPSTASH_VECTOR_REST_URL=your_upstash_vector_url
 UPSTASH_VECTOR_REST_TOKEN=your_upstash_vector_token
 
-# Redis (for Upstash temporary storage)
+# Optional Redis (only for a distributed temporary message buffer)
 REDIS_URL=redis://username:password@host:port/database
 
 # Optional: Custom ChromaDB path
@@ -376,12 +377,12 @@ class MemoryStorageLocal(MemoryStorageBase):
     )
 ```
 
-### MemoryStorageUpstash
+### MemoryStorageCloud
 
-Upstash Vector implementation.
+Cloud memory implementation backed by Upstash Vector.
 
 ```python
-class MemoryStorageUpstash(MemoryStorageBase):
+class MemoryStorageCloud(MemoryStorageBase):
     def __init__(
         self,
         memory_threshold: int = 10,          # Message threshold for storage
@@ -460,8 +461,8 @@ user_id = hashlib.sha256(real_user_id.encode()).hexdigest()
 For production environments:
 
 ```python
-# Use Upstash Vector for scalability
-memory = MemoryStorageUpstash(
+# Use cloud memory for scalability
+memory = MemoryStorageCloud(
     memory_threshold=10,
     keep_recent=2
 )
@@ -584,7 +585,7 @@ import logging
 
 # Enable memory system logging
 logging.getLogger('MemoryStorageLocal').setLevel(logging.DEBUG)
-logging.getLogger('MemoryStorageUpstash').setLevel(logging.DEBUG)
+logging.getLogger('MemoryStorageCloud').setLevel(logging.DEBUG)
 logging.getLogger('MemoryLLMService').setLevel(logging.DEBUG)
 
 # Custom logger for your application

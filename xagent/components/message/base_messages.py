@@ -12,7 +12,7 @@ class MessageStorageBase(ABC):
     
     This class defines the common interface that all message storage backends
     must implement. It ensures consistency between different storage implementations
-    such as LocalDB (in-memory) and MessageDB (Redis-based).
+    such as the local SQLite backend and the cloud Redis-backed backend.
     
     All methods that interact with storage are declared as abstract and must
     be implemented by concrete subclasses.

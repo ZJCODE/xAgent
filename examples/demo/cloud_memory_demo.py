@@ -1,27 +1,28 @@
 """
-Upstash Memory with Redis User Message Storage Example
+Cloud Memory with Redis Message Buffer Example
 
-This example demonstrates how the updated UpstashMemory class now uses Redis
-to store temporary user messages instead of local memory, making it completely
-stateless and suitable for distributed environments.
+This example demonstrates how to pair cloud memory with an explicit
+Redis-backed temporary message buffer for distributed environments.
 """
 
 import asyncio
 import os
-from xagent.components.memory.upstash_memory import MemoryStorageUpstash
+from xagent.components.memory.cloud_memory import MemoryStorageCloud
+from xagent.components.memory.message_buffer import MessageBufferRedis
 
-async def test_upstash_memory_redis_storage():
-    """Test the Upstash Memory with Redis storage for user messages."""
+async def test_cloud_memory_redis_buffer():
+    """Test cloud memory with a Redis-backed temporary message buffer."""
     
-    # Initialize Upstash Memory with Redis backend for temporary messages
-    memory = MemoryStorageUpstash(
+    # Initialize cloud memory with a Redis backend for temporary messages
+    memory = MemoryStorageCloud(
         memory_threshold=3,  # Low threshold for demo
-        keep_recent=1        # Keep only 1 message after storage
+        keep_recent=1,       # Keep only 1 message after storage
+        message_buffer=MessageBufferRedis()
     )
     
     user_id = "demo_user"
     
-    print("=== Testing Upstash Memory with Redis User Message Storage ===")
+    print("=== Testing Cloud Memory with Redis Message Buffer ===")
     
     # Test 1: Add some messages (should be stored in Redis)
     print("\n1. Adding messages to temporary Redis storage...")
@@ -92,13 +93,21 @@ async def test_upstash_memory_redis_storage():
     print("\n=== Test completed successfully! ===")
 
 async def demo_distributed_usage():
-    """Demonstrate how the Redis-backed storage works across multiple instances."""
+    """Demonstrate how the Redis-backed buffer works across multiple instances."""
     
     print("\n=== Demonstrating Distributed Usage ===")
     
     # Create two separate memory instances (simulating different servers/processes)
-    memory1 = MemoryStorageUpstash(memory_threshold=2, keep_recent=1)
-    memory2 = MemoryStorageUpstash(memory_threshold=2, keep_recent=1)
+    memory1 = MemoryStorageCloud(
+        memory_threshold=2,
+        keep_recent=1,
+        message_buffer=MessageBufferRedis()
+    )
+    memory2 = MemoryStorageCloud(
+        memory_threshold=2,
+        keep_recent=1,
+        message_buffer=MessageBufferRedis()
+    )
     
     user_id = "distributed_user"
     
@@ -149,7 +158,7 @@ async def main():
         return
     
     try:
-        await test_upstash_memory_redis_storage()
+        await test_cloud_memory_redis_buffer()
         await demo_distributed_usage()
         
     except Exception as e:

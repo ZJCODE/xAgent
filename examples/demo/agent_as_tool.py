@@ -7,12 +7,12 @@ agents that can be composed together for complex tasks.
 
 import asyncio
 from xagent.core import Agent
-from xagent.components import MessageStorageRedis
+from xagent.components import MessageStorageCloud
 from xagent.tools import web_search
 
 async def agent_as_tool_example():
-    # Create specialized agents with Redis message storage
-    message_storage = MessageStorageRedis()
+    # Create specialized agents with cloud message storage
+    message_storage = MessageStorageCloud()
     
     researcher_agent = Agent(
         name="research_specialist",

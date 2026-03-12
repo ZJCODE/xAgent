@@ -1,19 +1,19 @@
 """
-Advanced Chat with Redis Persistence Example
+Advanced Chat with Cloud Persistence Example
 
-This example demonstrates how to use xAgent with Redis persistence for maintaining
+This example demonstrates how to use xAgent with cloud persistence for maintaining
 conversation history across sessions.
 """
 
 import asyncio
 from xagent.core import Agent
-from xagent.components import MessageStorageRedis
+from xagent.components import MessageStorageCloud
 
 async def chat_with_persistence():
-    # Initialize Redis-backed message storage
-    message_storage = MessageStorageRedis()
+    # Initialize cloud-backed message storage
+    message_storage = MessageStorageCloud()
     
-    # Create agent with Redis persistence
+    # Create agent with cloud persistence
     agent = Agent(
         name="persistent_agent",
         model="gpt-4.1-mini",
@@ -29,7 +29,7 @@ async def chat_with_persistence():
     )
     print(response)
     
-    # Later conversation - context is preserved in Redis
+    # Later conversation - context is preserved in the cloud message store
     response = await agent.chat(
         user_message="What's my favorite color?",
         user_id="user123",

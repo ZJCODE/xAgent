@@ -8,8 +8,8 @@
 
 ```
 MessageStorageBase (Abstract Base Class)
-├── MessageStorageLocal (In-Memory Storage)
-└── MessageStorageRedis (Redis Storage)
+├── MessageStorageLocal (Local SQLite Storage)
+└── MessageStorageCloud (Cloud Storage, Redis-backed)
 ```
 
 ## Abstract Base Class: MessageStorageBase
@@ -96,37 +96,33 @@ def get_session_info(self, user_id: str, session_id: str) -> Dict[str, str]
 
 ## Concrete Implementation Classes
 
-### 1. MessageStorageLocal (In-Memory Storage)
+### 1. MessageStorageLocal (Local SQLite Storage)
 
 #### Features
-- **Storage Method**: Dictionary structure in memory
-- **Lifecycle**: Data is lost when application restarts
-- **Use Cases**: Development testing, temporary sessions, scenarios not requiring persistence
+- **Storage Method**: SQLite database file on local disk
+- **Lifecycle**: Data persists across application restarts
+- **Use Cases**: Single-machine deployments, local development, durable local sessions
 
 #### Core Characteristics
 ```python
 class MessageStorageLocal(MessageStorageBase):
-    def __init__(self):
-        self._messages: Dict[Tuple[str, str], List[Message]] = {}
+    def __init__(self, path: Optional[str] = None):
+        self.path = Path(path or "~/.xagent/messages.sqlite3").expanduser()
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
 ```
 
-- **Storage Format**: `{(user_id, session_id): [Message, ...]}`
-- **History Management**: Automatically trims to maximum history length (default 100 messages)
-- **Session Isolation**: Implements user and session isolation through tuple keys
+- **Storage Format**: SQLite rows with `user_id`, `session_id`, `timestamp`, and serialized `message_json`
+- **History Management**: Retrieves recent history by session using indexed queries
+- **Session Isolation**: Implements user and session isolation through `(user_id, session_id)` filters
 
 #### Configuration Parameters
 ```python
 class MessageStorageLocalConfig:
-    DEFAULT_MESSAGE_COUNT = 20      # Default number of messages to return
-    MAX_LOCAL_HISTORY = 100         # Maximum number of historical messages
+    DEFAULT_PATH = "~/.xagent/messages.sqlite3"
+    DEFAULT_MESSAGE_COUNT = 20
 ```
 
-#### Additional Methods
-- `get_all_sessions()`: Get list of all sessions
-- `clear_all_sessions()`: Clear all session data
-
-### 2. MessageStorageRedis (Redis Storage)
+### 2. MessageStorageCloud (Cloud Storage, Redis-backed)
 
 #### Features
 - **Storage Method**: Redis list structure
@@ -135,7 +131,7 @@ class MessageStorageLocalConfig:
 
 #### Core Characteristics
 ```python
-class MessageStorageRedis(MessageStorageBase):
+class MessageStorageCloud(MessageStorageBase):
     def __init__(self, redis_url: Optional[str] = None, *, sanitize_keys: bool = False):
         self.redis_url = self._get_redis_url(redis_url)
         self.r: Optional[redis.Redis] = None
@@ -150,7 +146,7 @@ class MessageStorageRedis(MessageStorageBase):
 
 #### Configuration Parameters
 ```python
-class MessageStorageRedisConfig:
+class MessageStorageCloudConfig:
     MSG_PREFIX = "xagent:chat"             # Redis key prefix
     DEFAULT_TTL = 2592000           # Default expiration time (30 days)
     DEFAULT_MESSAGE_COUNT = 20      # Default number of messages to return
@@ -173,14 +169,14 @@ class MessageStorageRedisConfig:
 
 ## Usage Examples
 
-### In-Memory Storage
+### Local SQLite Storage
 ```python
 from xagent.components import MessageStorageLocal, Agent
 
-# Create in-memory storage
+# Create local persistent storage
 storage = MessageStorageLocal()
 
-# Create agent using in-memory storage
+# Create agent using local persistent storage
 agent = Agent(
     name="my_agent",
     message_storage=storage
@@ -192,14 +188,14 @@ response = await agent.chat("Hello", user_id="user1", session_id="session1")
 
 ### Redis Storage
 ```python
-from xagent.components import MessageStorageRedis, Agent
+from xagent.components import MessageStorageCloud, Agent
 import os
 
 # Set Redis connection
 os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 
 # Create Redis storage
-storage = MessageStorageRedis(sanitize_keys=True)
+storage = MessageStorageCloud(sanitize_keys=True)
 
 # Create agent using Redis storage
 agent = Agent(
@@ -222,7 +218,7 @@ await storage.close()
 # Choose storage backend based on environment
 def create_storage():
     if os.getenv("REDIS_URL"):
-        return MessageStorageRedis()
+        return MessageStorageCloud()
     else:
         return MessageStorageLocal()
 
@@ -277,7 +273,7 @@ def get_session_info(self, user_id: str, session_id: str):
 4. **Register and Use**
 ```python
 # Register in components
-from xagent.components import MessageStorageLocal, MessageStorageRedis
+from xagent.components import MessageStorageLocal, MessageStorageCloud
 from .custom_storage import MessageStorageCustom
 
 # Use custom storage

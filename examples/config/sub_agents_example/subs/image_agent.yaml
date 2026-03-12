@@ -23,7 +23,7 @@ agent:
     tools: []
     mcp_servers: []
   
-  message_storage: "local"
+  storage_mode: "local"
 
 server:
   host: "0.0.0.0"

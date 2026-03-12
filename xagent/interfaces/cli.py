@@ -316,8 +316,7 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
       - calculate_square # Custom tool
     mcp_servers:
       - http://localhost:8001/mcp/  # Example MCP server
-  message_storage: local # support local and redis
-  memory_storage: local # support local and upstash
+  storage_mode: local # support local or cloud for both chat history and memory
 
 server:
   host: 0.0.0.0

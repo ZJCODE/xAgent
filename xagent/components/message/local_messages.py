@@ -1,276 +1,198 @@
-# Standard library imports
+import asyncio
 import logging
-from typing import Dict, List, Optional, Tuple, Union
+import sqlite3
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 
-# Local imports
 from .base_messages import MessageStorageBase
-from ...schemas import Message,MessageType
+from ...schemas import Message, MessageType
 
 
 class MessageStorageLocalConfig:
-    """Configuration constants for MessageStorageLocal class."""
-    
+    """Configuration constants for MessageStorageLocal."""
+
+    DEFAULT_PATH = "~/.xagent/messages.sqlite3"
     DEFAULT_MESSAGE_COUNT = 20
-    MAX_LOCAL_HISTORY = 100
+    CONNECT_TIMEOUT = 5.0
 
 
 class MessageStorageLocal(MessageStorageBase):
     """
-    Local memory-based message storage backend for conversation history.
-    
-    This class provides a simple in-memory storage solution for conversation
-    messages, compatible with the MessageDB interface. It supports:
-    
-    Features:
-    - Multi-user and multi-session isolation
-    - Automatic history trimming to manage memory usage
-    - Session-based message storage
-    - Compatible interface with MessageDB
-    
-    Storage Format:
-    - Keys: (user_id, session_id) tuples
-    - Values: Lists of Message objects
-    
-    Attributes:
-        _messages: Dictionary storing messages for each session
-        logger: Logger instance for this class
-    
-    Note:
-        This storage is volatile and will be lost when the application restarts.
-        It's intended for testing, development, or scenarios where persistence
-        is not required.
+    Local persistent message storage backed by SQLite.
+
+    The storage model is append-only per message. Each row stores the user,
+    session, message timestamp, and the full serialized Message payload.
     """
 
-    def __init__(self):
-        """
-        Initialize LocalDB instance.
-        """
-        self._messages: Dict[Tuple[str, str], List[Message]] = {}
+    def __init__(self, path: Optional[str] = None):
+        self.path = Path(path or MessageStorageLocalConfig.DEFAULT_PATH).expanduser()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
+        self._initialize_database()
 
-    def _get_session_key(self, user_id: str, session_id: str) -> Tuple[str, str]:
-        """
-        Get the session key for local storage.
-        
-        Args:
-            user_id: User identifier
-            session_id: Session identifier
-            
-        Returns:
-            Tuple of (user_id, session_id)
-        """
-        return (user_id, session_id)
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.path), timeout=MessageStorageLocalConfig.CONNECT_TIMEOUT)
+        conn.row_factory = sqlite3.Row
+        return conn
 
-    def _ensure_session_exists(self, session_key: Tuple[str, str]) -> None:
-        """Ensure session storage exists for the given session key."""
-        if session_key not in self._messages:
-            self._messages[session_key] = []
-
-    def _trim_history(self, session_key: Tuple[str, str]) -> None:
-        """Trim local history to maximum allowed size."""
-        messages = self._messages[session_key]
-        if len(messages) > MessageStorageLocalConfig.MAX_LOCAL_HISTORY:
-            self._messages[session_key] = messages[-MessageStorageLocalConfig.MAX_LOCAL_HISTORY:]
-            self.logger.debug(
-                "Trimmed session %s history to %d messages", 
-                session_key, MessageStorageLocalConfig.MAX_LOCAL_HISTORY
+    def _initialize_database(self) -> None:
+        with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    timestamp REAL NOT NULL,
+                    message_json TEXT NOT NULL
+                )
+                """
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_messages_session
+                ON messages (user_id, session_id, id)
+                """
+            )
+            conn.commit()
 
     async def add_messages(
         self,
         user_id: str,
         session_id: str,
         messages: Union[Message, List[Message]],
-        **kwargs  # Accept additional kwargs for compatibility with MessageDB
+        **kwargs,
     ) -> None:
-        """
-        Add messages to the session history.
-        
-        Args:
-            user_id: User identifier
-            session_id: Session identifier
-            messages: Single Message object or list of Message objects
-            **kwargs: Additional arguments (ignored, for compatibility)
-            
-        Note:
-            Automatically trims history to MAX_LOCAL_HISTORY to prevent memory issues.
-        """
-        # Normalize input to list
-        if not isinstance(messages, list):
-            messages = [messages]
-        
-        session_key = self._get_session_key(user_id, session_id)
-        self._ensure_session_exists(session_key)
-        
-        self.logger.info("Adding %d messages to local session %s", len(messages), session_key)
-        
-        # Add messages and manage history size
-        self._messages[session_key].extend(messages)
-        self._trim_history(session_key)
+        normalized = messages if isinstance(messages, list) else [messages]
+        if not normalized:
+            return
+        await asyncio.to_thread(self._add_messages_sync, user_id, session_id, normalized)
+
+    def _add_messages_sync(self, user_id: str, session_id: str, messages: List[Message]) -> None:
+        rows = [
+            (user_id, session_id, msg.timestamp, msg.model_dump_json())
+            for msg in messages
+        ]
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO messages (user_id, session_id, timestamp, message_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                rows,
+            )
+            conn.commit()
 
     async def get_messages(
-        self, 
-        user_id: str, 
-        session_id: str, 
-        count: int = MessageStorageLocalConfig.DEFAULT_MESSAGE_COUNT
+        self,
+        user_id: str,
+        session_id: str,
+        count: int = MessageStorageLocalConfig.DEFAULT_MESSAGE_COUNT,
     ) -> List[Message]:
-        """
-        Get the last `count` messages from the session history.
-        
-        Args:
-            user_id: User identifier
-            session_id: Session identifier
-            count: Number of messages to retrieve. Must be positive.
-            
-        Returns:
-            List of Message objects from the session history, ordered chronologically.
-            Returns empty list if no messages exist.
-            
-        Raises:
-            ValueError: If count is not positive
-        """
         if count <= 0:
             raise ValueError("count must be a positive integer")
-        
-        session_key = self._get_session_key(user_id, session_id)
-        self._ensure_session_exists(session_key)
-        
-        messages = self._messages[session_key]
-        result_messages = messages[-count:] if messages else []
-        
-        self.logger.debug(
-            "Retrieved %d/%d messages for session %s", 
-            len(result_messages), len(messages), session_key
-        )
-        return result_messages
+        return await asyncio.to_thread(self._get_messages_sync, user_id, session_id, count)
+
+    def _get_messages_sync(self, user_id: str, session_id: str, count: int) -> List[Message]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT message_json
+                FROM messages
+                WHERE user_id = ? AND session_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (user_id, session_id, count),
+            ).fetchall()
+
+        messages: List[Message] = []
+        for row in reversed(rows):
+            try:
+                messages.append(Message.model_validate_json(row["message_json"]))
+            except Exception as exc:
+                self.logger.warning(
+                    "Skipping invalid local message for %s:%s: %s",
+                    user_id,
+                    session_id,
+                    exc,
+                )
+        return messages
 
     async def clear_history(self, user_id: str, session_id: str) -> None:
-        """
-        Clear the session history.
-        
-        Args:
-            user_id: User identifier
-            session_id: Session identifier
-        """
-        session_key = self._get_session_key(user_id, session_id)
-        self._ensure_session_exists(session_key)
-        
-        message_count = len(self._messages[session_key])
-        self.logger.info("Clearing local session history for %s", session_key)
-        self._messages[session_key] = []
-        self.logger.debug("Cleared history for session %s (deleted: %d)", session_key, message_count)
+        await asyncio.to_thread(self._clear_history_sync, user_id, session_id)
+
+    def _clear_history_sync(self, user_id: str, session_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM messages WHERE user_id = ? AND session_id = ?",
+                (user_id, session_id),
+            )
+            conn.commit()
 
     async def pop_message(self, user_id: str, session_id: str) -> Optional[Message]:
-        """
-        Pop the last message from the session history.
-        
-        This method removes and returns the last message from the session.
-        If the last message is a tool result, it will continue popping until 
-        a non-tool result message is found.
-        
-        Args:
-            user_id: User identifier
-            session_id: Session identifier
-            
-        Returns:
-            The last non-tool result message, or None if no such message exists
-            or if the session is empty.
-        """
-        session_key = self._get_session_key(user_id, session_id)
-        self._ensure_session_exists(session_key)
-        
-        self.logger.info("Popping last message from local session %s", session_key)
-        
-        messages = self._messages[session_key]
-        messages_popped = 0
-        while messages:
-            msg = messages.pop()
-            messages_popped += 1
-            if not self._is_tool_message(msg):
-                self.logger.debug(
-                    "Popped non-tool message for session %s (checked %d messages)", 
-                    session_key, messages_popped
-                )
-                return msg
-            
-            # Continue if this is a tool message
-            self.logger.debug("Skipping tool message for session %s", session_key)
-        
-        self.logger.debug("No messages found for session %s", session_key)
-        return None
+        return await asyncio.to_thread(self._pop_message_sync, user_id, session_id)
+
+    def _pop_message_sync(self, user_id: str, session_id: str) -> Optional[Message]:
+        with self._connect() as conn:
+            while True:
+                row = conn.execute(
+                    """
+                    SELECT id, message_json
+                    FROM messages
+                    WHERE user_id = ? AND session_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (user_id, session_id),
+                ).fetchone()
+                if row is None:
+                    return None
+
+                conn.execute("DELETE FROM messages WHERE id = ?", (row["id"],))
+                conn.commit()
+
+                try:
+                    message = Message.model_validate_json(row["message_json"])
+                except Exception as exc:
+                    self.logger.warning(
+                        "Skipping invalid popped local message for %s:%s: %s",
+                        user_id,
+                        session_id,
+                        exc,
+                    )
+                    continue
+
+                if not self._is_tool_message(message):
+                    return message
 
     def _is_tool_message(self, message: Message) -> bool:
-        """Check if a message is a tool-related message."""
         return message.type in {MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT}
 
-
-
     async def get_message_count(self, user_id: str, session_id: str) -> int:
-        """
-        Get the total number of messages in the session.
-        
-        Args:
-            user_id: User identifier
-            session_id: Session identifier
-            
-        Returns:
-            Total number of messages in the session history
-        """
-        session_key = self._get_session_key(user_id, session_id)
-        self._ensure_session_exists(session_key)
-        return len(self._messages[session_key])
+        return await asyncio.to_thread(self._get_message_count_sync, user_id, session_id)
 
-    async def has_messages(self, user_id: str, session_id: str) -> bool:
-        """
-        Check if the session has any messages.
-        
-        Args:
-            user_id: User identifier
-            session_id: Session identifier
-            
-        Returns:
-            True if session contains messages, False otherwise
-        """
-        return await self.get_message_count(user_id, session_id) > 0
-
-    def get_all_sessions(self) -> List[Tuple[str, str]]:
-        """
-        Get all session keys.
-        
-        Returns:
-            List of (user_id, session_id) tuples for all sessions
-        """
-        return list(self._messages.keys())
-
-    def clear_all_sessions(self) -> None:
-        """Clear all session data."""
-        self.logger.info("Clearing all local sessions")
-        self._messages.clear()
+    def _get_message_count_sync(self, user_id: str, session_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS message_count
+                FROM messages
+                WHERE user_id = ? AND session_id = ?
+                """,
+                (user_id, session_id),
+            ).fetchone()
+        return int(row["message_count"]) if row is not None else 0
 
     def get_session_info(self, user_id: str, session_id: str) -> Dict[str, str]:
-        """
-        Get session information.
-        
-        Args:
-            user_id: User identifier
-            session_id: Session identifier
-            
-        Returns:
-            Dictionary containing session metadata
-        """
-        session_key = self._get_session_key(user_id, session_id)
         return {
             "user_id": user_id,
             "session_id": session_id,
             "backend": "local",
-            "session_key": f"{session_key[0]}:{session_key[1]}",
-            "message_count": str(len(self._messages.get(session_key, [])))
+            "session_key": f"{user_id}:{session_id}",
+            "path": str(self.path),
         }
 
-    def __str__(self) -> str:
-        """String representation of the LocalDB."""
-        return f"LocalDB(sessions={len(self._messages)})"
-
     def __repr__(self) -> str:
-        """Detailed string representation of the LocalDB."""
-        return f"LocalDB(sessions={len(self._messages)}, total_messages={sum(len(msgs) for msgs in self._messages.values())})"
+        return f"MessageStorageLocal(path='{self.path}')"

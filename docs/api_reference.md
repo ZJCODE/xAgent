@@ -117,7 +117,7 @@ Base interface for message storage implementations.
 
 #### MessageStorageLocal
 
-In-memory message storage (default option).
+Local SQLite message storage (default option).
 
 ```python
 from xagent.components import MessageStorageLocal
@@ -126,18 +126,18 @@ storage = MessageStorageLocal()
 agent = Agent(message_storage=storage)
 ```
 
-#### MessageStorageRedis
+#### MessageStorageCloud
 
-Redis-based persistent message storage.
+Cloud-backed persistent message storage.
 
 ```python
-from xagent.components import MessageStorageRedis
+from xagent.components import MessageStorageCloud
 
-storage = MessageStorageRedis()
+storage = MessageStorageCloud()
 agent = Agent(message_storage=storage)
 ```
 
-Requires `REDIS_URL` environment variable.
+Requires `REDIS_URL` environment variable for the Redis-backed cloud message store.
 
 ## Workflow Classes
 
@@ -214,7 +214,7 @@ agent:
         type: "str"
         description: "Field description"
   
-  message_storage: "local"  # or "redis"
+  storage_mode: "local"  # recommended; also supports "cloud"
 
 server:
   host: "0.0.0.0"

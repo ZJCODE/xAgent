@@ -36,15 +36,19 @@ dependencies = [
     "requests>=2.32.0",
     
     # Data storage
-    "redis>=6.2.0",
     "chromadb>=1.0.20",
-    "upstash_vector>=0.8.0",
     
     # Utilities
     "python-dotenv>=1.1.1",
     "pyyaml>=6.0.2",
     "tenacity>=9.1.2",
     "watchdog>=6.0.0",
+]
+
+[project.optional-dependencies]
+cloud = [
+    "redis>=6.2.0",
+    "upstash_vector>=0.8.0",
 ]
 
 [project.scripts]

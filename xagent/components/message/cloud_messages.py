@@ -41,10 +41,10 @@ def create_redis_client(redis_url: str, **common_kwargs):
         return redis.Redis.from_url(redis_url, **common_kwargs)
 
 
-class MessageStorageRedisConfig:
-    """Configuration constants for MessageStorageRedis class."""
+class MessageStorageCloudConfig:
+    """Configuration constants for MessageStorageCloud class."""
     
-    # Redis key constants
+    # Redis-backed key constants
     MSG_PREFIX: Final[str] = "xagent:chat"
     
     # Time constants (in seconds)
@@ -57,7 +57,7 @@ class MessageStorageRedisConfig:
     DEFAULT_MESSAGE_COUNT: Final[int] = 20
     DEFAULT_MAX_HISTORY: Final[int] = 200
     
-    # Redis client settings
+    # Redis-backed client settings
     CLIENT_NAME: Final[str] = "xagent-message-storage"
     
     # Message preview settings
@@ -67,12 +67,12 @@ class MessageStorageRedisConfig:
     URL_SAFE_CHARS: Final[str] = "-._~"
 
 
-class MessageStorageRedis(MessageStorageBase):
+class MessageStorageCloud(MessageStorageBase):
     """
-    Redis-based message storage backend for conversation history.
+    Cloud message storage backend for conversation history.
 
     This class provides a robust, scalable solution for storing and retrieving
-    conversation messages using Redis as the backend. It supports:
+    conversation messages using Redis as the underlying backend. It supports:
     
     Features:
     - Multi-user and multi-session isolation  
@@ -102,7 +102,7 @@ class MessageStorageRedis(MessageStorageBase):
         sanitize_keys: bool = False
     ):
         """
-        Initialize MessageDB instance.
+        Initialize MessageStorageCloud instance.
         
         Args:
             redis_url: Redis connection URL. If None, reads from REDIS_URL environment variable
@@ -154,11 +154,11 @@ class MessageStorageRedis(MessageStorageBase):
         """Create and configure Redis client with optimal settings and cluster support."""
         common_kwargs = dict(
             decode_responses=True,
-            health_check_interval=MessageStorageRedisConfig.HEALTH_CHECK_INTERVAL,
-            socket_connect_timeout=MessageStorageRedisConfig.SOCKET_CONNECT_TIMEOUT,
-            socket_timeout=MessageStorageRedisConfig.SOCKET_TIMEOUT,
+            health_check_interval=MessageStorageCloudConfig.HEALTH_CHECK_INTERVAL,
+            socket_connect_timeout=MessageStorageCloudConfig.SOCKET_CONNECT_TIMEOUT,
+            socket_timeout=MessageStorageCloudConfig.SOCKET_TIMEOUT,
             retry_on_timeout=True,
-            client_name=MessageStorageRedisConfig.CLIENT_NAME,
+            client_name=MessageStorageCloudConfig.CLIENT_NAME,
         )
         
         return create_redis_client(self.redis_url, **common_kwargs)
@@ -202,12 +202,12 @@ class MessageStorageRedis(MessageStorageBase):
         sanitized_session_id = self._sanitize_identifier(session_id)
         
         # Build key without agent namespace
-        return f"{MessageStorageRedisConfig.MSG_PREFIX}:{sanitized_user_id}:{sanitized_session_id}"
+        return f"{MessageStorageCloudConfig.MSG_PREFIX}:{sanitized_user_id}:{sanitized_session_id}"
     
     def _sanitize_identifier(self, identifier: str) -> str:
         """Sanitize identifier for Redis key usage."""
         if self.sanitize_keys:
-            return quote(identifier, safe=MessageStorageRedisConfig.URL_SAFE_CHARS)
+            return quote(identifier, safe=MessageStorageCloudConfig.URL_SAFE_CHARS)
         return identifier
 
     async def add_messages(
@@ -215,7 +215,7 @@ class MessageStorageRedis(MessageStorageBase):
         user_id: str,
         session_id: str,
         messages: Union[Message, List[Message]],
-        ttl: int = MessageStorageRedisConfig.DEFAULT_TTL,
+        ttl: int = MessageStorageCloudConfig.DEFAULT_TTL,
         *,
         max_len: Optional[int] = None,
         reset_ttl: bool = True,
@@ -308,7 +308,7 @@ class MessageStorageRedis(MessageStorageBase):
         self, 
         user_id: str, 
         session_id: str, 
-        count: int = MessageStorageRedisConfig.DEFAULT_MESSAGE_COUNT
+        count: int = MessageStorageCloudConfig.DEFAULT_MESSAGE_COUNT
     ) -> List[Message]:
         """
         Retrieve recent messages from conversation history.
@@ -368,17 +368,17 @@ class MessageStorageRedis(MessageStorageBase):
     
     def _create_message_preview(self, raw_message: str) -> str:
         """Create a safe preview of raw message for logging."""
-        if len(raw_message) <= MessageStorageRedisConfig.MESSAGE_PREVIEW_LENGTH:
+        if len(raw_message) <= MessageStorageCloudConfig.MESSAGE_PREVIEW_LENGTH:
             return repr(raw_message)
         return repr(
-            raw_message[:MessageStorageRedisConfig.MESSAGE_PREVIEW_LENGTH] + "..."
+            raw_message[:MessageStorageCloudConfig.MESSAGE_PREVIEW_LENGTH] + "..."
         )
 
     async def trim_history(
         self, 
         user_id: str, 
         session_id: str, 
-        max_len: int = MessageStorageRedisConfig.DEFAULT_MAX_HISTORY
+        max_len: int = MessageStorageCloudConfig.DEFAULT_MAX_HISTORY
     ) -> None:
         """
         Trim conversation history to maximum length.
@@ -412,7 +412,7 @@ class MessageStorageRedis(MessageStorageBase):
         self, 
         user_id: str, 
         session_id: str, 
-        ttl: int = MessageStorageRedisConfig.DEFAULT_TTL
+        ttl: int = MessageStorageCloudConfig.DEFAULT_TTL
     ) -> None:
         """
         Set expiration time for conversation history.
@@ -613,7 +613,7 @@ class MessageStorageRedis(MessageStorageBase):
     
     def get_session_info(self, user_id: str, session_id: str) -> Dict[str, str]:
         """
-        Get session information for MessageDB.
+        Get session information for MessageStorageCloud.
         
         Args:
             user_id: User identifier
@@ -625,21 +625,24 @@ class MessageStorageRedis(MessageStorageBase):
         return {
             "user_id": user_id,
             "session_id": session_id,
-            "backend": "redis",
+            "backend": "cloud",
             "session_key": f"{user_id}:{session_id}",
             "redis_url": self.redis_url,
             "sanitize_keys": str(self.sanitize_keys)
         }
 
     def __str__(self) -> str:
-        """String representation of MessageDB instance."""
-        return f"MessageDB(url='{self.redis_url}', sanitize_keys={self.sanitize_keys})"
+        """String representation of MessageStorageCloud instance."""
+        return (
+            f"MessageStorageCloud("
+            f"url='{self.redis_url}', sanitize_keys={self.sanitize_keys})"
+        )
     
     def __repr__(self) -> str:
-        """Detailed string representation of MessageDB instance."""
+        """Detailed string representation of MessageStorageCloud instance."""
         connected = "connected" if self.r else "disconnected"
         return (
-            f"MessageDB(url='{self.redis_url}', "
+            f"MessageStorageCloud(url='{self.redis_url}', "
             f"sanitize_keys={self.sanitize_keys}, "
             f"status='{connected}')"
         )

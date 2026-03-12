@@ -6,7 +6,7 @@ This demonstrates various configuration patterns and use cases.
 import asyncio
 from xagent.core.agent import Agent
 from xagent.interfaces.server import AgentHTTPServer
-from xagent.components import MessageStorageLocal, MessageStorageRedis
+from xagent.components import MessageStorageLocal
 from xagent.tools import web_search, draw_image
 from xagent.utils import function_tool
 

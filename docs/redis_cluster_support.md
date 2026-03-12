@@ -34,8 +34,8 @@ redis://localhost:6379?cluster=yes
 
 The following components now support Redis Cluster:
 
-1. **Message Storage** (`xagent.components.message.redis_messages.MessageStorageRedis`)
-2. **Memory Messages** (`xagent.components.memory.utils.messages_for_memory.RedisMessagesForMemory`)
+1. **Cloud Message Storage** (`xagent.components.message.cloud_messages.MessageStorageCloud`)
+2. **Redis Message Buffer** (`xagent.components.memory.message_buffer.redis_message_buffer.MessageBufferRedis`)
 
 ## Implementation Details
 
@@ -87,15 +87,15 @@ export REDIS_URL="redis+cluster://user:pass@localhost:6379"
 ### Python Code
 
 ```python
-from xagent.components.message.redis_messages import MessageStorageRedis
-from xagent.components.memory.utils.messages_for_memory import RedisMessagesForMemory
+from xagent.components.message.cloud_messages import MessageStorageCloud
+from xagent.components.memory.message_buffer import MessageBufferRedis
 
 # Automatic detection based on URL
-message_storage = MessageStorageRedis("redis+cluster://localhost:6379")
-memory_messages = RedisMessagesForMemory("redis://localhost:6379?cluster=true")
+message_storage = MessageStorageCloud("redis+cluster://localhost:6379")
+message_buffer = MessageBufferRedis("redis://localhost:6379?cluster=true")
 
 # Works with existing URLs too
-legacy_storage = MessageStorageRedis("redis://localhost:6379")
+legacy_storage = MessageStorageCloud("redis://localhost:6379")
 ```
 
 ## Testing
@@ -129,7 +129,7 @@ The test suite covers:
 
 3. **Verify Configuration**: Use the test script to verify cluster detection:
    ```python
-   from xagent.components.message.redis_messages import _looks_like_cluster
+   from xagent.components.message.cloud_messages import _looks_like_cluster
    
    # Should return True for cluster URLs
    print(_looks_like_cluster("redis+cluster://localhost:6379"))
@@ -166,8 +166,8 @@ Enable debug logging to troubleshoot connection issues:
 
 ```python
 import logging
-logging.getLogger("MessageStorageRedis").setLevel(logging.DEBUG)
-logging.getLogger("RedisMessagesForMemory").setLevel(logging.DEBUG)
+logging.getLogger("MessageStorageCloud").setLevel(logging.DEBUG)
+logging.getLogger("MessageBufferRedis").setLevel(logging.DEBUG)
 ```
 
 ## References

@@ -5,7 +5,7 @@ The Agent now directly manages MessageStorageBase internally.
 
 import asyncio
 from xagent.core.agent import Agent
-from xagent.components import MessageStorageLocal, MessageStorageRedis
+from xagent.components import MessageStorageLocal
 
 
 async def main():
@@ -54,19 +54,16 @@ async def main():
     
     print("\n" + "="*50 + "\n")
     
-    # Example 3: Agent with Redis message storage (commented out as it requires Redis)
-    print("=== Example 3: Agent with Redis storage (demo) ===")
-    # Uncomment the following lines if you have Redis running:
+    # Example 3: Agent with cloud message storage (commented out as it requires cloud deps)
+    print("=== Example 3: Agent with cloud storage (demo) ===")
+    # Uncomment the following lines if you have the cloud backend configured:
     
-    # redis_storage = MessageStorageRedis(
-    #     host='localhost',
-    #     port=6379,
-    #     db=0
-    # )
+    # from xagent.components import MessageStorageCloud
+    # cloud_storage = MessageStorageCloud()
     # agent3 = Agent(
-    #     name="redis_agent",
+    #     name="cloud_agent",
     #     system_prompt="You are a persistent assistant.",
-    #     message_storage=redis_storage
+    #     message_storage=cloud_storage
     # )
     # 
     # response4 = await agent3.chat(
@@ -76,7 +73,7 @@ async def main():
     # )
     # print(f"Response 4: {response4}")
     
-    print("Redis storage example is commented out (requires Redis server)")
+    print("Cloud storage example is commented out (requires REDIS_URL and cloud deps)")
     
     print("\n" + "="*50 + "\n")
     

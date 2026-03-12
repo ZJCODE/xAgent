@@ -10,7 +10,7 @@ This document provides comprehensive details on configuring xAgent through YAML 
 - [Multi-Agent System Configuration](#multi-agent-system-configuration)
 - [Structured Output Schema](#structured-output-schema)
 - [Tool and MCP Configuration](#tool-and-mcp-configuration)
-- [Message Storage Configuration](#message-storage-configuration)
+- [Storage Mode Configuration](#storage-mode-configuration)
 - [Complete Examples](#complete-examples)
 
 ## Basic Configuration
@@ -48,7 +48,7 @@ agent:
       - "draw_image"      # Built-in image generation
     mcp_servers: []       # MCP server URLs (optional)
   
-  message_storage: "local" # or "redis"
+  storage_mode: "local" # recommended; also supports "cloud"
 
 server:
   host: "0.0.0.0"
@@ -70,7 +70,7 @@ server:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `capabilities` | object | `{}` | Tools, MCP servers, and sub-agents configuration |
-| `message_storage` | string | `"local"` | Message persistence: "local" or "redis" |
+| `storage_mode` | string | `"local"` | Storage mode for both conversation history and long-term memory: `"local"` (SQLite + ChromaDB) or `"cloud"` (Redis + Upstash Vector) |
 | `output_schema` | object | `null` | Structured output schema definition |
 
 
@@ -110,7 +110,7 @@ agent:
         description: "Writing specialist for content creation"
         server_url: "http://localhost:8012"
 
-  message_storage: "local"
+  storage_mode: "local"
 
 server:
   host: "0.0.0.0"
@@ -134,7 +134,7 @@ agent:
     tools:
       - "web_search"
 
-  message_storage: "local"
+  storage_mode: "local"
 
 server:
   host: "0.0.0.0"
@@ -157,7 +157,7 @@ agent:
   capabilities:
     tools: []
 
-  message_storage: "local"
+  storage_mode: "local"
 
 server:
   host: "0.0.0.0"
@@ -302,25 +302,25 @@ When starting the server, specify custom tools:
 xagent-server --config agent.yaml --toolkit_path my_custom_tools/
 ```
 
-## Message Storage Configuration
+## Storage Mode Configuration
 
-### Local Storage (Default)
-
-```yaml
-agent:
-  message_storage: "local"
-```
-
-Stores conversation history in local memory (lost on restart).
-
-### Redis Storage
+### Local Mode (Default)
 
 ```yaml
 agent:
-  message_storage: "redis"
+  storage_mode: "local"
 ```
 
-Requires Redis server and `REDIS_URL` environment variable.
+Uses local SQLite for conversation history and local ChromaDB for long-term memory.
+
+### Cloud Mode
+
+```yaml
+agent:
+  storage_mode: "cloud"
+```
+
+Uses cloud backends for both conversation history and long-term memory. This currently requires `REDIS_URL`, `UPSTASH_VECTOR_REST_URL`, and `UPSTASH_VECTOR_REST_TOKEN`.
 
 ## Complete Examples
 
@@ -351,7 +351,7 @@ agent:
       - "draw_image"
     mcp_servers: []
   
-  message_storage: "redis"
+  storage_mode: "cloud"
 
 server:
   host: "0.0.0.0"
@@ -408,7 +408,7 @@ agent:
         items: "str"
         description: "Action recommendations"
   
-  message_storage: "redis"
+  storage_mode: "cloud"
 
 server:
   host: "0.0.0.0"
@@ -460,7 +460,7 @@ agent:
         type: "str"
         description: "Intended audience"
   
-  message_storage: "local"
+  storage_mode: "local"
 
 server:
   host: "0.0.0.0"

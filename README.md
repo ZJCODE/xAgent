@@ -2,7 +2,6 @@
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
-[![Redis](https://img.shields.io/badge/Redis-7.0+-red.svg)](https://redis.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A production-ready AI Agent framework focused on **easy start** and **scalable deployment**.
@@ -19,6 +18,12 @@ A production-ready AI Agent framework focused on **easy start** and **scalable d
 
 ```bash
 pip install myxagent
+```
+
+Optional extras:
+
+```bash
+pip install "myxagent[cloud]"   # Redis + Upstash cloud/distributed integrations
 ```
 
 ### 2) Set environment variable
@@ -66,7 +71,7 @@ agent:
         tools:
             - "web_search"
 
-    message_storage: "local"
+    storage_mode: "local"
 
 server:
     host: "0.0.0.0"
@@ -84,6 +89,7 @@ xagent-server --config config/agent.yaml --toolkit_path my_toolkit --open
 ```
 
 If you do not use custom tools, you can omit `--toolkit_path`.
+Cloud storage is optional and only needed when you explicitly choose `storage_mode: "cloud"` for both chat history and memory.
 
 For more YAML options, see [docs/configuration_reference.md](docs/configuration_reference.md).
 

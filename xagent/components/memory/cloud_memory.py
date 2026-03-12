@@ -3,14 +3,14 @@ import logging
 import dotenv
 
 from .basic_memory import MemoryStorageBasic
-from .message_buffer import MessageBufferBase, MessageBufferRedis
+from .message_buffer import MessageBufferBase, MessageBufferLocal
 from .vector_store import VectorStoreBase, VectorStoreUpstash
 
 dotenv.load_dotenv(override=True)
 
-class MemoryStorageUpstash(MemoryStorageBasic):
+class MemoryStorageCloud(MemoryStorageBasic):
     """
-    Upstash Vector memory storage with LLM-based memory extraction.
+    Cloud memory storage backed by Upstash Vector with LLM-based memory extraction.
     
     Args:
         memory_threshold: Number of messages to trigger long-term storage. Defaults to 10
@@ -38,11 +38,14 @@ class MemoryStorageUpstash(MemoryStorageBasic):
             vector_store=self.vector_store
         )
         
-        self.logger.info("UpstashMemory initialized with threshold: %d, keep_recent: %d", 
-                        memory_threshold, keep_recent)
+        self.logger.info(
+            "MemoryStorageCloud initialized with threshold: %d, keep_recent: %d",
+            memory_threshold,
+            keep_recent,
+        )
     
     def _initialize_vector_store(self, vector_store: Optional[VectorStoreBase] = None) -> VectorStoreBase:
-        """Initialize the vector store for Upstash memory."""
+        """Initialize the vector store for cloud memory."""
         if vector_store is None:
             vector_store = VectorStoreUpstash()
             self.logger.info("Using default VectorStoreUpstash")
@@ -52,10 +55,10 @@ class MemoryStorageUpstash(MemoryStorageBasic):
         return vector_store
     
     def _initialize_message_buffer(self, message_buffer: Optional[MessageBufferBase] = None) -> MessageBufferBase:
-        """Initialize the message buffer for Upstash memory."""
+        """Initialize the message buffer for cloud memory."""
         if message_buffer is None:
-            message_buffer = MessageBufferRedis(max_messages=100)
-            self.logger.info("Using default MessageBufferRedis")
+            message_buffer = MessageBufferLocal(max_messages=100)
+            self.logger.info("Using default MessageBufferLocal")
         else:
             self.logger.info("Using provided message buffer: %s", type(message_buffer).__name__)
         
