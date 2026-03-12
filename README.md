@@ -318,7 +318,7 @@ All technical details are now organized in `docs/`:
 - [Docker Deployment](deploy/docker/README.md)
 
 ### Examples
-- [Demo Examples](examples/demo)
+- [Demo Examples](examples/demo/README.md)
 - [Config Examples](examples/config)
 - [Toolkit Examples](examples/toolkit)
 

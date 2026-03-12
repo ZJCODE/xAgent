@@ -1,44 +1,30 @@
-"""
-Streaming Chat Example
-
-This example demonstrates the streaming chat functionality of xAgent.
-"""
+"""Streaming responses with local message storage."""
 
 import asyncio
+
+from xagent.components import MessageStorageLocal
 from xagent.core import Agent
-from xagent.tools import web_search
+
 
 async def main():
-    # Create agent with async-aware architecture
     agent = Agent(
-        name="my_assistant",
-        system_prompt="You are a helpful AI assistant.",
+        name="streaming_assistant",
+        system_prompt="You write practical answers in a calm, direct tone.",
         model="gpt-4.1-mini",
-        tools=[web_search]  # Add web search tool
+        message_storage=MessageStorageLocal(),
     )
 
-    # Async streaming chat interaction
-    response = await agent.chat(
-        user_message="Hello, how are you?", 
-        user_id="user123",
-        session_id="session456",
-        stream=True
+    stream = await agent.chat(
+        user_message="Write a short release note announcing faster search and cleaner settings pages.",
+        user_id="demo_user",
+        session_id="stream_demo",
+        stream=True,
     )
-    async for event in response:
-        print(event, end="", flush=True)
-    print()  # New line after streaming
 
-    # Continue conversation with context using streaming
-    response = await agent.chat(
-        user_message="What's the weather like in Hangzhou?", 
-        user_id="user123",
-        session_id="session456",
-        stream=True
-    )
-    async for event in response:
-        print(event, end="", flush=True)
-    print()  # New line after streaming
+    async for chunk in stream:
+        print(chunk, end="", flush=True)
+    print()
 
-# Run the async function
+
 if __name__ == "__main__":
     asyncio.run(main())

@@ -1,55 +1,56 @@
-"""
-Custom Tools Example (Sync and Async)
-
-This example demonstrates how to create custom tools that can be either
-synchronous or asynchronous, and how xAgent handles them automatically.
-"""
+"""Register sync and async local tools with an agent."""
 
 import asyncio
-import httpx
-from xagent.utils.tool_decorator import function_tool
+
+from xagent.components import MessageStorageLocal
 from xagent.core import Agent
+from xagent.utils import function_tool
 
-# Sync tools - automatically converted to async
-@function_tool()
-def calculate_square(n: int) -> int:
-    """Calculate square of a number (CPU-intensive)."""
-    import time
-    time.sleep(0.1)  # Simulate CPU work
-    return n * n
 
 @function_tool()
-def format_text(text: str, style: str) -> str:
-    """Format text with various styles."""
-    if style == "upper":
-        return text.upper()
-    elif style == "title":
-        return text.title()
-    return text
+def estimate_project_cost(hours: int, hourly_rate: int) -> str:
+    """Estimate project cost from effort and rate."""
+    total = hours * hourly_rate
+    return f"Estimated cost: ${total} for {hours} hours at ${hourly_rate}/hour."
 
-# Async tools - used directly for I/O operations
+
 @function_tool()
-async def fetch_weather(city: str) -> str:
-    """Fetch weather data from API."""
-    async with httpx.AsyncClient() as client:
-        # Simulate weather API call
-        await asyncio.sleep(0.5)
-        return f"Weather in {city}: 22°C, Sunny"
+def title_case(text: str) -> str:
+    """Convert text to title case."""
+    return text.title()
+
+
+@function_tool()
+async def assess_timeline_risk(scope: str, deadline_days: int) -> str:
+    """Return a simple schedule risk assessment."""
+    await asyncio.sleep(0.1)
+    if deadline_days <= 7:
+        risk = "high"
+    elif deadline_days <= 21:
+        risk = "medium"
+    else:
+        risk = "low"
+    return f"Timeline risk for {scope!r}: {risk}."
+
 
 async def main():
-    # Mix of sync and async tools
     agent = Agent(
-        tools=[calculate_square, format_text, fetch_weather],
-        model="gpt-4.1-mini"
+        name="tool_demo",
+        model="gpt-4.1-mini",
+        tools=[estimate_project_cost, title_case, assess_timeline_risk],
+        message_storage=MessageStorageLocal(),
     )
-    
-    # Agent handles all tools automatically - sync tools run in thread pool
+
     response = await agent.chat(
-        user_message="Calculate the square of 15, format 'hello world' in title case, and get weather for Tokyo",
-        user_id="user123",
-        session_id="session456"
+        user_message=(
+            "Estimate the cost of a 36-hour onboarding project at 120 dollars per hour, "
+            "convert 'q2 platform refresh' to title case, and assess the risk for shipping it in 10 days."
+        ),
+        user_id="demo_user",
+        session_id="tool_demo",
     )
     print(response)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

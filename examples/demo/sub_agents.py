@@ -1,46 +1,54 @@
-"""
-Agent as Tool Pattern Example
-
-This example demonstrates how to use agents as tools, creating specialized
-agents that can be composed together for complex tasks.
-"""
+"""Compose specialist agents under one coordinator."""
 
 import asyncio
-from xagent.core import Agent
-from xagent.tools import web_search
 
-async def agent_as_tool_example():
-    # Create specialized agents
-    researcher_agent = Agent(
-        name="research_specialist",
-        system_prompt="You are a research expert. Gather information by using web search, analyze data, and provide well-researched insights.",
-        description="Research topics and provide detailed analysis",
+from xagent.components import MessageStorageLocal
+from xagent.core import Agent
+
+
+async def main():
+    message_storage = MessageStorageLocal()
+
+    requirements_agent = Agent(
+        name="requirements_specialist",
+        description="Breaks requests into requirements and success criteria.",
+        system_prompt=(
+            "You extract requirements, constraints, and open questions. "
+            "Focus on clarity and implementation details."
+        ),
         model="gpt-4.1-mini",
-        tools=[web_search]  # Add web search tool for research purposes
+        message_storage=message_storage,
     )
-    
-    writing_agent = Agent(
-        name="writing_specialist", 
-        system_prompt="You are a professional writer. Create engaging content.",
-        description="Write and edit content",
-        model="gpt-4.1-mini"
+
+    writer_agent = Agent(
+        name="proposal_writer",
+        description="Turns structured inputs into concise internal proposals.",
+        system_prompt="You write crisp internal documents with clear actions and tradeoffs.",
+        model="gpt-4.1-mini",
+        message_storage=message_storage,
     )
-    
-    # Main coordinator agent with specialist tools
+
     coordinator = Agent(
-        name="coordinator",
-        sub_agents=[researcher_agent, writing_agent],
-        system_prompt="You are a coordination agent that breaks down complex tasks and delegates them to specialist agents. Analyze requests, create execution plans, delegate to the right specialist (research_specialist for information gathering, writing_specialist for writing), and synthesize results into coherent outputs. Solve tasks step-by-step, ensuring clarity and thoroughness in your responses.",
-        model="gpt-4.1"
+        name="proposal_coordinator",
+        system_prompt=(
+            "Delegate requirement extraction and writing work to the specialist agents when useful, "
+            "then return one coherent answer."
+        ),
+        model="gpt-4.1-mini",
+        sub_agents=[requirements_agent, writer_agent],
+        message_storage=message_storage,
     )
-    
-    # Complex multi-step task
+
     response = await coordinator.chat(
-        user_message="Research the latest advancements in AI technology and write a brief summary",
-        user_id="user123",
-        session_id="session456"
+        user_message=(
+            "Create a short internal proposal for moving release notes into a self-serve workflow. "
+            "Include scope, likely risks, and a recommendation."
+        ),
+        user_id="demo_user",
+        session_id="sub_agents",
     )
     print(response)
 
+
 if __name__ == "__main__":
-    asyncio.run(agent_as_tool_example())
+    asyncio.run(main())

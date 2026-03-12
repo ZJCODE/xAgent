@@ -1,62 +1,47 @@
-"""
-Example demonstrating AgentHTTPServer with a custom pre-configured Agent.
-This shows how to create an Agent with specific settings and pass it directly to AgentHTTPServer.
-"""
+"""Run AgentHTTPServer with a pre-configured local agent."""
 
-import asyncio
-from xagent.core.agent import Agent
-from xagent.interfaces.server import AgentHTTPServer
 from xagent.components import MessageStorageLocal
-from xagent.tools import web_search, draw_image
+from xagent.core import Agent
+from xagent.interfaces.server import AgentHTTPServer
+from xagent.utils import function_tool
 
 
-def create_custom_agent():
-    """Create a custom agent with specific configuration."""
-    
-    # Create custom message storage
-    message_storage = MessageStorageLocal()
-    
-    # Create agent with custom settings
-    agent = Agent(
-        name="CustomWebAgent", 
-        system_prompt=(
-            "You are a specialized web research assistant. "
-            "You excel at finding accurate information and creating visual content. "
-            "Always provide source citations when using web search results."
-        ),
-        model="gpt-4o-mini",
-        tools=[web_search, draw_image],  # Custom tool selection
-        message_storage=message_storage
+@function_tool()
+def release_window(environment: str) -> str:
+    """Return the standard release window for an environment."""
+    windows = {
+        "dev": "Weekdays, any time",
+        "staging": "Weekdays before 17:00",
+        "production": "Tuesday and Thursday at 10:00 local time",
+    }
+    return windows.get(environment.lower(), "Unknown environment")
+
+
+def create_custom_agent() -> Agent:
+    return Agent(
+        name="release_assistant",
+        system_prompt="You help teams answer release-process questions with short, direct responses.",
+        model="gpt-4.1-mini",
+        tools=[release_window],
+        message_storage=MessageStorageLocal(),
     )
-    
-    return agent
 
 
 def main():
-    """Demonstrate creating AgentHTTPServer with a custom agent."""
-    
-    # Create custom agent
-    custom_agent = create_custom_agent()
-    
-    # Create server with custom agent
-    print("Creating AgentHTTPServer with custom agent...")
-    server = AgentHTTPServer(agent=custom_agent)
-    
-    print(f"Server created successfully!")
-    print(f"Agent name: {server.agent.name}")
-    print(f"Agent model: {server.agent.model}")
-    print(f"Available tools: {len(server.agent.tools)}")
-    print(f"Tool names: {list(server.agent.tools.keys())}")
-    
-    # Start the server
+    agent = create_custom_agent()
+    server = AgentHTTPServer(agent=agent)
+
     print("Starting server on http://localhost:8010")
-    print("You can now send requests to the server with your custom agent!")
-    print("Press Ctrl+C to stop the server")
-    
-    try:
-        server.run(host="localhost", port=8010)
-    except KeyboardInterrupt:
-        print("\nServer stopped.")
+    print("Example POST body:")
+    print(
+        '{'
+        '"user_id":"demo_user",'
+        '"session_id":"release_ops",'
+        '"user_message":"When can I deploy to production?"'
+        '}'
+    )
+
+    server.run(host="localhost", port=8010)
 
 
 if __name__ == "__main__":

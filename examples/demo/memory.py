@@ -1,29 +1,41 @@
+"""Enable local long-term memory during normal agent chats."""
+
 import asyncio
+
+from xagent.components import MemoryStorageLocal, MessageStorageLocal
 from xagent.core import Agent
 
+
 async def main():
-    # Create agent with memory enabled
     agent = Agent(
         name="memory_assistant",
-        system_prompt="You are a helpful assistant with long-term memory."
+        system_prompt="You are a helpful assistant that uses long-term memory when available.",
+        model="gpt-4.1-mini",
+        message_storage=MessageStorageLocal(),
+        memory_storage=MemoryStorageLocal(collection_name="demo_agent_memory"),
     )
-    
-    # Chat with memory enabled
-    response = await agent.chat(
-        user_message="Hi, I'm John. I work as a software engineer at Google and live in San Francisco.",
-        user_id="john_12345",
-        session_id="session_1",
-        enable_memory=True  # Enable memory for this conversation
-    )
-    print(response)
-    
-    # In a later conversation, the agent will remember John's details
-    response = await agent.chat(
-        user_message="What do you know about me?",
-        user_id="john_12345", 
-        session_id="session_2",
-        enable_memory=True
-    )
-    print(response)  # Agent will recall John's job and location
 
-asyncio.run(main())
+    user_id = "alex"
+
+    first_reply = await agent.chat(
+        user_message=(
+            "Hi, I'm Alex. I lead platform engineering, prefer concise updates, "
+            "and I'm planning a Tokyo trip in May."
+        ),
+        user_id=user_id,
+        session_id="intro",
+        enable_memory=True,
+    )
+    print("Session 1:\n", first_reply, sep="")
+
+    second_reply = await agent.chat(
+        user_message="What do you remember about me, and how should you tailor future replies?",
+        user_id=user_id,
+        session_id="follow_up",
+        enable_memory=True,
+    )
+    print("\nSession 2:\n", second_reply, sep="")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
