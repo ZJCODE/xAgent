@@ -37,6 +37,56 @@ xagent-cli
 xagent-cli --ask "Hello"
 ```
 
+## Configure with `agent.yaml`
+
+If you want to customize the agent prompt, model, tools, or server port, create a YAML config file.
+
+### 1) Generate a starter config
+
+```bash
+xagent-cli --init
+```
+
+This creates:
+
+- `config/agent.yaml`
+- `my_toolkit/` for custom tools
+
+### 2) Edit `config/agent.yaml`
+
+```yaml
+agent:
+    name: "Assistant"
+    system_prompt: |
+        You are a helpful AI assistant.
+        Answer clearly and accurately.
+    model: "gpt-4.1-mini"
+
+    capabilities:
+        tools:
+            - "web_search"
+
+    message_storage: "local"
+
+server:
+    host: "0.0.0.0"
+    port: 8010
+```
+
+### 3) Run with your config
+
+```bash
+# CLI
+xagent-cli --config config/agent.yaml --toolkit_path my_toolkit
+
+# HTTP Server + Web UI
+xagent-server --config config/agent.yaml --toolkit_path my_toolkit --open
+```
+
+If you do not use custom tools, you can omit `--toolkit_path`.
+
+For more YAML options, see [docs/configuration_reference.md](docs/configuration_reference.md).
+
 ## Most Common Usage
 
 ### CLI
