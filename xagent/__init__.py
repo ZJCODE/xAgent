@@ -33,6 +33,7 @@ __all__ = [
 
     # Multi-agent
     "Workflow",
+    "Swarm",
     
     # Meta
     "__version__"
@@ -47,6 +48,7 @@ _EXPORTS = {
     "web_search": (".tools", "web_search"),
     "draw_image": (".tools", "draw_image"),
     "Workflow": (".multi", "Workflow"),
+    "Swarm": (".multi", "Swarm"),
     "MessageStorageBase": (".components", "MessageStorageBase"),
     "MessageStorageLocal": (".components", "MessageStorageLocal"),
     "MessageStorageCloud": (".components", "MessageStorageCloud"),

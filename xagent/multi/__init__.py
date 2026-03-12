@@ -4,10 +4,12 @@ import importlib
 
 __all__ = [
     "Workflow",
+    "Swarm",
 ]
 
 _EXPORTS = {
     "Workflow": (".workflow", "Workflow"),
+    "Swarm": (".swarm", "Swarm"),
 }
 
 

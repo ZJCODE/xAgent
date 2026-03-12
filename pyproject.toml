@@ -25,19 +25,15 @@ dependencies = [
     "fastapi>=0.116.1",
     "pydantic>=2.11.7",
     "uvicorn>=0.35.0",
-    
+
     # AI/ML and agents
     "openai>=1.98.0",
     "fastmcp>=2.10.6",
-    "langfuse>=3.2.1",
-    
+
     # HTTP clients
     "httpx>=0.28.1",
     "requests>=2.32.0",
-    
-    # Data storage
-    "chromadb>=1.0.20",
-    
+
     # Utilities
     "python-dotenv>=1.1.1",
     "pyyaml>=6.0.2",
@@ -46,10 +42,26 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Local vector-based memory (ChromaDB)
+local = [
+    "chromadb>=1.0.20",
+]
+# Cloud storage backends (Redis message buffer + Upstash vector store)
 cloud = [
     "redis>=6.2.0",
     "upstash_vector>=0.8.0",
 ]
+# Observability via Langfuse (tracing / monitoring)
+observability = [
+    "langfuse>=3.2.1",
+]
+# Development / testing
+dev = [
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+]
+# Install everything
+all = ["myxagent[local,cloud,observability]"]
 
 [project.scripts]
 xagent-server = "xagent.interfaces.server:main"
