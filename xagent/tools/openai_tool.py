@@ -1,5 +1,4 @@
-from langfuse import observe
-from langfuse.openai import AsyncOpenAI
+from openai import AsyncOpenAI
 
 from xagent.utils.tool_decorator import function_tool
 
@@ -19,7 +18,6 @@ def _get_client() -> AsyncOpenAI:
                      "search_query": "The query to search for on the web."
                }
 )
-@observe()
 async def web_search(search_query: str) -> str:
     "when the user wants to search the web using a search engine, use this tool"
 
@@ -44,7 +42,6 @@ async def web_search(search_query: str) -> str:
                      "prompt": "A detailed text prompt describing the image to generate. Include style, subject, composition, colors, and any specific details."
                }
 )
-@observe()
 async def draw_image(prompt: str) -> str:
     """
     when the user wants to generate an image based on a prompt, use this tool

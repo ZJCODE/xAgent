@@ -1,7 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
-from langfuse.openai import AsyncOpenAI
-from langfuse import observe
+from openai import AsyncOpenAI
 
 from ....schemas.memory import MemoryExtraction, MetaMemory, MetaMemoryPiece, MetaMemoryType, QueryPreprocessResult
 
@@ -59,7 +58,6 @@ class MemoryLLMService:
 
         return False
     
-    @observe()
     async def extract_memories_from_content(self, content: str) -> MemoryExtraction:
         """Extract structured memories from raw content using LLM.
         
@@ -182,7 +180,6 @@ Extract meaningful memories from the conversation that reveal each user's prefer
             # Fallback: return empty extraction
             return MemoryExtraction(memories=[])
 
-    @observe()
     async def extract_meta_memory_from_recent(self, recent_memories: List[Dict[str, Any]]) -> MetaMemory:
         """Extract meta-level insights from recent memories using LLM.
         
@@ -287,7 +284,6 @@ Extract meaningful meta-memory insights about patterns, themes, user state, and 
                 ]
             )
 
-    @observe()
     async def preprocess_query(self, query: str, query_context: Optional[str] = None, enable: bool = False) -> QueryPreprocessResult:
         """Preprocess query using LLM to generate variations and extract keywords for better memory retrieval.
         
@@ -381,7 +377,6 @@ Task: Extract keywords and rewrite query if it needs completion based on convers
                 keywords=[]
             )
 
-    @observe()
     async def merge_memories(self, extracted_memories: 'MemoryExtraction', related_memories: List[Dict[str, Any]]) -> MemoryExtraction:
         """Merge extracted memories with related existing memories using LLM.
         

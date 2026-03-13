@@ -24,9 +24,6 @@ class AgentCLI(BaseAgentRunner):
         # Configure logging based on verbose setting
         self.verbose = verbose
         
-        # Always suppress Langfuse logs regardless of verbose mode
-        logging.getLogger("langfuse").setLevel(logging.CRITICAL)
-        
         if not verbose:
             # Suppress most logging except critical errors
             logging.getLogger().setLevel(logging.CRITICAL)
@@ -38,7 +35,6 @@ class AgentCLI(BaseAgentRunner):
             # Enable verbose logging
             logging.getLogger().setLevel(logging.INFO)
             logging.getLogger("xagent").setLevel(logging.INFO)
-            # Keep Langfuse suppressed even in verbose mode
         
         # Initialize the base agent runner
         super().__init__(config_path, toolkit_path)

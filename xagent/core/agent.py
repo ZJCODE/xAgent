@@ -9,8 +9,7 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, List, Optional, Uni
 
 # Third-party imports
 import httpx
-from langfuse import observe
-from langfuse.openai import AsyncOpenAI
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -203,7 +202,6 @@ class Agent:
             shared=shared
         )
 
-    @observe()
     async def chat(
         self,
         user_message: str,
@@ -408,7 +406,6 @@ class Agent:
         # 注册新工具后使缓存失效
         self._tool_specs_cache = None
 
-    @observe()
     @retry(
         stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
         wait=wait_exponential(multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT)
@@ -613,7 +610,6 @@ class Agent:
 
         return fallback_text
 
-    @observe()
     @retry(
         stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
         wait=wait_exponential(multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT)
@@ -771,7 +767,6 @@ class Agent:
                 return ReplyType.ERROR, stream_generator()
             return ReplyType.ERROR, f"Model call error: {str(e)}"
     
-    @observe()
     async def _handle_tool_calls(self, tool_calls: list, user_id: str, session_id: str, input_messages: list, max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS) -> None:
         """
         Handle tool calls by executing them concurrently with concurrency limit.
