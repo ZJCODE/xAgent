@@ -130,7 +130,12 @@ class Agent:
         if memory_storage is not None:
             self.memory_storage = memory_storage
         else:
-            self.memory_storage = MemoryStorageLocal(collection_name = self.name)
+            self.memory_storage = MemoryStorageLocal(collection_name=self.name)
+
+        # Inject message_storage into memory_storage so it can read
+        # conversation history directly for memory extraction.
+        if self.memory_storage.message_storage is None:
+            self.memory_storage.message_storage = self.message_storage
         
         # System prompt setup
         self.system_prompt = system_prompt or ""
@@ -277,6 +282,7 @@ class Agent:
                                                                             query_context=f"pre_chat:{pre_chat}",enable_query_process=shared_query_process)
                     self._schedule_memory_add(
                         user_id=self.SHARED_USER_ID,
+                        session_id=self.SHARED_SESSION_ID,
                         messages=shared_messages_without_tool[-2:],
                         description="shared memory sync",
                     )
@@ -291,6 +297,7 @@ class Agent:
                 
                 self._schedule_memory_add(
                     user_id=user_id,
+                    session_id=session_id,
                     messages=messages_without_tool[-2:],
                     description="conversation memory sync",
                 )
@@ -495,6 +502,7 @@ class Agent:
     def _schedule_memory_add(
         self,
         user_id: str,
+        session_id: str,
         messages: List[dict],
         description: str,
     ) -> None:
@@ -502,7 +510,7 @@ class Agent:
         if not messages:
             return
         self._schedule_background_task(
-            lambda: self.memory_storage.add(user_id=user_id, messages=messages),
+            lambda: self.memory_storage.add(user_id=user_id, session_id=session_id, messages=messages),
             description=description,
         )
 

@@ -177,9 +177,6 @@ OPENAI_API_KEY=your_openai_api_key
 UPSTASH_VECTOR_REST_URL=your_upstash_vector_url
 UPSTASH_VECTOR_REST_TOKEN=your_upstash_vector_token
 
-# Optional Redis (only when you explicitly inject MessageBufferRedis)
-REDIS_URL=redis://username:password@host:port/database
-
 # Optional: Custom ChromaDB path
 CHROMADB_PATH=/custom/path/to/chromadb
 ```

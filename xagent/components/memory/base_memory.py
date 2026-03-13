@@ -1,18 +1,25 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..message.base_messages import MessageStorageBase as _MsgStorage
+
 
 class MemoryStorageBase(ABC):
     """Abstract interface for memory storage operations."""
-    
 
     @abstractmethod
     async def add(self,
-                  user_id:str,
-                  messages:List[Dict[str, Any]]
+                  user_id: str,
+                  session_id: str,
+                  messages: List[Dict[str, Any]]
                   ):
         """
-        Add multiple memory pieces for a user.
-        When messages reach a threshold, trigger store operation.
+        Add messages and conditionally trigger long-term memory extraction.
+
+        The memory system reads conversation history directly from the
+        associated *message_storage* when extraction is triggered, so
+        ``messages`` is only used for counting and keyword detection.
         """
         pass
 
@@ -47,6 +54,6 @@ class MemoryStorageBase(ABC):
         pass
 
     @abstractmethod
-    async def delete(self,memory_ids: List[str]):
+    async def delete(self, memory_ids: List[str]):
         """Delete memories by their IDs."""
         pass

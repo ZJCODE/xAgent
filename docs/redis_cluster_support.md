@@ -35,7 +35,6 @@ redis://localhost:6379?cluster=yes
 The following components now support Redis Cluster:
 
 1. **Cloud Message Storage** (`xagent.components.message.cloud_messages.MessageStorageCloud`)
-2. **Redis Message Buffer** (`xagent.components.memory.message_buffer.redis_message_buffer.MessageBufferRedis`)
 
 ## Implementation Details
 
@@ -88,11 +87,9 @@ export REDIS_URL="redis+cluster://user:pass@localhost:6379"
 
 ```python
 from xagent.components.message.cloud_messages import MessageStorageCloud
-from xagent.components.memory.message_buffer import MessageBufferRedis
 
 # Automatic detection based on URL
 message_storage = MessageStorageCloud("redis+cluster://localhost:6379")
-message_buffer = MessageBufferRedis("redis://localhost:6379?cluster=true")
 
 # Works with existing URLs too
 legacy_storage = MessageStorageCloud("redis://localhost:6379")
@@ -167,7 +164,6 @@ Enable debug logging to troubleshoot connection issues:
 ```python
 import logging
 logging.getLogger("MessageStorageCloud").setLevel(logging.DEBUG)
-logging.getLogger("MessageBufferRedis").setLevel(logging.DEBUG)
 ```
 
 ## References

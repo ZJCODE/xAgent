@@ -1,11 +1,23 @@
 import importlib
 
-__all__ = ["MemoryStorageBase", "MemoryStorageLocal", "MemoryStorageCloud"]
+__all__ = [
+    "MemoryStorageBase",
+    "MemoryStorageLocal",
+    "MemoryStorageCloud",
+    "VectorStoreBase",
+    "VectorDoc",
+    "VectorStoreLocal",
+    "VectorStoreUpstash",
+]
 
 _EXPORTS = {
     "MemoryStorageBase": (".base_memory", "MemoryStorageBase"),
     "MemoryStorageLocal": (".local_memory", "MemoryStorageLocal"),
     "MemoryStorageCloud": (".cloud_memory", "MemoryStorageCloud"),
+    "VectorStoreBase": (".base_vector_store", "VectorStoreBase"),
+    "VectorDoc": (".base_vector_store", "VectorDoc"),
+    "VectorStoreLocal": (".local_vector_store", "VectorStoreLocal"),
+    "VectorStoreUpstash": (".cloud_vector_store", "VectorStoreUpstash"),
 }
 
 
@@ -17,15 +29,16 @@ def __getattr__(name):
     try:
         module = importlib.import_module(module_name, __name__)
     except ModuleNotFoundError as exc:
-        if (exc.name or "").split(".")[0] == "upstash_vector":
+        package = (exc.name or "").split(".")[0]
+        if package == "upstash_vector":
             raise ImportError(
-                "MemoryStorageCloud requires the optional cloud dependencies. "
+                f"{attr_name} requires the optional cloud dependencies. "
                 "Install them with `pip install myxagent[cloud]`."
             ) from exc
-        if (exc.name or "").split(".")[0] == "redis":
+        if package == "chromadb":
             raise ImportError(
-                "Redis-backed memory buffers require the optional cloud dependencies. "
-                "Install them with `pip install myxagent[cloud]`."
+                f"{attr_name} requires ChromaDB. "
+                "Install it with `pip install myxagent` (included by default)."
             ) from exc
         raise
 

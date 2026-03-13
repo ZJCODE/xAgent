@@ -3,77 +3,88 @@ import os
 import uuid
 import re
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from datetime import datetime, timedelta, timezone
 
 from .base_memory import MemoryStorageBase
 from .helper.llm_service import MemoryLLMService
 from .config.memory_config import TRIGGER_KEYWORDS, MAX_SCAN_LENGTH
-from .message_buffer import MessageBufferBase
-from .vector_store import VectorStoreBase
+
+if TYPE_CHECKING:
+    from ..message.base_messages import MessageStorageBase as _MsgStorage
+    from .base_vector_store import VectorStoreBase as _VS
 
 class MemoryStorageBasic(MemoryStorageBase):
     """
     Basic memory storage implementation with common functionality.
     Provides shared methods for both local and cloud-based implementations.
+
+    Instead of maintaining a separate message buffer, this class reads
+    conversation history directly from the associated *message_storage*
+    when memory extraction is triggered.  A lightweight in-memory counter
+    tracks how many messages have been added per user so thresholds and
+    keyword triggers still work.
     """
     
     def __init__(self, 
                  memory_threshold: int = 10,
-                 keep_recent: int = 2,
-                 message_buffer: Optional[MessageBufferBase] = None,
-                 vector_store: Optional[VectorStoreBase] = None):
+                 message_storage=None,
+                 vector_store=None):
         # Initialize logger
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         
         # Initialize LLM service
         self.llm_service = MemoryLLMService()
         
-        # Set vector store and message buffer (initialized by subclasses)
+        # Set vector store (initialized by subclasses)
         self.vector_store = vector_store
-        self.message_buffer = message_buffer
+
+        # Message storage reference — used to read conversation history
+        # for memory extraction.  Injected by the Agent or the caller.
+        self.message_storage = message_storage
         
         # Memory management configuration
-        self.memory_threshold = memory_threshold  # Store to long-term memory when reaching this many messages
-        self.keep_recent = keep_recent  # Keep this many most recent messages after storage
+        self.memory_threshold = memory_threshold
+        
+        # Simple per-user counter replacing the old message buffer
+        self._msg_counter: Dict[str, int] = {}
         
         # 编译正则表达式模式，提高匹配性能
         self._compiled_patterns = self._compile_keyword_patterns()
         
-        self.logger.info("Basic memory initialized with threshold: %d, keep_recent: %d", 
-                        memory_threshold, keep_recent)
+        self.logger.info("Basic memory initialized with threshold: %d", memory_threshold)
     
     @abstractmethod
-    def _initialize_vector_store(self, **kwargs) -> VectorStoreBase:
+    def _initialize_vector_store(self, **kwargs):
         """Initialize the vector store. To be implemented by subclasses."""
-        pass
-    
-    @abstractmethod
-    def _initialize_message_buffer(self, **kwargs) -> MessageBufferBase:
-        """Initialize the message buffer. To be implemented by subclasses."""
         pass
     
     async def add(self,
                   user_id: str,
+                  session_id: str,
                   messages: List[Dict[str, Any]]
                   ):
         """
-        Add new messages to user's session memory.
-        When messages reach a threshold, or if a keyword is detected, trigger storage to long-term memory and keep only the latest 2 messages.
-        
+        Track incoming messages and conditionally trigger memory extraction.
+
+        Messages are NOT buffered.  When the threshold is reached (or a
+        keyword trigger fires), conversation history is read directly from
+        ``self.message_storage`` for LLM-based extraction.
+
         Args:
-            user_id: User identifier 
-            messages: List of message dictionaries with 'role', 'content', etc.
+            user_id: User identifier
+            session_id: Session identifier for reading history
+            messages: Recent message dicts (used for counting & keyword detection only)
         """
         if not messages:
             self.logger.debug("No messages provided for user %s", user_id)
             return
 
-        # Add new messages to user's message buffer
-        await self.message_buffer.add_messages(user_id, messages)
-        message_count = await self.message_buffer.get_message_count(user_id)
+        # Update counter
+        self._msg_counter[user_id] = self._msg_counter.get(user_id, 0) + len(messages)
+        message_count = self._msg_counter[user_id]
 
-        self.logger.debug("Added %d messages for user %s, total messages: %d", 
+        self.logger.debug("Added %d messages for user %s, counter: %d", 
                          len(messages), user_id, message_count)
 
         # 只监测 role 为 'user' 的消息是否有关键词触发，逆序遍历（从最新一条开始）
@@ -104,25 +115,32 @@ class MemoryStorageBasic(MemoryStorageBase):
                             "keyword" if keyword_triggered else "threshold",
                             f" - {trigger_tier}" if trigger_tier else "")
             try:
-                # Get all messages from buffer for storage
-                all_messages = await self.message_buffer.get_messages(user_id)
-                
+                # Read conversation history directly from message storage
+                if self.message_storage is not None:
+                    recent_msgs = await self.message_storage.get_messages(
+                        user_id, session_id, count=max(message_count, self.memory_threshold)
+                    )
+                    all_messages = [m.to_dict() for m in recent_msgs
+                                    if m.to_dict().get("role") in ("user", "assistant")]
+                else:
+                    # Fallback: use the messages passed directly
+                    all_messages = messages
+
                 # Convert messages to conversation format for storage
                 conversation_content = self._format_messages_for_storage(all_messages)
 
                 # Store conversation to long-term memory
                 await self.store(user_id, conversation_content)
 
-                # Keep only the most recent messages in buffer
-                await self.message_buffer.keep_recent_messages(user_id, self.keep_recent)
+                # Reset counter
+                self._msg_counter[user_id] = 0
 
-                self.logger.info("Stored %d messages to long-term memory for user %s, kept %d recent messages", 
-                               message_count - self.keep_recent if message_count > self.keep_recent else message_count, user_id, self.keep_recent)
+                self.logger.info("Stored messages to long-term memory for user %s, counter reset", user_id)
 
             except Exception as e:
                 self.logger.error("Failed to store messages to long-term memory for user %s: %s", user_id, str(e))
-                # If storage fails, still trim to prevent memory overflow
-                await self.message_buffer.keep_recent_messages(user_id, self.keep_recent)
+                # Reset counter to avoid infinite retry loop
+                self._msg_counter[user_id] = 0
 
     async def store(self, 
               user_id: str, 
@@ -322,10 +340,10 @@ class MemoryStorageBasic(MemoryStorageBase):
         # Clear long-term memories from vector store
         await self.vector_store.delete_by_filter({"user_id": user_id})
         
-        # Clear temporary messages from message buffer
-        await self.message_buffer.clear_messages(user_id)
+        # Reset message counter
+        self._msg_counter.pop(user_id, None)
         
-        self.logger.info("Cleared all memories and messages for user: %s", user_id)
+        self.logger.info("Cleared all memories for user: %s", user_id)
 
     async def delete(self, memory_ids: List[str]):
         """Delete memories by their IDs."""
