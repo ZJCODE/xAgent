@@ -320,7 +320,7 @@ agent:
   storage_mode: "cloud"
 ```
 
-For the complete cloud mode setup, including `pip install "myxagent[cloud]"` and the required `REDIS_URL`, `UPSTASH_VECTOR_REST_URL`, and `UPSTASH_VECTOR_REST_TOKEN`, see [README Cloud Mode](../README.md#cloud-mode).
+For the complete cloud mode setup, including the required `REDIS_URL`, `UPSTASH_VECTOR_REST_URL`, and `UPSTASH_VECTOR_REST_TOKEN` environment variables, see [README Cloud Mode](../README.md#cloud-mode).
 
 ## Complete Examples
 

@@ -89,21 +89,16 @@ For more YAML options, see [docs/configuration_reference.md](docs/configuration_
 ## Cloud Mode
 
 Use cloud mode when you want shared/distributed conversation history and cloud memory.
+All required dependencies (Redis, Upstash Vector) are included by default — no extra install step needed.
 
-### 1) Install cloud dependencies
-
-```bash
-pip install "myxagent[cloud]"
-```
-
-### 2) Set `storage_mode: "cloud"`
+### 1) Set `storage_mode: "cloud"`
 
 ```yaml
 agent:
     storage_mode: "cloud"
 ```
 
-### 3) Set required environment variables
+### 2) Set required environment variables
 
 ```bash
 export REDIS_URL=redis://localhost:6379/0
@@ -111,7 +106,7 @@ export UPSTASH_VECTOR_REST_URL=https://your-database.upstash.io
 export UPSTASH_VECTOR_REST_TOKEN=your_token_here
 ```
 
-For config-driven cloud mode, all three are required. If you want local-only execution, keep `storage_mode: "local"` and install `myxagent` only.
+For config-driven cloud mode, all three environment variables are required. If you want local-only execution, keep `storage_mode: "local"`.
 
 ## Most Common Usage
 
