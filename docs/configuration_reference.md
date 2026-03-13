@@ -71,6 +71,7 @@ server:
 |-------|------|---------|-------------|
 | `capabilities` | object | `{}` | Tools, MCP servers, and sub-agents configuration |
 | `storage_mode` | string | `"local"` | Storage mode for both conversation history and long-term memory: `"local"` (SQLite + ChromaDB) or `"cloud"` (Redis + Upstash Vector) |
+| `workspace` | string | `"~/.xagent"` | Root directory for all local storage files (SQLite + ChromaDB). Only applies when `storage_mode` is `"local"` |
 | `output_schema` | object | `null` | Structured output schema definition |
 
 
@@ -303,6 +304,24 @@ xagent-server --config agent.yaml --toolkit_path my_custom_tools/
 ```
 
 ## Storage Mode Configuration
+
+### Workspace Directory
+
+All local storage files (SQLite database and ChromaDB vectors) are placed under a single **workspace** directory. This makes it easy to manage, back up, or isolate data per agent.
+
+```
+<workspace>/
+  ├── messages.sqlite3    # Conversation history (SQLite)
+  └── chroma/             # Long-term memory vectors (ChromaDB)
+```
+
+If not specified, defaults to `~/.xagent`.
+
+```yaml
+agent:
+  storage_mode: "local"
+  workspace: "./my_project_data"  # Relative or absolute path; ~ is expanded
+```
 
 ### Local Mode (Default)
 

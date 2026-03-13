@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import warnings
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
 # Third-party imports
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field, create_model
 
 # Local imports
 from ..core.agent import Agent
+from ..core.config import AgentConfig
 from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageBase, MemoryStorageLocal
 from ..tools import TOOL_REGISTRY
 
@@ -67,6 +69,9 @@ class BaseAgentRunner:
         # Load and validate configuration
         self.config = self._load_config(config_path)
         
+        # Resolve workspace directory for local storage
+        self.workspace = self._resolve_workspace()
+
         # Initialize components in dependency order
         self.message_storage = self._initialize_message_storage()
         self.memory_storage = self._initialize_memory_storage()
@@ -143,6 +148,23 @@ class BaseAgentRunner:
                 "port": BaseAgentConfig.DEFAULT_PORT
             }
         }
+
+    def _resolve_workspace(self) -> Path:
+        """Resolve workspace directory from YAML config or default.
+
+        Priority (highest to lowest):
+        1. ``agent.workspace`` in the YAML configuration
+        2. Default ``~/.xagent``
+        """
+        agent_cfg = self.config.get("agent", {})
+        cfg_workspace = agent_cfg.get("workspace")
+        if cfg_workspace:
+            workspace = Path(cfg_workspace).expanduser().resolve()
+            self.logger.info("Workspace from config: %s", workspace)
+            return workspace
+
+        workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
+        return workspace
 
     def _get_storage_mode(self) -> str:
         """Resolve the configured storage mode for both messages and memory."""
@@ -449,13 +471,15 @@ class BaseAgentRunner:
         storage_mode = self._get_storage_mode()
 
         if storage_mode == "local":
-            return MessageStorageLocal()
+            msg_path = str(self.workspace / "messages.sqlite3")
+            return MessageStorageLocal(path=msg_path)
         if storage_mode == "cloud":
             from ..components import MessageStorageCloud
 
             return MessageStorageCloud()
 
-        return MessageStorageLocal()
+        msg_path = str(self.workspace / "messages.sqlite3")
+        return MessageStorageLocal(path=msg_path)
 
     def _initialize_memory_storage(self) -> MemoryStorageBase:
         """
@@ -469,12 +493,15 @@ class BaseAgentRunner:
             Defaults to MemoryStorageLocal if the mode is invalid.
         """
         storage_mode = self._get_storage_mode()
+        agent_name = self.config.get("agent", {}).get("name", AgentConfig.DEFAULT_NAME)
 
         if storage_mode == "cloud":
             from ..components import MemoryStorageCloud
 
             return MemoryStorageCloud()
         if storage_mode == "local":
-            return MemoryStorageLocal()
+            chroma_path = str(self.workspace / "chroma")
+            return MemoryStorageLocal(path=chroma_path, collection_name=agent_name)
 
-        return MemoryStorageLocal()
+        chroma_path = str(self.workspace / "chroma")
+        return MemoryStorageLocal(path=chroma_path, collection_name=agent_name)

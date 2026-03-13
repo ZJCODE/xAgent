@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import AsyncGenerator, List, Optional, Union
 
 from openai import AsyncOpenAI
@@ -38,6 +39,7 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         message_storage: Optional[MessageStorageBase] = None,
         memory_storage: Optional[MemoryStorageBase] = None,
+        workspace: Optional[str] = None,
     ):
         # Basic configuration
         self.name = name or AgentConfig.DEFAULT_NAME
@@ -47,14 +49,28 @@ class Agent:
         self.output_type = output_type
         self.system_prompt = system_prompt or ""
 
+        # Resolve workspace for default local storage paths
+        workspace_path: Optional[Path] = None
+        if workspace is not None:
+            workspace_path = Path(workspace).expanduser().resolve()
+
         # Message storage
-        self.message_storage = message_storage if message_storage is not None else MessageStorageLocal()
+        if message_storage is not None:
+            self.message_storage = message_storage
+        elif workspace_path is not None:
+            msg_path = str(workspace_path / "messages.sqlite3")
+            self.message_storage = MessageStorageLocal(path=msg_path)
+        else:
+            self.message_storage = MessageStorageLocal()
 
         # Memory storage
-        self.memory_storage = (
-            memory_storage if memory_storage is not None
-            else MemoryStorageLocal(collection_name=self.name)
-        )
+        if memory_storage is not None:
+            self.memory_storage = memory_storage
+        elif workspace_path is not None:
+            chroma_path = str(workspace_path / "chroma")
+            self.memory_storage = MemoryStorageLocal(path=chroma_path, collection_name=self.name)
+        else:
+            self.memory_storage = MemoryStorageLocal(collection_name=self.name)
 
         # --- Compose internal components ---
         self.tool_manager = ToolManager(tools=tools, mcp_servers=mcp_servers)

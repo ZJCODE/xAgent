@@ -13,6 +13,7 @@ class AgentConfig:
 
     DEFAULT_NAME = "default_agent"
     DEFAULT_MODEL = "gpt-5-mini"
+    DEFAULT_WORKSPACE = "~/.xagent"
     DEFAULT_USER_ID = "default_user"
     DEFAULT_SESSION_ID = "default_session"
     DEFAULT_HISTORY_COUNT = 16
