@@ -52,4 +52,7 @@ poetry.lock
 pyrightconfig.json
 
 server_registry.json
+
+# Agent instructions
+agent.md
 webchat_registry.json
