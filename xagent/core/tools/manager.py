@@ -5,7 +5,7 @@ from typing import List, Optional, Union
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from .config import AgentConfig
+from ..config import AgentConfig
 
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class ToolManager:
             mcp_servers = [mcp_servers]
         for url in mcp_servers or []:
             try:
-                from ..utils.mcp_convertor import MCPTool
+                from ...utils.mcp_convertor import MCPTool
 
                 mt = MCPTool(url)
                 mcp_tools = await mt.get_openai_tools()

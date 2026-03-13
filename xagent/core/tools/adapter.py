@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING, List, Optional, Union
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from .config import AgentConfig
-from ..utils.tool_decorator import function_tool
+from ..config import AgentConfig
+from ...utils.tool_decorator import function_tool
 
 if TYPE_CHECKING:
-    from .agent import Agent
+    from ..agent import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ def convert_sub_agents(
 ) -> Optional[list]:
     """Convert a list of sub-agents (Agent instances or HTTP tuples) into tool functions."""
     # Import here to avoid circular import at module level
-    from .agent import Agent
+    from ..agent import Agent
 
     tools = []
     for item in sub_agents or []:

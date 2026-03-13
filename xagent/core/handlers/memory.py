@@ -2,8 +2,8 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable, List, Optional
 
-from .config import AgentConfig
-from ..components import MemoryStorageBase, MessageStorageBase
+from ..config import AgentConfig
+from ...components import MemoryStorageBase, MessageStorageBase
 
 
 logger = logging.getLogger(__name__)

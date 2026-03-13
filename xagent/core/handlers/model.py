@@ -5,8 +5,8 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from .config import AgentConfig, ReplyType
-from ..schemas import MessageType
+from ..config import AgentConfig, ReplyType
+from ...schemas import MessageType
 
 
 logger = logging.getLogger(__name__)
