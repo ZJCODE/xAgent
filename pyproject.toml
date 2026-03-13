@@ -31,7 +31,7 @@ dependencies = [
     "fastmcp>=2.10.6",
     
     # HTTP clients
-    "httpx>=0.28.1",
+    "httpx[socks]>=0.28.1",
     "requests>=2.32.0",
     
     # Data storage
