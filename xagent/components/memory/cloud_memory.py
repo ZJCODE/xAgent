@@ -2,8 +2,7 @@ from typing import Optional
 import logging
 
 from .basic_memory import MemoryStorageBasic
-from .base_vector_store import VectorStoreBase
-from .cloud_vector_store import VectorStoreUpstash
+from .vector.cloud_vector_store import VectorStoreUpstash
 
 
 class MemoryStorageCloud(MemoryStorageBasic):

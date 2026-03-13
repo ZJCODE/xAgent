@@ -12,7 +12,7 @@ from .config.memory_config import TRIGGER_KEYWORDS, MAX_SCAN_LENGTH
 
 if TYPE_CHECKING:
     from ..message.base_messages import MessageStorageBase as _MsgStorage
-    from .base_vector_store import VectorStoreBase as _VS
+    from .vector.base_vector_store import VectorStoreBase as _VS
 
 class MemoryStorageBasic(MemoryStorageBase):
     """

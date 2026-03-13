@@ -14,10 +14,10 @@ _EXPORTS = {
     "MemoryStorageBase": (".base_memory", "MemoryStorageBase"),
     "MemoryStorageLocal": (".local_memory", "MemoryStorageLocal"),
     "MemoryStorageCloud": (".cloud_memory", "MemoryStorageCloud"),
-    "VectorStoreBase": (".base_vector_store", "VectorStoreBase"),
-    "VectorDoc": (".base_vector_store", "VectorDoc"),
-    "VectorStoreLocal": (".local_vector_store", "VectorStoreLocal"),
-    "VectorStoreUpstash": (".cloud_vector_store", "VectorStoreUpstash"),
+    "VectorStoreBase": (".vector.base_vector_store", "VectorStoreBase"),
+    "VectorDoc": (".vector.base_vector_store", "VectorDoc"),
+    "VectorStoreLocal": (".vector.local_vector_store", "VectorStoreLocal"),
+    "VectorStoreUpstash": (".vector.cloud_vector_store", "VectorStoreUpstash"),
 }
 
 

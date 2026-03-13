@@ -2,8 +2,7 @@ from typing import Optional
 import logging
 
 from .basic_memory import MemoryStorageBasic
-from .base_vector_store import VectorStoreBase
-from .local_vector_store import VectorStoreLocal
+from .vector.local_vector_store import VectorStoreLocal
 
 
 class MemoryStorageLocal(MemoryStorageBasic):
