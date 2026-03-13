@@ -27,7 +27,7 @@ class MathReasoning(BaseModel):
 
 async def main():
     agent = Agent(
-        model="gpt-4.1-mini",
+        model="gpt-5-mini",
         output_type=LaunchPlan,
         message_storage=MessageStorageLocal(),
     )

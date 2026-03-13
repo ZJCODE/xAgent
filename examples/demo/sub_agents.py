@@ -16,7 +16,7 @@ async def main():
             "You extract requirements, constraints, and open questions. "
             "Focus on clarity and implementation details."
         ),
-        model="gpt-4.1-mini",
+        model="gpt-5-mini",
         message_storage=message_storage,
     )
 
@@ -24,7 +24,7 @@ async def main():
         name="proposal_writer",
         description="Turns structured inputs into concise internal proposals.",
         system_prompt="You write crisp internal documents with clear actions and tradeoffs.",
-        model="gpt-4.1-mini",
+        model="gpt-5-mini",
         message_storage=message_storage,
     )
 
@@ -34,7 +34,7 @@ async def main():
             "Delegate requirement extraction and writing work to the specialist agents when useful, "
             "then return one coherent answer."
         ),
-        model="gpt-4.1-mini",
+        model="gpt-5-mini",
         sub_agents=[requirements_agent, writer_agent],
         message_storage=message_storage,
     )

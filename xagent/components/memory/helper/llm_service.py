@@ -22,7 +22,7 @@ class MemoryLLMService:
         "他", "她", "它", "他们", "她们",
     )
 
-    def __init__(self, model: str = "gpt-4.1-mini", mini_model: str = "gpt-4.1-nano"):
+    def __init__(self, model: str = "gpt-5-mini", mini_model: str = "gpt-4.1-nano"):
         """Initialize the LLM service.
         
         Args:

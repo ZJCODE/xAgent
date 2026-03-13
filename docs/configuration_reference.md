@@ -23,7 +23,7 @@ The simplest configuration file for a basic agent:
 agent:
   name: "MyAgent"
   system_prompt: "You are a helpful AI assistant."
-  model: "gpt-4.1-mini"
+  model: "gpt-5-mini"
 
 server:
   host: "0.0.0.0"
@@ -40,7 +40,7 @@ agent:
   system_prompt: |
     You are a helpful AI assistant with access to web search and image generation.
     Always provide accurate and helpful responses.
-  model: "gpt-4.1-mini"
+  model: "gpt-5-mini"
   
   capabilities:
     tools:
@@ -63,7 +63,7 @@ server:
 |-------|------|----------|-------------|
 | `name` | string | Yes | Agent identifier (used in logs and multi-agent systems) |
 | `system_prompt` | string | Yes | Instructions defining agent behavior and personality |
-| `model` | string | Yes | OpenAI model to use (e.g., "gpt-4.1-mini", "gpt-4.1") |
+| `model` | string | Yes | OpenAI model to use (e.g., "gpt-5-mini", "gpt-4.1") |
 
 ### Advanced Agent Settings
 
@@ -128,7 +128,7 @@ agent:
     - Verify information from multiple sources when possible
     - Present findings in a clear, structured format
     - Always cite your sources
-  model: "gpt-4.1-mini"
+  model: "gpt-5-mini"
 
   capabilities:
     tools:
@@ -152,7 +152,7 @@ agent:
     - Adapt tone and style to the intended audience
     - Ensure proper grammar and readability
     - Organize information logically
-  model: "gpt-4.1-mini"
+  model: "gpt-5-mini"
 
   capabilities:
     tools: []
@@ -343,7 +343,7 @@ agent:
     - Be concise but comprehensive
     - Ask for clarification when requests are ambiguous
   
-  model: "gpt-4.1-mini"
+  model: "gpt-5-mini"
   
   capabilities:
     tools:
@@ -433,7 +433,7 @@ agent:
     - Ensure coherence between different media
     - Adapt style to the intended audience and purpose
   
-  model: "gpt-4.1-mini"
+  model: "gpt-5-mini"
   
   capabilities:
     tools:

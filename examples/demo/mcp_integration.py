@@ -33,7 +33,7 @@ async def main():
         print(f"MCP server unavailable, running local-only fallback: {exc}")
 
     agent = Agent(
-        model="gpt-4.1-mini",
+        model="gpt-5-mini",
         tools=[local_calculator],
         mcp_servers=mcp_servers,
         system_prompt="Use the local calculator for arithmetic and MCP tools when they are available.",

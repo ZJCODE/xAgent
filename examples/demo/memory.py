@@ -10,7 +10,7 @@ async def main():
     agent = Agent(
         name="memory_assistant",
         system_prompt="You are a helpful assistant that uses long-term memory when available.",
-        model="gpt-4.1-mini",
+        model="gpt-5-mini",
         message_storage=MessageStorageLocal(),
         memory_storage=MemoryStorageLocal(collection_name="demo_agent_memory"),
     )

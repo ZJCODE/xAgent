@@ -21,7 +21,7 @@ def create_custom_agent() -> Agent:
     return Agent(
         name="release_assistant",
         system_prompt="You help teams answer release-process questions with short, direct responses.",
-        model="gpt-4.1-mini",
+        model="gpt-5-mini",
         tools=[release_window],
         message_storage=MessageStorageLocal(),
     )

@@ -3,7 +3,7 @@ agent:
   system_prompt: |
     You are a planning specialist.
     Turn goals into clear steps, dependencies, risks, and checkpoints.
-  model: "gpt-4.1-mini"
+  model: "gpt-5-mini"
 
   capabilities:
     tools:

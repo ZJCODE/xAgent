@@ -59,7 +59,7 @@ agent:
     system_prompt: |
         You are a helpful AI assistant.
         Answer clearly and accurately.
-    model: "gpt-4.1-mini"
+    model: "gpt-5-mini"
 
     capabilities:
         tools:
@@ -211,7 +211,7 @@ import asyncio
 from xagent.core import Agent
 
 async def main():
-    agent = Agent(model="gpt-4.1-mini")
+    agent = Agent(model="gpt-5-mini")
     response = await agent.chat(
         user_message="Hello",
         user_id="user123",
@@ -231,7 +231,7 @@ import asyncio
 from xagent.core import Agent
 
 async def main():
-    agent = Agent(model="gpt-4.1-mini")
+    agent = Agent(model="gpt-5-mini")
 
     user_id = "alice"
     session_id = "daily_chat"
@@ -262,7 +262,7 @@ import asyncio
 from xagent.core import Agent
 
 async def main():
-    agent = Agent(model="gpt-4.1-mini")
+    agent = Agent(model="gpt-5-mini")
 
     # Single image URL
     reply1 = await agent.chat(

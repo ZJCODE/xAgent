@@ -63,7 +63,7 @@ import asyncio
 from xagent.core import Agent
 
 async def main():
-    agent = Agent(model="gpt-4.1-mini")
+    agent = Agent(model="gpt-5-mini")
     reply = await agent.chat(
         user_message="Hello",
         user_id="user123",

@@ -44,7 +44,7 @@ Agent(
 
 - `name`: Agent identifier (default: "default_agent")
 - `system_prompt`: Instructions for the agent behavior
-- `model`: OpenAI model to use (default: "gpt-4.1-mini")
+- `model`: OpenAI model to use (default: "gpt-5-mini")
 - `client`: Custom AsyncOpenAI client instance
 - `tools`: List of function tools
 - `mcp_servers`: MCP server URLs for dynamic tool loading
@@ -195,7 +195,7 @@ dependencies = parse_dependencies_dsl("A->B, B->C")
 agent:
   name: "AgentName"
   system_prompt: "System prompt text"
-  model: "gpt-4.1-mini"
+  model: "gpt-5-mini"
   
   capabilities:
     tools:

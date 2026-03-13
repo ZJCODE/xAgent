@@ -3,7 +3,7 @@ agent:
   system_prompt: |
     You are a helpful assistant.
     Answer clearly and keep responses practical.
-  model: "gpt-4.1-mini"
+  model: "gpt-5-mini"
 
   capabilities:
     tools:

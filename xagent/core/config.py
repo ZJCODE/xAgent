@@ -12,7 +12,7 @@ class AgentConfig:
     """Configuration constants for Agent class."""
 
     DEFAULT_NAME = "default_agent"
-    DEFAULT_MODEL = "gpt-4.1-mini"
+    DEFAULT_MODEL = "gpt-5-mini"
     DEFAULT_USER_ID = "default_user"
     DEFAULT_SESSION_ID = "default_session"
     DEFAULT_HISTORY_COUNT = 16
