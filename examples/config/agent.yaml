@@ -9,6 +9,7 @@ agent:
     tools:
       - "web_search"
       - "draw_image"
+      - "run_command"
 
   storage_mode: "local"
   # workspace: "~/.xagent"  # Root directory for local storage (SQLite + ChromaDB)

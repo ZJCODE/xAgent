@@ -205,6 +205,7 @@ class Agent:
                     user_id=user_id,
                     retrieved_memories=retrieved_memories,
                     shared_context=shared_context,
+                    tool_names=list(self.tool_manager._tools.keys()),
                 ),
             }
             model_messages = [system_msg] + self.message_handler.sanitize_input_messages(input_messages)

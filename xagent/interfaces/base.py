@@ -138,7 +138,7 @@ class BaseAgentRunner:
                 "system_prompt": BaseAgentConfig.DEFAULT_SYSTEM_PROMPT,
                 "model": BaseAgentConfig.DEFAULT_MODEL,
                 "capabilities": {
-                    "tools": ["web_search"],  # Default tools
+                    "tools": ["web_search", "run_command"],  # Default tools
                     "mcp_servers": []  # Default MCP servers
                 },
                 "storage_mode": BaseAgentConfig.DEFAULT_STORAGE_MODE,

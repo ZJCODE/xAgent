@@ -51,6 +51,7 @@ class MessageHandler:
         user_id: str,
         retrieved_memories: Optional[List[dict]] = None,
         shared_context: Optional[str] = None,
+        tool_names: Optional[List[str]] = None,
     ) -> str:
         """Build the runtime system prompt."""
         sections = [
@@ -65,6 +66,13 @@ class MessageHandler:
         ]
         if self.system_prompt:
             sections.extend(["", self.system_prompt])
+
+        # Inject tool-specific system prompt segments
+        for name in (tool_names or []):
+            segment = AgentConfig.TOOL_SYSTEM_PROMPTS.get(name)
+            if segment:
+                sections.append(segment)
+
         return "\n".join(sections)
 
     @staticmethod
