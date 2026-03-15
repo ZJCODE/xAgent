@@ -167,8 +167,8 @@ class Agent:
             stream = False
 
         try:
-            # Ensure MCP tools are up-to-date
-            await self.tool_manager.register_mcp_servers(self.tool_manager.mcp_servers)
+            # Ensure MCP tools are up-to-date (lazy-init; no-op after first call until TTL expires)
+            await self.tool_manager.ensure_mcp_ready()
 
             # Store user message
             await self.message_handler.store_user_message(user_message, user_id, session_id, image_source)
