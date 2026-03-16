@@ -42,6 +42,7 @@ class AgentConfig:
     DEFAULT_COMMAND_TIMEOUT = 30  # seconds
     MAX_COMMAND_TIMEOUT = 300  # hard upper bound for timeout parameter
     MAX_COMMAND_OUTPUT_SIZE = 51200  # 50 KB per stream
+    MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled system prompt (chars)
 
     # Tool-specific system prompt segments (injected when the tool is active)
     TOOL_SYSTEM_PROMPTS = {
@@ -99,6 +100,38 @@ class AgentConfig:
 
     DEFAULT_SYSTEM_PROMPT = (
         "**Context Information:**\n"
+    )
+
+    # Foundational agent behavior prompt — injected before user's custom system_prompt
+    BASE_AGENT_PROMPT = (
+        "**Core Principles:**\n"
+        "- Respond in the same language as the user's message.\n"
+        "- Be concise for straightforward questions; provide depth when the task demands it.\n"
+        "- If you are unsure about something, say so honestly. "
+        "Never fabricate facts, data, URLs, citations, or tool results.\n"
+        "- Clearly distinguish between verified information and your own inferences or suggestions.\n"
+        "\n"
+        "**Tool Use Strategy:**\n"
+        "- Prefer answering from your knowledge when confident. "
+        "Use tools only when they provide concrete value "
+        "(real-time data, computation, file operations, external lookups).\n"
+        "- Think before acting: identify what information you need, "
+        "then select the minimal set of tool calls to obtain it.\n"
+        "- After receiving tool results, synthesize them into a clear answer — "
+        "do not simply echo raw output back to the user.\n"
+        "- If a tool call fails, analyze the error and try an alternative approach "
+        "before reporting failure to the user.\n"
+        "- When multiple tool calls are independent of each other, execute them in parallel.\n"
+        "\n"
+        "**Response Quality:**\n"
+        "- For multi-step tasks, briefly outline your plan, then execute step by step.\n"
+        "- Structure complex answers with headings, lists, or numbered steps for readability.\n"
+        "- If a request is ambiguous, state your interpretation and proceed; "
+        "only ask for clarification when critical information is missing.\n"
+        "\n"
+        "**Memory & Context:**\n"
+        "- Use retrieved memories to personalize responses and maintain continuity across sessions.\n"
+        "- Reference relevant earlier messages in the conversation; avoid repeating what the user already knows.\n"
     )
 
 
