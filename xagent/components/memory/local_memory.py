@@ -12,7 +12,7 @@ class MemoryStorageLocal(MemoryStorageBasic):
     Args:
         path: Path to ChromaDB storage directory. Defaults to ~/.xagent/chroma
         collection_name: Name of the ChromaDB collection. Defaults to 'xagent_memory'
-        memory_threshold: Number of messages to trigger long-term storage. Defaults to 10
+        memory_threshold: Number of user turns to trigger long-term storage. Defaults to 10
         message_storage: Optional MessageStorage instance for reading conversation history
         vector_store: Optional VectorStore instance (defaults to VectorStoreLocal)
     """

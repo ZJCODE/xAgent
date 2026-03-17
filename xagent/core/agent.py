@@ -104,7 +104,7 @@ class Agent:
         image_source: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
-        enable_memory: bool = False,
+        enable_memory: bool = True,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         return await self.chat(
             user_message=user_message,
@@ -130,7 +130,7 @@ class Agent:
         image_source: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
-        enable_memory: bool = False,
+        enable_memory: bool = True,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message."""
         normalized_conversation_id = self.normalize_conversation_id(conversation_id)

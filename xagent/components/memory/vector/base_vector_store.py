@@ -34,7 +34,6 @@ class VectorStoreBase(ABC):
         query_texts: Optional[List[str]] = None,
         n_results: Optional[int] = 5,
         meta_filter: Optional[Dict[str, Any]] = None,
-        keywords_filter: Optional[List[str]] = None,
     ) -> List[VectorDoc]:
         """
         Query vector pieces for a user.
@@ -46,8 +45,6 @@ class VectorStoreBase(ABC):
                         - Simple: {"user_id": "user123"}
                         - Range: {"created_timestamp": {"$gte": 1234567, "$lte": 2345678}}
                         - And: {"$and": [{"user_id": "user123"}, {"created_timestamp": {"$gte": 1234567}}]}
-            keywords_filter: List of keywords for document content filtering
-                           Multiple keywords will be combined with OR logic
 
         Returns:
             List of VectorDoc objects sorted by relevance

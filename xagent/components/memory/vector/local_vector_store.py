@@ -106,7 +106,6 @@ class VectorStoreLocal(VectorStoreBase):
         query_texts: Optional[List[str]] = None,
         n_results: Optional[int] = 5,
         meta_filter: Optional[Dict[str, Any]] = None,
-        keywords_filter: Optional[List[str]] = None,
     ) -> List[VectorDoc]:
         """
         Query vector documents.
@@ -115,7 +114,6 @@ class VectorStoreLocal(VectorStoreBase):
             query_texts: List of query texts for semantic search
             n_results: Maximum number of results to return
             meta_filter: Metadata filter (supports MongoDB-style queries)
-            keywords_filter: List of keywords for document content filtering (OR logic)
 
         Returns:
             List of VectorDoc objects
@@ -135,11 +133,6 @@ class VectorStoreLocal(VectorStoreBase):
             if meta_filter:
                 chroma_where = self._convert_meta_filter_to_chroma(meta_filter)
                 query_params["where"] = chroma_where
-
-            # Build keyword filter for document content
-            if keywords_filter:
-                keyword_query = self._build_keyword_query(keywords_filter)
-                query_params["where_document"] = keyword_query
 
             # Execute query
             results = await asyncio.to_thread(self._query_sync, query_params)
@@ -262,26 +255,6 @@ class VectorStoreLocal(VectorStoreBase):
                 chroma_filter[key] = value
 
         return chroma_filter
-
-    def _build_keyword_query(self, keywords_filter: List[str]) -> Dict[str, Any]:
-        """
-        Build ChromaDB keyword query from keywords filter.
-
-        Args:
-            keywords_filter: List of keywords for OR query
-
-        Returns:
-            ChromaDB compatible where_document clause
-        """
-        if not keywords_filter:
-            return {}
-
-        if len(keywords_filter) == 1:
-            # Single keyword - simple $contains
-            return {"$contains": keywords_filter[0]}
-        else:
-            # Multiple keywords - always use $or
-            return {"$or": [{"$contains": kw} for kw in keywords_filter if kw]}
 
     def get_collection_info(self) -> Dict[str, Any]:
         """

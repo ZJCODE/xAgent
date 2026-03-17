@@ -11,7 +11,7 @@ xAgent is a single-agent runtime with three entry points: Python API, CLI, and H
 - Speaker-aware messages via `user_id`
 - Built-in Web UI and streaming responses
 - Tool calling, MCP integration, and image input
-- Optional long-term memory with local or cloud storage
+- Long-term memory enabled by default with local or cloud storage
 
 ## Quick Start
 

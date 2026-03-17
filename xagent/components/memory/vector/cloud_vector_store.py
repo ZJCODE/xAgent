@@ -82,7 +82,6 @@ class VectorStoreUpstash(VectorStoreBase):
         query_texts: Optional[List[str]] = None,
         n_results: Optional[int] = 5,
         meta_filter: Optional[Dict[str, Any]] = None,
-        keywords_filter: Optional[List[str]] = None,
     ) -> List[VectorDoc]:
         """
         Query vector documents.
@@ -91,7 +90,6 @@ class VectorStoreUpstash(VectorStoreBase):
             query_texts: List of query texts for semantic search
             n_results: Maximum number of results to return
             meta_filter: Metadata filter (supports MongoDB-style queries)
-            keywords_filter: Do NOT use keywords filter (Upstash Vector does not support it)
 
         Returns:
             List of VectorDoc objects

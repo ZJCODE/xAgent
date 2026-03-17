@@ -30,7 +30,7 @@ class AgentInput(BaseModel):
     history_count: Optional[int] = 16
     max_iter: Optional[int] = 10
     max_concurrent_tools: Optional[int] = 10
-    enable_memory: Optional[bool] = False
+    enable_memory: Optional[bool] = True
 
 
 class ClearConversationInput(BaseModel):

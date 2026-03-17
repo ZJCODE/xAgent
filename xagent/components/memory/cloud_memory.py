@@ -10,7 +10,7 @@ class MemoryStorageCloud(MemoryStorageBasic):
     Cloud memory storage backed by Upstash Vector with LLM-based memory extraction.
 
     Args:
-        memory_threshold: Number of messages to trigger long-term storage. Defaults to 10
+        memory_threshold: Number of user turns to trigger long-term storage. Defaults to 10
         message_storage: Optional MessageStorage instance for reading conversation history
         vector_store: Optional VectorStore instance (defaults to VectorStoreUpstash)
     """

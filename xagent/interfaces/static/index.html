@@ -484,7 +484,7 @@
                     <strong>Enable memory</strong>
                   </div>
                   <label class="setting-toggle cursor-pointer">
-                    <input id="optMemory" type="checkbox" />
+                    <input id="optMemory" type="checkbox" checked />
                     <span class="toggle-track" aria-hidden="true"></span>
                   </label>
                 </div>
@@ -589,7 +589,7 @@ function restoreSettings() {
   document.getElementById('userId').value = settings.userId || 'web_user';
   document.getElementById('conversationId').value = settings.conversationId || generateId();
   document.getElementById('optStream').checked = settings.stream !== false;
-  document.getElementById('optMemory').checked = !!settings.memory;
+  document.getElementById('optMemory').checked = settings.memory !== false;
 
   const shouldDark = settings.darkMode || (!('darkMode' in settings) && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.classList.toggle('dark', !!shouldDark);

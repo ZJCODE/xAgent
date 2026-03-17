@@ -28,8 +28,11 @@ Rules:
 - Extract only PROFILE and EPISODIC memories.
 - PROFILE: stable preferences, traits, identity, working style, recurring habits.
 - EPISODIC: meaningful events, commitments, plans, and experiences.
+- Store only information that can help in future conversations.
+- Skip fleeting requests, temporary logistics, and one-off small talk unless they create a durable commitment or constraint.
 - Preserve important dates and times when they matter.
-- If multiple people appear, keep the speaker identity in the memory content when useful.
+- If a fact belongs to a specific speaker, include that speaker's sender_id explicitly in the memory content.
+- If multiple people appear, keep the speaker identity explicit instead of writing anonymous memories.
 """
 
         user_prompt = f"""Conversation:
@@ -44,8 +47,7 @@ Extract meaningful long-term memories from this conversation."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                text_format=MemoryExtraction,
-                temperature=0.3,
+                text_format=MemoryExtraction
             )
             return response.output_parsed or MemoryExtraction(memories=[])
         except Exception as exc:

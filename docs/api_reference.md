@@ -33,7 +33,7 @@ await agent.chat(
     image_source: str | list[str] | None = None,
     output_type: type[BaseModel] | None = None,
     stream: bool = False,
-    enable_memory: bool = False,
+    enable_memory: bool = True,
 )
 ```
 
@@ -50,7 +50,7 @@ await agent.chat(
 | `image_source` | string or list | Image URL, path, or data URI |
 | `output_type` | Pydantic model type | Structured output model |
 | `stream` | boolean | Enable streaming |
-| `enable_memory` | boolean | Enable long-term memory retrieval and writes |
+| `enable_memory` | boolean | Enable long-term memory retrieval and writes. Defaults to `true`. |
 
 ### Conversation Behavior
 
@@ -107,7 +107,7 @@ Request body:
   "conversation_id": "daily_chat",
   "user_message": "Hello",
   "stream": false,
-  "enable_memory": false
+  "enable_memory": true
 }
 ```
 

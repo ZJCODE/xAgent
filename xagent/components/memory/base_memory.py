@@ -19,7 +19,8 @@ class MemoryStorageBase(ABC):
 
         The memory system reads conversation history directly from the
         associated *message_storage* when extraction is triggered, so
-        ``messages`` is only used for counting and keyword detection.
+        ``messages`` is only used for user-turn counting and explicit
+        remember-this detection.
         """
         pass
 

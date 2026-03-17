@@ -135,7 +135,7 @@ class MessageHandler:
             if not content:
                 continue
             metadata = mem.get("metadata", {}) if isinstance(mem, dict) else {}
-            mem_type = metadata.get("type", "")
+            mem_type = metadata.get("memory_type") or metadata.get("type", "")
             prefix = f"[{mem_type}] " if mem_type else ""
             lines.append(f"{i}. {prefix}{content}")
 

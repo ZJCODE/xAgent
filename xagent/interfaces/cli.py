@@ -39,7 +39,7 @@ class AgentCLI(BaseAgentRunner):
         user_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         stream: Optional[bool] = None,
-        memory: bool = False,
+        memory: bool = True,
     ):
         if stream is None:
             stream = not (logging.getLogger().level <= logging.INFO)
@@ -143,7 +143,7 @@ class AgentCLI(BaseAgentRunner):
         message: str,
         user_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
-        memory: bool = False,
+        memory: bool = True,
     ):
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
         conversation_id = conversation_id or f"cli_conversation_{uuid.uuid4().hex[:8]}"

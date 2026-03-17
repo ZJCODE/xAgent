@@ -4,10 +4,12 @@ xAgent memory is a minimal long-term memory pipeline.
 
 It does two things:
 
-- extracts memories from conversation history after a threshold is reached
+- extracts memories from conversation history after a user-turn threshold is reached
 - retrieves relevant memories for the current turn
 
-It does not do query rewriting, meta-memory extraction, or multi-stage memory fusion.
+It also supports one explicit fast path: if a user clearly says "remember this" / "记住这个" / "别忘了", memory extraction runs immediately for the unread transcript segment.
+
+It does not do query rewriting, keyword tiers, meta-memory extraction, or multi-stage memory fusion.
 
 ## Memory Semantics
 
@@ -67,7 +69,6 @@ memory = MemoryStorageLocal(
     path="./data/chroma",
     collection_name="assistant_memory",
     memory_threshold=10,
-    keep_recent=2,
 )
 ```
 
@@ -78,7 +79,6 @@ from xagent.components import MemoryStorageCloud
 
 memory = MemoryStorageCloud(
     memory_threshold=10,
-    keep_recent=2,
 )
 ```
 
@@ -113,14 +113,18 @@ The runtime always resolves `memory_key` to the agent-global key.
 
 ## Operational Notes
 
-- Memory only runs when `enable_memory=True`
-- Writes happen after the configured threshold is reached
+- Memory is enabled by default and runs unless `enable_memory=False`
+- `memory_threshold` counts user turns, not assistant replies
+- Writes happen after the configured threshold is reached, or immediately when the user explicitly asks the agent to remember something
+- Extraction reads only the unread portion of the current conversation transcript
 - Retrieval uses the original user query directly
+- Retrieval applies a small relevance threshold before injecting memory back into context
+- Writes use lightweight near-duplicate suppression to reduce memory pollution
 - Stored memory text keeps speaker identifiers so the agent can remember who said what
 - Lower thresholds create more memories; higher thresholds create fewer, denser memories
 
 ## Best Practices
 
-- Enable memory only where continuity matters
+- Disable memory explicitly for scenarios that must remain stateless
 - Assume memory can surface context across users and conversations
 - Clear or rotate memory collections when testing different products or tenants
