@@ -9,6 +9,7 @@ A production-ready AI Agent framework focused on **easy start** and **scalable d
 - ✅ Chat via CLI / Python API / HTTP Server
 - ✅ Built-in Web UI and streaming responses
 - ✅ Tool calling, MCP integration, image input
+- ✅ Built-in tools: `web_search`, `draw_image`, `run_command` (shell)
 - ✅ Multi-user + multi-session support
 - ✅ Memory and multi-agent workflows
 

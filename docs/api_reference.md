@@ -161,6 +161,56 @@ workflow = Workflow()
 
 ## Utility Functions
 
+### Built-in Tools
+
+xAgent ships three built-in tools that can be enabled by name in YAML config or imported directly in Python.
+
+#### `web_search`
+
+```python
+from xagent.tools import web_search
+from xagent import Agent
+
+agent = Agent(tools=[web_search])
+```
+
+Searches the web and returns a list of relevant results for a query.
+
+#### `draw_image`
+
+```python
+from xagent.tools import draw_image
+
+agent = Agent(tools=[draw_image])
+```
+
+Generates an image via DALL·E given a text prompt. Returns the image URL.
+
+#### `run_command`
+
+```python
+from xagent.tools import run_command
+
+agent = Agent(tools=[run_command])
+```
+
+Executes a shell command and returns `stdout`, `stderr`, and `return_code`.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `command` | string | required | The shell command to execute |
+| `working_directory` | string | `None` | Working directory for the command |
+| `timeout` | integer | `30` | Max execution time in seconds (1–300) |
+
+Output is capped at **50 KB per stream** and automatically truncated.
+
+All executed commands are logged at `WARNING` level for auditing (`[SHELL AUDIT]`).
+
+**Safety behaviour** (enforced via system prompt):
+- Read-only commands (`ls`, `cat`, `grep`, `git status`, `git log`, etc.) run freely.
+- Write/destructive commands (`rm`, `mv`, `chmod`, `git commit`, `git push`, etc.) require explicit user approval before execution.
+- Forbidden patterns (`rm -rf /`, fork bombs, `git push --force` on shared branches, etc.) are never executed without unambiguous approval.
+
 ### Tool Decorator
 
 ```python

@@ -46,6 +46,7 @@ agent:
     tools:
       - "web_search"      # Built-in web search
       - "draw_image"      # Built-in image generation
+      - "run_command"     # Built-in shell command execution
     mcp_servers: []       # MCP server URLs (optional)
   
   storage_mode: "local" # recommended; also supports "cloud"
@@ -277,13 +278,27 @@ agent:
 
 ### Built-in Tools
 
+| Tool name | Description |
+|---|---|
+| `web_search` | Web search — returns relevant results for a query |
+| `draw_image` | AI image generation via DALL·E |
+| `run_command` | Shell command execution — runs CLI commands and returns stdout/stderr/return code |
+
 ```yaml
 agent:
   capabilities:
     tools:
       - "web_search"    # Web search functionality
       - "draw_image"    # AI image generation
+      - "run_command"   # Shell command execution
 ```
+
+> **Security note for `run_command`:** The agent is guided by built-in safety rules to treat
+> read-only commands (e.g. `ls`, `cat`, `git status`) as freely executable and to request
+> explicit user approval before running any write, delete, or destructive operation.
+> Git read-only commands (`git log`, `git diff`, `git blame`, etc.) are also pre-approved;
+> write operations (`git commit`, `git push`, `git reset`, etc.) require confirmation.
+> You can scope the tool further by adding instructions in the agent's `system_prompt`.
 
 ### MCP Server Integration
 
