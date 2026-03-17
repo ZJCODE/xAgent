@@ -15,7 +15,7 @@ class AgentConfig:
     DEFAULT_MODEL = "gpt-5-mini"
     DEFAULT_WORKSPACE = "~/.xagent"
     DEFAULT_USER_ID = "default_user"
-    DEFAULT_SESSION_ID = "default_session"
+    DEFAULT_CONVERSATION_ID = "default_conversation"
     DEFAULT_HISTORY_COUNT = 16
     DEFAULT_MAX_ITER = 10
     DEFAULT_MAX_CONCURRENT_TOOLS = 10  # Maximum concurrent tool calls

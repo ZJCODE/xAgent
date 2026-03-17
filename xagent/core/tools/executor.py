@@ -31,8 +31,7 @@ class ToolExecutor:
     async def handle_tool_calls(
         self,
         tool_calls: list,
-        user_id: str,
-        session_id: str,
+        conversation_id: str,
         input_messages: list,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
     ) -> Optional[tuple[str, str]]:
@@ -53,7 +52,7 @@ class ToolExecutor:
 
         async def execute_with_semaphore(tool_call):
             async with semaphore:
-                return await self.execute_single(tool_call, user_id, session_id)
+                return await self.execute_single(tool_call, conversation_id)
 
         tasks = [execute_with_semaphore(tc) for tc in function_calls]
         results = await asyncio.gather(*tasks)
@@ -63,7 +62,7 @@ class ToolExecutor:
 
         for tool_messages, image_data, description in results:
             if tool_messages:
-                input_messages.extend([msg.to_dict() for msg in tool_messages])
+                input_messages.extend([msg.to_model_input() for msg in tool_messages])
             if image_data:
                 pending_images.append(image_data)
             if description:
@@ -80,8 +79,7 @@ class ToolExecutor:
     async def execute_single(
         self,
         tool_call,
-        user_id: str,
-        session_id: str,
+        conversation_id: str,
     ) -> tuple[Optional[list], Optional[str], Optional[str]]:
         """Execute a single tool call and return (messages, image_data, description)."""
         name = getattr(tool_call, "name", None)
@@ -121,6 +119,7 @@ class ToolExecutor:
         tool_call_msg = Message(
             type=MessageType.FUNCTION_CALL,
             role=RoleType.TOOL,
+            sender_id=name,
             content=f"Calling tool: `{name}` with args: {args}",
             tool_call=ToolCall(
                 call_id=getattr(tool_call, "call_id", ""),
@@ -137,13 +136,14 @@ class ToolExecutor:
         tool_res_msg = Message(
             type=MessageType.FUNCTION_CALL_OUTPUT,
             role=RoleType.TOOL,
+            sender_id=name,
             content=f"Tool `{name}` result: {_format_preview(result_str)}",
             tool_call=ToolCall(
                 call_id=getattr(tool_call, "call_id", "001"),
                 output=model_output
             )
         )
-        await self.message_storage.add_messages(user_id, session_id, [tool_call_msg, tool_res_msg])
+        await self.message_storage.add_messages(conversation_id, [tool_call_msg, tool_res_msg])
 
         return [tool_call_msg, tool_res_msg], image_data, model_output if image_data else None
 

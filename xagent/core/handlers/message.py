@@ -25,7 +25,7 @@ class MessageHandler:
         self,
         user_message: str,
         user_id: str,
-        session_id: str,
+        conversation_id: str,
         image_source: Optional[Union[str, List[str]]] = None,
     ) -> None:
         """Store a user message, auto-detecting embedded image URLs."""
@@ -37,23 +37,31 @@ class MessageHandler:
             merged = list(dict.fromkeys(existing + detected))
             image_source = merged
 
-        msg = Message.create(content=user_message, role=RoleType.USER, image_source=image_source)
-        await self.message_storage.add_messages(user_id, session_id, msg)
+        msg = Message.create(
+            content=user_message,
+            role=RoleType.USER,
+            image_source=image_source,
+            sender_id=user_id,
+        )
+        await self.message_storage.add_messages(conversation_id, msg)
 
-    async def store_model_reply(self, reply_text: str, user_id: str, session_id: str) -> None:
-        model_msg = Message.create(content=reply_text, role=RoleType.ASSISTANT)
-        await self.message_storage.add_messages(user_id, session_id, model_msg)
+    async def store_model_reply(self, reply_text: str, conversation_id: str, sender_id: str) -> None:
+        model_msg = Message.create(content=reply_text, role=RoleType.ASSISTANT, sender_id=sender_id)
+        await self.message_storage.add_messages(conversation_id, model_msg)
 
-    async def get_input_messages(self, user_id: str, session_id: str, history_count: int) -> list:
+    async def get_input_messages(
+        self,
+        conversation_id: str,
+        history_count: int,
+    ) -> list:
         """Retrieve and serialize recent messages for model input."""
-        messages = await self.message_storage.get_messages(user_id, session_id, history_count)
-        return [msg.to_dict() for msg in messages]
+        messages = await self.message_storage.get_messages(conversation_id, history_count)
+        return [msg.to_model_input() for msg in messages]
 
     def build_system_prompt(
         self,
         user_id: str,
         retrieved_memories: Optional[List[dict]] = None,
-        shared_context: Optional[str] = None,
         tool_names: Optional[List[str]] = None,
     ) -> str:
         """Build the runtime system prompt.
@@ -61,7 +69,7 @@ class MessageHandler:
         Prompt layering order (each section only included when relevant):
           1. Core Principles — foundational behaviour guidelines
           2. Tool Instructions — per-tool safety / usage rules
-          3. Context Information — runtime metadata (user, date, timezone, shared context)
+          3. Context Information — runtime metadata (speaker, date, timezone)
           4. Retrieved Memories — relevant memories (only when non-empty)
           5. User System Prompt — developer-supplied customisation
           (6. User Message — appended as conversation messages, not part of system prompt)
@@ -84,12 +92,11 @@ class MessageHandler:
         # --- 3. Context Information ---
         context_lines = [
             AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip(),
-            f"- Current user: {user_id}",
+            f"- Current speaker: {user_id}",
+            "- Conversation messages preserve speaker identifiers.",
             f"- Date: {time.strftime('%Y-%m-%d')}",
             f"- Timezone: {time.tzname[0]}",
         ]
-        if shared_context:
-            context_lines.append(f"- Shared context: {shared_context}")
         sections.append("\n".join(context_lines))
 
         # --- 4. Retrieved Memories (conditional) ---

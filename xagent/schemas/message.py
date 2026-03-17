@@ -1,7 +1,8 @@
 import time
-from pydantic import BaseModel, Field
-from typing import Optional, Union, List
 from enum import Enum
+from typing import List, Optional, Union
+
+from pydantic import BaseModel, Field
 
 from ..utils.image_utils import file_to_data_uri, classify_source, infer_format, ImageSourceType
 
@@ -49,6 +50,7 @@ class Message(BaseModel):
     """Message model for communication between roles."""
     type: MessageType = Field(MessageType.Message, description="Type of message (e.g., message, function_call)")
     role: RoleType = Field(RoleType.USER, description="The role of the sender (e.g., user, assistant)")
+    sender_id: Optional[str] = Field(None, description="Stable identifier for the speaker in a conversation transcript")
     content: str = Field(..., description="The content of the message")
     timestamp: float = Field(default_factory=time.time, description="The timestamp of when the message was sent")
     tool_call: Optional[ToolCall] = Field(None, description="tool/function calls associated with the message")
@@ -60,6 +62,7 @@ class Message(BaseModel):
         content: str,
         role: Optional[RoleType] = RoleType.USER,
         image_source: Optional[Union[str, List[str]]] = None,
+        sender_id: Optional[str] = None,
     ) -> "Message":
         """
         Create a message with optional image content.
@@ -108,18 +111,44 @@ class Message(BaseModel):
 
         return cls(
             role=role,
-            type="message",
+            type=MessageType.Message,
+            sender_id=sender_id,
             content=content,
-            multimodal=multimodal
+            multimodal=multimodal,
         )
 
     def to_dict(self) -> dict:
-        """Convert the message to a dictionary, including tool call if present."""
+        """Convert the message to a storage-safe dictionary representation."""
+        base = {
+            "role": self.role.value,
+            "sender_id": self.sender_id,
+            "content": self.content,
+        }
+
         if self.type == MessageType.Message:
+            return base
+        if self.type in [MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT]:
+            result = {
+                "call_id": self.tool_call.call_id,
+                "type": self.type.value,
+                "name": self.tool_call.name,
+                "arguments": self.tool_call.arguments,
+                "output": self.tool_call.output,
+            }
+            # Filter out keys with value None
+            return {k: v for k, v in result.items() if v is not None}
+        raise ValueError(f"Unsupported message type: {self.type}")
+
+    def to_model_input(self) -> dict:
+        """Convert the message to an OpenAI responses input item."""
+        if self.type == MessageType.Message:
+            text_content = self.content
+            if self.sender_id and self.role == RoleType.USER:
+                text_content = f"[{self.sender_id}] {text_content}"
+
             if self.multimodal and self.multimodal.image:
-                content = [{"type": "input_text", "text": self.content}]
-                
-                # Handle single image or list of images
+                content = [{"type": "input_text", "text": text_content}]
+
                 images = self.multimodal.image if isinstance(self.multimodal.image, list) else [self.multimodal.image]
                 for image in images:
                     content.append({
@@ -132,17 +161,20 @@ class Message(BaseModel):
                 }
             return {
                 "role": self.role.value,
-                "content": self.content,
+                "content": text_content,
             }
-        elif self.type in [MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT]:
-            result = {
-            "call_id": self.tool_call.call_id,
-            "type": self.type.value,
-            "name": self.tool_call.name,
-            "arguments": self.tool_call.arguments,
-            "output": self.tool_call.output
+
+        if self.type in [MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT]:
+            return {
+                k: v
+                for k, v in {
+                    "call_id": self.tool_call.call_id,
+                    "type": self.type.value,
+                    "name": self.tool_call.name,
+                    "arguments": self.tool_call.arguments,
+                    "output": self.tool_call.output,
+                }.items()
+                if v is not None
             }
-            # Filter out keys with value None
-            return {k: v for k, v in result.items() if v is not None}
-        else:
-            raise ValueError(f"Unsupported message type: {self.type}")
+
+        raise ValueError(f"Unsupported message type: {self.type}")

@@ -1,123 +1,154 @@
 # API Reference
 
-## Core Classes
+## Agent
 
-### Agent Class
-
-Main AI agent class for handling conversations and tool execution.
+`Agent` is the main runtime entry point.
 
 ```python
 Agent(
     name: Optional[str] = None,
-    system_prompt: Optional[str] = None, 
+    system_prompt: Optional[str] = None,
+    description: Optional[str] = None,
     model: Optional[str] = None,
     client: Optional[AsyncOpenAI] = None,
     tools: Optional[list] = None,
-    mcp_servers: Optional[str | list] = None,
-    sub_agents: Optional[List[Union[tuple[str, str, str], 'Agent']]] = None,
+    mcp_servers: Optional[str | list[str]] = None,
     output_type: Optional[type[BaseModel]] = None,
-    message_storage: Optional[MessageStorageBase] = None
+    message_storage: Optional[MessageStorageBase] = None,
+    memory_storage: Optional[MemoryStorageBase] = None,
+    workspace: Optional[str] = None,
 )
 ```
 
-#### Key Methods
+### Chat API
 
-- `async chat(user_message, user_id, session_id, **kwargs) -> str | BaseModel`: Main chat interface
-- `async __call__(user_message, user_id, session_id, **kwargs) -> str | BaseModel`: Shorthand for chat
-- `as_tool(name, description) -> Callable`: Convert agent to tool
+```python
+await agent.chat(
+    user_message: str,
+    user_id: str = "default_user",
+    conversation_id: str = "default_conversation",
+    history_count: int = 16,
+    max_iter: int = 10,
+    max_concurrent_tools: int = 10,
+    image_source: str | list[str] | None = None,
+    output_type: type[BaseModel] | None = None,
+    stream: bool = False,
+    enable_memory: bool = False,
+)
+```
 
-#### Chat Method Parameters
+### Chat Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `user_message` | string | **required** | The user's message content |
-| `user_id` | string | "default_user" | User identifier for message storage |
-| `session_id` | string | "default_session" | Session identifier for message storage |
-| `history_count` | integer | `16` | Number of previous messages to include in context |
-| `max_iter` | integer | `10` | Maximum model call attempts for complex reasoning |
-| `max_concurrent_tools` | integer | `10` | Maximum number of concurrent tool calls |
-| `image_source` | string | optional | Image URL, file path, or base64 string for analysis |
-| `output_type` | type | optional | Pydantic model for structured output |
-| `stream` | boolean | `false` | Enable streaming response |
+| Parameter | Type | Description |
+|---|---|---|
+| `user_message` | string | Current speaker message |
+| `user_id` | string | Current speaker identifier |
+| `conversation_id` | string | Transcript identifier |
+| `history_count` | integer | Number of messages loaded from storage |
+| `max_iter` | integer | Maximum model-call loop count |
+| `max_concurrent_tools` | integer | Maximum parallel tool calls |
+| `image_source` | string or list | Image URL, path, or data URI |
+| `output_type` | Pydantic model type | Structured output model |
+| `stream` | boolean | Enable streaming |
+| `enable_memory` | boolean | Enable long-term memory retrieval and writes |
 
-#### Agent Constructor Parameters
+### Conversation Behavior
 
-- `name`: Agent identifier (default: "default_agent")
-- `system_prompt`: Instructions for the agent behavior
-- `model`: OpenAI model to use (default: "gpt-5-mini")
-- `client`: Custom AsyncOpenAI client instance
-- `tools`: List of function tools
-- `mcp_servers`: MCP server URLs for dynamic tool loading
-- `sub_agents`: List of sub-agent configurations (name, description, server URL)
-- `output_type`: Pydantic model for structured output
-- `message_storage`: MessageStorageBase instance for conversation persistence
+- One `conversation_id` maps to one transcript
+- `user_id` always means the current speaker
+- Speaker identifiers are included in user messages sent to the model
+- Reuse the same `conversation_id` to continue the same transcript
 
-### AgentHTTPServer Class
+### Example
 
-HTTP server for agent interactions with REST API endpoints.
+```python
+from xagent.core import Agent
+
+agent = Agent(name="assistant", model="gpt-5-mini")
+
+reply = await agent.chat(
+    user_message="Hello",
+    user_id="alice",
+    conversation_id="daily_chat",
+)
+
+follow_up = await agent.chat(
+    user_message="Summarize what this conversation has decided.",
+    user_id="bob",
+    conversation_id="daily_chat",
+)
+```
+
+## AgentHTTPServer
 
 ```python
 AgentHTTPServer(
     config_path: Optional[str] = None,
     toolkit_path: Optional[str] = None,
-    agent: Optional[Agent] = None
+    agent: Optional[Agent] = None,
+    enable_web: bool = True,
 )
 ```
 
-The AgentHTTPServer can be initialized in two ways:
+### Main Endpoints
 
-1. **Traditional approach** using configuration files:
-```python
-server = AgentHTTPServer(config_path="config.yaml")
-server.run()
+- `GET /health`
+- `POST /chat`
+- `POST /clear_conversation`
+- `GET /memory`
+
+### `POST /chat`
+
+Request body:
+
+```json
+{
+  "user_id": "alice",
+  "conversation_id": "daily_chat",
+  "user_message": "Hello",
+  "stream": false,
+  "enable_memory": false
+}
 ```
 
-2. **Direct agent approach** using a pre-configured Agent instance:
-```python
-agent = Agent(name="MyAgent", tools=[web_search])
-server = AgentHTTPServer(agent=agent)
-server.run()
+### `POST /clear_conversation`
+
+Request body:
+
+```json
+{
+  "conversation_id": "daily_chat"
+}
 ```
 
-#### Constructor Parameters
+### `GET /memory`
 
-- `config_path`: Path to configuration file (ignored if agent is provided)
-- `toolkit_path`: Path to toolkit directory (ignored if agent is provided)
-- `agent`: Pre-configured Agent instance to use directly
+Query parameters:
 
-#### API Endpoints
+- `query`
+- `limit`
 
-- `GET /health`: Health check endpoint
-- `POST /chat`: Main chat interaction endpoint
-- `POST /clear_session`: Clear conversation session
+This endpoint returns the agent-global memory view.
 
-#### Chat Endpoint Parameters
+## Message Storage
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `user_id` | string | ✅ | - | Unique user identifier |
-| `session_id` | string | ✅ | - | Conversation session identifier |
-| `user_message` | string | ✅ | - | User's message content |
-| `image_source` | string | ❌ | `null` | Image URL, file path, or base64 string |
-| `stream` | boolean | ❌ | `false` | Enable Server-Sent Events streaming |
-| `history_count` | integer | ❌ | `16` | Number of previous messages to include |
-| `max_iter` | integer | ❌ | `10` | Maximum model call attempts |
-| `max_concurrent_tools` | integer | ❌ | `10` | Maximum number of concurrent tool calls |
+### MessageStorageBase
 
-### Message Storage Classes
+Base interface for transcript storage.
 
-#### MessageStorageBase (Abstract)
+```python
+async def add_messages(conversation_id: str, messages, **kwargs) -> None
+async def get_messages(conversation_id: str, count: int = 20) -> list[Message]
+async def clear_conversation(conversation_id: str) -> None
+async def pop_message(conversation_id: str) -> Message | None
+async def get_message_count(conversation_id: str) -> int
+async def has_messages(conversation_id: str) -> bool
+def get_conversation_info(conversation_id: str) -> dict[str, str]
+```
 
-Base interface for message storage implementations.
+### MessageStorageLocal
 
-**Key Methods:**
-- `async add_messages(user_id, session_id, messages) -> None`: Store messages
-- `async get_messages(user_id, session_id, count) -> List[Message]`: Retrieve history
-- `async clear_session(user_id, session_id) -> None`: Clear conversation history
-
-#### MessageStorageLocal
-
-Local SQLite message storage (default option).
+SQLite-backed local message storage.
 
 ```python
 from xagent.components import MessageStorageLocal
@@ -126,9 +157,9 @@ storage = MessageStorageLocal()
 agent = Agent(message_storage=storage)
 ```
 
-#### MessageStorageCloud
+### MessageStorageCloud
 
-Cloud-backed persistent message storage.
+Redis-backed message storage.
 
 ```python
 from xagent.components import MessageStorageCloud
@@ -137,208 +168,43 @@ storage = MessageStorageCloud()
 agent = Agent(message_storage=storage)
 ```
 
-Requires `REDIS_URL` environment variable for the Redis-backed cloud message store.
+Requires `REDIS_URL`.
 
-## Workflow Classes
+## Memory Storage
 
-### Workflow Class
-
-Orchestrates multi-agent workflows with different execution patterns.
+### MemoryStorageBase
 
 ```python
-from xagent.multi.workflow import Workflow
-
-workflow = Workflow()
+async def add(memory_key: str, conversation_id: str, messages: list[dict]) -> None
+async def store(memory_key: str, content: str) -> str | None
+async def retrieve(memory_key: str, query: str, limit: int = 5) -> list | None
+async def clear(memory_key: str) -> None
+async def delete(memory_ids: list[str]) -> None
 ```
 
-#### Methods
+### Memory Behavior
 
-- `async run_auto(task) -> WorkflowResult`: Automatically generate agents, dependencies, and execute the workflow
-- `async run_sequential(agents, task) -> WorkflowResult`: Execute agents in sequence
-- `async run_parallel(agents, task) -> WorkflowResult`: Execute agents in parallel
-- `async run_graph(agents, dependencies, task) -> WorkflowResult`: Execute with complex dependencies
-- `async run_hybrid(task, stages) -> dict`: Execute multi-stage workflows
+- Runtime memory is agent-global
+- All conversations and all speakers contribute to the same long-term memory pool for that agent
+- Retrieved memory can therefore carry context across conversations and users
 
-## Utility Functions
+## Tools
 
-### Built-in Tools
+Built-in tools:
 
-xAgent ships three built-in tools that can be enabled by name in YAML config or imported directly in Python.
+- `web_search`
+- `draw_image`
+- `run_command`
 
-#### `web_search`
+### `function_tool`
 
 ```python
-from xagent.tools import web_search
-from xagent import Agent
+from xagent.utils import function_tool
 
-agent = Agent(tools=[web_search])
+
+@function_tool()
+def your_function(arg: str) -> str:
+    return arg
 ```
 
-Searches the web and returns a list of relevant results for a query.
-
-#### `draw_image`
-
-```python
-from xagent.tools import draw_image
-
-agent = Agent(tools=[draw_image])
-```
-
-Generates an image via DALL·E given a text prompt. Returns the image URL.
-
-#### `run_command`
-
-```python
-from xagent.tools import run_command
-
-agent = Agent(tools=[run_command])
-```
-
-Executes a shell command and returns `stdout`, `stderr`, and `return_code`.
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `command` | string | required | The shell command to execute |
-| `working_directory` | string | `None` | Working directory for the command |
-| `timeout` | integer | `30` | Max execution time in seconds (1–300) |
-
-Output is capped at **50 KB per stream** and automatically truncated.
-
-All executed commands are logged at `WARNING` level for auditing (`[SHELL AUDIT]`).
-
-**Safety behaviour** (enforced via system prompt):
-- Read-only commands (`ls`, `cat`, `grep`, `git status`, `git log`, etc.) run freely.
-- Write/destructive commands (`rm`, `mv`, `chmod`, `git commit`, `git push`, etc.) require explicit user approval before execution.
-- Forbidden patterns (`rm -rf /`, fork bombs, `git push --force` on shared branches, etc.) are never executed without unambiguous approval.
-
-### Tool Decorator
-
-```python
-from xagent.utils.tool_decorator import function_tool
-
-@function_tool(
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-    param_descriptions: Optional[Dict[str, str]] = None
-)
-def your_function():
-    pass
-```
-
-### DSL Utilities
-
-```python
-from xagent.multi.workflow import validate_dsl_syntax, parse_dependencies_dsl
-
-# Validate DSL syntax
-is_valid, error = validate_dsl_syntax("A->B, B->C")
-
-# Parse DSL into dependencies
-dependencies = parse_dependencies_dsl("A->B, B->C")
-```
-
-## Configuration Schema
-
-### Agent Configuration (YAML)
-
-```yaml
-agent:
-  name: "AgentName"
-  system_prompt: "System prompt text"
-  model: "gpt-5-mini"
-  
-  capabilities:
-    tools:
-      - "tool_name"
-    mcp_servers:
-      - "http://localhost:8001/mcp/"
-  
-  sub_agents:
-    - name: "sub_agent_name"
-      description: "Sub-agent description"
-      server_url: "http://localhost:8011"
-  
-  output_schema:
-    class_name: "ModelName"
-    fields:
-      field_name:
-        type: "str"
-        description: "Field description"
-  
-  storage_mode: "local"  # recommended; also supports "cloud"
-
-server:
-  host: "0.0.0.0"
-  port: 8010
-```
-
-## Response Types
-
-### Standard Response
-
-```python
-response: str = await agent.chat("Hello")
-```
-
-### Structured Response
-
-```python
-from pydantic import BaseModel
-
-class MyModel(BaseModel):
-    title: str
-    content: str
-
-response: MyModel = await agent.chat("Generate content", output_type=MyModel)
-```
-
-### Streaming Response
-
-```python
-response = await agent.chat("Tell me a story", stream=True)
-async for chunk in response:
-    print(chunk, end="")
-```
-
-## Error Handling
-
-### Common Exceptions
-
-- `ValidationError`: Invalid input parameters
-- `OpenAIError`: API communication issues
-- `ToolExecutionError`: Tool execution failures
-- `MessageStorageError`: Storage operation failures
-
-### Example Error Handling
-
-```python
-try:
-    response = await agent.chat("Hello", user_id="user123", session_id="session456")
-except ValidationError as e:
-    print(f"Invalid input: {e}")
-except Exception as e:
-    print(f"Unexpected error: {e}")
-```
-
-## Best Practices
-
-### Performance Optimization
-
-- Use appropriate `history_count` based on context needs
-- Set reasonable `max_iter` for task complexity
-- Configure `max_concurrent_tools` based on system resources
-- Use Redis storage for production deployments
-
-### Security Considerations
-
-- Validate all user inputs
-- Use environment variables for sensitive configuration
-- Implement proper authentication for HTTP endpoints
-- Monitor and log all interactions
-
-### Scaling Recommendations
-
-- Use Redis for message storage in multi-instance deployments
-- Implement load balancing for HTTP servers
-- Monitor agent performance and resource usage
-- Use appropriate model sizes for different tasks
+Use decorated functions in `Agent(tools=[...])`.

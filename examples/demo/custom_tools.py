@@ -47,7 +47,7 @@ async def main():
             "convert 'q2 platform refresh' to title case, and assess the risk for shipping it in 10 days."
         ),
         user_id="demo_user",
-        session_id="tool_demo",
+        conversation_id="tool_demo",
     )
     print(response)
 

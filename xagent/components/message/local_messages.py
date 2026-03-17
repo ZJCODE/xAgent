@@ -38,12 +38,18 @@ class MessageStorageLocal(MessageStorageBase):
     def _initialize_database(self) -> None:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+            }
+            expected_columns = {"id", "conversation_id", "timestamp", "message_json"}
+            if columns and columns != expected_columns:
+                conn.execute("DROP TABLE IF EXISTS messages")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
                     timestamp REAL NOT NULL,
                     message_json TEXT NOT NULL
                 )
@@ -51,34 +57,33 @@ class MessageStorageLocal(MessageStorageBase):
             )
             conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_messages_session
-                ON messages (user_id, session_id, id)
+                CREATE INDEX IF NOT EXISTS idx_messages_conversation
+                ON messages (conversation_id, id)
                 """
             )
             conn.commit()
 
     async def add_messages(
         self,
-        user_id: str,
-        session_id: str,
+        conversation_id: str,
         messages: Union[Message, List[Message]],
         **kwargs,
     ) -> None:
         normalized = messages if isinstance(messages, list) else [messages]
         if not normalized:
             return
-        await asyncio.to_thread(self._add_messages_sync, user_id, session_id, normalized)
+        await asyncio.to_thread(self._add_messages_sync, conversation_id, normalized)
 
-    def _add_messages_sync(self, user_id: str, session_id: str, messages: List[Message]) -> None:
+    def _add_messages_sync(self, conversation_id: str, messages: List[Message]) -> None:
         rows = [
-            (user_id, session_id, msg.timestamp, msg.model_dump_json())
+            (conversation_id, msg.timestamp, msg.model_dump_json())
             for msg in messages
         ]
         with self._connect() as conn:
             conn.executemany(
                 """
-                INSERT INTO messages (user_id, session_id, timestamp, message_json)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO messages (conversation_id, timestamp, message_json)
+                VALUES (?, ?, ?)
                 """,
                 rows,
             )
@@ -86,25 +91,24 @@ class MessageStorageLocal(MessageStorageBase):
 
     async def get_messages(
         self,
-        user_id: str,
-        session_id: str,
+        conversation_id: str,
         count: int = MessageStorageLocalConfig.DEFAULT_MESSAGE_COUNT,
     ) -> List[Message]:
         if count <= 0:
             raise ValueError("count must be a positive integer")
-        return await asyncio.to_thread(self._get_messages_sync, user_id, session_id, count)
+        return await asyncio.to_thread(self._get_messages_sync, conversation_id, count)
 
-    def _get_messages_sync(self, user_id: str, session_id: str, count: int) -> List[Message]:
+    def _get_messages_sync(self, conversation_id: str, count: int) -> List[Message]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT message_json
                 FROM messages
-                WHERE user_id = ? AND session_id = ?
+                WHERE conversation_id = ?
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (user_id, session_id, count),
+                (conversation_id, count),
             ).fetchall()
 
         messages: List[Message] = []
@@ -113,39 +117,38 @@ class MessageStorageLocal(MessageStorageBase):
                 messages.append(Message.model_validate_json(row["message_json"]))
             except Exception as exc:
                 self.logger.warning(
-                    "Skipping invalid local message for %s:%s: %s",
-                    user_id,
-                    session_id,
+                    "Skipping invalid local message for %s: %s",
+                    conversation_id,
                     exc,
                 )
         return messages
 
-    async def clear_history(self, user_id: str, session_id: str) -> None:
-        await asyncio.to_thread(self._clear_history_sync, user_id, session_id)
+    async def clear_conversation(self, conversation_id: str) -> None:
+        await asyncio.to_thread(self._clear_conversation_sync, conversation_id)
 
-    def _clear_history_sync(self, user_id: str, session_id: str) -> None:
+    def _clear_conversation_sync(self, conversation_id: str) -> None:
         with self._connect() as conn:
             conn.execute(
-                "DELETE FROM messages WHERE user_id = ? AND session_id = ?",
-                (user_id, session_id),
+                "DELETE FROM messages WHERE conversation_id = ?",
+                (conversation_id,),
             )
             conn.commit()
 
-    async def pop_message(self, user_id: str, session_id: str) -> Optional[Message]:
-        return await asyncio.to_thread(self._pop_message_sync, user_id, session_id)
+    async def pop_message(self, conversation_id: str) -> Optional[Message]:
+        return await asyncio.to_thread(self._pop_message_sync, conversation_id)
 
-    def _pop_message_sync(self, user_id: str, session_id: str) -> Optional[Message]:
+    def _pop_message_sync(self, conversation_id: str) -> Optional[Message]:
         with self._connect() as conn:
             while True:
                 row = conn.execute(
                     """
                     SELECT id, message_json
                     FROM messages
-                    WHERE user_id = ? AND session_id = ?
+                    WHERE conversation_id = ?
                     ORDER BY id DESC
                     LIMIT 1
                     """,
-                    (user_id, session_id),
+                    (conversation_id,),
                 ).fetchone()
                 if row is None:
                     return None
@@ -157,9 +160,8 @@ class MessageStorageLocal(MessageStorageBase):
                     message = Message.model_validate_json(row["message_json"])
                 except Exception as exc:
                     self.logger.warning(
-                        "Skipping invalid popped local message for %s:%s: %s",
-                        user_id,
-                        session_id,
+                        "Skipping invalid popped local message for %s: %s",
+                        conversation_id,
                         exc,
                     )
                     continue
@@ -170,27 +172,26 @@ class MessageStorageLocal(MessageStorageBase):
     def _is_tool_message(self, message: Message) -> bool:
         return message.type in {MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT}
 
-    async def get_message_count(self, user_id: str, session_id: str) -> int:
-        return await asyncio.to_thread(self._get_message_count_sync, user_id, session_id)
+    async def get_message_count(self, conversation_id: str) -> int:
+        return await asyncio.to_thread(self._get_message_count_sync, conversation_id)
 
-    def _get_message_count_sync(self, user_id: str, session_id: str) -> int:
+    def _get_message_count_sync(self, conversation_id: str) -> int:
         with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT COUNT(*) AS message_count
                 FROM messages
-                WHERE user_id = ? AND session_id = ?
+                WHERE conversation_id = ?
                 """,
-                (user_id, session_id),
+                (conversation_id,),
             ).fetchone()
         return int(row["message_count"]) if row is not None else 0
 
-    def get_session_info(self, user_id: str, session_id: str) -> Dict[str, str]:
+    def get_conversation_info(self, conversation_id: str) -> Dict[str, str]:
         return {
-            "user_id": user_id,
-            "session_id": session_id,
+            "conversation_id": conversation_id,
             "backend": "local",
-            "session_key": f"{user_id}:{session_id}",
+            "conversation_key": conversation_id,
             "path": str(self.path),
         }
 

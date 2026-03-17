@@ -34,7 +34,7 @@ class BaseAgentRunner:
     
     This class provides a standardized way to:
     - Load and validate agent configurations from YAML files
-    - Initialize agents with tools, MCP servers, and sub-agents
+    - Initialize agents with tools and MCP servers
     - Manage message databases and toolkit registries
     - Create dynamic Pydantic models from schema definitions
     
@@ -187,7 +187,7 @@ class BaseAgentRunner:
 
         self._storage_mode = storage_mode
         return storage_mode
-    
+
     def _load_toolkit_registry(self, toolkit_path: Optional[str]) -> Dict[str, Any]:
         """
         Dynamically load TOOLKIT_REGISTRY from a toolkit directory.
@@ -369,7 +369,6 @@ class BaseAgentRunner:
         # Load tools and servers
         tools = self._load_agent_tools(agent_cfg)
         mcp_servers = self._get_mcp_servers(agent_cfg)
-        sub_agents = self._process_sub_agents_config(agent_cfg)
         output_type = self._get_output_type(agent_cfg)
 
         return Agent(
@@ -378,7 +377,6 @@ class BaseAgentRunner:
             model=agent_cfg.get("model"),
             tools=tools,
             mcp_servers=mcp_servers,
-            sub_agents=sub_agents,
             output_type=output_type,
             message_storage=self.message_storage,
             memory_storage=self.memory_storage,
@@ -417,39 +415,6 @@ class BaseAgentRunner:
             mcp_servers = agent_cfg.get("mcp_servers", [])
         
         return mcp_servers
-    
-    def _process_sub_agents_config(
-        self, 
-        agent_cfg: Dict[str, Any]
-    ) -> Optional[List[tuple[str, str, str]]]:
-        """Process sub_agents configuration into standardized format."""
-        if "sub_agents" not in agent_cfg:
-            return None
-        
-        sub_agents = []
-        for agent_config in agent_cfg["sub_agents"]:
-            normalized_config = self._normalize_sub_agent_config(agent_config)
-            if normalized_config:
-                sub_agents.append(normalized_config)
-        
-        return sub_agents if sub_agents else None
-    
-    def _normalize_sub_agent_config(
-        self, 
-        agent_config: Any
-    ) -> Optional[tuple[str, str, str]]:
-        """Normalize sub-agent configuration to tuple format."""
-        if isinstance(agent_config, dict):
-            return (
-                agent_config.get("name", ""),
-                agent_config.get("description", ""),
-                agent_config.get("server_url", "")
-            )
-        elif isinstance(agent_config, (list, tuple)) and len(agent_config) == 3:
-            return tuple(agent_config)
-        else:
-            self.logger.warning("Invalid sub-agent config format: %s", agent_config)
-            return None
     
     def _get_output_type(self, agent_cfg: Dict[str, Any]) -> Optional[Type[BaseModel]]:
         """Get output type from configuration schema."""

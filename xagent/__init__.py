@@ -1,8 +1,4 @@
-"""
-xAgent - Multi-Modal AI Agent System
-
-A powerful multi-modal AI Agent system with modern architecture.
-"""
+"""Public exports for xAgent."""
 
 import importlib
 from .__version__ import __version__
@@ -22,6 +18,8 @@ __all__ = [
     "MessageStorageBase",
     "MessageStorageLocal",
     "MessageStorageCloud",
+    "MemoryStorageBase",
+    "MemoryStorageLocal",
     "MemoryStorageCloud",
     
     # Utilities
@@ -30,9 +28,6 @@ __all__ = [
     # Built-in tools
     "web_search",
     "draw_image",
-
-    # Multi-agent
-    "Workflow",
     
     # Meta
     "__version__"
@@ -46,10 +41,11 @@ _EXPORTS = {
     "function_tool": (".utils", "function_tool"),
     "web_search": (".tools", "web_search"),
     "draw_image": (".tools", "draw_image"),
-    "Workflow": (".multi", "Workflow"),
     "MessageStorageBase": (".components", "MessageStorageBase"),
     "MessageStorageLocal": (".components", "MessageStorageLocal"),
     "MessageStorageCloud": (".components", "MessageStorageCloud"),
+    "MemoryStorageBase": (".components", "MemoryStorageBase"),
+    "MemoryStorageLocal": (".components", "MemoryStorageLocal"),
     "MemoryStorageCloud": (".components", "MemoryStorageCloud"),
 }
 

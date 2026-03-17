@@ -10,8 +10,8 @@ class MemoryStorageBase(ABC):
 
     @abstractmethod
     async def add(self,
-                  user_id: str,
-                  session_id: str,
+                  memory_key: str,
+                  conversation_id: str,
                   messages: List[Dict[str, Any]]
                   ):
         """
@@ -25,32 +25,23 @@ class MemoryStorageBase(ABC):
 
     @abstractmethod
     async def store(self, 
-              user_id: str, 
+              memory_key: str,
               content: str) -> Optional[str]:
         """Store memory content and return memory ID."""
         pass
 
     @abstractmethod
     async def retrieve(self, 
-                 user_id: str, 
+                 memory_key: str,
                  query: str,
                  limit: int = 5,
-                 query_context: Optional[str] = None,
-                 enable_query_process: bool = False
                  ) -> Optional[List[str]]:
         """Retrieve relevant memories based on query."""
         pass
 
     @abstractmethod
-    async def extract_meta(self, 
-                      user_id: str, 
-                      days: int = 1) -> Optional[List[str]]:
-        """Extract metadata from memories within a time frame."""
-        pass
-
-    @abstractmethod
-    async def clear(self, user_id: str) -> None:
-        """Clear all memories for a user."""
+    async def clear(self, memory_key: str) -> None:
+        """Clear all memories for the given memory key."""
         pass
 
     @abstractmethod

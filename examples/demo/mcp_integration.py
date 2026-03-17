@@ -46,7 +46,7 @@ async def main():
             "If MCP tools are available, briefly mention what else you can access."
         ),
         user_id="demo_user",
-        session_id="mcp_demo",
+        conversation_id="mcp_demo",
     )
     print(response)
 

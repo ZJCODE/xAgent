@@ -75,7 +75,7 @@ class MessageStorageCloud(MessageStorageBase):
     conversation messages using Redis as the underlying backend. It supports:
     
     Features:
-    - Multi-user and multi-session isolation  
+    - Conversation isolation
     - Automatic message expiration (TTL)
     - History trimming to manage memory usage
     - Atomic operations using Redis pipelines
@@ -84,7 +84,7 @@ class MessageStorageCloud(MessageStorageBase):
     - URL-safe key sanitization (optional)
     
     Storage Format:
-    - Keys: "chat:<user_id>:<session_id>"
+    - Keys: "chat:<conversation_id>"
     - Values: JSON-serialized Message objects in Redis lists
     - Expiration: Configurable TTL with sliding window support
     
@@ -173,36 +173,28 @@ class MessageStorageCloud(MessageStorageBase):
             self.r = None  # Reset client on failure
             raise RedisError(f"Failed to establish Redis connection: {e}") from e
 
-    def _make_key(self, user_id: str, session_id: str) -> str:
+    def _make_key(self, conversation_id: str) -> str:
         """
         Generate Redis key with optional sanitization.
         
         Args:
-            user_id: User identifier (required)
-            session_id: Session identifier (required)
+            conversation_id: Conversation identifier (required)
             
         Returns:
-            Redis key in format 'chat:<user_id>:<session_id>'
+            Redis key in format 'chat:<conversation_id>'
             
         Raises:
-            ValueError: If user_id or session_id is empty or invalid
+            ValueError: If conversation_id is empty or invalid
             
         Note:
-            When sanitize_keys is enabled, user_id and session_id are URL-encoded
+            When sanitize_keys is enabled, the conversation identifier is URL-encoded
             to ensure compatibility with Redis key naming conventions.
         """
-        if not user_id or not isinstance(user_id, str):
-            raise ValueError("user_id must be a non-empty string")
-        
-        if not session_id or not isinstance(session_id, str):
-            raise ValueError("session_id must be a non-empty string")
-        
-        # Sanitize identifiers if requested
-        sanitized_user_id = self._sanitize_identifier(user_id)
-        sanitized_session_id = self._sanitize_identifier(session_id)
-        
-        # Build key without agent namespace
-        return f"{MessageStorageCloudConfig.MSG_PREFIX}:{sanitized_user_id}:{sanitized_session_id}"
+        if not conversation_id or not isinstance(conversation_id, str):
+            raise ValueError("conversation_id must be a non-empty string")
+
+        sanitized_conversation_id = self._sanitize_identifier(conversation_id)
+        return f"{MessageStorageCloudConfig.MSG_PREFIX}:{sanitized_conversation_id}"
     
     def _sanitize_identifier(self, identifier: str) -> str:
         """Sanitize identifier for Redis key usage."""
@@ -212,8 +204,7 @@ class MessageStorageCloud(MessageStorageBase):
 
     async def add_messages(
         self,
-        user_id: str,
-        session_id: str,
+        conversation_id: str,
         messages: Union[Message, List[Message]],
         ttl: int = MessageStorageCloudConfig.DEFAULT_TTL,
         *,
@@ -224,8 +215,7 @@ class MessageStorageCloud(MessageStorageBase):
         Append messages to conversation history with atomic operations.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             messages: Single Message object or list of Message objects
             ttl: Expiration time in seconds
             max_len: Maximum history length (triggers trimming if exceeded)
@@ -250,7 +240,7 @@ class MessageStorageCloud(MessageStorageBase):
 
         # Execute atomic operation
         client = await self._get_client()
-        key = self._make_key(user_id, session_id)
+        key = self._make_key(conversation_id)
         
         try:
             await self._execute_add_messages_pipeline(
@@ -306,16 +296,14 @@ class MessageStorageCloud(MessageStorageBase):
 
     async def get_messages(
         self, 
-        user_id: str, 
-        session_id: str, 
+        conversation_id: str,
         count: int = MessageStorageCloudConfig.DEFAULT_MESSAGE_COUNT
     ) -> List[Message]:
         """
         Retrieve recent messages from conversation history.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             count: Number of recent messages to retrieve
             
         Returns:
@@ -333,7 +321,7 @@ class MessageStorageCloud(MessageStorageBase):
             raise ValueError("count must be a positive integer")
         
         client = await self._get_client()
-        key = self._make_key(user_id, session_id)
+        key = self._make_key(conversation_id)
         
         try:
             raw_messages = await client.lrange(key, -count, -1)
@@ -375,17 +363,15 @@ class MessageStorageCloud(MessageStorageBase):
         )
 
     async def trim_history(
-        self, 
-        user_id: str, 
-        session_id: str, 
+        self,
+        conversation_id: str,
         max_len: int = MessageStorageCloudConfig.DEFAULT_MAX_HISTORY
     ) -> None:
         """
         Trim conversation history to maximum length.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             max_len: Maximum number of messages to retain
             
         Raises:
@@ -399,7 +385,7 @@ class MessageStorageCloud(MessageStorageBase):
             raise ValueError("max_len must be a positive integer")
         
         client = await self._get_client()
-        key = self._make_key(user_id, session_id)
+        key = self._make_key(conversation_id)
         
         try:
             await client.ltrim(key, -max_len, -1)
@@ -409,17 +395,15 @@ class MessageStorageCloud(MessageStorageBase):
             raise
 
     async def set_expire(
-        self, 
-        user_id: str, 
-        session_id: str, 
+        self,
+        conversation_id: str,
         ttl: int = MessageStorageCloudConfig.DEFAULT_TTL
     ) -> None:
         """
         Set expiration time for conversation history.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             ttl: Time to live in seconds
             
         Raises:
@@ -430,7 +414,7 @@ class MessageStorageCloud(MessageStorageBase):
             raise ValueError("ttl must be a positive integer")
         
         client = await self._get_client()
-        key = self._make_key(user_id, session_id)
+        key = self._make_key(conversation_id)
         
         try:
             await client.expire(key, ttl)
@@ -439,19 +423,18 @@ class MessageStorageCloud(MessageStorageBase):
             self.logger.error("Failed to set expire for key %s: %s", key, e)
             raise
 
-    async def clear_history(self, user_id: str, session_id: str) -> None:
+    async def clear_conversation(self, conversation_id: str) -> None:
         """
         Clear all messages from conversation history.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             
         Raises:
             RedisError: If Redis operation fails
         """
         client = await self._get_client()
-        key = self._make_key(user_id, session_id)
+        key = self._make_key(conversation_id)
         
         try:
             deleted_count = await client.delete(key)
@@ -460,7 +443,7 @@ class MessageStorageCloud(MessageStorageBase):
             self.logger.error("Failed to clear history for key %s: %s", key, e)
             raise
 
-    async def pop_message(self, user_id: str, session_id: str) -> Optional[Message]:
+    async def pop_message(self, conversation_id: str) -> Optional[Message]:
         """
         Remove and return the last non-tool message from history.
         
@@ -468,8 +451,7 @@ class MessageStorageCloud(MessageStorageBase):
         popping until a regular message is found or the history is empty.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             
         Returns:
             The removed Message object (non-tool), or None if history is empty
@@ -483,7 +465,7 @@ class MessageStorageCloud(MessageStorageBase):
             This ensures only meaningful conversation messages are popped.
         """
         client = await self._get_client()
-        key = self._make_key(user_id, session_id)
+        key = self._make_key(conversation_id)
         
         messages_popped = 0
         while True:
@@ -577,19 +559,18 @@ class MessageStorageCloud(MessageStorageBase):
             self.logger.error("Redis ping failed: %s", e)
             return False
     
-    async def get_key_info(self, user_id: str, session_id: str) -> dict:
+    async def get_key_info(self, conversation_id: str) -> dict:
         """
         Get metadata about a conversation key.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             
         Returns:
             Dictionary containing key metadata
         """
         client = await self._get_client()
-        key = self._make_key(user_id, session_id)
+        key = self._make_key(conversation_id)
         
         try:
             length = await client.llen(key)
@@ -611,22 +592,20 @@ class MessageStorageCloud(MessageStorageBase):
                 "error": str(e)
             }
     
-    def get_session_info(self, user_id: str, session_id: str) -> Dict[str, str]:
+    def get_conversation_info(self, conversation_id: str) -> Dict[str, str]:
         """
         Get session information for MessageStorageCloud.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             
         Returns:
             Dictionary containing session metadata
         """
         return {
-            "user_id": user_id,
-            "session_id": session_id,
+            "conversation_id": conversation_id,
             "backend": "cloud",
-            "session_key": f"{user_id}:{session_id}",
+            "conversation_key": conversation_id,
             "redis_url": self.redis_url,
             "sanitize_keys": str(self.sanitize_keys)
         }

@@ -34,7 +34,6 @@ class ModelClient:
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         store_reply: Optional[Callable[..., Awaitable]] = None,
-        shared_store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
         """
         Call the AI model with prepared messages.
@@ -45,8 +44,6 @@ class ModelClient:
             output_type: Pydantic model for structured output.
             stream: Whether to stream the response.
             store_reply: Async callback to store the final reply text.
-            shared_store_reply: Async callback to store the reply in shared context.
-
         Returns:
             Tuple of (ReplyType, response_object).
         """
@@ -64,7 +61,7 @@ class ModelClient:
             if not stream:
                 return self._handle_non_stream(response)
             else:
-                return await self._handle_stream(response, store_reply, shared_store_reply)
+                return await self._handle_stream(response, store_reply)
 
         except Exception as e:
             logger.exception("Model call failed: %s", e)
@@ -112,7 +109,6 @@ class ModelClient:
         self,
         response,
         store_reply: Optional[Callable[..., Awaitable]] = None,
-        shared_store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a streaming model response."""
         prefix_events = []
@@ -160,8 +156,6 @@ class ModelClient:
                 if final_text:
                     if store_reply:
                         await store_reply(final_text)
-                    if shared_store_reply:
-                        await shared_store_reply(final_text)
 
             return ReplyType.SIMPLE_REPLY, stream_generator()
 

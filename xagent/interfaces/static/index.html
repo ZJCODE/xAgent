@@ -439,7 +439,7 @@
           <summary class="cursor-pointer list-none px-4 py-3.5 flex items-center justify-between gap-3">
             <div>
               <span class="block text-sm font-medium">Advanced</span>
-              <span class="block mt-1 text-xs text-gray-500 dark:text-gray-400">Structured controls for identity, delivery mode, and session handling.</span>
+              <span class="block mt-1 text-xs text-gray-500 dark:text-gray-400">Structured controls for identity, delivery, and conversation handling.</span>
             </div>
             <span class="text-gray-500 group-open:rotate-180 transition text-lg leading-none">⌄</span>
           </summary>
@@ -447,8 +447,8 @@
             <section class="advanced-card">
               <div>
                 <p class="advanced-kicker">Identity Grid</p>
-                <p class="advanced-title">Session routing anchors</p>
-                <p class="advanced-caption">Use stable identifiers to preserve context, memory association, and shared request tracing across conversations.</p>
+                <p class="advanced-title">Conversation routing anchors</p>
+                <p class="advanced-caption">Use stable identifiers to preserve context, memory association, and transcript continuity across conversations.</p>
               </div>
               <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
                 <label class="field-shell text-sm">
@@ -456,8 +456,8 @@
                   <input id="userId" type="text" class="w-full px-3 py-2.5 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
                 </label>
                 <label class="field-shell text-sm">
-                  <span class="field-label">Session ID</span>
-                  <input id="sessionId" type="text" class="w-full px-3 py-2.5 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
+                  <span class="field-label">Conversation ID</span>
+                  <input id="conversationId" type="text" class="w-full px-3 py-2.5 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
                 </label>
               </div>
             </section>
@@ -481,16 +481,6 @@
 
                 <div class="setting-tile">
                   <div class="setting-copy">
-                    <strong>Shared mode</strong>
-                  </div>
-                  <label class="setting-toggle cursor-pointer">
-                    <input id="optShared" type="checkbox" />
-                    <span class="toggle-track" aria-hidden="true"></span>
-                  </label>
-                </div>
-
-                <div class="setting-tile">
-                  <div class="setting-copy">
                     <strong>Enable memory</strong>
                   </div>
                   <label class="setting-toggle cursor-pointer">
@@ -501,9 +491,9 @@
 
                 <div class="danger-tile">
                   <div>
-                    <strong>Session reset</strong>
+                    <strong>Conversation reset</strong>
                   </div>
-                  <button id="clearSessionBtn" title="Clear Session" aria-label="Clear Session" class="session-reset-button">
+                  <button id="clearConversationBtn" title="Clear Conversation" aria-label="Clear Conversation" class="session-reset-button">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3m-7 0h8" />
                     </svg>
@@ -573,7 +563,7 @@ const state = {
 const md = window.markdownit({ html: true, linkify: true, breaks: true });
 
 function generateId() {
-  return 'sess_' + Math.random().toString(36).slice(2, 10);
+  return 'conv_' + Math.random().toString(36).slice(2, 10);
 }
 
 function escapeHtml(text) {
@@ -585,9 +575,8 @@ function escapeHtml(text) {
 function saveSettings() {
   const settings = {
     userId: document.getElementById('userId').value,
-    sessionId: document.getElementById('sessionId').value,
+    conversationId: document.getElementById('conversationId').value,
     stream: document.getElementById('optStream').checked,
-    shared: document.getElementById('optShared').checked,
     memory: document.getElementById('optMemory').checked,
     darkMode: document.documentElement.classList.contains('dark'),
   };
@@ -598,9 +587,8 @@ function restoreSettings() {
   const settings = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
 
   document.getElementById('userId').value = settings.userId || 'web_user';
-  document.getElementById('sessionId').value = settings.sessionId || generateId();
+  document.getElementById('conversationId').value = settings.conversationId || generateId();
   document.getElementById('optStream').checked = settings.stream !== false;
-  document.getElementById('optShared').checked = !!settings.shared;
   document.getElementById('optMemory').checked = !!settings.memory;
 
   const shouldDark = settings.darkMode || (!('darkMode' in settings) && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -832,11 +820,10 @@ async function sendMessage() {
 
   const payload = {
     user_id: document.getElementById('userId').value.trim() || 'web_user',
-    session_id: document.getElementById('sessionId').value.trim() || generateId(),
+    conversation_id: document.getElementById('conversationId').value.trim() || generateId(),
     user_message: text,
     stream: document.getElementById('optStream').checked,
     enable_memory: document.getElementById('optMemory').checked,
-    shared: document.getElementById('optShared').checked,
   };
 
   if (currentImages.length === 1) {
@@ -870,15 +857,14 @@ async function sendMessage() {
   }
 }
 
-async function clearSession() {
-  const userId = document.getElementById('userId').value.trim() || 'web_user';
-  const sessionId = document.getElementById('sessionId').value.trim() || generateId();
+async function clearConversation() {
+  const conversationId = document.getElementById('conversationId').value.trim() || generateId();
 
   try {
-    const response = await fetch(`${API_BASE}/clear_session`, {
+    const response = await fetch(`${API_BASE}/clear_conversation`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, session_id: sessionId }),
+      body: JSON.stringify({ conversation_id: conversationId }),
     });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -913,12 +899,12 @@ function bindEvents() {
   const chatInput = document.getElementById('chatInput');
   const imageInput = document.getElementById('imageInput');
 
-  ['userId', 'sessionId', 'optStream', 'optShared', 'optMemory'].forEach((id) => {
+  ['userId', 'conversationId', 'optStream', 'optMemory'].forEach((id) => {
     document.getElementById(id).addEventListener('change', saveSettings);
   });
 
   document.getElementById('toggleThemeBtn').addEventListener('click', toggleTheme);
-  document.getElementById('clearSessionBtn').addEventListener('click', clearSession);
+  document.getElementById('clearConversationBtn').addEventListener('click', clearConversation);
   document.getElementById('sendBtn').addEventListener('click', sendMessage);
   document.getElementById('imageBtn').addEventListener('click', () => imageInput.click());
 

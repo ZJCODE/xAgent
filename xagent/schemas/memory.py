@@ -1,6 +1,6 @@
-from curses import meta
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import List
+
 from pydantic import BaseModel
 
 class MemoryType(Enum):
@@ -23,11 +23,6 @@ class MemoryType(Enum):
                            #   - "User shared positive feedback after using the booking service"
                            #   - "User reported an issue with login on 2024-04-01"
 
-
-
-class MetaMemoryType(Enum):
-    META = "meta"          # High-level summaries and insights derived from other memory types.
-
 class MemoryPiece(BaseModel):
     """Schema for memory objects."""
     content: str
@@ -36,18 +31,3 @@ class MemoryPiece(BaseModel):
 class MemoryExtraction(BaseModel):
     """Schema for memory extraction results."""
     memories: List[MemoryPiece]
-
-class MetaMemoryPiece(BaseModel):
-    """Schema for memory objects."""
-    content: str
-    type: MetaMemoryType
-
-class MetaMemory(BaseModel):
-    """Schema for meta information about memory pieces."""
-    contents: List[MetaMemoryPiece]
-
-class QueryPreprocessResult(BaseModel):
-    """Schema for query preprocessing results."""
-    original_query: str
-    rewritten_queries: List[str]
-    keywords: List[str]

@@ -71,7 +71,7 @@ curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user123",
-    "session_id": "session456", 
+    "conversation_id": "conversation456",
     "user_message": "Hello, how are you?"
   }'
 ```

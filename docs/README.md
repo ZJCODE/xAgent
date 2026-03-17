@@ -22,10 +22,6 @@ This directory contains the complete technical documentation for xAgent.
 2. [Message Storage Inheritance](message_storage_inheritance.md)
 3. [Redis Cluster Support](redis_cluster_support.md)
 
-### I want multi-agent orchestration
-1. [Multi-Agent Workflows](workflows.md)
-2. [Workflow DSL](workflow_dsl.md)
-
 ## Document Map
 
 - [Getting Started](getting_started.md) — Fastest path from install to usable app
@@ -33,8 +29,6 @@ This directory contains the complete technical documentation for xAgent.
 - [Configuration Reference](configuration_reference.md) — Full YAML config fields and examples
 - [API Reference](api_reference.md) — Full Python API details
 - [Memory System](memory.md) — Long-term memory architecture and usage
-- [Multi-Agent Workflows](workflows.md) — Workflow patterns and orchestration
-- [Workflow DSL](workflow_dsl.md) — DSL syntax for agent dependencies
 - [HTTP Server Agent Passing](http_server_agent_passing.md) — Pass a prebuilt `Agent` into HTTP server
 - [Message Storage Inheritance](message_storage_inheritance.md) — Build custom storage backends
 - [Redis Cluster Support](redis_cluster_support.md) — Cluster mode setup and guidance

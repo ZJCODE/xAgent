@@ -21,8 +21,7 @@ class MessageStorageBase(ABC):
     @abstractmethod
     async def add_messages(
         self,
-        user_id: str,
-        session_id: str,
+        conversation_id: str,
         messages: Union[Message, List[Message]],
         **kwargs
     ) -> None:
@@ -30,8 +29,7 @@ class MessageStorageBase(ABC):
         Add messages to the session history.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             messages: Single Message object or list of Message objects
             **kwargs: Additional backend-specific arguments
             
@@ -44,16 +42,14 @@ class MessageStorageBase(ABC):
     @abstractmethod
     async def get_messages(
         self, 
-        user_id: str, 
-        session_id: str, 
+        conversation_id: str,
         count: int = 20
     ) -> List[Message]:
         """
         Get the last `count` messages from the session history.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             count: Number of messages to retrieve. Must be positive.
             
         Returns:
@@ -67,13 +63,12 @@ class MessageStorageBase(ABC):
         pass
 
     @abstractmethod
-    async def clear_history(self, user_id: str, session_id: str) -> None:
+    async def clear_conversation(self, conversation_id: str) -> None:
         """
         Clear the session history.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             
         Raises:
             Exception: If storage operation fails
@@ -81,7 +76,7 @@ class MessageStorageBase(ABC):
         pass
 
     @abstractmethod
-    async def pop_message(self, user_id: str, session_id: str) -> Optional[Message]:
+    async def pop_message(self, conversation_id: str) -> Optional[Message]:
         """
         Pop the last message from the session history.
         
@@ -89,8 +84,7 @@ class MessageStorageBase(ABC):
         Implementations should handle tool messages according to their logic.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             
         Returns:
             The last message, or None if no message exists or session is empty
@@ -101,7 +95,7 @@ class MessageStorageBase(ABC):
         pass
 
     # Optional methods with default implementations
-    async def get_message_count(self, user_id: str, session_id: str) -> int:
+    async def get_message_count(self, conversation_id: str) -> int:
         """
         Get the total number of messages in the session.
         
@@ -109,20 +103,19 @@ class MessageStorageBase(ABC):
         Subclasses can override for more efficient implementations.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             
         Returns:
             Total number of messages in the session history
         """
         try:
             # Use a large number to get all messages, then count
-            messages = await self.get_messages(user_id, session_id, 999999)
+            messages = await self.get_messages(conversation_id, 999999)
             return len(messages)
         except Exception:
             return 0
 
-    async def has_messages(self, user_id: str, session_id: str) -> bool:
+    async def has_messages(self, conversation_id: str) -> bool:
         """
         Check if the session has any messages.
         
@@ -130,15 +123,14 @@ class MessageStorageBase(ABC):
         Subclasses can override for more efficient implementations.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             
         Returns:
             True if session contains messages, False otherwise
         """
-        return await self.get_message_count(user_id, session_id) > 0
+        return await self.get_message_count(conversation_id) > 0
 
-    def get_session_info(self, user_id: str, session_id: str) -> Dict[str, str]:
+    def get_conversation_info(self, conversation_id: str) -> Dict[str, str]:
         """
         Get session information.
         
@@ -146,17 +138,15 @@ class MessageStorageBase(ABC):
         Subclasses should override to provide backend-specific information.
         
         Args:
-            user_id: User identifier
-            session_id: Session identifier
+            conversation_id: Conversation identifier
             
         Returns:
             Dictionary containing session metadata
         """
         return {
-            "user_id": user_id,
-            "session_id": session_id,
+            "conversation_id": conversation_id,
             "backend": self.__class__.__name__.lower().replace("db", ""),
-            "session_key": f"{user_id}:{session_id}"
+            "conversation_key": conversation_id,
         }
 
 

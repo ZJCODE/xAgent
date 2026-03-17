@@ -36,7 +36,7 @@ def main():
     print(
         '{'
         '"user_id":"demo_user",'
-        '"session_id":"release_ops",'
+        '"conversation_id":"release_ops",'
         '"user_message":"When can I deploy to production?"'
         '}'
     )
