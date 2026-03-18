@@ -31,7 +31,7 @@ class MemoryManagerTests(unittest.IsolatedAsyncioTestCase):
     async def test_retrieve_memories_always_includes_recent_two_days(self):
         storage = _FakeMemoryStorage()
         manager = MemoryManager(memory_storage=storage, message_storage=_FakeMessageStorage())
-        recent_dates = manager._retrieve_recent_day_memories.__func__.__globals__["datetime"].now().astimezone().date()
+        recent_dates = manager._retrieve_recent_day_memories.__func__.__globals__["datetime"].now().date()
         today = recent_dates.strftime("%Y-%m-%d")
         yesterday = (recent_dates - manager._retrieve_recent_day_memories.__func__.__globals__["timedelta"](days=1)).strftime("%Y-%m-%d")
 
@@ -71,7 +71,7 @@ class MemoryManagerTests(unittest.IsolatedAsyncioTestCase):
     async def test_retrieve_memories_deduplicates_recent_day_and_search_results(self):
         storage = _FakeMemoryStorage()
         manager = MemoryManager(memory_storage=storage, message_storage=_FakeMessageStorage())
-        current_date = manager._retrieve_recent_day_memories.__func__.__globals__["datetime"].now().astimezone().date()
+        current_date = manager._retrieve_recent_day_memories.__func__.__globals__["datetime"].now().date()
         today = current_date.strftime("%Y-%m-%d")
 
         storage.by_date[today] = [

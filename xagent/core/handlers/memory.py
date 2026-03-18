@@ -114,7 +114,7 @@ class MemoryManager:
         )
 
     async def _retrieve_recent_day_memories(self, memory_key: str) -> list:
-        today = datetime.now().astimezone().date()
+        today = datetime.now().date()
         recent_dates = [
             (today - timedelta(days=offset)).strftime("%Y-%m-%d")
             for offset in range(self.ALWAYS_INCLUDE_RECENT_DAYS)

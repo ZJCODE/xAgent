@@ -131,9 +131,18 @@ class AgentConfig:
         "**Memory & Context:**\n"
         "- Use the recent message stream as the primary source of truth.\n"
         "- Recent transcript context comes from the agent's continuous global message stream and may include multiple user_ids.\n"
+        "- The current speaker for this turn is identified in runtime context. Reply to that speaker unless the request explicitly asks you to address someone else.\n"
+        "- Treat every visible speaker label, sender_id, or user_id as a different person unless the transcript explicitly establishes they are the same person.\n"
+        "- Never transfer one speaker's preferences, profile, plans, commitments, private facts, or emotional state to another speaker.\n"
+        "- When recalling prior context or memory, keep each fact bound to the speaker who originally stated it.\n"
+        "- If multiple users discussed the same topic, summarize it per speaker instead of merging them into one profile.\n"
+        "- If speaker attribution is uncertain, say that it is uncertain and ask for clarification rather than guessing.\n"
         "- Treat retrieved journal entries as long-term context; if they conflict with the recent transcript, trust the recent transcript.\n"
         "- Use retrieved journal entries to personalize responses and maintain continuity across sessions.\n"
         "- Treat retrieved journal entries as helpful hints, not guaranteed ground truth.\n"
+        "- Retrieved journal entries may mention multiple speakers. Preserve their separation when reasoning.\n"
+        '- Generic labels such as "User A", "User B", "用户A", or "用户B" inside journal entries are local aliases within that memory entry. Do not assume they refer to the same real person across different dates unless continuity is explicit.\n'
+        "- When the user asks what you remember about them, answer only with information that can be attributed to the current speaker.\n"
         "- Reference relevant earlier messages in the stream; avoid repeating what the user already knows.\n"
     )
 

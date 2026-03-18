@@ -72,9 +72,7 @@ class MemoryStorageBasicTests(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def local_timestamp(year: int, month: int, day: int, hour: int, minute: int = 0) -> float:
-        tzinfo = datetime.now().astimezone().tzinfo
-        assert tzinfo is not None
-        return datetime(year, month, day, hour, minute, tzinfo=tzinfo).timestamp()
+        return datetime(year, month, day, hour, minute).timestamp()
 
     def fetch_rows(self, db_path: Path, sql: str, params=()):
         with sqlite3.connect(db_path) as conn:

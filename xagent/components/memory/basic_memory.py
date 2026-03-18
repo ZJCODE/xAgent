@@ -1102,12 +1102,12 @@ class MemoryStorageBasic(MemoryStorageBase):
 
     @staticmethod
     def _current_local_date() -> str:
-        return datetime.now().astimezone().strftime("%Y-%m-%d")
+        return datetime.now().strftime("%Y-%m-%d")
 
     @staticmethod
     def _journal_date_from_timestamp(timestamp: Any) -> str:
         try:
-            return datetime.fromtimestamp(float(timestamp)).astimezone().strftime("%Y-%m-%d")
+            return datetime.fromtimestamp(float(timestamp)).strftime("%Y-%m-%d")
         except (TypeError, ValueError, OSError):
             return MemoryStorageBasic._current_local_date()
 
@@ -1190,7 +1190,7 @@ class MemoryStorageBasic(MemoryStorageBase):
         if timestamp is None:
             return ""
         try:
-            dt = datetime.fromtimestamp(float(timestamp)).astimezone()
+            dt = datetime.fromtimestamp(float(timestamp))
         except (TypeError, ValueError, OSError):
             return ""
         return dt.strftime("%Y-%m-%d %H:%M:%S")

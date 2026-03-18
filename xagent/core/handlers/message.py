@@ -77,7 +77,7 @@ class MessageHandler:
         Prompt layering order (each section only included when relevant):
           1. Core Principles — foundational behaviour guidelines
           2. Tool Instructions — per-tool safety / usage rules
-          3. Context Information — runtime metadata (speaker, date, timezone)
+          3. Context Information — runtime metadata (speaker, date)
           4. Retrieved Journal Memory — relevant journal entries (only when non-empty)
           5. User System Prompt — developer-supplied customisation
           (6. User Message — appended as normal messages, not part of system prompt)
@@ -103,18 +103,12 @@ class MessageHandler:
             f"- Current speaker: {user_id}",
             "- Recent messages come from the agent's continuous global interaction stream and may mix multiple user_ids.",
             f"- Date: {time.strftime('%Y-%m-%d')}",
-            f"- Timezone: {time.tzname[0]}",
         ]
         sections.append("\n".join(context_lines))
 
         # --- 4. Retrieved Journal Memory (conditional) ---
         memory_block = self._format_memories(retrieved_memories)
         if memory_block:
-            logger.info(
-                "System prompt journal memory block for %s:\n%s",
-                user_id,
-                memory_block,
-            )
             sections.append(memory_block)
 
         # --- 5. Developer-supplied system prompt ---
