@@ -31,7 +31,6 @@ class ToolExecutor:
     async def handle_tool_calls(
         self,
         tool_calls: list,
-        conversation_id: str,
         input_messages: list,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
     ) -> Optional[tuple[str, str]]:
@@ -52,7 +51,7 @@ class ToolExecutor:
 
         async def execute_with_semaphore(tool_call):
             async with semaphore:
-                return await self.execute_single(tool_call, conversation_id)
+                return await self.execute_single(tool_call)
 
         tasks = [execute_with_semaphore(tc) for tc in function_calls]
         results = await asyncio.gather(*tasks)
@@ -79,7 +78,6 @@ class ToolExecutor:
     async def execute_single(
         self,
         tool_call,
-        conversation_id: str,
     ) -> tuple[Optional[list], Optional[str], Optional[str]]:
         """Execute a single tool call and return (messages, image_data, description)."""
         name = getattr(tool_call, "name", None)
@@ -143,7 +141,7 @@ class ToolExecutor:
                 output=model_output
             )
         )
-        await self.message_storage.add_messages(conversation_id, [tool_call_msg, tool_res_msg])
+        await self.message_storage.add_messages([tool_call_msg, tool_res_msg])
 
         return [tool_call_msg, tool_res_msg], image_data, model_output if image_data else None
 

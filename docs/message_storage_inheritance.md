@@ -1,10 +1,9 @@
 # MessageStorageBase Inheritance Guide
 
-`MessageStorageBase` stores conversation transcripts keyed by `conversation_id`.
+`MessageStorageBase` stores a single continuous message stream for one agent.
 
-This matches the unified conversation model:
+This matches the runtime model:
 
-- one transcript per `conversation_id`
 - `user_id` lives on each message as speaker metadata
 - the storage layer does not partition by user
 
@@ -14,26 +13,24 @@ This matches the unified conversation model:
 class MessageStorageBase(ABC):
     async def add_messages(
         self,
-        conversation_id: str,
         messages: Message | list[Message],
         **kwargs,
     ) -> None: ...
 
     async def get_messages(
         self,
-        conversation_id: str,
-        count: int = 20,
+        count: int = 100,
     ) -> list[Message]: ...
 
-    async def clear_conversation(self, conversation_id: str) -> None: ...
+    async def clear_messages(self) -> None: ...
 
-    async def pop_message(self, conversation_id: str) -> Message | None: ...
+    async def pop_message(self) -> Message | None: ...
 
-    async def get_message_count(self, conversation_id: str) -> int: ...
+    async def get_message_count(self) -> int: ...
 
-    async def has_messages(self, conversation_id: str) -> bool: ...
+    async def has_messages(self) -> bool: ...
 
-    def get_conversation_info(self, conversation_id: str) -> dict[str, str]: ...
+    def get_stream_info(self) -> dict[str, str]: ...
 ```
 
 ## Message Shape
@@ -45,7 +42,7 @@ Stored messages should preserve:
 - `sender_id`
 - tool metadata when applicable
 
-`sender_id` is what allows the runtime to distinguish speakers in a shared transcript.
+`sender_id` is what allows the runtime to distinguish speakers in the shared stream.
 
 ## Built-in Implementations
 
@@ -73,7 +70,6 @@ agent = Agent(message_storage=storage)
 reply = await agent.chat(
     user_message="Hello",
     user_id="alice",
-    conversation_id="daily_chat",
 )
 ```
 
@@ -84,28 +80,28 @@ from xagent.components.message.base_messages import MessageStorageBase
 
 
 class MessageStorageCustom(MessageStorageBase):
-    async def add_messages(self, conversation_id: str, messages, **kwargs):
+    async def add_messages(self, messages, **kwargs):
         ...
 
-    async def get_messages(self, conversation_id: str, count: int = 20):
+    async def get_messages(self, count: int = 100):
         ...
 
-    async def clear_conversation(self, conversation_id: str):
+    async def clear_messages(self):
         ...
 
-    async def pop_message(self, conversation_id: str):
+    async def pop_message(self):
         ...
 
-    def get_conversation_info(self, conversation_id: str):
+    def get_stream_info(self):
         return {
-            "conversation_id": conversation_id,
+            "stream": "custom",
             "backend": "custom",
         }
 ```
 
 ## Design Guidance
 
-- Keep storage keyed by `conversation_id`
+- Keep storage append-only and chronologically ordered
 - Preserve chronological ordering
 - Make batch writes atomic where possible
 - Do not reinterpret speaker metadata inside storage

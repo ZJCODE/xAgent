@@ -8,12 +8,10 @@ This guide summarizes practical recommendations for building stable, maintainabl
 - Add tools only when you have clear use cases.
 - Introduce memory only after your baseline flow is stable.
 
-## 2) Keep Conversations Explicit
+## 2) Keep Speaker Identity Stable
 
-- Always pass stable `conversation_id` values.
-- Use one conversation per context boundary, such as `work`, `personal`, or `incident_review`.
-- Avoid reusing one conversation for unrelated topics.
-- Keep `user_id` stable and human-readable, because it is part of the model-visible transcript.
+- Keep `user_id` stable and human-readable, because it is part of the model-visible stream.
+- Remember the agent uses one continuous message stream, not separate conversation buckets.
 
 ## 3) Prefer Configuration for Deployments
 
@@ -33,9 +31,8 @@ See: [Configuration Reference](configuration_reference.md)
 ## 5) Memory Usage
 
 - Enable memory only for scenarios that need continuity.
-- Define memory thresholds to control storage frequency.
+- Define memory thresholds and batch intervals to control storage frequency.
 - Separate memory collections by product or tenant boundaries when needed.
-- Remember that memory is agent-global, not user-scoped.
 
 See: [Memory System](memory.md)
 

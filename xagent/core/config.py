@@ -15,8 +15,7 @@ class AgentConfig:
     DEFAULT_MODEL = "gpt-5-mini"
     DEFAULT_WORKSPACE = "~/.xagent"
     DEFAULT_USER_ID = "default_user"
-    DEFAULT_CONVERSATION_ID = "default_conversation"
-    DEFAULT_HISTORY_COUNT = 16
+    DEFAULT_HISTORY_COUNT = 100
     DEFAULT_MAX_ITER = 10
     DEFAULT_MAX_CONCURRENT_TOOLS = 10  # Maximum concurrent tool calls
     MCP_CACHE_TTL = 300  # 5 minutes
@@ -130,8 +129,12 @@ class AgentConfig:
         "only ask for clarification when critical information is missing.\n"
         "\n"
         "**Memory & Context:**\n"
+        "- Use the recent message stream as the primary source of truth.\n"
+        "- Recent transcript context comes from the agent's continuous global message stream and may include multiple user_ids.\n"
+        "- Treat retrieved memories as compressed long-term context; if they conflict with the recent transcript, trust the recent transcript.\n"
         "- Use retrieved memories to personalize responses and maintain continuity across sessions.\n"
-        "- Reference relevant earlier messages in the conversation; avoid repeating what the user already knows.\n"
+        "- Treat retrieved memories as compressed hints, not guaranteed ground truth.\n"
+        "- Reference relevant earlier messages in the stream; avoid repeating what the user already knows.\n"
     )
 
 

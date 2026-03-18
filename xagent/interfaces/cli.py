@@ -37,7 +37,6 @@ class AgentCLI(BaseAgentRunner):
     async def chat_interactive(
         self,
         user_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
         stream: Optional[bool] = None,
         memory: bool = True,
     ):
@@ -46,10 +45,8 @@ class AgentCLI(BaseAgentRunner):
 
         verbose_mode = logging.getLogger().level <= logging.INFO
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
-        conversation_id = conversation_id or f"cli_conversation_{uuid.uuid4().hex[:8]}"
 
         self._print_banner(
-            conversation_id=conversation_id,
             stream=stream,
             memory=memory,
             verbose_mode=verbose_mode,
@@ -67,10 +64,8 @@ class AgentCLI(BaseAgentRunner):
                     break
 
                 if user_input.lower() == "clear":
-                    await self.message_storage.clear_conversation(
-                        self.agent.normalize_conversation_id(conversation_id)
-                    )
-                    print("🧹 ✨ Conversation cleared.")
+                    await self.message_storage.clear_messages()
+                    print("🧹 ✨ Global message stream cleared.")
                     continue
 
                 if user_input.lower().startswith("stream "):
@@ -91,15 +86,6 @@ class AgentCLI(BaseAgentRunner):
                         print("⚠️  Usage: memory on/off")
                     continue
 
-                if user_input.lower().startswith("conversation "):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) == 2 and parts[1].strip():
-                        conversation_id = parts[1].strip()
-                        print(f"🔗 ✨ Conversation set to {conversation_id}.")
-                    else:
-                        print("⚠️  Usage: conversation <conversation_id>")
-                    continue
-
                 if user_input.lower() == "help":
                     self._show_help()
                     continue
@@ -111,7 +97,6 @@ class AgentCLI(BaseAgentRunner):
                 response = await self.agent(
                     user_message=user_input,
                     user_id=user_id,
-                    conversation_id=conversation_id,
                     stream=stream,
                     enable_memory=memory,
                 )
@@ -142,23 +127,18 @@ class AgentCLI(BaseAgentRunner):
         self,
         message: str,
         user_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
         memory: bool = True,
     ):
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
-        conversation_id = conversation_id or f"cli_conversation_{uuid.uuid4().hex[:8]}"
-
         return await self.agent(
             user_message=message,
             user_id=user_id,
-            conversation_id=conversation_id,
             stream=False,
             enable_memory=memory,
         )
 
     def _print_banner(
         self,
-        conversation_id: str,
         stream: bool,
         memory: bool,
         verbose_mode: bool,
@@ -179,8 +159,6 @@ class AgentCLI(BaseAgentRunner):
         else:
             print(f"🛠️  Tools: {total_tools} loaded")
 
-        print(f"🔗 Conversation: {conversation_id}")
-
         status_indicators = [
             f"{'🟢' if verbose_mode else '🔇'} Verbose: {'On' if verbose_mode else 'Off'}",
             f"{'🌊' if stream else '📄'} Stream: {'On' if stream else 'Off'}",
@@ -193,19 +171,17 @@ class AgentCLI(BaseAgentRunner):
         print("  • Type your message to chat with the agent")
         print("  • Use 'help' to see all available commands")
         print("  • Use 'exit', 'quit', or 'bye' to end session")
-        print("  • Use 'clear' to reset the current conversation")
+        print("  • Use 'clear' to reset the agent message stream")
         print("  • Use 'stream on/off' to toggle response streaming")
         print("  • Use 'memory on/off' to toggle memory storage")
-        print("  • Use 'conversation <id>' to switch the active conversation")
         print("─" * 60)
 
     def _show_help(self):
         print("\n╭─ 📋 Commands ─────────────────────────────────────────────╮")
         print("│ exit, quit, bye    Exit the chat session                  │")
-        print("│ clear              Clear current conversation             │")
+        print("│ clear              Clear the agent message stream         │")
         print("│ stream on/off      Toggle streaming response mode         │")
         print("│ memory on/off      Toggle memory storage mode             │")
-        print("│ conversation <id>  Switch active conversation id         │")
         print("│ help               Show this help message                 │")
         print("╰───────────────────────────────────────────────────────────╯")
 
@@ -296,8 +272,7 @@ def main():
     parser = argparse.ArgumentParser(description="xAgent CLI - Interactive chat agent")
     parser.add_argument("--config", default=None, help="Config file path (if not specified, uses default configuration)")
     parser.add_argument("--toolkit_path", default=None, help="Toolkit directory path (if not specified, no additional tools will be loaded)")
-    parser.add_argument("--user_id", help="Speaker identifier for the conversation")
-    parser.add_argument("--conversation_id", help="Conversation ID for the chat")
+    parser.add_argument("--user_id", help="Speaker identifier for the chat")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument("--env", default=".env", help="Path to .env file")
     parser.add_argument("--ask", metavar="MESSAGE", help="Ask a single question instead of starting interactive chat")
@@ -328,7 +303,6 @@ def main():
                 agent_cli.chat_single(
                     message=args.ask,
                     user_id=args.user_id,
-                    conversation_id=args.conversation_id,
                 )
             )
             print(response)
@@ -337,7 +311,6 @@ def main():
         asyncio.run(
             agent_cli.chat_interactive(
                 user_id=args.user_id,
-                conversation_id=args.conversation_id,
             )
         )
 

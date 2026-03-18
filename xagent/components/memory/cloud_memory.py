@@ -2,21 +2,24 @@ from typing import Optional
 import logging
 
 from .basic_memory import MemoryStorageBasic
+from .config.memory_config import MEMORY_EXTRACTION_INTERVAL_SECONDS, MEMORY_MAX_BATCH_MESSAGES
 from .vector.cloud_vector_store import VectorStoreUpstash
 
 
 class MemoryStorageCloud(MemoryStorageBasic):
     """
-    Cloud memory storage backed by Upstash Vector with LLM-based memory extraction.
+    Cloud memory storage backed by Upstash Vector with batched LLM-based memory extraction.
 
     Args:
-        memory_threshold: Number of user turns to trigger long-term storage. Defaults to 10
-        message_storage: Optional MessageStorage instance for reading conversation history
+        memory_threshold: Number of unread transcript messages required for periodic extraction
+        message_storage: Optional MessageStorage instance for reading message history
         vector_store: Optional VectorStore instance (defaults to VectorStoreUpstash)
     """
 
     def __init__(self,
                  memory_threshold: int = 10,
+                 memory_interval_seconds: int = MEMORY_EXTRACTION_INTERVAL_SECONDS,
+                 max_batch_messages: int = MEMORY_MAX_BATCH_MESSAGES,
                  message_storage=None,
                  vector_store=None):
 
@@ -29,6 +32,8 @@ class MemoryStorageCloud(MemoryStorageBasic):
             memory_threshold=memory_threshold,
             message_storage=message_storage,
             vector_store=self.vector_store,
+            memory_interval_seconds=memory_interval_seconds,
+            max_batch_messages=max_batch_messages,
         )
 
         self.logger.info(

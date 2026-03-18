@@ -11,15 +11,14 @@ class MemoryStorageBase(ABC):
     @abstractmethod
     async def add(self,
                   memory_key: str,
-                  conversation_id: str,
                   messages: List[Dict[str, Any]]
                   ):
         """
         Add messages and conditionally trigger long-term memory extraction.
 
-        The memory system reads conversation history directly from the
+        The memory system reads message history directly from the
         associated *message_storage* when extraction is triggered, so
-        ``messages`` is only used for user-turn counting and explicit
+        ``messages`` is only used for unread-activity counting and explicit
         remember-this detection.
         """
         pass
@@ -36,7 +35,7 @@ class MemoryStorageBase(ABC):
                  memory_key: str,
                  query: str,
                  limit: int = 5,
-                 ) -> Optional[List[str]]:
+                 ) -> Optional[List[Dict[str, Any]]]:
         """Retrieve relevant memories based on query."""
         pass
 

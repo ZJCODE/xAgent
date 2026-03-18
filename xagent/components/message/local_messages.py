@@ -12,17 +12,15 @@ class MessageStorageLocalConfig:
     """Configuration constants for MessageStorageLocal."""
 
     DEFAULT_PATH = "~/.xagent/messages.sqlite3"
-    DEFAULT_MESSAGE_COUNT = 20
+    DEFAULT_MESSAGE_COUNT = 100
     CONNECT_TIMEOUT = 5.0
+    TABLE_NAME = "messages"
+    LEGACY_COLUMNS = {"id", "conversation_id", "timestamp", "message_json"}
+    CURRENT_COLUMNS = {"id", "timestamp", "message_json"}
 
 
 class MessageStorageLocal(MessageStorageBase):
-    """
-    Local persistent message storage backed by SQLite.
-
-    The storage model is append-only per message. Each row stores the user,
-    session, message timestamp, and the full serialized Message payload.
-    """
+    """Local persistent single-stream message storage backed by SQLite."""
 
     def __init__(self, path: Optional[str] = None):
         self.path = Path(path or MessageStorageLocalConfig.DEFAULT_PATH).expanduser()
@@ -40,50 +38,79 @@ class MessageStorageLocal(MessageStorageBase):
             conn.execute("PRAGMA journal_mode=WAL")
             columns = {
                 row["name"]
-                for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+                for row in conn.execute(
+                    f"PRAGMA table_info({MessageStorageLocalConfig.TABLE_NAME})"
+                ).fetchall()
             }
-            expected_columns = {"id", "conversation_id", "timestamp", "message_json"}
-            if columns and columns != expected_columns:
-                conn.execute("DROP TABLE IF EXISTS messages")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conversation_id TEXT NOT NULL,
-                    timestamp REAL NOT NULL,
-                    message_json TEXT NOT NULL
+
+            if not columns:
+                self._create_current_schema(conn)
+            elif columns == MessageStorageLocalConfig.CURRENT_COLUMNS:
+                self._ensure_current_indexes(conn)
+            elif columns == MessageStorageLocalConfig.LEGACY_COLUMNS:
+                self._migrate_legacy_schema(conn)
+            else:
+                self.logger.warning(
+                    "Unexpected messages schema at %s; recreating storage table.",
+                    self.path,
                 )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_messages_conversation
-                ON messages (conversation_id, id)
-                """
-            )
+                conn.execute(f"DROP TABLE IF EXISTS {MessageStorageLocalConfig.TABLE_NAME}")
+                self._create_current_schema(conn)
+
             conn.commit()
+
+    def _create_current_schema(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {MessageStorageLocalConfig.TABLE_NAME} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                message_json TEXT NOT NULL
+            )
+            """
+        )
+        self._ensure_current_indexes(conn)
+
+    def _ensure_current_indexes(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_{MessageStorageLocalConfig.TABLE_NAME}_id
+            ON {MessageStorageLocalConfig.TABLE_NAME} (id)
+            """
+        )
+
+    def _migrate_legacy_schema(self, conn: sqlite3.Connection) -> None:
+        legacy_table = f"{MessageStorageLocalConfig.TABLE_NAME}_legacy"
+        conn.execute(f"ALTER TABLE {MessageStorageLocalConfig.TABLE_NAME} RENAME TO {legacy_table}")
+        self._create_current_schema(conn)
+        conn.execute(
+            f"""
+            INSERT INTO {MessageStorageLocalConfig.TABLE_NAME} (id, timestamp, message_json)
+            SELECT id, timestamp, message_json
+            FROM {legacy_table}
+            ORDER BY id
+            """
+        )
+        conn.execute(f"DROP TABLE {legacy_table}")
+        self.logger.info("Migrated legacy conversation-scoped message storage at %s", self.path)
 
     async def add_messages(
         self,
-        conversation_id: str,
         messages: Union[Message, List[Message]],
         **kwargs,
     ) -> None:
         normalized = messages if isinstance(messages, list) else [messages]
         if not normalized:
             return
-        await asyncio.to_thread(self._add_messages_sync, conversation_id, normalized)
+        await asyncio.to_thread(self._add_messages_sync, normalized)
 
-    def _add_messages_sync(self, conversation_id: str, messages: List[Message]) -> None:
-        rows = [
-            (conversation_id, msg.timestamp, msg.model_dump_json())
-            for msg in messages
-        ]
+    def _add_messages_sync(self, messages: List[Message]) -> None:
+        rows = [(msg.timestamp, msg.model_dump_json()) for msg in messages]
         with self._connect() as conn:
             conn.executemany(
-                """
-                INSERT INTO messages (conversation_id, timestamp, message_json)
-                VALUES (?, ?, ?)
+                f"""
+                INSERT INTO {MessageStorageLocalConfig.TABLE_NAME} (timestamp, message_json)
+                VALUES (?, ?)
                 """,
                 rows,
             )
@@ -91,24 +118,22 @@ class MessageStorageLocal(MessageStorageBase):
 
     async def get_messages(
         self,
-        conversation_id: str,
         count: int = MessageStorageLocalConfig.DEFAULT_MESSAGE_COUNT,
     ) -> List[Message]:
         if count <= 0:
             raise ValueError("count must be a positive integer")
-        return await asyncio.to_thread(self._get_messages_sync, conversation_id, count)
+        return await asyncio.to_thread(self._get_messages_sync, count)
 
-    def _get_messages_sync(self, conversation_id: str, count: int) -> List[Message]:
+    def _get_messages_sync(self, count: int) -> List[Message]:
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT message_json
-                FROM messages
-                WHERE conversation_id = ?
+                FROM {MessageStorageLocalConfig.TABLE_NAME}
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (conversation_id, count),
+                (count,),
             ).fetchall()
 
         messages: List[Message] = []
@@ -116,54 +141,44 @@ class MessageStorageLocal(MessageStorageBase):
             try:
                 messages.append(Message.model_validate_json(row["message_json"]))
             except Exception as exc:
-                self.logger.warning(
-                    "Skipping invalid local message for %s: %s",
-                    conversation_id,
-                    exc,
-                )
+                self.logger.warning("Skipping invalid local message: %s", exc)
         return messages
 
-    async def clear_conversation(self, conversation_id: str) -> None:
-        await asyncio.to_thread(self._clear_conversation_sync, conversation_id)
+    async def clear_messages(self) -> None:
+        await asyncio.to_thread(self._clear_messages_sync)
 
-    def _clear_conversation_sync(self, conversation_id: str) -> None:
+    def _clear_messages_sync(self) -> None:
         with self._connect() as conn:
-            conn.execute(
-                "DELETE FROM messages WHERE conversation_id = ?",
-                (conversation_id,),
-            )
+            conn.execute(f"DELETE FROM {MessageStorageLocalConfig.TABLE_NAME}")
             conn.commit()
 
-    async def pop_message(self, conversation_id: str) -> Optional[Message]:
-        return await asyncio.to_thread(self._pop_message_sync, conversation_id)
+    async def pop_message(self) -> Optional[Message]:
+        return await asyncio.to_thread(self._pop_message_sync)
 
-    def _pop_message_sync(self, conversation_id: str) -> Optional[Message]:
+    def _pop_message_sync(self) -> Optional[Message]:
         with self._connect() as conn:
             while True:
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT id, message_json
-                    FROM messages
-                    WHERE conversation_id = ?
+                    FROM {MessageStorageLocalConfig.TABLE_NAME}
                     ORDER BY id DESC
                     LIMIT 1
-                    """,
-                    (conversation_id,),
+                    """
                 ).fetchone()
                 if row is None:
                     return None
 
-                conn.execute("DELETE FROM messages WHERE id = ?", (row["id"],))
+                conn.execute(
+                    f"DELETE FROM {MessageStorageLocalConfig.TABLE_NAME} WHERE id = ?",
+                    (row["id"],),
+                )
                 conn.commit()
 
                 try:
                     message = Message.model_validate_json(row["message_json"])
                 except Exception as exc:
-                    self.logger.warning(
-                        "Skipping invalid popped local message for %s: %s",
-                        conversation_id,
-                        exc,
-                    )
+                    self.logger.warning("Skipping invalid popped local message: %s", exc)
                     continue
 
                 if not self._is_tool_message(message):
@@ -172,26 +187,23 @@ class MessageStorageLocal(MessageStorageBase):
     def _is_tool_message(self, message: Message) -> bool:
         return message.type in {MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT}
 
-    async def get_message_count(self, conversation_id: str) -> int:
-        return await asyncio.to_thread(self._get_message_count_sync, conversation_id)
+    async def get_message_count(self) -> int:
+        return await asyncio.to_thread(self._get_message_count_sync)
 
-    def _get_message_count_sync(self, conversation_id: str) -> int:
+    def _get_message_count_sync(self) -> int:
         with self._connect() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS message_count
-                FROM messages
-                WHERE conversation_id = ?
-                """,
-                (conversation_id,),
+                FROM {MessageStorageLocalConfig.TABLE_NAME}
+                """
             ).fetchone()
         return int(row["message_count"]) if row is not None else 0
 
-    def get_conversation_info(self, conversation_id: str) -> Dict[str, str]:
+    def get_stream_info(self) -> Dict[str, str]:
         return {
-            "conversation_id": conversation_id,
+            "stream": "local",
             "backend": "local",
-            "conversation_key": conversation_id,
             "path": str(self.path),
         }
 

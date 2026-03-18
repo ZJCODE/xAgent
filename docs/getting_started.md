@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide gets xAgent running with the unified conversation model in a few minutes.
+This guide gets xAgent running with the continuous agent message stream in a few minutes.
 
 ## Prerequisites
 
@@ -25,10 +25,9 @@ If you plan to use cloud storage, also see [README Cloud Mode](../README.md#clou
 
 Each chat request includes:
 
-- `conversation_id`: the transcript identifier
 - `user_id`: the current speaker
 
-Single-user and multi-user conversations use the same runtime model. The only difference is how many distinct speakers appear in the transcript.
+Single-user and multi-user interactions use the same runtime model. The only difference is how many distinct speakers appear in the agent's message stream.
 
 ## Start with the CLI
 
@@ -44,7 +43,6 @@ xagent-cli --ask "Who are you?"
 
 Inside the CLI:
 
-- `conversation <id>`
 - `clear`
 
 ## Start the HTTP Server
@@ -63,19 +61,17 @@ curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "alice",
-    "conversation_id": "daily_chat",
     "user_message": "Hello"
   }'
 ```
 
-Add another speaker to the same transcript:
+Add another speaker to the same message stream:
 
 ```bash
 curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "bob",
-    "conversation_id": "daily_chat",
     "user_message": "Summarize what Alice said."
   }'
 ```
@@ -93,14 +89,12 @@ async def main():
     reply = await agent.chat(
         user_message="Hello",
         user_id="alice",
-        conversation_id="daily_chat",
     )
     print(reply)
 
     follow_up = await agent.chat(
         user_message="Summarize what the conversation has decided.",
         user_id="bob",
-        conversation_id="daily_chat",
     )
     print(follow_up)
 

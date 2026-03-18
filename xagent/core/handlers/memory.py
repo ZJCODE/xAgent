@@ -33,7 +33,6 @@ class MemoryManager:
     def schedule_memory_add(
         self,
         memory_key: str,
-        conversation_id: str,
         messages: List[dict],
     ) -> None:
         if not messages:
@@ -42,7 +41,6 @@ class MemoryManager:
         task = asyncio.create_task(
             self.memory_storage.add(
                 memory_key=memory_key,
-                conversation_id=conversation_id,
                 messages=messages,
             )
         )

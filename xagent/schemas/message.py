@@ -50,7 +50,7 @@ class Message(BaseModel):
     """Message model for communication between roles."""
     type: MessageType = Field(MessageType.Message, description="Type of message (e.g., message, function_call)")
     role: RoleType = Field(RoleType.USER, description="The role of the sender (e.g., user, assistant)")
-    sender_id: Optional[str] = Field(None, description="Stable identifier for the speaker in a conversation transcript")
+    sender_id: Optional[str] = Field(None, description="Stable identifier for the speaker in the agent message stream")
     content: str = Field(..., description="The content of the message")
     timestamp: float = Field(default_factory=time.time, description="The timestamp of when the message was sent")
     tool_call: Optional[ToolCall] = Field(None, description="tool/function calls associated with the message")

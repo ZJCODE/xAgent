@@ -23,18 +23,16 @@ async def main():
             "and I'm planning a Tokyo trip in May."
         ),
         user_id=user_id,
-        conversation_id="intro",
         enable_memory=True,
     )
-    print("Conversation 1:\n", first_reply, sep="")
+    print("Turn 1:\n", first_reply, sep="")
 
     second_reply = await agent.chat(
         user_message="What do you remember about me, and how should you tailor future replies?",
         user_id=user_id,
-        conversation_id="follow_up",
         enable_memory=True,
     )
-    print("\nConversation 2:\n", second_reply, sep="")
+    print("\nTurn 2:\n", second_reply, sep="")
 
 
 if __name__ == "__main__":

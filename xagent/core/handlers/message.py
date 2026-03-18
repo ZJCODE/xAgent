@@ -25,7 +25,6 @@ class MessageHandler:
         self,
         user_message: str,
         user_id: str,
-        conversation_id: str,
         image_source: Optional[Union[str, List[str]]] = None,
     ) -> None:
         """Store a user message, auto-detecting embedded image URLs."""
@@ -43,19 +42,28 @@ class MessageHandler:
             image_source=image_source,
             sender_id=user_id,
         )
-        await self.message_storage.add_messages(conversation_id, msg)
+        await self.message_storage.add_messages(msg)
 
-    async def store_model_reply(self, reply_text: str, conversation_id: str, sender_id: str) -> None:
+    async def store_model_reply(self, reply_text: str, sender_id: str) -> None:
         model_msg = Message.create(content=reply_text, role=RoleType.ASSISTANT, sender_id=sender_id)
-        await self.message_storage.add_messages(conversation_id, model_msg)
+        await self.message_storage.add_messages(model_msg)
+
+    async def get_recent_messages(
+        self,
+        history_count: int,
+    ) -> List[Message]:
+        return await self.message_storage.get_messages(history_count)
 
     async def get_input_messages(
         self,
-        conversation_id: str,
         history_count: int,
     ) -> list:
         """Retrieve and serialize recent messages for model input."""
-        messages = await self.message_storage.get_messages(conversation_id, history_count)
+        messages = await self.get_recent_messages(history_count)
+        return [msg.to_model_input() for msg in messages]
+
+    @staticmethod
+    def to_model_input(messages: List[Message]) -> list:
         return [msg.to_model_input() for msg in messages]
 
     def build_system_prompt(
@@ -72,7 +80,7 @@ class MessageHandler:
           3. Context Information — runtime metadata (speaker, date, timezone)
           4. Retrieved Memories — relevant memories (only when non-empty)
           5. User System Prompt — developer-supplied customisation
-          (6. User Message — appended as conversation messages, not part of system prompt)
+          (6. User Message — appended as normal messages, not part of system prompt)
         """
         sections: list[str] = []
 
@@ -93,7 +101,7 @@ class MessageHandler:
         context_lines = [
             AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip(),
             f"- Current speaker: {user_id}",
-            "- Conversation messages preserve speaker identifiers.",
+            "- Recent messages come from the agent's continuous global interaction stream and may mix multiple user_ids.",
             f"- Date: {time.strftime('%Y-%m-%d')}",
             f"- Timezone: {time.tzname[0]}",
         ]
@@ -129,17 +137,41 @@ class MessageHandler:
         if not retrieved_memories:
             return ""
 
-        lines = ["**Retrieved Memories:**"]
-        for i, mem in enumerate(retrieved_memories, 1):
+        groups = {
+            "semantic": [],
+            "social": [],
+            "episodic": [],
+            "self": [],
+            "other": [],
+        }
+
+        for mem in retrieved_memories:
             content = mem.get("content", "") if isinstance(mem, dict) else str(mem)
             if not content:
                 continue
             metadata = mem.get("metadata", {}) if isinstance(mem, dict) else {}
-            mem_type = metadata.get("memory_type") or metadata.get("type", "")
-            prefix = f"[{mem_type}] " if mem_type else ""
-            lines.append(f"{i}. {prefix}{content}")
+            mem_type = str(metadata.get("memory_type") or metadata.get("type") or "").lower()
+            bucket = groups.get(mem_type, groups["other"])
+            bucket.append(content)
 
-        return "\n".join(lines) if len(lines) > 1 else ""
+        lines = [
+            "**Relevant Long-Term Memory:**",
+            "- These are compressed reminders. If they conflict with the recent transcript, trust the recent transcript.",
+        ]
+        for label, items in [
+            ("Semantic", groups["semantic"]),
+            ("Social", groups["social"]),
+            ("Episodic", groups["episodic"]),
+            ("Self", groups["self"]),
+            ("Other", groups["other"]),
+        ]:
+            if not items:
+                continue
+            lines.append(f"{label}:")
+            for i, item in enumerate(items, 1):
+                lines.append(f"{i}. {item}")
+
+        return "\n".join(lines) if len(lines) > 2 else ""
 
     @staticmethod
     def sanitize_input_messages(input_messages: list) -> list:

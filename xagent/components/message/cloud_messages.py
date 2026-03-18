@@ -11,7 +11,7 @@ from redis.exceptions import RedisError
 
 # Local imports
 from .base_messages import MessageStorageBase
-from ...schemas import Message,MessageType
+from ...schemas import Message, MessageType
 
 
 def _strip_query_param(url: str, key: str) -> str:
@@ -37,91 +37,42 @@ def create_redis_client(redis_url: str, **common_kwargs):
     """Create Redis client supporting both standalone and cluster modes."""
     if _looks_like_cluster(redis_url):
         return RedisCluster.from_url(_strip_query_param(redis_url, "cluster"), **common_kwargs)
-    else:
-        return redis.Redis.from_url(redis_url, **common_kwargs)
+    return redis.Redis.from_url(redis_url, **common_kwargs)
 
 
 class MessageStorageCloudConfig:
-    """Configuration constants for MessageStorageCloud class."""
-    
-    # Redis-backed key constants
-    MSG_PREFIX: Final[str] = "xagent:chat"
-    
-    # Time constants (in seconds)
-    DEFAULT_TTL: Final[int] = 2592000  # 30 days
+    """Configuration constants for MessageStorageCloud."""
+
+    MSG_PREFIX: Final[str] = "xagent:stream"
+    DEFAULT_STREAM_NAME: Final[str] = "default_agent"
+    DEFAULT_TTL: Final[int] = 2592000
     HEALTH_CHECK_INTERVAL: Final[int] = 30
     SOCKET_CONNECT_TIMEOUT: Final[int] = 5
     SOCKET_TIMEOUT: Final[int] = 5
-    
-    # Default values
-    DEFAULT_MESSAGE_COUNT: Final[int] = 20
-    DEFAULT_MAX_HISTORY: Final[int] = 200
-    
-    # Redis-backed client settings
+    DEFAULT_MESSAGE_COUNT: Final[int] = 100
+    DEFAULT_MAX_HISTORY: Final[int] = 500
     CLIENT_NAME: Final[str] = "xagent-message-storage"
-    
-    # Message preview settings
     MESSAGE_PREVIEW_LENGTH: Final[int] = 120
-    
-    # URL encoding safe characters
     URL_SAFE_CHARS: Final[str] = "-._~"
 
 
 class MessageStorageCloud(MessageStorageBase):
-    """
-    Cloud message storage backend for conversation history.
-
-    This class provides a robust, scalable solution for storing and retrieving
-    conversation messages using Redis as the underlying backend. It supports:
-    
-    Features:
-    - Conversation isolation
-    - Automatic message expiration (TTL)
-    - History trimming to manage memory usage
-    - Atomic operations using Redis pipelines
-    - Connection pooling and health checks
-    - Graceful error handling and recovery
-    - URL-safe key sanitization (optional)
-    
-    Storage Format:
-    - Keys: "chat:<conversation_id>"
-    - Values: JSON-serialized Message objects in Redis lists
-    - Expiration: Configurable TTL with sliding window support
-    
-    Attributes:
-        redis_url: Redis connection URL
-        r: Redis client instance (lazy-initialized)
-        sanitize_keys: Whether to URL-encode keys for safety
-        logger: Logger instance for this class
-    """
+    """Cloud-backed single-stream message storage using Redis."""
 
     def __init__(
-        self, 
+        self,
         redis_url: Optional[str] = None,
-        *, 
-        sanitize_keys: bool = False
+        *,
+        stream_name: str = MessageStorageCloudConfig.DEFAULT_STREAM_NAME,
+        sanitize_keys: bool = False,
     ):
-        """
-        Initialize MessageStorageCloud instance.
-        
-        Args:
-            redis_url: Redis connection URL. If None, reads from REDIS_URL environment variable
-            sanitize_keys: Whether to URL-encode keys for safety. Defaults to False
-        
-        Raises:
-            ValueError: If Redis connection information is not provided
-            
-        Note:
-            The Redis connection is lazy-initialized on first use to avoid
-            blocking the constructor with network operations.
-        """
         self.redis_url = self._get_redis_url(redis_url)
-        self.r: Optional[Union[redis.Redis, RedisCluster]] = None
+        self.stream_name = stream_name or MessageStorageCloudConfig.DEFAULT_STREAM_NAME
         self.sanitize_keys = sanitize_keys
+        self.r: Optional[Union[redis.Redis, RedisCluster]] = None
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
-    
+
     def _get_redis_url(self, redis_url: Optional[str]) -> str:
-        """Get Redis URL from parameter or environment variable."""
         url = redis_url or os.environ.get("REDIS_URL")
         if not url:
             raise ValueError(
@@ -131,27 +82,12 @@ class MessageStorageCloud(MessageStorageBase):
         return url
 
     async def _get_client(self) -> Union[redis.Redis, RedisCluster]:
-        """
-        Get or create async Redis client with optimized configuration.
-        
-        Returns:
-            Configured Redis client instance (standalone or cluster) with connection pooling and health checks
-            
-        Raises:
-            RedisError: If Redis connection fails during initial health check
-            
-        Note:
-            The client is cached and reused across method calls. Connection
-            parameters are optimized for stability and performance.
-            Supports both standalone Redis and Redis Cluster modes.
-        """
         if self.r is None:
             self.r = await self._create_redis_client()
             await self._validate_connection()
         return self.r
-    
+
     async def _create_redis_client(self) -> Union[redis.Redis, RedisCluster]:
-        """Create and configure Redis client with optimal settings and cluster support."""
         common_kwargs = dict(
             decode_responses=True,
             health_check_interval=MessageStorageCloudConfig.HEALTH_CHECK_INTERVAL,
@@ -160,468 +96,219 @@ class MessageStorageCloud(MessageStorageBase):
             retry_on_timeout=True,
             client_name=MessageStorageCloudConfig.CLIENT_NAME,
         )
-        
         return create_redis_client(self.redis_url, **common_kwargs)
-    
+
     async def _validate_connection(self) -> None:
-        """Validate Redis connection with initial ping."""
         try:
             await self.r.ping()
             self.logger.info("Redis connection established successfully")
-        except Exception as e:
-            self.logger.error("Redis connection failed: %s", e)
-            self.r = None  # Reset client on failure
-            raise RedisError(f"Failed to establish Redis connection: {e}") from e
+        except Exception as exc:
+            self.logger.error("Redis connection failed: %s", exc)
+            self.r = None
+            raise RedisError(f"Failed to establish Redis connection: {exc}") from exc
 
-    def _make_key(self, conversation_id: str) -> str:
-        """
-        Generate Redis key with optional sanitization.
-        
-        Args:
-            conversation_id: Conversation identifier (required)
-            
-        Returns:
-            Redis key in format 'chat:<conversation_id>'
-            
-        Raises:
-            ValueError: If conversation_id is empty or invalid
-            
-        Note:
-            When sanitize_keys is enabled, the conversation identifier is URL-encoded
-            to ensure compatibility with Redis key naming conventions.
-        """
-        if not conversation_id or not isinstance(conversation_id, str):
-            raise ValueError("conversation_id must be a non-empty string")
+    def _make_key(self) -> str:
+        if not self.stream_name or not isinstance(self.stream_name, str):
+            raise ValueError("stream_name must be a non-empty string")
 
-        sanitized_conversation_id = self._sanitize_identifier(conversation_id)
-        return f"{MessageStorageCloudConfig.MSG_PREFIX}:{sanitized_conversation_id}"
-    
+        stream_name = self._sanitize_identifier(self.stream_name)
+        return f"{MessageStorageCloudConfig.MSG_PREFIX}:{stream_name}"
+
     def _sanitize_identifier(self, identifier: str) -> str:
-        """Sanitize identifier for Redis key usage."""
         if self.sanitize_keys:
             return quote(identifier, safe=MessageStorageCloudConfig.URL_SAFE_CHARS)
         return identifier
 
     async def add_messages(
         self,
-        conversation_id: str,
         messages: Union[Message, List[Message]],
         ttl: int = MessageStorageCloudConfig.DEFAULT_TTL,
         *,
         max_len: Optional[int] = None,
         reset_ttl: bool = True,
     ) -> None:
-        """
-        Append messages to conversation history with atomic operations.
-        
-        Args:
-            conversation_id: Conversation identifier
-            messages: Single Message object or list of Message objects
-            ttl: Expiration time in seconds
-            max_len: Maximum history length (triggers trimming if exceeded)
-            reset_ttl: Whether to refresh expiration time (sliding window)
-            
-        Raises:
-            ValueError: If parameters are invalid
-            RedisError: If Redis operation fails
-            
-        Note:
-            Uses Redis pipeline for atomic operations to ensure data consistency.
-            If max_len is provided, history is automatically trimmed after addition.
-        """
-        # Validate parameters
         self._validate_add_messages_params(ttl, max_len)
-        
-        # Normalize input
         normalized_messages = self._normalize_messages_input(messages)
         if not normalized_messages:
-            self.logger.info("No messages to add, skipping operation")
             return
 
-        # Execute atomic operation
         client = await self._get_client()
-        key = self._make_key(conversation_id)
-        
+        key = self._make_key()
         try:
             await self._execute_add_messages_pipeline(
-                client, key, normalized_messages, ttl, max_len, reset_ttl
+                client=client,
+                key=key,
+                messages=normalized_messages,
+                ttl=ttl,
+                max_len=max_len,
+                reset_ttl=reset_ttl,
             )
-            self.logger.info(
-                "Added %d messages to key %s", len(normalized_messages), key
-            )
-        except RedisError as e:
-            self.logger.error("Failed to add messages for key %s: %s", key, e)
+        except RedisError as exc:
+            self.logger.error("Failed to add messages for key %s: %s", key, exc)
             raise
-    
+
     def _validate_add_messages_params(self, ttl: int, max_len: Optional[int]) -> None:
-        """Validate parameters for add_messages method."""
         if ttl is not None and ttl <= 0:
             raise ValueError("ttl must be a positive integer")
         if max_len is not None and max_len <= 0:
             raise ValueError("max_len must be a positive integer")
-    
+
     def _normalize_messages_input(
-        self, 
-        messages: Union[Message, List[Message]]
+        self,
+        messages: Union[Message, List[Message]],
     ) -> List[Message]:
-        """Normalize message input to a list."""
         if not isinstance(messages, list):
             return [messages] if messages else []
         return messages
-    
+
     async def _execute_add_messages_pipeline(
         self,
-        client: redis.Redis,
+        client: Union[redis.Redis, RedisCluster],
         key: str,
         messages: List[Message],
         ttl: int,
         max_len: Optional[int],
-        reset_ttl: bool
+        reset_ttl: bool,
     ) -> None:
-        """Execute Redis pipeline for adding messages atomically."""
         async with client.pipeline(transaction=False) as pipe:
-            # Add messages to list
             pipe.rpush(key, *(m.model_dump_json() for m in messages))
-            
-            # Trim if max_len specified
             if max_len is not None:
                 pipe.ltrim(key, -max_len, -1)
-            
-            # Set/refresh TTL
             if reset_ttl and ttl is not None:
                 pipe.expire(key, ttl)
-            
             await pipe.execute()
-        
 
     async def get_messages(
-        self, 
-        conversation_id: str,
-        count: int = MessageStorageCloudConfig.DEFAULT_MESSAGE_COUNT
+        self,
+        count: int = MessageStorageCloudConfig.DEFAULT_MESSAGE_COUNT,
     ) -> List[Message]:
-        """
-        Retrieve recent messages from conversation history.
-        
-        Args:
-            conversation_id: Conversation identifier
-            count: Number of recent messages to retrieve
-            
-        Returns:
-            List of Message objects in chronological order (oldest first)
-            
-        Raises:
-            ValueError: If count is not positive
-            RedisError: If Redis operation fails
-            
-        Note:
-            Invalid messages in Redis are skipped with warnings logged.
-            The method is resilient to data corruption and partial failures.
-        """
         if count <= 0:
             raise ValueError("count must be a positive integer")
-        
+
         client = await self._get_client()
-        key = self._make_key(conversation_id)
-        
+        key = self._make_key()
         try:
             raw_messages = await client.lrange(key, -count, -1)
-            valid_messages = self._parse_raw_messages(raw_messages, key)
-            
-            self.logger.debug(
-                "Retrieved %d/%d valid messages for key %s", 
-                len(valid_messages), len(raw_messages), key
-            )
-            return valid_messages
-            
-        except RedisError as e:
-            self.logger.error("Failed to get messages for key %s: %s", key, e)
+        except RedisError as exc:
+            self.logger.error("Failed to get messages for key %s: %s", key, exc)
             raise
-    
+        return self._parse_raw_messages(raw_messages, key)
+
     def _parse_raw_messages(self, raw_messages: List[str], key: str) -> List[Message]:
-        """Parse raw Redis messages into Message objects with error handling."""
         valid_messages: List[Message] = []
-        
-        for i, raw_msg in enumerate(raw_messages):
+        for index, raw_msg in enumerate(raw_messages):
             try:
-                message = Message.model_validate_json(raw_msg)
-                valid_messages.append(message)
-            except Exception as e:
+                valid_messages.append(Message.model_validate_json(raw_msg))
+            except Exception as exc:
                 preview = self._create_message_preview(raw_msg)
                 self.logger.warning(
                     "Skipping invalid message at index %d for key %s: %s | preview=%s",
-                    i, key, e, preview
+                    index,
+                    key,
+                    exc,
+                    preview,
                 )
-        
         return valid_messages
-    
+
     def _create_message_preview(self, raw_message: str) -> str:
-        """Create a safe preview of raw message for logging."""
         if len(raw_message) <= MessageStorageCloudConfig.MESSAGE_PREVIEW_LENGTH:
             return repr(raw_message)
-        return repr(
-            raw_message[:MessageStorageCloudConfig.MESSAGE_PREVIEW_LENGTH] + "..."
-        )
+        return repr(raw_message[:MessageStorageCloudConfig.MESSAGE_PREVIEW_LENGTH] + "...")
 
-    async def trim_history(
-        self,
-        conversation_id: str,
-        max_len: int = MessageStorageCloudConfig.DEFAULT_MAX_HISTORY
-    ) -> None:
-        """
-        Trim conversation history to maximum length.
-        
-        Args:
-            conversation_id: Conversation identifier
-            max_len: Maximum number of messages to retain
-            
-        Raises:
-            ValueError: If max_len is not positive
-            RedisError: If Redis operation fails
-            
-        Note:
-            Keeps the most recent max_len messages and removes older ones.
-        """
-        if max_len <= 0:
-            raise ValueError("max_len must be a positive integer")
-        
+    async def clear_messages(self) -> None:
         client = await self._get_client()
-        key = self._make_key(conversation_id)
-        
+        key = self._make_key()
         try:
-            await client.ltrim(key, -max_len, -1)
-            self.logger.debug("Trimmed history to %d messages for key %s", max_len, key)
-        except RedisError as e:
-            self.logger.error("Failed to trim history for key %s: %s", key, e)
+            await client.delete(key)
+        except RedisError as exc:
+            self.logger.error("Failed to clear message stream for key %s: %s", key, exc)
             raise
 
-    async def set_expire(
-        self,
-        conversation_id: str,
-        ttl: int = MessageStorageCloudConfig.DEFAULT_TTL
-    ) -> None:
-        """
-        Set expiration time for conversation history.
-        
-        Args:
-            conversation_id: Conversation identifier
-            ttl: Time to live in seconds
-            
-        Raises:
-            ValueError: If ttl is not positive
-            RedisError: If Redis operation fails
-        """
-        if ttl <= 0:
-            raise ValueError("ttl must be a positive integer")
-        
+    async def pop_message(self) -> Optional[Message]:
         client = await self._get_client()
-        key = self._make_key(conversation_id)
-        
-        try:
-            await client.expire(key, ttl)
-            self.logger.debug("Set TTL to %d seconds for key %s", ttl, key)
-        except RedisError as e:
-            self.logger.error("Failed to set expire for key %s: %s", key, e)
-            raise
+        key = self._make_key()
 
-    async def clear_conversation(self, conversation_id: str) -> None:
-        """
-        Clear all messages from conversation history.
-        
-        Args:
-            conversation_id: Conversation identifier
-            
-        Raises:
-            RedisError: If Redis operation fails
-        """
-        client = await self._get_client()
-        key = self._make_key(conversation_id)
-        
-        try:
-            deleted_count = await client.delete(key)
-            self.logger.debug("Cleared history for key %s (deleted: %d)", key, deleted_count)
-        except RedisError as e:
-            self.logger.error("Failed to clear history for key %s: %s", key, e)
-            raise
-
-    async def pop_message(self, conversation_id: str) -> Optional[Message]:
-        """
-        Remove and return the last non-tool message from history.
-        
-        This method automatically skips tool-related messages and continues
-        popping until a regular message is found or the history is empty.
-        
-        Args:
-            conversation_id: Conversation identifier
-            
-        Returns:
-            The removed Message object (non-tool), or None if history is empty
-            or contains only tool messages
-            
-        Raises:
-            RedisError: If Redis operation fails
-            
-        Note:
-            Tool messages are automatically removed but not returned.
-            This ensures only meaningful conversation messages are popped.
-        """
-        client = await self._get_client()
-        key = self._make_key(conversation_id)
-        
-        messages_popped = 0
         while True:
             try:
                 raw_msg = await client.rpop(key)
-                messages_popped += 1
-            except RedisError as e:
-                self.logger.error("Failed to pop message for key %s: %s", key, e)
+            except RedisError as exc:
+                self.logger.error("Failed to pop message for key %s: %s", key, exc)
                 raise
 
-            # No more messages
             if raw_msg is None:
-                self.logger.debug("No messages found for key %s", key)
                 return None
 
-            # Try to parse message
             try:
                 message = Message.model_validate_json(raw_msg)
-            except Exception as e:
+            except Exception as exc:
                 preview = self._create_message_preview(raw_msg)
                 self.logger.warning(
-                    "Skipping invalid popped message for key %s: %s | preview=%s", 
-                    key, e, preview
+                    "Skipping invalid popped message for key %s: %s | preview=%s",
+                    key,
+                    exc,
+                    preview,
                 )
-                continue  # Continue to next message
+                continue
 
-            # Return first non-tool message
             if not self._is_tool_message(message):
-                self.logger.debug(
-                    "Popped non-tool message for key %s (checked %d messages)", 
-                    key, messages_popped
-                )
                 return message
-            
-            # Continue if this is a tool message
-            self.logger.debug("Skipping tool message for key %s", key)
-    
+
     def _is_tool_message(self, message: Message) -> bool:
-        """Check if a message is a tool-related message."""
         return message.type in {MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT}
 
+    async def get_message_count(self) -> int:
+        client = await self._get_client()
+        key = self._make_key()
+        try:
+            return int(await client.llen(key))
+        except RedisError as exc:
+            self.logger.error("Failed to count messages for key %s: %s", key, exc)
+            raise
+
+    def get_stream_info(self) -> Dict[str, str]:
+        return {
+            "stream": self.stream_name,
+            "backend": "cloud",
+            "redis_url": self.redis_url,
+            "sanitize_keys": str(self.sanitize_keys),
+        }
 
     async def close(self) -> None:
-        """
-        Close the Redis connection and cleanup resources.
-        
-        This method is idempotent and safe to call multiple times.
-        """
         if self.r:
             try:
                 await self.r.aclose()
-                self.logger.debug("Redis connection closed successfully")
-            except Exception as e:
-                self.logger.warning("Error closing Redis connection: %s", e)
+            except Exception as exc:
+                self.logger.warning("Error closing Redis connection: %s", exc)
             finally:
                 self.r = None
 
     async def __aenter__(self):
-        """
-        Async context manager entry.
-        
-        Returns:
-            Self instance with established Redis connection
-        """
         await self._get_client()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """
-        Async context manager exit with automatic cleanup.
-        
-        Args:
-            exc_type: Exception type (if any)
-            exc_val: Exception value (if any)
-            exc_tb: Exception traceback (if any)
-        """
         await self.close()
-    
+
     async def ping(self) -> bool:
-        """
-        Test Redis connection health.
-        
-        Returns:
-            True if connection is healthy, False otherwise
-        """
         try:
             client = await self._get_client()
             await client.ping()
             return True
-        except Exception as e:
-            self.logger.error("Redis ping failed: %s", e)
+        except Exception as exc:
+            self.logger.error("Redis ping failed: %s", exc)
             return False
-    
-    async def get_key_info(self, conversation_id: str) -> dict:
-        """
-        Get metadata about a conversation key.
-        
-        Args:
-            conversation_id: Conversation identifier
-            
-        Returns:
-            Dictionary containing key metadata
-        """
-        client = await self._get_client()
-        key = self._make_key(conversation_id)
-        
-        try:
-            length = await client.llen(key)
-            ttl = await client.ttl(key)
-            
-            return {
-                "key": key,
-                "message_count": length,
-                "ttl_seconds": ttl if ttl != -1 else None,
-                "exists": length > 0
-            }
-        except RedisError as e:
-            self.logger.error("Failed to get key info for %s: %s", key, e)
-            return {
-                "key": key,
-                "message_count": 0,
-                "ttl_seconds": None,
-                "exists": False,
-                "error": str(e)
-            }
-    
-    def get_conversation_info(self, conversation_id: str) -> Dict[str, str]:
-        """
-        Get session information for MessageStorageCloud.
-        
-        Args:
-            conversation_id: Conversation identifier
-            
-        Returns:
-            Dictionary containing session metadata
-        """
-        return {
-            "conversation_id": conversation_id,
-            "backend": "cloud",
-            "conversation_key": conversation_id,
-            "redis_url": self.redis_url,
-            "sanitize_keys": str(self.sanitize_keys)
-        }
 
     def __str__(self) -> str:
-        """String representation of MessageStorageCloud instance."""
         return (
             f"MessageStorageCloud("
-            f"url='{self.redis_url}', sanitize_keys={self.sanitize_keys})"
+            f"url='{self.redis_url}', stream_name='{self.stream_name}', sanitize_keys={self.sanitize_keys})"
         )
-    
+
     def __repr__(self) -> str:
-        """Detailed string representation of MessageStorageCloud instance."""
         connected = "connected" if self.r else "disconnected"
         return (
             f"MessageStorageCloud(url='{self.redis_url}', "
+            f"stream_name='{self.stream_name}', "
             f"sanitize_keys={self.sanitize_keys}, "
             f"status='{connected}')"
         )

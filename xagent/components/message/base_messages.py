@@ -21,7 +21,6 @@ class MessageStorageBase(ABC):
     @abstractmethod
     async def add_messages(
         self,
-        conversation_id: str,
         messages: Union[Message, List[Message]],
         **kwargs
     ) -> None:
@@ -29,7 +28,6 @@ class MessageStorageBase(ABC):
         Add messages to the session history.
         
         Args:
-            conversation_id: Conversation identifier
             messages: Single Message object or list of Message objects
             **kwargs: Additional backend-specific arguments
             
@@ -41,15 +39,13 @@ class MessageStorageBase(ABC):
 
     @abstractmethod
     async def get_messages(
-        self, 
-        conversation_id: str,
+        self,
         count: int = 20
     ) -> List[Message]:
         """
         Get the last `count` messages from the session history.
         
         Args:
-            conversation_id: Conversation identifier
             count: Number of messages to retrieve. Must be positive.
             
         Returns:
@@ -63,29 +59,23 @@ class MessageStorageBase(ABC):
         pass
 
     @abstractmethod
-    async def clear_conversation(self, conversation_id: str) -> None:
+    async def clear_messages(self) -> None:
         """
         Clear the session history.
-        
-        Args:
-            conversation_id: Conversation identifier
-            
+
         Raises:
             Exception: If storage operation fails
         """
         pass
 
     @abstractmethod
-    async def pop_message(self, conversation_id: str) -> Optional[Message]:
+    async def pop_message(self) -> Optional[Message]:
         """
         Pop the last message from the session history.
-        
+
         This method removes and returns the last message from the session.
         Implementations should handle tool messages according to their logic.
-        
-        Args:
-            conversation_id: Conversation identifier
-            
+
         Returns:
             The last message, or None if no message exists or session is empty
             
@@ -95,58 +85,48 @@ class MessageStorageBase(ABC):
         pass
 
     # Optional methods with default implementations
-    async def get_message_count(self, conversation_id: str) -> int:
+    async def get_message_count(self) -> int:
         """
         Get the total number of messages in the session.
-        
+
         Default implementation uses get_messages with a large count.
         Subclasses can override for more efficient implementations.
-        
-        Args:
-            conversation_id: Conversation identifier
-            
+
         Returns:
             Total number of messages in the session history
         """
         try:
             # Use a large number to get all messages, then count
-            messages = await self.get_messages(conversation_id, 999999)
+            messages = await self.get_messages(999999)
             return len(messages)
         except Exception:
             return 0
 
-    async def has_messages(self, conversation_id: str) -> bool:
+    async def has_messages(self) -> bool:
         """
         Check if the session has any messages.
-        
+
         Default implementation uses get_message_count.
         Subclasses can override for more efficient implementations.
-        
-        Args:
-            conversation_id: Conversation identifier
-            
+
         Returns:
             True if session contains messages, False otherwise
         """
-        return await self.get_message_count(conversation_id) > 0
+        return await self.get_message_count() > 0
 
-    def get_conversation_info(self, conversation_id: str) -> Dict[str, str]:
+    def get_stream_info(self) -> Dict[str, str]:
         """
-        Get session information.
-        
+        Get stream information.
+
         Default implementation provides basic info.
         Subclasses should override to provide backend-specific information.
-        
-        Args:
-            conversation_id: Conversation identifier
-            
+
         Returns:
-            Dictionary containing session metadata
+            Dictionary containing stream metadata
         """
         return {
-            "conversation_id": conversation_id,
+            "stream": "default",
             "backend": self.__class__.__name__.lower().replace("db", ""),
-            "conversation_key": conversation_id,
         }
 
 

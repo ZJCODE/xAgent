@@ -7,7 +7,7 @@
 xAgent is a single-agent runtime with three entry points: Python API, CLI, and HTTP server.
 
 - Chat via CLI, Python API, or HTTP
-- One transcript model built on `conversation_id`
+- One continuous agent-level message stream
 - Speaker-aware messages via `user_id`
 - Built-in Web UI and streaming responses
 - Tool calling, MCP integration, and image input
@@ -39,15 +39,13 @@ Single-shot mode:
 xagent-cli --ask "Hello"
 ```
 
-## Conversation Model
+## Message Model
 
-Every chat belongs to a `conversation_id`.
+Every chat appends to the agent's continuous message stream.
 
-- `conversation_id` selects the transcript
 - `user_id` identifies the current speaker
-- single-user and multi-user conversations use the same runtime model
-
-Reuse the same `conversation_id` to continue the same transcript across turns.
+- recent context is pulled from the agent's global recent-message window
+- single-user and multi-user interactions use the same runtime model
 
 ## HTTP API
 
@@ -63,14 +61,13 @@ Open the Web UI automatically:
 xagent-server --open
 ```
 
-Continue the same conversation:
+Send a chat message:
 
 ```bash
 curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "alice",
-    "conversation_id": "daily_chat",
     "user_message": "Remember that my favorite city is Hangzhou."
   }'
 ```
@@ -82,19 +79,14 @@ curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "bob",
-    "conversation_id": "daily_chat",
     "user_message": "Please summarize Alice'"'"'s plan and list the top risks."
   }'
 ```
 
-Clear a conversation:
+Clear the message stream:
 
 ```bash
-curl -X POST "http://localhost:8010/clear_conversation" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "conversation_id": "daily_chat"
-  }'
+curl -X POST "http://localhost:8010/clear_messages"
 ```
 
 Image input:
@@ -104,7 +96,6 @@ curl -X POST "http://localhost:8010/chat" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user123",
-    "conversation_id": "image_demo",
     "user_message": "Describe this image.",
     "image_source": "https://example.com/image.jpg"
   }'
@@ -123,14 +114,12 @@ async def main():
     reply = await agent.chat(
         user_message="Hello",
         user_id="alice",
-        conversation_id="daily_chat",
     )
     print(reply)
 
     follow_up = await agent.chat(
         user_message="Summarize what the conversation has agreed on so far.",
         user_id="bob",
-        conversation_id="daily_chat",
     )
     print(follow_up)
 
@@ -178,7 +167,7 @@ xagent-server --config config/agent.yaml --toolkit_path my_toolkit --open
 
 ## Cloud Mode
 
-Use `storage_mode: "cloud"` when you want Redis-backed conversation storage and Upstash-backed memory.
+Use `storage_mode: "cloud"` when you want Redis-backed message storage and Upstash-backed memory.
 
 ```yaml
 agent:

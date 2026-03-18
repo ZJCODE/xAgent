@@ -9,7 +9,7 @@ from xagent.core import Agent
 
 
 class LaunchPlan(BaseModel):
-    audience: str
+    target_group: str
     goal: str
     milestones: list[str]
     risks: list[str]
@@ -37,7 +37,6 @@ async def main():
             "Create a lightweight launch plan for releasing an internal analytics dashboard to 20 beta users."
         ),
         user_id="demo_user",
-        conversation_id="structured_output",
     )
 
     print("Launch plan:")
@@ -46,7 +45,6 @@ async def main():
     reasoning = await agent.chat(
         user_message="Solve 8x + 7 = -23 step by step.",
         user_id="demo_user",
-        conversation_id="structured_output",
         output_type=MathReasoning,
     )
 

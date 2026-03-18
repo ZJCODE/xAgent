@@ -26,8 +26,7 @@ Agent(
 await agent.chat(
     user_message: str,
     user_id: str = "default_user",
-    conversation_id: str = "default_conversation",
-    history_count: int = 16,
+    history_count: int = 100,
     max_iter: int = 10,
     max_concurrent_tools: int = 10,
     image_source: str | list[str] | None = None,
@@ -43,7 +42,6 @@ await agent.chat(
 |---|---|---|
 | `user_message` | string | Current speaker message |
 | `user_id` | string | Current speaker identifier |
-| `conversation_id` | string | Transcript identifier |
 | `history_count` | integer | Number of messages loaded from storage |
 | `max_iter` | integer | Maximum model-call loop count |
 | `max_concurrent_tools` | integer | Maximum parallel tool calls |
@@ -52,12 +50,12 @@ await agent.chat(
 | `stream` | boolean | Enable streaming |
 | `enable_memory` | boolean | Enable long-term memory retrieval and writes. Defaults to `true`. |
 
-### Conversation Behavior
+### Message Stream Behavior
 
-- One `conversation_id` maps to one transcript
+- The agent keeps one continuous message stream
 - `user_id` always means the current speaker
 - Speaker identifiers are included in user messages sent to the model
-- Reuse the same `conversation_id` to continue the same transcript
+- Recent context is pulled from the global recent-message window for that agent
 
 ### Example
 
@@ -69,13 +67,11 @@ agent = Agent(name="assistant", model="gpt-5-mini")
 reply = await agent.chat(
     user_message="Hello",
     user_id="alice",
-    conversation_id="daily_chat",
 )
 
 follow_up = await agent.chat(
     user_message="Summarize what this conversation has decided.",
     user_id="bob",
-    conversation_id="daily_chat",
 )
 ```
 
@@ -94,7 +90,7 @@ AgentHTTPServer(
 
 - `GET /health`
 - `POST /chat`
-- `POST /clear_conversation`
+- `POST /clear_messages`
 - `GET /memory`
 
 ### `POST /chat`
@@ -104,22 +100,15 @@ Request body:
 ```json
 {
   "user_id": "alice",
-  "conversation_id": "daily_chat",
   "user_message": "Hello",
   "stream": false,
   "enable_memory": true
 }
 ```
 
-### `POST /clear_conversation`
+### `POST /clear_messages`
 
-Request body:
-
-```json
-{
-  "conversation_id": "daily_chat"
-}
-```
+This endpoint clears the agent's entire message stream.
 
 ### `GET /memory`
 
@@ -128,22 +117,20 @@ Query parameters:
 - `query`
 - `limit`
 
-This endpoint returns the agent-global memory view.
-
 ## Message Storage
 
 ### MessageStorageBase
 
-Base interface for transcript storage.
+Base interface for single-stream message storage.
 
 ```python
-async def add_messages(conversation_id: str, messages, **kwargs) -> None
-async def get_messages(conversation_id: str, count: int = 20) -> list[Message]
-async def clear_conversation(conversation_id: str) -> None
-async def pop_message(conversation_id: str) -> Message | None
-async def get_message_count(conversation_id: str) -> int
-async def has_messages(conversation_id: str) -> bool
-def get_conversation_info(conversation_id: str) -> dict[str, str]
+async def add_messages(messages, **kwargs) -> None
+async def get_messages(count: int = 100) -> list[Message]
+async def clear_messages() -> None
+async def pop_message() -> Message | None
+async def get_message_count() -> int
+async def has_messages() -> bool
+def get_stream_info() -> dict[str, str]
 ```
 
 ### MessageStorageLocal
@@ -175,18 +162,22 @@ Requires `REDIS_URL`.
 ### MemoryStorageBase
 
 ```python
-async def add(memory_key: str, conversation_id: str, messages: list[dict]) -> None
+async def add(memory_key: str, messages: list[dict]) -> None
 async def store(memory_key: str, content: str) -> str | None
-async def retrieve(memory_key: str, query: str, limit: int = 5) -> list | None
+async def retrieve(
+    memory_key: str,
+    query: str,
+    limit: int = 5,
+) -> list | None
 async def clear(memory_key: str) -> None
 async def delete(memory_ids: list[str]) -> None
 ```
 
 ### Memory Behavior
 
-- Runtime memory is agent-global
-- All conversations and all speakers contribute to the same long-term memory pool for that agent
-- Retrieved memory can therefore carry context across conversations and users
+- Runtime memory is agent-scoped
+- The agent's full message stream contributes to the same long-term memory pool
+- Retrieval operates on one shared memory pool per agent
 
 ## Tools
 

@@ -17,7 +17,6 @@ async def main():
     stream = await agent.chat(
         user_message="Write a short release note announcing faster search and cleaner settings pages.",
         user_id="demo_user",
-        conversation_id="stream_demo",
         stream=True,
     )
 

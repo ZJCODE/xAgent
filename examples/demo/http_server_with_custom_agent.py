@@ -36,7 +36,6 @@ def main():
     print(
         '{'
         '"user_id":"demo_user",'
-        '"conversation_id":"release_ops",'
         '"user_message":"When can I deploy to production?"'
         '}'
     )

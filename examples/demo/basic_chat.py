@@ -17,28 +17,23 @@ async def main():
     )
 
     user_id = "demo_user"
-    planning_conversation = "roadmap_planning"
-
     reply = await agent.chat(
         user_message="We are launching a private beta in six weeks. Give me a three-item kickoff checklist.",
         user_id=user_id,
-        conversation_id=planning_conversation,
     )
     print("Turn 1:\n", reply, sep="")
 
     follow_up = await agent.chat(
         user_message="Now turn that checklist into a short status update for the team.",
         user_id=user_id,
-        conversation_id=planning_conversation,
     )
     print("\nTurn 2:\n", follow_up, sep="")
 
-    separate_conversation = await agent.chat(
-        user_message="In a separate conversation, suggest a title for a product retrospective.",
+    continued_stream = await agent.chat(
+        user_message="Now suggest a title for a product retrospective in the same continuous stream.",
         user_id=user_id,
-        conversation_id="retrospective",
     )
-    print("\nIndependent conversation:\n", separate_conversation, sep="")
+    print("\nTurn 3:\n", continued_stream, sep="")
 
 
 if __name__ == "__main__":

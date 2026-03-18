@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,31 +11,33 @@ from .base_memory import MemoryStorageBase
 from .config.memory_config import (
     EXPLICIT_MEMORY_PATTERNS,
     MEMORY_DUPLICATE_SCORE_THRESHOLD,
+    MEMORY_EXTRACTION_INTERVAL_SECONDS,
+    MEMORY_FORCE_EXTRACTION_MULTIPLIER,
+    MEMORY_MAX_BATCH_MESSAGES,
     MEMORY_REPLACEMENT_MIN_LENGTH_DELTA,
     MEMORY_RETRIEVAL_MIN_SCORE,
+    MEMORY_RETRIEVAL_OVERSCAN,
 )
 from .helper.llm_service import MemoryLLMService
 from .vector.base_vector_store import VectorDoc
 
 
 @dataclass
-class ConversationMemoryState:
-    """In-memory extraction state for a single conversation transcript."""
+class StreamMemoryState:
+    """Extraction cursor and schedule state for a single agent memory stream."""
 
-    pending_user_turns: int = 0
     last_processed_message_count: int = 0
+    last_extracted_at: float = 0.0
 
 
 class MemoryStorageBasic(MemoryStorageBase):
     """
-    Minimal long-term memory pipeline shared by local and cloud backends.
+    Simplified long-term memory pipeline shared by local and cloud backends.
 
-    The design is intentionally narrow:
-    - Count user turns per conversation
-    - Trigger extraction on threshold or explicit "remember this" intent
-    - Read only the unread transcript segment for that conversation
-    - Extract memory pieces once and store them directly
-    - Retrieve with a single vector query using the original user query
+    Design principles:
+    - Recent global transcript remains the primary source of truth
+    - Long-term memory is compressed support context
+    - Extraction is delayed and batched instead of running every turn
     """
 
     def __init__(
@@ -42,14 +45,22 @@ class MemoryStorageBasic(MemoryStorageBase):
         memory_threshold: int = 10,
         message_storage=None,
         vector_store=None,
+        memory_interval_seconds: int = MEMORY_EXTRACTION_INTERVAL_SECONDS,
+        max_batch_messages: int = MEMORY_MAX_BATCH_MESSAGES,
     ):
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         self.llm_service = MemoryLLMService()
         self.vector_store = vector_store
         self.message_storage = message_storage
-        self.memory_threshold = memory_threshold
-        self._conversation_states: Dict[str, ConversationMemoryState] = {}
-        self._conversation_locks: Dict[str, asyncio.Lock] = {}
+        self.memory_threshold = max(1, memory_threshold)
+        self.memory_interval_seconds = max(0, memory_interval_seconds)
+        self.max_batch_messages = max(1, max_batch_messages)
+        self.force_extraction_threshold = max(
+            self.memory_threshold + 1,
+            self.memory_threshold * MEMORY_FORCE_EXTRACTION_MULTIPLIER,
+        )
+        self._stream_states: Dict[str, StreamMemoryState] = {}
+        self._stream_locks: Dict[str, asyncio.Lock] = {}
         self._memory_key_locks: Dict[str, asyncio.Lock] = {}
         self._explicit_memory_patterns = [
             re.compile(pattern, re.IGNORECASE) for pattern in EXPLICIT_MEMORY_PATTERNS
@@ -58,60 +69,56 @@ class MemoryStorageBasic(MemoryStorageBase):
     async def add(
         self,
         memory_key: str,
-        conversation_id: str,
         messages: List[Dict[str, Any]],
     ):
-        """Track user turns and persist long-term memories from unread transcript segments."""
+        """Persist delayed long-term memories from unread global transcript batches."""
         if not messages:
             return
 
-        async with self._conversation_lock(conversation_id):
-            state = self._conversation_states.setdefault(
-                conversation_id,
-                ConversationMemoryState(),
-            )
+        async with self._stream_lock(memory_key):
+            state = self._stream_states.setdefault(memory_key, StreamMemoryState())
+            current_message_count = await self._get_stream_message_count(messages)
 
-            current_message_count = await self._get_conversation_message_count(
-                conversation_id,
-                messages,
-            )
             if current_message_count < state.last_processed_message_count:
                 self.logger.info(
-                    "Conversation %s shrank from %d to %d messages; resetting memory cursor.",
-                    conversation_id,
+                    "Message stream for %s shrank from %d to %d messages; resetting memory cursor.",
+                    memory_key,
                     state.last_processed_message_count,
                     current_message_count,
                 )
-                state.pending_user_turns = 0
                 state.last_processed_message_count = 0
+                state.last_extracted_at = 0.0
 
-            user_messages = self._extract_user_messages(messages)
-            if not user_messages:
+            unread_count = max(0, current_message_count - state.last_processed_message_count)
+            if unread_count <= 0:
                 return
 
-            state.pending_user_turns += len(user_messages)
-            explicit_trigger = self._contains_explicit_memory_intent(user_messages)
-            if not explicit_trigger and state.pending_user_turns < self.memory_threshold:
+            explicit_trigger = self._contains_explicit_memory_intent(
+                self._extract_user_messages(messages)
+            )
+            if not explicit_trigger and not self._should_extract(state, unread_count):
                 return
 
             try:
                 serialised, processed_message_count = await self._collect_unprocessed_messages(
-                    conversation_id=conversation_id,
                     last_processed_message_count=state.last_processed_message_count,
                     current_message_count=current_message_count,
                     fallback_messages=messages,
+                    max_batch_messages=self.max_batch_messages,
                 )
+                if processed_message_count <= state.last_processed_message_count:
+                    return
+
                 content = self._format_messages_for_storage(serialised)
                 if content:
                     await self.store(memory_key, content)
 
                 state.last_processed_message_count = processed_message_count
-                state.pending_user_turns = 0
+                state.last_extracted_at = time.time()
             except Exception as exc:
                 self.logger.error(
-                    "Failed to store memories for %s from conversation %s: %s",
+                    "Failed to store memories for %s from message stream: %s",
                     memory_key,
-                    conversation_id,
                     exc,
                 )
 
@@ -149,7 +156,10 @@ class MemoryStorageBasic(MemoryStorageBase):
                 ids.append(document_id)
                 documents.append(document)
                 metadatas.append(
-                    self._create_base_metadata(memory_key, memory_piece.type.value)
+                    self._create_base_metadata(
+                        memory_key=memory_key,
+                        memory_type=memory_piece.type.value,
+                    )
                 )
 
             if not ids:
@@ -166,22 +176,23 @@ class MemoryStorageBasic(MemoryStorageBase):
         query: str,
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Retrieve memories with one semantic query and a small relevance gate."""
+        """Retrieve memories with one semantic query and lightweight post-filtering."""
         try:
             vector_docs = await self.vector_store.query(
                 query_texts=[query],
-                n_results=limit,
+                n_results=max(limit * MEMORY_RETRIEVAL_OVERSCAN, limit),
                 meta_filter={"memory_key": memory_key},
             )
         except Exception as exc:
             self.logger.error("Failed to retrieve memories for %s: %s", memory_key, exc)
             return []
 
-        filtered_docs = [
-            vector_doc
-            for vector_doc in vector_docs
-            if vector_doc.score is None or vector_doc.score >= MEMORY_RETRIEVAL_MIN_SCORE
-        ]
+        filtered_docs: List[VectorDoc] = []
+        for vector_doc in vector_docs:
+            if vector_doc.score is not None and vector_doc.score < MEMORY_RETRIEVAL_MIN_SCORE:
+                continue
+            filtered_docs.append(vector_doc)
+
         filtered_docs.sort(
             key=lambda doc: (
                 self._memory_type_priority(doc.metadata.get("memory_type")),
@@ -205,50 +216,55 @@ class MemoryStorageBasic(MemoryStorageBase):
 
     async def clear(self, memory_key: str) -> None:
         await self.vector_store.delete_by_filter({"memory_key": memory_key})
+        self._stream_states.pop(memory_key, None)
 
     async def delete(self, memory_ids: List[str]):
         await self.vector_store.delete(memory_ids)
 
-    async def _get_conversation_message_count(
+    async def _get_stream_message_count(
         self,
-        conversation_id: str,
         fallback_messages: Sequence[Dict[str, Any]],
     ) -> int:
         if self.message_storage is None:
             return len(fallback_messages)
-        return await self.message_storage.get_message_count(conversation_id)
+        return await self.message_storage.get_message_count()
 
     async def _collect_unprocessed_messages(
         self,
-        conversation_id: str,
         last_processed_message_count: int,
         current_message_count: int,
         fallback_messages: Sequence[Dict[str, Any]],
+        max_batch_messages: int,
     ) -> Tuple[List[Dict[str, Any]], int]:
         if self.message_storage is None:
-            unread_messages = list(fallback_messages)
-            return self._serialise_memory_messages(unread_messages), len(unread_messages)
+            unread_messages = list(fallback_messages)[:max_batch_messages]
+            processed_count = min(len(fallback_messages), max_batch_messages)
+            return self._serialise_memory_messages(unread_messages), processed_count
 
         if current_message_count <= 0:
             return [], 0
 
-        stored_messages = await self.message_storage.get_messages(
-            conversation_id,
-            count=current_message_count,
-        )
+        stored_messages = await self.message_storage.get_messages(count=current_message_count)
         start = max(0, min(last_processed_message_count, len(stored_messages)))
-        unread_messages = stored_messages[start:]
-        return self._serialise_memory_messages(unread_messages), len(stored_messages)
+        unread_messages = stored_messages[start:start + max_batch_messages]
+        processed_count = start + len(unread_messages)
+        return self._serialise_memory_messages(unread_messages), processed_count
 
     def _serialise_memory_messages(self, messages: Sequence[Any]) -> List[Dict[str, Any]]:
         serialised: List[Dict[str, Any]] = []
         for message in messages:
             if not self._is_memory_candidate_message(message):
                 continue
+
             if hasattr(message, "to_dict"):
-                serialised.append(message.to_dict())
+                item = message.to_dict()
             else:
-                serialised.append(dict(message))
+                item = dict(message)
+
+            timestamp = self._message_value(message, "timestamp")
+            if timestamp is not None:
+                item["timestamp"] = timestamp
+            serialised.append(item)
         return serialised
 
     def _extract_user_messages(self, messages: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -265,6 +281,19 @@ class MemoryStorageBasic(MemoryStorageBase):
                 return True
         return False
 
+    def _should_extract(
+        self,
+        state: StreamMemoryState,
+        unread_count: int,
+    ) -> bool:
+        if unread_count >= self.force_extraction_threshold:
+            return True
+        if unread_count < self.memory_threshold:
+            return False
+        if state.last_extracted_at <= 0:
+            return True
+        return (time.time() - state.last_extracted_at) >= self.memory_interval_seconds
+
     def _is_memory_candidate_message(self, message: Any) -> bool:
         role = self._message_value(message, "role")
         return role in {"user", "assistant"}
@@ -280,18 +309,22 @@ class MemoryStorageBasic(MemoryStorageBase):
 
     def _format_messages_for_storage(self, messages: List[Dict[str, Any]]) -> str:
         lines: List[str] = []
-
         for msg in messages:
             role = str(msg.get("role", "unknown")).title()
             sender_id = msg.get("sender_id")
             content = str(msg.get("content", "")).strip()
-
             if not content:
                 continue
 
-            prefix = f"{role} {sender_id}" if sender_id else role
-            lines.append(f"{prefix}: {content}")
+            prefix_parts: List[str] = []
+            timestamp = self._format_timestamp(msg.get("timestamp"))
+            if timestamp:
+                prefix_parts.append(f"[{timestamp}]")
+            prefix_parts.append(role)
+            if sender_id:
+                prefix_parts.append(str(sender_id))
 
+            lines.append(f"{' '.join(prefix_parts)}: {content}")
         return "\n\n".join(lines)
 
     async def _find_near_duplicate(
@@ -343,13 +376,21 @@ class MemoryStorageBasic(MemoryStorageBase):
     @staticmethod
     def _memory_type_priority(memory_type: Optional[str]) -> int:
         normalized = str(memory_type or "").lower()
-        if normalized == "profile":
+        if normalized == "semantic":
             return 0
-        if normalized == "episodic":
+        if normalized == "social":
             return 1
-        return 2
+        if normalized == "episodic":
+            return 2
+        if normalized == "self":
+            return 3
+        return 4
 
-    def _create_base_metadata(self, memory_key: str, memory_type: str) -> Dict[str, Any]:
+    def _create_base_metadata(
+        self,
+        memory_key: str,
+        memory_type: str,
+    ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
         return {
             "memory_key": memory_key,
@@ -359,8 +400,18 @@ class MemoryStorageBasic(MemoryStorageBase):
             "type": memory_type,
         }
 
-    def _conversation_lock(self, conversation_id: str) -> asyncio.Lock:
-        return self._conversation_locks.setdefault(conversation_id, asyncio.Lock())
+    @staticmethod
+    def _format_timestamp(timestamp: Any) -> str:
+        if timestamp is None:
+            return ""
+        try:
+            dt = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return ""
+        return dt.strftime("%Y-%m-%d %H:%M:%SZ")
+
+    def _stream_lock(self, memory_key: str) -> asyncio.Lock:
+        return self._stream_locks.setdefault(memory_key, asyncio.Lock())
 
     def _memory_key_lock(self, memory_key: str) -> asyncio.Lock:
         return self._memory_key_locks.setdefault(memory_key, asyncio.Lock())

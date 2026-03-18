@@ -434,16 +434,18 @@ class BaseAgentRunner:
             Defaults to local persistent SQLite storage if the mode is invalid.
         """
         storage_mode = self._get_storage_mode()
+        agent_name = self.config.get("agent", {}).get("name", AgentConfig.DEFAULT_NAME)
+        agent_slug = self._normalize_agent_identifier(agent_name)
 
         if storage_mode == "local":
-            msg_path = str(self.workspace / "messages.sqlite3")
+            msg_path = str(self.workspace / f"{agent_slug}_messages.sqlite3")
             return MessageStorageLocal(path=msg_path)
         if storage_mode == "cloud":
             from ..components import MessageStorageCloud
 
-            return MessageStorageCloud()
+            return MessageStorageCloud(stream_name=agent_slug)
 
-        msg_path = str(self.workspace / "messages.sqlite3")
+        msg_path = str(self.workspace / f"{agent_slug}_messages.sqlite3")
         return MessageStorageLocal(path=msg_path)
 
     def _initialize_memory_storage(self) -> MemoryStorageBase:
@@ -470,3 +472,7 @@ class BaseAgentRunner:
 
         chroma_path = str(self.workspace / "chroma")
         return MemoryStorageLocal(path=chroma_path, collection_name=agent_name)
+
+    @staticmethod
+    def _normalize_agent_identifier(name: str) -> str:
+        return (name or AgentConfig.DEFAULT_NAME).lower().replace(" ", "_").replace("-", "_")

@@ -23,20 +23,13 @@ class AgentInput(BaseModel):
     """Request body for chat endpoint."""
 
     user_id: str
-    conversation_id: str
     user_message: str
     image_source: Optional[Union[str, List[str]]] = None
     stream: Optional[bool] = False
-    history_count: Optional[int] = 16
+    history_count: Optional[int] = 100
     max_iter: Optional[int] = 10
     max_concurrent_tools: Optional[int] = 10
     enable_memory: Optional[bool] = True
-
-
-class ClearConversationInput(BaseModel):
-    """Request body for clear conversation endpoint."""
-
-    conversation_id: str
 
 
 class AgentHTTPServer(BaseAgentRunner):
@@ -71,7 +64,7 @@ class AgentHTTPServer(BaseAgentRunner):
     def _create_app(self) -> FastAPI:
         app = FastAPI(
             title="xAgent HTTP Agent Server",
-            description="HTTP API for xAgent conversational AI",
+            description="HTTP API for xAgent continuous-stream AI",
             version="1.0.0",
         )
         self._add_routes(app)
@@ -105,9 +98,8 @@ class AgentHTTPServer(BaseAgentRunner):
         @app.post("/chat")
         async def chat(input_data: AgentInput):
             self.logger.info(
-                "Chat request from %s, conversation %s, stream=%s",
+                "Chat request from %s, stream=%s",
                 input_data.user_id,
-                input_data.conversation_id,
                 input_data.stream,
             )
             try:
@@ -117,7 +109,6 @@ class AgentHTTPServer(BaseAgentRunner):
                             response = await self.agent(
                                 user_message=input_data.user_message,
                                 user_id=input_data.user_id,
-                                conversation_id=input_data.conversation_id,
                                 history_count=input_data.history_count,
                                 max_iter=input_data.max_iter,
                                 max_concurrent_tools=input_data.max_concurrent_tools,
@@ -145,7 +136,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 response = await self.agent(
                     user_message=input_data.user_message,
                     user_id=input_data.user_id,
-                    conversation_id=input_data.conversation_id,
                     history_count=input_data.history_count,
                     max_iter=input_data.max_iter,
                     max_concurrent_tools=input_data.max_concurrent_tools,
@@ -162,7 +152,7 @@ class AgentHTTPServer(BaseAgentRunner):
 
         @app.get("/memory")
         async def get_memory(
-            query: str = Query("recent conversations", description="Search query for memory retrieval"),
+            query: str = Query("recent messages", description="Search query for memory retrieval"),
             limit: int = Query(10, ge=1, le=50, description="Maximum number of memories to return"),
         ):
             self.logger.info("Memory retrieval for agent key %s, query=%s, limit=%d", self.agent.memory_key, query, limit)
@@ -189,20 +179,18 @@ class AgentHTTPServer(BaseAgentRunner):
                 self.logger.error("Memory retrieval error: %s", exc)
                 raise HTTPException(status_code=500, detail=f"Memory retrieval error: {str(exc)}")
 
-        @app.post("/clear_conversation")
-        async def clear_conversation(input_data: ClearConversationInput):
-            self.logger.info("Clear conversation request for %s", input_data.conversation_id)
+        @app.post("/clear_messages")
+        async def clear_messages():
+            self.logger.info("Clear messages request for agent %s", self.agent.name)
             try:
-                await self.message_storage.clear_conversation(
-                    conversation_id=self.agent.normalize_conversation_id(input_data.conversation_id)
-                )
+                await self.message_storage.clear_messages()
                 return {
                     "status": "success",
-                    "message": f"Conversation {input_data.conversation_id} cleared",
+                    "message": "Message stream cleared",
                 }
             except Exception as exc:
-                self.logger.error("Failed to clear conversation %s: %s", input_data.conversation_id, exc)
-                raise HTTPException(status_code=500, detail=f"Failed to clear conversation: {str(exc)}")
+                self.logger.error("Failed to clear messages: %s", exc)
+                raise HTTPException(status_code=500, detail=f"Failed to clear messages: {str(exc)}")
 
     def run(self, host: str = None, port: int = None, open_browser: bool = False) -> None:
         server_cfg = self.config.get("server", {})
@@ -259,21 +247,14 @@ def main():
 
     if os.path.exists(args.env):
         load_dotenv(args.env, override=True)
-        logger.info("Loaded .env file from: %s", args.env)
-    else:
-        logger.warning(".env file not found: %s", args.env)
+        logger.info("Loaded environment from %s", args.env)
 
-    try:
-        server = AgentHTTPServer(
-            config_path=args.config,
-            toolkit_path=args.toolkit_path,
-            agent=None,
-            enable_web=not args.no_web,
-        )
-        server.run(host=args.host, port=args.port, open_browser=args.open_browser)
-    except Exception as exc:
-        logger.error("Failed to start server: %s", exc)
-        raise
+    server = AgentHTTPServer(
+        config_path=args.config,
+        toolkit_path=args.toolkit_path,
+        enable_web=not args.no_web,
+    )
+    server.run(host=args.host, port=args.port, open_browser=args.open_browser)
 
 
 if __name__ == "__main__":

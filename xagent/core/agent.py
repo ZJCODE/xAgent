@@ -8,15 +8,18 @@ from pydantic import BaseModel
 from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageBase, MemoryStorageLocal
 from .config import AgentConfig, ReplyType
 from .handlers import MemoryManager, MessageHandler, ModelClient
-from .session import normalize_conversation_id
 from .tools import ToolExecutor, ToolManager
 
 
 logger = logging.getLogger(__name__)
 
 
+def _normalize_agent_identifier(name: str) -> str:
+    return (name or AgentConfig.DEFAULT_NAME).lower().replace(" ", "_").replace("-", "_")
+
+
 class Agent:
-    """AI agent runtime for a unified conversation transcript model."""
+    """AI agent runtime for a continuous agent-level message stream."""
 
     def __init__(
         self,
@@ -46,9 +49,15 @@ class Agent:
         if message_storage is not None:
             self.message_storage = message_storage
         elif workspace_path is not None:
-            self.message_storage = MessageStorageLocal(path=str(workspace_path / "messages.sqlite3"))
+            self.message_storage = MessageStorageLocal(
+                path=str(workspace_path / f"{_normalize_agent_identifier(self.name)}_messages.sqlite3")
+            )
         else:
-            self.message_storage = MessageStorageLocal()
+            default_workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
+            default_workspace.mkdir(parents=True, exist_ok=True)
+            self.message_storage = MessageStorageLocal(
+                path=str(default_workspace / f"{_normalize_agent_identifier(self.name)}_messages.sqlite3")
+            )
 
         if memory_storage is not None:
             self.memory_storage = memory_storage
@@ -90,14 +99,10 @@ class Agent:
     def memory_key(self) -> str:
         return self._agent_memory_key
 
-    def normalize_conversation_id(self, conversation_id: str) -> str:
-        return normalize_conversation_id(self.name, conversation_id)
-
     async def __call__(
         self,
         user_message: str,
         user_id: str = AgentConfig.DEFAULT_USER_ID,
-        conversation_id: str = AgentConfig.DEFAULT_CONVERSATION_ID,
         history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
@@ -109,7 +114,6 @@ class Agent:
         return await self.chat(
             user_message=user_message,
             user_id=user_id,
-            conversation_id=conversation_id,
             history_count=history_count,
             max_iter=max_iter,
             max_concurrent_tools=max_concurrent_tools,
@@ -123,7 +127,6 @@ class Agent:
         self,
         user_message: str,
         user_id: str = AgentConfig.DEFAULT_USER_ID,
-        conversation_id: str = AgentConfig.DEFAULT_CONVERSATION_ID,
         history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
@@ -133,8 +136,6 @@ class Agent:
         enable_memory: bool = True,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message."""
-        normalized_conversation_id = self.normalize_conversation_id(conversation_id)
-
         if output_type is None:
             output_type = self.output_type
         if output_type:
@@ -146,14 +147,13 @@ class Agent:
             await self.message_handler.store_user_message(
                 user_message,
                 user_id,
-                normalized_conversation_id,
                 image_source,
             )
 
-            input_messages = await self.message_handler.get_input_messages(
-                conversation_id=normalized_conversation_id,
+            recent_messages = await self.message_handler.get_recent_messages(
                 history_count=history_count,
             )
+            input_messages = self.message_handler.to_model_input(recent_messages)
             messages_without_tool = self.message_handler.filter_non_tool_messages(input_messages)
 
             retrieved_memories: list = []
@@ -164,7 +164,6 @@ class Agent:
                 )
                 self.memory_manager.schedule_memory_add(
                     memory_key=self.memory_key,
-                    conversation_id=normalized_conversation_id,
                     messages=messages_without_tool[-2:],
                 )
 
@@ -186,7 +185,6 @@ class Agent:
                     stream=stream,
                     store_reply=lambda text: self.message_handler.store_model_reply(
                         text,
-                        normalized_conversation_id,
                         self._assistant_sender_id,
                     ),
                 )
@@ -195,7 +193,6 @@ class Agent:
                     if not stream:
                         await self.message_handler.store_model_reply(
                             str(response),
-                            normalized_conversation_id,
                             self._assistant_sender_id,
                         )
                     return response
@@ -203,7 +200,6 @@ class Agent:
                 if reply_type == ReplyType.STRUCTURED_REPLY:
                     await self.message_handler.store_model_reply(
                         response.model_dump_json(),
-                        normalized_conversation_id,
                         self._assistant_sender_id,
                     )
                     return response
@@ -211,7 +207,6 @@ class Agent:
                 if reply_type == ReplyType.TOOL_CALL:
                     tool_result = await self.tool_executor.handle_tool_calls(
                         response,
-                        normalized_conversation_id,
                         input_messages,
                         max_concurrent_tools,
                     )
@@ -219,7 +214,6 @@ class Agent:
                         image_data, description = tool_result
                         await self.message_handler.store_model_reply(
                             description,
-                            normalized_conversation_id,
                             self._assistant_sender_id,
                         )
                         return image_data

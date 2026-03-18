@@ -27,13 +27,13 @@ server:
 | `capabilities` | object | `{}` | Tool and MCP configuration |
 | `output_schema` | object | `null` | Structured output schema |
 
-There is no `conversation_mode` config. All conversations use the same transcript model.
+There is no `conversation_mode` config. All chats use the same continuous message-stream model.
 
-## Conversation Model
+## Message Model
 
-- `conversation_id` selects the transcript
 - `user_id` identifies the current speaker
-- single-user and multi-user conversations use the same runtime path
+- recent context comes from the agent's single message stream
+- single-user and multi-user interactions use the same runtime path
 
 ## Capabilities
 
@@ -84,14 +84,14 @@ agent:
 
 Local mode stores:
 
-- conversation history in SQLite
+- message history in SQLite
 - long-term memory in ChromaDB
 
 Workspace layout:
 
 ```text
 <workspace>/
-  messages.sqlite3
+  <agent_name>_messages.sqlite3
   chroma/
 ```
 
