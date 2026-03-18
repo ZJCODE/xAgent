@@ -425,7 +425,8 @@ class BaseAgentRunner:
         return self.workspace / f"{agent_slug}_messages.sqlite3"
 
     def _get_memory_storage_path(self) -> Path:
-        return self.workspace / "chroma"
+        agent_slug = self._normalize_agent_identifier(self._get_agent_name())
+        return self._get_message_storage_path(agent_slug)
 
     def _create_message_storage(
         self,
@@ -437,10 +438,8 @@ class BaseAgentRunner:
         return MessageStorageLocal(path=str(self._get_message_storage_path(agent_slug)))
 
     def _create_memory_storage(self, *, agent_name: str) -> MemoryStorageBase:
-        return MemoryStorageLocal(
-            path=str(self._get_memory_storage_path()),
-            collection_name=agent_name,
-        )
+        del agent_name
+        return MemoryStorageLocal(path=str(self._get_memory_storage_path()))
 
     @staticmethod
     def _normalize_agent_identifier(name: str) -> str:

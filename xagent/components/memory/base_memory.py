@@ -33,8 +33,9 @@ class MemoryStorageBase(ABC):
     @abstractmethod
     async def retrieve(self, 
                  memory_key: str,
-                 query: str,
+                 query: str = "",
                  limit: int = 5,
+                 journal_date: Optional[str] = None,
                  ) -> Optional[List[Dict[str, Any]]]:
         """Retrieve relevant memories based on query."""
         pass

@@ -78,7 +78,7 @@ class MessageHandler:
           1. Core Principles — foundational behaviour guidelines
           2. Tool Instructions — per-tool safety / usage rules
           3. Context Information — runtime metadata (speaker, date, timezone)
-          4. Retrieved Memories — relevant memories (only when non-empty)
+          4. Retrieved Journal Memory — relevant journal entries (only when non-empty)
           5. User System Prompt — developer-supplied customisation
           (6. User Message — appended as normal messages, not part of system prompt)
         """
@@ -107,9 +107,14 @@ class MessageHandler:
         ]
         sections.append("\n".join(context_lines))
 
-        # --- 4. Retrieved Memories (conditional) ---
+        # --- 4. Retrieved Journal Memory (conditional) ---
         memory_block = self._format_memories(retrieved_memories)
         if memory_block:
+            logger.info(
+                "System prompt journal memory block for %s:\n%s",
+                user_id,
+                memory_block,
+            )
             sections.append(memory_block)
 
         # --- 5. Developer-supplied system prompt ---
@@ -137,41 +142,27 @@ class MessageHandler:
         if not retrieved_memories:
             return ""
 
-        groups = {
-            "semantic": [],
-            "social": [],
-            "episodic": [],
-            "self": [],
-            "other": [],
-        }
-
+        lines = [
+            "**Relevant Journal Memory:**",
+            "- These are retrieved journal entries written by you. If they conflict with the recent transcript, trust the recent transcript.",
+        ]
+        blocks: list[str] = []
         for mem in retrieved_memories:
-            content = mem.get("content", "") if isinstance(mem, dict) else str(mem)
+            if not isinstance(mem, dict):
+                continue
+            content = str(mem.get("content", "")).strip()
             if not content:
                 continue
-            metadata = mem.get("metadata", {}) if isinstance(mem, dict) else {}
-            mem_type = str(metadata.get("memory_type") or metadata.get("type") or "").lower()
-            bucket = groups.get(mem_type, groups["other"])
-            bucket.append(content)
+            metadata = mem.get("metadata", {}) if isinstance(mem.get("metadata"), dict) else {}
+            journal_date = metadata.get("journal_date")
+            if journal_date:
+                blocks.append(f"[{journal_date}]\n{content}")
+            else:
+                blocks.append(content)
 
-        lines = [
-            "**Relevant Long-Term Memory:**",
-            "- These are compressed reminders. If they conflict with the recent transcript, trust the recent transcript.",
-        ]
-        for label, items in [
-            ("Semantic", groups["semantic"]),
-            ("Social", groups["social"]),
-            ("Episodic", groups["episodic"]),
-            ("Self", groups["self"]),
-            ("Other", groups["other"]),
-        ]:
-            if not items:
-                continue
-            lines.append(f"{label}:")
-            for i, item in enumerate(items, 1):
-                lines.append(f"{i}. {item}")
-
-        return "\n".join(lines) if len(lines) > 2 else ""
+        if not blocks:
+            return ""
+        return "\n\n".join(["\n".join(lines), *blocks])
 
     @staticmethod
     def sanitize_input_messages(input_messages: list) -> list:

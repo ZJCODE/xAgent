@@ -1,26 +1,23 @@
 # Memory System
 
-xAgent memory is a minimal long-term memory pipeline.
+xAgent memory is now a SQLite-backed daily journal system.
 
 It does two things:
 
-- extracts memories from unread conversation transcript batches on a delayed schedule
-- retrieves relevant memories for the current turn
+- rewrites per-day journal entries from unread conversation transcript batches
+- retrieves relevant journal entries for the current turn
 
-It also supports one explicit fast path: if a user clearly says "remember this" / "记住这个" / "别忘了", memory extraction runs immediately for the unread message segment.
-
-It does not do query rewriting, keyword tiers, meta-memory extraction, or multi-stage memory fusion.
+It still supports one explicit fast path: if a user clearly says "remember this" / "记住这个" / "别忘了", the current unread batch is journaled immediately.
 
 ## Memory Semantics
 
-Memory is agent-scoped and intentionally simple.
+Journal memory is agent-scoped and intentionally simple.
 
-That means:
+- the agent's full message stream contributes to one shared journal stream
+- all speakers still contribute to that journal stream
+- each `memory_key + YYYY-MM-DD` has one journal row whose `content` is rewritten in place during the day
 
-- the agent's full message stream contributes to the same long-term memory pool
-- all speakers still contribute to that pool
-
-This keeps cross-turn continuity without adding per-memory visibility logic.
+This keeps cross-turn continuity without introducing separate memory collections or per-memory visibility rules.
 
 ## Quick Start
 
@@ -31,11 +28,12 @@ from xagent.core import Agent
 
 
 async def main():
+    message_storage = MessageStorageLocal()
     agent = Agent(
         name="memory_agent",
         model="gpt-5-mini",
-        message_storage=MessageStorageLocal(),
-        memory_storage=MemoryStorageLocal(collection_name="memory_agent"),
+        message_storage=message_storage,
+        memory_storage=MemoryStorageLocal(path=str(message_storage.path)),
     )
 
     await agent.chat(
@@ -45,7 +43,7 @@ async def main():
     )
 
     reply = await agent.chat(
-        user_message="Recommend a weekend activity for me.",
+        user_message="What do you remember about me?",
         user_id="sarah",
         enable_memory=True,
     )
@@ -55,40 +53,32 @@ async def main():
 asyncio.run(main())
 ```
 
-## Storage Backends
+## Storage Layout
 
-### Local
+Local memory uses the same SQLite file as message history.
 
 ```python
 from xagent.components import MemoryStorageLocal
 
 memory = MemoryStorageLocal(
-    path="./data/chroma",
-    collection_name="assistant_memory",
+    path="./data/assistant_messages.sqlite3",
     memory_threshold=10,
 )
 ```
 
-### Extending The Pipeline
+The database contains:
 
-If you need a custom backend, keep `MemoryStorageBase` as the minimal interface,
-or reuse `MemoryStorageBasic` with your own vector-store implementation.
+- `messages`: the continuous agent-level message stream
+- `journals`: one row per `memory_key + journal_date`
+- `journal_state`: persistent unread cursor and last-write timestamp
+- `journal_fts`: FTS5 trigram index used for keyword retrieval
 
-## Memory Types
+## Retrieval Model
 
-The simplified memory pipeline stores:
-
-- `EPISODIC`
-- `SEMANTIC`
-- `SOCIAL`
-- `SELF`
-
-The model is asked to keep:
-
-- `EPISODIC`: dated events, commitments, plans, and decisions
-- `SEMANTIC`: stable facts, roles, preferences, and priorities
-- `SOCIAL`: relationships, group membership, alignment, and working agreements
-- `SELF`: agent-side strategy, work continuity, and response-style adjustments
+- `date` only: exact journal lookup for one day
+- `query` only: LLM extracts 3-5 keywords, then journal retrieval searches SQLite FTS5
+- `date + query`: keyword retrieval scoped to the specified date
+- short keywords fall back to `LIKE` matching so short Chinese words still match
 
 ## API Surface
 
@@ -99,30 +89,25 @@ class MemoryStorageBase(ABC):
     async def retrieve(
         self,
         memory_key: str,
-        query: str,
+        query: str = "",
         limit: int = 5,
+        journal_date: str | None = None,
     ) -> list | None
     async def clear(self, memory_key: str) -> None
     async def delete(self, memory_ids: list[str]) -> None
 ```
 
-The runtime still resolves `memory_key` to the agent key, and retrieval reads from one shared memory pool for that agent.
-
 ## Operational Notes
 
 - Memory is enabled by default and runs unless `enable_memory=False`
-- `memory_threshold` now refers to unread message-stream growth, not just user turns
+- `memory_threshold` refers to unread message-stream growth, not just user turns
 - Writes happen after the configured batch threshold and interval are reached, or immediately when the user explicitly asks the agent to remember something
-- Extraction reads only the unread portion of the current message stream and processes it in batches
-- Retrieval uses the original user query directly
-- Retrieval applies a small relevance threshold before injecting memory back into context
-- Writes use lightweight near-duplicate suppression to reduce memory pollution
-- Stored memory text keeps timestamps and speaker identifiers so the agent can remember who said what
-- Lower thresholds create more memories; higher thresholds create fewer, denser memories
-- Larger `history_count` values reduce pressure on memory freshness because the recent message stream stays in model context longer
+- Journal writes are message-driven background tasks; there is no independent daemon timer
+- `last_processed_message_id` is persisted in SQLite so restarts do not re-journal old messages
+- Retrieved journal entries are injected back into the system prompt as date-stamped long-term context
 
 ## Best Practices
 
 - Disable memory explicitly for scenarios that must remain stateless
-- Prefer stable `user_id` values because they remain visible in the transcript and extracted memories
-- Clear or rotate memory collections when testing different products or tenants
+- Prefer stable `user_id` values because they remain visible in the transcript and daily journal
+- Keep the message and memory backends on the same SQLite file unless you are implementing a custom backend on purpose

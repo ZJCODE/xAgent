@@ -1,5 +1,5 @@
-from .llm_service import MemoryLLMService
+from .llm_service import JournalLLMService
 
 __all__ = [
-    "MemoryLLMService"
+    "JournalLLMService"
 ]

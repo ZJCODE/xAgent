@@ -7,12 +7,13 @@ from xagent.core import Agent
 
 
 async def main():
+    message_storage = MessageStorageLocal()
     agent = Agent(
         name="memory_assistant",
-        system_prompt="You are a helpful assistant that uses long-term memory when available.",
+        system_prompt="You are a helpful assistant that uses journal memory when available.",
         model="gpt-5-mini",
-        message_storage=MessageStorageLocal(),
-        memory_storage=MemoryStorageLocal(collection_name="demo_agent_memory"),
+        message_storage=message_storage,
+        memory_storage=MemoryStorageLocal(path=str(message_storage.path)),
     )
 
     user_id = "alex"

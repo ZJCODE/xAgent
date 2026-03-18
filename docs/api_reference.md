@@ -115,6 +115,7 @@ This endpoint clears the agent's entire message stream.
 Query parameters:
 
 - `query`
+- `date`
 - `limit`
 
 ## Message Storage
@@ -155,8 +156,9 @@ async def add(memory_key: str, messages: list[dict]) -> None
 async def store(memory_key: str, content: str) -> str | None
 async def retrieve(
     memory_key: str,
-    query: str,
+    query: str = "",
     limit: int = 5,
+    journal_date: str | None = None,
 ) -> list | None
 async def clear(memory_key: str) -> None
 async def delete(memory_ids: list[str]) -> None
@@ -165,8 +167,9 @@ async def delete(memory_ids: list[str]) -> None
 ### Memory Behavior
 
 - Runtime memory is agent-scoped
-- The agent's full message stream contributes to the same long-term memory pool
-- Retrieval operates on one shared memory pool per agent
+- The agent's full message stream contributes to one per-agent daily journal
+- Journal entries are stored in the same SQLite database file as messages
+- Retrieval supports exact-date lookups, keyword search, and date-filtered keyword search
 - Custom backends can implement `MemoryStorageBase` or reuse `MemoryStorageBasic`
 
 ## Tools

@@ -61,13 +61,16 @@ class Agent:
 
         if memory_storage is not None:
             self.memory_storage = memory_storage
-        elif workspace_path is not None:
-            self.memory_storage = MemoryStorageLocal(
-                path=str(workspace_path / "chroma"),
-                collection_name=self.name,
-            )
         else:
-            self.memory_storage = MemoryStorageLocal(collection_name=self.name)
+            local_memory_path = getattr(self.message_storage, "path", None)
+            if local_memory_path is None:
+                raise ValueError(
+                    "Default journal memory requires a SQLite-backed message storage path. "
+                    "Provide MemoryStorageLocal(path=...) when using a custom message backend."
+                )
+            self.memory_storage = MemoryStorageLocal(
+                path=str(local_memory_path),
+            )
 
         self.tool_manager = ToolManager(tools=tools, mcp_servers=mcp_servers)
         self.model_client = ModelClient(client=self.client, model=self.model)

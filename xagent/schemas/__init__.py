@@ -1,5 +1,11 @@
 from .message import Message,ToolCall, RoleType, MessageType
-from .memory import MemoryType,MemoryPiece,MemoryExtraction
+from .memory import (
+    DailyJournalRewrite,
+    JournalKeywordExtraction,
+    MemoryType,
+    MemoryPiece,
+    MemoryExtraction,
+)
 
 __all__ = [
 	"Message",
@@ -8,5 +14,7 @@ __all__ = [
 	"MessageType",
 	"MemoryType",
     "MemoryPiece",
-    "MemoryExtraction"
+    "MemoryExtraction",
+    "DailyJournalRewrite",
+    "JournalKeywordExtraction",
 ]

@@ -22,7 +22,7 @@ server:
 | `name` | string | `"Agent"` | Agent identifier |
 | `system_prompt` | string | `"You are a helpful assistant."` | Base system prompt |
 | `model` | string | `"gpt-4o-mini"` | OpenAI model name |
-| `workspace` | string | `"~/.xagent"` | Local storage root for SQLite and Chroma |
+| `workspace` | string | `"~/.xagent"` | Local storage root for the shared SQLite database |
 | `capabilities` | object | `{}` | Tool and MCP configuration |
 | `output_schema` | object | `null` | Structured output schema |
 
@@ -83,14 +83,13 @@ agent:
 Local mode stores:
 
 - message history in SQLite
-- long-term memory in ChromaDB
+- journal memory in the same SQLite file
 
 Workspace layout:
 
 ```text
 <workspace>/
   <agent_name>_messages.sqlite3
-  chroma/
 ```
 
 ## Structured Output Schema

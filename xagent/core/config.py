@@ -131,9 +131,9 @@ class AgentConfig:
         "**Memory & Context:**\n"
         "- Use the recent message stream as the primary source of truth.\n"
         "- Recent transcript context comes from the agent's continuous global message stream and may include multiple user_ids.\n"
-        "- Treat retrieved memories as compressed long-term context; if they conflict with the recent transcript, trust the recent transcript.\n"
-        "- Use retrieved memories to personalize responses and maintain continuity across sessions.\n"
-        "- Treat retrieved memories as compressed hints, not guaranteed ground truth.\n"
+        "- Treat retrieved journal entries as long-term context; if they conflict with the recent transcript, trust the recent transcript.\n"
+        "- Use retrieved journal entries to personalize responses and maintain continuity across sessions.\n"
+        "- Treat retrieved journal entries as helpful hints, not guaranteed ground truth.\n"
         "- Reference relevant earlier messages in the stream; avoid repeating what the user already knows.\n"
     )
 

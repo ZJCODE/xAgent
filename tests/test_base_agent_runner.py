@@ -12,7 +12,7 @@ class _FakeMessageStorageLocal:
 
 
 class _FakeMemoryStorageLocal:
-    def __init__(self, path: str, collection_name: str):
+    def __init__(self, path: str, collection_name: str | None = None):
         self.path = path
         self.collection_name = collection_name
 
@@ -54,8 +54,11 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
                 runner = _RunnerWithoutAgent(config_path=str(config_path))
 
             self.assertEqual(runner.message_storage.path, str(resolved_tmpdir / "research_agent_messages.sqlite3"))
-            self.assertEqual(runner.memory_storage.path, str(resolved_tmpdir / "chroma"))
-            self.assertEqual(runner.memory_storage.collection_name, "Research Agent")
+            self.assertEqual(
+                runner.memory_storage.path,
+                str(resolved_tmpdir / "research_agent_messages.sqlite3"),
+            )
+            self.assertIsNone(runner.memory_storage.collection_name)
 
     def test_runner_storage_factories_are_overridable(self):
         with tempfile.TemporaryDirectory() as tmpdir:

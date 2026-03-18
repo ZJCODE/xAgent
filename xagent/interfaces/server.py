@@ -152,18 +152,26 @@ class AgentHTTPServer(BaseAgentRunner):
 
         @app.get("/memory")
         async def get_memory(
-            query: str = Query("recent messages", description="Search query for memory retrieval"),
+            query: Optional[str] = Query(None, description="Search query for journal retrieval"),
+            date: Optional[str] = Query(None, description="Optional YYYY-MM-DD journal date filter"),
             limit: int = Query(10, ge=1, le=50, description="Maximum number of memories to return"),
         ):
-            self.logger.info("Memory retrieval for agent key %s, query=%s, limit=%d", self.agent.memory_key, query, limit)
+            self.logger.info(
+                "Memory retrieval for agent key %s, query=%s, date=%s, limit=%d",
+                self.agent.memory_key,
+                query,
+                date,
+                limit,
+            )
             memory_storage = getattr(self.agent, "memory_storage", None)
             if memory_storage is None:
                 return {"memories": [], "message": "Memory storage not configured"}
             try:
                 results = await memory_storage.retrieve(
                     memory_key=self.agent.memory_key,
-                    query=query,
+                    query=query or "",
                     limit=limit,
+                    journal_date=date,
                 )
                 memories = []
                 if results:

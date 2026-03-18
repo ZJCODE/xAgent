@@ -11,7 +11,7 @@ agent:
       - "draw_image"
       - "run_command"
 
-  # workspace: "~/.xagent"  # Root directory for local storage (SQLite + ChromaDB)
+  # workspace: "~/.xagent"  # Root directory for local storage (single SQLite database)
 
 server:
   host: "0.0.0.0"
