@@ -52,12 +52,6 @@ Stored messages should preserve:
 - durable local transcript storage
 - good default for development and local deployment
 
-### MessageStorageCloud
-
-- Redis-backed
-- good for distributed deployments
-- requires `REDIS_URL`
-
 ## Example
 
 ```python

@@ -32,7 +32,7 @@ class StreamMemoryState:
 
 class MemoryStorageBasic(MemoryStorageBase):
     """
-    Simplified long-term memory pipeline shared by local and cloud backends.
+    Simplified long-term memory pipeline shared by local and custom backends.
 
     Design principles:
     - Recent global transcript remains the primary source of truth

@@ -22,7 +22,6 @@ server:
 | `name` | string | `"Agent"` | Agent identifier |
 | `system_prompt` | string | `"You are a helpful assistant."` | Base system prompt |
 | `model` | string | `"gpt-4o-mini"` | OpenAI model name |
-| `storage_mode` | string | `"local"` | `local` or `cloud` |
 | `workspace` | string | `"~/.xagent"` | Local storage root for SQLite and Chroma |
 | `capabilities` | object | `{}` | Tool and MCP configuration |
 | `output_schema` | object | `null` | Structured output schema |
@@ -72,13 +71,12 @@ Load custom tools at runtime:
 xagent-server --config agent.yaml --toolkit_path my_toolkit/
 ```
 
-## Storage Mode
+## Storage Layout
 
-### Local
+By default the built-in runtime stores data locally:
 
 ```yaml
 agent:
-  storage_mode: "local"
   workspace: "./my_project_data"
 ```
 
@@ -93,21 +91,6 @@ Workspace layout:
 <workspace>/
   <agent_name>_messages.sqlite3
   chroma/
-```
-
-### Cloud
-
-```yaml
-agent:
-  storage_mode: "cloud"
-```
-
-Cloud mode requires:
-
-```bash
-export REDIS_URL=redis://localhost:6379/0
-export UPSTASH_VECTOR_REST_URL=https://your-database.upstash.io
-export UPSTASH_VECTOR_REST_TOKEN=your_token_here
 ```
 
 ## Structured Output Schema
@@ -148,7 +131,6 @@ agent:
     You are a helpful assistant.
     Be concise and accurate.
   model: "gpt-5-mini"
-  storage_mode: "local"
   workspace: "./data"
 
   capabilities:

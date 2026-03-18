@@ -144,18 +144,7 @@ storage = MessageStorageLocal()
 agent = Agent(message_storage=storage)
 ```
 
-### MessageStorageCloud
-
-Redis-backed message storage.
-
-```python
-from xagent.components import MessageStorageCloud
-
-storage = MessageStorageCloud()
-agent = Agent(message_storage=storage)
-```
-
-Requires `REDIS_URL`.
+Custom backends can implement `MessageStorageBase` and be injected into `Agent`.
 
 ## Memory Storage
 
@@ -178,6 +167,7 @@ async def delete(memory_ids: list[str]) -> None
 - Runtime memory is agent-scoped
 - The agent's full message stream contributes to the same long-term memory pool
 - Retrieval operates on one shared memory pool per agent
+- Custom backends can implement `MemoryStorageBase` or reuse `MemoryStorageBasic`
 
 ## Tools
 

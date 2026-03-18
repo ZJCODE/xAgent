@@ -27,8 +27,6 @@ agent:
         items: "str"
         description: "Relevant categorization labels"
 
-  storage_mode: "local"
-
 server:
   host: "0.0.0.0"
   port: 8010

@@ -10,7 +10,6 @@ agent:
     mcp_servers:
       - "http://localhost:8001/mcp/"  # Example MCP server
 
-  storage_mode: "local"  # Supported: local (SQLite + ChromaDB) and cloud (Redis + Upstash Vector)
   workspace: "/data/xagent"  # Root directory for local storage; mount as a Docker volume for persistence
 
 server:

@@ -20,7 +20,7 @@ Create a `.env` file from the example:
 cp .env.example .env
 ```
 
-Update the `.env` file with your specific configuration, including API keys and Redis connection details.
+Update the `.env` file with your specific configuration, including API keys.
 
 ### Building the Docker Image
 
@@ -44,7 +44,7 @@ To start the HTTP agent, use:
 docker-compose up
 ```
 
-This command will start the services defined in `docker-compose.yml`, including the HTTP agent and any dependencies like Redis.
+This command will start the services defined in `docker-compose.yml`, including the HTTP agent and the mounted local data volume.
 
 ### Accessing the Agent
 

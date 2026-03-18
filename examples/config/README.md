@@ -19,5 +19,5 @@ xagent-server --config examples/config/toolkit_agent.yaml --toolkit_path example
 Guidelines for adding new config examples:
 
 - Add a new config only when it demonstrates a distinct runtime capability
-- Keep the default storage mode as `local` unless cloud storage is the point
+- Prefer the built-in local workspace layout in examples
 - Avoid hidden dependencies: if a config needs `--toolkit_path` or an MCP server, say so in a nearby README

@@ -19,8 +19,6 @@ pip install myxagent
 export OPENAI_API_KEY=your_openai_api_key
 ```
 
-If you plan to use cloud storage, also see [README Cloud Mode](../README.md#cloud-mode).
-
 ## Core Concepts
 
 Each chat request includes:

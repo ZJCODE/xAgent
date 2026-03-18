@@ -1,11 +1,10 @@
-from .message import MessageStorageBase, MessageStorageLocal, MessageStorageCloud
-from .memory import MemoryStorageBase, MemoryStorageLocal, MemoryStorageCloud
+from .message import MessageStorageBase, MessageStorageLocal
+from .memory import MemoryStorageBase, MemoryStorageBasic, MemoryStorageLocal
 
 __all__ = [
     "MessageStorageBase",
     "MessageStorageLocal",
-    "MessageStorageCloud",
     "MemoryStorageBase",
+    "MemoryStorageBasic",
     "MemoryStorageLocal",
-    "MemoryStorageCloud",
 ]

@@ -11,7 +11,7 @@ xAgent is a single-agent runtime with three entry points: Python API, CLI, and H
 - Speaker-aware messages via `user_id`
 - Built-in Web UI and streaming responses
 - Tool calling, MCP integration, and image input
-- Long-term memory enabled by default with local or cloud storage
+- Long-term memory enabled by default with local storage
 
 ## Quick Start
 
@@ -151,8 +151,6 @@ agent:
     tools:
       - "web_search"
 
-  storage_mode: "local"
-
 server:
   host: "0.0.0.0"
   port: 8010
@@ -163,23 +161,6 @@ Run with config:
 ```bash
 xagent-cli --config config/agent.yaml --toolkit_path my_toolkit
 xagent-server --config config/agent.yaml --toolkit_path my_toolkit --open
-```
-
-## Cloud Mode
-
-Use `storage_mode: "cloud"` when you want Redis-backed message storage and Upstash-backed memory.
-
-```yaml
-agent:
-  storage_mode: "cloud"
-```
-
-Required environment variables:
-
-```bash
-export REDIS_URL=redis://localhost:6379/0
-export UPSTASH_VECTOR_REST_URL=https://your-database.upstash.io
-export UPSTASH_VECTOR_REST_TOKEN=your_token_here
 ```
 
 ## Documentation

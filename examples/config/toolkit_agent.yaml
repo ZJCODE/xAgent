@@ -10,8 +10,6 @@ agent:
       - "web_search"
       - "char_count"
 
-  storage_mode: "local"
-
 server:
   host: "0.0.0.0"
   port: 8010

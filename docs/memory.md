@@ -69,22 +69,10 @@ memory = MemoryStorageLocal(
 )
 ```
 
-### Cloud
+### Extending The Pipeline
 
-```python
-from xagent.components import MemoryStorageCloud
-
-memory = MemoryStorageCloud(
-    memory_threshold=10,
-)
-```
-
-Cloud mode requires:
-
-```bash
-export UPSTASH_VECTOR_REST_URL=https://your-database.upstash.io
-export UPSTASH_VECTOR_REST_TOKEN=your_token_here
-```
+If you need a custom backend, keep `MemoryStorageBase` as the minimal interface,
+or reuse `MemoryStorageBasic` with your own vector-store implementation.
 
 ## Memory Types
 

@@ -20,7 +20,6 @@ This directory contains the complete technical documentation for xAgent.
 ### I want memory and long-term context
 1. [Memory System](memory.md)
 2. [Message Storage Inheritance](message_storage_inheritance.md)
-3. [Redis Cluster Support](redis_cluster_support.md)
 
 ## Document Map
 
@@ -31,7 +30,6 @@ This directory contains the complete technical documentation for xAgent.
 - [Memory System](memory.md) — Long-term memory architecture and usage
 - [HTTP Server Agent Passing](http_server_agent_passing.md) — Pass a prebuilt `Agent` into HTTP server
 - [Message Storage Inheritance](message_storage_inheritance.md) — Build custom storage backends
-- [Redis Cluster Support](redis_cluster_support.md) — Cluster mode setup and guidance
 
 ## Suggested Reading Order
 

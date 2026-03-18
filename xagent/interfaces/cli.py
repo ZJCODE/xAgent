@@ -218,7 +218,6 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
       - calculate_square
     mcp_servers:
       - http://localhost:8001/mcp/
-  storage_mode: local
 
 server:
   host: 0.0.0.0

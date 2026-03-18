@@ -3,7 +3,6 @@ import importlib.util
 import logging
 import os
 import sys
-import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
@@ -24,7 +23,6 @@ class BaseAgentConfig:
     DEFAULT_AGENT_NAME = "Agent"
     DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
     DEFAULT_MODEL = "gpt-4o-mini"
-    DEFAULT_STORAGE_MODE = "local"
     DEFAULT_HOST = "0.0.0.0"
     DEFAULT_PORT = 8010
 
@@ -141,7 +139,6 @@ class BaseAgentRunner:
                     "tools": ["web_search", "run_command"],  # Default tools
                     "mcp_servers": []  # Default MCP servers
                 },
-                "storage_mode": BaseAgentConfig.DEFAULT_STORAGE_MODE,
             },
             "server": {
                 "host": BaseAgentConfig.DEFAULT_HOST,
@@ -165,28 +162,6 @@ class BaseAgentRunner:
 
         workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
         return workspace
-
-    def _get_storage_mode(self) -> str:
-        """Resolve the configured storage mode for both messages and memory."""
-        cached_mode = getattr(self, "_storage_mode", None)
-        if cached_mode is not None:
-            return cached_mode
-
-        agent_cfg = self.config.get("agent", {})
-        storage_mode = str(
-            agent_cfg.get("storage_mode", BaseAgentConfig.DEFAULT_STORAGE_MODE)
-        ).strip().lower()
-
-        if storage_mode not in {"local", "cloud"}:
-            warnings.warn(
-                f"Unknown storage_mode '{storage_mode}', falling back to local storage mode.",
-                UserWarning,
-                stacklevel=2,
-            )
-            storage_mode = "local"
-
-        self._storage_mode = storage_mode
-        return storage_mode
 
     def _load_toolkit_registry(self, toolkit_path: Optional[str]) -> Dict[str, Any]:
         """
@@ -424,54 +399,48 @@ class BaseAgentRunner:
     
     def _initialize_message_storage(self) -> MessageStorageBase:
         """
-        Initialize message storage based on the configured storage mode.
-        
-        Returns:
-            MessageStorageBase instance for the configured backend
-            
-        Note:
-            Returns the message storage backend selected by `storage_mode`.
-            Defaults to local persistent SQLite storage if the mode is invalid.
+        Initialize the default message storage backend.
+
+        Subclasses can override `_create_message_storage` to plug in a different
+        implementation while keeping the runner lifecycle unchanged.
         """
-        storage_mode = self._get_storage_mode()
-        agent_name = self.config.get("agent", {}).get("name", AgentConfig.DEFAULT_NAME)
+        agent_name = self._get_agent_name()
         agent_slug = self._normalize_agent_identifier(agent_name)
-
-        if storage_mode == "local":
-            msg_path = str(self.workspace / f"{agent_slug}_messages.sqlite3")
-            return MessageStorageLocal(path=msg_path)
-        if storage_mode == "cloud":
-            from ..components import MessageStorageCloud
-
-            return MessageStorageCloud(stream_name=agent_slug)
-
-        msg_path = str(self.workspace / f"{agent_slug}_messages.sqlite3")
-        return MessageStorageLocal(path=msg_path)
+        return self._create_message_storage(agent_name=agent_name, agent_slug=agent_slug)
 
     def _initialize_memory_storage(self) -> MemoryStorageBase:
         """
-        Initialize memory storage based on the configured storage mode.
-        
-        Returns:
-            MemoryStorageBase instance for the configured backend
-            
-        Note:
-            Returns the memory backend selected by `storage_mode`.
-            Defaults to MemoryStorageLocal if the mode is invalid.
+        Initialize the default memory storage backend.
+
+        Subclasses can override `_create_memory_storage` to plug in a different
+        implementation while keeping the runner lifecycle unchanged.
         """
-        storage_mode = self._get_storage_mode()
-        agent_name = self.config.get("agent", {}).get("name", AgentConfig.DEFAULT_NAME)
+        agent_name = self._get_agent_name()
+        return self._create_memory_storage(agent_name=agent_name)
 
-        if storage_mode == "cloud":
-            from ..components import MemoryStorageCloud
+    def _get_agent_name(self) -> str:
+        return self.config.get("agent", {}).get("name", AgentConfig.DEFAULT_NAME)
 
-            return MemoryStorageCloud()
-        if storage_mode == "local":
-            chroma_path = str(self.workspace / "chroma")
-            return MemoryStorageLocal(path=chroma_path, collection_name=agent_name)
+    def _get_message_storage_path(self, agent_slug: str) -> Path:
+        return self.workspace / f"{agent_slug}_messages.sqlite3"
 
-        chroma_path = str(self.workspace / "chroma")
-        return MemoryStorageLocal(path=chroma_path, collection_name=agent_name)
+    def _get_memory_storage_path(self) -> Path:
+        return self.workspace / "chroma"
+
+    def _create_message_storage(
+        self,
+        *,
+        agent_name: str,
+        agent_slug: str,
+    ) -> MessageStorageBase:
+        del agent_name
+        return MessageStorageLocal(path=str(self._get_message_storage_path(agent_slug)))
+
+    def _create_memory_storage(self, *, agent_name: str) -> MemoryStorageBase:
+        return MemoryStorageLocal(
+            path=str(self._get_memory_storage_path()),
+            collection_name=agent_name,
+        )
 
     @staticmethod
     def _normalize_agent_identifier(name: str) -> str:

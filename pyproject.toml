@@ -36,8 +36,6 @@ dependencies = [
     
     # Data storage
     "chromadb>=1.0.20",
-    "redis>=6.2.0",
-    "upstash_vector>=0.8.0",
     
     # Utilities
     "python-dotenv>=1.1.1",

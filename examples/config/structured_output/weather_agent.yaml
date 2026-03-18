@@ -21,8 +21,6 @@ agent:
         type: "str"
         description: "Short weather condition summary"
 
-  storage_mode: "local"
-
 server:
   host: "0.0.0.0"
   port: 8010

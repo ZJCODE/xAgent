@@ -8,7 +8,7 @@ This folder is organized by how people usually learn the project:
 
 Best-practice rules used in this directory:
 
-- Keep examples local-first unless cloud behavior is the thing being demonstrated
+- Keep examples local-first and focused on built-in behavior unless an extension point is the thing being demonstrated
 - Prefer one high-signal example per capability over many overlapping variants
 - Make starter examples runnable from the repository root
 - Keep generated files such as `__pycache__` and logs out of versioned example content
