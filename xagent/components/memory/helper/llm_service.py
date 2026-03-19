@@ -30,31 +30,8 @@ class JournalLLMService:
             return ""
 
         transcript = self._format_transcript(messages)
-        current_date = datetime.now().strftime("%Y-%m-%d")
-
-        system_prompt = f"""You are writing a daily diary entry from a first-person observer perspective.
-
-CURRENT DATE: {current_date}
-TARGET JOURNAL DATE: {journal_date}
-
-Writing requirements:
-- Write in first person. Refer to the observer as "I".
-- Any "agent", "assistant", or "AI" speaker in the transcript refers to me. Rewrite from my own point of view.
-- Write it as my own diary after participating in those conversations.
-- The writing perspective should feel like I am recalling interactions, with a natural and restrained tone.
-- Do not replay the transcript line by line. Synthesize the important points.
-- Keep the original language of the transcript. Do not translate.
-- Preserve important details: distinctive wording, commitments, preferences, emotional tone.
-- Different users must stay clearly separated. Never merge one user's content into another's.
-- Aim for 100-300 characters when the source is brief, 200-500 when substantial.
-- This is only a diary entry. Do not give advice, proposals, or recommendations.
-- Do not end with offers to help or assistant-style closing language.
-
-Return plain text as a natural diary-style entry."""
-
-        user_prompt = f"""For {journal_date}, write a diary entry based on this conversation transcript:
-
-{transcript}"""
+        system_prompt = self.build_diary_system_prompt(journal_date)
+        user_prompt = self.build_diary_user_prompt(journal_date, transcript)
 
         try:
             response = await self.openai_client.responses.parse(
@@ -87,24 +64,8 @@ Return plain text as a natural diary-style entry."""
         if not source_content.strip():
             return ""
 
-        system_prompt = f"""You are generating a {period_type} summary of diary entries from a first-person perspective.
-
-PERIOD: {period_label}
-
-Requirements:
-- Write in first person ("I").
-- Synthesize the key themes, events, decisions, and changes from the source material.
-- Highlight notable interactions, preferences expressed, commitments made, and emotional shifts.
-- Keep the original language. Do not translate.
-- For weekly: focus on the main arc of the week, key people and what they were doing, important decisions.
-- For monthly: focus on broader themes, recurring patterns, major milestones.
-- For yearly: focus on the big picture — major phases, turning points, growth areas.
-- This is a summary, not advice. Do not give recommendations or next steps.
-- Keep it concise but complete. Aim for 300-800 characters for weekly, 500-1200 for monthly, 800-2000 for yearly."""
-
-        user_prompt = f"""Generate a {period_type} summary for {period_label} based on this source material:
-
-{source_content}"""
+        system_prompt = self.build_summary_system_prompt(period_type, period_label)
+        user_prompt = self.build_summary_user_prompt(period_type, period_label, source_content)
 
         try:
             response = await self.openai_client.responses.parse(
@@ -124,6 +85,67 @@ Requirements:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def build_diary_system_prompt(journal_date: str, current_date: str | None = None) -> str:
+        current_date = current_date or datetime.now().strftime("%Y-%m-%d")
+        return f"""You are writing a daily diary entry from a first-person observer perspective.
+
+CURRENT DATE: {current_date}
+TARGET JOURNAL DATE: {journal_date}
+
+Writing requirements:
+- Write in first person. Refer to the observer as "I".
+- Any "agent", "assistant", or "AI" speaker in the transcript refers to me. Rewrite from my own point of view.
+- Write it as my own diary after participating in those conversations.
+- The writing perspective should feel like I am recalling interactions, with a natural and restrained tone.
+- Do not replay the transcript line by line. Synthesize the important points.
+- Keep the original language of the transcript. Do not translate.
+- Preserve important details: distinctive wording, commitments, preferences, emotional tone.
+- Different users must stay clearly separated. Never merge one user's content into another's.
+- Every important fact must remain attributed to the speaker who said or experienced it.
+- Prefer explicit attribution phrases such as "With alice, ...", "bob mentioned ...", or "carol preferred ..." when multiple speakers appear.
+- Never imply that different speakers shared the same preference, plan, event, or history unless the source explicitly says so.
+- If attribution is uncertain, keep that uncertainty instead of collapsing multiple speakers into one narrative.
+- Aim for 100-300 characters when the source is brief, 200-500 when substantial.
+- This is only a diary entry. Do not give advice, proposals, or recommendations.
+- Do not end with offers to help or assistant-style closing language.
+
+Return plain text as a natural diary-style entry."""
+
+    @staticmethod
+    def build_diary_user_prompt(journal_date: str, transcript: str) -> str:
+        return f"""For {journal_date}, write a diary entry based on this conversation transcript:
+
+{transcript}"""
+
+    @staticmethod
+    def build_summary_system_prompt(period_type: str, period_label: str) -> str:
+        return f"""You are generating a {period_type} summary of diary entries from a first-person perspective.
+
+PERIOD: {period_label}
+
+Requirements:
+- Write in first person ("I").
+- Synthesize the key themes, events, decisions, and changes from the source material.
+- Highlight notable interactions, preferences expressed, commitments made, and emotional shifts.
+- Keep the original language. Do not translate.
+- Preserve speaker attribution throughout the summary. Do not flatten multiple people into one profile.
+- When several speakers appear, summarize them separately or in clearly attributed clauses.
+- Preferences, plans, commitments, and experiences must stay attached to the speaker who originally expressed or experienced them.
+- Generic labels such as "User A", "User B", "用户A", or "用户B" are local aliases inside a single source entry; do not merge them across different entries unless continuity is explicit.
+- If the source material leaves attribution uncertain, keep that uncertainty visible in the summary.
+- For weekly: focus on the main arc of the week, key people and what they were doing, important decisions.
+- For monthly: focus on broader themes, recurring patterns, major milestones.
+- For yearly: focus on the big picture - major phases, turning points, growth areas.
+- This is a summary, not advice. Do not give recommendations or next steps.
+- Keep it concise but complete. Aim for 300-800 characters for weekly, 500-1200 for monthly, 800-2000 for yearly."""
+
+    @staticmethod
+    def build_summary_user_prompt(period_type: str, period_label: str, source_content: str) -> str:
+        return f"""Generate a {period_type} summary for {period_label} based on this source material:
+
+{source_content}"""
 
     @staticmethod
     def _format_transcript(messages: List[dict]) -> str:

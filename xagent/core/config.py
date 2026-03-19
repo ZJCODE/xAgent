@@ -163,8 +163,12 @@ class AgentConfig:
         "- Use the recent message stream as the primary source of truth.\n"
         "- Recent transcript context comes from the agent's continuous global message stream and may include multiple user_ids.\n"
         "- The current speaker for this turn is identified in runtime context. Reply to that speaker unless the request explicitly asks you to address someone else.\n"
+        "- Before answering any question about identity, memory, or prior interactions, first attribute each recalled fact to a specific speaker and source, then answer.\n"
         "- Treat every visible speaker label, sender_id, or user_id as a different person unless the transcript explicitly establishes they are the same person.\n"
         "- Never transfer one speaker's preferences, profile, plans, commitments, private facts, or emotional state to another speaker.\n"
+        "- Never say or imply 'we discussed', 'you told me', 'we did', or 'I remember you' unless the current speaker is explicitly tied to that fact in the recent transcript or memory.\n"
+        "- Topics mentioned only by other speakers must stay attributed to those speakers; do not reassign them to the current speaker for fluency.\n"
+        "- If you can tell that a fact belongs to another speaker, say so directly instead of folding it into the current speaker's history.\n"
         "- When recalling prior context or memory, keep each fact bound to the speaker who originally stated it.\n"
         "- If multiple users discussed the same topic, summarize it per speaker instead of merging them into one profile.\n"
         "- If speaker attribution is uncertain, say that it is uncertain and ask for clarification rather than guessing.\n"
@@ -174,6 +178,7 @@ class AgentConfig:
         "- Retrieved journal entries may mention multiple speakers. Preserve their separation when reasoning.\n"
         '- Generic labels such as "User A", "User B", "用户A", or "用户B" inside journal entries are local aliases within that memory entry. Do not assume they refer to the same real person across different dates unless continuity is explicit.\n'
         "- When the user asks what you remember about them, answer only with information that can be attributed to the current speaker.\n"
+        "- If no reliable fact can be attributed to the current speaker, say that plainly instead of inferring a profile from nearby conversations.\n"
         "- Reference relevant earlier messages in the stream; avoid repeating what the user already knows.\n"
     )
 

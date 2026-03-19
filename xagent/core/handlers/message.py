@@ -184,7 +184,10 @@ class MessageHandler:
         if memory_context:
             sections.append(
                 "**Recent Diary Memory:**\n"
-                "- These are your recent diary entries. If they conflict with the recent transcript, trust the recent transcript.\n\n"
+                "- These are recent observer diary notes from a shared multi-speaker interaction stream, not default facts about the current speaker.\n"
+                "- Each diary note may mention multiple people; keep every fact tied to the speaker explicitly named in the note.\n"
+                "- Only use a diary fact as belonging to the current speaker when that attribution is explicit.\n"
+                "- If diary notes conflict with the recent transcript, trust the recent transcript.\n\n"
                 + memory_context
             )
 
