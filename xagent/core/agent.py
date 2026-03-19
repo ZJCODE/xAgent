@@ -5,11 +5,13 @@ from typing import AsyncGenerator, List, Optional, Union
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageBase, MemoryStorageLocal
+from ..components import MessageStorageBase, MessageStorageLocal
+from ..components.memory.markdown_memory import MarkdownMemory
+from ..components.memory.helper.llm_service import JournalLLMService
 from .config import AgentConfig, ReplyType
-from .handlers import MemoryManager, MessageHandler, ModelClient
+from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .tools import ToolExecutor, ToolManager
-from ..tools import create_search_journal_memory_tool
+from ..tools import create_write_daily_memory_tool, create_search_memory_tool, create_generate_summary_tool
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,8 @@ def _normalize_agent_identifier(name: str) -> str:
 class Agent:
     """AI agent runtime for a continuous agent-level message stream."""
 
+    _MEMORY_TOOL_NAMES = {"write_daily_memory", "search_memory", "generate_memory_summary"}
+
     def __init__(
         self,
         name: Optional[str] = None,
@@ -33,7 +37,6 @@ class Agent:
         mcp_servers: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         message_storage: Optional[MessageStorageBase] = None,
-        memory_storage: Optional[MemoryStorageBase] = None,
         workspace: Optional[str] = None,
     ):
         self.name = name or AgentConfig.DEFAULT_NAME
@@ -43,7 +46,6 @@ class Agent:
         self.output_type = output_type
         self.system_prompt = system_prompt or ""
         self._assistant_sender_id = f"agent:{self.name}"
-        self._agent_memory_key = f"agent:{self.name}"
         self._memory_tools_enabled = True
 
         workspace_path: Optional[Path] = None
@@ -63,31 +65,37 @@ class Agent:
                 path=str(default_workspace / f"{_normalize_agent_identifier(self.name)}_messages.sqlite3")
             )
 
-        if memory_storage is not None:
-            self.memory_storage = memory_storage
+        # Markdown-based memory system
+        if workspace_path is not None:
+            memory_dir = str(workspace_path / f"{_normalize_agent_identifier(self.name)}_memory")
         else:
-            local_memory_path = getattr(self.message_storage, "path", None)
-            if local_memory_path is None:
-                raise ValueError(
-                    "Default journal memory requires a SQLite-backed message storage path. "
-                    "Provide MemoryStorageLocal(path=...) when using a custom message backend."
-                )
-            self.memory_storage = MemoryStorageLocal(
-                path=str(local_memory_path),
-            )
+            default_workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
+            default_workspace.mkdir(parents=True, exist_ok=True)
+            memory_dir = str(default_workspace / f"{_normalize_agent_identifier(self.name)}_memory")
 
-        self.memory_manager = MemoryManager(
-            memory_storage=self.memory_storage,
-            message_storage=self.message_storage,
+        self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
+        self.llm_service = JournalLLMService(model=self.model)
+        self.memory_handler = MemoryHandler(
+            memory=self.markdown_memory,
+            llm_service=self.llm_service,
         )
+
         bound_tools = list(tools or [])
-        bound_tools.append(
-            create_search_journal_memory_tool(
-                memory_manager=self.memory_manager,
-                memory_key=self.memory_key,
+        bound_tools.extend([
+            create_write_daily_memory_tool(
+                memory=self.markdown_memory,
                 is_enabled=lambda: self._memory_tools_enabled,
-            )
-        )
+            ),
+            create_search_memory_tool(
+                memory=self.markdown_memory,
+                is_enabled=lambda: self._memory_tools_enabled,
+            ),
+            create_generate_summary_tool(
+                memory=self.markdown_memory,
+                llm_service=self.llm_service,
+                is_enabled=lambda: self._memory_tools_enabled,
+            ),
+        ])
         self.tool_manager = ToolManager(tools=bound_tools, mcp_servers=mcp_servers)
         self.model_client = ModelClient(client=self.client, model=self.model)
         self.message_handler = MessageHandler(
@@ -107,10 +115,6 @@ class Agent:
     @property
     def mcp_tools(self) -> dict:
         return self.tool_manager.mcp_tools
-
-    @property
-    def memory_key(self) -> str:
-        return self._agent_memory_key
 
     async def __call__(
         self,
@@ -170,28 +174,25 @@ class Agent:
             input_messages = self.message_handler.to_model_input(recent_messages)
             messages_without_tool = self.message_handler.filter_non_tool_messages(input_messages)
 
-            retrieved_memories: list = []
+            memory_context = ""
             if enable_memory:
-                retrieved_memories = await self.memory_manager.retrieve_context_memories(memory_key=self.memory_key)
-                self.memory_manager.schedule_memory_add(
-                    memory_key=self.memory_key,
-                    messages=messages_without_tool[-2:],
-                )
+                memory_context = await self.memory_handler.get_recent_context()
+                self.memory_handler.schedule_diary_write(messages_without_tool[-2:])
 
             tool_names = list(self.tool_manager._tools.keys())
             tool_specs = self.tool_manager.cached_tool_specs
             if not enable_memory:
-                tool_names = [name for name in tool_names if name != "search_journal_memory"]
+                tool_names = [n for n in tool_names if n not in self._MEMORY_TOOL_NAMES]
                 tool_specs = [
                     spec for spec in (tool_specs or [])
-                    if spec.get("name") != "search_journal_memory"
+                    if spec.get("name") not in self._MEMORY_TOOL_NAMES
                 ] or None
 
             system_msg = {
                 "role": "system",
                 "content": self.message_handler.build_system_prompt(
                     user_id=user_id,
-                    retrieved_memories=retrieved_memories,
+                    memory_context=memory_context,
                     tool_names=tool_names,
                 ),
             }

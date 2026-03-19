@@ -1,3 +1,5 @@
+"""Tests for BaseAgentRunner initialization (message storage only)."""
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,12 +13,6 @@ class _FakeMessageStorageLocal:
         self.path = path
 
 
-class _FakeMemoryStorageLocal:
-    def __init__(self, path: str, collection_name: str | None = None):
-        self.path = path
-        self.collection_name = collection_name
-
-
 class _RunnerWithoutAgent(BaseAgentRunner):
     def _initialize_agent(self):
         return object()
@@ -26,12 +22,9 @@ class _RunnerWithCustomStorage(_RunnerWithoutAgent):
     def _create_message_storage(self, *, agent_name: str, agent_slug: str):
         return {"agent_name": agent_name, "agent_slug": agent_slug}
 
-    def _create_memory_storage(self, *, agent_name: str):
-        return {"agent_name": agent_name, "backend": "custom"}
-
 
 class BaseAgentRunnerStorageTests(unittest.TestCase):
-    def test_runner_defaults_to_local_storage_even_with_legacy_storage_mode(self):
+    def test_runner_defaults_to_local_message_storage(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             resolved_tmpdir = Path(tmpdir).resolve()
             config_path = Path(tmpdir) / "agent.yaml"
@@ -40,7 +33,6 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
                     [
                         "agent:",
                         '  name: "Research Agent"',
-                        '  storage_mode: "cloud"',
                         f'  workspace: "{resolved_tmpdir}"',
                         "server: {}",
                     ]
@@ -48,19 +40,13 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("xagent.interfaces.base.MessageStorageLocal", _FakeMessageStorageLocal), patch(
-                "xagent.interfaces.base.MemoryStorageLocal", _FakeMemoryStorageLocal
-            ):
+            with patch("xagent.interfaces.base.MessageStorageLocal", _FakeMessageStorageLocal):
                 runner = _RunnerWithoutAgent(config_path=str(config_path))
 
             self.assertEqual(runner.message_storage.path, str(resolved_tmpdir / "research_agent_messages.sqlite3"))
-            self.assertEqual(
-                runner.memory_storage.path,
-                str(resolved_tmpdir / "research_agent_messages.sqlite3"),
-            )
-            self.assertIsNone(runner.memory_storage.collection_name)
+            self.assertFalse(hasattr(runner, "memory_storage"))
 
-    def test_runner_storage_factories_are_overridable(self):
+    def test_runner_message_storage_factory_is_overridable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "agent.yaml"
             config_path.write_text(
@@ -81,7 +67,7 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
                 runner.message_storage,
                 {"agent_name": "Extensible Agent", "agent_slug": "extensible_agent"},
             )
-            self.assertEqual(
-                runner.memory_storage,
-                {"agent_name": "Extensible Agent", "backend": "custom"},
-            )
+
+
+if __name__ == "__main__":
+    unittest.main()

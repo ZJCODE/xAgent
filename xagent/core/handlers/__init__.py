@@ -1,9 +1,9 @@
 from .model import ModelClient
-from .memory import MemoryManager
+from .memory import MemoryHandler
 from .message import MessageHandler
 
 __all__ = [
     "ModelClient",
-    "MemoryManager",
+    "MemoryHandler",
     "MessageHandler",
 ]

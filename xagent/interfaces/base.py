@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, create_model
 # Local imports
 from ..core.agent import Agent
 from ..core.config import AgentConfig
-from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageBase, MemoryStorageLocal
+from ..components import MessageStorageBase, MessageStorageLocal
 from ..tools import TOOL_REGISTRY
 
 
@@ -72,7 +72,6 @@ class BaseAgentRunner:
 
         # Initialize components in dependency order
         self.message_storage = self._initialize_message_storage()
-        self.memory_storage = self._initialize_memory_storage()
         self.agent = self._initialize_agent()
         
     def _load_config(self, cfg_path: Optional[str]) -> Dict[str, Any]:
@@ -354,7 +353,7 @@ class BaseAgentRunner:
             mcp_servers=mcp_servers,
             output_type=output_type,
             message_storage=self.message_storage,
-            memory_storage=self.memory_storage,
+            workspace=str(self.workspace),
         )
     
     def _load_agent_tools(self, agent_cfg: Dict[str, Any]) -> List[Any]:
@@ -408,25 +407,11 @@ class BaseAgentRunner:
         agent_slug = self._normalize_agent_identifier(agent_name)
         return self._create_message_storage(agent_name=agent_name, agent_slug=agent_slug)
 
-    def _initialize_memory_storage(self) -> MemoryStorageBase:
-        """
-        Initialize the default memory storage backend.
-
-        Subclasses can override `_create_memory_storage` to plug in a different
-        implementation while keeping the runner lifecycle unchanged.
-        """
-        agent_name = self._get_agent_name()
-        return self._create_memory_storage(agent_name=agent_name)
-
     def _get_agent_name(self) -> str:
         return self.config.get("agent", {}).get("name", AgentConfig.DEFAULT_NAME)
 
     def _get_message_storage_path(self, agent_slug: str) -> Path:
         return self.workspace / f"{agent_slug}_messages.sqlite3"
-
-    def _get_memory_storage_path(self) -> Path:
-        agent_slug = self._normalize_agent_identifier(self._get_agent_name())
-        return self._get_message_storage_path(agent_slug)
 
     def _create_message_storage(
         self,
@@ -436,10 +421,6 @@ class BaseAgentRunner:
     ) -> MessageStorageBase:
         del agent_name
         return MessageStorageLocal(path=str(self._get_message_storage_path(agent_slug)))
-
-    def _create_memory_storage(self, *, agent_name: str) -> MemoryStorageBase:
-        del agent_name
-        return MemoryStorageLocal(path=str(self._get_memory_storage_path()))
 
     @staticmethod
     def _normalize_agent_identifier(name: str) -> str:

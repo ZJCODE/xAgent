@@ -83,13 +83,18 @@ agent:
 Local mode stores:
 
 - message history in SQLite
-- journal memory in the same SQLite file
+- diary memory in markdown files under `<agent_name>_memory/`
 
 Workspace layout:
 
 ```text
 <workspace>/
   <agent_name>_messages.sqlite3
+  <agent_name>_memory/
+    daily/
+    weekly/
+    monthly/
+    yearly/
 ```
 
 ## Structured Output Schema

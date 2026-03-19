@@ -1,46 +1,60 @@
+"""Simplified LLM service for diary entry formatting and summary generation."""
+
 import logging
 from datetime import datetime
-import re
 from typing import List
 
 from openai import AsyncOpenAI
 
-from ....schemas.memory import DailyJournalRewrite, JournalKeywordExtraction
+from ....schemas.memory import DiaryEntry, SummaryOutput
 
 
 class JournalLLMService:
-    """LLM service for rewriting daily journals and extracting retrieval keywords."""
+    """LLM service for formatting diary entries and generating periodic summaries."""
 
     def __init__(self, model: str = "gpt-5-mini"):
-        self.logger = logging.getLogger(f"{self.__class__.__name__}")
+        self.logger = logging.getLogger(self.__class__.__name__)
         self.openai_client = AsyncOpenAI()
         self.model = model
 
-    async def rewrite_daily_journal(
+    async def format_diary_entry(
         self,
-        existing_journal: str,
-        new_transcript: str,
+        messages: List[dict],
         journal_date: str,
     ) -> str:
-        """Rewrite the full journal text for one date from prior journal + new transcript."""
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        self.logger.debug(
-            "LLM journal rewrite request: journal_date=%s existing_len=%d transcript_len=%d model=%s",
-            journal_date,
-            len(existing_journal or ""),
-            len(new_transcript or ""),
-            self.model,
-        )
+        """Format conversation messages into a diary-style prose entry.
 
-        system_prompt = self._build_rewrite_system_prompt(
-            current_date=current_date,
-            journal_date=journal_date,
-        )
-        user_prompt = self._build_rewrite_user_prompt(
-            existing_journal=existing_journal,
-            new_transcript=new_transcript,
-            journal_date=journal_date,
-        )
+        Returns plain text suitable for appending to the daily markdown file.
+        """
+        if not messages:
+            return ""
+
+        transcript = self._format_transcript(messages)
+        current_date = datetime.now().strftime("%Y-%m-%d")
+
+        system_prompt = f"""You are writing a daily diary entry from a first-person observer perspective.
+
+CURRENT DATE: {current_date}
+TARGET JOURNAL DATE: {journal_date}
+
+Writing requirements:
+- Write in first person. Refer to the observer as "I".
+- Any "agent", "assistant", or "AI" speaker in the transcript refers to me. Rewrite from my own point of view.
+- Write it as my own diary after participating in those conversations.
+- The writing perspective should feel like I am recalling interactions, with a natural and restrained tone.
+- Do not replay the transcript line by line. Synthesize the important points.
+- Keep the original language of the transcript. Do not translate.
+- Preserve important details: distinctive wording, commitments, preferences, emotional tone.
+- Different users must stay clearly separated. Never merge one user's content into another's.
+- Aim for 100-300 characters when the source is brief, 200-500 when substantial.
+- This is only a diary entry. Do not give advice, proposals, or recommendations.
+- Do not end with offers to help or assistant-style closing language.
+
+Return plain text as a natural diary-style entry."""
+
+        user_prompt = f"""For {journal_date}, write a diary entry based on this conversation transcript:
+
+{transcript}"""
 
         try:
             response = await self.openai_client.responses.parse(
@@ -49,184 +63,108 @@ class JournalLLMService:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                text_format=DailyJournalRewrite,
+                text_format=DiaryEntry,
             )
-            parsed = response.output_parsed or DailyJournalRewrite()
-            normalized = self._normalize_journal_content(parsed.content)
-            self.logger.debug(
-                "LLM journal rewrite success: journal_date=%s output_len=%d",
-                journal_date,
-                len(normalized),
-            )
-            return normalized
+            parsed = response.output_parsed or DiaryEntry()
+            return self._normalize_content(parsed.content)
         except Exception as exc:
-            self.logger.error("Error rewriting daily journal: %s", exc)
-            fallback = self._normalize_journal_content(existing_journal)
-            self.logger.debug(
-                "LLM journal rewrite fallback to existing journal: journal_date=%s fallback_len=%d",
-                journal_date,
-                len(fallback),
-            )
-            return fallback
+            self.logger.error("Error formatting diary entry: %s", exc)
+            return self._fallback_entry(messages)
 
-    def _build_rewrite_system_prompt(
+    async def generate_summary(
         self,
-        *,
-        current_date: str,
-        journal_date: str,
+        source_content: str,
+        period_type: str,
+        period_label: str,
     ) -> str:
-        return f"""You are writing a daily journal from a first-person observer perspective.
+        """Generate a periodic summary (weekly/monthly/yearly) from source material.
 
-CURRENT DATE: {current_date}
-TARGET JOURNAL DATE: {journal_date}
+        Args:
+            source_content: The raw diary/summary text to summarize.
+            period_type: One of ``weekly``, ``monthly``, ``yearly``.
+            period_label: Human-readable label (e.g. "2026-03-16 to 2026-03-22").
+        """
+        if not source_content.strip():
+            return ""
 
-Writing requirements:
-- Write in first person. Refer to the observer as "I" rather than “Assistant”, “AI”, “the assistant”, or other third-person labels.
-- The journal is about conversations that happened when I was interacting with other people. Any "agent", "assistant", or "AI" speaker in the transcript refers to me and must be rewritten from my own first-person point of view.
-- Do not describe the day as if I were merely watching a transcript from the outside. Write it as my own diary after participating in those conversations.
-- The writing perspective should feel like I am recalling the day after interacting with people, with a natural and restrained tone.
-- The journal should read like a human-like observation diary, not a system log, audit trail, or bullet-point report.
-- Do not replay the transcript line by line. Synthesize the day's important movement, emphasis, and changes.
-- Keep the original language of the transcript whenever possible. Do not translate unless the source already mixes languages.
-- Preserve important details such as distinctive wording, unusual phrases, commitments, preferences, emotional tone, or clear changes in direction.
-- Short quotes are allowed only when a phrase is especially revealing or memorable. Do not over-quote or paste long stretches of the transcript.
-- Different users must stay clearly separated. Never merge one user's preferences, plans, or attitudes into another user's section.
-- The transcript may already use normalized speaker labels such as "User A" or "User B". Treat those labels as canonical and preserve them exactly.
-- If the existing journal already uses those normalized user labels, keep them stable in the rewrite. Do not reshuffle them.
-- Aim for medium length, usually around 200-500 characters in the journal's primary language when the source material is substantial. If the day is sparse, stay brief but still complete the structure.
-- Output one complete journal entry for the target date, not a delta. Merge the existing journal with the new transcript and remove obvious duplication.
-- In the final section, the summary or feeling should also stay in first person, using the same observer pronoun, but keep it restrained.
-- Let the journal naturally touch on the main movement of the day, who appeared and what each person was doing, notable preferences or expressions or changes, and a restrained closing impression from the observer.
-- This is only a diary entry. Do not give advice, proposals, next steps, reminders, recommendations, or direct responses to any user.
-- Do not end with offers to help, follow-up questions, or assistant-style closing language. End like a person finishing a private diary note.
+        system_prompt = f"""You are generating a {period_type} summary of diary entries from a first-person perspective.
 
-Return plain text as a natural diary-style entry. Headings are optional. Smooth prose is preferred over rigid formatting.
-"""
+PERIOD: {period_label}
 
-    def _build_rewrite_user_prompt(
-        self,
-        *,
-        existing_journal: str,
-        new_transcript: str,
-        journal_date: str,
-    ) -> str:
-        return f"""For {journal_date}, rewrite the full daily journal entry.
+Requirements:
+- Write in first person ("I").
+- Synthesize the key themes, events, decisions, and changes from the source material.
+- Highlight notable interactions, preferences expressed, commitments made, and emotional shifts.
+- Keep the original language. Do not translate.
+- For weekly: focus on the main arc of the week, key people and what they were doing, important decisions.
+- For monthly: focus on broader themes, recurring patterns, major milestones.
+- For yearly: focus on the big picture — major phases, turning points, growth areas.
+- This is a summary, not advice. Do not give recommendations or next steps.
+- Keep it concise but complete. Aim for 300-800 characters for weekly, 500-1200 for monthly, 800-2000 for yearly."""
 
-Interpretation notes:
-- The existing journal is today's earlier observation draft.
-- The new transcript is today's newly arrived interaction fragment.
-- If the new transcript does not materially change the understanding of the day, preserve the useful parts of the existing journal and only make necessary refinements.
-- Speaker labels already shown in the transcript are the names you should use in the rewritten journal.
-- Keep the whole diary in a first-person perspective, using "I" when referring to the narrator's summary, attention, or feeling.
-- Treat any "agent", "assistant", or "AI" role inside the transcript as me. Rewrite those parts from my own point of view instead of referring to that speaker as someone separate.
-- Do not let the narrator call itself “Assistant”, “AI assistant”, or similar role labels.
-- Keep the text observational. Do not turn it into advice, a plan, a suggestion, a recommendation, or a reply addressed to someone else.
+        user_prompt = f"""Generate a {period_type} summary for {period_label} based on this source material:
 
-Existing journal draft:
-{existing_journal or "(empty)"}
-
-New transcript chunk:
-{new_transcript}
-"""
-
-    async def extract_query_keywords(
-        self,
-        query: str,
-        max_keywords: int = 5,
-    ) -> List[str]:
-        """Extract a compact keyword set for journal retrieval."""
-        query = str(query or "").strip()
-        if not query:
-            self.logger.debug("Skipping keyword extraction: empty query")
-            return []
-        self.logger.debug(
-            "LLM keyword extraction request: query=%r max_keywords=%d model=%s",
-            query,
-            max_keywords,
-            self.model,
-        )
-
-        system_prompt = """Extract 3 to 5 retrieval keywords or short phrases from the user's search query.
-
-Rules:
-- Keep the original language.
-- Prefer concrete entities, dates, topics, projects, locations, and commitments.
-- Avoid filler words and full-sentence rewrites.
-- Return unique items only.
-- If the query is already short and specific, reuse its key phrases directly.
-"""
+{source_content}"""
 
         try:
             response = await self.openai_client.responses.parse(
                 model=self.model,
                 input=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": query},
+                    {"role": "user", "content": user_prompt},
                 ],
-                text_format=JournalKeywordExtraction,
+                text_format=SummaryOutput,
             )
-            parsed = response.output_parsed or JournalKeywordExtraction()
-            normalized = self._normalize_keywords(parsed.keywords, max_keywords=max_keywords)
-            self.logger.debug(
-                "LLM keyword extraction success: query=%r keywords=%s",
-                query,
-                normalized,
-            )
-            return normalized
+            parsed = response.output_parsed or SummaryOutput()
+            return self._normalize_content(parsed.content)
         except Exception as exc:
-            self.logger.error("Error extracting journal search keywords: %s", exc)
-            fallback = self._fallback_keywords(query, max_keywords=max_keywords)
-            self.logger.debug(
-                "LLM keyword extraction fallback: query=%r keywords=%s",
-                query,
-                fallback,
-            )
-            return fallback
+            self.logger.error("Error generating %s summary: %s", period_type, exc)
+            return ""
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _normalize_keywords(keywords: List[str], max_keywords: int = 5) -> List[str]:
-        normalized: List[str] = []
-        seen: set[str] = set()
-        for keyword in keywords:
-            item = " ".join(str(keyword or "").split()).strip()
-            if not item:
+    def _format_transcript(messages: List[dict]) -> str:
+        """Format messages into a simple transcript string."""
+        lines: List[str] = []
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            sender = msg.get("sender_id", role)
+            content = str(msg.get("content", "")).strip()
+            if not content:
                 continue
-            key = item.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            normalized.append(item)
-            if len(normalized) >= max_keywords:
-                break
-        return normalized
+            lines.append(f"[{sender}]: {content}")
+        return "\n".join(lines)
 
-    def _fallback_keywords(self, query: str, max_keywords: int = 5) -> List[str]:
-        chunks = re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9][A-Za-z0-9_:/.-]*", query)
-        if not chunks:
-            self.logger.debug("Keyword fallback produced raw-query slice for query=%r", query)
-            return [query[:40]]
-
-        chunks.sort(key=len, reverse=True)
-        normalized = self._normalize_keywords(chunks, max_keywords=max_keywords)
-        self.logger.debug("Keyword fallback regex extraction: query=%r keywords=%s", query, normalized)
-        return normalized
-
-    @classmethod
-    def _normalize_journal_content(cls, content: str) -> str:
+    @staticmethod
+    def _normalize_content(content: str) -> str:
+        """Collapse excessive blank lines and strip edges."""
         lines: List[str] = []
         previous_blank = False
         for raw_line in str(content or "").splitlines():
-            normalized_line = " ".join(raw_line.split()).strip()
-            if not normalized_line:
+            normalized = raw_line.strip()
+            if not normalized:
                 if lines and not previous_blank:
                     lines.append("")
                 previous_blank = True
                 continue
-            lines.append(normalized_line)
+            lines.append(normalized)
             previous_blank = False
-
         while lines and lines[0] == "":
             lines.pop(0)
         while lines and lines[-1] == "":
             lines.pop()
         return "\n".join(lines)
+
+    @staticmethod
+    def _fallback_entry(messages: List[dict]) -> str:
+        """Simple fallback when the LLM call fails."""
+        parts: List[str] = []
+        for msg in messages:
+            content = str(msg.get("content", "")).strip()
+            sender = msg.get("sender_id", msg.get("role", ""))
+            if content:
+                parts.append(f"{sender}: {content}")
+        return "\n".join(parts)

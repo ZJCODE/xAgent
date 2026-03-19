@@ -1,31 +1,41 @@
+"""Tests for MessageHandler system prompt memory injection."""
+
 import unittest
 
 from xagent.core.handlers.message import MessageHandler
 
 
-class MessageHandlerJournalFormattingTests(unittest.TestCase):
-    def test_format_memories_preserves_multiline_journal_entries(self):
-        journal = "\n\n".join(
-            [
-                "今天发生了什么\n今天主要围绕路线图推进。",
-                "有哪些人，他们大致在做什么\nalice 在推进发布节奏。\n用户A 在补充评审意见。",
-                "有意思或重要的信息\nalice 说了一句“别拖了”。",
-                "简单总结或感受\n整体节奏更清晰了一些。",
-            ]
-        )
+class _FakeMessageStorage:
+    path = "/tmp/fake.sqlite3"
 
-        formatted = MessageHandler._format_memories(
-            [
-                {
-                    "content": journal,
-                    "metadata": {"journal_date": "2026-03-18"},
-                }
-            ]
-        )
 
-        self.assertIn("[2026-03-18]\n今天发生了什么", formatted)
-        self.assertIn("有哪些人，他们大致在做什么\nalice 在推进发布节奏。", formatted)
-        self.assertNotIn("[2026-03-18] 今天发生了什么", formatted)
+class MessageHandlerMemoryContextTests(unittest.TestCase):
+    def test_build_system_prompt_includes_memory_context(self):
+        """memory_context is injected under the 'Recent Diary Memory' header."""
+        handler = MessageHandler(
+            system_prompt="You are a helpful assistant.",
+            message_storage=_FakeMessageStorage(),
+        )
+        memory_context = "[2026-03-18]\n今天主要围绕路线图推进。"
+        prompt = handler.build_system_prompt(
+            user_id="alice",
+            memory_context=memory_context,
+        )
+        self.assertIn("Recent Diary Memory", prompt)
+        self.assertIn("[2026-03-18]", prompt)
+        self.assertIn("今天主要围绕路线图推进。", prompt)
+
+    def test_build_system_prompt_omits_section_when_context_empty(self):
+        """Empty memory_context should not inject a memory section."""
+        handler = MessageHandler(
+            system_prompt="You are a helpful assistant.",
+            message_storage=_FakeMessageStorage(),
+        )
+        prompt = handler.build_system_prompt(
+            user_id="alice",
+            memory_context="",
+        )
+        self.assertNotIn("Recent Diary Memory", prompt)
 
 
 if __name__ == "__main__":

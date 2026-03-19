@@ -150,43 +150,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 self.logger.error("Agent processing error for %s: %s", input_data.user_id, exc)
                 raise HTTPException(status_code=500, detail=f"Agent processing error: {str(exc)}")
 
-        @app.get("/memory")
-        async def get_memory(
-            query: Optional[str] = Query(None, description="Search query for journal retrieval"),
-            date: Optional[str] = Query(None, description="Optional YYYY-MM-DD journal date filter"),
-            limit: int = Query(10, ge=1, le=50, description="Maximum number of memories to return"),
-        ):
-            self.logger.info(
-                "Memory retrieval for agent key %s, query=%s, date=%s, limit=%d",
-                self.agent.memory_key,
-                query,
-                date,
-                limit,
-            )
-            memory_storage = getattr(self.agent, "memory_storage", None)
-            if memory_storage is None:
-                return {"memories": [], "message": "Memory storage not configured"}
-            try:
-                results = await memory_storage.retrieve(
-                    memory_key=self.agent.memory_key,
-                    query=query or "",
-                    limit=limit,
-                    journal_date=date,
-                )
-                memories = []
-                if results:
-                    for item in results:
-                        if isinstance(item, str):
-                            memories.append({"content": item})
-                        elif isinstance(item, dict):
-                            memories.append(item)
-                        else:
-                            memories.append({"content": str(item)})
-                return {"memories": memories}
-            except Exception as exc:
-                self.logger.error("Memory retrieval error: %s", exc)
-                raise HTTPException(status_code=500, detail=f"Memory retrieval error: {str(exc)}")
-
         @app.post("/clear_messages")
         async def clear_messages():
             self.logger.info("Clear messages request for agent %s", self.agent.name)

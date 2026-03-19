@@ -1,90 +1,73 @@
+"""Tests for memory tool factories (write_daily_memory, search_memory, generate_memory_summary)."""
+
 import asyncio
+import tempfile
 import unittest
-from unittest.mock import AsyncMock
+from datetime import date
 
-from xagent.core.agent import Agent
-from xagent.core.config import ReplyType
-
-
-class _FakeMessageStorage:
-    def __init__(self):
-        self.messages = []
-
-    async def add_messages(self, messages):
-        if isinstance(messages, list):
-            self.messages.extend(messages)
-            return
-        self.messages.append(messages)
-
-    async def get_messages(self, history_count: int):
-        return list(self.messages[-history_count:])
+from xagent.components.memory.markdown_memory import MarkdownMemory
+from xagent.tools.memory_tool import (
+    create_write_daily_memory_tool,
+    create_search_memory_tool,
+    create_generate_summary_tool,
+)
 
 
-class _FakeMemoryStorage:
-    def __init__(self):
-        self.retrieve_calls = []
-        self.add_calls = []
-
-    async def retrieve(self, memory_key: str, query: str = "", limit: int = 5, journal_date=None):
-        self.retrieve_calls.append(
-            {
-                "memory_key": memory_key,
-                "query": query,
-                "limit": limit,
-                "journal_date": journal_date,
-            }
-        )
-        return []
-
-    async def add(self, memory_key: str, messages: list[dict]):
-        self.add_calls.append({"memory_key": memory_key, "messages": list(messages)})
+class _FakeLLMService:
+    async def generate_summary(self, source_content, period_type, period_label):
+        return f"[Summary: {period_type} {period_label}]"
 
 
-class AgentMemoryToolTests(unittest.IsolatedAsyncioTestCase):
-    async def test_agent_uses_recent_memory_context_without_keyword_search(self):
-        message_storage = _FakeMessageStorage()
-        memory_storage = _FakeMemoryStorage()
-        agent = Agent(
-            name="Memory Agent",
-            client=object(),
-            message_storage=message_storage,
-            memory_storage=memory_storage,
-        )
-        agent.model_client.call = AsyncMock(return_value=(ReplyType.SIMPLE_REPLY, "ok"))
+class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.memory = MarkdownMemory(self._tmpdir.name)
+        self._enabled = True
 
-        reply = await agent.chat(
-            user_message="帮我总结一下路线图",
-            user_id="alice",
-            enable_memory=True,
-        )
-        await asyncio.sleep(0)
+    def tearDown(self):
+        self._tmpdir.cleanup()
 
-        self.assertEqual(reply, "ok")
-        self.assertEqual(len(memory_storage.retrieve_calls), 2)
-        self.assertTrue(all(call["query"] == "" for call in memory_storage.retrieve_calls))
-        self.assertIn("search_journal_memory", agent.tools)
+    def _is_enabled(self):
+        return self._enabled
 
-    async def test_agent_hides_memory_tool_when_memory_disabled(self):
-        message_storage = _FakeMessageStorage()
-        memory_storage = _FakeMemoryStorage()
-        agent = Agent(
-            name="Memory Agent",
-            client=object(),
-            message_storage=message_storage,
-            memory_storage=memory_storage,
-        )
-        agent.model_client.call = AsyncMock(return_value=(ReplyType.SIMPLE_REPLY, "ok"))
+    async def test_write_daily_memory_appends_entry(self):
+        tool = create_write_daily_memory_tool(self.memory, self._is_enabled)
+        result = await tool("This is a test diary entry")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["date"], date.today().isoformat())
 
-        await agent.chat(
-            user_message="今天怎么样",
-            user_id="alice",
-            enable_memory=False,
-        )
+        text = await self.memory.read_file(self.memory.daily_path(date.today()))
+        self.assertIn("test diary entry", text)
 
-        self.assertEqual(memory_storage.retrieve_calls, [])
-        tool_specs = agent.model_client.call.await_args.kwargs["tool_specs"]
-        tool_names = [spec["name"] for spec in tool_specs or []]
-        self.assertNotIn("search_journal_memory", tool_names)
+    async def test_write_daily_memory_disabled(self):
+        self._enabled = False
+        tool = create_write_daily_memory_tool(self.memory, self._is_enabled)
+        result = await tool("Should not be written")
+        self.assertEqual(result["status"], "disabled")
+
+    async def test_write_daily_memory_empty_content(self):
+        tool = create_write_daily_memory_tool(self.memory, self._is_enabled)
+        result = await tool("   ")
+        self.assertEqual(result["status"], "skipped")
+
+    async def test_search_memory_keyword(self):
+        await self.memory.append_daily("Meeting with Alice about project X")
+        tool = create_search_memory_tool(self.memory, self._is_enabled)
+        result = await tool(query="Alice")
+        self.assertIn("Alice", result["results"])
+
+    async def test_search_memory_disabled(self):
+        self._enabled = False
+        tool = create_search_memory_tool(self.memory, self._is_enabled)
+        result = await tool(query="anything")
+        self.assertFalse(result["enabled"])
+
+    async def test_search_memory_date_range(self):
+        today = date.today()
+        await self.memory.append_daily("Entry for today", target_date=today)
+        tool = create_search_memory_tool(self.memory, self._is_enabled)
+        result = await tool(date=today.isoformat())
+        self.assertIn("Entry for today", result["results"])
 
 
 if __name__ == "__main__":

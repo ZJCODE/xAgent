@@ -1,38 +1,13 @@
-from enum import Enum
-from typing import List
-
 from pydantic import BaseModel, Field
 
 
-class MemoryType(str, Enum):
-    """Types of long-term memory supported by the system."""
+class DiaryEntry(BaseModel):
+    """Structured output for a diary entry formatted by the LLM."""
 
-    EPISODIC = "episodic"
-    SEMANTIC = "semantic"
-    SOCIAL = "social"
-    SELF = "self"
+    content: str = Field(default="", description="Diary entry text")
 
 
-class MemoryPiece(BaseModel):
-    """A single durable memory item extracted from transcript chunks."""
+class SummaryOutput(BaseModel):
+    """Structured output for a periodic summary (weekly/monthly/yearly)."""
 
-    content: str
-    type: MemoryType
-
-
-class MemoryExtraction(BaseModel):
-    """Structured output returned by the memory extraction model."""
-
-    memories: List[MemoryPiece] = Field(default_factory=list)
-
-
-class DailyJournalRewrite(BaseModel):
-    """Structured output for a full rewritten daily journal entry."""
-
-    content: str = Field(default="", description="Complete journal text for the target day")
-
-
-class JournalKeywordExtraction(BaseModel):
-    """Structured output for search keywords derived from a user query."""
-
-    keywords: List[str] = Field(default_factory=list, description="Search keywords or short phrases")
+    content: str = Field(default="", description="Summary text")

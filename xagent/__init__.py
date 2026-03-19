@@ -17,8 +17,7 @@ __all__ = [
     # Database
     "MessageStorageBase",
     "MessageStorageLocal",
-    "MemoryStorageBase",
-    "MemoryStorageLocal",
+    "MarkdownMemory",
     
     # Utilities
     "function_tool",
@@ -41,8 +40,7 @@ _EXPORTS = {
     "draw_image": (".tools", "draw_image"),
     "MessageStorageBase": (".components", "MessageStorageBase"),
     "MessageStorageLocal": (".components", "MessageStorageLocal"),
-    "MemoryStorageBase": (".components", "MemoryStorageBase"),
-    "MemoryStorageLocal": (".components", "MemoryStorageLocal"),
+    "MarkdownMemory": (".components", "MarkdownMemory"),
 }
 
 

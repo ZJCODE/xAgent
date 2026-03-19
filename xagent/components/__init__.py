@@ -1,10 +1,8 @@
 from .message import MessageStorageBase, MessageStorageLocal
-from .memory import MemoryStorageBase, MemoryStorageBasic, MemoryStorageLocal
+from .memory import MarkdownMemory
 
 __all__ = [
     "MessageStorageBase",
     "MessageStorageLocal",
-    "MemoryStorageBase",
-    "MemoryStorageBasic",
-    "MemoryStorageLocal",
+    "MarkdownMemory",
 ]

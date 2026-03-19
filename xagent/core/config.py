@@ -45,16 +45,36 @@ class AgentConfig:
 
     # Tool-specific system prompt segments (injected when the tool is active)
     TOOL_SYSTEM_PROMPTS = {
-        "search_journal_memory": (
-            "\n**Journal Memory Search Guidelines:**\n"
-            "You have access to a journal memory lookup tool (`search_journal_memory`).\n"
+        "write_daily_memory": (
+            "\n**Daily Memory Writing Guidelines:**\n"
+            "You have access to a diary writing tool (`write_daily_memory`).\n"
+            "- Use it to record important facts, decisions, preferences, commitments, or notable events.\n"
+            "- Write entries in first person, natural diary style.\n"
+            "- Good triggers: the user explicitly asks you to remember something, "
+            "a significant decision is made, user shares important personal information, "
+            "or you detect a preference worth preserving.\n"
+            "- Do not write trivial small talk or routine greetings.\n"
+            "- Each write appends to today's diary file — entries are never overwritten.\n"
+        ),
+        "search_memory": (
+            "\n**Memory Search Guidelines:**\n"
+            "You have access to a memory search tool (`search_memory`).\n"
             "- Use it only when older context is necessary to answer well.\n"
             "- Do not call it on every turn.\n"
-            "- Prefer the recent transcript and already-injected recent journal context first.\n"
+            "- Prefer the recent diary context already injected in the system prompt.\n"
             "- Good triggers: the user asks what you remember, refers to a prior plan/preference, "
             "or asks you to recall an earlier discussion.\n"
-            "- When the user gives a specific date, pass that date to the tool.\n"
+            "- You can search by keyword (grep), by date, or by date range.\n"
+            "- Scopes: daily, weekly, monthly, yearly, or all.\n"
             "- After reading results, keep facts tied to the correct speaker and date.\n"
+        ),
+        "generate_memory_summary": (
+            "\n**Memory Summary Generation Guidelines:**\n"
+            "You have access to a summary generation tool (`generate_memory_summary`).\n"
+            "- Use it to create weekly, monthly, or yearly summaries from diary entries.\n"
+            "- Good triggers: user asks for a period summary, end of a significant period, "
+            "or to consolidate scattered daily notes.\n"
+            "- Weekly summaries are based on daily entries, monthly on daily entries, yearly on monthly summaries.\n"
         ),
         "run_command": (
             "\n**Shell Command Execution Guidelines:**\n"

@@ -69,7 +69,7 @@ class MessageHandler:
     def build_system_prompt(
         self,
         user_id: str,
-        retrieved_memories: Optional[List[dict]] = None,
+        memory_context: str = "",
         tool_names: Optional[List[str]] = None,
     ) -> str:
         """Build the runtime system prompt.
@@ -78,7 +78,7 @@ class MessageHandler:
           1. Core Principles — foundational behaviour guidelines
           2. Tool Instructions — per-tool safety / usage rules
           3. Context Information — runtime metadata (speaker, date)
-          4. Retrieved Journal Memory — relevant journal entries (only when non-empty)
+          4. Recent Diary Memory — recent daily diary entries (only when non-empty)
           5. User System Prompt — developer-supplied customisation
           (6. User Message — appended as normal messages, not part of system prompt)
         """
@@ -106,10 +106,13 @@ class MessageHandler:
         ]
         sections.append("\n".join(context_lines))
 
-        # --- 4. Retrieved Journal Memory (conditional) ---
-        memory_block = self._format_memories(retrieved_memories)
-        if memory_block:
-            sections.append(memory_block)
+        # --- 4. Recent Diary Memory (conditional) ---
+        if memory_context:
+            sections.append(
+                "**Recent Diary Memory:**\n"
+                "- These are your recent diary entries. If they conflict with the recent transcript, trust the recent transcript.\n\n"
+                + memory_context
+            )
 
         # --- 5. Developer-supplied system prompt ---
         if self.system_prompt:
@@ -125,38 +128,6 @@ class MessageHandler:
             )
 
         return prompt
-
-    @staticmethod
-    def _format_memories(retrieved_memories: Optional[List[dict]]) -> str:
-        """Format retrieved memories into a structured prompt section.
-
-        Returns an empty string when there are no memories so the caller
-        can skip appending the section entirely.
-        """
-        if not retrieved_memories:
-            return ""
-
-        lines = [
-            "**Relevant Journal Memory:**",
-            "- These are retrieved journal entries written by you. If they conflict with the recent transcript, trust the recent transcript.",
-        ]
-        blocks: list[str] = []
-        for mem in retrieved_memories:
-            if not isinstance(mem, dict):
-                continue
-            content = str(mem.get("content", "")).strip()
-            if not content:
-                continue
-            metadata = mem.get("metadata", {}) if isinstance(mem.get("metadata"), dict) else {}
-            journal_date = metadata.get("journal_date")
-            if journal_date:
-                blocks.append(f"[{journal_date}]\n{content}")
-            else:
-                blocks.append(content)
-
-        if not blocks:
-            return ""
-        return "\n\n".join(["\n".join(lines), *blocks])
 
     @staticmethod
     def sanitize_input_messages(input_messages: list) -> list:
