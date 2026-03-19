@@ -202,6 +202,8 @@ class Agent:
                     current_user_id=user_id,
                 )
             ]
+            # add log for iteration_messages
+            logger.info("Iteration messages: %s", iteration_messages)
             model_messages = [system_msg] + self.message_handler.sanitize_input_messages(list(iteration_messages))
 
             for _ in range(max_iter):

@@ -86,14 +86,14 @@ class MessageHandler:
         transcript_lines = [
             "Recent shared conversation transcript.",
             f"Current speaker for this turn: {current_user_id}.",
-            "Each block below shows one recent message with an explicit speaker label.",
+            "Each block below shows one recent message with an explicit speaker label.\n\n==========\n",
             "",
         ]
 
         for msg in conversation_messages:
-            speaker = msg.sender_id or msg.role.value
+            speaker = MessageHandler._format_transcript_speaker(msg)
             content = msg.content.strip() or "[Empty message]"
-            transcript_lines.append(f"[speaker={speaker} role={msg.role.value}]")
+            transcript_lines.append(f"[speaker={speaker}]")
             transcript_lines.append(content)
 
             image_count = MessageHandler._count_message_images(msg)
@@ -104,7 +104,7 @@ class MessageHandler:
             transcript_lines.append("")
 
         transcript_lines.append(
-            "Based on the full conversation above, how would you reply now to the latest message "
+            "\n==========\n\nBased on the full conversation above, how would you reply now to the latest message "
             f"from {current_user_id}?"
         )
 
@@ -126,6 +126,12 @@ class MessageHandler:
             return 0
         images = message.multimodal.image
         return len(images) if isinstance(images, list) else 1
+
+    @staticmethod
+    def _format_transcript_speaker(message: Message) -> str:
+        if message.role == RoleType.ASSISTANT:
+            return "you"
+        return message.sender_id or message.role.value
 
     @staticmethod
     def _latest_user_images(messages: List[Message], current_user_id: str) -> List[str]:

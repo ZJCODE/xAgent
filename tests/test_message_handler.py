@@ -60,9 +60,10 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
         self.assertEqual(transcript_message["role"], "user")
         self.assertIsInstance(transcript_message["content"], str)
-        self.assertIn("[speaker=alice role=user]", transcript_message["content"])
+        self.assertIn("[speaker=alice]", transcript_message["content"])
         self.assertIn("First answer", transcript_message["content"])
-        self.assertIn("[speaker=bob role=user]", transcript_message["content"])
+        self.assertIn("[speaker=you]", transcript_message["content"])
+        self.assertIn("[speaker=bob]", transcript_message["content"])
         self.assertNotIn("Tool output preview", transcript_message["content"])
         self.assertIn("latest message from bob", transcript_message["content"])
 

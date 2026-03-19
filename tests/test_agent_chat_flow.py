@@ -120,9 +120,9 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         first_call_messages = model_client.calls[0]
         self.assertEqual(first_call_messages[0]["role"], "system")
         self.assertEqual(first_call_messages[1]["role"], "user")
-        self.assertIn("[speaker=alice role=user]", first_call_messages[1]["content"])
-        self.assertIn("[speaker=agent:test role=assistant]", first_call_messages[1]["content"])
-        self.assertIn("[speaker=bob role=user]", first_call_messages[1]["content"])
+        self.assertIn("[speaker=alice]", first_call_messages[1]["content"])
+        self.assertIn("[speaker=you]", first_call_messages[1]["content"])
+        self.assertIn("[speaker=bob]", first_call_messages[1]["content"])
         self.assertEqual(
             [message.role for message in storage.messages],
             [RoleType.USER, RoleType.ASSISTANT, RoleType.USER, RoleType.ASSISTANT],
