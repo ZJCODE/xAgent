@@ -141,7 +141,6 @@ class ToolExecutor:
                 output=model_output
             )
         )
-        await self.message_storage.add_messages([tool_call_msg, tool_res_msg])
 
         return [tool_call_msg, tool_res_msg], image_data, model_output if image_data else None
 

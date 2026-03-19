@@ -171,8 +171,8 @@ class Agent:
             recent_messages = await self.message_handler.get_recent_messages(
                 history_count=history_count,
             )
-            input_messages = self.message_handler.to_model_input(recent_messages)
-            messages_without_tool = self.message_handler.filter_non_tool_messages(input_messages)
+            conversation_messages = self.message_handler.filter_conversation_messages(recent_messages)
+            messages_without_tool = self.message_handler.to_model_input(conversation_messages)
 
             memory_context = ""
             if enable_memory:
@@ -196,7 +196,13 @@ class Agent:
                     tool_names=tool_names,
                 ),
             }
-            model_messages = [system_msg] + self.message_handler.sanitize_input_messages(input_messages)
+            iteration_messages = [
+                self.message_handler.build_recent_transcript_message(
+                    recent_messages,
+                    current_user_id=user_id,
+                )
+            ]
+            model_messages = [system_msg] + self.message_handler.sanitize_input_messages(list(iteration_messages))
 
             for _ in range(max_iter):
                 reply_type, response = await self.model_client.call(
@@ -228,7 +234,7 @@ class Agent:
                 if reply_type == ReplyType.TOOL_CALL:
                     tool_result = await self.tool_executor.handle_tool_calls(
                         response,
-                        input_messages,
+                        iteration_messages,
                         max_concurrent_tools,
                     )
                     if tool_result is not None:
@@ -238,7 +244,7 @@ class Agent:
                             self._assistant_sender_id,
                         )
                         return image_data
-                    model_messages = [system_msg] + self.message_handler.sanitize_input_messages(input_messages)
+                    model_messages = [system_msg] + self.message_handler.sanitize_input_messages(list(iteration_messages))
                     continue
 
                 logger.error("Unknown reply type: %s", reply_type)

@@ -66,6 +66,80 @@ class MessageHandler:
     def to_model_input(messages: List[Message]) -> list:
         return [msg.to_model_input() for msg in messages]
 
+    @staticmethod
+    def filter_conversation_messages(messages: List[Message]) -> List[Message]:
+        """Keep only persisted user/assistant natural-language messages."""
+        return [
+            msg for msg in messages
+            if msg.type == MessageType.Message
+            and msg.role in (RoleType.USER, RoleType.ASSISTANT)
+        ]
+
+    @staticmethod
+    def build_recent_transcript_message(
+        messages: List[Message],
+        current_user_id: str,
+    ) -> dict:
+        """Collapse recent conversation history into one user transcript message."""
+        conversation_messages = MessageHandler.filter_conversation_messages(messages)
+
+        transcript_lines = [
+            "Recent shared conversation transcript.",
+            f"Current speaker for this turn: {current_user_id}.",
+            "Each block below shows one recent message with an explicit speaker label.",
+            "",
+        ]
+
+        for msg in conversation_messages:
+            speaker = msg.sender_id or msg.role.value
+            content = msg.content.strip() or "[Empty message]"
+            transcript_lines.append(f"[speaker={speaker} role={msg.role.value}]")
+            transcript_lines.append(content)
+
+            image_count = MessageHandler._count_message_images(msg)
+            if image_count:
+                noun = "image" if image_count == 1 else "images"
+                transcript_lines.append(f"[Attached {noun}: {image_count}]")
+
+            transcript_lines.append("")
+
+        transcript_lines.append(
+            "Based on the full conversation above, how would you reply now to the latest message "
+            f"from {current_user_id}?"
+        )
+
+        transcript_text = "\n".join(transcript_lines).strip()
+        latest_images = MessageHandler._latest_user_images(conversation_messages, current_user_id)
+        if not latest_images:
+            return {"role": RoleType.USER.value, "content": transcript_text}
+
+        content = [{"type": "input_text", "text": transcript_text}]
+        content.extend(
+            {"type": "input_image", "image_url": image_source}
+            for image_source in latest_images
+        )
+        return {"role": RoleType.USER.value, "content": content}
+
+    @staticmethod
+    def _count_message_images(message: Message) -> int:
+        if not message.multimodal or not message.multimodal.image:
+            return 0
+        images = message.multimodal.image
+        return len(images) if isinstance(images, list) else 1
+
+    @staticmethod
+    def _latest_user_images(messages: List[Message], current_user_id: str) -> List[str]:
+        for msg in reversed(messages):
+            if msg.role != RoleType.USER or msg.sender_id != current_user_id:
+                continue
+            if not msg.multimodal or not msg.multimodal.image:
+                return []
+
+            images = msg.multimodal.image
+            image_items = images if isinstance(images, list) else [images]
+            return [image.source for image in image_items if image.source]
+        return []
+
     def build_system_prompt(
         self,
         user_id: str,
