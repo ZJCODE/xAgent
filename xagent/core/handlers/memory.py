@@ -32,8 +32,55 @@ class MemoryManager:
         limit: int = 5,
         journal_date: str | None = None,
     ) -> list:
+        """Retrieve recent context plus keyword/date search results."""
+        if journal_date is not None:
+            return await self.search_memories(
+                memory_key=memory_key,
+                query=query,
+                limit=limit,
+                journal_date=journal_date,
+            )
+
+        recent_results = await self.retrieve_context_memories(memory_key=memory_key)
+        search_results = await self.search_memories(
+            memory_key=memory_key,
+            query=query,
+            limit=limit,
+            journal_date=journal_date,
+        )
+        results = self._merge_memory_results(recent_results, search_results)
         self.logger.debug(
-            "Memory retrieval dispatch: memory_key=%s query=%r limit=%d journal_date=%s",
+            "Memory retrieval completed: memory_key=%s recent_results=%d search_results=%d merged_results=%d",
+            memory_key,
+            len(recent_results),
+            len(search_results),
+            len(results),
+        )
+        return results
+
+    async def retrieve_context_memories(
+        self,
+        memory_key: str,
+    ) -> list:
+        """Retrieve lightweight always-on memory context for the current turn."""
+        results = await self._retrieve_recent_day_memories(memory_key=memory_key)
+        self.logger.debug(
+            "Context memory retrieval completed: memory_key=%s results=%d",
+            memory_key,
+            len(results),
+        )
+        return results
+
+    async def search_memories(
+        self,
+        memory_key: str,
+        query: str,
+        limit: int = 5,
+        journal_date: str | None = None,
+    ) -> list:
+        """Retrieve memory by explicit keyword search or date filter."""
+        self.logger.debug(
+            "Memory search dispatch: memory_key=%s query=%r limit=%d journal_date=%s",
             memory_key,
             query,
             limit,
@@ -47,25 +94,21 @@ class MemoryManager:
                 journal_date=journal_date,
             )
             self.logger.debug(
-                "Memory retrieval completed with explicit journal_date: memory_key=%s results=%d",
+                "Memory search completed with explicit journal_date: memory_key=%s results=%d",
                 memory_key,
                 len(results),
             )
             return results
 
-        recent_results = await self._retrieve_recent_day_memories(memory_key=memory_key)
-        search_results = await self.memory_storage.retrieve(
+        results = await self.memory_storage.retrieve(
             memory_key=memory_key,
             query=query,
             limit=limit,
             journal_date=None,
         )
-        results = self._merge_memory_results(recent_results, search_results)
         self.logger.debug(
-            "Memory retrieval completed: memory_key=%s recent_results=%d search_results=%d merged_results=%d",
+            "Memory search completed: memory_key=%s results=%d",
             memory_key,
-            len(recent_results),
-            len(search_results),
             len(results),
         )
         return results

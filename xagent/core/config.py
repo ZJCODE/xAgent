@@ -45,6 +45,17 @@ class AgentConfig:
 
     # Tool-specific system prompt segments (injected when the tool is active)
     TOOL_SYSTEM_PROMPTS = {
+        "search_journal_memory": (
+            "\n**Journal Memory Search Guidelines:**\n"
+            "You have access to a journal memory lookup tool (`search_journal_memory`).\n"
+            "- Use it only when older context is necessary to answer well.\n"
+            "- Do not call it on every turn.\n"
+            "- Prefer the recent transcript and already-injected recent journal context first.\n"
+            "- Good triggers: the user asks what you remember, refers to a prior plan/preference, "
+            "or asks you to recall an earlier discussion.\n"
+            "- When the user gives a specific date, pass that date to the tool.\n"
+            "- After reading results, keep facts tied to the correct speaker and date.\n"
+        ),
         "run_command": (
             "\n**Shell Command Execution Guidelines:**\n"
             "You have access to a shell command execution tool (`run_command`). "

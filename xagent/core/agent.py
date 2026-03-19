@@ -9,6 +9,7 @@ from ..components import MessageStorageBase, MessageStorageLocal, MemoryStorageB
 from .config import AgentConfig, ReplyType
 from .handlers import MemoryManager, MessageHandler, ModelClient
 from .tools import ToolExecutor, ToolManager
+from ..tools import create_search_journal_memory_tool
 
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,9 @@ class Agent:
         self.client = client or AsyncOpenAI()
         self.output_type = output_type
         self.system_prompt = system_prompt or ""
+        self._assistant_sender_id = f"agent:{self.name}"
+        self._agent_memory_key = f"agent:{self.name}"
+        self._memory_tools_enabled = True
 
         workspace_path: Optional[Path] = None
         if workspace is not None:
@@ -72,12 +76,20 @@ class Agent:
                 path=str(local_memory_path),
             )
 
-        self.tool_manager = ToolManager(tools=tools, mcp_servers=mcp_servers)
-        self.model_client = ModelClient(client=self.client, model=self.model)
         self.memory_manager = MemoryManager(
             memory_storage=self.memory_storage,
             message_storage=self.message_storage,
         )
+        bound_tools = list(tools or [])
+        bound_tools.append(
+            create_search_journal_memory_tool(
+                memory_manager=self.memory_manager,
+                memory_key=self.memory_key,
+                is_enabled=lambda: self._memory_tools_enabled,
+            )
+        )
+        self.tool_manager = ToolManager(tools=bound_tools, mcp_servers=mcp_servers)
+        self.model_client = ModelClient(client=self.client, model=self.model)
         self.message_handler = MessageHandler(
             message_storage=self.message_storage,
             system_prompt=self.system_prompt,
@@ -87,8 +99,6 @@ class Agent:
             message_storage=self.message_storage,
             client=self.client,
         )
-        self._assistant_sender_id = f"agent:{self.name}"
-        self._agent_memory_key = f"agent:{self.name}"
 
     @property
     def tools(self) -> dict:
@@ -146,6 +156,7 @@ class Agent:
 
         try:
             await self.tool_manager.ensure_mcp_ready()
+            self._memory_tools_enabled = enable_memory
 
             await self.message_handler.store_user_message(
                 user_message,
@@ -161,21 +172,27 @@ class Agent:
 
             retrieved_memories: list = []
             if enable_memory:
-                retrieved_memories = await self.memory_manager.retrieve_memories(
-                    memory_key=self.memory_key,
-                    query=user_message,
-                )
+                retrieved_memories = await self.memory_manager.retrieve_context_memories(memory_key=self.memory_key)
                 self.memory_manager.schedule_memory_add(
                     memory_key=self.memory_key,
                     messages=messages_without_tool[-2:],
                 )
+
+            tool_names = list(self.tool_manager._tools.keys())
+            tool_specs = self.tool_manager.cached_tool_specs
+            if not enable_memory:
+                tool_names = [name for name in tool_names if name != "search_journal_memory"]
+                tool_specs = [
+                    spec for spec in (tool_specs or [])
+                    if spec.get("name") != "search_journal_memory"
+                ] or None
 
             system_msg = {
                 "role": "system",
                 "content": self.message_handler.build_system_prompt(
                     user_id=user_id,
                     retrieved_memories=retrieved_memories,
-                    tool_names=list(self.tool_manager._tools.keys()),
+                    tool_names=tool_names,
                 ),
             }
             model_messages = [system_msg] + self.message_handler.sanitize_input_messages(input_messages)
@@ -183,7 +200,7 @@ class Agent:
             for _ in range(max_iter):
                 reply_type, response = await self.model_client.call(
                     messages=model_messages,
-                    tool_specs=self.tool_manager.cached_tool_specs,
+                    tool_specs=tool_specs,
                     output_type=output_type,
                     stream=stream,
                     store_reply=lambda text: self.message_handler.store_model_reply(

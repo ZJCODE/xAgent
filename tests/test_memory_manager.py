@@ -28,7 +28,7 @@ class _FakeMessageStorage:
 
 
 class MemoryManagerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_retrieve_memories_always_includes_recent_two_days(self):
+    async def test_retrieve_context_memories_always_includes_recent_two_days(self):
         storage = _FakeMemoryStorage()
         manager = MemoryManager(memory_storage=storage, message_storage=_FakeMessageStorage())
         recent_dates = manager._retrieve_recent_day_memories.__func__.__globals__["datetime"].now().date()
@@ -57,16 +57,12 @@ class MemoryManagerTests(unittest.IsolatedAsyncioTestCase):
             }
         ]
 
-        results = await manager.retrieve_memories(
-            memory_key="agent:test",
-            query="路线图",
-            limit=5,
-        )
+        results = await manager.retrieve_context_memories(memory_key="agent:test")
 
-        self.assertEqual([item["id"] for item in results], ["today-id", "yesterday-id", "search-id"])
+        self.assertEqual([item["id"] for item in results], ["today-id", "yesterday-id"])
         self.assertEqual(storage.calls[0]["journal_date"], today)
         self.assertEqual(storage.calls[1]["journal_date"], yesterday)
-        self.assertEqual(storage.calls[2]["query"], "路线图")
+        self.assertEqual(len(storage.calls), 2)
 
     async def test_retrieve_memories_deduplicates_recent_day_and_search_results(self):
         storage = _FakeMemoryStorage()
@@ -101,6 +97,28 @@ class MemoryManagerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual([item["id"] for item in results], ["today-id", "other-id"])
+
+    async def test_search_memories_does_not_inject_recent_day_context(self):
+        storage = _FakeMemoryStorage()
+        manager = MemoryManager(memory_storage=storage, message_storage=_FakeMessageStorage())
+        storage.search_results = [
+            {
+                "id": "search-id",
+                "content": "关键词命中的更早日记",
+                "metadata": {"journal_date": "2026-03-01"},
+            }
+        ]
+
+        results = await manager.search_memories(
+            memory_key="agent:test",
+            query="路线图",
+            limit=5,
+        )
+
+        self.assertEqual([item["id"] for item in results], ["search-id"])
+        self.assertEqual(len(storage.calls), 1)
+        self.assertEqual(storage.calls[0]["query"], "路线图")
+        self.assertIsNone(storage.calls[0]["journal_date"])
 
     async def test_explicit_journal_date_bypasses_recent_day_injection(self):
         storage = _FakeMemoryStorage()

@@ -75,6 +75,8 @@ The database contains:
 
 ## Retrieval Model
 
+- normal chat turns automatically inject only the most recent daily journal context
+- keyword journal search is exposed as the `search_journal_memory` tool and should be triggered only when older memory is actually needed
 - `date` only: exact journal lookup for one day
 - `query` only: LLM extracts 3-5 keywords, then journal retrieval searches SQLite FTS5
 - `date + query`: keyword retrieval scoped to the specified date
@@ -104,7 +106,8 @@ class MemoryStorageBase(ABC):
 - Writes happen after the configured batch threshold and interval are reached, or immediately when the user explicitly asks the agent to remember something
 - Journal writes are message-driven background tasks; there is no independent daemon timer
 - `last_processed_message_id` is persisted in SQLite so restarts do not re-journal old messages
-- Retrieved journal entries are injected back into the system prompt as date-stamped long-term context
+- Recent journal context is injected into the system prompt as date-stamped long-term context
+- Full keyword-based journal search is on-demand through the memory tool, which avoids paying that cost on every turn
 
 ## Best Practices
 
