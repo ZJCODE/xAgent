@@ -12,7 +12,7 @@ class AgentConfig:
     """Configuration constants for Agent class."""
 
     DEFAULT_NAME = "default_agent"
-    DEFAULT_MODEL = "gpt-5-mini"
+    DEFAULT_MODEL = "gpt-5.4-mini"
     DEFAULT_WORKSPACE = "~/.xagent"
     DEFAULT_USER_ID = "default_user"
     DEFAULT_HISTORY_COUNT = 100
@@ -22,7 +22,7 @@ class AgentConfig:
     HTTP_TIMEOUT = 600.0  # 10 minutes
     TOOL_RESULT_PREVIEW_LENGTH = 20
     ERROR_RESPONSE_PREVIEW_LENGTH = 200
-    IMAGE_CAPTION_MODEL = "gpt-4o-mini"  # lightweight vision model for image captioning
+    IMAGE_CAPTION_MODEL = "gpt-5.4-mini"  # lightweight vision model for image captioning
     IMAGE_CAPTION_PROMPT = (
         "Describe this image in detail for future reference. Include: subject matter, "
         "composition, colors, style, mood, and any notable details. Be concise but thorough. "

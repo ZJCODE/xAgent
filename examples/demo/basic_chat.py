@@ -12,7 +12,7 @@ async def main():
     agent = Agent(
         name="project_assistant",
         system_prompt="You are a concise assistant for internal project planning.",
-        model="gpt-5-mini",
+        model="gpt-5.4-mini",
         message_storage=message_storage,
     )
 

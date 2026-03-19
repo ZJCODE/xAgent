@@ -25,7 +25,7 @@ from xagent.tools import web_search, draw_image
 agent = Agent(
     name="MyCustomAgent",
     system_prompt="You are a specialized assistant.",
-    model="gpt-4o-mini",
+    model="gpt-5.4-mini",
     tools=[web_search, draw_image]
 )
 
@@ -48,7 +48,7 @@ def create_research_agent():
     return Agent(
         name="ResearchAgent",
         system_prompt="You are a research specialist.",
-        model="gpt-4o-mini",
+        model="gpt-5.4-mini",
         tools=[web_search],
         workspace="./data/research_agent"
     )
@@ -58,7 +58,7 @@ def create_creative_agent():
     return Agent(
         name="CreativeAgent", 
         system_prompt="You are a creative visual assistant.",
-        model="gpt-4o-mini",
+        model="gpt-5.4-mini",
         tools=[draw_image]
     )
 

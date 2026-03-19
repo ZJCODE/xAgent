@@ -11,7 +11,7 @@ async def main():
     agent = Agent(
         name="memory_assistant",
         system_prompt="You are a helpful assistant that uses journal memory when available.",
-        model="gpt-5-mini",
+        model="gpt-5.4-mini",
         message_storage=message_storage,
         memory_storage=MemoryStorageLocal(path=str(message_storage.path)),
     )

@@ -10,7 +10,7 @@ async def main():
     agent = Agent(
         name="streaming_assistant",
         system_prompt="You write practical answers in a calm, direct tone.",
-        model="gpt-5-mini",
+        model="gpt-5.4-mini",
         message_storage=MessageStorageLocal(),
     )
 

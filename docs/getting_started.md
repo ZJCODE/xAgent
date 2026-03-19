@@ -82,7 +82,7 @@ from xagent.core import Agent
 
 
 async def main():
-    agent = Agent(model="gpt-5-mini")
+    agent = Agent(model="gpt-5.4-mini")
 
     reply = await agent.chat(
         user_message="Hello",

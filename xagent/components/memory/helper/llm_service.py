@@ -12,7 +12,7 @@ from ....schemas.memory import DiaryEntry, SummaryOutput
 class JournalLLMService:
     """LLM service for formatting diary entries and generating periodic summaries."""
 
-    def __init__(self, model: str = "gpt-5-mini"):
+    def __init__(self, model: str = "gpt-5.4-mini"):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.openai_client = AsyncOpenAI()
         self.model = model

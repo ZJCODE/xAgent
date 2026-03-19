@@ -8,7 +8,7 @@ xAgent supports YAML-based configuration for CLI and HTTP server startup.
 agent:
   name: "MyAgent"
   system_prompt: "You are a helpful assistant."
-  model: "gpt-5-mini"
+  model: "gpt-5.4-mini"
 
 server:
   host: "0.0.0.0"
@@ -21,7 +21,7 @@ server:
 |---|---|---|---|
 | `name` | string | `"Agent"` | Agent identifier |
 | `system_prompt` | string | `"You are a helpful assistant."` | Base system prompt |
-| `model` | string | `"gpt-4o-mini"` | OpenAI model name |
+| `model` | string | `"gpt-5.4-mini"` | OpenAI model name |
 | `workspace` | string | `"~/.xagent"` | Local storage root for the shared SQLite database |
 | `capabilities` | object | `{}` | Tool and MCP configuration |
 | `output_schema` | object | `null` | Structured output schema |
@@ -134,7 +134,7 @@ agent:
   system_prompt: |
     You are a helpful assistant.
     Be concise and accurate.
-  model: "gpt-5-mini"
+  model: "gpt-5.4-mini"
   workspace: "./data"
 
   capabilities:

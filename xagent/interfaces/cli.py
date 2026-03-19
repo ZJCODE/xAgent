@@ -211,7 +211,7 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
   system_prompt: |
     You are a helpful assistant. Your task is to assist users
     with their queries and tasks.
-  model: gpt-4o-mini
+  model: gpt-5.4-mini
   capabilities:
     tools:
       - web_search

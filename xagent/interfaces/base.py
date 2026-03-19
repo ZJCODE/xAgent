@@ -22,7 +22,7 @@ class BaseAgentConfig:
     
     DEFAULT_AGENT_NAME = "Agent"
     DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
-    DEFAULT_MODEL = "gpt-4o-mini"
+    DEFAULT_MODEL = "gpt-5.4-mini"
     DEFAULT_HOST = "0.0.0.0"
     DEFAULT_PORT = 8010
 

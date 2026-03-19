@@ -36,7 +36,7 @@ async def assess_timeline_risk(scope: str, deadline_days: int) -> str:
 async def main():
     agent = Agent(
         name="tool_demo",
-        model="gpt-5-mini",
+        model="gpt-5.4-mini",
         tools=[estimate_project_cost, title_case, assess_timeline_risk],
         message_storage=MessageStorageLocal(),
     )

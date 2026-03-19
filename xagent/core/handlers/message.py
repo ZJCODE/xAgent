@@ -104,8 +104,9 @@ class MessageHandler:
             transcript_lines.append("")
 
         transcript_lines.append(
-            "\n==========\n\nBased on the full conversation above, how would you reply now to the latest message "
-            f"from {current_user_id}?"
+            "\n==========\n\nNow reply directly to the latest message "
+            f"from {current_user_id}. Respond as yourself — do not suggest, "
+            "propose alternatives, or wrap your reply in quotes."
         )
 
         transcript_text = "\n".join(transcript_lines).strip()

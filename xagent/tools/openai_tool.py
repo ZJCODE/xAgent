@@ -2,7 +2,7 @@ from openai import AsyncOpenAI
 
 from xagent.utils.tool_decorator import function_tool
 
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "gpt-5.4-mini"
 _SHARED_CLIENT: AsyncOpenAI | None = None
 
 

@@ -44,7 +44,7 @@ async def main():
     message_storage = MessageStorageLocal()
     agent = Agent(
         name="memory_agent",
-        model="gpt-5-mini",
+        model="gpt-5.4-mini",
         message_storage=message_storage,
         workspace="./my_workspace",
     )
