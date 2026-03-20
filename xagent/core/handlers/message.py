@@ -93,41 +93,22 @@ class MessageHandler:
         transcript_lines: list[str] = []
 
         # --- Runtime context ---
-        transcript_lines.append(
-            AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip()
-        )
+        transcript_lines.append(AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip())
         transcript_lines.append(f"- Current speaker: {current_user_id}")
-        transcript_lines.append(
-            "- Recent messages come from the agent's continuous global "
-            "interaction stream and may mix multiple user_ids."
-        )
         transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
         transcript_lines.append("")
 
         # --- Recent diary memory (conditional) ---
         if memory_context:
             transcript_lines.append(
-                "**Recent Diary Memory:**\n"
-                "- These are recent observer diary notes from a shared "
-                "multi-speaker interaction stream, not default facts "
-                "about the current speaker.\n"
-                "- Each diary note may mention multiple people; keep every "
-                "fact tied to the speaker explicitly named in the note.\n"
-                "- Only use a diary fact as belonging to the current speaker "
-                "when that attribution is explicit.\n"
-                "- If diary notes conflict with the recent transcript, "
-                "trust the recent transcript.\n\n"
+                "**Recent Diary Memory** "
+                "(attribution rules per instructions):\n\n"
                 + memory_context
             )
             transcript_lines.append("")
 
         # --- Conversation transcript ---
-        transcript_lines.append("Recent shared conversation transcript.")
-        transcript_lines.append(f"Current speaker for this turn: {current_user_id}.")
-        transcript_lines.append(
-            "Each block below shows one recent message with an "
-            "explicit speaker label.\n\n==========\n"
-        )
+        transcript_lines.append("==========\n")
         transcript_lines.append("")
 
         for msg in conversation_messages:

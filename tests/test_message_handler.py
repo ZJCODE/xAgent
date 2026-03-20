@@ -12,16 +12,16 @@ class _FakeMessageStorage:
 
 class MessageHandlerMemoryContextTests(unittest.TestCase):
     def test_build_instructions_contains_core_rules_and_dev_prompt(self):
-        """build_instructions returns static layers: core rules + developer prompt."""
+        """build_instructions returns static layers: core rules + input format + developer prompt."""
         handler = MessageHandler(
             system_prompt="You are a helpful assistant.",
             message_storage=_FakeMessageStorage(),
         )
         instructions = handler.build_instructions()
         self.assertIn("Core Rules", instructions)
+        self.assertIn("Input Format", instructions)
         self.assertIn("You are a helpful assistant.", instructions)
         # Should NOT contain per-turn dynamic content
-        self.assertNotIn("Current speaker", instructions)
         self.assertNotIn("Recent Diary Memory", instructions)
 
     def test_build_instructions_includes_tool_prompts(self):

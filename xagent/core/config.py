@@ -41,7 +41,7 @@ class AgentConfig:
     DEFAULT_COMMAND_TIMEOUT = 30  # seconds
     MAX_COMMAND_TIMEOUT = 300  # hard upper bound for timeout parameter
     MAX_COMMAND_OUTPUT_SIZE = 51200  # 50 KB per stream
-    MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled system prompt (chars)
+    MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled instructions (chars)
 
     # Tool-specific instruction segments (injected when the tool is active)
     TOOL_SYSTEM_PROMPTS = {
@@ -77,7 +77,7 @@ class AgentConfig:
     }
 
     DEFAULT_SYSTEM_PROMPT = (
-        "**Context Information:**\n"
+        "**Context:**\n"
     )
 
     # Foundational agent behavior — injected via the `instructions` API parameter
@@ -87,8 +87,13 @@ class AgentConfig:
         "- Never fabricate facts, data, URLs, citations, or tool results. State uncertainty explicitly.\n"
         "- Prefer your own knowledge when reliable. Use tools only for concrete value; synthesize results instead of echoing raw output.\n"
         "\n"
-        "**Speaker Attribution (Multi-User Stream):**\n"
-        "- The conversation stream is shared across multiple users. The current speaker is identified per-turn in context metadata.\n"
+        "**Input Format:**\n"
+        "- Input is a single user message containing a multi-speaker conversation transcript preceded by context metadata.\n"
+        "- Context metadata includes the current speaker and date. Reply only to the current speaker unless explicitly asked to address someone else.\n"
+        "- Each message in the transcript is labeled `[speaker=<id>]`. `[speaker=you]` marks your own previous replies.\n"
+        "- The transcript may contain messages from multiple users interleaved in time order.\n"
+        "\n"
+        "**Speaker Attribution:**\n"
         "- Treat every speaker label, sender_id, or user_id as a distinct person unless the transcript explicitly says otherwise.\n"
         "- Never transfer one speaker's preferences, plans, commitments, or private facts to another speaker. Topics from other speakers stay attributed to them.\n"
         "- Never say or imply 'we discussed', 'you told me', 'we did', or 'I remember you' unless the current speaker is explicitly tied to that fact in the transcript or memory.\n"

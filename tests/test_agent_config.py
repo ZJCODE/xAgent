@@ -7,8 +7,13 @@ class AgentConfigPromptTests(unittest.TestCase):
     def test_base_agent_prompt_includes_multi_user_boundaries(self):
         prompt = AgentConfig.BASE_AGENT_PROMPT
 
+        # Input format explanation
+        self.assertIn("Input Format", prompt)
+        self.assertIn("[speaker=<id>]", prompt)
+        self.assertIn("[speaker=you]", prompt)
+        self.assertIn("current speaker and date", prompt)
+
         # Core speaker isolation rules
-        self.assertIn("current speaker is identified per-turn in context metadata", prompt)
         self.assertIn("speaker label, sender_id, or user_id as a distinct person", prompt)
         self.assertIn("Never transfer one speaker's preferences, plans, commitments, or private facts to another speaker", prompt)
         self.assertIn("Topics from other speakers stay attributed to them", prompt)
