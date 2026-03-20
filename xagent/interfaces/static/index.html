@@ -523,6 +523,13 @@ function autoResize(textarea) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
 }
 
+function focusChatInput() {
+  const chatInput = document.getElementById('chatInput');
+  requestAnimationFrame(() => {
+    chatInput.focus({ preventScroll: true });
+  });
+}
+
 function scrollToBottom() {
   const container = document.getElementById('messages');
   requestAnimationFrame(() => {
@@ -756,6 +763,7 @@ async function sendMessage() {
     state.messages[messageIndex].content = `Error: ${errText}`;
   } finally {
     setSending(false);
+    focusChatInput();
     scrollToBottom();
   }
 }
@@ -798,7 +806,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   restoreSettings();
   bindEvents();
   await checkHealth();
-  document.getElementById('chatInput').focus();
+  focusChatInput();
 });
 </script>
 </body>
