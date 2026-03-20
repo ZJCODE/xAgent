@@ -43,20 +43,6 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(today.isoformat(), ctx)
         self.assertIn("Today's diary entry", ctx)
 
-    async def test_schedule_diary_write_explicit_trigger(self):
-        """Explicit 'remember this' pattern triggers immediate diary write."""
-        self.handler.schedule_diary_write([
-            {"role": "user", "content": "请记住我喜欢蓝色"},
-            {"role": "assistant", "content": "好的，我记住了。"},
-        ])
-        # Wait for background task to complete
-        await asyncio.sleep(0.5)
-        for task in list(self.handler._background_tasks):
-            await task
-
-        today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
-        self.assertIn("蓝色", today_text)
-
     async def test_schedule_diary_write_threshold_trigger(self):
         """Messages accumulate and trigger when threshold + interval are met."""
         self.handler._last_write_time = 0.0  # Ensure interval is met

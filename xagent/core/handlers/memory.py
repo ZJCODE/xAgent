@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, List
@@ -14,18 +13,6 @@ if TYPE_CHECKING:
     from ...components.memory.helper.llm_service import JournalLLMService
 
 logger = logging.getLogger(__name__)
-
-# Patterns that trigger an immediate diary write
-EXPLICIT_MEMORY_PATTERNS = [
-    r"请记住", r"帮我记住", r"记住(?:这个|这件事|这一点|一下)?",
-    r"别忘了", r"记一下", r"记下来",
-    r"\bremember\s+this\b", r"\bplease\s+remember\b",
-    r"\bdon'?t\s+forget\b", r"\bnote\s+this\s+down\b",
-    r"\bmake\s+a\s+note\s+of\s+this\b",
-    r"记一下日记", r"写日记", r"write.*diary",
-]
-
-_EXPLICIT_RE = re.compile("|".join(EXPLICIT_MEMORY_PATTERNS), re.IGNORECASE)
 
 
 class MemoryHandler:
@@ -77,8 +64,7 @@ class MemoryHandler:
     def schedule_diary_write(self, messages: List[dict]) -> None:
         """Accumulate messages and schedule a background diary write when appropriate.
 
-        Triggers immediately on explicit "remember this" patterns.
-        Otherwise waits until ``MESSAGE_THRESHOLD`` is reached **and**
+        Waits until ``MESSAGE_THRESHOLD`` is reached **and**
         ``MIN_INTERVAL_SECONDS`` have elapsed since the last write.
         """
         if not messages:
@@ -86,17 +72,11 @@ class MemoryHandler:
 
         self._pending_messages.extend(messages)
 
-        # Check for explicit trigger
-        explicit = any(
-            _EXPLICIT_RE.search(str(m.get("content", "")))
-            for m in messages
-        )
-
         now = time.time()
         threshold_met = len(self._pending_messages) >= self.MESSAGE_THRESHOLD
         interval_met = (now - self._last_write_time) >= self.MIN_INTERVAL_SECONDS
 
-        if explicit or (threshold_met and interval_met):
+        if threshold_met and interval_met:
             self._flush_diary_write()
 
     def _flush_diary_write(self) -> None:

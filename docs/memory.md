@@ -81,7 +81,7 @@ The **recent 3 days** are always injected into the system prompt automatically â
 ## How It Works
 
 1. **Every chat turn**: `MemoryHandler.get_recent_context()` reads the last 3 daily files and injects them into the system prompt.
-2. **Background diary write**: Messages are accumulated. When an explicit trigger pattern is detected or a message threshold + time interval are met, the LLM formats them into a diary entry and appends to today's daily file.
+2. **Background diary write**: Messages are accumulated. When a message threshold + time interval are met, the LLM formats them into a diary entry and appends to today's daily file.
 3. **Periodic summaries**: After each turn, `MemoryHandler.check_and_generate_summaries()` checks if any completed past periods (last week, last month, last year) are missing summary files and generates them.
 
 ## File I/O
