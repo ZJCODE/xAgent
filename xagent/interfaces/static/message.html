@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>xAgent Messages</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {} }
+    };
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg-primary: #f5f5f4;
+      --bg-secondary: rgba(255, 255, 255, 0.78);
+      --bg-tertiary: rgba(255, 255, 255, 0.58);
+      --border-soft: rgba(24, 24, 27, 0.08);
+      --border-strong: rgba(24, 24, 27, 0.12);
+      --text-primary: #18181b;
+      --text-secondary: #52525b;
+      --shadow-soft: 0 18px 60px -28px rgba(24, 24, 27, 0.22);
+      --shadow-card: 0 10px 30px -18px rgba(24, 24, 27, 0.18);
+    }
+    .dark {
+      color-scheme: dark;
+      --bg-primary: #09090b;
+      --bg-secondary: rgba(17, 17, 19, 0.78);
+      --bg-tertiary: rgba(24, 24, 27, 0.76);
+      --border-soft: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.12);
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --shadow-soft: 0 24px 80px -36px rgba(0, 0, 0, 0.75);
+      --shadow-card: 0 18px 40px -24px rgba(0, 0, 0, 0.68);
+    }
+    html, body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(120, 113, 108, 0.12), transparent 30%),
+        radial-gradient(circle at bottom right, rgba(120, 113, 108, 0.08), transparent 26%),
+        var(--bg-primary);
+      color: var(--text-primary);
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #9ca3af; border-radius: 9999px; }
+    .dark ::-webkit-scrollbar-thumb { background: #4b5563; }
+    .panel-surface {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-soft);
+      box-shadow: var(--shadow-card);
+      backdrop-filter: blur(20px);
+    }
+    .panel-muted {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-soft);
+      backdrop-filter: blur(16px);
+    }
+    .hero-grid {
+      background-image:
+        linear-gradient(to right, rgba(24, 24, 27, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(24, 24, 27, 0.04) 1px, transparent 1px);
+      background-size: 22px 22px;
+    }
+    .dark .hero-grid {
+      background-image:
+        linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    }
+    .ghost-button {
+      background: rgba(255, 255, 255, 0.6);
+      border: 1px solid var(--border-soft);
+      backdrop-filter: blur(14px);
+    }
+    .dark .ghost-button {
+      background: rgba(24, 24, 27, 0.72);
+    }
+    .nav-link {
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+    }
+    .nav-link:hover { color: var(--text-primary); background: rgba(24, 24, 27, 0.05); }
+    .dark .nav-link:hover { background: rgba(255, 255, 255, 0.06); }
+    .nav-link.active {
+      color: var(--text-primary);
+      background: rgba(24, 24, 27, 0.08);
+    }
+    .dark .nav-link.active { background: rgba(255, 255, 255, 0.1); }
+    .msg-card {
+      border-radius: 1.25rem;
+      padding: 1rem 1.15rem;
+      border: 1px solid var(--border-soft);
+      transition: transform 0.15s ease;
+    }
+    .msg-card:hover { transform: translateY(-1px); }
+    .msg-card.role-user {
+      background: rgba(24, 24, 27, 0.04);
+    }
+    .dark .msg-card.role-user {
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .msg-card.role-assistant {
+      background: rgba(255, 255, 255, 0.72);
+      box-shadow: var(--shadow-card);
+    }
+    .dark .msg-card.role-assistant {
+      background: rgba(24, 24, 27, 0.5);
+    }
+    .msg-card.role-tool {
+      background: rgba(59, 130, 246, 0.04);
+      border-color: rgba(59, 130, 246, 0.12);
+    }
+    .dark .msg-card.role-tool {
+      background: rgba(59, 130, 246, 0.08);
+      border-color: rgba(59, 130, 246, 0.15);
+    }
+    .msg-card.role-system {
+      background: rgba(168, 85, 247, 0.04);
+      border-color: rgba(168, 85, 247, 0.12);
+    }
+    .dark .msg-card.role-system {
+      background: rgba(168, 85, 247, 0.08);
+      border-color: rgba(168, 85, 247, 0.15);
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.15rem 0.55rem;
+      border-radius: 9999px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .badge-user { background: #18181b; color: #fafafa; }
+    .dark .badge-user { background: #fafafa; color: #18181b; }
+    .badge-assistant { background: #059669; color: #fff; }
+    .badge-tool { background: #2563eb; color: #fff; }
+    .badge-system { background: #7c3aed; color: #fff; }
+    .sender-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.2rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      line-height: 1;
+      border: 1px solid transparent;
+    }
+    .sender-pill.role-user {
+      background: rgba(24, 24, 27, 0.08);
+      color: #18181b;
+      border-color: rgba(24, 24, 27, 0.08);
+    }
+    .dark .sender-pill.role-user {
+      background: rgba(255, 255, 255, 0.14);
+      color: #fafafa;
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+    .sender-pill.role-assistant {
+      background: rgba(5, 150, 105, 0.12);
+      color: #047857;
+      border-color: rgba(5, 150, 105, 0.18);
+    }
+    .dark .sender-pill.role-assistant {
+      background: rgba(16, 185, 129, 0.18);
+      color: #d1fae5;
+      border-color: rgba(16, 185, 129, 0.2);
+    }
+    .sender-pill.role-tool {
+      background: rgba(37, 99, 235, 0.1);
+      color: #1d4ed8;
+      border-color: rgba(37, 99, 235, 0.16);
+    }
+    .dark .sender-pill.role-tool {
+      background: rgba(59, 130, 246, 0.18);
+      color: #dbeafe;
+      border-color: rgba(96, 165, 250, 0.22);
+    }
+    .sender-pill.role-system {
+      background: rgba(124, 58, 237, 0.1);
+      color: #6d28d9;
+      border-color: rgba(124, 58, 237, 0.16);
+    }
+    .dark .sender-pill.role-system {
+      background: rgba(139, 92, 246, 0.18);
+      color: #ede9fe;
+      border-color: rgba(167, 139, 250, 0.22);
+    }
+    .md-body p { margin: 0.35em 0; }
+    .md-body pre {
+      background: #111827; color: #f3f4f6;
+      padding: 0.8em 1em; border-radius: 0.75rem;
+      overflow-x: auto; margin: 0.6em 0;
+      font-size: 0.82rem;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .md-body :not(pre) > code {
+      background: rgba(24, 24, 27, 0.08);
+      padding: 0.12em 0.35em; border-radius: 0.35rem;
+    }
+    .dark .md-body :not(pre) > code { background: rgba(255, 255, 255, 0.1); }
+    .md-body ul, .md-body ol { padding-left: 1.2rem; margin: 0.4em 0; }
+    .md-body ul { list-style: disc; }
+    .md-body ol { list-style: decimal; }
+    .md-body a { text-decoration: underline; color: #2563eb; }
+    .dark .md-body a { color: #60a5fa; }
+    .tool-detail {
+      background: rgba(24, 24, 27, 0.03);
+      border: 1px solid var(--border-soft);
+      border-radius: 0.75rem;
+      padding: 0.7rem 0.85rem;
+      margin-top: 0.5rem;
+      font-size: 0.82rem;
+    }
+    .dark .tool-detail {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .stat-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body class="h-full text-gray-900 dark:text-gray-100">
+  <div class="hero-grid fixed inset-0 pointer-events-none opacity-70"></div>
+  <div class="relative h-full max-w-6xl mx-auto px-3 sm:px-5 py-4 sm:py-6 flex flex-col gap-4">
+    <section class="panel-surface flex-1 min-h-0 rounded-[32px] overflow-hidden flex flex-col">
+      <!-- Header -->
+      <header class="px-4 sm:px-6 py-4 sm:py-5 border-b border-black/5 dark:border-white/10">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-4">
+            <h1 class="text-xl sm:text-2xl font-semibold tracking-[-0.03em]">xAgent Messages</h1>
+            <nav class="flex flex-wrap items-center gap-1">
+              <a href="/" class="nav-link">Chat</a>
+              <a href="/memory" class="nav-link">Memory</a>
+              <a href="/message" class="nav-link active">Messages</a>
+            </nav>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="refreshBtn" class="ghost-button text-xs sm:text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition inline-flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M4 9a9 9 0 0115.4-5.4M20 15a9 9 0 01-15.4 5.4"/></svg>
+              Refresh
+            </button>
+            <button id="toggleThemeBtn" class="ghost-button text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Theme</button>
+          </div>
+        </div>
+        <div id="agentInfo" class="mt-3 text-xs text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-4 gap-y-1"></div>
+      </header>
+
+      <!-- Messages list -->
+      <main class="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6">
+        <div id="messageList" class="space-y-3"></div>
+        <div id="emptyState" class="hidden h-full min-h-[200px] flex items-center justify-center text-gray-400 dark:text-gray-500 text-sm">
+          <div class="text-center">
+            <svg class="mx-auto w-12 h-12 mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+            </svg>
+            <p>No messages yet</p>
+          </div>
+        </div>
+        <div id="loadMoreWrap" class="hidden text-center py-4">
+          <button id="loadMoreBtn" class="ghost-button px-5 py-2 rounded-full text-sm hover:bg-white/80 dark:hover:bg-gray-900 transition">Load more</button>
+        </div>
+      </main>
+    </section>
+  </div>
+
+<script>
+(function() {
+  const md = window.markdownit({ html: false, linkify: true, typographer: true });
+  const THEME_KEY = 'xagent_theme_v1';
+  const PAGE_SIZE = 50;
+
+  let allMessages = [];
+  let currentOffset = 0;
+  let hasMore = false;
+
+  // ── Theme ──
+  function initTheme() {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'dark' || (!saved && matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.classList.add('dark');
+    }
+  }
+  initTheme();
+  document.getElementById('toggleThemeBtn').addEventListener('click', () => {
+    document.documentElement.classList.toggle('dark');
+    localStorage.setItem(THEME_KEY, document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+  });
+
+  // ── Agent info ──
+  async function loadAgentInfo() {
+    try {
+      const res = await fetch('/api/agent/info');
+      const data = await res.json();
+      const storagePath = data.message_storage && data.message_storage.path ? data.message_storage.path : '';
+      document.getElementById('agentInfo').innerHTML =
+        `<span>Agent: <strong>${esc(data.name)}</strong></span>` +
+        `<span>Model: <strong>${esc(data.model)}</strong></span>` +
+        `<span>Workspace: <strong>${esc(data.workspace)}</strong></span>` +
+        `<span>Messages: <strong>${esc(storagePath)}</strong></span>`;
+    } catch {}
+  }
+
+  // ── Messages ──
+  async function loadMessages(append) {
+    if (!append) {
+      currentOffset = 0;
+      allMessages = [];
+    }
+    try {
+      const res = await fetch(`/api/messages?count=${PAGE_SIZE}&offset=${currentOffset}`);
+      const data = await res.json();
+      hasMore = data.has_more;
+
+      allMessages = append ? allMessages.concat(data.messages) : data.messages;
+      renderMessages();
+      currentOffset += data.messages.length;
+
+      document.getElementById('loadMoreWrap').classList.toggle('hidden', !hasMore);
+    } catch (e) {
+      document.getElementById('messageList').innerHTML =
+        `<div class="text-red-500 text-sm p-4">Failed to load messages: ${esc(e.message)}</div>`;
+    }
+  }
+
+  function renderMessages() {
+    const list = document.getElementById('messageList');
+    const empty = document.getElementById('emptyState');
+
+    if (allMessages.length === 0) {
+      list.innerHTML = '';
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+
+    list.innerHTML = allMessages.map(m => {
+      const roleClass = `role-${m.role.toLowerCase()}`;
+      const badgeClass = `badge-${m.role.toLowerCase()}`;
+      const typeLabel = typeof m.type === 'string' ? m.type.trim() : '';
+      const showType = typeLabel && typeLabel.toLowerCase() !== 'message';
+      const ts = m.timestamp ? fmtTime(m.timestamp) : '';
+      const senderLabel = formatSenderLabel(m.sender_id);
+      const sender = senderLabel ? esc(senderLabel) : '';
+
+      let body = '';
+      if (m.content) {
+        body = `<div class="md-body mt-2 text-sm leading-relaxed">${md.render(m.content)}</div>`;
+      }
+
+      let toolHtml = '';
+      if (m.tool_call) {
+        const tc = m.tool_call;
+        let argsStr = '';
+        try {
+          argsStr = typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments, null, 2);
+        } catch { argsStr = String(tc.arguments); }
+
+        toolHtml = `<details class="tool-detail">
+          <summary class="cursor-pointer font-medium">🔧 ${esc(tc.name)}</summary>
+          <div class="mt-2">
+            <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Arguments:</div>
+            <pre class="text-xs bg-gray-900 text-gray-100 p-2 rounded-lg overflow-x-auto">${esc(argsStr)}</pre>
+            ${tc.output ? `<div class="text-xs text-gray-500 dark:text-gray-400 mt-2 mb-1">Output:</div><pre class="text-xs bg-gray-900 text-gray-100 p-2 rounded-lg overflow-x-auto">${esc(tc.output)}</pre>` : ''}
+          </div>
+        </details>`;
+      }
+
+      return `<div class="msg-card ${roleClass}">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="badge ${badgeClass}">${esc(m.role)}</span>
+          ${showType ? `<span class="text-xs text-gray-400">${esc(typeLabel)}</span>` : ''}
+          ${sender ? `<span class="sender-pill ${roleClass}">${sender}</span>` : ''}
+          <span class="ml-auto text-xs text-gray-400 dark:text-gray-500">${ts}</span>
+        </div>
+        ${body}
+        ${toolHtml}
+      </div>`;
+    }).join('');
+  }
+
+  // ── Load more ──
+  document.getElementById('loadMoreBtn').addEventListener('click', () => loadMessages(true));
+
+  // ── Refresh ──
+  document.getElementById('refreshBtn').addEventListener('click', () => {
+    loadAgentInfo();
+    loadMessages(false);
+  });
+
+  // ── Helpers ──
+  function fmtTime(ts) {
+    return new Date(ts * 1000).toLocaleString();
+  }
+  function formatSenderLabel(senderId) {
+    if (typeof senderId !== 'string') {
+      return '';
+    }
+    return senderId.replace(/^agent:/i, '').trim();
+  }
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
+  }
+
+  // ── Init ──
+  loadAgentInfo();
+  loadMessages(false);
+})();
+</script>
+</body>
+</html>

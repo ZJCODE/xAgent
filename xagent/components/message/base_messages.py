@@ -40,13 +40,15 @@ class MessageStorageBase(ABC):
     @abstractmethod
     async def get_messages(
         self,
-        count: int = 20
+        count: int = 20,
+        offset: int = 0,
     ) -> List[Message]:
         """
         Get the last `count` messages from the session history.
         
         Args:
             count: Number of messages to retrieve. Must be positive.
+            offset: Number of recent messages to skip before retrieving.
             
         Returns:
             List of Message objects from the session history, ordered chronologically.

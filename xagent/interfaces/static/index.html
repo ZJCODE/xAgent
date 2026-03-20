@@ -145,9 +145,9 @@
     .setting-toggle {
       display: inline-flex;
       align-items: center;
-      gap: 0.9rem;
-      min-height: 48px;
-      padding: 0.35rem 0.4rem 0.35rem 0;
+      gap: 0.75rem;
+      min-height: 40px;
+      padding: 0;
       color: var(--text-secondary);
     }
 
@@ -159,8 +159,8 @@
 
     .toggle-track {
       position: relative;
-      width: 46px;
-      height: 28px;
+      width: 42px;
+      height: 26px;
       flex-shrink: 0;
       border-radius: 999px;
       background: rgba(24, 24, 27, 0.12);
@@ -180,8 +180,8 @@
       position: absolute;
       top: 3px;
       left: 3px;
-      width: 20px;
-      height: 20px;
+      width: 18px;
+      height: 18px;
       border-radius: 999px;
       background: #ffffff;
       box-shadow: 0 4px 10px rgba(24, 24, 27, 0.18);
@@ -205,7 +205,7 @@
     }
 
     .setting-toggle input:checked + .toggle-track::after {
-      transform: translateX(18px);
+      transform: translateX(16px);
       background: #ffffff;
     }
 
@@ -224,193 +224,140 @@
 
     .setting-toggle-text {
       font-size: 0.95rem;
-      font-weight: 500;
-      letter-spacing: -0.01em;
-      color: var(--text-primary);
-    }
-
-    .advanced-grid {
-      display: grid;
-      grid-template-columns: repeat(1, minmax(0, 1fr));
-      gap: 0.9rem;
-    }
-
-    .advanced-card {
-      background: rgba(255, 255, 255, 0.52);
-      border: 1px solid var(--border-soft);
-      border-radius: 1.5rem;
-      padding: 1rem;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
-    }
-
-    .dark .advanced-card {
-      background: rgba(9, 9, 11, 0.24);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-    }
-
-    .advanced-kicker {
-      font-size: 0.68rem;
-      line-height: 1;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
-      color: var(--text-secondary);
-    }
-
-    .advanced-title {
-      margin-top: 0.45rem;
-      font-size: 1rem;
       font-weight: 600;
       letter-spacing: -0.02em;
       color: var(--text-primary);
     }
 
-    .advanced-caption {
-      margin-top: 0.3rem;
-      font-size: 0.86rem;
-      line-height: 1.55;
-      color: var(--text-secondary);
+    .settings-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 1rem;
+      padding: 1rem 1.15rem;
+      border-radius: 1.5rem;
     }
 
-    .field-shell {
-      display: block;
-      padding: 0.95rem;
-      border-radius: 1.2rem;
+    .settings-actions {
+      display: flex;
+      margin-left: auto;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.8rem;
+      flex-wrap: wrap;
+    }
+
+    .inline-field {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      min-width: 220px;
+      min-height: 44px;
+      padding: 0 1rem;
+      border-radius: 999px;
       background: rgba(255, 255, 255, 0.56);
       border: 1px solid rgba(24, 24, 27, 0.06);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
     }
 
-    .dark .field-shell {
+    .dark .inline-field {
       background: rgba(255, 255, 255, 0.03);
       border-color: rgba(255, 255, 255, 0.07);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
 
-    .field-label {
-      display: block;
-      margin-bottom: 0.5rem;
-      font-size: 0.72rem;
+    .inline-label {
+      flex-shrink: 0;
+      font-size: 0.68rem;
       line-height: 1;
       letter-spacing: 0.16em;
       text-transform: uppercase;
       color: var(--text-secondary);
     }
 
-    .control-grid {
-      display: grid;
-      grid-template-columns: repeat(1, minmax(0, 1fr));
-      gap: 0.75rem;
-      margin-top: 1rem;
-    }
-
-    .setting-tile {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      min-height: 88px;
-      padding: 1rem 1.05rem;
-      border-radius: 1.25rem;
-      background: rgba(255, 255, 255, 0.56);
-      border: 1px solid rgba(24, 24, 27, 0.06);
-      transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
-    }
-
-    .setting-tile:hover {
-      transform: translateY(-1px);
-      border-color: var(--border-strong);
-    }
-
-    .dark .setting-tile {
-      background: rgba(255, 255, 255, 0.03);
-      border-color: rgba(255, 255, 255, 0.07);
-    }
-
-    .setting-copy {
-      min-width: 0;
-    }
-
-    .setting-copy strong {
-      display: block;
-      font-size: 0.95rem;
-      font-weight: 600;
-      letter-spacing: -0.02em;
+    .inline-input {
+      min-width: 180px;
+      background: transparent;
       color: var(--text-primary);
-    }
-
-    .setting-tile .setting-toggle {
-      padding: 0;
-      min-height: auto;
-      flex-shrink: 0;
-    }
-
-    .danger-tile {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      min-height: 88px;
-      padding: 1rem 1.05rem;
-      border-radius: 1.25rem;
-      background: rgba(255, 255, 255, 0.56);
-      border: 1px solid rgba(220, 38, 38, 0.12);
-    }
-
-    .dark .danger-tile {
-      background: rgba(255, 255, 255, 0.03);
-      border-color: rgba(248, 113, 113, 0.16);
-    }
-
-    .danger-tile strong {
-      font-size: 0.95rem;
-      font-weight: 600;
+      outline: none;
+      font-size: 1rem;
+      font-weight: 500;
       letter-spacing: -0.02em;
-      color: var(--text-primary);
     }
 
-    .session-reset-button {
-      width: 46px;
-      height: 28px;
+    .inline-input::placeholder {
+      color: var(--text-secondary);
+    }
+
+    .inline-switch {
       display: inline-flex;
       align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
+      min-height: 44px;
+      gap: 0.65rem;
+      padding: 0 0.35rem 0 1rem;
       border-radius: 999px;
-      border: 1px solid rgba(220, 38, 38, 0.18);
-      background: rgba(220, 38, 38, 0.08);
-      color: #dc2626;
-      transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+      background: rgba(255, 255, 255, 0.56);
+      border: 1px solid rgba(24, 24, 27, 0.06);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
     }
 
-    .session-reset-button:hover {
-      transform: translateY(-1px);
-      background: rgba(220, 38, 38, 0.12);
-      border-color: rgba(220, 38, 38, 0.26);
+    .dark .inline-switch {
+      background: rgba(255, 255, 255, 0.03);
+      border-color: rgba(255, 255, 255, 0.07);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
 
-    .session-reset-button:focus-visible {
-      outline: 2px solid rgba(220, 38, 38, 0.7);
-      outline-offset: 2px;
+    .inline-switch .setting-toggle {
+      padding: 0;
+      min-height: auto;
+      gap: 0.65rem;
     }
 
-    .dark .session-reset-button {
-      background: rgba(248, 113, 113, 0.1);
-      border-color: rgba(248, 113, 113, 0.22);
-      color: #f87171;
-    }
-
-    .dark .session-reset-button:hover {
-      background: rgba(248, 113, 113, 0.16);
-      border-color: rgba(248, 113, 113, 0.3);
-    }
-
-    @media (min-width: 1024px) {
-      .advanced-grid {
-        grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+    @media (max-width: 640px) {
+      .settings-bar {
+        align-items: stretch;
+        padding: 0.85rem;
       }
 
-      .control-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+      .settings-actions {
+        width: 100%;
+        margin-left: 0;
+        justify-content: flex-start;
+      }
+
+      .inline-field {
+        width: 100%;
+        min-width: 0;
+      }
+
+      .inline-switch {
+        justify-content: space-between;
+        width: calc(50% - 0.4rem);
+      }
+
+      .inline-input {
+        min-width: 0;
+        width: 100%;
       }
     }
+
+    .nav-link {
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+    .nav-link:hover { color: var(--text-primary); background: rgba(24, 24, 27, 0.05); }
+    .dark .nav-link:hover { background: rgba(255, 255, 255, 0.06); }
+    .nav-link.active {
+      color: var(--text-primary);
+      background: rgba(24, 24, 27, 0.08);
+    }
+    .dark .nav-link.active { background: rgba(255, 255, 255, 0.1); }
 
     .typing-cursor::after { content: '▍'; animation: blink 1s step-end infinite; }
     @keyframes blink { 50% { opacity: 0; } }
@@ -423,7 +370,14 @@
       <header class="px-4 sm:px-6 py-4 sm:py-5 border-b border-black/5 dark:border-white/10">
         <div class="flex items-center justify-between gap-3">
           <div>
-            <h1 class="text-xl sm:text-2xl font-semibold tracking-[-0.03em]">xAgent Chat</h1>
+            <div class="flex flex-wrap items-center gap-4">
+              <h1 class="text-xl sm:text-2xl font-semibold tracking-[-0.03em]">xAgent Chat</h1>
+              <nav class="flex flex-wrap items-center gap-1">
+                <a href="/" class="nav-link active">Chat</a>
+                <a href="/memory" class="nav-link">Memory</a>
+                <a href="/message" class="nav-link">Messages</a>
+              </nav>
+            </div>
             <p class="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-1">Quiet visuals, focused exchange, connected to the current server.</p>
           </div>
           <div class="flex items-center gap-2">
@@ -435,70 +389,30 @@
           </div>
         </div>
 
-        <details class="mt-4 group rounded-[22px] panel-muted overflow-hidden">
-          <summary class="cursor-pointer list-none px-4 py-3.5 flex items-center justify-between gap-3">
-            <div>
-              <span class="block text-sm font-medium">Advanced</span>
-              <span class="block mt-1 text-xs text-gray-500 dark:text-gray-400">Structured controls for identity, delivery, and message-stream handling.</span>
+        <div class="settings-bar panel-muted">
+          <label class="inline-field text-sm">
+            <span class="inline-label">User</span>
+            <input id="userId" type="text" class="inline-input text-sm" />
+          </label>
+
+          <div class="settings-actions">
+            <div class="inline-switch">
+              <label class="setting-toggle cursor-pointer">
+                <span class="setting-toggle-text">Streaming</span>
+                <input id="optStream" type="checkbox" checked />
+                <span class="toggle-track" aria-hidden="true"></span>
+              </label>
             </div>
-            <span class="text-gray-500 group-open:rotate-180 transition text-lg leading-none">⌄</span>
-          </summary>
-          <div class="px-4 pb-4 advanced-grid">
-            <section class="advanced-card">
-              <div>
-                <p class="advanced-kicker">Identity Grid</p>
-                <p class="advanced-title">Speaker identity</p>
-                <p class="advanced-caption">Use a stable user ID to preserve speaker attribution while the agent keeps one continuous global message stream.</p>
-              </div>
-              <div class="mt-4 grid grid-cols-1 gap-3">
-                <label class="field-shell text-sm">
-                  <span class="field-label">User ID</span>
-                  <input id="userId" type="text" class="w-full px-3 py-2.5 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
-                </label>
-              </div>
-            </section>
 
-            <section class="advanced-card">
-              <div>
-                <p class="advanced-kicker">Interaction Matrix</p>
-                <p class="advanced-title">Behavior and lifecycle controls</p>
-                <p class="advanced-caption">Group high-frequency behaviors together, keep destructive actions clearly separated, and maintain a balanced visual rhythm.</p>
-              </div>
-              <div class="control-grid">
-                <div class="setting-tile">
-                  <div class="setting-copy">
-                    <strong>Streaming</strong>
-                  </div>
-                  <label class="setting-toggle cursor-pointer">
-                    <input id="optStream" type="checkbox" checked />
-                    <span class="toggle-track" aria-hidden="true"></span>
-                  </label>
-                </div>
-
-                <div class="setting-tile">
-                  <div class="setting-copy">
-                    <strong>Enable memory</strong>
-                  </div>
-                  <label class="setting-toggle cursor-pointer">
-                    <input id="optMemory" type="checkbox" checked />
-                    <span class="toggle-track" aria-hidden="true"></span>
-                  </label>
-                </div>
-
-                <div class="danger-tile">
-                  <div>
-                    <strong>Message stream reset</strong>
-                  </div>
-                  <button id="clearMessagesBtn" title="Clear Messages" aria-label="Clear Messages" class="session-reset-button">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3m-7 0h8" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            </section>
+            <div class="inline-switch">
+              <label class="setting-toggle cursor-pointer">
+                <span class="setting-toggle-text">Memory</span>
+                <input id="optMemory" type="checkbox" checked />
+                <span class="toggle-track" aria-hidden="true"></span>
+              </label>
+            </div>
           </div>
-        </details>
+        </div>
       </header>
 
       <main class="flex-1 min-h-0 flex flex-col overflow-hidden">
@@ -846,40 +760,6 @@ async function sendMessage() {
   }
 }
 
-async function clearMessages() {
-  try {
-    const response = await fetch(`${API_BASE}/clear_messages`, {
-      method: 'POST',
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-  } catch (error) {
-    console.warn('Clear message stream request failed:', error);
-  }
-
-  state.messages = [];
-  const container = document.getElementById('messages');
-  container.innerHTML = `
-    <div id="welcome" class="h-full min-h-[320px] flex items-center justify-center text-center text-gray-500 dark:text-gray-400 text-sm">
-      <div class="max-w-md px-4">
-        <div class="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[24px] panel-muted shadow-sm">
-          <svg class="w-7 h-7 text-gray-700 dark:text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" d="M8 10h8M8 14h5m-7 6h12a2 2 0 002-2V8.828a2 2 0 00-.586-1.414l-2.828-2.828A2 2 0 0015.172 4H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-          </svg>
-        </div>
-        <p class="font-semibold text-base text-gray-800 dark:text-gray-100 tracking-[-0.02em]">Start a message stream</p>
-        <p class="mt-2 leading-6">Type a message and press Enter to send. Add images when needed. Keep the interface calm and let the content lead.</p>
-        <div class="mt-5 flex flex-wrap justify-center gap-2 text-xs">
-          <span class="panel-muted rounded-full px-3 py-1.5">Enter to send</span>
-          <span class="panel-muted rounded-full px-3 py-1.5">Shift + Enter for newline</span>
-          <span class="panel-muted rounded-full px-3 py-1.5">Optional image upload</span>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
 function bindEvents() {
   const chatInput = document.getElementById('chatInput');
   const imageInput = document.getElementById('imageInput');
@@ -889,7 +769,6 @@ function bindEvents() {
   });
 
   document.getElementById('toggleThemeBtn').addEventListener('click', toggleTheme);
-  document.getElementById('clearMessagesBtn').addEventListener('click', clearMessages);
   document.getElementById('sendBtn').addEventListener('click', sendMessage);
   document.getElementById('imageBtn').addEventListener('click', () => imageInput.click());
 

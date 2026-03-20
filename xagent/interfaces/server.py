@@ -2,8 +2,9 @@ import argparse
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import uvicorn
 from dotenv import load_dotenv
@@ -61,6 +62,13 @@ class AgentHTTPServer(BaseAgentRunner):
             allow_headers=["*"],
         )
 
+    def _get_memory_root(self) -> Path:
+        memory = self.agent.markdown_memory
+        memory_root = getattr(memory, "root", None)
+        if memory_root is None:
+            raise HTTPException(status_code=500, detail="Memory storage path is unavailable")
+        return Path(memory_root).expanduser().resolve()
+
     def _create_app(self) -> FastAPI:
         app = FastAPI(
             title="xAgent HTTP Agent Server",
@@ -80,6 +88,20 @@ class AgentHTTPServer(BaseAgentRunner):
                 if index.exists():
                     return FileResponse(str(index), media_type="text/html")
                 raise HTTPException(status_code=404, detail="Web UI not found")
+
+            @app.get("/memory", include_in_schema=False)
+            async def serve_memory():
+                page = _STATIC_DIR / "memory.html"
+                if page.exists():
+                    return FileResponse(str(page), media_type="text/html")
+                raise HTTPException(status_code=404, detail="Memory page not found")
+
+            @app.get("/message", include_in_schema=False)
+            async def serve_message():
+                page = _STATIC_DIR / "message.html"
+                if page.exists():
+                    return FileResponse(str(page), media_type="text/html")
+                raise HTTPException(status_code=404, detail="Message page not found")
 
             app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
             self.logger.info("Web UI available at /")
@@ -162,6 +184,176 @@ class AgentHTTPServer(BaseAgentRunner):
             except Exception as exc:
                 self.logger.error("Failed to clear messages: %s", exc)
                 raise HTTPException(status_code=500, detail=f"Failed to clear messages: {str(exc)}")
+
+        # ── Monitoring API endpoints ─────────────────────────────────
+
+        @app.get("/api/agent/info", tags=["Monitoring"])
+        async def agent_info():
+            """Return agent metadata for monitoring pages."""
+            memory_dir = str(self._get_memory_root())
+            storage_info = self.message_storage.get_stream_info() if hasattr(self.message_storage, "get_stream_info") else {}
+            return {
+                "name": self.agent.name,
+                "model": self.agent.model,
+                "workspace": str(getattr(self, "workspace", "")),
+                "memory_dir": memory_dir,
+                "message_storage": storage_info,
+            }
+
+        @app.get("/api/memory/tree", tags=["Monitoring"])
+        async def memory_tree():
+            """Return the memory directory tree as JSON."""
+            memory_dir = self._get_memory_root()
+            if not memory_dir.is_dir():
+                return {"tree": []}
+
+            def _scan(directory: Path, rel_root: Path) -> List[Dict[str, Any]]:
+                entries: List[Dict[str, Any]] = []
+                try:
+                    children = sorted(directory.iterdir(), key=lambda p: p.name)
+                except PermissionError:
+                    return entries
+                for child in children:
+                    rel = child.relative_to(rel_root)
+                    if child.is_dir():
+                        entries.append({
+                            "name": child.name,
+                            "path": str(rel),
+                            "type": "dir",
+                            "children": _scan(child, rel_root),
+                        })
+                    elif child.suffix == ".md":
+                        entries.append({
+                            "name": child.name,
+                            "path": str(rel),
+                            "type": "file",
+                            "modified": child.stat().st_mtime,
+                        })
+                return entries
+
+            return {"tree": _scan(memory_dir, memory_dir)}
+
+        @app.get("/api/memory/read", tags=["Monitoring"])
+        async def memory_read(path: str = Query(..., description="Relative path inside memory directory")):
+            """Read a specific memory markdown file."""
+            memory_dir = self._get_memory_root()
+            requested = (memory_dir / path).resolve()
+
+            # Path traversal protection
+            if not requested.is_relative_to(memory_dir):
+                raise HTTPException(status_code=403, detail="Access denied")
+            if not requested.is_file():
+                raise HTTPException(status_code=404, detail="File not found")
+            if requested.suffix != ".md":
+                raise HTTPException(status_code=403, detail="Only markdown files can be read")
+
+            content = requested.read_text(encoding="utf-8")
+            return {
+                "path": path,
+                "content": content,
+                "modified": requested.stat().st_mtime,
+            }
+
+        @app.get("/api/memory/search", tags=["Monitoring"])
+        async def memory_search(
+            query: str = Query(..., min_length=1, description="Search text for memory file names or file content"),
+            limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
+        ):
+            """Search memory files by file name and content."""
+            memory_dir = self._get_memory_root()
+            needle = query.strip().lower()
+            results: List[Dict[str, Any]] = []
+
+            for file_path in sorted(memory_dir.rglob("*.md")):
+                if len(results) >= limit:
+                    break
+
+                relative_path = str(file_path.relative_to(memory_dir))
+                file_name = file_path.name
+                match_kind: List[str] = []
+                snippet = ""
+
+                if needle in file_name.lower() or needle in relative_path.lower():
+                    match_kind.append("filename")
+
+                try:
+                    content = file_path.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+
+                lower_content = content.lower()
+                content_index = lower_content.find(needle)
+                if content_index != -1:
+                    match_kind.append("content")
+                    start = max(0, content_index - 80)
+                    end = min(len(content), content_index + len(query) + 120)
+                    snippet = content[start:end].replace("\n", " ").strip()
+
+                if match_kind:
+                    results.append({
+                        "path": relative_path,
+                        "name": file_name,
+                        "matched_in": match_kind,
+                        "snippet": snippet,
+                        "modified": file_path.stat().st_mtime,
+                    })
+
+            return {
+                "query": query,
+                "results": results,
+            }
+
+        @app.get("/api/messages", tags=["Monitoring"])
+        async def get_messages(
+            count: int = Query(50, ge=1, le=500, description="Number of messages to retrieve"),
+            offset: int = Query(0, ge=0, description="Number of recent messages to skip"),
+        ):
+            """Paginated message retrieval for the monitoring page.
+
+            Returns messages in newest-first order so the UI can append older
+            pages at the end without reordering previously rendered items.
+            """
+            total = await self.message_storage.get_message_count()
+            messages = await self.message_storage.get_messages(count=count, offset=offset)
+            items = []
+            for msg in messages:
+                item = {
+                    "role": msg.role.value if hasattr(msg.role, "value") else str(msg.role),
+                    "type": msg.type.value if hasattr(msg.type, "value") else str(msg.type),
+                    "content": msg.content,
+                    "sender_id": msg.sender_id,
+                    "timestamp": msg.timestamp,
+                }
+                if msg.tool_call:
+                    item["tool_call"] = {
+                        "name": msg.tool_call.name,
+                        "arguments": msg.tool_call.arguments,
+                        "output": msg.tool_call.output,
+                    }
+                items.append(item)
+            items.reverse()
+            return {
+                "messages": items,
+                "total": total,
+                "count": count,
+                "offset": offset,
+                "has_more": offset + count < total,
+            }
+
+        @app.get("/api/messages/stats", tags=["Monitoring"])
+        async def messages_stats():
+            """Return message storage statistics."""
+            total = await self.message_storage.get_message_count()
+            storage_info = self.message_storage.get_stream_info() if hasattr(self.message_storage, "get_stream_info") else {}
+            result: Dict[str, Any] = {"total": total, "storage": storage_info}
+            if total > 0:
+                oldest = await self.message_storage.get_messages(count=1, offset=total - 1)
+                newest = await self.message_storage.get_messages(count=1, offset=0)
+                if oldest:
+                    result["earliest_timestamp"] = oldest[0].timestamp
+                if newest:
+                    result["latest_timestamp"] = newest[0].timestamp
+            return result
 
     def run(self, host: str = None, port: int = None, open_browser: bool = False) -> None:
         server_cfg = self.config.get("server", {})

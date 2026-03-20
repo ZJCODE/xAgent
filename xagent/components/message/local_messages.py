@@ -119,21 +119,22 @@ class MessageStorageLocal(MessageStorageBase):
     async def get_messages(
         self,
         count: int = MessageStorageLocalConfig.DEFAULT_MESSAGE_COUNT,
+        offset: int = 0,
     ) -> List[Message]:
         if count <= 0:
             raise ValueError("count must be a positive integer")
-        return await asyncio.to_thread(self._get_messages_sync, count)
+        return await asyncio.to_thread(self._get_messages_sync, count, offset)
 
-    def _get_messages_sync(self, count: int) -> List[Message]:
+    def _get_messages_sync(self, count: int, offset: int = 0) -> List[Message]:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
                 SELECT message_json
                 FROM {MessageStorageLocalConfig.TABLE_NAME}
                 ORDER BY id DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (count,),
+                (count, offset),
             ).fetchall()
 
         messages: List[Message] = []

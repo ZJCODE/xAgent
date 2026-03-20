@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>xAgent Memory</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {} }
+    };
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg-primary: #f5f5f4;
+      --bg-secondary: rgba(255, 255, 255, 0.78);
+      --bg-tertiary: rgba(255, 255, 255, 0.58);
+      --border-soft: rgba(24, 24, 27, 0.08);
+      --border-strong: rgba(24, 24, 27, 0.12);
+      --text-primary: #18181b;
+      --text-secondary: #52525b;
+      --shadow-soft: 0 18px 60px -28px rgba(24, 24, 27, 0.22);
+      --shadow-card: 0 10px 30px -18px rgba(24, 24, 27, 0.18);
+    }
+    .dark {
+      color-scheme: dark;
+      --bg-primary: #09090b;
+      --bg-secondary: rgba(17, 17, 19, 0.78);
+      --bg-tertiary: rgba(24, 24, 27, 0.76);
+      --border-soft: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.12);
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --shadow-soft: 0 24px 80px -36px rgba(0, 0, 0, 0.75);
+      --shadow-card: 0 18px 40px -24px rgba(0, 0, 0, 0.68);
+    }
+    html, body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(120, 113, 108, 0.12), transparent 30%),
+        radial-gradient(circle at bottom right, rgba(120, 113, 108, 0.08), transparent 26%),
+        var(--bg-primary);
+      color: var(--text-primary);
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #9ca3af; border-radius: 9999px; }
+    .dark ::-webkit-scrollbar-thumb { background: #4b5563; }
+    .panel-surface {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-soft);
+      box-shadow: var(--shadow-card);
+      backdrop-filter: blur(20px);
+    }
+    .panel-muted {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-soft);
+      backdrop-filter: blur(16px);
+    }
+    .hero-grid {
+      background-image:
+        linear-gradient(to right, rgba(24, 24, 27, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(24, 24, 27, 0.04) 1px, transparent 1px);
+      background-size: 22px 22px;
+    }
+    .dark .hero-grid {
+      background-image:
+        linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    }
+    .ghost-button {
+      background: rgba(255, 255, 255, 0.6);
+      border: 1px solid var(--border-soft);
+      backdrop-filter: blur(14px);
+    }
+    .dark .ghost-button {
+      background: rgba(24, 24, 27, 0.72);
+    }
+    .nav-link {
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+    }
+    .nav-link:hover { color: var(--text-primary); background: rgba(24, 24, 27, 0.05); }
+    .dark .nav-link:hover { background: rgba(255, 255, 255, 0.06); }
+    .nav-link.active {
+      color: var(--text-primary);
+      background: rgba(24, 24, 27, 0.08);
+    }
+    .dark .nav-link.active { background: rgba(255, 255, 255, 0.1); }
+    .search-input {
+      width: 100%;
+      padding: 0.8rem 1rem;
+      border-radius: 1rem;
+      border: 1px solid var(--border-soft);
+      background: rgba(255, 255, 255, 0.68);
+      color: var(--text-primary);
+    }
+    .dark .search-input {
+      background: rgba(24, 24, 27, 0.72);
+    }
+    .search-result {
+      padding: 0.75rem;
+      border-radius: 0.9rem;
+      border: 1px solid var(--border-soft);
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .search-result:hover {
+      background: rgba(24, 24, 27, 0.05);
+    }
+    .dark .search-result:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .tree-item {
+      cursor: pointer;
+      padding: 0.4rem 0.65rem;
+      border-radius: 0.75rem;
+      font-size: 0.85rem;
+      transition: background 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .tree-item:hover { background: rgba(24, 24, 27, 0.05); }
+    .dark .tree-item:hover { background: rgba(255, 255, 255, 0.06); }
+    .tree-item.selected { background: rgba(24, 24, 27, 0.1); font-weight: 600; }
+    .dark .tree-item.selected { background: rgba(255, 255, 255, 0.12); }
+    .tree-children { padding-left: 1rem; }
+    .md-content p { margin: 0.5em 0; }
+    .md-content pre {
+      background: #111827; color: #f3f4f6;
+      padding: 0.9em 1em; border-radius: 1rem;
+      overflow-x: auto; margin: 0.75em 0;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .md-content :not(pre) > code {
+      background: rgba(24, 24, 27, 0.08);
+      padding: 0.15em 0.4em; border-radius: 0.45rem;
+    }
+    .dark .md-content :not(pre) > code { background: rgba(255, 255, 255, 0.1); }
+    .md-content ul, .md-content ol { padding-left: 1.25rem; margin: 0.5em 0; }
+    .md-content ul { list-style: disc; }
+    .md-content ol { list-style: decimal; }
+    .md-content a { text-decoration: underline; color: #2563eb; }
+    .dark .md-content a { color: #60a5fa; }
+    .md-content h2 { font-size: 1.15rem; font-weight: 700; margin: 1.2em 0 0.4em; }
+    .md-content h3 { font-size: 1rem; font-weight: 600; margin: 1em 0 0.3em; }
+    .md-content hr { border: none; border-top: 1px solid var(--border-soft); margin: 1.2em 0; }
+    .md-content img { max-width: 100%; border-radius: 0.9rem; margin: 0.65em 0; }
+  </style>
+</head>
+<body class="h-full text-gray-900 dark:text-gray-100">
+  <div class="hero-grid fixed inset-0 pointer-events-none opacity-70"></div>
+  <div class="relative h-full max-w-6xl mx-auto px-3 sm:px-5 py-4 sm:py-6 flex flex-col gap-4">
+    <section class="panel-surface flex-1 min-h-0 rounded-[32px] overflow-hidden flex flex-col">
+      <!-- Header -->
+      <header class="px-4 sm:px-6 py-4 sm:py-5 border-b border-black/5 dark:border-white/10">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-4">
+            <h1 class="text-xl sm:text-2xl font-semibold tracking-[-0.03em]">xAgent Memory</h1>
+            <nav class="flex flex-wrap items-center gap-1">
+              <a href="/" class="nav-link">Chat</a>
+              <a href="/memory" class="nav-link active">Memory</a>
+              <a href="/message" class="nav-link">Messages</a>
+            </nav>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="refreshBtn" class="ghost-button text-xs sm:text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition inline-flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M4 9a9 9 0 0115.4-5.4M20 15a9 9 0 01-15.4 5.4"/></svg>
+              Refresh
+            </button>
+            <button id="toggleThemeBtn" class="ghost-button text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Theme</button>
+          </div>
+        </div>
+        <!-- Agent info bar -->
+        <div id="agentInfo" class="mt-3 text-xs text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-4 gap-y-1"></div>
+        <div class="mt-3 flex flex-col sm:flex-row gap-2">
+          <input id="searchInput" type="text" class="search-input" placeholder="Search by file name or memory content" />
+          <button id="searchBtn" class="ghost-button px-4 py-2 rounded-2xl text-sm">Search</button>
+          <button id="clearSearchBtn" class="ghost-button px-4 py-2 rounded-2xl text-sm">Clear</button>
+        </div>
+      </header>
+
+      <!-- Body: Tree + Content -->
+      <div class="flex-1 min-h-0 flex overflow-hidden">
+        <!-- Tree sidebar -->
+        <aside id="treeSidebar" class="w-64 shrink-0 border-r border-black/5 dark:border-white/10 overflow-y-auto p-3">
+          <div id="searchResults" class="hidden space-y-2 mb-3"></div>
+          <div class="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-2 px-2">Files</div>
+          <div id="treeContainer"></div>
+          <div id="treeEmpty" class="hidden text-sm text-gray-400 dark:text-gray-500 text-center py-8">No memory files found</div>
+        </aside>
+        <!-- Content viewer -->
+        <main class="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
+          <div id="contentPlaceholder" class="h-full flex items-center justify-center text-gray-400 dark:text-gray-500 text-sm">
+            <div class="text-center">
+              <svg class="mx-auto w-12 h-12 mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+              </svg>
+              <p>Select a file from the tree to view its content</p>
+            </div>
+          </div>
+          <div id="contentViewer" class="hidden">
+            <div class="flex items-center justify-between mb-4">
+              <h2 id="contentTitle" class="text-lg font-semibold tracking-tight"></h2>
+              <span id="contentMeta" class="text-xs text-gray-400 dark:text-gray-500"></span>
+            </div>
+            <article id="contentBody" class="md-content leading-relaxed"></article>
+          </div>
+        </main>
+      </div>
+    </section>
+  </div>
+
+<script>
+(function() {
+  const md = window.markdownit({ html: false, linkify: true, typographer: true });
+  const THEME_KEY = 'xagent_theme_v1';
+  const searchResultsEl = document.getElementById('searchResults');
+  const searchInputEl = document.getElementById('searchInput');
+
+  // ── Theme ──
+  function initTheme() {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'dark' || (!saved && matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.classList.add('dark');
+    }
+  }
+  initTheme();
+  document.getElementById('toggleThemeBtn').addEventListener('click', () => {
+    document.documentElement.classList.toggle('dark');
+    localStorage.setItem(THEME_KEY, document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+  });
+
+  // ── Agent info ──
+  async function loadAgentInfo() {
+    try {
+      const res = await fetch('/api/agent/info');
+      const data = await res.json();
+      document.getElementById('agentInfo').innerHTML =
+        `<span>Agent: <strong>${esc(data.name)}</strong></span>` +
+        `<span>Model: <strong>${esc(data.model)}</strong></span>` +
+        `<span>Memory: <strong>${esc(data.memory_dir)}</strong></span>`;
+    } catch {}
+  }
+
+  // ── Tree ──
+  let selectedPath = null;
+
+  async function loadTree() {
+    try {
+      const res = await fetch('/api/memory/tree');
+      const data = await res.json();
+      const container = document.getElementById('treeContainer');
+      const empty = document.getElementById('treeEmpty');
+      if (!data.tree || data.tree.length === 0) {
+        container.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+      container.innerHTML = '';
+      container.appendChild(buildTree(data.tree));
+    } catch (e) {
+      document.getElementById('treeContainer').innerHTML = `<div class="text-sm text-red-500 p-2">Failed to load tree</div>`;
+    }
+  }
+
+  function buildTree(nodes) {
+    const frag = document.createDocumentFragment();
+    for (const node of nodes) {
+      if (node.type === 'dir') {
+        const wrapper = document.createElement('div');
+        const label = document.createElement('div');
+        label.className = 'tree-item';
+        label.innerHTML = `<span class="toggle-arrow text-gray-400 text-xs">▶</span><span>📁 ${esc(node.name)}</span>`;
+        const children = document.createElement('div');
+        children.className = 'tree-children hidden';
+        if (node.children && node.children.length > 0) {
+          children.appendChild(buildTree(node.children));
+        }
+        label.addEventListener('click', () => {
+          children.classList.toggle('hidden');
+          const arrow = label.querySelector('.toggle-arrow');
+          arrow.textContent = children.classList.contains('hidden') ? '▶' : '▼';
+        });
+        wrapper.appendChild(label);
+        wrapper.appendChild(children);
+        frag.appendChild(wrapper);
+      } else {
+        const item = document.createElement('div');
+        item.className = 'tree-item';
+        item.dataset.path = node.path;
+        item.innerHTML = `<span>📄 ${esc(node.name)}</span>`;
+        item.addEventListener('click', () => selectFile(node.path, item));
+        frag.appendChild(item);
+      }
+    }
+    return frag;
+  }
+
+  async function selectFile(path, el) {
+    // Deselect previous
+    document.querySelectorAll('.tree-item.selected').forEach(e => e.classList.remove('selected'));
+    if (el) {
+      el.classList.add('selected');
+    }
+    selectedPath = path;
+
+    document.getElementById('contentPlaceholder').classList.add('hidden');
+    document.getElementById('contentViewer').classList.remove('hidden');
+    document.getElementById('contentTitle').textContent = path;
+    document.getElementById('contentBody').innerHTML = '<div class="text-gray-400 text-sm py-4">Loading…</div>';
+    document.getElementById('contentMeta').textContent = '';
+
+    try {
+      const res = await fetch(`/api/memory/read?path=${encodeURIComponent(path)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      document.getElementById('contentBody').innerHTML = md.render(data.content || '_(empty file)_');
+      if (data.modified) {
+        document.getElementById('contentMeta').textContent = 'Modified: ' + new Date(data.modified * 1000).toLocaleString();
+      }
+    } catch (e) {
+      document.getElementById('contentBody').innerHTML = `<div class="text-red-500 text-sm">Failed to load file: ${esc(e.message)}</div>`;
+    }
+  }
+
+  async function runSearch() {
+    const query = searchInputEl.value.trim();
+    if (!query) {
+      clearSearchResults();
+      return;
+    }
+
+    searchResultsEl.classList.remove('hidden');
+    searchResultsEl.innerHTML = '<div class="text-sm text-gray-400 px-1">Searching…</div>';
+
+    try {
+      const res = await fetch(`/api/memory/search?query=${encodeURIComponent(query)}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      renderSearchResults(data.results || []);
+    } catch (e) {
+      searchResultsEl.innerHTML = `<div class="text-sm text-red-500 px-1">Search failed: ${esc(e.message)}</div>`;
+    }
+  }
+
+  function renderSearchResults(results) {
+    if (results.length === 0) {
+      searchResultsEl.innerHTML = '<div class="text-sm text-gray-400 px-1">No results found</div>';
+      return;
+    }
+
+    searchResultsEl.innerHTML = results.map(result => `
+      <div class="search-result" data-path="${esc(result.path)}">
+        <div class="text-xs text-gray-400 dark:text-gray-500">${esc(result.matched_in.join(', '))}</div>
+        <div class="text-sm font-medium mt-1">${esc(result.path)}</div>
+        ${result.snippet ? `<div class="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-5">${esc(result.snippet)}</div>` : ''}
+      </div>
+    `).join('');
+
+    searchResultsEl.querySelectorAll('.search-result').forEach(item => {
+      item.addEventListener('click', () => {
+        const path = item.dataset.path;
+        selectFile(path, null);
+      });
+    });
+  }
+
+  function clearSearchResults() {
+    searchInputEl.value = '';
+    searchResultsEl.innerHTML = '';
+    searchResultsEl.classList.add('hidden');
+  }
+
+  // ── Refresh ──
+  document.getElementById('refreshBtn').addEventListener('click', () => {
+    loadTree();
+    loadAgentInfo();
+    // Reload current file if one is selected
+    if (selectedPath) {
+      const el = document.querySelector(`.tree-item[data-path="${CSS.escape(selectedPath)}"]`);
+      if (el) selectFile(selectedPath, el);
+    }
+  });
+  document.getElementById('searchBtn').addEventListener('click', runSearch);
+  document.getElementById('clearSearchBtn').addEventListener('click', clearSearchResults);
+  searchInputEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      runSearch();
+    }
+  });
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
+  }
+
+  // ── Init ──
+  loadAgentInfo();
+  loadTree();
+})();
+</script>
+</body>
+</html>
