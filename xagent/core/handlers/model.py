@@ -31,6 +31,7 @@ class ModelClient:
         self,
         messages: list,
         tool_specs: Optional[list],
+        instructions: Optional[str] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         store_reply: Optional[Callable[..., Awaitable]] = None,
@@ -39,8 +40,9 @@ class ModelClient:
         Call the AI model with prepared messages.
 
         Args:
-            messages: Full message list including system message.
+            messages: Input message list (user/assistant/tool content only).
             tool_specs: Tool specifications for the model.
+            instructions: Static behavioural instructions (system prompt).
             output_type: Pydantic model for structured output.
             stream: Whether to stream the response.
             store_reply: Async callback to store the final reply text.
@@ -49,13 +51,15 @@ class ModelClient:
         """
         try:
             if output_type is not None:
-                return await self._handle_structured(messages, tool_specs, output_type)
+                return await self._handle_structured(messages, tool_specs, output_type, instructions)
 
             response = await self.client.responses.create(
                 model=self.model,
+                instructions=instructions,
                 tools=tool_specs or [],
                 input=messages,
-                stream=stream
+                stream=stream,
+                truncation="auto",
             )
 
             if not stream:
@@ -79,13 +83,16 @@ class ModelClient:
         messages: list,
         tool_specs: Optional[list],
         output_type: type[BaseModel],
+        instructions: Optional[str] = None,
     ) -> tuple[ReplyType, object]:
         """Handle structured output via responses.parse."""
         response = await self.client.responses.parse(
             model=self.model,
+            instructions=instructions,
             tools=tool_specs if tool_specs else [],
             input=messages,
-            text_format=output_type
+            text_format=output_type,
+            truncation="auto",
         )
         if hasattr(response, "output_parsed") and response.output_parsed is not None:
             return ReplyType.STRUCTURED_REPLY, response.output_parsed

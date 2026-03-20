@@ -188,28 +188,21 @@ class Agent:
                     if spec.get("name") not in self._MEMORY_TOOL_NAMES
                 ] or None
 
-            system_msg = {
-                "role": "system",
-                "content": self.message_handler.build_system_prompt(
-                    user_id=user_id,
-                    memory_context=memory_context,
-                    tool_names=tool_names,
-                ),
-            }
+            instructions = self.message_handler.build_instructions(tool_names=tool_names)
             iteration_messages = [
                 self.message_handler.build_recent_transcript_message(
                     recent_messages,
                     current_user_id=user_id,
+                    memory_context=memory_context,
                 )
             ]
-            # add log for iteration_messages
-            # logger.info("Iteration messages: %s", iteration_messages)
-            model_messages = [system_msg] + self.message_handler.sanitize_input_messages(list(iteration_messages))
+            input_messages = self.message_handler.sanitize_input_messages(list(iteration_messages))
 
             for _ in range(max_iter):
                 reply_type, response = await self.model_client.call(
-                    messages=model_messages,
+                    messages=input_messages,
                     tool_specs=tool_specs,
+                    instructions=instructions,
                     output_type=output_type,
                     stream=stream,
                     store_reply=lambda text: self.message_handler.store_model_reply(
@@ -246,7 +239,7 @@ class Agent:
                             self._assistant_sender_id,
                         )
                         return image_data
-                    model_messages = [system_msg] + self.message_handler.sanitize_input_messages(list(iteration_messages))
+                    input_messages = self.message_handler.sanitize_input_messages(list(iteration_messages))
                     continue
 
                 logger.error("Unknown reply type: %s", reply_type)

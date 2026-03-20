@@ -79,16 +79,56 @@ class MessageHandler:
     def build_recent_transcript_message(
         messages: List[Message],
         current_user_id: str,
+        memory_context: str = "",
     ) -> dict:
-        """Collapse recent conversation history into one user transcript message."""
+        """Collapse recent conversation history into one user transcript message.
+
+        Includes per-turn dynamic context that changes each call:
+          - Runtime metadata (current speaker, date)
+          - Recent diary memory (conditional)
+          - Conversation transcript with speaker labels
+        """
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
 
-        transcript_lines = [
-            "Recent shared conversation transcript.",
-            f"Current speaker for this turn: {current_user_id}.",
-            "Each block below shows one recent message with an explicit speaker label.\n\n==========\n",
-            "",
-        ]
+        transcript_lines: list[str] = []
+
+        # --- Runtime context ---
+        transcript_lines.append(
+            AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip()
+        )
+        transcript_lines.append(f"- Current speaker: {current_user_id}")
+        transcript_lines.append(
+            "- Recent messages come from the agent's continuous global "
+            "interaction stream and may mix multiple user_ids."
+        )
+        transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
+        transcript_lines.append("")
+
+        # --- Recent diary memory (conditional) ---
+        if memory_context:
+            transcript_lines.append(
+                "**Recent Diary Memory:**\n"
+                "- These are recent observer diary notes from a shared "
+                "multi-speaker interaction stream, not default facts "
+                "about the current speaker.\n"
+                "- Each diary note may mention multiple people; keep every "
+                "fact tied to the speaker explicitly named in the note.\n"
+                "- Only use a diary fact as belonging to the current speaker "
+                "when that attribution is explicit.\n"
+                "- If diary notes conflict with the recent transcript, "
+                "trust the recent transcript.\n\n"
+                + memory_context
+            )
+            transcript_lines.append("")
+
+        # --- Conversation transcript ---
+        transcript_lines.append("Recent shared conversation transcript.")
+        transcript_lines.append(f"Current speaker for this turn: {current_user_id}.")
+        transcript_lines.append(
+            "Each block below shows one recent message with an "
+            "explicit speaker label.\n\n==========\n"
+        )
+        transcript_lines.append("")
 
         for msg in conversation_messages:
             speaker = MessageHandler._format_transcript_speaker(msg)
@@ -147,21 +187,16 @@ class MessageHandler:
             return [image.source for image in image_items if image.source]
         return []
 
-    def build_system_prompt(
+    def build_instructions(
         self,
-        user_id: str,
-        memory_context: str = "",
         tool_names: Optional[List[str]] = None,
     ) -> str:
-        """Build the runtime system prompt.
+        """Build the static instructions string for the model.
 
-        Prompt layering order (each section only included when relevant):
+        Contains only behavioural rules that do not change per-turn:
           1. Core Principles — foundational behaviour guidelines
           2. Tool Instructions — per-tool safety / usage rules
-          3. Context Information — runtime metadata (speaker, date)
-          4. Recent Diary Memory — recent daily diary entries (only when non-empty)
-          5. User System Prompt — developer-supplied customisation
-          (6. User Message — appended as normal messages, not part of system prompt)
+          3. User System Prompt — developer-supplied customisation
         """
         sections: list[str] = []
 
@@ -178,40 +213,20 @@ class MessageHandler:
             if segment:
                 sections.append(segment)
 
-        # --- 3. Context Information ---
-        context_lines = [
-            AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip(),
-            f"- Current speaker: {user_id}",
-            "- Recent messages come from the agent's continuous global interaction stream and may mix multiple user_ids.",
-            f"- Date: {time.strftime('%Y-%m-%d')}",
-        ]
-        sections.append("\n".join(context_lines))
-
-        # --- 4. Recent Diary Memory (conditional) ---
-        if memory_context:
-            sections.append(
-                "**Recent Diary Memory:**\n"
-                "- These are recent observer diary notes from a shared multi-speaker interaction stream, not default facts about the current speaker.\n"
-                "- Each diary note may mention multiple people; keep every fact tied to the speaker explicitly named in the note.\n"
-                "- Only use a diary fact as belonging to the current speaker when that attribution is explicit.\n"
-                "- If diary notes conflict with the recent transcript, trust the recent transcript.\n\n"
-                + memory_context
-            )
-
-        # --- 5. Developer-supplied system prompt ---
+        # --- 3. Developer-supplied system prompt ---
         if self.system_prompt:
             sections.append(self.system_prompt)
 
-        prompt = "\n\n".join(sections)
+        instructions = "\n\n".join(sections)
 
-        if len(prompt) > AgentConfig.MAX_SYSTEM_PROMPT_LENGTH:
+        if len(instructions) > AgentConfig.MAX_SYSTEM_PROMPT_LENGTH:
             logger.warning(
-                "System prompt length (%d chars) exceeds soft limit (%d). "
-                "Consider reducing memory results or shortening the user system prompt.",
-                len(prompt), AgentConfig.MAX_SYSTEM_PROMPT_LENGTH,
+                "Instructions length (%d chars) exceeds soft limit (%d). "
+                "Consider shortening the user system prompt.",
+                len(instructions), AgentConfig.MAX_SYSTEM_PROMPT_LENGTH,
             )
 
-        return prompt
+        return instructions
 
     @staticmethod
     def sanitize_input_messages(input_messages: list) -> list:

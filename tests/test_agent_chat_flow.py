@@ -55,9 +55,11 @@ class CapturingModelClient:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
+        self.instructions_calls = []
 
-    async def call(self, messages, tool_specs, output_type=None, stream=False, store_reply=None):
+    async def call(self, messages, tool_specs, instructions=None, output_type=None, stream=False, store_reply=None):
         self.calls.append(messages)
+        self.instructions_calls.append(instructions)
         return self.responses.pop(0)
 
 
@@ -118,11 +120,14 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "Final answer")
         self.assertEqual(len(model_client.calls), 1)
         first_call_messages = model_client.calls[0]
-        self.assertEqual(first_call_messages[0]["role"], "system")
-        self.assertEqual(first_call_messages[1]["role"], "user")
-        self.assertIn("[speaker=alice]", first_call_messages[1]["content"])
-        self.assertIn("[speaker=you]", first_call_messages[1]["content"])
-        self.assertIn("[speaker=bob]", first_call_messages[1]["content"])
+        # No system message in input — instructions are passed separately
+        self.assertEqual(first_call_messages[0]["role"], "user")
+        self.assertIn("[speaker=alice]", first_call_messages[0]["content"])
+        self.assertIn("[speaker=you]", first_call_messages[0]["content"])
+        self.assertIn("[speaker=bob]", first_call_messages[0]["content"])
+        # Instructions passed separately
+        self.assertIsNotNone(model_client.instructions_calls[0])
+        self.assertIn("Core Rules", model_client.instructions_calls[0])
         self.assertEqual(
             [message.role for message in storage.messages],
             [RoleType.USER, RoleType.ASSISTANT, RoleType.USER, RoleType.ASSISTANT],
@@ -154,9 +159,10 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(model_client.calls), 2)
         first_call_messages = model_client.calls[0]
         second_call_messages = model_client.calls[1]
-        self.assertEqual(len(first_call_messages), 2)
-        self.assertEqual(second_call_messages[2]["type"], "function_call")
-        self.assertEqual(second_call_messages[3]["type"], "function_call_output")
+        # No system message — input starts with transcript user message
+        self.assertEqual(len(first_call_messages), 1)
+        self.assertEqual(second_call_messages[1]["type"], "function_call")
+        self.assertEqual(second_call_messages[2]["type"], "function_call_output")
         self.assertEqual(
             [message.role for message in storage.messages],
             [RoleType.USER, RoleType.ASSISTANT],

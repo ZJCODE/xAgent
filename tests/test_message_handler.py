@@ -11,32 +11,76 @@ class _FakeMessageStorage:
 
 
 class MessageHandlerMemoryContextTests(unittest.TestCase):
-    def test_build_system_prompt_includes_memory_context(self):
-        """memory_context is injected under the 'Recent Diary Memory' header."""
+    def test_build_instructions_contains_core_rules_and_dev_prompt(self):
+        """build_instructions returns static layers: core rules + developer prompt."""
         handler = MessageHandler(
             system_prompt="You are a helpful assistant.",
             message_storage=_FakeMessageStorage(),
         )
+        instructions = handler.build_instructions()
+        self.assertIn("Core Rules", instructions)
+        self.assertIn("You are a helpful assistant.", instructions)
+        # Should NOT contain per-turn dynamic content
+        self.assertNotIn("Current speaker", instructions)
+        self.assertNotIn("Recent Diary Memory", instructions)
+
+    def test_build_instructions_includes_tool_prompts(self):
+        """build_instructions includes tool-specific segments for active tools."""
+        handler = MessageHandler(
+            system_prompt="",
+            message_storage=_FakeMessageStorage(),
+        )
+        instructions = handler.build_instructions(tool_names=["write_daily_memory"])
+        self.assertIn("Daily Memory Writing", instructions)
+
+    def test_transcript_includes_memory_context(self):
+        """memory_context is injected into the transcript message under 'Recent Diary Memory'."""
+        handler = MessageHandler(
+            system_prompt="You are a helpful assistant.",
+            message_storage=_FakeMessageStorage(),
+        )
+        messages = [
+            Message.create("Hello", role=RoleType.USER, sender_id="alice"),
+        ]
         memory_context = "[2026-03-18]\n今天主要围绕路线图推进。"
-        prompt = handler.build_system_prompt(
-            user_id="alice",
+        transcript = handler.build_recent_transcript_message(
+            messages,
+            current_user_id="alice",
             memory_context=memory_context,
         )
-        self.assertIn("Recent Diary Memory", prompt)
-        self.assertIn("[2026-03-18]", prompt)
-        self.assertIn("今天主要围绕路线图推进。", prompt)
+        self.assertIn("Recent Diary Memory", transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"])
+        self.assertIn("[2026-03-18]", transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"])
+        self.assertIn("今天主要围绕路线图推进。", transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"])
 
-    def test_build_system_prompt_omits_section_when_context_empty(self):
-        """Empty memory_context should not inject a memory section."""
+    def test_transcript_omits_memory_section_when_context_empty(self):
+        """Empty memory_context should not inject a memory section in transcript."""
         handler = MessageHandler(
             system_prompt="You are a helpful assistant.",
             message_storage=_FakeMessageStorage(),
         )
-        prompt = handler.build_system_prompt(
-            user_id="alice",
+        messages = [
+            Message.create("Hello", role=RoleType.USER, sender_id="alice"),
+        ]
+        transcript = handler.build_recent_transcript_message(
+            messages,
+            current_user_id="alice",
             memory_context="",
         )
-        self.assertNotIn("Recent Diary Memory", prompt)
+        content = transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"]
+        self.assertNotIn("Recent Diary Memory", content)
+
+    def test_build_recent_transcript_message_contains_runtime_context(self):
+        handler = MessageHandler(
+            system_prompt="You are a helpful assistant.",
+            message_storage=_FakeMessageStorage(),
+        )
+        messages = [
+            Message.create("Hello", role=RoleType.USER, sender_id="alice"),
+        ]
+        transcript = handler.build_recent_transcript_message(messages, current_user_id="alice")
+        content = transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"]
+        self.assertIn("Current speaker: alice", content)
+        self.assertIn("Date:", content)
 
     def test_build_recent_transcript_message_collapses_messages(self):
         handler = MessageHandler(
