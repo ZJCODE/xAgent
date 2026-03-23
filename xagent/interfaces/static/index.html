@@ -411,6 +411,14 @@
                 <span class="toggle-track" aria-hidden="true"></span>
               </label>
             </div>
+
+            <div class="inline-switch">
+              <label class="setting-toggle cursor-pointer">
+                <span class="setting-toggle-text">Private</span>
+                <input id="optPrivate" type="checkbox" />
+                <span class="toggle-track" aria-hidden="true"></span>
+              </label>
+            </div>
           </div>
         </div>
       </header>
@@ -483,6 +491,7 @@ function saveSettings() {
     userId: document.getElementById('userId').value,
     stream: document.getElementById('optStream').checked,
     memory: document.getElementById('optMemory').checked,
+    private: document.getElementById('optPrivate').checked,
     darkMode: document.documentElement.classList.contains('dark'),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
@@ -494,14 +503,17 @@ function restoreSettings() {
   document.getElementById('userId').value = settings.userId || 'web_user';
   document.getElementById('optStream').checked = settings.stream !== false;
   document.getElementById('optMemory').checked = settings.memory !== false;
+  document.getElementById('optPrivate').checked = !!settings.private;
 
   const shouldDark = settings.darkMode || (!('darkMode' in settings) && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.classList.toggle('dark', !!shouldDark);
+  updatePrivateIndicator();
 }
 
 function toggleTheme() {
   document.documentElement.classList.toggle('dark');
   saveSettings();
+  updatePrivateIndicator();
 }
 
 async function checkHealth() {
@@ -734,6 +746,7 @@ async function sendMessage() {
     user_message: text,
     stream: document.getElementById('optStream').checked,
     enable_memory: document.getElementById('optMemory').checked,
+    private: document.getElementById('optPrivate').checked,
   };
 
   if (currentImages.length === 1) {
@@ -772,8 +785,11 @@ function bindEvents() {
   const chatInput = document.getElementById('chatInput');
   const imageInput = document.getElementById('imageInput');
 
-  ['userId', 'optStream', 'optMemory'].forEach((id) => {
-    document.getElementById(id).addEventListener('change', saveSettings);
+  ['userId', 'optStream', 'optMemory', 'optPrivate'].forEach((id) => {
+    document.getElementById(id).addEventListener('change', () => {
+      saveSettings();
+      updatePrivateIndicator();
+    });
   });
 
   document.getElementById('toggleThemeBtn').addEventListener('click', toggleTheme);
@@ -808,6 +824,37 @@ document.addEventListener('DOMContentLoaded', async () => {
   await checkHealth();
   focusChatInput();
 });
+
+function updatePrivateIndicator() {
+  const isPrivate = document.getElementById('optPrivate').checked;
+  const header = document.querySelector('section.panel-surface > header');
+  const existing = document.getElementById('privateBanner');
+
+  if (isPrivate && !existing) {
+    const banner = document.createElement('div');
+    banner.id = 'privateBanner';
+    banner.className = 'flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium tracking-wide';
+    banner.style.cssText = 'background: rgba(139, 92, 246, 0.10); color: #7c3aed; border-bottom: 1px solid rgba(139, 92, 246, 0.15);';
+    banner.innerHTML = `
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+      </svg>
+      <span>Private Mode — messages are ephemeral and memory writes are disabled</span>
+    `;
+    header.after(banner);
+  } else if (!isPrivate && existing) {
+    existing.remove();
+  }
+
+  // Darken-style the dark-mode banner
+  const b = document.getElementById('privateBanner');
+  if (b) {
+    const dark = document.documentElement.classList.contains('dark');
+    b.style.background = dark ? 'rgba(139, 92, 246, 0.12)' : 'rgba(139, 92, 246, 0.08)';
+    b.style.color = dark ? '#a78bfa' : '#7c3aed';
+    b.style.borderBottom = dark ? '1px solid rgba(139, 92, 246, 0.18)' : '1px solid rgba(139, 92, 246, 0.12)';
+  }
+}
 </script>
 </body>
 </html>

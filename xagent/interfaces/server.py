@@ -31,6 +31,7 @@ class AgentInput(BaseModel):
     max_iter: Optional[int] = 10
     max_concurrent_tools: Optional[int] = 10
     enable_memory: Optional[bool] = True
+    private: Optional[bool] = False
 
 
 class AgentHTTPServer(BaseAgentRunner):
@@ -137,6 +138,7 @@ class AgentHTTPServer(BaseAgentRunner):
                                 image_source=input_data.image_source,
                                 stream=True,
                                 enable_memory=input_data.enable_memory,
+                                private=input_data.private,
                             )
                             if hasattr(response, "__aiter__"):
                                 async for delta in response:
@@ -163,6 +165,7 @@ class AgentHTTPServer(BaseAgentRunner):
                     max_concurrent_tools=input_data.max_concurrent_tools,
                     image_source=input_data.image_source,
                     enable_memory=input_data.enable_memory,
+                    private=input_data.private,
                 )
 
                 if hasattr(response, "model_dump"):

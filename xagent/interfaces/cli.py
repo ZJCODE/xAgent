@@ -39,6 +39,7 @@ class AgentCLI(BaseAgentRunner):
         user_id: Optional[str] = None,
         stream: Optional[bool] = None,
         memory: bool = True,
+        private: bool = False,
     ):
         if stream is None:
             stream = not (logging.getLogger().level <= logging.INFO)
@@ -49,6 +50,7 @@ class AgentCLI(BaseAgentRunner):
         self._print_banner(
             stream=stream,
             memory=memory,
+            private=private,
             verbose_mode=verbose_mode,
         )
 
@@ -86,6 +88,15 @@ class AgentCLI(BaseAgentRunner):
                         print("⚠️  Usage: memory on/off")
                     continue
 
+                if user_input.lower().startswith("private "):
+                    private_cmd = user_input.lower().split()
+                    if len(private_cmd) == 2 and private_cmd[1] in {"on", "off"}:
+                        private = private_cmd[1] == "on"
+                        print(f"{'🔒' if private else '🔓'} ✨ Private mode {'enabled' if private else 'disabled'}.")
+                    else:
+                        print("⚠️  Usage: private on/off")
+                    continue
+
                 if user_input.lower() == "help":
                     self._show_help()
                     continue
@@ -99,6 +110,7 @@ class AgentCLI(BaseAgentRunner):
                     user_id=user_id,
                     stream=stream,
                     enable_memory=memory,
+                    private=private,
                 )
 
                 if stream and hasattr(response, "__aiter__"):
@@ -141,6 +153,7 @@ class AgentCLI(BaseAgentRunner):
         self,
         stream: bool,
         memory: bool,
+        private: bool,
         verbose_mode: bool,
     ) -> None:
         print("╭" + "─" * 58 + "╮")
@@ -163,6 +176,7 @@ class AgentCLI(BaseAgentRunner):
             f"{'🟢' if verbose_mode else '🔇'} Verbose: {'On' if verbose_mode else 'Off'}",
             f"{'🌊' if stream else '📄'} Stream: {'On' if stream else 'Off'}",
             f"{'🧠' if memory else '🚫'} Memory: {'On' if memory else 'Off'}",
+            f"{'🔒' if private else '🔓'} Private: {'On' if private else 'Off'}",
         ]
         print(f"⚙️  Status: {' | '.join(status_indicators)}")
 
@@ -174,6 +188,7 @@ class AgentCLI(BaseAgentRunner):
         print("  • Use 'clear' to reset the agent message stream")
         print("  • Use 'stream on/off' to toggle response streaming")
         print("  • Use 'memory on/off' to toggle memory storage")
+        print("  • Use 'private on/off' to toggle private mode")
         print("─" * 60)
 
     def _show_help(self):
@@ -182,6 +197,7 @@ class AgentCLI(BaseAgentRunner):
         print("│ clear              Clear the agent message stream         │")
         print("│ stream on/off      Toggle streaming response mode         │")
         print("│ memory on/off      Toggle memory storage mode             │")
+        print("│ private on/off     Toggle private (ephemeral) mode         │")
         print("│ help               Show this help message                 │")
         print("╰───────────────────────────────────────────────────────────╯")
 

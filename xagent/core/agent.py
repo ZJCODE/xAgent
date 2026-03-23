@@ -5,7 +5,7 @@ from typing import AsyncGenerator, List, Optional, Union
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from ..components import MessageStorageBase, MessageStorageLocal
+from ..components import MessageStorageBase, MessageStorageInMemory, MessageStorageLocal
 from ..components.memory.markdown_memory import MarkdownMemory
 from ..components.memory.helper.llm_service import JournalLLMService
 from .config import AgentConfig, ReplyType
@@ -25,6 +25,8 @@ class Agent:
     """AI agent runtime for a continuous agent-level message stream."""
 
     _MEMORY_TOOL_NAMES = {"write_daily_memory", "search_memory", "generate_memory_summary"}
+    _MEMORY_WRITE_TOOL_NAMES = {"write_daily_memory", "generate_memory_summary"}
+    _MEMORY_READ_TOOL_NAMES = {"search_memory"}
 
     def __init__(
         self,
@@ -47,6 +49,9 @@ class Agent:
         self.system_prompt = system_prompt or ""
         self._assistant_sender_id = f"agent:{self.name}"
         self._memory_tools_enabled = True
+        self._private_mode = False
+        self._private_storage: Optional[MessageStorageInMemory] = None
+        self._private_message_handler: Optional[MessageHandler] = None
 
         workspace_path: Optional[Path] = None
         if workspace is not None:
@@ -127,6 +132,7 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         enable_memory: bool = True,
+        private: bool = False,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         return await self.chat(
             user_message=user_message,
@@ -138,6 +144,7 @@ class Agent:
             output_type=output_type,
             stream=stream,
             enable_memory=enable_memory,
+            private=private,
         )
 
     async def chat(
@@ -151,52 +158,76 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         enable_memory: bool = True,
+        private: bool = False,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
-        """Generate a reply from the agent given a user message."""
+        """Generate a reply from the agent given a user message.
+
+        Args:
+            private: When True, messages are stored in an isolated in-memory
+                buffer (discarded on switch back to normal mode). Memory
+                *reads* are preserved but all memory *writes* are suppressed.
+        """
         if output_type is None:
             output_type = self.output_type
         if output_type:
             stream = False
 
+        # --- Private-mode lifecycle management ---
+        msg_handler = self._resolve_message_handler(private)
+
         try:
             await self.tool_manager.ensure_mcp_ready()
-            self._memory_tools_enabled = enable_memory
 
-            await self.message_handler.store_user_message(
+            # Determine memory write / read flags
+            memory_read = enable_memory  # private keeps reads if enable_memory is True
+            memory_write = enable_memory and not private
+            self._memory_tools_enabled = memory_write
+
+            await msg_handler.store_user_message(
                 user_message,
                 user_id,
                 image_source,
             )
 
-            recent_messages = await self.message_handler.get_recent_messages(
+            recent_messages = await msg_handler.get_recent_messages(
                 history_count=history_count,
             )
-            conversation_messages = self.message_handler.filter_conversation_messages(recent_messages)
-            messages_without_tool = self.message_handler.to_model_input(conversation_messages)
+            conversation_messages = msg_handler.filter_conversation_messages(recent_messages)
+            messages_without_tool = msg_handler.to_model_input(conversation_messages)
 
             memory_context = ""
-            if enable_memory:
+            if memory_read:
                 memory_context = await self.memory_handler.get_recent_context()
+            if memory_write:
                 self.memory_handler.schedule_diary_write(messages_without_tool[-2:])
 
+            # Filter tool specs based on memory flags
             tool_names = list(self.tool_manager._tools.keys())
             tool_specs = self.tool_manager.cached_tool_specs
             if not enable_memory:
+                # memory completely off: remove all memory tools
                 tool_names = [n for n in tool_names if n not in self._MEMORY_TOOL_NAMES]
                 tool_specs = [
                     spec for spec in (tool_specs or [])
                     if spec.get("name") not in self._MEMORY_TOOL_NAMES
                 ] or None
+            elif private:
+                # private mode: remove write tools, keep read tools
+                tool_names = [n for n in tool_names if n not in self._MEMORY_WRITE_TOOL_NAMES]
+                tool_specs = [
+                    spec for spec in (tool_specs or [])
+                    if spec.get("name") not in self._MEMORY_WRITE_TOOL_NAMES
+                ] or None
 
-            instructions = self.message_handler.build_instructions(tool_names=tool_names)
+            instructions = msg_handler.build_instructions(tool_names=tool_names)
             iteration_messages = [
-                self.message_handler.build_recent_transcript_message(
+                msg_handler.build_recent_transcript_message(
                     recent_messages,
                     current_user_id=user_id,
                     memory_context=memory_context,
                 )
             ]
-            input_messages = self.message_handler.sanitize_input_messages(list(iteration_messages))
+            input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 
             for _ in range(max_iter):
                 reply_type, response = await self.model_client.call(
@@ -205,7 +236,7 @@ class Agent:
                     instructions=instructions,
                     output_type=output_type,
                     stream=stream,
-                    store_reply=lambda text: self.message_handler.store_model_reply(
+                    store_reply=lambda text: msg_handler.store_model_reply(
                         text,
                         self._assistant_sender_id,
                     ),
@@ -213,14 +244,14 @@ class Agent:
 
                 if reply_type == ReplyType.SIMPLE_REPLY:
                     if not stream:
-                        await self.message_handler.store_model_reply(
+                        await msg_handler.store_model_reply(
                             str(response),
                             self._assistant_sender_id,
                         )
                     return response
 
                 if reply_type == ReplyType.STRUCTURED_REPLY:
-                    await self.message_handler.store_model_reply(
+                    await msg_handler.store_model_reply(
                         response.model_dump_json(),
                         self._assistant_sender_id,
                     )
@@ -234,12 +265,12 @@ class Agent:
                     )
                     if tool_result is not None:
                         image_data, description = tool_result
-                        await self.message_handler.store_model_reply(
+                        await msg_handler.store_model_reply(
                             description,
                             self._assistant_sender_id,
                         )
                         return image_data
-                    input_messages = self.message_handler.sanitize_input_messages(list(iteration_messages))
+                    input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
                     continue
 
                 logger.error("Unknown reply type: %s", reply_type)
@@ -251,3 +282,28 @@ class Agent:
         except Exception as exc:
             logger.exception("Agent chat error: %s", exc)
             return "Sorry, something went wrong."
+
+    def _resolve_message_handler(self, private: bool) -> MessageHandler:
+        """Return the appropriate MessageHandler for the current mode.
+
+        When entering private mode, lazily creates an in-memory storage and
+        handler.  When leaving private mode, discards them.
+        """
+        if private:
+            if not self._private_mode:
+                # Entering private mode — create isolated storage
+                self._private_storage = MessageStorageInMemory()
+                self._private_message_handler = MessageHandler(
+                    message_storage=self._private_storage,
+                    system_prompt=self.system_prompt,
+                )
+            self._private_mode = True
+            return self._private_message_handler  # type: ignore[return-value]
+
+        if self._private_mode:
+            # Leaving private mode — discard private state
+            self._private_storage = None
+            self._private_message_handler = None
+            self._private_mode = False
+
+        return self.message_handler

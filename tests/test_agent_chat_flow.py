@@ -88,8 +88,13 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     def _build_agent(self, storage, model_client, tool_executor=None, tools=None):
         agent = Agent.__new__(Agent)
         agent.output_type = None
+        agent.name = "test"
+        agent.system_prompt = ""
         agent._assistant_sender_id = "agent:test"
         agent._memory_tools_enabled = True
+        agent._private_mode = False
+        agent._private_storage = None
+        agent._private_message_handler = None
         agent.tool_manager = FakeToolManager(tools=tools)
         agent.model_client = model_client
         agent.message_storage = storage
