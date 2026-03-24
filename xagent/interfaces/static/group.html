@@ -312,9 +312,10 @@ function initials(name) {
 function saveState() {
   const data = {
     seats: state.seats,
+    messages: state.messages,
     darkMode: document.documentElement.classList.contains('dark'),
   };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
 }
 
 function restoreState() {
@@ -324,6 +325,9 @@ function restoreState() {
       const data = JSON.parse(raw);
       if (Array.isArray(data.seats) && data.seats.length === SEAT_COUNT) {
         state.seats = data.seats;
+      }
+      if (Array.isArray(data.messages)) {
+        state.messages = data.messages;
       }
       const shouldDark = data.darkMode || (!('darkMode' in data) && window.matchMedia('(prefers-color-scheme: dark)').matches);
       document.documentElement.classList.toggle('dark', !!shouldDark);
@@ -515,14 +519,6 @@ function appendMessage(msg, placeholder = false) {
   return bubble;
 }
 
-function buildConversationContext() {
-  // Build a multi-speaker conversation context for the agent
-  return state.messages.map(m => {
-    if (m.role === 'assistant') return `[xAgent]: ${m.content}`;
-    return `[${m.name}]: ${m.content}`;
-  }).join('\n');
-}
-
 async function sendMessage() {
   if (state.sending) return;
   if (state.activeSeatIndex < 0) return;
@@ -540,13 +536,9 @@ async function sendMessage() {
   input.style.height = 'auto';
   setSending(true);
 
-  // Build full conversation context
-  const conversationCtx = buildConversationContext();
-  const systemHint = `This is a group round-table discussion. Participants: ${state.seats.filter(s => s.occupied).map(s => s.name).join(', ')}. Each message is prefixed with the speaker's name in brackets. Reply naturally to the group.`;
-
   const payload = {
-    user_id: `group_${seat.name.toLowerCase().replace(/\s+/g, '_')}`,
-    user_message: `${systemHint}\n\n--- Conversation ---\n${conversationCtx}`,
+    user_id: seat.name.toLowerCase().replace(/\s+/g, '_'),
+    user_message: text,
     stream: true,
     enable_memory: false,
     private: false,
@@ -602,9 +594,11 @@ async function sendMessage() {
     }
 
     agentMsg.content = fullText;
+    saveState();
   } catch (err) {
     bubbleEl.innerHTML = `<span class="text-red-500">Error: ${escapeHtml(err.message)}</span>`;
     agentMsg.content = `Error: ${err.message}`;
+    saveState();
   } finally {
     bubbleEl.classList.remove('typing-cursor');
     setSending(false);
@@ -655,6 +649,7 @@ function bindEvents() {
     state.messages = [];
     const container = document.getElementById('chatMessages');
     container.innerHTML = '';
+    saveState();
     updateEmptyHint();
   });
 }
@@ -663,6 +658,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   restoreState();
   bindEvents();
   renderTable();
+  // Re-render persisted messages
+  if (state.messages.length > 0) {
+    state.messages.forEach(m => appendMessage(m));
+    scrollToBottom();
+  }
   updateEmptyHint();
   await checkHealth();
 

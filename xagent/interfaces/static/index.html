@@ -473,12 +473,34 @@
 <script>
 const API_BASE = '';
 const STORAGE_KEY = 'xagent_web_settings_v3';
+const HISTORY_KEY = 'xagent_chat_history_v1';
 
 const state = {
   messages: [],
   pendingImages: [],
   sending: false,
 };
+
+function saveHistory() {
+  // Store messages without base64 images to keep storage small
+  const slim = state.messages.map(m => ({
+    role: m.role,
+    content: m.content,
+    images: (m.images || []).map(() => '[image]'),
+  }));
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(slim)); } catch {}
+}
+
+function restoreHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return;
+    const msgs = JSON.parse(raw);
+    if (!Array.isArray(msgs) || msgs.length === 0) return;
+    state.messages = msgs;
+    msgs.forEach(m => appendMessageBubble(m));
+  } catch {}
+}
 
 const md = window.markdownit({ html: true, linkify: true, breaks: true });
 
@@ -724,6 +746,7 @@ async function streamChat(payload, contentEl, messageIndex) {
 
   state.messages[messageIndex].content = fullText;
   contentEl.classList.remove('typing-cursor');
+  saveHistory();
 }
 
 async function sendMessage() {
@@ -776,6 +799,7 @@ async function sendMessage() {
     contentEl.classList.remove('typing-cursor');
     contentEl.innerHTML = `<div class="text-red-500">Error: ${escapeHtml(errText)}</div>`;
     state.messages[messageIndex].content = `Error: ${errText}`;
+    saveHistory();
   } finally {
     setSending(false);
     focusChatInput();
@@ -822,9 +846,11 @@ function bindEvents() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   restoreSettings();
+  restoreHistory();
   bindEvents();
   await checkHealth();
   focusChatInput();
+  scrollToBottom();
 });
 
 function updatePrivateIndicator() {
