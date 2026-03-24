@@ -131,9 +131,7 @@ def _build_agent(storage, model_client, memory_handler=None, tool_executor=None,
     agent.system_prompt = ""
     agent._assistant_sender_id = "agent:test"
     agent._memory_tools_enabled = True
-    agent._private_mode = False
-    agent._private_storage = None
-    agent._private_message_handler = None
+    agent._private_handler = None
     agent.tool_manager = FakeToolManager(tools=tools)
     agent.model_client = model_client
     agent.message_storage = storage
@@ -179,8 +177,8 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
         await Agent.chat(agent, user_message="msg-2", user_id="alice", private=True)
 
         # Private storage should have accumulated messages
-        self.assertTrue(agent._private_mode)
-        private_msgs = await agent._private_storage.get_messages(100)
+        self.assertIsNotNone(agent._private_handler)
+        private_msgs = await agent._private_handler.message_storage.get_messages(100)
         # 2 user + 2 assistant = 4
         self.assertEqual(len(private_msgs), 4)
         # Main storage untouched
@@ -196,12 +194,10 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
         agent = _build_agent(storage=main_storage, model_client=model_client)
 
         await Agent.chat(agent, user_message="secret", user_id="alice", private=True)
-        self.assertTrue(agent._private_mode)
+        self.assertIsNotNone(agent._private_handler)
 
         await Agent.chat(agent, user_message="hello", user_id="alice", private=False)
-        self.assertFalse(agent._private_mode)
-        self.assertIsNone(agent._private_storage)
-        self.assertIsNone(agent._private_message_handler)
+        self.assertIsNone(agent._private_handler)
 
         # Normal message should be in main storage
         main_msgs = await main_storage.get_messages(100)

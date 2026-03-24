@@ -26,7 +26,6 @@ class Agent:
 
     _MEMORY_TOOL_NAMES = {"write_daily_memory", "search_memory", "generate_memory_summary"}
     _MEMORY_WRITE_TOOL_NAMES = {"write_daily_memory", "generate_memory_summary"}
-    _MEMORY_READ_TOOL_NAMES = {"search_memory"}
 
     def __init__(
         self,
@@ -49,9 +48,7 @@ class Agent:
         self.system_prompt = system_prompt or ""
         self._assistant_sender_id = f"agent:{self.name}"
         self._memory_tools_enabled = True
-        self._private_mode = False
-        self._private_storage: Optional[MessageStorageInMemory] = None
-        self._private_message_handler: Optional[MessageHandler] = None
+        self._private_handler: Optional[MessageHandler] = None
 
         workspace_path: Optional[Path] = None
         if workspace is not None:
@@ -172,14 +169,20 @@ class Agent:
         if output_type:
             stream = False
 
-        # --- Private-mode lifecycle management ---
-        msg_handler = self._resolve_message_handler(private)
+        # Private-mode: lazily create or discard the ephemeral handler
+        if private and self._private_handler is None:
+            self._private_handler = MessageHandler(
+                message_storage=MessageStorageInMemory(),
+                system_prompt=self.system_prompt,
+            )
+        elif not private and self._private_handler is not None:
+            self._private_handler = None
+        msg_handler = self._private_handler or self.message_handler
 
         try:
             await self.tool_manager.ensure_mcp_ready()
 
-            # Determine memory write / read flags
-            memory_read = enable_memory  # private keeps reads if enable_memory is True
+            memory_read = enable_memory
             memory_write = enable_memory and not private
             self._memory_tools_enabled = memory_write
 
@@ -201,23 +204,11 @@ class Agent:
             if memory_write:
                 self.memory_handler.schedule_diary_write(messages_without_tool[-2:])
 
-            # Filter tool specs based on memory flags
-            tool_names = list(self.tool_manager._tools.keys())
+            excluded = self._excluded_memory_tools(enable_memory, private)
+            tool_names = [n for n in self.tool_manager._tools if n not in excluded]
             tool_specs = self.tool_manager.cached_tool_specs
-            if not enable_memory:
-                # memory completely off: remove all memory tools
-                tool_names = [n for n in tool_names if n not in self._MEMORY_TOOL_NAMES]
-                tool_specs = [
-                    spec for spec in (tool_specs or [])
-                    if spec.get("name") not in self._MEMORY_TOOL_NAMES
-                ] or None
-            elif private:
-                # private mode: remove write tools, keep read tools
-                tool_names = [n for n in tool_names if n not in self._MEMORY_WRITE_TOOL_NAMES]
-                tool_specs = [
-                    spec for spec in (tool_specs or [])
-                    if spec.get("name") not in self._MEMORY_WRITE_TOOL_NAMES
-                ] or None
+            if excluded and tool_specs:
+                tool_specs = [s for s in tool_specs if s.get("name") not in excluded] or None
 
             instructions = msg_handler.build_instructions(tool_names=tool_names)
             iteration_messages = [
@@ -283,27 +274,10 @@ class Agent:
             logger.exception("Agent chat error: %s", exc)
             return "Sorry, something went wrong."
 
-    def _resolve_message_handler(self, private: bool) -> MessageHandler:
-        """Return the appropriate MessageHandler for the current mode.
-
-        When entering private mode, lazily creates an in-memory storage and
-        handler.  When leaving private mode, discards them.
-        """
+    def _excluded_memory_tools(self, enable_memory: bool, private: bool) -> set:
+        """Return the set of memory tool names to exclude from this call."""
+        if not enable_memory:
+            return self._MEMORY_TOOL_NAMES
         if private:
-            if not self._private_mode:
-                # Entering private mode — create isolated storage
-                self._private_storage = MessageStorageInMemory()
-                self._private_message_handler = MessageHandler(
-                    message_storage=self._private_storage,
-                    system_prompt=self.system_prompt,
-                )
-            self._private_mode = True
-            return self._private_message_handler  # type: ignore[return-value]
-
-        if self._private_mode:
-            # Leaving private mode — discard private state
-            self._private_storage = None
-            self._private_message_handler = None
-            self._private_mode = False
-
-        return self.message_handler
+            return self._MEMORY_WRITE_TOOL_NAMES
+        return set()
