@@ -361,6 +361,18 @@ class AgentHTTPServer(BaseAgentRunner):
                 "has_more": offset + count < total,
             }
 
+        @app.post("/api/memory/clear", tags=["Monitoring"])
+        async def memory_clear():
+            """Delete the entire memory directory and recreate it empty."""
+            import shutil
+            memory_dir = self._get_memory_root()
+            try:
+                shutil.rmtree(memory_dir)
+            except OSError:
+                pass
+            memory_dir.mkdir(parents=True, exist_ok=True)
+            return {"status": "ok"}
+
         @app.get("/api/messages/stats", tags=["Monitoring"])
         async def messages_stats():
             """Return message storage statistics."""

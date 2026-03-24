@@ -230,6 +230,30 @@
             <div class="info-label mb-3">System Prompt</div>
             <div id="systemPrompt" class="system-prompt-box">—</div>
           </div>
+
+          <!-- Danger zone -->
+          <div class="panel-muted info-card" style="border-color: rgba(239,68,68,0.18);">
+            <div class="info-label mb-3" style="color: #ef4444;">Danger Zone</div>
+            <div class="flex flex-wrap gap-3">
+              <button id="clearMemoryBtn"
+                class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition"
+                style="background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.2); color: #ef4444;">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+                Clear Memory
+              </button>
+              <button id="clearMessagesBtn"
+                class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition"
+                style="background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.2); color: #ef4444;">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5M3 6h18M19 6l-1 14H6L5 6"/>
+                </svg>
+                Clear Messages
+              </button>
+            </div>
+            <div id="clearStatus" class="mt-2 text-xs hidden"></div>
+          </div>
         </div>
       </main>
     </section>
@@ -364,6 +388,40 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.documentElement.classList.toggle('dark');
     saveTheme();
   });
+
+  document.getElementById('clearMemoryBtn').addEventListener('click', async () => {
+    if (!confirm('Delete all memory files? This cannot be undone.')) return;
+    const statusEl = document.getElementById('clearStatus');
+    try {
+      const res = await fetch(`${API_BASE}/api/memory/clear`, { method: 'POST' });
+      const data = await res.json();
+      statusEl.textContent = 'Memory directory cleared.';
+      statusEl.style.color = '#22c55e';
+    } catch (e) {
+      statusEl.textContent = `Error: ${escapeHtml(e.message)}`;
+      statusEl.style.color = '#ef4444';
+    }
+    statusEl.classList.remove('hidden');
+    setTimeout(() => statusEl.classList.add('hidden'), 4000);
+  });
+
+  document.getElementById('clearMessagesBtn').addEventListener('click', async () => {
+    if (!confirm('Delete all messages? This cannot be undone.')) return;
+    const statusEl = document.getElementById('clearStatus');
+    try {
+      const res = await fetch(`${API_BASE}/clear_messages`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      statusEl.textContent = 'Messages cleared.';
+      statusEl.style.color = '#22c55e';
+      document.getElementById('infoMessageCount').textContent = '0';
+    } catch (e) {
+      statusEl.textContent = `Error: ${escapeHtml(e.message)}`;
+      statusEl.style.color = '#ef4444';
+    }
+    statusEl.classList.remove('hidden');
+    setTimeout(() => statusEl.classList.add('hidden'), 4000);
+  });
+
   await Promise.all([checkHealth(), loadAgentConfig()]);
 });
 </script>

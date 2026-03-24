@@ -421,6 +421,12 @@
                 <span class="toggle-track" aria-hidden="true"></span>
               </label>
             </div>
+
+            <div class="inline-switch" style="padding-left: 1rem; padding-right: 1rem;">
+              <button id="clearChatBtn" class="setting-toggle-text hover:opacity-70 transition-opacity cursor-pointer" title="Clear chat history">
+                Clear Chat
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -819,6 +825,7 @@ function bindEvents() {
   });
 
   document.getElementById('toggleThemeBtn').addEventListener('click', toggleTheme);
+  document.getElementById('clearChatBtn').addEventListener('click', clearChat);
   document.getElementById('sendBtn').addEventListener('click', sendMessage);
   document.getElementById('imageBtn').addEventListener('click', () => imageInput.click());
 
@@ -852,6 +859,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   focusChatInput();
   scrollToBottom();
 });
+
+function clearChat() {
+  state.messages = [];
+  try { localStorage.removeItem(HISTORY_KEY); } catch {}
+  const container = document.getElementById('messages');
+  container.innerHTML = `
+    <div id="welcome" class="h-full min-h-[320px] flex items-center justify-center text-center text-gray-500 dark:text-gray-400 text-sm">
+      <div class="max-w-md px-4">
+        <div class="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[24px] panel-muted shadow-sm">
+          <svg class="w-7 h-7 text-gray-700 dark:text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" d="M8 10h8M8 14h5m-7 6h12a2 2 0 002-2V8.828a2 2 0 00-.586-1.414l-2.828-2.828A2 2 0 0015.172 4H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+        </div>
+        <p class="font-semibold text-base text-gray-800 dark:text-gray-100 tracking-[-0.02em]">Start a message stream</p>
+        <p class="mt-2 leading-6">Type a message and press Enter to send. Add images when needed. Keep the interface calm and let the content lead.</p>
+        <div class="mt-5 flex flex-wrap justify-center gap-2 text-xs">
+          <span class="panel-muted rounded-full px-3 py-1.5">Enter to send</span>
+          <span class="panel-muted rounded-full px-3 py-1.5">Shift + Enter for newline</span>
+          <span class="panel-muted rounded-full px-3 py-1.5">Optional image upload</span>
+        </div>
+      </div>
+    </div>`;
+}
 
 function updatePrivateIndicator() {
   const isPrivate = document.getElementById('optPrivate').checked;
