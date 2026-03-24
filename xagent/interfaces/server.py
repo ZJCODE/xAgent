@@ -104,6 +104,20 @@ class AgentHTTPServer(BaseAgentRunner):
                     return FileResponse(str(page), media_type="text/html")
                 raise HTTPException(status_code=404, detail="Message page not found")
 
+            @app.get("/group", include_in_schema=False)
+            async def serve_group():
+                page = _STATIC_DIR / "group.html"
+                if page.exists():
+                    return FileResponse(str(page), media_type="text/html")
+                raise HTTPException(status_code=404, detail="Group page not found")
+
+            @app.get("/agent", include_in_schema=False)
+            async def serve_agent():
+                page = _STATIC_DIR / "agent.html"
+                if page.exists():
+                    return FileResponse(str(page), media_type="text/html")
+                raise HTTPException(status_code=404, detail="Agent page not found")
+
             app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
             self.logger.info("Web UI available at /")
         else:
@@ -198,9 +212,13 @@ class AgentHTTPServer(BaseAgentRunner):
             return {
                 "name": self.agent.name,
                 "model": self.agent.model,
+                "description": getattr(self.agent, "description", None) or "",
                 "workspace": str(getattr(self, "workspace", "")),
                 "memory_dir": memory_dir,
                 "message_storage": storage_info,
+                "tools": list(self.agent.tools.keys()),
+                "mcp_tools": list(self.agent.mcp_tools.keys()) if self.agent.mcp_tools else [],
+                "system_prompt": getattr(self.agent, "system_prompt", "") or "",
             }
 
         @app.get("/api/memory/tree", tags=["Monitoring"])

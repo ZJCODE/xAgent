@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>xAgent Group</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {} }
+    };
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg-primary: #f5f5f4;
+      --bg-secondary: rgba(255, 255, 255, 0.78);
+      --bg-tertiary: rgba(255, 255, 255, 0.58);
+      --border-soft: rgba(24, 24, 27, 0.08);
+      --border-strong: rgba(24, 24, 27, 0.12);
+      --text-primary: #18181b;
+      --text-secondary: #52525b;
+      --shadow-soft: 0 18px 60px -28px rgba(24, 24, 27, 0.22);
+      --shadow-card: 0 10px 30px -18px rgba(24, 24, 27, 0.18);
+    }
+    .dark {
+      color-scheme: dark;
+      --bg-primary: #09090b;
+      --bg-secondary: rgba(17, 17, 19, 0.78);
+      --bg-tertiary: rgba(24, 24, 27, 0.76);
+      --border-soft: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.12);
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --shadow-soft: 0 24px 80px -36px rgba(0, 0, 0, 0.75);
+      --shadow-card: 0 18px 40px -24px rgba(0, 0, 0, 0.68);
+    }
+    html, body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(120, 113, 108, 0.12), transparent 30%),
+        radial-gradient(circle at bottom right, rgba(120, 113, 108, 0.08), transparent 26%),
+        var(--bg-primary);
+      color: var(--text-primary);
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #9ca3af; border-radius: 9999px; }
+    .dark ::-webkit-scrollbar-thumb { background: #4b5563; }
+    .panel-surface {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-soft);
+      box-shadow: var(--shadow-card);
+      backdrop-filter: blur(20px);
+    }
+    .panel-muted {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-soft);
+      backdrop-filter: blur(16px);
+    }
+    .hero-grid {
+      background-image:
+        linear-gradient(to right, rgba(24, 24, 27, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(24, 24, 27, 0.04) 1px, transparent 1px);
+      background-size: 22px 22px;
+    }
+    .dark .hero-grid {
+      background-image:
+        linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    }
+    .ghost-button {
+      background: rgba(255, 255, 255, 0.6);
+      border: 1px solid var(--border-soft);
+      backdrop-filter: blur(14px);
+    }
+    .dark .ghost-button { background: rgba(24, 24, 27, 0.72); }
+    .nav-link {
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+    .nav-link:hover { color: var(--text-primary); background: rgba(24, 24, 27, 0.05); }
+    .dark .nav-link:hover { background: rgba(255, 255, 255, 0.06); }
+    .nav-link.active { color: var(--text-primary); background: rgba(24, 24, 27, 0.08); }
+    .dark .nav-link.active { background: rgba(255, 255, 255, 0.1); }
+
+    .msg-content { word-break: break-word; }
+    .msg-content p { margin: 0.4em 0; }
+    .msg-content pre {
+      background: #111827; color: #f3f4f6;
+      padding: 0.9em 1em; border-radius: 1rem;
+      overflow-x: auto; margin: 0.75em 0;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .msg-content :not(pre) > code {
+      background: rgba(24, 24, 27, 0.08);
+      padding: 0.15em 0.4em; border-radius: 0.45rem;
+    }
+    .dark .msg-content :not(pre) > code { background: rgba(255, 255, 255, 0.1); }
+    .msg-content a { text-decoration: underline; color: #2563eb; }
+    .dark .msg-content a { color: #60a5fa; }
+
+    /* ── Round table ───────────────────────────────── */
+    .round-table-container {
+      position: relative;
+      width: 340px; height: 340px;
+      flex-shrink: 0;
+    }
+    .table-circle {
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 160px; height: 160px;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background: var(--bg-tertiary);
+      border: 2px solid var(--border-strong);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: var(--shadow-soft);
+    }
+    .seat {
+      position: absolute;
+      width: 72px; height: 72px;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      text-align: center;
+    }
+    .seat-empty {
+      background: var(--bg-tertiary);
+      border: 2px dashed var(--border-strong);
+    }
+    .seat-empty:hover {
+      border-color: var(--text-secondary);
+      transform: translate(-50%, -50%) scale(1.08);
+    }
+    .seat-occupied {
+      border: 2px solid var(--border-strong);
+      box-shadow: var(--shadow-card);
+    }
+    .seat-active {
+      ring: 2px;
+      outline: 3px solid #2563eb;
+      outline-offset: 2px;
+    }
+    .dark .seat-active { outline-color: #60a5fa; }
+
+    .seat-name {
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 64px;
+      line-height: 1.2;
+    }
+    .seat-avatar {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem; font-weight: 700;
+      margin-bottom: 2px;
+    }
+
+    .chat-bubble {
+      padding: 0.6rem 0.9rem;
+      border-radius: 1.2rem;
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+    .bubble-user {
+      background: #18181b; color: #fafafa;
+      border-bottom-right-radius: 0.3rem;
+    }
+    .dark .bubble-user { background: #fafafa; color: #18181b; }
+    .bubble-agent {
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(24, 24, 27, 0.08);
+      box-shadow: var(--shadow-card);
+      border-bottom-left-radius: 0.3rem;
+    }
+    .dark .bubble-agent {
+      background: rgba(24, 24, 27, 0.78);
+      border-color: rgba(255, 255, 255, 0.08);
+    }
+    .typing-cursor::after { content: '▍'; animation: blink 1s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .fade-mask {
+      mask-image: linear-gradient(to bottom, transparent 0%, black 4%, black 96%, transparent 100%);
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 4%, black 96%, transparent 100%);
+    }
+  </style>
+</head>
+<body class="h-full text-gray-900 dark:text-gray-100">
+  <div class="hero-grid fixed inset-0 pointer-events-none opacity-70"></div>
+  <div class="relative h-full max-w-6xl mx-auto px-3 sm:px-5 py-4 sm:py-6 flex flex-col gap-4">
+    <section class="panel-surface flex-1 min-h-0 rounded-[32px] overflow-hidden flex flex-col">
+      <header class="px-4 sm:px-6 py-4 sm:py-5 border-b border-black/5 dark:border-white/10">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="flex flex-wrap items-center gap-4">
+              <h1 class="text-xl sm:text-2xl font-semibold tracking-[-0.03em]">xAgent Group</h1>
+              <nav class="flex flex-wrap items-center gap-1">
+                <a href="/" class="nav-link">Chat</a>
+                <a href="/group" class="nav-link active">Group</a>
+                <a href="/memory" class="nav-link">Memory</a>
+                <a href="/message" class="nav-link">Messages</a>
+                <a href="/agent" class="nav-link">Agent</a>
+              </nav>
+            </div>
+            <p class="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-1">Round-table group conversation — click a seat to join, then chat together.</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <div id="healthDot" class="ghost-button text-xs sm:text-sm text-gray-500 dark:text-gray-400 inline-flex items-center gap-2 px-3 py-1.5 rounded-full">
+              <span class="w-2 h-2 rounded-full bg-gray-400"></span><span>Checking...</span>
+            </div>
+            <button id="toggleThemeBtn" class="ghost-button text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Theme</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="flex-1 min-h-0 flex overflow-hidden">
+        <!-- Left: Round table -->
+        <aside class="flex flex-col items-center justify-center px-4 py-6 border-r border-black/5 dark:border-white/10" style="min-width: 380px;">
+          <div class="round-table-container" id="tableContainer">
+            <div class="table-circle">
+              <span id="agentAvatar" class="text-lg font-bold tracking-tight text-center leading-tight" style="max-width: 120px; overflow: hidden; text-overflow: ellipsis;">xAgent</span>
+            </div>
+            <!-- Seats are rendered by JS -->
+          </div>
+          <div class="mt-4 flex gap-2">
+            <button id="clearSeatsBtn" class="ghost-button text-xs px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Clear All Seats</button>
+            <button id="clearChatBtn" class="ghost-button text-xs px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Clear Chat</button>
+          </div>
+        </aside>
+
+        <!-- Right: Chat panel -->
+        <div class="flex-1 flex flex-col min-w-0">
+          <section id="chatMessages" class="fade-mask flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-4 space-y-3">
+            <div id="emptyHint" class="h-full flex items-center justify-center text-center text-gray-400 dark:text-gray-500 text-sm">
+              <div class="max-w-xs">
+                <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-[20px] panel-muted shadow-sm">
+                  <svg class="w-6 h-6 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+                  </svg>
+                </div>
+                <p class="font-semibold text-gray-700 dark:text-gray-200">No one at the table yet</p>
+                <p class="mt-1.5 leading-relaxed">Click an empty seat on the round table to add a participant, then start chatting.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="border-t border-black/5 dark:border-white/10 px-4 sm:px-6 py-3 bg-transparent">
+            <div class="flex items-center gap-2 mb-2" id="activeSpeakerBar">
+              <span class="text-xs text-gray-400 dark:text-gray-500">Speaking as:</span>
+              <span id="activeSpeakerName" class="text-sm font-semibold">—</span>
+            </div>
+            <div class="panel-muted rounded-[28px] p-2 sm:p-3 flex items-end gap-2 sm:gap-3">
+              <textarea id="groupInput" rows="1" placeholder="Click a seat first to join..." disabled
+                class="flex-1 resize-none max-h-32 overflow-y-auto px-4 py-3 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:opacity-50"
+              ></textarea>
+              <button id="sendBtn" disabled title="Send"
+                class="h-11 px-5 shrink-0 rounded-2xl bg-gray-950 text-white dark:bg-white dark:text-gray-950 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
+                Send
+              </button>
+            </div>
+          </section>
+        </div>
+      </main>
+    </section>
+  </div>
+
+<script>
+const API_BASE = '';
+const SEAT_COUNT = 6;
+const SEAT_COLORS = [
+  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899',
+];
+const STORAGE_KEY = 'xagent_group_state_v1';
+
+const md = window.markdownit({ html: true, linkify: true, breaks: true });
+
+const state = {
+  seats: Array.from({ length: SEAT_COUNT }, () => ({ name: '', occupied: false })),
+  activeSeatIndex: -1,
+  messages: [],
+  sending: false,
+};
+
+/* ── Helpers ─────────────────────────────────── */
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = String(text ?? '');
+  return div.innerHTML;
+}
+
+function initials(name) {
+  return name.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2);
+}
+
+function saveState() {
+  const data = {
+    seats: state.seats,
+    darkMode: document.documentElement.classList.contains('dark'),
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+function restoreState() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw) {
+    try {
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.seats) && data.seats.length === SEAT_COUNT) {
+        state.seats = data.seats;
+      }
+      const shouldDark = data.darkMode || (!('darkMode' in data) && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.classList.toggle('dark', !!shouldDark);
+    } catch {}
+  } else {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.classList.toggle('dark', prefersDark);
+  }
+}
+
+/* ── Health check ────────────────────────────── */
+
+async function checkHealth() {
+  const dot = document.getElementById('healthDot');
+  try {
+    const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(5000) });
+    if (res.ok) {
+      dot.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500"></span><span>Online</span>';
+    } else {
+      dot.innerHTML = `<span class="w-2 h-2 rounded-full bg-yellow-500"></span><span>Error ${res.status}</span>`;
+    }
+  } catch {
+    dot.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span><span>Offline</span>';
+  }
+}
+
+/* ── Round table rendering ───────────────────── */
+
+function renderTable() {
+  const container = document.getElementById('tableContainer');
+  // Remove existing seats
+  container.querySelectorAll('.seat').forEach(el => el.remove());
+
+  const cx = 170, cy = 170, radius = 140;
+
+  state.seats.forEach((seat, i) => {
+    const angle = (2 * Math.PI * i / SEAT_COUNT) - Math.PI / 2;
+    const x = cx + radius * Math.cos(angle);
+    const y = cy + radius * Math.sin(angle);
+
+    const el = document.createElement('div');
+    el.className = `seat ${seat.occupied ? 'seat-occupied' : 'seat-empty'} ${state.activeSeatIndex === i ? 'seat-active' : ''}`;
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+
+    if (seat.occupied) {
+      const color = SEAT_COLORS[i % SEAT_COLORS.length];
+      el.style.background = `${color}18`;
+      el.style.borderColor = `${color}66`;
+      el.innerHTML = `
+        <div class="seat-avatar" style="background: ${color}22; color: ${color};">${initials(seat.name)}</div>
+        <div class="seat-name" style="color: var(--text-primary);">${escapeHtml(seat.name)}</div>
+      `;
+      el.addEventListener('click', () => selectSeat(i));
+      el.addEventListener('contextmenu', (e) => { e.preventDefault(); removeSeat(i); });
+    } else {
+      el.innerHTML = `
+        <svg class="w-5 h-5 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+        </svg>
+      `;
+      el.addEventListener('click', () => promptAddSeat(i));
+    }
+
+    container.appendChild(el);
+  });
+
+  updateActiveSpeaker();
+}
+
+function promptAddSeat(index) {
+  const name = prompt('Enter participant name:');
+  if (!name || !name.trim()) return;
+  state.seats[index] = { name: name.trim(), occupied: true };
+  state.activeSeatIndex = index;
+  saveState();
+  renderTable();
+  updateEmptyHint();
+}
+
+function removeSeat(index) {
+  state.seats[index] = { name: '', occupied: false };
+  if (state.activeSeatIndex === index) {
+    state.activeSeatIndex = state.seats.findIndex(s => s.occupied);
+    if (state.activeSeatIndex === undefined) state.activeSeatIndex = -1;
+  }
+  saveState();
+  renderTable();
+  updateEmptyHint();
+}
+
+function selectSeat(index) {
+  if (!state.seats[index].occupied) return;
+  state.activeSeatIndex = index;
+  renderTable();
+  document.getElementById('groupInput').focus();
+}
+
+function updateActiveSpeaker() {
+  const nameEl = document.getElementById('activeSpeakerName');
+  const input = document.getElementById('groupInput');
+  const sendBtn = document.getElementById('sendBtn');
+
+  if (state.activeSeatIndex >= 0 && state.seats[state.activeSeatIndex]?.occupied) {
+    const seat = state.seats[state.activeSeatIndex];
+    const color = SEAT_COLORS[state.activeSeatIndex % SEAT_COLORS.length];
+    nameEl.textContent = seat.name;
+    nameEl.style.color = color;
+    input.disabled = false;
+    sendBtn.disabled = state.sending;
+    input.placeholder = `Message as ${seat.name}...`;
+  } else {
+    nameEl.textContent = '—';
+    nameEl.style.color = '';
+    input.disabled = true;
+    sendBtn.disabled = true;
+    input.placeholder = 'Click a seat first to join...';
+  }
+}
+
+function updateEmptyHint() {
+  const hint = document.getElementById('emptyHint');
+  const hasOccupied = state.seats.some(s => s.occupied);
+  if (hint) {
+    hint.style.display = (hasOccupied || state.messages.length > 0) ? 'none' : 'flex';
+  }
+}
+
+/* ── Chat ────────────────────────────────────── */
+
+function scrollToBottom() {
+  const container = document.getElementById('chatMessages');
+  requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
+}
+
+function renderMarkdown(target, content) {
+  target.innerHTML = md.render(content);
+}
+
+function appendMessage(msg, placeholder = false) {
+  const container = document.getElementById('chatMessages');
+  const hint = document.getElementById('emptyHint');
+  if (hint) hint.style.display = 'none';
+
+  const wrapper = document.createElement('div');
+  const isAgent = msg.role === 'assistant';
+  wrapper.className = `flex ${isAgent ? 'justify-start' : 'justify-end'} items-end gap-2`;
+
+  // Avatar
+  const avatar = document.createElement('div');
+  avatar.className = 'flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold';
+  if (isAgent) {
+    avatar.style.cssText = 'background: rgba(24,24,27,0.08); color: var(--text-secondary);';
+    avatar.textContent = 'A';
+  } else {
+    const color = SEAT_COLORS[msg.seatIndex % SEAT_COLORS.length];
+    avatar.style.cssText = `background: ${color}22; color: ${color};`;
+    avatar.textContent = initials(msg.name);
+  }
+
+  const col = document.createElement('div');
+  col.className = `flex flex-col ${isAgent ? 'items-start' : 'items-end'} max-w-[80%]`;
+
+  const label = document.createElement('div');
+  label.className = 'text-[11px] text-gray-400 dark:text-gray-500 mb-0.5 px-1';
+  label.textContent = isAgent ? 'xAgent' : msg.name;
+
+  const bubble = document.createElement('div');
+  bubble.className = `chat-bubble msg-content ${isAgent ? 'bubble-agent' : 'bubble-user'}`;
+  if (placeholder) {
+    bubble.innerHTML = '<span class="text-gray-400">Thinking...</span>';
+  } else if (msg.content) {
+    renderMarkdown(bubble, msg.content);
+  }
+
+  col.appendChild(label);
+  col.appendChild(bubble);
+
+  if (isAgent) {
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(col);
+  } else {
+    wrapper.appendChild(col);
+    wrapper.appendChild(avatar);
+  }
+  container.appendChild(wrapper);
+  scrollToBottom();
+
+  return bubble;
+}
+
+function buildConversationContext() {
+  // Build a multi-speaker conversation context for the agent
+  return state.messages.map(m => {
+    if (m.role === 'assistant') return `[xAgent]: ${m.content}`;
+    return `[${m.name}]: ${m.content}`;
+  }).join('\n');
+}
+
+async function sendMessage() {
+  if (state.sending) return;
+  if (state.activeSeatIndex < 0) return;
+
+  const input = document.getElementById('groupInput');
+  const text = input.value.trim();
+  if (!text) return;
+
+  const seat = state.seats[state.activeSeatIndex];
+  const msg = { role: 'user', name: seat.name, seatIndex: state.activeSeatIndex, content: text };
+  state.messages.push(msg);
+  appendMessage(msg);
+
+  input.value = '';
+  input.style.height = 'auto';
+  setSending(true);
+
+  // Build full conversation context
+  const conversationCtx = buildConversationContext();
+  const systemHint = `This is a group round-table discussion. Participants: ${state.seats.filter(s => s.occupied).map(s => s.name).join(', ')}. Each message is prefixed with the speaker's name in brackets. Reply naturally to the group.`;
+
+  const payload = {
+    user_id: `group_${seat.name.toLowerCase().replace(/\s+/g, '_')}`,
+    user_message: `${systemHint}\n\n--- Conversation ---\n${conversationCtx}`,
+    stream: true,
+    enable_memory: false,
+    private: false,
+  };
+
+  const agentMsg = { role: 'assistant', content: '' };
+  state.messages.push(agentMsg);
+  const bubbleEl = appendMessage(agentMsg, true);
+  bubbleEl.classList.add('typing-cursor');
+
+  try {
+    const response = await fetch(`${API_BASE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullText = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data: ')) continue;
+        const chunk = trimmed.slice(6);
+        if (chunk === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(chunk);
+          if (parsed.error) throw new Error(parsed.error);
+          if (parsed.delta) {
+            fullText += parsed.delta;
+            renderMarkdown(bubbleEl, fullText);
+            scrollToBottom();
+          } else if (parsed.message) {
+            fullText = typeof parsed.message === 'object' ? JSON.stringify(parsed.message, null, 2) : parsed.message;
+            renderMarkdown(bubbleEl, fullText);
+            scrollToBottom();
+          }
+        } catch (e) {
+          if (!String(e?.message || e).includes('JSON')) throw e;
+        }
+      }
+    }
+
+    agentMsg.content = fullText;
+  } catch (err) {
+    bubbleEl.innerHTML = `<span class="text-red-500">Error: ${escapeHtml(err.message)}</span>`;
+    agentMsg.content = `Error: ${err.message}`;
+  } finally {
+    bubbleEl.classList.remove('typing-cursor');
+    setSending(false);
+    document.getElementById('groupInput').focus();
+    scrollToBottom();
+  }
+}
+
+function setSending(flag) {
+  state.sending = flag;
+  const sendBtn = document.getElementById('sendBtn');
+  const input = document.getElementById('groupInput');
+  sendBtn.disabled = flag || state.activeSeatIndex < 0;
+  input.disabled = flag || state.activeSeatIndex < 0;
+}
+
+/* ── Init ────────────────────────────────────── */
+
+function bindEvents() {
+  document.getElementById('toggleThemeBtn').addEventListener('click', () => {
+    document.documentElement.classList.toggle('dark');
+    saveState();
+  });
+
+  document.getElementById('sendBtn').addEventListener('click', sendMessage);
+
+  document.getElementById('groupInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  document.getElementById('groupInput').addEventListener('input', function () {
+    this.style.height = 'auto';
+    this.style.height = `${Math.min(this.scrollHeight, 128)}px`;
+  });
+
+  document.getElementById('clearSeatsBtn').addEventListener('click', () => {
+    state.seats = Array.from({ length: SEAT_COUNT }, () => ({ name: '', occupied: false }));
+    state.activeSeatIndex = -1;
+    saveState();
+    renderTable();
+    updateEmptyHint();
+  });
+
+  document.getElementById('clearChatBtn').addEventListener('click', () => {
+    state.messages = [];
+    const container = document.getElementById('chatMessages');
+    container.innerHTML = '';
+    updateEmptyHint();
+  });
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  restoreState();
+  bindEvents();
+  renderTable();
+  updateEmptyHint();
+  await checkHealth();
+
+  // Load agent name
+  try {
+    const res = await fetch(`${API_BASE}/api/agent/info`);
+    if (res.ok) {
+      const info = await res.json();
+      document.getElementById('agentAvatar').textContent = info.name || 'xAgent';
+    }
+  } catch {}
+});
+</script>
+</body>
+</html>

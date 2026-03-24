@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>xAgent Config</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {} }
+    };
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg-primary: #f5f5f4;
+      --bg-secondary: rgba(255, 255, 255, 0.78);
+      --bg-tertiary: rgba(255, 255, 255, 0.58);
+      --border-soft: rgba(24, 24, 27, 0.08);
+      --border-strong: rgba(24, 24, 27, 0.12);
+      --text-primary: #18181b;
+      --text-secondary: #52525b;
+      --shadow-soft: 0 18px 60px -28px rgba(24, 24, 27, 0.22);
+      --shadow-card: 0 10px 30px -18px rgba(24, 24, 27, 0.18);
+    }
+    .dark {
+      color-scheme: dark;
+      --bg-primary: #09090b;
+      --bg-secondary: rgba(17, 17, 19, 0.78);
+      --bg-tertiary: rgba(24, 24, 27, 0.76);
+      --border-soft: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.12);
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --shadow-soft: 0 24px 80px -36px rgba(0, 0, 0, 0.75);
+      --shadow-card: 0 18px 40px -24px rgba(0, 0, 0, 0.68);
+    }
+    html, body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(120, 113, 108, 0.12), transparent 30%),
+        radial-gradient(circle at bottom right, rgba(120, 113, 108, 0.08), transparent 26%),
+        var(--bg-primary);
+      color: var(--text-primary);
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #9ca3af; border-radius: 9999px; }
+    .dark ::-webkit-scrollbar-thumb { background: #4b5563; }
+    .panel-surface {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-soft);
+      box-shadow: var(--shadow-card);
+      backdrop-filter: blur(20px);
+    }
+    .panel-muted {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-soft);
+      backdrop-filter: blur(16px);
+    }
+    .hero-grid {
+      background-image:
+        linear-gradient(to right, rgba(24, 24, 27, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(24, 24, 27, 0.04) 1px, transparent 1px);
+      background-size: 22px 22px;
+    }
+    .dark .hero-grid {
+      background-image:
+        linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    }
+    .ghost-button {
+      background: rgba(255, 255, 255, 0.6);
+      border: 1px solid var(--border-soft);
+      backdrop-filter: blur(14px);
+    }
+    .dark .ghost-button { background: rgba(24, 24, 27, 0.72); }
+    .nav-link {
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+    .nav-link:hover { color: var(--text-primary); background: rgba(24, 24, 27, 0.05); }
+    .dark .nav-link:hover { background: rgba(255, 255, 255, 0.06); }
+    .nav-link.active { color: var(--text-primary); background: rgba(24, 24, 27, 0.08); }
+    .dark .nav-link.active { background: rgba(255, 255, 255, 0.1); }
+
+    .info-card {
+      border-radius: 1.5rem;
+      padding: 1.25rem 1.5rem;
+    }
+    .info-label {
+      font-size: 0.68rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      margin-bottom: 0.35rem;
+    }
+    .info-value {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--text-primary);
+      word-break: break-all;
+    }
+    .info-value.mono {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.85rem;
+    }
+    .tool-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-soft);
+    }
+    .system-prompt-box {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.82rem;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-break: break-word;
+      padding: 1rem 1.2rem;
+      border-radius: 1rem;
+      background: rgba(24, 24, 27, 0.03);
+      border: 1px solid var(--border-soft);
+      max-height: 420px;
+      overflow-y: auto;
+      color: var(--text-primary);
+    }
+    .dark .system-prompt-box {
+      background: rgba(255, 255, 255, 0.03);
+    }
+  </style>
+</head>
+<body class="h-full text-gray-900 dark:text-gray-100">
+  <div class="hero-grid fixed inset-0 pointer-events-none opacity-70"></div>
+  <div class="relative h-full max-w-6xl mx-auto px-3 sm:px-5 py-4 sm:py-6 flex flex-col gap-4">
+    <section class="panel-surface flex-1 min-h-0 rounded-[32px] overflow-hidden flex flex-col">
+      <header class="px-4 sm:px-6 py-4 sm:py-5 border-b border-black/5 dark:border-white/10">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="flex flex-wrap items-center gap-4">
+              <h1 class="text-xl sm:text-2xl font-semibold tracking-[-0.03em]">xAgent Config</h1>
+              <nav class="flex flex-wrap items-center gap-1">
+                <a href="/" class="nav-link">Chat</a>
+                <a href="/group" class="nav-link">Group</a>
+                <a href="/memory" class="nav-link">Memory</a>
+                <a href="/message" class="nav-link">Messages</a>
+                <a href="/agent" class="nav-link active">Agent</a>
+              </nav>
+            </div>
+            <p class="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-1">Current agent configuration and runtime details.</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <div id="healthDot" class="ghost-button text-xs sm:text-sm text-gray-500 dark:text-gray-400 inline-flex items-center gap-2 px-3 py-1.5 rounded-full">
+              <span class="w-2 h-2 rounded-full bg-gray-400"></span><span>Checking...</span>
+            </div>
+            <button id="toggleThemeBtn" class="ghost-button text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Theme</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="flex-1 min-h-0 overflow-y-auto px-4 sm:px-8 py-6 sm:py-8">
+        <!-- Loading -->
+        <div id="loading" class="h-48 flex items-center justify-center text-gray-400">
+          <span>Loading agent configuration...</span>
+        </div>
+
+        <!-- Content (hidden until loaded) -->
+        <div id="content" class="hidden space-y-6 max-w-3xl mx-auto">
+
+          <!-- Agent identity -->
+          <div class="panel-muted info-card">
+            <div class="flex items-center gap-4 mb-4">
+              <div id="agentIcon" class="w-14 h-14 rounded-[18px] flex items-center justify-center text-xl font-bold" style="background: rgba(24,24,27,0.06); color: var(--text-primary);">
+                A
+              </div>
+              <div>
+                <div id="agentName" class="text-lg font-semibold tracking-[-0.02em]">—</div>
+                <div id="agentModel" class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">—</div>
+              </div>
+            </div>
+            <div id="agentDescription" class="text-sm text-gray-600 dark:text-gray-400 leading-relaxed hidden"></div>
+          </div>
+
+          <!-- Key info grid -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div class="panel-muted info-card">
+              <div class="info-label">Workspace</div>
+              <div id="infoWorkspace" class="info-value mono">—</div>
+            </div>
+            <div class="panel-muted info-card">
+              <div class="info-label">Memory Directory</div>
+              <div id="infoMemory" class="info-value mono">—</div>
+            </div>
+            <div class="panel-muted info-card">
+              <div class="info-label">Message Storage</div>
+              <div id="infoStorage" class="info-value mono">—</div>
+            </div>
+            <div class="panel-muted info-card">
+              <div class="info-label">Total Messages</div>
+              <div id="infoMessageCount" class="info-value">—</div>
+            </div>
+          </div>
+
+          <!-- Tools -->
+          <div class="panel-muted info-card">
+            <div class="info-label mb-3">Registered Tools</div>
+            <div id="toolList" class="flex flex-wrap gap-2">
+              <span class="text-sm text-gray-400">Loading...</span>
+            </div>
+          </div>
+
+          <!-- MCP Tools -->
+          <div id="mcpSection" class="panel-muted info-card hidden">
+            <div class="info-label mb-3">MCP Tools</div>
+            <div id="mcpToolList" class="flex flex-wrap gap-2"></div>
+          </div>
+
+          <!-- System prompt -->
+          <div class="panel-muted info-card">
+            <div class="info-label mb-3">System Prompt</div>
+            <div id="systemPrompt" class="system-prompt-box">—</div>
+          </div>
+        </div>
+      </main>
+    </section>
+  </div>
+
+<script>
+const API_BASE = '';
+const THEME_KEY = 'xagent_agent_theme_v1';
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = String(text ?? '');
+  return div.innerHTML;
+}
+
+function restoreTheme() {
+  const raw = localStorage.getItem(THEME_KEY);
+  let shouldDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  if (raw !== null) {
+    try { shouldDark = JSON.parse(raw); } catch {}
+  }
+  document.documentElement.classList.toggle('dark', shouldDark);
+}
+
+function saveTheme() {
+  localStorage.setItem(THEME_KEY, JSON.stringify(document.documentElement.classList.contains('dark')));
+}
+
+async function checkHealth() {
+  const dot = document.getElementById('healthDot');
+  try {
+    const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(5000) });
+    if (res.ok) {
+      dot.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500"></span><span>Online</span>';
+    } else {
+      dot.innerHTML = `<span class="w-2 h-2 rounded-full bg-yellow-500"></span><span>Error ${res.status}</span>`;
+    }
+  } catch {
+    dot.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span><span>Offline</span>';
+  }
+}
+
+async function loadAgentConfig() {
+  const loading = document.getElementById('loading');
+  const content = document.getElementById('content');
+
+  try {
+    const [infoRes, statsRes] = await Promise.all([
+      fetch(`${API_BASE}/api/agent/info`),
+      fetch(`${API_BASE}/api/messages/stats`),
+    ]);
+
+    if (!infoRes.ok) throw new Error(`Agent info: HTTP ${infoRes.status}`);
+
+    const info = await infoRes.json();
+    const stats = statsRes.ok ? await statsRes.json() : {};
+
+    // Agent identity
+    const name = info.name || 'Unknown';
+    document.getElementById('agentName').textContent = name;
+    document.getElementById('agentModel').textContent = info.model || 'Unknown model';
+    document.getElementById('agentIcon').textContent = name.charAt(0).toUpperCase();
+
+    if (info.description) {
+      const descEl = document.getElementById('agentDescription');
+      descEl.textContent = info.description;
+      descEl.classList.remove('hidden');
+    }
+
+    // Key info
+    document.getElementById('infoWorkspace').textContent = info.workspace || '(default)';
+    document.getElementById('infoMemory').textContent = info.memory_dir || '—';
+
+    const storage = info.message_storage || {};
+    if (storage.stream_name || storage.path) {
+      document.getElementById('infoStorage').textContent = storage.path || storage.stream_name || JSON.stringify(storage);
+    } else if (Object.keys(storage).length) {
+      document.getElementById('infoStorage').textContent = JSON.stringify(storage);
+    }
+
+    // Message stats
+    document.getElementById('infoMessageCount').textContent =
+      stats.total !== undefined ? stats.total.toLocaleString() : '—';
+
+    // Tools
+    if (info.tools && Array.isArray(info.tools) && info.tools.length) {
+      document.getElementById('toolList').innerHTML = info.tools.map(t => {
+        const name = typeof t === 'string' ? t : (t.name || t);
+        return `<span class="tool-badge">
+          <svg class="w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          ${escapeHtml(name)}
+        </span>`;
+      }).join('');
+    } else {
+      document.getElementById('toolList').innerHTML = '<span class="text-sm text-gray-400">No tools registered</span>';
+    }
+
+    // MCP Tools
+    if (info.mcp_tools && Array.isArray(info.mcp_tools) && info.mcp_tools.length) {
+      document.getElementById('mcpSection').classList.remove('hidden');
+      document.getElementById('mcpToolList').innerHTML = info.mcp_tools.map(t => {
+        const name = typeof t === 'string' ? t : (t.name || t);
+        return `<span class="tool-badge" style="border-color: rgba(139, 92, 246, 0.2); background: rgba(139, 92, 246, 0.06);">
+          <svg class="w-3.5 h-3.5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+          ${escapeHtml(name)}
+        </span>`;
+      }).join('');
+    }
+
+    // System prompt
+    if (info.system_prompt) {
+      document.getElementById('systemPrompt').textContent = info.system_prompt;
+    } else {
+      document.getElementById('systemPrompt').textContent = '(no system prompt configured)';
+    }
+
+    loading.classList.add('hidden');
+    content.classList.remove('hidden');
+  } catch (err) {
+    loading.innerHTML = `<div class="text-center"><p class="text-red-500 mb-2">Failed to load agent configuration</p><p class="text-sm text-gray-400">${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  restoreTheme();
+  document.getElementById('toggleThemeBtn').addEventListener('click', () => {
+    document.documentElement.classList.toggle('dark');
+    saveTheme();
+  });
+  await Promise.all([checkHealth(), loadAgentConfig()]);
+});
+</script>
+</body>
+</html>
