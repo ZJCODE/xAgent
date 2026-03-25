@@ -361,6 +361,128 @@
 
     .typing-cursor::after { content: '▍'; animation: blink 1s step-end infinite; }
     @keyframes blink { 50% { opacity: 0; } }
+
+    /* Dual-mode layout */
+    .dual-container {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .dual-container > .chat-panel {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .dual-container > .panel-divider {
+      width: 1px;
+      flex-shrink: 0;
+      background: var(--border-strong);
+    }
+
+    .panel-settings-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.55rem;
+      padding: 0.55rem 0.75rem;
+      border-bottom: 1px solid var(--border-soft);
+      background: var(--bg-tertiary);
+    }
+
+    .panel-settings-bar .inline-field {
+      min-width: 120px;
+      min-height: 34px;
+      padding: 0 0.65rem;
+    }
+
+    .panel-settings-bar .inline-input {
+      min-width: 80px;
+      font-size: 0.85rem;
+    }
+
+    .panel-settings-bar .inline-switch {
+      min-height: 34px;
+      padding: 0 0.25rem 0 0.65rem;
+    }
+
+    .panel-settings-bar .setting-toggle-text {
+      font-size: 0.78rem;
+    }
+
+    .panel-settings-bar .toggle-track {
+      width: 34px;
+      height: 21px;
+    }
+
+    .panel-settings-bar .toggle-track::after {
+      width: 15px;
+      height: 15px;
+      top: 2px;
+      left: 2px;
+    }
+
+    .panel-settings-bar .setting-toggle input:checked + .toggle-track::after {
+      transform: translateX(13px);
+    }
+
+    .panel-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 0.2rem 0.65rem;
+      border-radius: 999px;
+      flex-shrink: 0;
+    }
+
+    .panel-label-left {
+      background: rgba(59, 130, 246, 0.10);
+      color: #3b82f6;
+    }
+
+    .dark .panel-label-left {
+      background: rgba(96, 165, 250, 0.12);
+      color: #60a5fa;
+    }
+
+    .panel-label-right {
+      background: rgba(168, 85, 247, 0.10);
+      color: #a855f7;
+    }
+
+    .dark .panel-label-right {
+      background: rgba(192, 132, 252, 0.12);
+      color: #c084fc;
+    }
+
+    .panel-clear-btn {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 0.2rem 0.5rem;
+      border-radius: 999px;
+      transition: opacity 0.2s;
+      margin-left: auto;
+    }
+
+    .panel-clear-btn:hover { opacity: 0.6; }
+
+    @media (max-width: 768px) {
+      .dual-container {
+        flex-direction: column;
+      }
+
+      .dual-container > .panel-divider {
+        width: 100%;
+        height: 1px;
+      }
+    }
   </style>
 </head>
 <body class="h-full text-gray-900 dark:text-gray-100">
@@ -387,11 +509,15 @@
               <span class="w-2 h-2 rounded-full bg-gray-400"></span>
               <span>Checking...</span>
             </div>
+            <label class="ghost-button text-sm px-3 py-1.5 rounded-full inline-flex items-center gap-2 cursor-pointer hover:bg-white/80 dark:hover:bg-gray-900 transition">
+              <span>Dual</span>
+              <input id="optDual" type="checkbox" class="w-3.5 h-3.5 accent-current" />
+            </label>
             <button id="toggleThemeBtn" class="ghost-button text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Theme</button>
           </div>
         </div>
 
-        <div class="settings-bar panel-muted">
+        <div class="settings-bar panel-muted" id="globalSettingsBar">
           <label class="inline-field text-sm">
             <span class="inline-label">User</span>
             <input id="userId" type="text" class="inline-input text-sm" />
@@ -431,47 +557,8 @@
         </div>
       </header>
 
-      <main class="flex-1 min-h-0 flex flex-col overflow-hidden">
-      <section id="messages" class="fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4">
-        <div id="welcome" class="h-full min-h-[320px] flex items-center justify-center text-center text-gray-500 dark:text-gray-400 text-sm">
-          <div class="max-w-md px-4">
-            <div class="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[24px] panel-muted shadow-sm">
-              <svg class="w-7 h-7 text-gray-700 dark:text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" d="M8 10h8M8 14h5m-7 6h12a2 2 0 002-2V8.828a2 2 0 00-.586-1.414l-2.828-2.828A2 2 0 0015.172 4H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-            </div>
-            <p class="font-semibold text-base text-gray-800 dark:text-gray-100 tracking-[-0.02em]">Start a message stream</p>
-            <p class="mt-2 leading-6">Type a message and press Enter to send. Add images when needed. Keep the interface calm and let the content lead.</p>
-            <div class="mt-5 flex flex-wrap justify-center gap-2 text-xs">
-              <span class="panel-muted rounded-full px-3 py-1.5">Enter to send</span>
-              <span class="panel-muted rounded-full px-3 py-1.5">Shift + Enter for newline</span>
-              <span class="panel-muted rounded-full px-3 py-1.5">Optional image upload</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="imagePreview" class="hidden border-t border-black/5 dark:border-white/10 px-3 sm:px-6 py-3 bg-white/20 dark:bg-black/10">
-      </section>
-
-      <section class="border-t border-black/5 dark:border-white/10 px-3 sm:px-6 py-4 bg-transparent">
-        <div class="panel-muted rounded-[28px] p-2 sm:p-3 flex items-end gap-2 sm:gap-3">
-          <button id="imageBtn" title="Upload image" class="ghost-button h-11 w-11 shrink-0 rounded-2xl hover:bg-white dark:hover:bg-gray-900 flex items-center justify-center transition">
-            <svg class="w-5 h-5 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-          </button>
-          <input id="imageInput" type="file" accept="image/jpeg,image/png" multiple class="hidden" />
-
-          <textarea id="chatInput" rows="1" placeholder="Message xAgent..."
-            class="flex-1 resize-none max-h-40 overflow-y-auto px-4 py-3 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white placeholder:text-gray-400 dark:placeholder:text-gray-500"
-          ></textarea>
-
-          <button id="sendBtn" title="Send" class="h-11 px-5 shrink-0 rounded-2xl bg-gray-950 text-white dark:bg-white dark:text-gray-950 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
-            Send
-          </button>
-        </div>
-      </section>
+      <main id="mainArea" class="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <!-- Populated by JS: single panel or dual panels -->
       </main>
     </section>
   </div>
@@ -480,35 +567,14 @@
 const API_BASE = '';
 const STORAGE_KEY = 'xagent_web_settings_v3';
 const HISTORY_KEY = 'xagent_chat_history_v1';
-
-const state = {
-  messages: [],
-  pendingImages: [],
-  sending: false,
-};
-
-function saveHistory() {
-  // Store messages without base64 images to keep storage small
-  const slim = state.messages.map(m => ({
-    role: m.role,
-    content: m.content,
-    images: (m.images || []).map(() => '[image]'),
-  }));
-  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(slim)); } catch {}
-}
-
-function restoreHistory() {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    if (!raw) return;
-    const msgs = JSON.parse(raw);
-    if (!Array.isArray(msgs) || msgs.length === 0) return;
-    state.messages = msgs;
-    msgs.forEach(m => appendMessageBubble(m));
-  } catch {}
-}
+const DUAL_MODE_KEY = 'xagent_dual_mode';
 
 const md = window.markdownit({ html: true, linkify: true, breaks: true });
+
+/** Active panel instances — destroyed/recreated on mode switch */
+let panels = [];
+
+/* ─── Shared utilities ─── */
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -516,34 +582,48 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-function saveSettings() {
+function renderMarkdown(target, content) {
+  target.innerHTML = md.render(content);
+}
+
+function autoResize(textarea) {
+  textarea.style.height = 'auto';
+  textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+}
+
+/* ─── Global settings (single-mode only) ─── */
+
+function saveGlobalSettings() {
   const settings = {
     userId: document.getElementById('userId').value,
     stream: document.getElementById('optStream').checked,
     memory: document.getElementById('optMemory').checked,
     private: document.getElementById('optPrivate').checked,
     darkMode: document.documentElement.classList.contains('dark'),
+    dual: document.getElementById('optDual').checked,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
 }
 
-function restoreSettings() {
+function restoreGlobalSettings() {
   const settings = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
 
   document.getElementById('userId').value = settings.userId || 'web_user';
   document.getElementById('optStream').checked = settings.stream !== false;
   document.getElementById('optMemory').checked = settings.memory !== false;
   document.getElementById('optPrivate').checked = !!settings.private;
+  document.getElementById('optDual').checked = !!settings.dual;
 
   const shouldDark = settings.darkMode || (!('darkMode' in settings) && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.classList.toggle('dark', !!shouldDark);
-  updatePrivateIndicator();
 }
 
 function toggleTheme() {
   document.documentElement.classList.toggle('dark');
-  saveSettings();
-  updatePrivateIndicator();
+  saveGlobalSettings();
+  // Update private banners in all panels
+  panels.forEach(p => p.updatePrivateIndicator());
+  updateGlobalPrivateIndicator();
 }
 
 async function checkHealth() {
@@ -560,312 +640,11 @@ async function checkHealth() {
   }
 }
 
-function autoResize(textarea) {
-  textarea.style.height = 'auto';
-  textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
-}
+/* ─── Welcome HTML template ─── */
 
-function focusChatInput() {
-  const chatInput = document.getElementById('chatInput');
-  requestAnimationFrame(() => {
-    chatInput.focus({ preventScroll: true });
-  });
-}
-
-function scrollToBottom() {
-  const container = document.getElementById('messages');
-  requestAnimationFrame(() => {
-    container.scrollTop = container.scrollHeight;
-  });
-}
-
-function renderMarkdown(target, content) {
-  target.innerHTML = md.render(content);
-}
-
-function appendMessageBubble(message, placeholder = false) {
-  const container = document.getElementById('messages');
-  const welcome = document.getElementById('welcome');
-  if (welcome) welcome.remove();
-
-  const wrapper = document.createElement('div');
-  wrapper.className = `flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`;
-
-  const bubble = document.createElement('div');
-  const isUser = message.role === 'user';
-  bubble.className = `max-w-[92%] sm:max-w-[80%] lg:max-w-[68%] rounded-[24px] px-4 py-3.5 text-sm leading-relaxed ${isUser
-    ? 'user-bubble rounded-br-md'
-    : 'assistant-bubble rounded-bl-md'}`;
-
-  const label = document.createElement('div');
-  label.className = `mb-2 text-[11px] uppercase tracking-[0.18em] ${isUser
-    ? 'text-white/60 dark:text-black/50'
-    : 'text-gray-400 dark:text-gray-500'}`;
-  label.textContent = isUser ? 'You' : 'xAgent';
-  bubble.appendChild(label);
-
-  const contentEl = document.createElement('div');
-  contentEl.className = 'msg-content';
-  if (placeholder) {
-    contentEl.innerHTML = '<span class="text-gray-400">Thinking...</span>';
-  } else if (message.content) {
-    renderMarkdown(contentEl, message.content);
-  }
-  bubble.appendChild(contentEl);
-
-  if (isUser && message.images && message.images.length) {
-    const imageRow = document.createElement('div');
-    imageRow.className = 'mt-2 flex flex-wrap gap-2';
-    message.images.forEach((src) => {
-      const img = document.createElement('img');
-      img.src = src;
-      img.className = 'h-20 rounded-lg border border-white/30 object-cover';
-      imageRow.appendChild(img);
-    });
-    bubble.appendChild(imageRow);
-  }
-
-  wrapper.appendChild(bubble);
-  container.appendChild(wrapper);
-  scrollToBottom();
-  return { wrapper, contentEl };
-}
-
-function renderImagePreview() {
-  const preview = document.getElementById('imagePreview');
-  if (!state.pendingImages.length) {
-    preview.classList.add('hidden');
-    preview.innerHTML = '';
-    return;
-  }
-
-  preview.classList.remove('hidden');
-  preview.innerHTML = state.pendingImages.map((src, index) => `
-    <div class="inline-flex items-center gap-2 mr-2 mb-2 pl-1 pr-2 py-1 rounded-full border border-black/5 dark:border-white/10 bg-white/70 dark:bg-black/20 shadow-sm backdrop-blur">
-      <img src="${src}" class="h-10 w-10 rounded-full object-cover" />
-      <button class="text-xs text-red-600 dark:text-red-400" onclick="removePendingImage(${index})">Remove</button>
-    </div>
-  `).join('');
-}
-
-function removePendingImage(index) {
-  state.pendingImages.splice(index, 1);
-  renderImagePreview();
-}
-
-function clearPendingImages() {
-  state.pendingImages = [];
-  renderImagePreview();
-}
-
-function setSending(sending) {
-  state.sending = sending;
-  document.getElementById('sendBtn').disabled = sending;
-  document.getElementById('chatInput').disabled = sending;
-}
-
-async function regularChat(payload, contentEl, messageIndex) {
-  contentEl.innerHTML = '<span class="text-gray-400">Thinking...</span>';
-
-  const response = await fetch(`${API_BASE}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-  }
-
-  const result = await response.json();
-  const reply = result.reply;
-  if (typeof reply === 'object') {
-    const text = JSON.stringify(reply, null, 2);
-    contentEl.innerHTML = `<pre>${escapeHtml(text)}</pre>`;
-    state.messages[messageIndex].content = text;
-    return;
-  }
-
-  renderMarkdown(contentEl, reply || '');
-  state.messages[messageIndex].content = reply || '';
-}
-
-async function streamChat(payload, contentEl, messageIndex) {
-  contentEl.classList.add('typing-cursor');
-
-  const response = await fetch(`${API_BASE}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let fullText = '';
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('data: ')) continue;
-      const payloadChunk = trimmed.slice(6);
-      if (payloadChunk === '[DONE]') continue;
-
-      try {
-        const parsed = JSON.parse(payloadChunk);
-        if (parsed.error) throw new Error(parsed.error);
-        if (parsed.delta) {
-          fullText += parsed.delta;
-          renderMarkdown(contentEl, fullText);
-          scrollToBottom();
-          continue;
-        }
-        if (parsed.message) {
-          if (typeof parsed.message === 'object') {
-            fullText = JSON.stringify(parsed.message, null, 2);
-            contentEl.innerHTML = `<pre>${escapeHtml(fullText)}</pre>`;
-          } else {
-            fullText = parsed.message;
-            renderMarkdown(contentEl, fullText);
-          }
-          scrollToBottom();
-        }
-      } catch (error) {
-        const errText = String(error?.message || error);
-        if (!errText.includes('JSON')) {
-          throw error;
-        }
-      }
-    }
-  }
-
-  state.messages[messageIndex].content = fullText;
-  contentEl.classList.remove('typing-cursor');
-  saveHistory();
-}
-
-async function sendMessage() {
-  if (state.sending) return;
-
-  const input = document.getElementById('chatInput');
-  const text = input.value.trim();
-  if (!text) return;
-
-  const currentImages = [...state.pendingImages];
-  clearPendingImages();
-
-  const userMessage = { role: 'user', content: text, images: currentImages };
-  state.messages.push(userMessage);
-  appendMessageBubble(userMessage);
-
-  input.value = '';
-  input.style.height = 'auto';
-
-  const payload = {
-    user_id: document.getElementById('userId').value.trim() || 'web_user',
-    user_message: text,
-    stream: document.getElementById('optStream').checked,
-    enable_memory: document.getElementById('optMemory').checked,
-    private: document.getElementById('optPrivate').checked,
-  };
-
-  if (currentImages.length === 1) {
-    payload.image_source = currentImages[0];
-  } else if (currentImages.length > 1) {
-    payload.image_source = currentImages;
-  }
-
-  setSending(true);
-  saveSettings();
-
-  const assistantMessage = { role: 'assistant', content: '' };
-  state.messages.push(assistantMessage);
-  const messageIndex = state.messages.length - 1;
-  const { contentEl } = appendMessageBubble(assistantMessage, true);
-
-  try {
-    if (payload.stream) {
-      await streamChat(payload, contentEl, messageIndex);
-    } else {
-      await regularChat(payload, contentEl, messageIndex);
-    }
-  } catch (error) {
-    const errText = String(error?.message || error);
-    contentEl.classList.remove('typing-cursor');
-    contentEl.innerHTML = `<div class="text-red-500">Error: ${escapeHtml(errText)}</div>`;
-    state.messages[messageIndex].content = `Error: ${errText}`;
-    saveHistory();
-  } finally {
-    setSending(false);
-    focusChatInput();
-    scrollToBottom();
-  }
-}
-
-function bindEvents() {
-  const chatInput = document.getElementById('chatInput');
-  const imageInput = document.getElementById('imageInput');
-
-  ['userId', 'optStream', 'optMemory', 'optPrivate'].forEach((id) => {
-    document.getElementById(id).addEventListener('change', () => {
-      saveSettings();
-      updatePrivateIndicator();
-    });
-  });
-
-  document.getElementById('toggleThemeBtn').addEventListener('click', toggleTheme);
-  document.getElementById('clearChatBtn').addEventListener('click', clearChat);
-  document.getElementById('sendBtn').addEventListener('click', sendMessage);
-  document.getElementById('imageBtn').addEventListener('click', () => imageInput.click());
-
-  imageInput.addEventListener('change', (event) => {
-    const files = Array.from(event.target.files || []);
-    files.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = (loadEvent) => {
-        state.pendingImages.push(loadEvent.target.result);
-        renderImagePreview();
-      };
-      reader.readAsDataURL(file);
-    });
-    event.target.value = '';
-  });
-
-  chatInput.addEventListener('input', () => autoResize(chatInput));
-  chatInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      sendMessage();
-    }
-  });
-}
-
-document.addEventListener('DOMContentLoaded', async () => {
-  restoreSettings();
-  restoreHistory();
-  bindEvents();
-  await checkHealth();
-  focusChatInput();
-  scrollToBottom();
-});
-
-function clearChat() {
-  state.messages = [];
-  try { localStorage.removeItem(HISTORY_KEY); } catch {}
-  const container = document.getElementById('messages');
-  container.innerHTML = `
-    <div id="welcome" class="h-full min-h-[320px] flex items-center justify-center text-center text-gray-500 dark:text-gray-400 text-sm">
+function welcomeHTML(idPrefix) {
+  return `
+    <div id="${idPrefix}_welcome" class="h-full min-h-[320px] flex items-center justify-center text-center text-gray-500 dark:text-gray-400 text-sm">
       <div class="max-w-md px-4">
         <div class="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[24px] panel-muted shadow-sm">
           <svg class="w-7 h-7 text-gray-700 dark:text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -873,17 +652,550 @@ function clearChat() {
           </svg>
         </div>
         <p class="font-semibold text-base text-gray-800 dark:text-gray-100 tracking-[-0.02em]">Start a message stream</p>
-        <p class="mt-2 leading-6">Type a message and press Enter to send. Add images when needed. Keep the interface calm and let the content lead.</p>
+        <p class="mt-2 leading-6">Type a message and press Enter to send.</p>
         <div class="mt-5 flex flex-wrap justify-center gap-2 text-xs">
           <span class="panel-muted rounded-full px-3 py-1.5">Enter to send</span>
           <span class="panel-muted rounded-full px-3 py-1.5">Shift + Enter for newline</span>
-          <span class="panel-muted rounded-full px-3 py-1.5">Optional image upload</span>
         </div>
       </div>
     </div>`;
 }
 
-function updatePrivateIndicator() {
+/* ═══════════════════════════════════════════════════════
+   Chat Panel Factory — creates a fully isolated panel
+   ═══════════════════════════════════════════════════════ */
+
+function createChatPanel(panelId, containerEl, options = {}) {
+  const { showPanelSettings = false, panelLabel = '', panelLabelClass = '' } = options;
+  const settingsKey = `${STORAGE_KEY}_${panelId}`;
+  const historyKey = `${HISTORY_KEY}_${panelId}`;
+  const el = (suffix) => containerEl.querySelector(`[data-pid="${panelId}_${suffix}"]`);
+
+  const state = {
+    messages: [],
+    pendingImages: [],
+    sending: false,
+  };
+
+  /* ── Build DOM ── */
+
+  function buildHTML() {
+    const settingsHTML = showPanelSettings ? `
+      <div class="panel-settings-bar">
+        <span class="panel-label ${panelLabelClass}">${panelLabel}</span>
+        <label class="inline-field text-sm">
+          <span class="inline-label">User</span>
+          <input data-pid="${panelId}_userId" type="text" class="inline-input text-sm" value="web_user" />
+        </label>
+        <div class="inline-switch">
+          <label class="setting-toggle cursor-pointer">
+            <span class="setting-toggle-text">Stream</span>
+            <input data-pid="${panelId}_optStream" type="checkbox" checked />
+            <span class="toggle-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="inline-switch">
+          <label class="setting-toggle cursor-pointer">
+            <span class="setting-toggle-text">Memory</span>
+            <input data-pid="${panelId}_optMemory" type="checkbox" checked />
+            <span class="toggle-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="inline-switch">
+          <label class="setting-toggle cursor-pointer">
+            <span class="setting-toggle-text">Private</span>
+            <input data-pid="${panelId}_optPrivate" type="checkbox" />
+            <span class="toggle-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <button data-pid="${panelId}_clearBtn" class="panel-clear-btn" title="Clear chat">Clear</button>
+      </div>` : '';
+
+    containerEl.innerHTML = `
+      ${settingsHTML}
+      <section data-pid="${panelId}_messages" class="fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4">
+        ${welcomeHTML(panelId)}
+      </section>
+      <section data-pid="${panelId}_imagePreview" class="hidden border-t border-black/5 dark:border-white/10 px-3 sm:px-6 py-3 bg-white/20 dark:bg-black/10">
+      </section>
+      <section class="border-t border-black/5 dark:border-white/10 px-3 sm:px-6 py-4 bg-transparent">
+        <div class="panel-muted rounded-[28px] p-2 sm:p-3 flex items-end gap-2 sm:gap-3">
+          <button data-pid="${panelId}_imageBtn" title="Upload image" class="ghost-button h-11 w-11 shrink-0 rounded-2xl hover:bg-white dark:hover:bg-gray-900 flex items-center justify-center transition">
+            <svg class="w-5 h-5 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          </button>
+          <input data-pid="${panelId}_imageInput" type="file" accept="image/jpeg,image/png" multiple class="hidden" />
+          <textarea data-pid="${panelId}_chatInput" rows="1" placeholder="Message xAgent..."
+            class="flex-1 resize-none max-h-40 overflow-y-auto px-4 py-3 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white placeholder:text-gray-400 dark:placeholder:text-gray-500"
+          ></textarea>
+          <button data-pid="${panelId}_sendBtn" title="Send" class="h-11 px-5 shrink-0 rounded-2xl bg-gray-950 text-white dark:bg-white dark:text-gray-950 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
+            Send
+          </button>
+        </div>
+      </section>`;
+  }
+
+  /* ── Settings ── */
+
+  function getSettings() {
+    if (showPanelSettings) {
+      return {
+        userId: (el('userId')?.value || '').trim() || 'web_user',
+        stream: el('optStream')?.checked ?? true,
+        memory: el('optMemory')?.checked ?? true,
+        private: el('optPrivate')?.checked ?? false,
+      };
+    }
+    return {
+      userId: (document.getElementById('userId')?.value || '').trim() || 'web_user',
+      stream: document.getElementById('optStream')?.checked ?? true,
+      memory: document.getElementById('optMemory')?.checked ?? true,
+      private: document.getElementById('optPrivate')?.checked ?? false,
+    };
+  }
+
+  function saveSettings() {
+    if (!showPanelSettings) return;
+    const s = getSettings();
+    localStorage.setItem(settingsKey, JSON.stringify(s));
+  }
+
+  function restoreSettings() {
+    if (!showPanelSettings) return;
+    const s = JSON.parse(localStorage.getItem(settingsKey) || '{}');
+    const userIdEl = el('userId');
+    if (userIdEl) userIdEl.value = s.userId || (panelId === 'left' ? 'user_a' : 'user_b');
+    const streamEl = el('optStream');
+    if (streamEl) streamEl.checked = s.stream !== false;
+    const memoryEl = el('optMemory');
+    if (memoryEl) memoryEl.checked = s.memory !== false;
+    const privateEl = el('optPrivate');
+    if (privateEl) privateEl.checked = !!s.private;
+  }
+
+  /* ── History ── */
+
+  function saveHistory() {
+    const slim = state.messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      images: (m.images || []).map(() => '[image]'),
+    }));
+    try { localStorage.setItem(historyKey, JSON.stringify(slim)); } catch {}
+  }
+
+  function restoreHistory() {
+    try {
+      const raw = localStorage.getItem(historyKey);
+      if (!raw) return;
+      const msgs = JSON.parse(raw);
+      if (!Array.isArray(msgs) || msgs.length === 0) return;
+      state.messages = msgs;
+      msgs.forEach(m => appendMessageBubble(m));
+    } catch {}
+  }
+
+  /* ── DOM helpers ── */
+
+  function scrollToBottom() {
+    const container = el('messages');
+    if (!container) return;
+    requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
+  }
+
+  function focusInput() {
+    const input = el('chatInput');
+    if (input) requestAnimationFrame(() => input.focus({ preventScroll: true }));
+  }
+
+  function setSending(v) {
+    state.sending = v;
+    const sendBtn = el('sendBtn');
+    const chatInput = el('chatInput');
+    if (sendBtn) sendBtn.disabled = v;
+    if (chatInput) chatInput.disabled = v;
+  }
+
+  /* ── Messages ── */
+
+  function appendMessageBubble(message, placeholder = false) {
+    const container = el('messages');
+    if (!container) return {};
+    const welcome = container.querySelector(`[id="${panelId}_welcome"]`);
+    if (welcome) welcome.remove();
+
+    const wrapper = document.createElement('div');
+    wrapper.className = `flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`;
+
+    const bubble = document.createElement('div');
+    const isUser = message.role === 'user';
+    bubble.className = `max-w-[92%] sm:max-w-[80%] lg:max-w-[68%] rounded-[24px] px-4 py-3.5 text-sm leading-relaxed ${isUser
+      ? 'user-bubble rounded-br-md'
+      : 'assistant-bubble rounded-bl-md'}`;
+
+    const label = document.createElement('div');
+    label.className = `mb-2 text-[11px] uppercase tracking-[0.18em] ${isUser
+      ? 'text-white/60 dark:text-black/50'
+      : 'text-gray-400 dark:text-gray-500'}`;
+    label.textContent = isUser ? 'You' : 'xAgent';
+    bubble.appendChild(label);
+
+    const contentEl = document.createElement('div');
+    contentEl.className = 'msg-content';
+    if (placeholder) {
+      contentEl.innerHTML = '<span class="text-gray-400">Thinking...</span>';
+    } else if (message.content) {
+      renderMarkdown(contentEl, message.content);
+    }
+    bubble.appendChild(contentEl);
+
+    if (isUser && message.images && message.images.length) {
+      const imageRow = document.createElement('div');
+      imageRow.className = 'mt-2 flex flex-wrap gap-2';
+      message.images.forEach((src) => {
+        const img = document.createElement('img');
+        img.src = src;
+        img.className = 'h-20 rounded-lg border border-white/30 object-cover';
+        imageRow.appendChild(img);
+      });
+      bubble.appendChild(imageRow);
+    }
+
+    wrapper.appendChild(bubble);
+    container.appendChild(wrapper);
+    scrollToBottom();
+    return { wrapper, contentEl };
+  }
+
+  /* ── Image preview ── */
+
+  function renderImagePreview() {
+    const preview = el('imagePreview');
+    if (!preview) return;
+    if (!state.pendingImages.length) {
+      preview.classList.add('hidden');
+      preview.innerHTML = '';
+      return;
+    }
+    preview.classList.remove('hidden');
+    preview.innerHTML = '';
+    state.pendingImages.forEach((src, index) => {
+      const item = document.createElement('div');
+      item.className = 'inline-flex items-center gap-2 mr-2 mb-2 pl-1 pr-2 py-1 rounded-full border border-black/5 dark:border-white/10 bg-white/70 dark:bg-black/20 shadow-sm backdrop-blur';
+      const img = document.createElement('img');
+      img.src = src;
+      img.className = 'h-10 w-10 rounded-full object-cover';
+      const btn = document.createElement('button');
+      btn.className = 'text-xs text-red-600 dark:text-red-400';
+      btn.textContent = 'Remove';
+      btn.addEventListener('click', () => {
+        state.pendingImages.splice(index, 1);
+        renderImagePreview();
+      });
+      item.appendChild(img);
+      item.appendChild(btn);
+      preview.appendChild(item);
+    });
+  }
+
+  function clearPendingImages() {
+    state.pendingImages = [];
+    renderImagePreview();
+  }
+
+  /* ── Chat operations ── */
+
+  async function regularChat(payload, contentEl, messageIndex) {
+    contentEl.innerHTML = '<span class="text-gray-400">Thinking...</span>';
+    const response = await fetch(`${API_BASE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    const result = await response.json();
+    const reply = result.reply;
+    if (typeof reply === 'object') {
+      const text = JSON.stringify(reply, null, 2);
+      contentEl.innerHTML = `<pre>${escapeHtml(text)}</pre>`;
+      state.messages[messageIndex].content = text;
+      return;
+    }
+    renderMarkdown(contentEl, reply || '');
+    state.messages[messageIndex].content = reply || '';
+  }
+
+  async function streamChat(payload, contentEl, messageIndex) {
+    contentEl.classList.add('typing-cursor');
+    const response = await fetch(`${API_BASE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullText = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data: ')) continue;
+        const payloadChunk = trimmed.slice(6);
+        if (payloadChunk === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(payloadChunk);
+          if (parsed.error) throw new Error(parsed.error);
+          if (parsed.delta) {
+            fullText += parsed.delta;
+            renderMarkdown(contentEl, fullText);
+            scrollToBottom();
+            continue;
+          }
+          if (parsed.message) {
+            if (typeof parsed.message === 'object') {
+              fullText = JSON.stringify(parsed.message, null, 2);
+              contentEl.innerHTML = `<pre>${escapeHtml(fullText)}</pre>`;
+            } else {
+              fullText = parsed.message;
+              renderMarkdown(contentEl, fullText);
+            }
+            scrollToBottom();
+          }
+        } catch (error) {
+          const errText = String(error?.message || error);
+          if (!errText.includes('JSON')) throw error;
+        }
+      }
+    }
+
+    state.messages[messageIndex].content = fullText;
+    contentEl.classList.remove('typing-cursor');
+    saveHistory();
+  }
+
+  async function sendMessage() {
+    if (state.sending) return;
+    const input = el('chatInput');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+
+    const currentImages = [...state.pendingImages];
+    clearPendingImages();
+
+    const userMessage = { role: 'user', content: text, images: currentImages };
+    state.messages.push(userMessage);
+    appendMessageBubble(userMessage);
+
+    input.value = '';
+    input.style.height = 'auto';
+
+    const settings = getSettings();
+    const payload = {
+      user_id: settings.userId,
+      user_message: text,
+      stream: settings.stream,
+      enable_memory: settings.memory,
+      private: settings.private,
+    };
+
+    if (currentImages.length === 1) {
+      payload.image_source = currentImages[0];
+    } else if (currentImages.length > 1) {
+      payload.image_source = currentImages;
+    }
+
+    setSending(true);
+    saveSettings();
+    if (!showPanelSettings) saveGlobalSettings();
+
+    const assistantMessage = { role: 'assistant', content: '' };
+    state.messages.push(assistantMessage);
+    const messageIndex = state.messages.length - 1;
+    const { contentEl } = appendMessageBubble(assistantMessage, true);
+
+    try {
+      if (payload.stream) {
+        await streamChat(payload, contentEl, messageIndex);
+      } else {
+        await regularChat(payload, contentEl, messageIndex);
+      }
+    } catch (error) {
+      const errText = String(error?.message || error);
+      contentEl.classList.remove('typing-cursor');
+      contentEl.innerHTML = `<div class="text-red-500">Error: ${escapeHtml(errText)}</div>`;
+      state.messages[messageIndex].content = `Error: ${errText}`;
+      saveHistory();
+    } finally {
+      setSending(false);
+      focusInput();
+      scrollToBottom();
+    }
+  }
+
+  function clearChat() {
+    state.messages = [];
+    try { localStorage.removeItem(historyKey); } catch {}
+    const container = el('messages');
+    if (container) container.innerHTML = welcomeHTML(panelId);
+  }
+
+  function updatePrivateIndicator() {
+    // No-op for dual panels (too compact); only used in single mode via global
+  }
+
+  /* ── Event binding ── */
+
+  function bindEvents() {
+    const chatInput = el('chatInput');
+    const imageInput = el('imageInput');
+    const sendBtn = el('sendBtn');
+    const imageBtn = el('imageBtn');
+    const clearBtn = el('clearBtn');
+
+    if (sendBtn) sendBtn.addEventListener('click', sendMessage);
+    if (imageBtn) imageBtn.addEventListener('click', () => imageInput?.click());
+    if (clearBtn) clearBtn.addEventListener('click', clearChat);
+
+    if (imageInput) {
+      imageInput.addEventListener('change', (event) => {
+        const files = Array.from(event.target.files || []);
+        files.forEach((file) => {
+          const reader = new FileReader();
+          reader.onload = (loadEvent) => {
+            state.pendingImages.push(loadEvent.target.result);
+            renderImagePreview();
+          };
+          reader.readAsDataURL(file);
+        });
+        event.target.value = '';
+      });
+    }
+
+    if (chatInput) {
+      chatInput.addEventListener('input', () => autoResize(chatInput));
+      chatInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          sendMessage();
+        }
+      });
+    }
+
+    // Panel-level settings save
+    if (showPanelSettings) {
+      ['userId', 'optStream', 'optMemory', 'optPrivate'].forEach((suffix) => {
+        const input = el(suffix);
+        if (input) input.addEventListener('change', saveSettings);
+      });
+    }
+  }
+
+  /* ── Init ── */
+
+  buildHTML();
+  restoreSettings();
+  restoreHistory();
+  bindEvents();
+  scrollToBottom();
+
+  return { state, focusInput, scrollToBottom, clearChat, updatePrivateIndicator, panelId };
+}
+
+/* ═══════════════════════════════════════════════════════
+   Mode switching: Single ↔ Dual
+   ═══════════════════════════════════════════════════════ */
+
+function isDualMode() {
+  return document.getElementById('optDual')?.checked ?? false;
+}
+
+function mountPanels() {
+  const main = document.getElementById('mainArea');
+  const outerContainer = main.closest('.max-w-6xl');
+  main.innerHTML = '';
+  panels = [];
+
+  if (isDualMode()) {
+    // Hide global settings bar (each panel has its own)
+    document.getElementById('globalSettingsBar').style.display = 'none';
+
+    // Widen the container for dual panels
+    if (outerContainer) {
+      outerContainer.classList.remove('max-w-6xl');
+      outerContainer.classList.add('max-w-[1600px]');
+    }
+
+    main.className = 'flex-1 min-h-0 dual-container';
+
+    const leftDiv = document.createElement('div');
+    leftDiv.className = 'chat-panel flex flex-col';
+    const divider = document.createElement('div');
+    divider.className = 'panel-divider';
+    const rightDiv = document.createElement('div');
+    rightDiv.className = 'chat-panel flex flex-col';
+
+    main.appendChild(leftDiv);
+    main.appendChild(divider);
+    main.appendChild(rightDiv);
+
+    const leftPanel = createChatPanel('left', leftDiv, {
+      showPanelSettings: true,
+      panelLabel: 'Left',
+      panelLabelClass: 'panel-label-left',
+    });
+
+    const rightPanel = createChatPanel('right', rightDiv, {
+      showPanelSettings: true,
+      panelLabel: 'Right',
+      panelLabelClass: 'panel-label-right',
+    });
+
+    panels.push(leftPanel, rightPanel);
+    leftPanel.focusInput();
+  } else {
+    // Show global settings bar
+    document.getElementById('globalSettingsBar').style.display = '';
+
+    // Restore original container width
+    if (outerContainer) {
+      outerContainer.classList.remove('max-w-[1600px]');
+      outerContainer.classList.add('max-w-6xl');
+    }
+
+    main.className = 'flex-1 min-h-0 flex flex-col overflow-hidden';
+
+    const singleDiv = document.createElement('div');
+    singleDiv.className = 'flex-1 min-h-0 flex flex-col overflow-hidden';
+    main.appendChild(singleDiv);
+
+    const singlePanel = createChatPanel('single', singleDiv, {
+      showPanelSettings: false,
+    });
+    panels.push(singlePanel);
+    singlePanel.focusInput();
+  }
+}
+
+/* ─── Global private banner (single mode only) ─── */
+
+function updateGlobalPrivateIndicator() {
+  if (isDualMode()) {
+    const existing = document.getElementById('privateBanner');
+    if (existing) existing.remove();
+    return;
+  }
+
   const isPrivate = document.getElementById('optPrivate').checked;
   const header = document.querySelector('section.panel-surface > header');
   const existing = document.getElementById('privateBanner');
@@ -904,7 +1216,6 @@ function updatePrivateIndicator() {
     existing.remove();
   }
 
-  // Darken-style the dark-mode banner
   const b = document.getElementById('privateBanner');
   if (b) {
     const dark = document.documentElement.classList.contains('dark');
@@ -913,6 +1224,44 @@ function updatePrivateIndicator() {
     b.style.borderBottom = dark ? '1px solid rgba(139, 92, 246, 0.18)' : '1px solid rgba(139, 92, 246, 0.12)';
   }
 }
+
+/* ─── Global event wiring ─── */
+
+function bindGlobalEvents() {
+  ['userId', 'optStream', 'optMemory', 'optPrivate'].forEach((id) => {
+    document.getElementById(id).addEventListener('change', () => {
+      saveGlobalSettings();
+      updateGlobalPrivateIndicator();
+    });
+  });
+
+  document.getElementById('toggleThemeBtn').addEventListener('click', toggleTheme);
+
+  document.getElementById('clearChatBtn').addEventListener('click', () => {
+    if (isDualMode()) {
+      panels.forEach(p => p.clearChat());
+    } else {
+      panels.forEach(p => p.clearChat());
+    }
+  });
+
+  // Dual mode toggle
+  document.getElementById('optDual').addEventListener('change', () => {
+    saveGlobalSettings();
+    mountPanels();
+    updateGlobalPrivateIndicator();
+  });
+}
+
+/* ─── Boot ─── */
+
+document.addEventListener('DOMContentLoaded', async () => {
+  restoreGlobalSettings();
+  bindGlobalEvents();
+  mountPanels();
+  updateGlobalPrivateIndicator();
+  await checkHealth();
+});
 </script>
 </body>
 </html>
