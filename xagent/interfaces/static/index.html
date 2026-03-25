@@ -765,7 +765,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
     if (!showPanelSettings) return;
     const s = JSON.parse(localStorage.getItem(settingsKey) || '{}');
     const userIdEl = el('userId');
-    if (userIdEl) userIdEl.value = s.userId || (panelId === 'left' ? 'user_a' : 'user_b');
+    if (userIdEl) userIdEl.value = s.userId || (panelId === 'left' ? 'John' : 'Alice');
     const streamEl = el('optStream');
     if (streamEl) streamEl.checked = s.stream !== false;
     const memoryEl = el('optMemory');

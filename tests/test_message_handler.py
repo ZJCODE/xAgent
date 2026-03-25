@@ -19,7 +19,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         instructions = handler.build_instructions()
         self.assertIn("Core Rules", instructions)
-        self.assertIn("Input Format", instructions)
+        self.assertIn("Conversation Awareness", instructions)
         self.assertIn("You are a helpful assistant.", instructions)
         # Should NOT contain per-turn dynamic content
         self.assertNotIn("Recent Diary Memory", instructions)

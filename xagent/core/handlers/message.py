@@ -127,7 +127,8 @@ class MessageHandler:
         transcript_lines.append(
             "\n==========\n\nNow reply directly to the latest message "
             f"from {current_user_id}. Respond as yourself — do not suggest, "
-            "propose alternatives, or wrap your reply in quotes."
+            "propose alternatives, or wrap your reply in quotes. "
+            "Never mention internal labels, tags, or message formatting in your reply."
         )
 
         transcript_text = "\n".join(transcript_lines).strip()
