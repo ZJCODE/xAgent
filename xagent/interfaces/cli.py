@@ -223,20 +223,22 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
         os.makedirs(config_dir)
 
     default_config_yaml = """agent:
-  name: Agent
+  name: "Agent"
   system_prompt: |
-    You are a helpful assistant. Your task is to assist users
-    with their queries and tasks.
-  model: gpt-5.4-mini
+    You are a helpful assistant.
+    Answer clearly and keep responses practical.
+  model: "gpt-5.4"
+
   capabilities:
     tools:
-      - web_search
-      - calculate_square
-    mcp_servers:
-      - http://localhost:8001/mcp/
+      - "web_search"
+      - "draw_image"
+      - "run_command"
+
+  # workspace: "~/.xagent"
 
 server:
-  host: 0.0.0.0
+  host: "0.0.0.0"
   port: 8010
 """
 
