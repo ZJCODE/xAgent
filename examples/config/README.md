@@ -20,4 +20,4 @@ Guidelines for adding new config examples:
 
 - Add a new config only when it demonstrates a distinct runtime capability
 - Prefer the built-in local workspace layout in examples
-- Avoid hidden dependencies: if a config needs `--toolkit_path` or an MCP server, say so in a nearby README
+- Avoid hidden dependencies: if a config needs `--toolkit_path`, say so in a nearby README

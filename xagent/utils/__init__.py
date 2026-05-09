@@ -2,11 +2,10 @@
 
 import importlib
 
-__all__ = ["function_tool", "MCPTool", "file_to_data_uri"]
+__all__ = ["function_tool", "file_to_data_uri"]
 
 _EXPORTS = {
     "function_tool": (".tool_decorator", "function_tool"),
-    "MCPTool": (".mcp_convertor", "MCPTool"),
     "file_to_data_uri": (".image_utils", "file_to_data_uri"),
 }
 

@@ -35,7 +35,6 @@ class Agent:
         model: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[List] = None,
-        mcp_servers: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         message_storage: Optional[MessageStorageBase] = None,
         workspace: Optional[str] = None,
@@ -98,7 +97,7 @@ class Agent:
                 is_enabled=lambda: self._memory_tools_enabled,
             ),
         ])
-        self.tool_manager = ToolManager(tools=bound_tools, mcp_servers=mcp_servers)
+        self.tool_manager = ToolManager(tools=bound_tools)
         self.model_client = ModelClient(client=self.client, model=self.model)
         self.message_handler = MessageHandler(
             message_storage=self.message_storage,
@@ -113,10 +112,6 @@ class Agent:
     @property
     def tools(self) -> dict:
         return self.tool_manager.tools
-
-    @property
-    def mcp_tools(self) -> dict:
-        return self.tool_manager.mcp_tools
 
     async def __call__(
         self,
@@ -180,8 +175,6 @@ class Agent:
         msg_handler = self._private_handler or self.message_handler
 
         try:
-            await self.tool_manager.ensure_mcp_ready()
-
             memory_read = enable_memory
             memory_write = enable_memory and not private
             self._memory_tools_enabled = memory_write

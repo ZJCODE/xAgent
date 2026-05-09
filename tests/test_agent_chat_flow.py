@@ -1,8 +1,10 @@
 import unittest
+from types import SimpleNamespace
 
 from xagent.components.message.base_messages import MessageStorageBase
 from xagent.core.agent import Agent
 from xagent.core.config import ReplyType
+from xagent.core.handlers.model import ModelClient
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.tools.executor import ToolExecutor
 from xagent.schemas import Message, RoleType
@@ -32,9 +34,6 @@ class FakeToolManager:
     def __init__(self, tools=None):
         self._tools = dict(tools or {})
         self.cached_tool_specs = None
-
-    async def ensure_mcp_ready(self):
-        return None
 
     def get_tool(self, name):
         return self._tools.get(name)
@@ -84,6 +83,20 @@ class FakeToolCall:
         self.call_id = call_id
 
 
+class ModelClientResponseTests(unittest.TestCase):
+    def test_non_stream_response_prioritizes_tool_calls_over_text(self):
+        tool_call = FakeToolCall()
+        response = SimpleNamespace(
+            output_text="I will look that up first.",
+            output=[SimpleNamespace(type="message"), tool_call],
+        )
+
+        reply_type, payload = ModelClient._handle_non_stream(response)
+
+        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
+        self.assertEqual(payload, [tool_call])
+
+
 class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     def _build_agent(self, storage, model_client, tool_executor=None, tools=None):
         agent = Agent.__new__(Agent)
@@ -92,9 +105,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent:test"
         agent._memory_tools_enabled = True
-        agent._private_mode = False
-        agent._private_storage = None
-        agent._private_message_handler = None
+        agent._private_handler = None
         agent.tool_manager = FakeToolManager(tools=tools)
         agent.model_client = model_client
         agent.message_storage = storage

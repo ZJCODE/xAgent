@@ -166,11 +166,7 @@ class AgentCLI(BaseAgentRunner):
         print(f"🧠 Model: {self.agent.model}")
 
         total_tools = len(self.agent.tools)
-        mcp_tools_count = len(self.agent.mcp_tools) if self.agent.mcp_tools else 0
-        if mcp_tools_count > 0:
-            print(f"🛠️  Tools: {total_tools} built-in + {mcp_tools_count} MCP tools")
-        else:
-            print(f"🛠️  Tools: {total_tools} loaded")
+        print(f"🛠️  Tools: {total_tools} loaded")
 
         status_indicators = [
             f"{'🟢' if verbose_mode else '🔇'} Verbose: {'On' if verbose_mode else 'Off'}",
@@ -208,13 +204,6 @@ class AgentCLI(BaseAgentRunner):
         else:
             print("│ No built-in tools available                              │")
         print("╰───────────────────────────────────────────────────────────╯")
-
-        if self.agent.mcp_tools:
-            print("\n╭─ 🌐 MCP Tools ────────────────────────────────────────────╮")
-            for i, tool_name in enumerate(self.agent.mcp_tools.keys(), 1):
-                print(f"│ {i:2d}. {tool_name:<50} │")
-            print("╰───────────────────────────────────────────────────────────╯")
-
 
 def create_default_config_file(config_path: str = "config/agent.yaml"):
     """Create a default configuration file and toolkit directory structure."""

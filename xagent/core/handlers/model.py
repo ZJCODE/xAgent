@@ -94,6 +94,10 @@ class ModelClient:
             text_format=output_type,
             truncation="auto",
         )
+        tool_calls = self._extract_tool_calls(response)
+        if tool_calls:
+            return ReplyType.TOOL_CALL, tool_calls
+
         if hasattr(response, "output_parsed") and response.output_parsed is not None:
             return ReplyType.STRUCTURED_REPLY, response.output_parsed
 
@@ -103,11 +107,13 @@ class ModelClient:
     @staticmethod
     def _handle_non_stream(response) -> tuple[ReplyType, object]:
         """Handle a non-streaming model response."""
-        if hasattr(response, 'output_text') and response.output_text:
-            return ReplyType.SIMPLE_REPLY, response.output_text
+        tool_calls = ModelClient._extract_tool_calls(response)
+        if tool_calls:
+            return ReplyType.TOOL_CALL, tool_calls
 
-        if hasattr(response, 'output') and response.output:
-            return ReplyType.TOOL_CALL, response.output
+        text = ModelClient._extract_response_text(response)
+        if text:
+            return ReplyType.SIMPLE_REPLY, text
 
         logger.warning("Model response contains no valid output: %s", response)
         return ReplyType.ERROR, "No valid output from model response."
@@ -172,7 +178,7 @@ class ModelClient:
                 if event_response is not None:
                     last_response = event_response
 
-            tool_output = getattr(last_response, "output", None) or []
+            tool_output = self._extract_tool_calls(last_response)
             if tool_output:
                 return ReplyType.TOOL_CALL, tool_output
 
@@ -198,28 +204,43 @@ class ModelClient:
     @staticmethod
     def _classify_stream_event(event) -> Optional[ReplyType]:
         """Infer the high-level response kind from a stream event."""
+        resp = getattr(event, "response", None)
+        if resp is not None:
+            if ModelClient._extract_tool_calls(resp):
+                return ReplyType.TOOL_CALL
+            if getattr(resp, "output_text", ""):
+                return ReplyType.SIMPLE_REPLY
+
         event_type = getattr(event, "type", None)
-        if event_type == "response.output_text.delta":
-            return ReplyType.SIMPLE_REPLY
         if event_type and "function_call" in event_type:
             return ReplyType.TOOL_CALL
+        if event_type == "response.output_text.delta":
+            return ReplyType.SIMPLE_REPLY
 
         item = getattr(event, "item", None)
         item_type = getattr(item, "type", None)
+        if isinstance(item, dict):
+            item_type = item.get("type")
         if item_type == "message":
             return ReplyType.SIMPLE_REPLY
         if item_type == "function_call":
             return ReplyType.TOOL_CALL
 
-        resp = getattr(event, "response", None)
-        if resp is not None:
-            if getattr(resp, "output_text", ""):
-                return ReplyType.SIMPLE_REPLY
-            output = getattr(resp, "output", None) or []
-            if any(getattr(o, "type", None) == "function_call" for o in output):
-                return ReplyType.TOOL_CALL
-
         return None
+
+    @staticmethod
+    def _extract_tool_calls(response) -> list:
+        """Return function-call output items from a completed model response."""
+        output_items = getattr(response, "output", None) or []
+        return [item for item in output_items if ModelClient._is_function_call(item)]
+
+    @staticmethod
+    def _is_function_call(item) -> bool:
+        if getattr(item, "type", None) == "function_call":
+            return True
+        if isinstance(item, dict):
+            return item.get("type") == "function_call"
+        return False
 
     @staticmethod
     def _extract_stream_text_delta(event) -> str:

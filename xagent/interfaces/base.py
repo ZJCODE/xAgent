@@ -42,7 +42,7 @@ class BaseAgentRunner:
     
     This class provides a standardized way to:
     - Load and validate agent configurations from YAML files
-    - Initialize agents with tools and MCP servers
+    - Initialize agents with tools
     - Manage message databases and toolkit registries
     - Create dynamic Pydantic models from schema definitions
     
@@ -146,7 +146,6 @@ class BaseAgentRunner:
                 "model": BaseAgentConfig.DEFAULT_MODEL,
                 "capabilities": {
                     "tools": ["web_search", "run_command"],  # Default tools
-                    "mcp_servers": []  # Default MCP servers
                 },
             },
             "server": {
@@ -350,9 +349,7 @@ class BaseAgentRunner:
         """
         agent_cfg = self.config.get("agent", {})
         
-        # Load tools and servers
         tools = self._load_agent_tools(agent_cfg)
-        mcp_servers = self._get_mcp_servers(agent_cfg)
         output_type = self._get_output_type(agent_cfg)
 
         return Agent(
@@ -360,7 +357,6 @@ class BaseAgentRunner:
             system_prompt=agent_cfg.get("system_prompt"),
             model=agent_cfg.get("model"),
             tools=tools,
-            mcp_servers=mcp_servers,
             output_type=output_type,
             message_storage=self.message_storage,
             workspace=str(self.workspace),
@@ -388,17 +384,6 @@ class BaseAgentRunner:
                 self.logger.warning("Tool '%s' not found in registry", name)
         
         return tools
-    
-    def _get_mcp_servers(self, agent_cfg: Dict[str, Any]) -> List[str]:
-        """Extract MCP servers configuration with backward compatibility."""
-        capabilities = agent_cfg.get("capabilities", {})
-        mcp_servers = capabilities.get("mcp_servers", [])
-        
-        # Support legacy format for backward compatibility
-        if "mcp_servers" in agent_cfg and "mcp_servers" not in capabilities:
-            mcp_servers = agent_cfg.get("mcp_servers", [])
-        
-        return mcp_servers
     
     def _get_output_type(self, agent_cfg: Dict[str, Any]) -> Optional[Type[BaseModel]]:
         """Get output type from configuration schema."""

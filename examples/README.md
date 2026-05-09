@@ -4,7 +4,7 @@ This folder is organized by how people usually learn the project:
 
 - [`demo/`](./demo/README.md): curated Python examples for the main runtime APIs
 - [`config/`](./config/README.md): YAML-first examples for `xagent-server` and `xagent-cli`
-- [`toolkit/`](./toolkit/README.md): local custom tools and standalone MCP examples
+- [`toolkit/`](./toolkit/README.md): local custom tools for config-driven runs
 
 Best-practice rules used in this directory:
 

@@ -17,9 +17,6 @@ class FakeToolManager:
         self._tools = dict(tools or {})
         self.cached_tool_specs = None
 
-    async def ensure_mcp_ready(self):
-        return None
-
 
 class FakeMemoryHandler:
     def __init__(self):

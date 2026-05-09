@@ -28,7 +28,6 @@ dependencies = [
     
     # AI/ML and agents
     "openai>=1.98.0",
-    "fastmcp>=2.10.6",
     
     # HTTP clients
     "httpx[socks]>=0.28.1",

@@ -217,7 +217,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 "memory_dir": memory_dir,
                 "message_storage": storage_info,
                 "tools": list(self.agent.tools.keys()),
-                "mcp_tools": list(self.agent.mcp_tools.keys()) if self.agent.mcp_tools else [],
                 "system_prompt": getattr(self.agent, "system_prompt", "") or "",
             }
 

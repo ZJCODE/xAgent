@@ -23,7 +23,7 @@ server:
 | `system_prompt` | string | `"You are a helpful assistant."` | Base system prompt |
 | `model` | string | `"gpt-5.4-mini"` | OpenAI model name |
 | `workspace` | string | `"~/.xagent"` | Local storage root for the shared SQLite database |
-| `capabilities` | object | `{}` | Tool and MCP configuration |
+| `capabilities` | object | `{}` | Tool configuration |
 | `output_schema` | object | `null` | Structured output schema |
 
 There is no `conversation_mode` config. All chats use the same continuous message-stream model.
@@ -52,16 +52,6 @@ Available built-in tools:
 - `web_search`
 - `draw_image`
 - `run_command`
-
-### MCP Servers
-
-```yaml
-agent:
-  capabilities:
-    mcp_servers:
-      - "http://localhost:8001/mcp/"
-      - "http://localhost:8002/mcp/"
-```
 
 ### Custom Toolkit
 
@@ -141,7 +131,6 @@ agent:
     tools:
       - "web_search"
       - "run_command"
-    mcp_servers: []
 
 server:
   host: "0.0.0.0"

@@ -18,7 +18,6 @@ class AgentConfig:
     DEFAULT_HISTORY_COUNT = 100
     DEFAULT_MAX_ITER = 10
     DEFAULT_MAX_CONCURRENT_TOOLS = 10  # Maximum concurrent tool calls
-    MCP_CACHE_TTL = 300  # 5 minutes
     HTTP_TIMEOUT = 600.0  # 10 minutes
     TOOL_RESULT_PREVIEW_LENGTH = 20
     ERROR_RESPONSE_PREVIEW_LENGTH = 200

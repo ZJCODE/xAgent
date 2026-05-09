@@ -12,7 +12,6 @@ Agent(
     model: Optional[str] = None,
     client: Optional[AsyncOpenAI] = None,
     tools: Optional[list] = None,
-    mcp_servers: Optional[str | list[str]] = None,
     output_type: Optional[type[BaseModel]] = None,
     message_storage: Optional[MessageStorageBase] = None,
     memory_storage: Optional[MemoryStorageBase] = None,

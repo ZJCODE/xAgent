@@ -10,7 +10,6 @@ The examples here are the smallest set that still covers xAgent's core capabilit
 - `structured_output.py`: typed outputs with Pydantic models
 - `memory.py`: enabling SQLite journal memory in normal agent chats
 - `http_server_with_custom_agent.py`: running `AgentHTTPServer` with a pre-configured local agent
-- `mcp_integration.py`: combining local tools with MCP tools when an MCP server is available
 
 What is intentionally not in this folder anymore:
 
