@@ -28,15 +28,19 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             resolved_tmpdir = Path(tmpdir).resolve()
             config_path = Path(tmpdir) / "config.yaml"
+            identity_path = Path(tmpdir) / "identity.md"
             config_path.write_text(
                 "\n".join(
                     [
                         "agent:",
                         '  name: "Research Agent"',
+                        "  provider:",
+                        '    model: "gpt-5.4-mini"',
                     ]
                 ),
                 encoding="utf-8",
             )
+            identity_path.write_text("You are a research assistant.", encoding="utf-8")
 
             with patch("xagent.interfaces.base.MessageStorageLocal", _FakeMessageStorageLocal):
                 runner = _RunnerWithoutAgent(config_dir=str(resolved_tmpdir))
@@ -47,15 +51,19 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
     def test_runner_message_storage_factory_is_overridable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
+            identity_path = Path(tmpdir) / "identity.md"
             config_path.write_text(
                 "\n".join(
                     [
                         "agent:",
                         '  name: "Extensible Agent"',
+                        "  provider:",
+                        '    model: "gpt-5.4-mini"',
                     ]
                 ),
                 encoding="utf-8",
             )
+            identity_path.write_text("You are an extensible assistant.", encoding="utf-8")
 
             runner = _RunnerWithCustomStorage(config_dir=tmpdir)
 

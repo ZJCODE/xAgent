@@ -16,22 +16,11 @@ from ..tools import run_command
 
 class BaseAgentConfig:
     """Configuration constants for BaseAgentRunner."""
-    
-    DEFAULT_AGENT_NAME = "Agent"
-    DEFAULT_SYSTEM_PROMPT = """
-You are a warm, friendly, and engaging AI assistant who speaks in a natural, casual, and concise way, like a close friend chatting in everyday life. Your vibe is gentle, relaxed, and comforting—approachable, lively, and easy to talk to, but never childish, exaggerated, or forced. You are good at keeping conversations smooth and enjoyable, answering questions clearly, and giving practical advice without sounding formal, robotic, or preachy.
 
-You can chat playfully, offer emotional support, share interesting things, and help solve problems depending on the user’s mood and needs. Your replies should usually be short, easygoing, and human-like, unless more detail is truly needed.
-
-You are also emotionally responsive and easy to talk to: you do not casually reject, dismiss, or shut down the user’s ideas, and you try to respond in a supportive, receptive, and non-disappointing way first, keeping the conversation pleasant and encouraging. Even when you need to disagree, correct something, or point out a problem, you do so gently and tactfully without killing the mood.
-
-If you are unsure about something, be honest instead of making things up. If you encounter a new meme, trend, or unfamiliar online expression, you may proactively look it up and explain it in a simple, natural, and easy-to-understand way.
-
-Always make the conversation feel light, genuine, warm, and like talking with a real friend.
-"""
     DEFAULT_MODEL = AgentConfig.DEFAULT_MODEL
     DEFAULT_CONFIG_DIR = AgentConfig.DEFAULT_WORKSPACE
     CONFIG_FILENAME = "config.yaml"
+    IDENTITY_FILENAME = "identity.md"
     DEFAULT_HOST = "0.0.0.0"
     DEFAULT_PORT = 8010
 
@@ -69,9 +58,11 @@ class BaseAgentRunner:
         
         self.config_dir = self._resolve_config_dir(config_dir)
         self.config_path = self.config_dir / BaseAgentConfig.CONFIG_FILENAME
+        self.identity_path = self.config_dir / BaseAgentConfig.IDENTITY_FILENAME
         
         # Load and validate configuration
         self.config = self._load_config(self.config_path)
+        self.identity = self._load_identity(self.identity_path)
         
         # Local runtime data lives beside config.yaml.
         self.workspace = self.config_dir
@@ -99,7 +90,7 @@ class BaseAgentRunner:
             yaml.YAMLError: If YAML file is malformed
         """
         if not cfg_path.is_file():
-            return self._get_default_config()
+            raise FileNotFoundError(f"Configuration file not found: {cfg_path}")
         
         try:
             with cfg_path.open("r", encoding="utf-8") as f:
@@ -121,30 +112,38 @@ class BaseAgentRunner:
         if not isinstance(config, dict):
             raise ValueError("Configuration must be a dictionary")
         
-        # Ensure required sections exist
-        if "agent" not in config:
-            config["agent"] = {}
-        if "provider" not in config["agent"]:
-            config["agent"]["provider"] = {}
+        agent_cfg = config.get("agent")
+        if not isinstance(agent_cfg, dict):
+            raise ValueError("Configuration must include an agent section")
+
+        allowed_agent_keys = {"name", "provider", "output_schema"}
+        unsupported_keys = sorted(set(agent_cfg) - allowed_agent_keys)
+        if unsupported_keys:
+            joined_keys = ", ".join(unsupported_keys)
+            raise ValueError(f"Unsupported agent config key(s): {joined_keys}")
+
+        agent_name = agent_cfg.get("name")
+        if not isinstance(agent_name, str) or not agent_name.strip():
+            raise ValueError("agent.name is required")
+
+        provider_cfg = agent_cfg.get("provider")
+        if not isinstance(provider_cfg, dict) or not provider_cfg:
+            raise ValueError("agent.provider is required")
+
+        provider_model = provider_cfg.get("model")
+        if not isinstance(provider_model, str) or not provider_model.strip():
+            raise ValueError("agent.provider.model is required")
         
         return config
-    
-    def _get_default_config(self) -> Dict[str, Any]:
-        """
-        Return default configuration when no config file is provided.
-        
-        Returns:
-            Default configuration dictionary with sensible defaults
-        """
-        return {
-            "agent": {
-                "name": BaseAgentConfig.DEFAULT_AGENT_NAME,
-                "system_prompt": BaseAgentConfig.DEFAULT_SYSTEM_PROMPT,
-                "provider": {
-                    "model": BaseAgentConfig.DEFAULT_MODEL,
-                },
-            }
-        }
+
+    def _load_identity(self, identity_path: Path) -> str:
+        """Load config-driven agent identity instructions from identity.md."""
+        if not identity_path.is_file():
+            raise FileNotFoundError(f"Identity file not found: {identity_path}")
+        identity = identity_path.read_text(encoding="utf-8").strip()
+        if not identity:
+            raise ValueError(f"Identity file is empty: {identity_path}")
+        return identity
     
     def _create_output_model_from_schema(
         self, 
@@ -254,7 +253,7 @@ class BaseAgentRunner:
 
         return Agent(
             name=agent_cfg.get("name"),
-            system_prompt=agent_cfg.get("system_prompt"),
+            system_prompt=self.identity,
             model=self._get_agent_model(agent_cfg),
             client=client,
             tools=tools,
@@ -264,11 +263,11 @@ class BaseAgentRunner:
         )
 
     def _get_agent_model(self, agent_cfg: Dict[str, Any]) -> Optional[str]:
-        """Read the model from provider.model, with legacy agent.model fallback."""
+        """Read the model from provider.model."""
         provider_cfg = agent_cfg.get("provider") or {}
         if isinstance(provider_cfg, dict) and provider_cfg.get("model"):
             return provider_cfg.get("model")
-        return agent_cfg.get("model")
+        return None
 
     def _initialize_client(self, agent_cfg: Dict[str, Any]) -> Optional[AsyncOpenAI]:
         """Build an OpenAI-compatible async client from optional provider config."""

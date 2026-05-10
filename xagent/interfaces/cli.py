@@ -1,9 +1,11 @@
 import argparse
 import asyncio
 import logging
+import sys
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence, Tuple
 
 from .base import BaseAgentConfig, BaseAgentRunner
 
@@ -135,14 +137,17 @@ class AgentCLI(BaseAgentRunner):
         self,
         message: str,
         user_id: Optional[str] = None,
+        stream: bool = False,
         memory: bool = True,
+        private: bool = False,
     ):
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
         return await self.agent(
             user_message=message,
             user_id=user_id,
-            stream=False,
+            stream=stream,
             enable_memory=memory,
+            private=private,
         )
 
     def _print_banner(
@@ -206,80 +211,242 @@ class AgentCLI(BaseAgentRunner):
             print("│ No built-in tools available                              │")
         print("╰───────────────────────────────────────────────────────────╯")
 
-def create_default_config_file(config_dir: Optional[str] = None) -> Path:
-    """Create a default config.yaml file in the xAgent runtime directory."""
+
+@dataclass(frozen=True)
+class InitResult:
+    """Result for xagent init file generation."""
+
+    config_path: Path
+    identity_path: Path
+    wrote_files: bool
+    conflicts: Tuple[Path, ...]
+
+
+def _default_config_yaml(schema: bool = False) -> str:
+    config_yaml = """agent:
+  name: "starter"
+  provider:
+    base_url: "https://api.openai.com/v1"
+    api_key: "your_api_key_here"
+    model: "gpt-5.4-mini"
+"""
+    if not schema:
+        return config_yaml
+
+    return config_yaml + """
+  output_schema:
+    class_name: "WeatherReport"
+    fields:
+      location:
+        type: "str"
+        description: "Location name"
+      temperature_celsius:
+        type: "int"
+        description: "Temperature in degrees Celsius"
+      condition:
+        type: "str"
+        description: "Short weather condition summary"
+"""
+
+
+def _default_identity_markdown() -> str:
+    return """# Identity
+
+You are a helpful assistant.
+Answer clearly, keep responses practical, and adapt to the user's language.
+Be concise by default, and add detail when it improves the answer.
+"""
+
+
+def init_agent_directory(
+    config_dir: Optional[str] = None,
+    *,
+    force: bool = False,
+    schema: bool = False,
+) -> InitResult:
+    """Create config.yaml and identity.md in the selected xAgent directory."""
     resolved_dir = Path(config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
     resolved_dir.mkdir(parents=True, exist_ok=True)
     config_path = resolved_dir / BaseAgentConfig.CONFIG_FILENAME
+    identity_path = resolved_dir / BaseAgentConfig.IDENTITY_FILENAME
+    managed_paths = (config_path, identity_path)
+    conflicts = tuple(path for path in managed_paths if path.exists())
 
-    if config_path.exists():
+    if conflicts and not force:
         print("╭─────────────────────────────────────────────────────────╮")
-        print("│ ℹ️  xAgent configuration already exists.                │")
+        print("│ xAgent init found existing managed files.              │")
         print("╰─────────────────────────────────────────────────────────╯")
-        print(f"📁 Config: {config_path}")
-        return config_path
-
-    default_config_yaml = """agent:
-  name: "Agent"
-  system_prompt: |
-    You are a helpful assistant.
-    Answer clearly and keep responses practical.
-
-  provider:
-    model: "gpt-5.4-mini"
-    # base_url: "https://api.deepseek.com"
-    # api_key: "your_api_key_here"
-"""
-
-    config_path.write_text(default_config_yaml, encoding="utf-8")
-
-    print("╭─────────────────────────────────────────────────────────╮")
-    print("│ ✅ xAgent configuration created successfully!           │")
-    print("╰─────────────────────────────────────────────────────────╯")
-    print(f"📁 Config: {config_path}")
-    return config_path
-
-
-def main():
-    parser = argparse.ArgumentParser(description="xAgent CLI - Interactive chat agent")
-    parser.add_argument("--dir", default=None, help="Directory containing config.yaml (default: ~/.xagent)")
-    parser.add_argument("--user_id", help="Speaker identifier for the chat")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    parser.add_argument("--ask", metavar="MESSAGE", help="Ask a single question instead of starting interactive chat")
-    parser.add_argument("--init", action="store_true", help="Create config.yaml in the selected directory and exit")
-
-    args = parser.parse_args()
-
-    try:
-        if args.init:
-            create_default_config_file(args.dir)
-            return
-
-        agent_cli = AgentCLI(
-            config_dir=args.dir,
-            verbose=args.verbose,
+        for path in conflicts:
+            print(f"Existing: {path}")
+        print("Re-run with --force to overwrite config.yaml and identity.md.")
+        return InitResult(
+            config_path=config_path,
+            identity_path=identity_path,
+            wrote_files=False,
+            conflicts=conflicts,
         )
 
-        if args.ask:
-            response = asyncio.run(
-                agent_cli.chat_single(
-                    message=args.ask,
-                    user_id=args.user_id,
-                )
-            )
-            print(response)
-            return
+    config_path.write_text(_default_config_yaml(schema=schema), encoding="utf-8")
+    identity_path.write_text(_default_identity_markdown(), encoding="utf-8")
 
+    print("╭─────────────────────────────────────────────────────────╮")
+    print("│ xAgent project files written successfully.             │")
+    print("╰─────────────────────────────────────────────────────────╯")
+    print(f"Config: {config_path}")
+    print(f"Identity: {identity_path}")
+    return InitResult(
+        config_path=config_path,
+        identity_path=identity_path,
+        wrote_files=True,
+        conflicts=(),
+    )
+
+
+def _add_dir_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--dir",
+        dest="config_dir",
+        default=None,
+        help="Directory containing config.yaml and identity.md (default: ~/.xagent)",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="xagent",
+        description="xAgent command line interface",
+    )
+    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+
+    init_parser = subparsers.add_parser("init", help="Create config.yaml and identity.md")
+    _add_dir_argument(init_parser)
+    init_parser.add_argument("--force", action="store_true", help="Overwrite init-managed files")
+    init_parser.add_argument("--schema", action="store_true", help="Include a starter output_schema example")
+    init_parser.set_defaults(handler=handle_init)
+
+    chat_parser = subparsers.add_parser("chat", help="Chat with the configured agent")
+    chat_parser.add_argument("message", nargs="?", help="Single message to send; omit for interactive chat")
+    _add_dir_argument(chat_parser)
+    chat_parser.add_argument("--user-id", dest="user_id", default=None, help="Speaker identifier")
+    chat_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    chat_parser.add_argument(
+        "--stream",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable response streaming",
+    )
+    chat_parser.add_argument(
+        "--memory",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable memory tools",
+    )
+    chat_parser.add_argument("--private", action="store_true", help="Use ephemeral private mode")
+    chat_parser.set_defaults(handler=handle_chat)
+
+    server_parser = subparsers.add_parser("server", help="Run the HTTP server")
+    _add_dir_argument(server_parser)
+    server_parser.add_argument("--host", default=None, help="Host to bind to")
+    server_parser.add_argument("--port", type=int, default=None, help="Port to bind to")
+    server_parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the web UI")
+    server_parser.add_argument("--no-web", action="store_true", dest="no_web", help="Disable the built-in web UI")
+    server_parser.add_argument(
+        "--max-concurrent-chats",
+        type=int,
+        default=None,
+        help="Maximum concurrent chat requests",
+    )
+    server_parser.add_argument(
+        "--queue-timeout",
+        type=float,
+        default=None,
+        help="Seconds to wait for a chat slot",
+    )
+    server_parser.add_argument(
+        "--chat-timeout",
+        type=float,
+        default=None,
+        help="Seconds before a chat request times out",
+    )
+    server_parser.set_defaults(handler=handle_server)
+
+    return parser
+
+
+def handle_init(args: argparse.Namespace) -> int:
+    result = init_agent_directory(
+        args.config_dir,
+        force=args.force,
+        schema=args.schema,
+    )
+    return 0 if result.wrote_files else 1
+
+
+def handle_chat(args: argparse.Namespace) -> int:
+    agent_cli = AgentCLI(config_dir=args.config_dir, verbose=args.verbose)
+
+    if args.message is None:
         asyncio.run(
             agent_cli.chat_interactive(
                 user_id=args.user_id,
+                stream=args.stream,
+                memory=args.memory,
+                private=args.private,
             )
         )
+        return 0
 
-    except Exception as exc:
-        print(f"Failed to start CLI: {exc}")
-        raise
+    stream = bool(args.stream) if args.stream is not None else False
+
+    async def run_single_message():
+        response = await agent_cli.chat_single(
+            message=args.message,
+            user_id=args.user_id,
+            stream=stream,
+            memory=args.memory,
+            private=args.private,
+        )
+        if stream and hasattr(response, "__aiter__"):
+            async for chunk in response:
+                if chunk:
+                    print(chunk, end="", flush=True)
+            print()
+        else:
+            print(response)
+
+    asyncio.run(run_single_message())
+    return 0
+
+
+def handle_server(args: argparse.Namespace) -> int:
+    from .server import AgentHTTPServer
+
+    server_kwargs = {
+        "config_dir": args.config_dir,
+        "enable_web": not args.no_web,
+    }
+    if args.max_concurrent_chats is not None:
+        server_kwargs["max_concurrent_chats"] = args.max_concurrent_chats
+    if args.queue_timeout is not None:
+        server_kwargs["chat_queue_timeout"] = args.queue_timeout
+    if args.chat_timeout is not None:
+        server_kwargs["chat_timeout"] = args.chat_timeout
+
+    server = AgentHTTPServer(**server_kwargs)
+    server.run(host=args.host, port=args.port, open_browser=args.open_browser)
+    return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if not hasattr(args, "handler"):
+        parser.print_help()
+        return 0
+
+    return args.handler(args)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

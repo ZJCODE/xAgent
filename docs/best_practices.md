@@ -15,9 +15,12 @@ This guide summarizes practical recommendations for building stable, maintainabl
 
 ## 3) Prefer Configuration for Deployments
 
-- Use `xagent --init` to create `~/.xagent/config.yaml`.
+- Use `xagent init` to create `config.yaml` and `identity.md`.
 - Use `--dir` to keep separate agent profiles and local storage roots.
-- Keep provider settings in config and server host/port in deployment commands.
+- Keep provider settings and `agent.name` in `config.yaml`.
+- Keep role and response-style instructions in `identity.md`.
+- Re-run init with `--force` only when you intentionally want to overwrite init-managed files.
+- Keep server host/port in deployment commands.
 
 See: [Configuration Reference](configuration_reference.md)
 

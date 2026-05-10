@@ -16,18 +16,21 @@ pip install myxagent
 ## Create a Config
 
 ```bash
-xagent --init
+xagent init
 ```
 
 Edit `~/.xagent/config.yaml` and set your provider:
 
 ```yaml
 agent:
-  name: "Agent"
+  name: "starter"
   provider:
-    model: "gpt-5.4-mini"
+    base_url: "https://api.openai.com/v1"
     api_key: "your_api_key_here"
+    model: "gpt-5.4-mini"
 ```
+
+Edit `~/.xagent/identity.md` to define the agent's role and response style.
 
 ## Core Concepts
 
@@ -40,13 +43,13 @@ Single-user and multi-user interactions use the same runtime model. The only dif
 ## Start with the CLI
 
 ```bash
-xagent
+xagent chat
 ```
 
 Single-shot mode:
 
 ```bash
-xagent --ask "Who are you?"
+xagent chat "Who are you?"
 ```
 
 Inside the CLI:
@@ -56,7 +59,7 @@ Inside the CLI:
 ## Start the HTTP Server
 
 ```bash
-xagent-server
+xagent server
 ```
 
 - API base: `http://localhost:8010`
@@ -65,7 +68,7 @@ xagent-server
 Set host and port at startup:
 
 ```bash
-xagent-server --host 127.0.0.1 --port 8010
+xagent server --host 127.0.0.1 --port 8010
 ```
 
 Example request:
@@ -119,12 +122,12 @@ asyncio.run(main())
 ## Use Another xAgent Directory
 
 ```bash
-xagent --init --dir ./my-agent
-xagent --dir ./my-agent --ask "Hello"
-xagent-server --dir ./my-agent --host 0.0.0.0 --port 8010
+xagent init --dir ./my-agent
+xagent chat --dir ./my-agent "Hello"
+xagent server --dir ./my-agent --host 0.0.0.0 --port 8010
 ```
 
-The selected directory contains `config.yaml` and local xAgent runtime data.
+The selected directory contains `config.yaml`, `identity.md`, and local xAgent runtime data.
 
 ## Next Reading
 

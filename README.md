@@ -24,32 +24,32 @@ pip install myxagent
 ### Create a config
 
 ```bash
-xagent --init
+xagent init
 ```
 
 Then set your provider in `~/.xagent/config.yaml`:
 
 ```yaml
 agent:
-  name: "Agent"
-  system_prompt: |
-    You are a helpful assistant.
-
+  name: "starter"
   provider:
-    model: "gpt-5.4-mini"
+    base_url: "https://api.openai.com/v1"
     api_key: "your_api_key_here"
+    model: "gpt-5.4-mini"
 ```
+
+Put the agent's role and response style in `~/.xagent/identity.md`.
 
 ### Start the CLI
 
 ```bash
-xagent
+xagent chat
 ```
 
 Single-shot mode:
 
 ```bash
-xagent --ask "Hello"
+xagent chat "Hello"
 ```
 
 ## Message Model
@@ -65,19 +65,19 @@ Every chat appends to the agent's continuous message stream.
 Start the server:
 
 ```bash
-xagent-server
+xagent server
 ```
 
 Open the Web UI automatically:
 
 ```bash
-xagent-server --open
+xagent server --open
 ```
 
 Configure host and port at startup:
 
 ```bash
-xagent-server --host 127.0.0.1 --port 8010
+xagent server --host 127.0.0.1 --port 8010
 ```
 
 Send a chat message:
@@ -153,22 +153,26 @@ asyncio.run(main())
 Generate a starter config:
 
 ```bash
-xagent --init
+xagent init
 ```
 
 Example:
 
 ```yaml
 agent:
-  name: "Assistant"
-  system_prompt: |
-    You are a helpful AI assistant.
-    Answer clearly and accurately.
-
+  name: "assistant"
   provider:
-    model: "gpt-5.4-mini"
-    # base_url: "https://api.deepseek.com"
+    base_url: "https://api.openai.com/v1"
     api_key: "your_api_key_here"
+    model: "gpt-5.4-mini"
+```
+
+`identity.md` stores the agent's role, personality, and behavior instructions.
+
+Add a starter structured-output schema during initialization:
+
+```bash
+xagent init --schema
 ```
 
 `run_command` is built in by default and does not need YAML configuration.
@@ -176,8 +180,8 @@ agent:
 Use a different xAgent directory:
 
 ```bash
-xagent --dir ./my-agent
-xagent-server --dir ./my-agent --host 0.0.0.0 --port 8010 --open
+xagent chat --dir ./my-agent
+xagent server --dir ./my-agent --host 0.0.0.0 --port 8010 --open
 ```
 
 ## Documentation

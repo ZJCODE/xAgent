@@ -1,4 +1,3 @@
-import argparse
 import asyncio
 import json
 import logging
@@ -495,24 +494,3 @@ def get_app_lazy() -> FastAPI:
 
 
 app = None
-
-
-def main():
-    parser = argparse.ArgumentParser(description="xAgent HTTP Server")
-    parser.add_argument("--dir", default=None, help="Directory containing config.yaml (default: ~/.xagent)")
-    parser.add_argument("--host", default=None, help="Host to bind to")
-    parser.add_argument("--port", type=int, default=None, help="Port to bind to")
-    parser.add_argument("--open", action="store_true", dest="open_browser", help="Auto-open the web UI in the default browser")
-    parser.add_argument("--no-web", action="store_true", dest="no_web", help="Disable the built-in web UI (API-only mode)")
-
-    args = parser.parse_args()
-
-    server = AgentHTTPServer(
-        config_dir=args.dir,
-        enable_web=not args.no_web,
-    )
-    server.run(host=args.host, port=args.port, open_browser=args.open_browser)
-
-
-if __name__ == "__main__":
-    main()
