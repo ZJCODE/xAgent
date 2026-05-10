@@ -23,7 +23,6 @@ from xagent.tools import run_command
 
 # Create custom agent
 agent = Agent(
-    name="MyCustomAgent",
     system_prompt="You are a specialized assistant.",
     model="gpt-5.4-mini",
     tools=[run_command]
@@ -46,7 +45,6 @@ from xagent.tools import run_command
 def create_ops_agent():
     """Create specialized local-ops agent."""
     return Agent(
-        name="OpsAgent",
         system_prompt="You help inspect local project state safely.",
         model="gpt-5.4-mini",
         tools=[run_command],
@@ -56,7 +54,6 @@ def create_ops_agent():
 def create_chat_agent():
     """Create specialized chat-only agent."""
     return Agent(
-        name="ChatAgent",
         system_prompt="You are a concise assistant.",
         model="gpt-5.4-mini",
         tools=[]

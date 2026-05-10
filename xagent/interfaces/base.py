@@ -112,27 +112,19 @@ class BaseAgentRunner:
         if not isinstance(config, dict):
             raise ValueError("Configuration must be a dictionary")
         
-        agent_cfg = config.get("agent")
-        if not isinstance(agent_cfg, dict):
-            raise ValueError("Configuration must include an agent section")
-
-        allowed_agent_keys = {"name", "provider", "output_schema"}
-        unsupported_keys = sorted(set(agent_cfg) - allowed_agent_keys)
+        allowed_config_keys = {"provider", "output_schema"}
+        unsupported_keys = sorted(set(config) - allowed_config_keys)
         if unsupported_keys:
             joined_keys = ", ".join(unsupported_keys)
-            raise ValueError(f"Unsupported agent config key(s): {joined_keys}")
+            raise ValueError(f"Unsupported config key(s): {joined_keys}")
 
-        agent_name = agent_cfg.get("name")
-        if not isinstance(agent_name, str) or not agent_name.strip():
-            raise ValueError("agent.name is required")
-
-        provider_cfg = agent_cfg.get("provider")
+        provider_cfg = config.get("provider")
         if not isinstance(provider_cfg, dict) or not provider_cfg:
-            raise ValueError("agent.provider is required")
+            raise ValueError("provider is required")
 
         provider_model = provider_cfg.get("model")
         if not isinstance(provider_model, str) or not provider_model.strip():
-            raise ValueError("agent.provider.model is required")
+            raise ValueError("provider.model is required")
         
         return config
 
@@ -245,14 +237,13 @@ class BaseAgentRunner:
             KeyError: If required configuration is missing
             ImportError: If tool cannot be loaded
         """
-        agent_cfg = self.config.get("agent", {})
+        agent_cfg = self.config
         
         tools = self._load_agent_tools(agent_cfg)
         output_type = self._get_output_type(agent_cfg)
         client = self._initialize_client(agent_cfg)
 
         return Agent(
-            name=agent_cfg.get("name"),
             system_prompt=self.identity,
             model=self._get_agent_model(agent_cfg),
             client=client,
@@ -308,25 +299,10 @@ class BaseAgentRunner:
         Subclasses can override `_create_message_storage` to plug in a different
         implementation while keeping the runner lifecycle unchanged.
         """
-        agent_name = self._get_agent_name()
-        agent_slug = self._normalize_agent_identifier(agent_name)
-        return self._create_message_storage(agent_name=agent_name, agent_slug=agent_slug)
+        return self._create_message_storage()
 
-    def _get_agent_name(self) -> str:
-        return self.config.get("agent", {}).get("name", AgentConfig.DEFAULT_NAME)
+    def _get_message_storage_path(self) -> Path:
+        return self.workspace / "messages.sqlite3"
 
-    def _get_message_storage_path(self, agent_slug: str) -> Path:
-        return self.workspace / f"{agent_slug}_messages.sqlite3"
-
-    def _create_message_storage(
-        self,
-        *,
-        agent_name: str,
-        agent_slug: str,
-    ) -> MessageStorageBase:
-        del agent_name
-        return MessageStorageLocal(path=str(self._get_message_storage_path(agent_slug)))
-
-    @staticmethod
-    def _normalize_agent_identifier(name: str) -> str:
-        return (name or AgentConfig.DEFAULT_NAME).lower().replace(" ", "_").replace("-", "_")
+    def _create_message_storage(self) -> MessageStorageBase:
+        return MessageStorageLocal(path=str(self._get_message_storage_path()))

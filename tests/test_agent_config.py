@@ -1,9 +1,13 @@
+import io
 import unittest
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
+
+import yaml
 
 from xagent.core.config import AgentConfig
-from xagent.interfaces.cli import init_agent_directory
+from xagent.interfaces.cli import InitSelection, collect_init_selection, init_agent_directory
 from xagent.interfaces.base import BaseAgentRunner
 
 
@@ -46,9 +50,7 @@ class ProviderConfigTests(unittest.TestCase):
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
                 """
-agent:
-  name: "ProviderAgent"
-  provider:
+provider:
     model: "deepseek-v4-pro"
     base_url: "https://api.openai.com/v1"
     api_key: "test-key"
@@ -59,7 +61,6 @@ agent:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertEqual(runner.agent.name, "ProviderAgent")
             self.assertEqual(runner.agent.system_prompt, "You are a test assistant.")
             self.assertEqual(runner.agent.model, "deepseek-v4-pro")
             self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.openai.com/v1")
@@ -69,9 +70,7 @@ agent:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
                 """
-agent:
-  name: "ToolAgent"
-  provider:
+provider:
     model: "gpt-5.4-mini"
     api_key: "test-key"
 """,
@@ -96,11 +95,11 @@ agent:
 
             config_text = result.config_path.read_text(encoding="utf-8")
             identity_text = result.identity_path.read_text(encoding="utf-8")
-            self.assertIn('name: "starter"', config_text)
-            self.assertIn("provider:", config_text)
-            self.assertIn('base_url: "https://api.openai.com/v1"', config_text)
-            self.assertIn('api_key: "your_api_key_here"', config_text)
-            self.assertIn("model:", config_text)
+            config = yaml.safe_load(config_text)
+            self.assertNotIn("agent", config)
+            self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
+            self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
+            self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
             self.assertNotIn("system_prompt:", config_text)
             self.assertNotIn("output_schema:", config_text)
             self.assertNotIn("workspace:", config_text)
@@ -112,11 +111,11 @@ agent:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = init_agent_directory(tmpdir, schema=True)
 
-            config_text = result.config_path.read_text(encoding="utf-8")
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertIn("output_schema:", config_text)
-            self.assertIn('class_name: "WeatherReport"', config_text)
-            self.assertIn("temperature_celsius:", config_text)
+            output_schema = config["output_schema"]
+            self.assertEqual(output_schema["class_name"], "WeatherReport")
+            self.assertIn("temperature_celsius", output_schema["fields"])
 
     def test_init_refuses_to_overwrite_managed_files_without_force(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -138,17 +137,124 @@ agent:
             forced = init_agent_directory(tmpdir, force=True)
 
             self.assertTrue(forced.wrote_files)
-            self.assertIn('name: "starter"', forced.config_path.read_text(encoding="utf-8"))
+            config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
+            self.assertNotIn("agent", config)
             self.assertIn("You are a helpful assistant.", forced.identity_path.read_text(encoding="utf-8"))
 
-    def test_config_rejects_system_prompt_key(self):
+    def test_init_uses_selected_provider_model_key_and_identity(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="deepseek",
+                base_url="https://api.deepseek.com",
+                api_key="secret-key",
+                model="deepseek-v4-pro",
+                identity="# Identity\n\nYou report weather.\n",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertNotIn("agent", config)
+            self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
+            self.assertEqual(config["provider"]["api_key"], "secret-key")
+            self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
+            self.assertEqual(result.identity_path.read_text(encoding="utf-8"), "# Identity\n\nYou report weather.\n")
+
+    def test_collect_init_selection_supports_custom_identity(self):
+        answers = iter([
+            "1",
+            "4",
+            "You investigate codebases.",
+            ".",
+        ])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: "openai-key",
+        )
+
+        self.assertEqual(selection.provider, "openai")
+        self.assertEqual(selection.base_url, "https://api.openai.com/v1")
+        self.assertEqual(selection.api_key, "openai-key")
+        self.assertEqual(selection.model, "gpt-5.5")
+        self.assertEqual(selection.identity, "# Identity\n\nYou investigate codebases.\n")
+
+    def test_collect_init_selection_deepseek_decide_later_uses_model_placeholder(self):
+        answers = iter([
+            "2",
+            "3",
+            ".",
+        ])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: "",
+        )
+
+        self.assertEqual(selection.provider, "deepseek")
+        self.assertEqual(selection.base_url, "https://api.deepseek.com")
+        self.assertEqual(selection.api_key, "your_api_key_here")
+        self.assertEqual(selection.model, "your_model_here")
+        self.assertIn("Describe this agent's role", selection.identity)
+
+    def test_collect_init_selection_supports_qwen_models(self):
+        answers = iter([
+            "3",
+            "3",
+            ".",
+        ])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: "qwen-key",
+        )
+
+        self.assertEqual(selection.provider, "qwen")
+        self.assertEqual(selection.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        self.assertEqual(selection.api_key, "qwen-key")
+        self.assertEqual(selection.model, "qwen3.6-max-preview")
+
+    def test_collect_init_selection_does_not_label_defaults(self):
+        answers = iter([
+            "",
+            "",
+            ".",
+        ])
+
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            selection = collect_init_selection(
+                input_func=lambda prompt: next(answers),
+                secret_input_func=lambda prompt: "",
+            )
+
+        self.assertEqual(selection.provider, "openai")
+        self.assertEqual(selection.model, "gpt-5.4-mini")
+        self.assertIn("Describe this agent's role", selection.identity)
+        self.assertNotIn("(default)", stdout.getvalue())
+
+    def test_config_rejects_name_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+name: "PromptAgent"
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "Unsupported config key"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_agent_section(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
                 """
 agent:
-  name: "PromptAgent"
-  system_prompt: "not supported"
   provider:
     model: "gpt-5.4-mini"
     api_key: "test-key"
@@ -157,7 +263,24 @@ agent:
             )
             write_identity(tmpdir)
 
-            with self.assertRaisesRegex(ValueError, "Unsupported agent config key"):
+            with self.assertRaisesRegex(ValueError, "Unsupported config key"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_system_prompt_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+system_prompt: "not supported"
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "Unsupported config key"):
                 BaseAgentRunner(config_dir=tmpdir)
 
 

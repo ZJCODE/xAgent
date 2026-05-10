@@ -177,18 +177,17 @@
         <!-- Content (hidden until loaded) -->
         <div id="content" class="hidden space-y-6 max-w-3xl mx-auto">
 
-          <!-- Agent identity -->
+          <!-- Runtime summary -->
           <div class="panel-muted info-card">
             <div class="flex items-center gap-4 mb-4">
               <div id="agentIcon" class="w-14 h-14 rounded-[18px] flex items-center justify-center text-xl font-bold" style="background: rgba(24,24,27,0.06); color: var(--text-primary);">
-                A
+                x
               </div>
               <div>
-                <div id="agentName" class="text-lg font-semibold tracking-[-0.02em]">—</div>
+                <div id="agentTitle" class="text-lg font-semibold tracking-[-0.02em]">xAgent Runtime</div>
                 <div id="agentModel" class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">—</div>
               </div>
             </div>
-            <div id="agentDescription" class="text-sm text-gray-600 dark:text-gray-400 leading-relaxed hidden"></div>
           </div>
 
           <!-- Key info grid -->
@@ -305,17 +304,9 @@ async function loadAgentConfig() {
     const info = await infoRes.json();
     const stats = statsRes.ok ? await statsRes.json() : {};
 
-    // Agent identity
-    const name = info.name || 'Unknown';
-    document.getElementById('agentName').textContent = name;
+    // Runtime summary
     document.getElementById('agentModel').textContent = info.model || 'Unknown model';
-    document.getElementById('agentIcon').textContent = name.charAt(0).toUpperCase();
-
-    if (info.description) {
-      const descEl = document.getElementById('agentDescription');
-      descEl.textContent = info.description;
-      descEl.classList.remove('hidden');
-    }
+    document.getElementById('agentIcon').textContent = 'x';
 
     // Key info
     document.getElementById('infoWorkspace').textContent = info.workspace || '(default)';

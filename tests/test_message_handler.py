@@ -89,7 +89,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         messages = [
             Message.create("First question", role=RoleType.USER, sender_id="alice"),
-            Message.create("First answer", role=RoleType.ASSISTANT, sender_id="agent:test"),
+            Message.create("First answer", role=RoleType.ASSISTANT, sender_id="agent"),
             Message(
                 type=MessageType.FUNCTION_CALL_OUTPUT,
                 role=RoleType.TOOL,

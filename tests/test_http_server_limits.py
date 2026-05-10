@@ -12,7 +12,6 @@ class FakeMessageStorage:
 
 
 class BlockingAgent:
-    name = "blocking"
     model = "test-model"
     tools = {}
 
@@ -33,7 +32,6 @@ class BlockingAgent:
 
 
 class SlowStreamingAgent:
-    name = "streaming"
     model = "test-model"
     tools = {}
 

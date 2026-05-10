@@ -8,15 +8,34 @@ xAgent uses a directory-based runtime layout. The selected directory contains:
 
 By default xAgent reads `~/.xagent`. Use `--dir` on each command to select another directory.
 
+## Init Wizard
+
+Run:
+
+```bash
+xagent init
+```
+
+The wizard asks for the provider, model, API key, and identity text before writing `config.yaml` and `identity.md`. Submit an empty identity to edit the file later.
+
+Provider choices:
+
+| Provider | Base URL | Model choices |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`, or decide later |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-flash`, `deepseek-v4-pro`, or decide later |
+| Qwen | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.6-plus`, `qwen3.6-flash`, `qwen3.6-max-preview`, or decide later |
+| Custom | entered during init | placeholder model by default |
+
+Choosing to decide later writes `your_model_here`. Leaving the API key blank writes `your_api_key_here`.
+
 ## Minimal Config
 
 ```yaml
-agent:
-  name: "assistant"
-  provider:
-    base_url: "https://api.openai.com/v1"
-    api_key: "your_api_key_here"
-    model: "gpt-5.4-mini"
+provider:
+  base_url: "https://api.openai.com/v1"
+  api_key: "your_api_key_here"
+  model: "gpt-5.4-mini"
 ```
 
 ## Identity File
@@ -30,13 +49,12 @@ You are a helpful assistant.
 Answer clearly, keep responses practical, and adapt to the user's language.
 ```
 
-`config.yaml` does not contain prompt text. `agent.system_prompt` is not a supported config key.
+`config.yaml` does not contain prompt text. `system_prompt` is not a supported config key.
 
-## Agent Section
+## Config Fields
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `name` | string | yes | Runtime identifier used for storage and assistant message attribution |
 | `provider` | object | yes | OpenAI-compatible provider config |
 | `output_schema` | object | no | Structured output schema |
 
@@ -44,26 +62,22 @@ There is no `conversation_mode` config. All chats use the same continuous messag
 
 ## Provider
 
-Set `agent.provider` for OpenAI-compatible providers:
+Set `provider` for OpenAI-compatible providers:
 
 ```yaml
-agent:
-  name: "deepseek-agent"
-  provider:
-    base_url: "https://api.openai.com/v1"
-    api_key: "your_deepseek_api_key"
-    model: "deepseek-v4-pro"
+provider:
+  base_url: "https://api.deepseek.com"
+  api_key: "your_deepseek_api_key"
+  model: "deepseek-v4-pro"
 ```
 
 MiniMax example:
 
 ```yaml
-agent:
-  name: "minimax-agent"
-  provider:
-    base_url: "https://api.minimax.io/v1"
-    api_key: "your_minimax_api_key"
-    model: "MiniMax-M2.7"
+provider:
+  base_url: "https://api.minimax.io/v1"
+  api_key: "your_minimax_api_key"
+  model: "MiniMax-M2.7"
 ```
 
 ## Message Model
@@ -98,7 +112,7 @@ xagent chat --dir ./my-project-agent
 Local mode stores:
 
 - message history in SQLite
-- diary memory in markdown files under `<agent_name>_memory/`
+- diary memory in markdown files under `memory/`
 
 Workspace layout:
 
@@ -106,8 +120,8 @@ Workspace layout:
 <xagent-dir>/
   config.yaml
   identity.md
-  <agent_name>_messages.sqlite3
-  <agent_name>_memory/
+  messages.sqlite3
+  memory/
     daily/
     weekly/
     monthly/
@@ -125,25 +139,23 @@ xagent init --schema
 Or define a Pydantic model directly in YAML:
 
 ```yaml
-agent:
-  name: "analysis"
-  provider:
-    base_url: "https://api.openai.com/v1"
-    api_key: "your_api_key_here"
-    model: "gpt-5.4-mini"
-  output_schema:
-    class_name: "AnalysisResult"
-    fields:
-      summary:
-        type: "str"
-        description: "Short summary"
-      action_items:
-        type: "list"
-        items: "str"
-        description: "Recommended next steps"
-      confidence:
-        type: "float"
-        description: "Confidence score"
+provider:
+  base_url: "https://api.openai.com/v1"
+  api_key: "your_api_key_here"
+  model: "gpt-5.4-mini"
+output_schema:
+  class_name: "AnalysisResult"
+  fields:
+    summary:
+      type: "str"
+      description: "Short summary"
+    action_items:
+      type: "list"
+      items: "str"
+      description: "Recommended next steps"
+    confidence:
+      type: "float"
+      description: "Confidence score"
 ```
 
 Supported field types:

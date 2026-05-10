@@ -11,7 +11,6 @@ logging.basicConfig(
 class AgentConfig:
     """Configuration constants for Agent class."""
 
-    DEFAULT_NAME = "default_agent"
     DEFAULT_MODEL = "gpt-5.4-mini"
     DEFAULT_WORKSPACE = "~/.xagent"
     DEFAULT_USER_ID = "default_user"

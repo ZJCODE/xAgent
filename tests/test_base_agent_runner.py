@@ -19,8 +19,8 @@ class _RunnerWithoutAgent(BaseAgentRunner):
 
 
 class _RunnerWithCustomStorage(_RunnerWithoutAgent):
-    def _create_message_storage(self, *, agent_name: str, agent_slug: str):
-        return {"agent_name": agent_name, "agent_slug": agent_slug}
+    def _create_message_storage(self):
+        return {"storage": "custom"}
 
 
 class BaseAgentRunnerStorageTests(unittest.TestCase):
@@ -32,10 +32,8 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
             config_path.write_text(
                 "\n".join(
                     [
-                        "agent:",
-                        '  name: "Research Agent"',
-                        "  provider:",
-                        '    model: "gpt-5.4-mini"',
+                        "provider:",
+                        '  model: "gpt-5.4-mini"',
                     ]
                 ),
                 encoding="utf-8",
@@ -45,7 +43,7 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
             with patch("xagent.interfaces.base.MessageStorageLocal", _FakeMessageStorageLocal):
                 runner = _RunnerWithoutAgent(config_dir=str(resolved_tmpdir))
 
-            self.assertEqual(runner.message_storage.path, str(resolved_tmpdir / "research_agent_messages.sqlite3"))
+            self.assertEqual(runner.message_storage.path, str(resolved_tmpdir / "messages.sqlite3"))
             self.assertFalse(hasattr(runner, "memory_storage"))
 
     def test_runner_message_storage_factory_is_overridable(self):
@@ -55,10 +53,8 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
             config_path.write_text(
                 "\n".join(
                     [
-                        "agent:",
-                        '  name: "Extensible Agent"',
-                        "  provider:",
-                        '    model: "gpt-5.4-mini"',
+                        "provider:",
+                        '  model: "gpt-5.4-mini"',
                     ]
                 ),
                 encoding="utf-8",
@@ -69,7 +65,7 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
 
             self.assertEqual(
                 runner.message_storage,
-                {"agent_name": "Extensible Agent", "agent_slug": "extensible_agent"},
+                {"storage": "custom"},
             )
 
 

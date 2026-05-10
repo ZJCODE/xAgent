@@ -6,15 +6,12 @@
 
 ```python
 Agent(
-    name: Optional[str] = None,
     system_prompt: Optional[str] = None,
-    description: Optional[str] = None,
     model: Optional[str] = None,
     client: Optional[AsyncOpenAI] = None,
     tools: Optional[list] = None,
     output_type: Optional[type[BaseModel]] = None,
     message_storage: Optional[MessageStorageBase] = None,
-    memory_storage: Optional[MemoryStorageBase] = None,
     workspace: Optional[str] = None,
 )
 ```
@@ -64,7 +61,7 @@ await agent.chat(
 ```python
 from xagent.core import Agent
 
-agent = Agent(name="assistant", model="gpt-5.4-mini")
+agent = Agent(model="gpt-5.4-mini")
 
 reply = await agent.chat(
     user_message="Hello",

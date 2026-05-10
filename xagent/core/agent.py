@@ -18,10 +18,6 @@ from ..tools import create_write_daily_memory_tool, create_search_memory_tool, c
 logger = logging.getLogger(__name__)
 
 
-def _normalize_agent_identifier(name: str) -> str:
-    return (name or AgentConfig.DEFAULT_NAME).lower().replace(" ", "_").replace("-", "_")
-
-
 class Agent:
     """AI agent runtime for a continuous agent-level message stream."""
 
@@ -30,9 +26,7 @@ class Agent:
 
     def __init__(
         self,
-        name: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        description: Optional[str] = None,
         model: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         tools: Optional[List] = None,
@@ -40,13 +34,11 @@ class Agent:
         message_storage: Optional[MessageStorageBase] = None,
         workspace: Optional[str] = None,
     ):
-        self.name = name or AgentConfig.DEFAULT_NAME
-        self.description = description
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.client = client or AsyncOpenAI()
         self.output_type = output_type
         self.system_prompt = system_prompt or ""
-        self._assistant_sender_id = f"agent:{self.name}"
+        self._assistant_sender_id = "agent"
         self._memory_mode_var: ContextVar[MemoryMode] = ContextVar(
             f"xagent_memory_mode_{id(self)}",
             default=MemoryMode.FULL,
@@ -61,22 +53,22 @@ class Agent:
             self.message_storage = message_storage
         elif workspace_path is not None:
             self.message_storage = MessageStorageLocal(
-                path=str(workspace_path / f"{_normalize_agent_identifier(self.name)}_messages.sqlite3")
+                path=str(workspace_path / "messages.sqlite3")
             )
         else:
             default_workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
             default_workspace.mkdir(parents=True, exist_ok=True)
             self.message_storage = MessageStorageLocal(
-                path=str(default_workspace / f"{_normalize_agent_identifier(self.name)}_messages.sqlite3")
+                path=str(default_workspace / "messages.sqlite3")
             )
 
         # Markdown-based memory system
         if workspace_path is not None:
-            memory_dir = str(workspace_path / f"{_normalize_agent_identifier(self.name)}_memory")
+            memory_dir = str(workspace_path / "memory")
         else:
             default_workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
             default_workspace.mkdir(parents=True, exist_ok=True)
-            memory_dir = str(default_workspace / f"{_normalize_agent_identifier(self.name)}_memory")
+            memory_dir = str(default_workspace / "memory")
 
         self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
         self.llm_service = JournalLLMService(client=self.client, model=self.model)

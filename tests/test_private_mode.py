@@ -60,7 +60,7 @@ class MessageStorageInMemoryTests(unittest.IsolatedAsyncioTestCase):
         storage = MessageStorageInMemory()
         msgs = [
             Message.create("one", role=RoleType.USER, sender_id="alice"),
-            Message.create("two", role=RoleType.ASSISTANT, sender_id="agent:test"),
+            Message.create("two", role=RoleType.ASSISTANT, sender_id="agent"),
         ]
         await storage.add_messages(msgs)
         result = await storage.get_messages(10)
@@ -124,9 +124,8 @@ class MessageStorageInMemoryTests(unittest.IsolatedAsyncioTestCase):
 def _build_agent(storage, model_client, memory_handler=None, tool_executor=None, tools=None):
     agent = Agent.__new__(Agent)
     agent.output_type = None
-    agent.name = "test"
     agent.system_prompt = ""
-    agent._assistant_sender_id = "agent:test"
+    agent._assistant_sender_id = "agent"
     agent._private_handler = None
     agent.tool_manager = FakeToolManager(tools=tools)
     agent.model_client = model_client

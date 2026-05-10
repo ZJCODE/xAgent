@@ -27,18 +27,18 @@ pip install myxagent
 xagent init
 ```
 
-Then set your provider in `~/.xagent/config.yaml`:
+The init wizard asks for the provider, model, API key, and identity text before writing files. Submit an empty identity to edit `identity.md` later.
+
+Generated `config.yaml` example for OpenAI:
 
 ```yaml
-agent:
-  name: "starter"
-  provider:
-    base_url: "https://api.openai.com/v1"
-    api_key: "your_api_key_here"
-    model: "gpt-5.4-mini"
+provider:
+  base_url: "https://api.openai.com/v1"
+  api_key: "your_api_key_here"
+  model: "gpt-5.4-mini"
 ```
 
-Put the agent's role and response style in `~/.xagent/identity.md`.
+Generated `identity.md` stores the agent's role and response style. You can enter it during init or leave it as a placeholder and edit it later.
 
 ### Start the CLI
 
@@ -156,18 +156,18 @@ Generate a starter config:
 xagent init
 ```
 
-Example:
+The init wizard currently supports OpenAI, DeepSeek, Qwen, and custom OpenAI-compatible providers.
+
+Example OpenAI config:
 
 ```yaml
-agent:
-  name: "assistant"
-  provider:
-    base_url: "https://api.openai.com/v1"
-    api_key: "your_api_key_here"
-    model: "gpt-5.4-mini"
+provider:
+  base_url: "https://api.openai.com/v1"
+  api_key: "your_api_key_here"
+  model: "gpt-5.4-mini"
 ```
 
-`identity.md` stores the agent's role, personality, and behavior instructions.
+`identity.md` stores the agent's role, personality, and behavior instructions. You can enter custom identity text during `xagent init` or submit an empty value to edit it later.
 
 Add a starter structured-output schema during initialization:
 

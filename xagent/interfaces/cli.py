@@ -1,11 +1,14 @@
 import argparse
 import asyncio
+import getpass
 import logging
 import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
+
+import yaml
 
 from .base import BaseAgentConfig, BaseAgentRunner
 
@@ -168,7 +171,6 @@ class AgentCLI(BaseAgentRunner):
         )
         print(f"\n{config_msg}")
         print(f"📂 Dir: {self.config_dir}")
-        print(f"🤖 Agent: {self.agent.name}")
         print(f"🧠 Model: {self.agent.model}")
 
         total_tools = len(self.agent.tools)
@@ -222,31 +224,85 @@ class InitResult:
     conflicts: Tuple[Path, ...]
 
 
-def _default_config_yaml(schema: bool = False) -> str:
-    config_yaml = """agent:
-  name: "starter"
-  provider:
-    base_url: "https://api.openai.com/v1"
-    api_key: "your_api_key_here"
-    model: "gpt-5.4-mini"
-"""
-    if not schema:
-        return config_yaml
+@dataclass(frozen=True)
+class InitSelection:
+    """Interactive choices used to generate xAgent project files."""
 
-    return config_yaml + """
-  output_schema:
-    class_name: "WeatherReport"
-    fields:
-      location:
-        type: "str"
-        description: "Location name"
-      temperature_celsius:
-        type: "int"
-        description: "Temperature in degrees Celsius"
-      condition:
-        type: "str"
-        description: "Short weather condition summary"
-"""
+    provider: str
+    base_url: str
+    api_key: str
+    model: str
+    identity: str
+
+
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+CUSTOM_BASE_URL_PLACEHOLDER = "https://api.example.com/v1"
+API_KEY_PLACEHOLDER = "your_api_key_here"
+MODEL_PLACEHOLDER = "your_model_here"
+
+OPENAI_MODELS = (
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "gpt-5.5",
+    "Decide later",
+)
+DEEPSEEK_MODELS = (
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "Decide later",
+)
+QWEN_MODELS = (
+    "qwen3.6-plus",
+    "qwen3.6-flash",
+    "qwen3.6-max-preview",
+    "Decide later",
+)
+
+
+def _default_init_selection() -> InitSelection:
+    return InitSelection(
+        provider="openai",
+        base_url=OPENAI_BASE_URL,
+        api_key=API_KEY_PLACEHOLDER,
+        model="gpt-5.4-mini",
+        identity=_default_identity_markdown(),
+    )
+
+
+def _weather_output_schema() -> dict:
+    return {
+        "class_name": "WeatherReport",
+        "fields": {
+            "location": {
+                "type": "str",
+                "description": "Location name",
+            },
+            "temperature_celsius": {
+                "type": "int",
+                "description": "Temperature in degrees Celsius",
+            },
+            "condition": {
+                "type": "str",
+                "description": "Short weather condition summary",
+            },
+        },
+    }
+
+
+def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
+    config = {
+        "provider": {
+            "base_url": selection.base_url,
+            "api_key": selection.api_key,
+            "model": selection.model,
+        }
+    }
+    if schema:
+        config["output_schema"] = _weather_output_schema()
+    return yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
 
 
 def _default_identity_markdown() -> str:
@@ -258,11 +314,138 @@ Be concise by default, and add detail when it improves the answer.
 """
 
 
+def _edit_later_identity_markdown() -> str:
+    return """# Identity
+
+Describe this agent's role, tone, and behavior here.
+"""
+
+
+def _format_identity_markdown(identity: str) -> str:
+    identity = identity.strip()
+    if not identity:
+        return _edit_later_identity_markdown()
+    if identity.startswith("#"):
+        return identity + "\n"
+    return f"# Identity\n\n{identity}\n"
+
+
+def _prompt_text(
+    prompt: str,
+    *,
+    default: Optional[str] = None,
+    input_func: Callable[[str], str] = input,
+) -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input_func(f"{prompt}{suffix}: ").strip()
+    if not value and default is not None:
+        return default
+    return value
+
+
+def _select_option(
+    title: str,
+    options: Sequence[str],
+    *,
+    default_index: int = 0,
+    input_func: Callable[[str], str] = input,
+) -> str:
+    print(f"\n{title}")
+    for index, option in enumerate(options, 1):
+        print(f"  {index}. {option}")
+
+    while True:
+        raw_choice = input_func("Choose an option number: ").strip()
+        if not raw_choice:
+            return options[default_index]
+        if raw_choice.isdigit():
+            choice = int(raw_choice)
+            if 1 <= choice <= len(options):
+                return options[choice - 1]
+        print(f"Please enter a number from 1 to {len(options)}.")
+
+
+def _prompt_multiline_identity(input_func: Callable[[str], str] = input) -> str:
+    print("\nEnter the agent identity, or submit an empty value and finish with '.' to edit later.")
+    print("Finish with a single '.' on its own line.")
+    lines = []
+    while True:
+        line = input_func("> ")
+        if line.strip() == ".":
+            break
+        lines.append(line)
+    return _format_identity_markdown("\n".join(lines))
+
+
+def collect_init_selection(
+    *,
+    input_func: Callable[[str], str] = input,
+    secret_input_func: Callable[[str], str] = getpass.getpass,
+) -> InitSelection:
+    """Collect init choices from the terminal before writing files."""
+    print("\nxAgent init")
+    print("Configure the runtime first; files will be written after these choices.")
+
+    provider = _select_option(
+        "Provider",
+        ("openai", "deepseek", "qwen", "custom"),
+        input_func=input_func,
+    )
+
+    if provider == "openai":
+        selected_model = _select_option(
+            "OpenAI model",
+            OPENAI_MODELS,
+            default_index=1,
+            input_func=input_func,
+        )
+        base_url = OPENAI_BASE_URL
+    elif provider == "deepseek":
+        selected_model = _select_option(
+            "DeepSeek model",
+            DEEPSEEK_MODELS,
+            default_index=0,
+            input_func=input_func,
+        )
+        base_url = DEEPSEEK_BASE_URL
+    elif provider == "qwen":
+        selected_model = _select_option(
+            "Qwen model",
+            QWEN_MODELS,
+            default_index=1,
+            input_func=input_func,
+        )
+        base_url = QWEN_BASE_URL
+    else:
+        selected_model = "Decide later"
+        base_url = _prompt_text(
+            "Custom provider base URL",
+            default=CUSTOM_BASE_URL_PLACEHOLDER,
+            input_func=input_func,
+        )
+
+    model = MODEL_PLACEHOLDER if selected_model == "Decide later" else selected_model
+    api_key = secret_input_func("API key (leave blank to fill in later): ").strip()
+    if not api_key:
+        api_key = API_KEY_PLACEHOLDER
+
+    identity = _prompt_multiline_identity(input_func=input_func)
+
+    return InitSelection(
+        provider=provider,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        identity=identity,
+    )
+
+
 def init_agent_directory(
     config_dir: Optional[str] = None,
     *,
     force: bool = False,
     schema: bool = False,
+    selection: Optional[InitSelection] = None,
 ) -> InitResult:
     """Create config.yaml and identity.md in the selected xAgent directory."""
     resolved_dir = Path(config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
@@ -286,8 +469,9 @@ def init_agent_directory(
             conflicts=conflicts,
         )
 
-    config_path.write_text(_default_config_yaml(schema=schema), encoding="utf-8")
-    identity_path.write_text(_default_identity_markdown(), encoding="utf-8")
+    selection = selection or _default_init_selection()
+    config_path.write_text(_config_yaml(selection, schema=schema), encoding="utf-8")
+    identity_path.write_text(selection.identity, encoding="utf-8")
 
     print("╭─────────────────────────────────────────────────────────╮")
     print("│ xAgent project files written successfully.             │")
@@ -374,10 +558,28 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def handle_init(args: argparse.Namespace) -> int:
+    resolved_dir = Path(args.config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
+    conflicts = tuple(
+        path for path in (
+            resolved_dir / BaseAgentConfig.CONFIG_FILENAME,
+            resolved_dir / BaseAgentConfig.IDENTITY_FILENAME,
+        )
+        if path.exists()
+    )
+    if conflicts and not args.force:
+        result = init_agent_directory(
+            args.config_dir,
+            force=args.force,
+            schema=args.schema,
+        )
+        return 0 if result.wrote_files else 1
+
+    selection = collect_init_selection()
     result = init_agent_directory(
         args.config_dir,
         force=args.force,
         schema=args.schema,
+        selection=selection,
     )
     return 0 if result.wrote_files else 1
 

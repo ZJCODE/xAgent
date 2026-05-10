@@ -24,7 +24,7 @@ class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
                 )
                 rows = [
                     ("alpha", 1.0, Message.create("first", role=RoleType.USER, sender_id="alice").model_dump_json()),
-                    ("beta", 2.0, Message.create("second", role=RoleType.ASSISTANT, sender_id="agent:test").model_dump_json()),
+                    ("beta", 2.0, Message.create("second", role=RoleType.ASSISTANT, sender_id="agent").model_dump_json()),
                     ("alpha", 3.0, Message.create("third", role=RoleType.USER, sender_id="bob").model_dump_json()),
                 ]
                 conn.executemany(

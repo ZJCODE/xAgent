@@ -19,18 +19,23 @@ pip install myxagent
 xagent init
 ```
 
-Edit `~/.xagent/config.yaml` and set your provider:
+The init wizard asks for:
+
+- provider: OpenAI, DeepSeek, Qwen, or custom
+- model, with a "decide later" placeholder option
+- API key, which can also be filled in later
+- identity text for `identity.md`, or an empty placeholder to edit later
+
+OpenAI config example:
 
 ```yaml
-agent:
-  name: "starter"
-  provider:
-    base_url: "https://api.openai.com/v1"
-    api_key: "your_api_key_here"
-    model: "gpt-5.4-mini"
+provider:
+  base_url: "https://api.openai.com/v1"
+  api_key: "your_api_key_here"
+  model: "gpt-5.4-mini"
 ```
 
-Edit `~/.xagent/identity.md` to define the agent's role and response style.
+Edit `~/.xagent/identity.md` later if you skipped identity setup during init.
 
 ## Core Concepts
 

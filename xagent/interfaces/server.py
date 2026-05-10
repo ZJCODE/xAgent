@@ -262,7 +262,7 @@ class AgentHTTPServer(BaseAgentRunner):
 
         @app.post("/clear_messages")
         async def clear_messages():
-            self.logger.info("Clear messages request for agent %s", self.agent.name)
+            self.logger.info("Clear messages request")
             try:
                 await self.message_storage.clear_messages()
                 return {
@@ -281,9 +281,7 @@ class AgentHTTPServer(BaseAgentRunner):
             memory_dir = str(self._get_memory_root())
             storage_info = self.message_storage.get_stream_info() if hasattr(self.message_storage, "get_stream_info") else {}
             return {
-                "name": self.agent.name,
                 "model": self.agent.model,
-                "description": getattr(self.agent, "description", None) or "",
                 "workspace": str(getattr(self, "workspace", "")),
                 "memory_dir": memory_dir,
                 "message_storage": storage_info,
@@ -463,7 +461,6 @@ class AgentHTTPServer(BaseAgentRunner):
         port = port if port is not None else BaseAgentConfig.DEFAULT_PORT
 
         self.logger.info("Starting xAgent HTTP Server on %s:%s", host, port)
-        self.logger.info("Agent: %s", self.agent.name)
         self.logger.info("Model: %s", self.agent.model)
         self.logger.info("Tools: %d loaded", len(self.agent.tools))
         self.logger.info("Web UI: %s", "enabled at /" if self._enable_web else "disabled (--no-web)")

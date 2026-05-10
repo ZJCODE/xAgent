@@ -13,7 +13,7 @@ If a user explicitly says "remember this" / "记住这个" / "别忘了", the cu
 ## Directory Layout
 
 ```text
-<workspace>/<agent_name>_memory/
+<workspace>/memory/
   daily/
     2025/
       2025-07/
@@ -43,7 +43,6 @@ from xagent.core import Agent
 async def main():
     message_storage = MessageStorageLocal()
     agent = Agent(
-        name="memory_agent",
         model="gpt-5.4-mini",
         message_storage=message_storage,
         workspace="./my_workspace",

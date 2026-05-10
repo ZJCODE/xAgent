@@ -274,9 +274,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     def _build_agent(self, storage, model_client, tool_executor=None, tools=None):
         agent = Agent.__new__(Agent)
         agent.output_type = None
-        agent.name = "test"
         agent.system_prompt = ""
-        agent._assistant_sender_id = "agent:test"
+        agent._assistant_sender_id = "agent"
         agent._private_handler = None
         agent.tool_manager = FakeToolManager(tools=tools)
         agent.model_client = model_client
@@ -289,7 +288,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_sends_single_transcript_message_before_loop(self):
         storage = InMemoryMessageStorage([
             Message.create("Hello", role=RoleType.USER, sender_id="alice"),
-            Message.create("Hi Alice", role=RoleType.ASSISTANT, sender_id="agent:test"),
+            Message.create("Hi Alice", role=RoleType.ASSISTANT, sender_id="agent"),
         ])
         model_client = CapturingModelClient([
             (ReplyType.SIMPLE_REPLY, "Final answer"),
