@@ -233,6 +233,8 @@ class InitSelection:
     api_key: str
     model: str
     identity: str
+    search_provider: str = "none"
+    search_api_key: str = ""
 
 
 OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -240,6 +242,7 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 CUSTOM_BASE_URL_PLACEHOLDER = "https://api.example.com/v1"
 API_KEY_PLACEHOLDER = "your_api_key_here"
+BRAVE_SEARCH_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 MODEL_PLACEHOLDER = "your_model_here"
 
 OPENAI_MODELS = (
@@ -260,6 +263,17 @@ QWEN_MODELS = (
     "qwen3.6-max-preview",
     "Decide later",
 )
+OPENAI_SEARCH_PROVIDERS = (
+    "openai",
+    "duckduckgo",
+    "brave",
+    "none",
+)
+NON_OPENAI_SEARCH_PROVIDERS = (
+    "duckduckgo",
+    "brave",
+    "none",
+)
 
 
 def _default_init_selection() -> InitSelection:
@@ -269,6 +283,7 @@ def _default_init_selection() -> InitSelection:
         api_key=API_KEY_PLACEHOLDER,
         model="gpt-5.4-mini",
         identity=_default_identity_markdown(),
+        search_provider="openai",
     )
 
 
@@ -295,11 +310,16 @@ def _weather_output_schema() -> dict:
 def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
     config = {
         "provider": {
+            "name": selection.provider,
             "base_url": selection.base_url,
             "api_key": selection.api_key,
             "model": selection.model,
         }
     }
+    search_config = {"provider": selection.search_provider or "none"}
+    if search_config["provider"] == "brave":
+        search_config["api_key"] = selection.search_api_key or BRAVE_SEARCH_API_KEY_PLACEHOLDER
+    config["search"] = search_config
     if schema:
         config["output_schema"] = _weather_output_schema()
     return yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
@@ -363,6 +383,20 @@ def _select_option(
             if 1 <= choice <= len(options):
                 return options[choice - 1]
         print(f"Please enter a number from 1 to {len(options)}.")
+
+
+def _select_search_provider(
+    provider: str,
+    *,
+    input_func: Callable[[str], str] = input,
+) -> str:
+    options = OPENAI_SEARCH_PROVIDERS if provider == "openai" else NON_OPENAI_SEARCH_PROVIDERS
+    return _select_option(
+        "Search provider",
+        options,
+        default_index=0,
+        input_func=input_func,
+    )
 
 
 def _prompt_multiline_identity(input_func: Callable[[str], str] = input) -> str:
@@ -429,6 +463,13 @@ def collect_init_selection(
     if not api_key:
         api_key = API_KEY_PLACEHOLDER
 
+    search_provider = _select_search_provider(provider, input_func=input_func)
+    search_api_key = ""
+    if search_provider == "brave":
+        search_api_key = secret_input_func("Brave Search API key (leave blank to fill in later): ").strip()
+        if not search_api_key:
+            search_api_key = BRAVE_SEARCH_API_KEY_PLACEHOLDER
+
     identity = _prompt_multiline_identity(input_func=input_func)
 
     return InitSelection(
@@ -437,6 +478,8 @@ def collect_init_selection(
         api_key=api_key,
         model=model,
         identity=identity,
+        search_provider=search_provider,
+        search_api_key=search_api_key,
     )
 
 

@@ -100,6 +100,8 @@ provider:
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
             self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
+            self.assertEqual(config["provider"]["name"], "openai")
+            self.assertEqual(config["search"]["provider"], "openai")
             self.assertNotIn("system_prompt:", config_text)
             self.assertNotIn("output_schema:", config_text)
             self.assertNotIn("workspace:", config_text)
@@ -158,12 +160,15 @@ provider:
             self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
             self.assertEqual(config["provider"]["api_key"], "secret-key")
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
+            self.assertEqual(config["provider"]["name"], "deepseek")
+            self.assertEqual(config["search"]["provider"], "none")
             self.assertEqual(result.identity_path.read_text(encoding="utf-8"), "# Identity\n\nYou report weather.\n")
 
     def test_collect_init_selection_supports_custom_identity(self):
         answers = iter([
             "1",
             "4",
+            "1",
             "You investigate codebases.",
             ".",
         ])
@@ -177,11 +182,13 @@ provider:
         self.assertEqual(selection.base_url, "https://api.openai.com/v1")
         self.assertEqual(selection.api_key, "openai-key")
         self.assertEqual(selection.model, "gpt-5.5")
+        self.assertEqual(selection.search_provider, "openai")
         self.assertEqual(selection.identity, "# Identity\n\nYou investigate codebases.\n")
 
     def test_collect_init_selection_deepseek_decide_later_uses_model_placeholder(self):
         answers = iter([
             "2",
+            "3",
             "3",
             ".",
         ])
@@ -195,12 +202,14 @@ provider:
         self.assertEqual(selection.base_url, "https://api.deepseek.com")
         self.assertEqual(selection.api_key, "your_api_key_here")
         self.assertEqual(selection.model, "your_model_here")
+        self.assertEqual(selection.search_provider, "none")
         self.assertIn("Describe this agent's role", selection.identity)
 
     def test_collect_init_selection_supports_qwen_models(self):
         answers = iter([
             "3",
             "3",
+            "1",
             ".",
         ])
 
@@ -213,9 +222,47 @@ provider:
         self.assertEqual(selection.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1")
         self.assertEqual(selection.api_key, "qwen-key")
         self.assertEqual(selection.model, "qwen3.6-max-preview")
+        self.assertEqual(selection.search_provider, "duckduckgo")
+
+    def test_collect_init_selection_supports_brave_search_api_key(self):
+        answers = iter([
+            "1",
+            "",
+            "3",
+            ".",
+        ])
+        secrets = iter(["openai-key", "brave-key"])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: next(secrets),
+        )
+
+        self.assertEqual(selection.provider, "openai")
+        self.assertEqual(selection.search_provider, "brave")
+        self.assertEqual(selection.search_api_key, "brave-key")
+
+    def test_collect_init_selection_non_openai_excludes_openai_search(self):
+        answers = iter([
+            "2",
+            "1",
+            "1",
+            ".",
+        ])
+
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            selection = collect_init_selection(
+                input_func=lambda prompt: next(answers),
+                secret_input_func=lambda prompt: "deepseek-key",
+            )
+
+        search_output = stdout.getvalue().split("Search provider", 1)[1].split("Enter the agent identity", 1)[0]
+        self.assertEqual(selection.search_provider, "duckduckgo")
+        self.assertNotIn("openai", search_output)
 
     def test_collect_init_selection_does_not_label_defaults(self):
         answers = iter([
+            "",
             "",
             "",
             ".",
@@ -229,8 +276,68 @@ provider:
 
         self.assertEqual(selection.provider, "openai")
         self.assertEqual(selection.model, "gpt-5.4-mini")
+        self.assertEqual(selection.search_provider, "openai")
         self.assertIn("Describe this agent's role", selection.identity)
         self.assertNotIn("(default)", stdout.getvalue())
+
+    def test_config_loads_duckduckgo_search_tool(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+search:
+    provider: "duckduckgo"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertIn("run_command", runner.agent.tools)
+            self.assertIn("web_search", runner.agent.tools)
+
+    def test_config_skips_search_tool_when_disabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+search:
+    provider: "none"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertIn("run_command", runner.agent.tools)
+            self.assertNotIn("web_search", runner.agent.tools)
+
+    def test_config_rejects_openai_search_for_non_openai_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    api_key: "test-key"
+search:
+    provider: "openai"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "search.provider 'openai'"):
+                BaseAgentRunner(config_dir=tmpdir)
 
     def test_config_rejects_name_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:

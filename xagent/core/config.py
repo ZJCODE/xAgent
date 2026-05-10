@@ -46,6 +46,9 @@ class AgentConfig:
     MAX_COMMAND_TIMEOUT = 300  # hard upper bound for timeout parameter
     MAX_COMMAND_OUTPUT_SIZE = 51200  # 50 KB per stream
     MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled instructions (chars)
+    SEARCH_HTTP_TIMEOUT = 15.0
+    DEFAULT_SEARCH_RESULTS = 5
+    MAX_SEARCH_RESULTS = 20
 
     # Tool-specific instruction segments (injected when the tool is active)
     TOOL_SYSTEM_PROMPTS = {
@@ -77,6 +80,13 @@ class AgentConfig:
             "- Never expose secrets; summarize only non-sensitive parts of output.\n"
             "- Stay within scope, use reasonable timeouts, and avoid unbounded output.\n"
             "- On failure: inspect `return_code` and `stderr`, explain the cause, suggest a targeted fix.\n"
+        ),
+        "web_search": (
+            "\n**Web Search:**\n"
+            "- Use `web_search` when the answer depends on current, external, local, or source-backed information.\n"
+            "- Prefer precise queries with names, dates, locations, and constraints.\n"
+            "- Ground factual claims in returned source URLs. Never invent citations or cite URLs that were not returned.\n"
+            "- If search fails or returns no useful results, say that plainly and answer only from reliable context.\n"
         ),
     }
 

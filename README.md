@@ -18,7 +18,9 @@ Run the first-time setup:
 xagent init
 ```
 
-Follow the prompts to choose your provider, model, API key, and optional identity. A clear identity helps the agent respond in the role and style you expect.
+Follow the prompts to choose your provider, model, API key, search provider, and optional identity. A clear identity helps the agent respond in the role and style you expect.
+
+Search is optional. OpenAI providers can use OpenAI built-in web search without an extra key, DuckDuckGo, Brave Search, or no search. Other providers can use DuckDuckGo, Brave Search, or no search. Brave Search requires a Brave Search API key in `search.api_key` or `BRAVE_SEARCH_API_KEY`.
 
 ## Use From The CLI
 

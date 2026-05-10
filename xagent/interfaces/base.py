@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field, create_model
 from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..components import MessageStorageBase, MessageStorageLocal
-from ..tools import run_command
+from ..tools import create_web_search_tool, run_command
+from ..tools.search_tool import SEARCH_PROVIDER_OPENAI, normalize_search_provider
 
 
 class BaseAgentConfig:
@@ -112,7 +113,7 @@ class BaseAgentRunner:
         if not isinstance(config, dict):
             raise ValueError("Configuration must be a dictionary")
         
-        allowed_config_keys = {"provider", "output_schema"}
+        allowed_config_keys = {"provider", "search", "output_schema"}
         unsupported_keys = sorted(set(config) - allowed_config_keys)
         if unsupported_keys:
             joined_keys = ", ".join(unsupported_keys)
@@ -125,8 +126,34 @@ class BaseAgentRunner:
         provider_model = provider_cfg.get("model")
         if not isinstance(provider_model, str) or not provider_model.strip():
             raise ValueError("provider.model is required")
+
+        self._validate_search_config(config.get("search"), provider_cfg)
         
         return config
+
+    def _validate_search_config(
+        self,
+        search_cfg: Optional[Dict[str, Any]],
+        provider_cfg: Dict[str, Any],
+    ) -> None:
+        """Validate optional search configuration."""
+        if search_cfg is None:
+            return
+        if not isinstance(search_cfg, dict):
+            raise ValueError("search must be a dictionary")
+
+        search_provider = normalize_search_provider(search_cfg.get("provider"))
+        if search_provider == SEARCH_PROVIDER_OPENAI and not self._is_openai_provider(provider_cfg):
+            raise ValueError("search.provider 'openai' requires an OpenAI provider")
+
+    @staticmethod
+    def _is_openai_provider(provider_cfg: Dict[str, Any]) -> bool:
+        provider_name = str(provider_cfg.get("name") or "").strip().lower()
+        if provider_name:
+            return provider_name == "openai"
+
+        base_url = str(provider_cfg.get("base_url") or "").strip().rstrip("/")
+        return base_url == "https://api.openai.com/v1"
 
     def _load_identity(self, identity_path: Path) -> str:
         """Load config-driven agent identity instructions from identity.md."""
@@ -239,9 +266,9 @@ class BaseAgentRunner:
         """
         agent_cfg = self.config
         
-        tools = self._load_agent_tools(agent_cfg)
-        output_type = self._get_output_type(agent_cfg)
         client = self._initialize_client(agent_cfg)
+        tools = self._load_agent_tools(agent_cfg, client=client)
+        output_type = self._get_output_type(agent_cfg)
 
         return Agent(
             system_prompt=self.identity,
@@ -280,11 +307,25 @@ class BaseAgentRunner:
 
         return AsyncOpenAI(**client_kwargs)
     
-    def _load_agent_tools(self, agent_cfg: Dict[str, Any]) -> List[Any]:
+    def _load_agent_tools(
+        self,
+        agent_cfg: Dict[str, Any],
+        *,
+        client: Optional[AsyncOpenAI] = None,
+    ) -> List[Any]:
         """Load default built-in tools."""
         if "capabilities" in agent_cfg or "tools" in agent_cfg:
             self.logger.warning("Configured tools are ignored; run_command is built in by default.")
-        return [run_command]
+
+        tools = [run_command]
+        search_tool = create_web_search_tool(
+            agent_cfg.get("search"),
+            client=client,
+            model=self._get_agent_model(agent_cfg),
+        )
+        if search_tool is not None:
+            tools.append(search_tool)
+        return tools
     
     def _get_output_type(self, agent_cfg: Dict[str, Any]) -> Optional[Type[BaseModel]]:
         """Get output type from configuration schema."""
