@@ -16,9 +16,15 @@ class AgentConfig:
     DEFAULT_WORKSPACE = "~/.xagent"
     DEFAULT_USER_ID = "default_user"
     DEFAULT_HISTORY_COUNT = 100
+    MAX_TRANSCRIPT_MESSAGES = 40
+    MAX_TRANSCRIPT_CHARS = 24000
+    MAX_TRANSCRIPT_MESSAGE_CHARS = 4000
     DEFAULT_MAX_ITER = 10
     DEFAULT_MAX_CONCURRENT_TOOLS = 10  # Maximum concurrent tool calls
     HTTP_TIMEOUT = 600.0  # 10 minutes
+    DEFAULT_HTTP_MAX_CONCURRENT_CHATS = 4
+    DEFAULT_HTTP_QUEUE_TIMEOUT = 30.0
+    DEFAULT_HTTP_CHAT_TIMEOUT = HTTP_TIMEOUT
     TOOL_RESULT_PREVIEW_LENGTH = 20
     ERROR_RESPONSE_PREVIEW_LENGTH = 200
     IMAGE_CAPTION_MODEL = "gpt-5.4-mini"  # lightweight vision model for image captioning
@@ -118,3 +124,27 @@ class ReplyType(Enum):
     STRUCTURED_REPLY = "structured_reply"
     TOOL_CALL = "tool_call"
     ERROR = "error"
+
+
+class MemoryMode(Enum):
+    """Per-turn memory access policy."""
+
+    FULL = "full"
+    READ_ONLY = "read_only"
+    DISABLED = "disabled"
+
+    @classmethod
+    def from_flags(cls, enable_memory: bool, private: bool) -> "MemoryMode":
+        if not enable_memory:
+            return cls.DISABLED
+        if private:
+            return cls.READ_ONLY
+        return cls.FULL
+
+    @property
+    def can_read(self) -> bool:
+        return self in {self.FULL, self.READ_ONLY}
+
+    @property
+    def can_write(self) -> bool:
+        return self == self.FULL

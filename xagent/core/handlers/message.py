@@ -80,6 +80,9 @@ class MessageHandler:
         messages: List[Message],
         current_user_id: str,
         memory_context: str = "",
+        max_messages: int = AgentConfig.MAX_TRANSCRIPT_MESSAGES,
+        max_total_chars: int = AgentConfig.MAX_TRANSCRIPT_CHARS,
+        max_message_chars: int = AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS,
     ) -> dict:
         """Collapse recent conversation history into one user transcript message.
 
@@ -89,6 +92,13 @@ class MessageHandler:
           - Conversation transcript with speaker labels
         """
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
+        budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
+            conversation_messages,
+            max_messages=max_messages,
+            max_total_chars=max_total_chars,
+            max_message_chars=max_message_chars,
+        )
+        budgeted_messages = [msg for msg, _ in budgeted_entries]
 
         transcript_lines: list[str] = []
 
@@ -111,9 +121,12 @@ class MessageHandler:
         transcript_lines.append("==========\n")
         transcript_lines.append("")
 
-        for msg in conversation_messages:
+        if omitted_count:
+            transcript_lines.append(f"[Earlier transcript omitted: {omitted_count} messages]")
+            transcript_lines.append("")
+
+        for msg, content in budgeted_entries:
             speaker = MessageHandler._format_transcript_speaker(msg)
-            content = msg.content.strip() or "[Empty message]"
             transcript_lines.append(f"[speaker={speaker}]")
             transcript_lines.append(content)
 
@@ -132,7 +145,7 @@ class MessageHandler:
         )
 
         transcript_text = "\n".join(transcript_lines).strip()
-        latest_images = MessageHandler._latest_user_images(conversation_messages, current_user_id)
+        latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id)
         if not latest_images:
             return {"role": RoleType.USER.value, "content": transcript_text}
 
@@ -142,6 +155,57 @@ class MessageHandler:
             for image_source in latest_images
         )
         return {"role": RoleType.USER.value, "content": content}
+
+    @staticmethod
+    def _budget_transcript_entries(
+        messages: List[Message],
+        max_messages: int,
+        max_total_chars: int,
+        max_message_chars: int,
+    ) -> tuple[List[tuple[Message, str]], int]:
+        if not messages:
+            return [], 0
+
+        message_limit = max(1, int(max_messages or AgentConfig.MAX_TRANSCRIPT_MESSAGES))
+        total_limit = max(1, int(max_total_chars or AgentConfig.MAX_TRANSCRIPT_CHARS))
+        per_message_limit = max(1, int(max_message_chars or AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS))
+
+        omitted_count = max(0, len(messages) - message_limit)
+        candidates = messages[-message_limit:]
+        selected_reversed: list[tuple[Message, str]] = []
+        used_chars = 0
+
+        for index in range(len(candidates) - 1, -1, -1):
+            msg = candidates[index]
+            content = MessageHandler._truncate_transcript_content(
+                msg.content.strip() or "[Empty message]",
+                per_message_limit,
+            )
+            estimated_chars = MessageHandler._estimate_transcript_entry_chars(msg, content)
+            if selected_reversed and used_chars + estimated_chars > total_limit:
+                omitted_count += index + 1
+                break
+            selected_reversed.append((msg, content))
+            used_chars += estimated_chars
+
+        return list(reversed(selected_reversed)), omitted_count
+
+    @staticmethod
+    def _truncate_transcript_content(content: str, limit: int) -> str:
+        if len(content) <= limit:
+            return content
+        omitted_chars = len(content) - limit
+        clipped = content[:limit].rstrip()
+        return f"{clipped}\n[Content truncated: {omitted_chars} chars omitted]"
+
+    @staticmethod
+    def _estimate_transcript_entry_chars(message: Message, content: str) -> int:
+        speaker = MessageHandler._format_transcript_speaker(message)
+        image_note_chars = 0
+        image_count = MessageHandler._count_message_images(message)
+        if image_count:
+            image_note_chars = len(f"[Attached images: {image_count}]")
+        return len(speaker) + len(content) + image_note_chars + 8
 
     @staticmethod
     def _count_message_images(message: Message) -> int:

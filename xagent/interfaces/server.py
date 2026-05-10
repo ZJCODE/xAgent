@@ -1,6 +1,8 @@
 import argparse
+import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -14,6 +16,7 @@ from pydantic import BaseModel
 
 from .base import BaseAgentConfig, BaseAgentRunner
 from ..core.agent import Agent
+from ..core.config import AgentConfig
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -25,9 +28,9 @@ class AgentInput(BaseModel):
     user_message: str
     image_source: Optional[Union[str, List[str]]] = None
     stream: Optional[bool] = False
-    history_count: Optional[int] = 100
-    max_iter: Optional[int] = 10
-    max_concurrent_tools: Optional[int] = 10
+    history_count: Optional[int] = AgentConfig.DEFAULT_HISTORY_COUNT
+    max_iter: Optional[int] = AgentConfig.DEFAULT_MAX_ITER
+    max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
     enable_memory: Optional[bool] = True
     private: Optional[bool] = False
 
@@ -40,8 +43,14 @@ class AgentHTTPServer(BaseAgentRunner):
         config_dir: Optional[str] = None,
         agent: Optional[Agent] = None,
         enable_web: bool = True,
+        max_concurrent_chats: int = AgentConfig.DEFAULT_HTTP_MAX_CONCURRENT_CHATS,
+        chat_queue_timeout: float = AgentConfig.DEFAULT_HTTP_QUEUE_TIMEOUT,
+        chat_timeout: float = AgentConfig.DEFAULT_HTTP_CHAT_TIMEOUT,
     ):
         self._enable_web = enable_web
+        self._chat_semaphore = asyncio.Semaphore(max(1, int(max_concurrent_chats)))
+        self._chat_queue_timeout = max(0.001, float(chat_queue_timeout))
+        self._chat_timeout = max(0.001, float(chat_timeout))
 
         if agent is not None:
             self.agent = agent
@@ -59,6 +68,107 @@ class AgentHTTPServer(BaseAgentRunner):
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    async def _acquire_chat_slot(self) -> None:
+        try:
+            await asyncio.wait_for(
+                self._chat_semaphore.acquire(),
+                timeout=self._chat_queue_timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many concurrent chat requests; try again later.",
+            ) from exc
+
+    async def _call_agent(self, input_data: AgentInput, stream: bool):
+        return await self.agent(
+            user_message=input_data.user_message,
+            user_id=input_data.user_id,
+            history_count=input_data.history_count,
+            max_iter=input_data.max_iter,
+            max_concurrent_tools=input_data.max_concurrent_tools,
+            image_source=input_data.image_source,
+            stream=stream,
+            enable_memory=input_data.enable_memory,
+            private=input_data.private,
+        )
+
+    async def _run_chat_with_limits(self, input_data: AgentInput, stream: bool):
+        await self._acquire_chat_slot()
+        try:
+            deadline = time.monotonic() + self._chat_timeout
+            return await self._await_before_deadline(
+                self._call_agent(input_data, stream=stream),
+                deadline,
+            )
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="Agent chat timed out.") from exc
+        finally:
+            self._chat_semaphore.release()
+
+    async def _stream_chat_events(self, input_data: AgentInput):
+        acquired = False
+        try:
+            await self._acquire_chat_slot()
+            acquired = True
+            deadline = time.monotonic() + self._chat_timeout
+            response = await self._await_before_deadline(
+                self._call_agent(input_data, stream=True),
+                deadline,
+            )
+            if hasattr(response, "__aiter__"):
+                async for delta in self._iterate_before_deadline(response, deadline):
+                    yield self._sse({"delta": delta})
+            else:
+                yield self._sse({"message": self._response_payload(response)})
+            yield "data: [DONE]\n\n"
+        except HTTPException as exc:
+            self.logger.warning("Streaming chat rejected for %s: %s", input_data.user_id, exc.detail)
+            yield self._sse({"error": exc.detail, "status_code": exc.status_code})
+            yield "data: [DONE]\n\n"
+        except asyncio.TimeoutError:
+            self.logger.error("Streaming chat timed out for %s", input_data.user_id)
+            yield self._sse({"error": "Agent chat timed out.", "status_code": 504})
+            yield "data: [DONE]\n\n"
+        except Exception as exc:
+            self.logger.error("Streaming error for %s: %s", input_data.user_id, exc)
+            yield self._sse({"error": str(exc)})
+            yield "data: [DONE]\n\n"
+        finally:
+            if acquired:
+                self._chat_semaphore.release()
+
+    async def _await_before_deadline(self, awaitable, deadline: float):
+        return await asyncio.wait_for(awaitable, timeout=self._remaining_time(deadline))
+
+    async def _iterate_before_deadline(self, response, deadline: float):
+        iterator = response.__aiter__()
+        while True:
+            try:
+                yield await asyncio.wait_for(
+                    iterator.__anext__(),
+                    timeout=self._remaining_time(deadline),
+                )
+            except StopAsyncIteration:
+                break
+
+    @staticmethod
+    def _sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
+    @staticmethod
+    def _response_payload(response):
+        if hasattr(response, "model_dump"):
+            return response.model_dump()
+        return str(response)
+
+    @staticmethod
+    def _remaining_time(deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise asyncio.TimeoutError
+        return remaining
 
     def _get_memory_root(self) -> Path:
         memory = self.agent.markdown_memory
@@ -138,50 +248,15 @@ class AgentHTTPServer(BaseAgentRunner):
             )
             try:
                 if input_data.stream:
-                    async def event_generator():
-                        try:
-                            response = await self.agent(
-                                user_message=input_data.user_message,
-                                user_id=input_data.user_id,
-                                history_count=input_data.history_count,
-                                max_iter=input_data.max_iter,
-                                max_concurrent_tools=input_data.max_concurrent_tools,
-                                image_source=input_data.image_source,
-                                stream=True,
-                                enable_memory=input_data.enable_memory,
-                                private=input_data.private,
-                            )
-                            if hasattr(response, "__aiter__"):
-                                async for delta in response:
-                                    yield f"data: {json.dumps({'delta': delta})}\n\n"
-                                yield "data: [DONE]\n\n"
-                            else:
-                                if hasattr(response, "model_dump"):
-                                    yield f"data: {json.dumps({'message': response.model_dump()})}\n\n"
-                                else:
-                                    yield f"data: {json.dumps({'message': str(response)})}\n\n"
-                                yield "data: [DONE]\n\n"
-                        except Exception as exc:
-                            self.logger.error("Streaming error for %s: %s", input_data.user_id, exc)
-                            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-                            yield "data: [DONE]\n\n"
+                    return StreamingResponse(
+                        self._stream_chat_events(input_data),
+                        media_type="text/event-stream",
+                    )
 
-                    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-                response = await self.agent(
-                    user_message=input_data.user_message,
-                    user_id=input_data.user_id,
-                    history_count=input_data.history_count,
-                    max_iter=input_data.max_iter,
-                    max_concurrent_tools=input_data.max_concurrent_tools,
-                    image_source=input_data.image_source,
-                    enable_memory=input_data.enable_memory,
-                    private=input_data.private,
-                )
-
-                if hasattr(response, "model_dump"):
-                    return {"reply": response.model_dump()}
-                return {"reply": str(response)}
+                response = await self._run_chat_with_limits(input_data, stream=False)
+                return {"reply": self._response_payload(response)}
+            except HTTPException:
+                raise
             except Exception as exc:
                 self.logger.error("Agent processing error for %s: %s", input_data.user_id, exc)
                 raise HTTPException(status_code=500, detail=f"Agent processing error: {str(exc)}")

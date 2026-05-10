@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from xagent.components.message.base_messages import MessageStorageBase
 from xagent.core.agent import Agent
-from xagent.core.config import ReplyType
+from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.tools.executor import ToolExecutor
@@ -15,6 +15,8 @@ from xagent.schemas import Message, RoleType
 class InMemoryMessageStorage(MessageStorageBase):
     def __init__(self, initial_messages=None):
         self.messages = list(initial_messages or [])
+        self.last_count = None
+        self.last_offset = None
 
     async def add_messages(self, messages, **kwargs) -> None:
         if isinstance(messages, list):
@@ -22,8 +24,14 @@ class InMemoryMessageStorage(MessageStorageBase):
         else:
             self.messages.append(messages)
 
-    async def get_messages(self, count: int = 20):
-        return self.messages[-count:]
+    async def get_messages(self, count: int = 20, offset: int = 0):
+        self.last_count = count
+        self.last_offset = offset
+        if count <= 0:
+            return []
+        end = len(self.messages) - offset if offset else len(self.messages)
+        start = max(0, end - count)
+        return self.messages[start:end]
 
     async def clear_messages(self) -> None:
         self.messages.clear()
@@ -269,7 +277,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.name = "test"
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent:test"
-        agent._memory_tools_enabled = True
         agent._private_handler = None
         agent.tool_manager = FakeToolManager(tools=tools)
         agent.model_client = model_client
@@ -350,6 +357,72 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             [message.role for message in storage.messages],
             [RoleType.USER, RoleType.ASSISTANT],
         )
+
+    async def test_chat_caps_history_before_loading_messages(self):
+        storage = InMemoryMessageStorage([
+            Message.create(f"old-{index:02d}", role=RoleType.USER, sender_id="alice")
+            for index in range(50)
+        ])
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "Final answer"),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        result = await Agent.chat(
+            agent,
+            user_message="latest request",
+            user_id="alice",
+            max_iter=2,
+            enable_memory=False,
+        )
+
+        self.assertEqual(result, "Final answer")
+        self.assertEqual(storage.last_count, AgentConfig.MAX_TRANSCRIPT_MESSAGES)
+        transcript = model_client.calls[0][0]["content"]
+        self.assertNotIn("old-00", transcript)
+        self.assertNotIn("old-10", transcript)
+        self.assertIn("old-49", transcript)
+        self.assertIn("latest request", transcript)
+
+    async def test_transcript_budget_omits_older_messages_and_truncates_content(self):
+        messages = [
+            Message.create(f"message-{index}", role=RoleType.USER, sender_id="alice")
+            for index in range(3)
+        ]
+        messages.append(
+            Message.create("x" * 30, role=RoleType.USER, sender_id="alice")
+        )
+
+        transcript = MessageHandler.build_recent_transcript_message(
+            messages,
+            current_user_id="alice",
+            max_messages=2,
+            max_total_chars=200,
+            max_message_chars=10,
+        )["content"]
+
+        self.assertIn("[Earlier transcript omitted: 2 messages]", transcript)
+        self.assertNotIn("message-0", transcript)
+        self.assertIn("message-2", transcript)
+        self.assertIn("[Content truncated: 20 chars omitted]", transcript)
+
+    async def test_transcript_budget_preserves_latest_user_images(self):
+        image_url = "https://example.com/chart.png"
+        messages = [
+            Message.create("older", role=RoleType.USER, sender_id="alice"),
+            Message.create("look at this", role=RoleType.USER, sender_id="alice", image_source=image_url),
+        ]
+
+        model_message = MessageHandler.build_recent_transcript_message(
+            messages,
+            current_user_id="alice",
+            max_messages=1,
+            max_total_chars=200,
+            max_message_chars=100,
+        )
+
+        self.assertIsInstance(model_message["content"], list)
+        self.assertEqual(model_message["content"][1]["image_url"]["url"], image_url)
 
 
 class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):

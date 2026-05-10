@@ -86,4 +86,4 @@ The **recent 3 days** are always injected into the system prompt automatically â
 
 ## File I/O
 
-All file operations use `asyncio.create_subprocess_exec` with basic POSIX commands (`cat`, `grep`, `find`, `mkdir`, `tee`). Content is written via **stdin pipe** to prevent command injection. No shell interpolation is ever used.
+Regular file operations use Python `pathlib` APIs through `asyncio.to_thread`, including reads, appends, summary writes, directory creation, and file listing. Keyword search uses `grep` for efficient recursive search when available, with a Python fallback.

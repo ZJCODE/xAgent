@@ -1,8 +1,7 @@
-"""Markdown-based memory storage using plain files and basic shell commands."""
+"""Markdown-based memory storage using plain files."""
 
 import asyncio
 import logging
-import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -16,14 +15,14 @@ _VALID_SCOPES = {"daily", "weekly", "monthly", "yearly", "all"}
 class MarkdownMemory:
     """File-based memory organized as daily/weekly/monthly/yearly markdown files.
 
-    All read/write operations use ``asyncio.create_subprocess_exec`` with basic
-    POSIX commands (``cat``, ``grep``, ``find``, ``mkdir``, ``tee``).
-    Content is written via **stdin pipe** — never interpolated into shell
-    arguments — to prevent command-injection.
+    Common file reads, writes, and directory scans use ``pathlib`` through
+    ``asyncio.to_thread``. Keyword search keeps ``grep`` for efficient recursive
+    search and falls back to a Python scanner when unavailable.
     """
 
     def __init__(self, memory_dir: str) -> None:
         self.root = Path(memory_dir)
+        self._write_lock = asyncio.Lock()
         self._ensure_dirs_sync()
 
     # ------------------------------------------------------------------
@@ -66,7 +65,7 @@ class MarkdownMemory:
         """Append a diary entry to the daily markdown file.
 
         Each entry is separated by ``---`` and starts with a ``## HH:MM``
-        heading.  Content is piped via stdin to ``tee -a``.
+        heading.
         """
         d = target_date or date.today()
         path = self.daily_path(d)
@@ -78,7 +77,8 @@ class MarkdownMemory:
         timestamp_heading = f"## {now.hour:02d}:{now.minute:02d}"
         block = f"\n---\n\n{timestamp_heading}\n\n{content.rstrip()}\n"
 
-        await self._append_file(path, block)
+        async with self._write_lock:
+            await self._append_file(path, block)
         logger.debug("Appended daily entry: %s (%d chars)", path, len(content))
         return path
 
@@ -87,16 +87,8 @@ class MarkdownMemory:
     # ------------------------------------------------------------------
 
     async def read_file(self, path: Path) -> str:
-        """Read a single markdown file via ``cat``."""
-        if not path.exists():
-            return ""
-        proc = await asyncio.create_subprocess_exec(
-            "cat", str(path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        return stdout.decode(errors="replace")
+        """Read a single markdown file."""
+        return await asyncio.to_thread(self._read_text_sync, path)
 
     async def read_recent_dailies(self, days: int = 3) -> List[Tuple[str, str]]:
         """Return ``[(date_str, content), ...]`` for the last *days* days."""
@@ -117,7 +109,8 @@ class MarkdownMemory:
     async def write_summary(self, path: Path, content: str) -> Path:
         """Write (overwrite) a summary file (weekly / monthly / yearly)."""
         await self._mkdir(path.parent)
-        await self._write_file(path, content)
+        async with self._write_lock:
+            await self._write_file(path, content)
         logger.debug("Wrote summary: %s (%d chars)", path, len(content))
         return path
 
@@ -136,23 +129,35 @@ class MarkdownMemory:
         Returns the raw grep output as a string (file paths + matches).
         """
         scope = scope if scope in _VALID_SCOPES else "all"
+        context_lines = max(0, min(int(context_lines), 20))
         search_dir = str(self.root / scope) if scope != "all" else str(self.root)
 
-        # Sanitise query for use as grep pattern (escape regex metacharacters
-        # so the search is a plain-string match).
-        safe_query = re.escape(query)
+        if not query:
+            return ""
 
-        proc = await asyncio.create_subprocess_exec(
-            "grep", "-rni",
-            f"--include=*.md",
-            f"-C{context_lines}",
-            safe_query,
-            search_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "grep", "-Frni",
+                "--include=*.md",
+                f"-C{context_lines}",
+                "--",
+                query,
+                search_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode in (0, 1):
+                return stdout.decode(errors="replace")
+        except (FileNotFoundError, OSError):
+            pass
+
+        return await asyncio.to_thread(
+            self._search_keyword_sync,
+            query,
+            Path(search_dir),
+            context_lines,
         )
-        stdout, _ = await proc.communicate()
-        return stdout.decode(errors="replace")
 
     # ------------------------------------------------------------------
     # Search: date range (find + cat)
@@ -191,20 +196,10 @@ class MarkdownMemory:
     # ------------------------------------------------------------------
 
     async def list_files(self, scope: str = "all") -> List[str]:
-        """List markdown files in a scope directory via ``find``."""
+        """List markdown files in a scope directory."""
         scope = scope if scope in _VALID_SCOPES else "all"
-        search_dir = str(self.root / scope) if scope != "all" else str(self.root)
-
-        proc = await asyncio.create_subprocess_exec(
-            "find", search_dir,
-            "-name", "*.md",
-            "-type", "f",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        lines = stdout.decode(errors="replace").strip().splitlines()
-        return sorted(line.strip() for line in lines if line.strip())
+        search_dir = self.root / scope if scope != "all" else self.root
+        return await asyncio.to_thread(self._list_files_sync, search_dir)
 
     # ------------------------------------------------------------------
     # Week helpers (ISO week: Monday–Sunday)
@@ -231,30 +226,67 @@ class MarkdownMemory:
 
     @staticmethod
     async def _mkdir(path: Path) -> None:
-        await asyncio.create_subprocess_exec(
-            "mkdir", "-p", str(path),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
+        await asyncio.to_thread(path.mkdir, parents=True, exist_ok=True)
 
     @staticmethod
     async def _append_file(path: Path, content: str) -> None:
-        """Append *content* to *path* via ``tee -a`` with stdin pipe."""
-        proc = await asyncio.create_subprocess_exec(
-            "tee", "-a", str(path),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate(input=content.encode())
+        """Append *content* to *path*."""
+        await asyncio.to_thread(MarkdownMemory._append_file_sync, path, content)
 
     @staticmethod
     async def _write_file(path: Path, content: str) -> None:
-        """Overwrite *path* via ``tee`` with stdin pipe."""
-        proc = await asyncio.create_subprocess_exec(
-            "tee", str(path),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate(input=content.encode())
+        """Overwrite *path*."""
+        await asyncio.to_thread(MarkdownMemory._write_file_sync, path, content)
+
+    @staticmethod
+    def _read_text_sync(path: Path) -> str:
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            return ""
+
+    @staticmethod
+    def _append_file_sync(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(content)
+
+    @staticmethod
+    def _write_file_sync(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def _list_files_sync(search_dir: Path) -> List[str]:
+        if not search_dir.exists():
+            return []
+        return sorted(str(path) for path in search_dir.rglob("*.md") if path.is_file())
+
+    @staticmethod
+    def _search_keyword_sync(query: str, search_dir: Path, context_lines: int) -> str:
+        if not search_dir.exists():
+            return ""
+
+        needle = query.casefold()
+        blocks: list[str] = []
+        for path in sorted(search_dir.rglob("*.md")):
+            if not path.is_file():
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for index, line in enumerate(lines):
+                if needle not in line.casefold():
+                    continue
+                start = max(0, index - context_lines)
+                end = min(len(lines), index + context_lines + 1)
+                blocks.extend(
+                    f"{path}:{line_number + 1}:{lines[line_number]}"
+                    for line_number in range(start, end)
+                )
+                blocks.append("--")
+
+        if blocks and blocks[-1] == "--":
+            blocks.pop()
+        return "\n".join(blocks)

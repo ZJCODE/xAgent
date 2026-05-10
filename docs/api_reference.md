@@ -32,6 +32,7 @@ await agent.chat(
     output_type: type[BaseModel] | None = None,
     stream: bool = False,
     enable_memory: bool = True,
+    private: bool = False,
 )
 ```
 
@@ -41,13 +42,14 @@ await agent.chat(
 |---|---|---|
 | `user_message` | string | Current speaker message |
 | `user_id` | string | Current speaker identifier |
-| `history_count` | integer | Number of messages loaded from storage |
+| `history_count` | integer | Maximum recent messages eligible for context before transcript budgeting |
 | `max_iter` | integer | Maximum model-call loop count |
 | `max_concurrent_tools` | integer | Maximum parallel tool calls |
 | `image_source` | string or list | Image URL, path, or data URI |
 | `output_type` | Pydantic model type | Structured output model |
 | `stream` | boolean | Enable streaming |
 | `enable_memory` | boolean | Enable long-term memory retrieval and writes. Defaults to `true`. |
+| `private` | boolean | Use isolated in-memory message history and read-only memory access for this turn. Defaults to `false`. |
 
 ### Message Stream Behavior
 
@@ -55,6 +57,7 @@ await agent.chat(
 - `user_id` always means the current speaker
 - Speaker identifiers are included in user messages sent to the model
 - Recent context is pulled from the global recent-message window for that agent
+- Model transcript input is capped by a message and character budget. By default, at most the latest 40 natural-language messages are included even if `history_count` is larger.
 
 ### Example
 
@@ -81,10 +84,14 @@ AgentHTTPServer(
     config_dir: Optional[str] = None,
     agent: Optional[Agent] = None,
     enable_web: bool = True,
+    max_concurrent_chats: int = 4,
+    chat_queue_timeout: float = 30.0,
+    chat_timeout: float = 600.0,
 )
 ```
 
 `config_dir` points to a directory containing `config.yaml`; it defaults to `~/.xagent`.
+`max_concurrent_chats`, `chat_queue_timeout`, and `chat_timeout` provide application-level backpressure for `/chat` requests.
 
 ### Main Endpoints
 

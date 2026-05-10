@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from xagent.components.memory.markdown_memory import MarkdownMemory
 
@@ -106,6 +107,20 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         root = Path(self.memory_dir)
         for sub in ("daily", "weekly", "monthly", "yearly"):
             self.assertTrue((root / sub).is_dir())
+
+    async def test_regular_file_io_does_not_spawn_subprocesses(self):
+        d = date.today()
+        start, end = self.memory.week_range_for(d)
+        summary_path = self.memory.weekly_path(start, end)
+
+        with patch("asyncio.create_subprocess_exec", side_effect=AssertionError("subprocess used")):
+            await self.memory.append_daily("Native append", target_date=d)
+            text = await self.memory.read_file(self.memory.daily_path(d))
+            await self.memory.write_summary(summary_path, "Native summary")
+            files = await self.memory.list_files("all")
+
+        self.assertIn("Native append", text)
+        self.assertIn(str(summary_path), files)
 
 
 if __name__ == "__main__":

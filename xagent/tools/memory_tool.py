@@ -33,7 +33,7 @@ def create_write_daily_memory_tool(
     async def write_daily_memory(content: str) -> dict:
         """Append a diary entry to the daily markdown file."""
         if not is_enabled():
-            return {"status": "disabled", "message": "Memory is disabled for this turn."}
+            return {"status": "disabled", "message": "Memory writing is disabled for this turn."}
 
         content = content.strip()
         if not content:
@@ -79,7 +79,7 @@ def create_search_memory_tool(
     ) -> dict:
         """Search memory files by keyword or date. Returns matching text."""
         if not is_enabled():
-            return {"results": "", "enabled": False, "message": "Memory is disabled for this turn."}
+            return {"results": "", "enabled": False, "message": "Memory reading is disabled for this turn."}
 
         context_lines = max(0, min(int(context_lines), 10))
         results = ""
@@ -165,7 +165,7 @@ def create_generate_summary_tool(
     ) -> dict:
         """Generate a summary for the specified period."""
         if not is_enabled():
-            return {"status": "disabled", "message": "Memory is disabled for this turn."}
+            return {"status": "disabled", "message": "Memory writing is disabled for this turn."}
 
         from datetime import date as date_cls, timedelta
 

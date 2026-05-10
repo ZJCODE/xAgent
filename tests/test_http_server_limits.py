@@ -1,0 +1,134 @@
+import asyncio
+import unittest
+
+import httpx
+
+from xagent.interfaces.server import AgentHTTPServer
+
+
+class FakeMessageStorage:
+    async def clear_messages(self):
+        return None
+
+
+class BlockingAgent:
+    name = "blocking"
+    model = "test-model"
+    tools = {}
+
+    def __init__(self):
+        self.message_storage = FakeMessageStorage()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancelled = False
+
+    async def __call__(self, **kwargs):
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        return "ok"
+
+
+class SlowStreamingAgent:
+    name = "streaming"
+    model = "test-model"
+    tools = {}
+
+    def __init__(self):
+        self.message_storage = FakeMessageStorage()
+
+    async def __call__(self, stream=False, **kwargs):
+        if not stream:
+            return "ok"
+
+        async def generator():
+            yield "first"
+            await asyncio.sleep(1)
+            yield "late"
+
+        return generator()
+
+
+class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
+    async def _client(self, server):
+        transport = httpx.ASGITransport(app=server.app)
+        return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+
+    async def test_chat_rejects_when_queue_timeout_expires(self):
+        agent = BlockingAgent()
+        server = AgentHTTPServer(
+            agent=agent,
+            enable_web=False,
+            max_concurrent_chats=1,
+            chat_queue_timeout=0.05,
+            chat_timeout=1.0,
+        )
+
+        async with await self._client(server) as client:
+            first = asyncio.create_task(client.post("/chat", json={
+                "user_id": "alice",
+                "user_message": "hold the slot",
+            }))
+            await asyncio.wait_for(agent.started.wait(), timeout=1.0)
+
+            second = await client.post("/chat", json={
+                "user_id": "bob",
+                "user_message": "should be rejected",
+            })
+
+            agent.release.set()
+            first_response = await first
+
+        self.assertEqual(second.status_code, 429)
+        self.assertIn("Too many concurrent chat requests", second.json()["detail"])
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(first_response.json(), {"reply": "ok"})
+
+    async def test_chat_timeout_returns_gateway_timeout(self):
+        agent = BlockingAgent()
+        server = AgentHTTPServer(
+            agent=agent,
+            enable_web=False,
+            max_concurrent_chats=1,
+            chat_queue_timeout=1.0,
+            chat_timeout=0.05,
+        )
+
+        async with await self._client(server) as client:
+            response = await client.post("/chat", json={
+                "user_id": "alice",
+                "user_message": "timeout please",
+            })
+
+        self.assertEqual(response.status_code, 504)
+        self.assertEqual(response.json()["detail"], "Agent chat timed out.")
+        self.assertTrue(agent.cancelled)
+
+    async def test_streaming_chat_timeout_emits_error_and_done(self):
+        agent = SlowStreamingAgent()
+        server = AgentHTTPServer(
+            agent=agent,
+            enable_web=False,
+            max_concurrent_chats=1,
+            chat_queue_timeout=1.0,
+            chat_timeout=0.05,
+        )
+
+        async with await self._client(server) as client:
+            response = await client.post("/chat", json={
+                "user_id": "alice",
+                "user_message": "stream timeout",
+                "stream": True,
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"delta": "first"', response.text)
+        self.assertIn('"error": "Agent chat timed out."', response.text)
+        self.assertIn("data: [DONE]", response.text)
+
+
+if __name__ == "__main__":
+    unittest.main()

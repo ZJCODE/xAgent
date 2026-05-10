@@ -1,4 +1,5 @@
 import logging
+from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import AsyncGenerator, List, Optional, Union
 
@@ -8,7 +9,7 @@ from pydantic import BaseModel
 from ..components import MessageStorageBase, MessageStorageInMemory, MessageStorageLocal
 from ..components.memory.markdown_memory import MarkdownMemory
 from ..components.memory.helper.llm_service import JournalLLMService
-from .config import AgentConfig, ReplyType
+from .config import AgentConfig, MemoryMode, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .tools import ToolExecutor, ToolManager
 from ..tools import create_write_daily_memory_tool, create_search_memory_tool, create_generate_summary_tool
@@ -46,7 +47,10 @@ class Agent:
         self.output_type = output_type
         self.system_prompt = system_prompt or ""
         self._assistant_sender_id = f"agent:{self.name}"
-        self._memory_tools_enabled = True
+        self._memory_mode_var: ContextVar[MemoryMode] = ContextVar(
+            f"xagent_memory_mode_{id(self)}",
+            default=MemoryMode.FULL,
+        )
         self._private_handler: Optional[MessageHandler] = None
 
         workspace_path: Optional[Path] = None
@@ -85,16 +89,16 @@ class Agent:
         bound_tools.extend([
             create_write_daily_memory_tool(
                 memory=self.markdown_memory,
-                is_enabled=lambda: self._memory_tools_enabled,
+                is_enabled=self._memory_can_write,
             ),
             create_search_memory_tool(
                 memory=self.markdown_memory,
-                is_enabled=lambda: self._memory_tools_enabled,
+                is_enabled=self._memory_can_read,
             ),
             create_generate_summary_tool(
                 memory=self.markdown_memory,
                 llm_service=self.llm_service,
-                is_enabled=lambda: self._memory_tools_enabled,
+                is_enabled=self._memory_can_write,
             ),
         ])
         self.tool_manager = ToolManager(tools=bound_tools)
@@ -173,31 +177,30 @@ class Agent:
         elif not private and self._private_handler is not None:
             self._private_handler = None
         msg_handler = self._private_handler or self.message_handler
+        memory_mode = MemoryMode.from_flags(enable_memory=enable_memory, private=private)
+        memory_mode_token = self._set_memory_mode(memory_mode)
 
         try:
-            memory_read = enable_memory
-            memory_write = enable_memory and not private
-            self._memory_tools_enabled = memory_write
-
             await msg_handler.store_user_message(
                 user_message,
                 user_id,
                 image_source,
             )
 
+            effective_history_count = self._effective_history_count(history_count)
             recent_messages = await msg_handler.get_recent_messages(
-                history_count=history_count,
+                history_count=effective_history_count,
             )
             conversation_messages = msg_handler.filter_conversation_messages(recent_messages)
             messages_without_tool = msg_handler.to_model_input(conversation_messages)
 
             memory_context = ""
-            if memory_read:
+            if memory_mode.can_read:
                 memory_context = await self.memory_handler.get_recent_context()
-            if memory_write:
+            if memory_mode.can_write:
                 self.memory_handler.schedule_diary_write(messages_without_tool[-2:])
 
-            excluded = self._excluded_memory_tools(enable_memory, private)
+            excluded = self._excluded_memory_tools(memory_mode=memory_mode)
             tool_names = [n for n in self.tool_manager._tools if n not in excluded]
             tool_specs = self.tool_manager.cached_tool_specs
             if excluded and tool_specs:
@@ -266,14 +269,57 @@ class Agent:
         except Exception as exc:
             logger.exception("Agent chat error: %s", exc)
             return "Sorry, something went wrong."
+        finally:
+            self._reset_memory_mode(memory_mode_token)
 
-    def _excluded_memory_tools(self, enable_memory: bool, private: bool) -> set:
+    def _excluded_memory_tools(
+        self,
+        enable_memory: bool = True,
+        private: bool = False,
+        memory_mode: Optional[MemoryMode] = None,
+    ) -> set:
         """Return the set of memory tool names to exclude from this call."""
-        if not enable_memory:
+        mode = memory_mode or MemoryMode.from_flags(enable_memory=enable_memory, private=private)
+        if mode == MemoryMode.DISABLED:
             return self._MEMORY_TOOL_NAMES
-        if private:
+        if mode == MemoryMode.READ_ONLY:
             return self._MEMORY_WRITE_TOOL_NAMES
         return set()
+
+    def _get_memory_mode_var(self) -> ContextVar[MemoryMode]:
+        memory_mode_var = getattr(self, "_memory_mode_var", None)
+        if memory_mode_var is None:
+            memory_mode_var = ContextVar(
+                f"xagent_memory_mode_{id(self)}",
+                default=MemoryMode.FULL,
+            )
+            self._memory_mode_var = memory_mode_var
+        return memory_mode_var
+
+    def _set_memory_mode(self, memory_mode: MemoryMode) -> Token:
+        return self._get_memory_mode_var().set(memory_mode)
+
+    def _reset_memory_mode(self, token: Token) -> None:
+        self._get_memory_mode_var().reset(token)
+
+    def _current_memory_mode(self) -> MemoryMode:
+        return self._get_memory_mode_var().get()
+
+    def _memory_can_read(self) -> bool:
+        return self._current_memory_mode().can_read
+
+    def _memory_can_write(self) -> bool:
+        return self._current_memory_mode().can_write
+
+    @staticmethod
+    def _effective_history_count(history_count: Optional[int]) -> int:
+        requested = history_count or AgentConfig.DEFAULT_HISTORY_COUNT
+        try:
+            requested_count = int(requested)
+        except (TypeError, ValueError):
+            requested_count = AgentConfig.DEFAULT_HISTORY_COUNT
+        capped = min(requested_count, AgentConfig.MAX_TRANSCRIPT_MESSAGES)
+        return max(1, capped)
 
     @staticmethod
     def _tool_spec_name(tool_spec: dict) -> str:

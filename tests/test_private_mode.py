@@ -4,7 +4,7 @@ import unittest
 
 from xagent.components.message.memory_messages import MessageStorageInMemory
 from xagent.core.agent import Agent
-from xagent.core.config import ReplyType
+from xagent.core.config import MemoryMode, ReplyType
 from xagent.core.handlers.message import MessageHandler
 from xagent.schemas import Message, RoleType
 
@@ -127,7 +127,6 @@ def _build_agent(storage, model_client, memory_handler=None, tool_executor=None,
     agent.name = "test"
     agent.system_prompt = ""
     agent._assistant_sender_id = "agent:test"
-    agent._memory_tools_enabled = True
     agent._private_handler = None
     agent.tool_manager = FakeToolManager(tools=tools)
     agent.model_client = model_client
@@ -139,6 +138,22 @@ def _build_agent(storage, model_client, memory_handler=None, tool_executor=None,
 
 
 class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_memory_mode_read_only_allows_read_not_write(self):
+        main_storage = MessageStorageInMemory()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "reply"),
+        ])
+        agent = _build_agent(storage=main_storage, model_client=model_client)
+
+        token = agent._set_memory_mode(MemoryMode.READ_ONLY)
+        try:
+            self.assertTrue(agent._memory_can_read())
+            self.assertFalse(agent._memory_can_write())
+        finally:
+            agent._reset_memory_mode(token)
+
+        self.assertEqual(agent._current_memory_mode(), MemoryMode.FULL)
+
     async def test_private_mode_does_not_write_to_main_storage(self):
         """Messages in private mode should NOT appear in the main storage."""
         main_storage = MessageStorageInMemory()
@@ -338,6 +353,52 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("custom_tool", spec_names)
         self.assertNotIn("write_daily_memory", spec_names)
         self.assertNotIn("generate_memory_summary", spec_names)
+
+    async def test_memory_disabled_filters_all_memory_tools(self):
+        """Disabling memory should remove read and write memory tools."""
+        main_storage = MessageStorageInMemory()
+        tools = {
+            "write_daily_memory": lambda: None,
+            "search_memory": lambda: None,
+            "generate_memory_summary": lambda: None,
+            "custom_tool": lambda: None,
+        }
+        tool_specs = [
+            {"type": "function", "function": {"name": "write_daily_memory"}},
+            {"type": "function", "function": {"name": "search_memory"}},
+            {"type": "function", "function": {"name": "generate_memory_summary"}},
+            {"type": "function", "function": {"name": "custom_tool"}},
+        ]
+
+        class SpecCapturingModelClient(CapturingModelClient):
+            def __init__(self, responses):
+                super().__init__(responses)
+                self.received_tool_specs = None
+
+            async def call(self, messages, tool_specs, **kwargs):
+                self.received_tool_specs = tool_specs
+                return self.responses.pop(0)
+
+        model_client = SpecCapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "reply"),
+        ])
+        agent = _build_agent(
+            storage=main_storage,
+            model_client=model_client,
+            tools=tools,
+        )
+        agent.tool_manager.cached_tool_specs = tool_specs
+
+        await Agent.chat(
+            agent,
+            user_message="hi",
+            user_id="alice",
+            private=False,
+            enable_memory=False,
+        )
+
+        spec_names = {s["function"]["name"] for s in model_client.received_tool_specs}
+        self.assertEqual(spec_names, {"custom_tool"})
 
 
 if __name__ == "__main__":
