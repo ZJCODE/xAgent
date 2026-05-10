@@ -20,15 +20,21 @@ class ChatToolCall:
     call_id: str
     name: str
     arguments: str
+    reasoning_content: Optional[str] = None
     type: str = "function"
 
     @classmethod
-    def from_raw(cls, raw_tool_call: Any) -> "ChatToolCall":
+    def from_raw(
+        cls,
+        raw_tool_call: Any,
+        reasoning_content: Optional[str] = None,
+    ) -> "ChatToolCall":
         function = ModelClient._field(raw_tool_call, "function") or {}
         return cls(
             call_id=ModelClient._field(raw_tool_call, "id") or "",
             name=ModelClient._field(function, "name") or "",
             arguments=ModelClient._field(function, "arguments") or "{}",
+            reasoning_content=reasoning_content,
             type=ModelClient._field(raw_tool_call, "type") or "function",
         )
 
@@ -191,11 +197,15 @@ class ModelClient:
     ) -> tuple[ReplyType, object]:
         """Handle a streaming model response."""
         prefix_chunks = []
+        reasoning_parts: list[str] = []
         tool_call_parts: dict[int, dict] = {}
         stream_kind = None
 
         async for chunk in response:
             prefix_chunks.append(chunk)
+            reasoning_delta = self._extract_stream_reasoning_delta(chunk)
+            if reasoning_delta:
+                reasoning_parts.append(reasoning_delta)
             self._merge_stream_tool_calls(tool_call_parts, chunk)
             if self._chunk_has_tool_calls(chunk):
                 stream_kind = ReplyType.TOOL_CALL
@@ -229,9 +239,13 @@ class ModelClient:
 
         if stream_kind == ReplyType.TOOL_CALL:
             async for chunk in response:
+                reasoning_delta = self._extract_stream_reasoning_delta(chunk)
+                if reasoning_delta:
+                    reasoning_parts.append(reasoning_delta)
                 self._merge_stream_tool_calls(tool_call_parts, chunk)
 
-            tool_calls = self._finalize_stream_tool_calls(tool_call_parts)
+            reasoning_content = "".join(reasoning_parts) if reasoning_parts else None
+            tool_calls = self._finalize_stream_tool_calls(tool_call_parts, reasoning_content)
             if tool_calls:
                 return ReplyType.TOOL_CALL, tool_calls
 
@@ -251,7 +265,13 @@ class ModelClient:
     def _field(obj: Any, name: str, default: Any = None) -> Any:
         if isinstance(obj, dict):
             return obj.get(name, default)
-        return getattr(obj, name, default)
+        value = getattr(obj, name, default)
+        if value is not default:
+            return value
+        model_extra = getattr(obj, "model_extra", None)
+        if isinstance(model_extra, dict) and name in model_extra:
+            return model_extra.get(name, default)
+        return value
 
     @staticmethod
     def _first_choice(response) -> Any:
@@ -266,8 +286,9 @@ class ModelClient:
             return []
         message = ModelClient._field(choice, "message")
         raw_tool_calls = ModelClient._field(message, "tool_calls") or []
+        reasoning_content = ModelClient._field(message, "reasoning_content")
         return [
-            ChatToolCall.from_raw(tool_call)
+            ChatToolCall.from_raw(tool_call, reasoning_content=reasoning_content)
             for tool_call in raw_tool_calls
             if ModelClient._field(tool_call, "type") in (None, "function")
         ]
@@ -282,6 +303,16 @@ class ModelClient:
         for choice in ModelClient._chunk_choices(chunk):
             delta = ModelClient._field(choice, "delta")
             content = ModelClient._field(delta, "content")
+            if isinstance(content, str) and content:
+                return content
+        return ""
+
+    @staticmethod
+    def _extract_stream_reasoning_delta(chunk) -> str:
+        """Return a DeepSeek thinking-mode reasoning delta when present."""
+        for choice in ModelClient._chunk_choices(chunk):
+            delta = ModelClient._field(choice, "delta")
+            content = ModelClient._field(delta, "reasoning_content")
             if isinstance(content, str) and content:
                 return content
         return ""
@@ -349,13 +380,16 @@ class ModelClient:
                     part["function"]["arguments"] += arguments
 
     @staticmethod
-    def _finalize_stream_tool_calls(tool_call_parts: dict[int, dict]) -> list[ChatToolCall]:
+    def _finalize_stream_tool_calls(
+        tool_call_parts: dict[int, dict],
+        reasoning_content: Optional[str] = None,
+    ) -> list[ChatToolCall]:
         tool_calls = []
         for index in sorted(tool_call_parts):
             part = tool_call_parts[index]
             if not part["id"]:
                 part["id"] = f"call_{index}"
-            tool_call = ChatToolCall.from_raw(part)
+            tool_call = ChatToolCall.from_raw(part, reasoning_content=reasoning_content)
             if tool_call.name:
                 tool_calls.append(tool_call)
         return tool_calls

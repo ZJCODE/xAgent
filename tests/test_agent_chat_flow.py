@@ -123,8 +123,12 @@ class AsyncChunkStream:
             raise StopAsyncIteration
 
 
-def _chat_response(content=None, tool_calls=None):
-    message = SimpleNamespace(content=content, tool_calls=tool_calls or [])
+def _chat_response(content=None, tool_calls=None, reasoning_content=None):
+    message = SimpleNamespace(
+        content=content,
+        tool_calls=tool_calls or [],
+        reasoning_content=reasoning_content,
+    )
     return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
 
 
@@ -145,6 +149,22 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(reply_type, ReplyType.TOOL_CALL)
         self.assertEqual(payload, [ChatToolCall(call_id="call-1", name="lookup", arguments="{}")])
+
+    def test_non_stream_tool_calls_preserve_reasoning_content(self):
+        raw_tool_call = SimpleNamespace(
+            id="call-1",
+            type="function",
+            function=SimpleNamespace(name="lookup", arguments="{}"),
+        )
+        response = _chat_response(
+            tool_calls=[raw_tool_call],
+            reasoning_content="I need to inspect local state before answering.",
+        )
+
+        reply_type, payload = ModelClient._handle_non_stream(response)
+
+        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
+        self.assertEqual(payload[0].reasoning_content, "I need to inspect local state before answering.")
 
     async def test_call_uses_chat_completions_with_system_message(self):
         client = FakeOpenAIClient([_chat_response(content="ok")])
@@ -209,12 +229,17 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stream_tool_calls_accumulates_split_arguments(self):
         chunks = [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
+                reasoning_content="I should call ",
+                tool_calls=None,
+                content=None,
+            ))]),
             SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(tool_calls=[
                 SimpleNamespace(index=0, id="call-1", type="function", function=SimpleNamespace(name="lookup", arguments='{"value"'))
-            ], content=None))]),
+            ], content=None, reasoning_content="the lookup tool."))]),
             SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(tool_calls=[
                 SimpleNamespace(index=0, id=None, type=None, function=SimpleNamespace(name=None, arguments=': "ok"}'))
-            ], content=None))]),
+            ], content=None, reasoning_content=None))]),
         ]
         client = FakeOpenAIClient([AsyncChunkStream(chunks)])
         model = ModelClient(client=client, model="test-model")
@@ -226,7 +251,15 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload, [ChatToolCall(call_id="call-1", name="lookup", arguments='{"value": "ok"}')])
+        self.assertEqual(
+            payload,
+            [ChatToolCall(
+                call_id="call-1",
+                name="lookup",
+                arguments='{"value": "ok"}',
+                reasoning_content="I should call the lookup tool.",
+            )],
+        )
 
 
 class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
@@ -371,6 +404,42 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(messages[1]["tool_calls"]), 2)
         self.assertEqual(messages[2], {"role": "tool", "tool_call_id": "call-1", "content": "one"})
         self.assertEqual(messages[3], {"role": "tool", "tool_call_id": "call-2", "content": "two"})
+
+    async def test_handle_tool_calls_appends_reasoning_content_when_present(self):
+        async def lookup() -> str:
+            return "ok"
+
+        storage = InMemoryMessageStorage()
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"lookup": lookup}),
+            message_storage=storage,
+            client=None,
+        )
+        messages = [{"role": "user", "content": "run tool"}]
+
+        result = await executor.handle_tool_calls(
+            [FakeToolCall(name="lookup", call_id="call-1")],
+            messages,
+            max_concurrent_tools=1,
+        )
+
+        self.assertIsNone(result)
+        self.assertNotIn("reasoning_content", messages[1])
+
+        messages = [{"role": "user", "content": "run tool"}]
+        result = await executor.handle_tool_calls(
+            [ChatToolCall(
+                call_id="call-1",
+                name="lookup",
+                arguments="{}",
+                reasoning_content="I need this tool result before answering.",
+            )],
+            messages,
+            max_concurrent_tools=1,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(messages[1]["reasoning_content"], "I need this tool result before answering.")
 
 
 if __name__ == "__main__":

@@ -46,11 +46,15 @@ class ToolExecutor:
         if not function_calls:
             return None
 
-        input_messages.append({
+        assistant_message = {
             "role": "assistant",
             "content": None,
             "tool_calls": [self._to_chat_tool_call(tc) for tc in function_calls],
-        })
+        }
+        reasoning_content = self._tool_reasoning_content(function_calls[0])
+        if reasoning_content is not None:
+            assistant_message["reasoning_content"] = reasoning_content
+        input_messages.append(assistant_message)
 
         semaphore = asyncio.Semaphore(max_concurrent_tools)
 
@@ -180,6 +184,10 @@ class ToolExecutor:
             return arguments
         function = cls._field(tool_call, "function") or {}
         return cls._field(function, "arguments") or "{}"
+
+    @classmethod
+    def _tool_reasoning_content(cls, tool_call) -> Optional[str]:
+        return cls._field(tool_call, "reasoning_content")
 
     @classmethod
     def _to_chat_tool_call(cls, tool_call) -> dict:
