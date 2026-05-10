@@ -1,6 +1,6 @@
 import unittest
 
-from xagent.components.memory.helper.llm_service import JournalLLMService
+from xagent.components.memory import JournalLLMService
 
 
 class JournalLLMServicePromptTests(unittest.TestCase):

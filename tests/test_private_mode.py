@@ -1,8 +1,8 @@
-"""Tests for MessageStorageInMemory and Agent private mode."""
+"""Tests for MessageStoragePrivateTemp and Agent private mode."""
 
 import unittest
 
-from xagent.components.message.memory_messages import MessageStorageInMemory
+from xagent.components.message import MessageStoragePrivateTemp
 from xagent.core.agent import Agent
 from xagent.core.config import MemoryMode, ReplyType
 from xagent.core.handlers.message import MessageHandler
@@ -44,12 +44,12 @@ class FakeToolExecutor:
         return None
 
 
-# ── MessageStorageInMemory tests ──
+# ── MessageStoragePrivateTemp tests ──
 
 
-class MessageStorageInMemoryTests(unittest.IsolatedAsyncioTestCase):
+class MessageStoragePrivateTempTests(unittest.IsolatedAsyncioTestCase):
     async def test_add_and_get_messages(self):
-        storage = MessageStorageInMemory()
+        storage = MessageStoragePrivateTemp()
         msg = Message.create("hello", role=RoleType.USER, sender_id="alice")
         await storage.add_messages(msg)
         result = await storage.get_messages(10)
@@ -57,7 +57,7 @@ class MessageStorageInMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0].content, "hello")
 
     async def test_add_list_of_messages(self):
-        storage = MessageStorageInMemory()
+        storage = MessageStoragePrivateTemp()
         msgs = [
             Message.create("one", role=RoleType.USER, sender_id="alice"),
             Message.create("two", role=RoleType.ASSISTANT, sender_id="agent"),
@@ -67,7 +67,7 @@ class MessageStorageInMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result), 2)
 
     async def test_get_messages_respects_count(self):
-        storage = MessageStorageInMemory()
+        storage = MessageStoragePrivateTemp()
         for i in range(5):
             await storage.add_messages(
                 Message.create(f"msg-{i}", role=RoleType.USER, sender_id="alice")
@@ -78,7 +78,7 @@ class MessageStorageInMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[1].content, "msg-4")
 
     async def test_get_messages_with_offset(self):
-        storage = MessageStorageInMemory()
+        storage = MessageStoragePrivateTemp()
         for i in range(5):
             await storage.add_messages(
                 Message.create(f"msg-{i}", role=RoleType.USER, sender_id="alice")
@@ -89,7 +89,7 @@ class MessageStorageInMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[1].content, "msg-3")
 
     async def test_clear_messages(self):
-        storage = MessageStorageInMemory()
+        storage = MessageStoragePrivateTemp()
         await storage.add_messages(
             Message.create("hello", role=RoleType.USER, sender_id="alice")
         )
@@ -97,7 +97,7 @@ class MessageStorageInMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await storage.get_message_count(), 0)
 
     async def test_pop_message(self):
-        storage = MessageStorageInMemory()
+        storage = MessageStoragePrivateTemp()
         await storage.add_messages(
             Message.create("hello", role=RoleType.USER, sender_id="alice")
         )
@@ -106,16 +106,16 @@ class MessageStorageInMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await storage.get_message_count(), 0)
 
     async def test_pop_empty_returns_none(self):
-        storage = MessageStorageInMemory()
+        storage = MessageStoragePrivateTemp()
         self.assertIsNone(await storage.pop_message())
 
-    async def test_get_messages_zero_count(self):
-        storage = MessageStorageInMemory()
+    async def test_get_messages_zero_count_raises(self):
+        storage = MessageStoragePrivateTemp()
         await storage.add_messages(
             Message.create("hello", role=RoleType.USER, sender_id="alice")
         )
-        result = await storage.get_messages(0)
-        self.assertEqual(result, [])
+        with self.assertRaises(ValueError):
+            await storage.get_messages(0)
 
 
 # ── Agent private mode tests ──
@@ -138,7 +138,7 @@ def _build_agent(storage, model_client, memory_handler=None, tool_executor=None,
 
 class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
     async def test_memory_mode_read_only_allows_read_not_write(self):
-        main_storage = MessageStorageInMemory()
+        main_storage = MessageStoragePrivateTemp()
         model_client = CapturingModelClient([
             (ReplyType.SIMPLE_REPLY, "reply"),
         ])
@@ -155,7 +155,7 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_mode_does_not_write_to_main_storage(self):
         """Messages in private mode should NOT appear in the main storage."""
-        main_storage = MessageStorageInMemory()
+        main_storage = MessageStoragePrivateTemp()
         model_client = CapturingModelClient([
             (ReplyType.SIMPLE_REPLY, "private reply"),
         ])
@@ -177,7 +177,7 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_mode_accumulates_across_calls(self):
         """Multiple private calls should share the same in-memory storage."""
-        main_storage = MessageStorageInMemory()
+        main_storage = MessageStoragePrivateTemp()
         model_client = CapturingModelClient([
             (ReplyType.SIMPLE_REPLY, "reply-1"),
             (ReplyType.SIMPLE_REPLY, "reply-2"),
@@ -197,7 +197,7 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_switching_from_private_to_normal_discards_private(self):
         """Switching back to normal mode should discard private messages."""
-        main_storage = MessageStorageInMemory()
+        main_storage = MessageStoragePrivateTemp()
         model_client = CapturingModelClient([
             (ReplyType.SIMPLE_REPLY, "private reply"),
             (ReplyType.SIMPLE_REPLY, "normal reply"),
@@ -216,7 +216,7 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_mode_suppresses_diary_write(self):
         """Private mode should not schedule diary writes."""
-        main_storage = MessageStorageInMemory()
+        main_storage = MessageStoragePrivateTemp()
         memory_handler = FakeMemoryHandler()
         model_client = CapturingModelClient([
             (ReplyType.SIMPLE_REPLY, "reply"),
@@ -250,7 +250,7 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
                 self.get_recent_context_called = True
                 return "some diary context"
 
-        main_storage = MessageStorageInMemory()
+        main_storage = MessageStoragePrivateTemp()
         memory_handler = TrackingMemoryHandler()
         model_client = CapturingModelClient([
             (ReplyType.SIMPLE_REPLY, "reply"),
@@ -283,7 +283,7 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
                 self.get_recent_context_called = True
                 return "context"
 
-        main_storage = MessageStorageInMemory()
+        main_storage = MessageStoragePrivateTemp()
         memory_handler = TrackingMemoryHandler()
         model_client = CapturingModelClient([
             (ReplyType.SIMPLE_REPLY, "reply"),
@@ -306,7 +306,7 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_mode_filters_write_tools_keeps_search(self):
         """Private mode should remove write memory tools but keep search_memory."""
-        main_storage = MessageStorageInMemory()
+        main_storage = MessageStoragePrivateTemp()
         tools = {
             "write_daily_memory": lambda: None,
             "search_memory": lambda: None,
@@ -355,7 +355,7 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_memory_disabled_filters_all_memory_tools(self):
         """Disabling memory should remove read and write memory tools."""
-        main_storage = MessageStorageInMemory()
+        main_storage = MessageStoragePrivateTemp()
         tools = {
             "write_daily_memory": lambda: None,
             "search_memory": lambda: None,

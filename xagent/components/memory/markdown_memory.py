@@ -1,27 +1,27 @@
-"""Markdown-based memory storage using plain files."""
+"""Markdown-file store for long-term diary memory."""
 
 import asyncio
 import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
-# Allowed scope values for search/list
-_VALID_SCOPES = {"daily", "weekly", "monthly", "yearly", "all"}
+MemoryScope = Literal["daily", "weekly", "monthly", "yearly", "all"]
+
+_VALID_SCOPES: set[str] = {"daily", "weekly", "monthly", "yearly", "all"}
 
 
 class MarkdownMemory:
-    """File-based memory organized as daily/weekly/monthly/yearly markdown files.
+    """Store diary memory as daily, weekly, monthly, and yearly markdown files.
 
-    Common file reads, writes, and directory scans use ``pathlib`` through
-    ``asyncio.to_thread``. Keyword search keeps ``grep`` for efficient recursive
-    search and falls back to a Python scanner when unavailable.
+    This class owns file layout and I/O only. Scheduling writes, generating
+    summaries, and deciding what should be remembered live in higher layers.
     """
 
     def __init__(self, memory_dir: str) -> None:
-        self.root = Path(memory_dir)
+        self.root = Path(memory_dir).expanduser()
         self._write_lock = asyncio.Lock()
         self._ensure_dirs_sync()
 
@@ -29,11 +29,11 @@ class MarkdownMemory:
     # Path helpers
     # ------------------------------------------------------------------
 
-    def _daily_dir(self, d: date) -> Path:
-        return self.root / "daily" / str(d.year) / f"{d.year}-{d.month:02d}"
+    def _daily_dir(self, target_date: date) -> Path:
+        return self.root / "daily" / str(target_date.year) / f"{target_date.year}-{target_date.month:02d}"
 
-    def daily_path(self, d: date) -> Path:
-        return self._daily_dir(d) / f"{d.isoformat()}.md"
+    def daily_path(self, target_date: date) -> Path:
+        return self._daily_dir(target_date) / f"{target_date.isoformat()}.md"
 
     def weekly_path(self, week_start: date, week_end: date) -> Path:
         return (
@@ -67,8 +67,8 @@ class MarkdownMemory:
         Each entry is separated by ``---`` and starts with a ``## HH:MM``
         heading.
         """
-        d = target_date or date.today()
-        path = self.daily_path(d)
+        entry_date = target_date or date.today()
+        path = self.daily_path(entry_date)
 
         # Ensure parent directory exists
         await self._mkdir(path.parent)
@@ -95,11 +95,11 @@ class MarkdownMemory:
         today = date.today()
         results: List[Tuple[str, str]] = []
         for offset in range(days):
-            d = today - timedelta(days=offset)
-            path = self.daily_path(d)
+            entry_date = today - timedelta(days=offset)
+            path = self.daily_path(entry_date)
             text = await self.read_file(path)
             if text.strip():
-                results.append((d.isoformat(), text))
+                results.append((entry_date.isoformat(), text))
         return results
 
     # ------------------------------------------------------------------
@@ -121,16 +121,16 @@ class MarkdownMemory:
     async def search_keyword(
         self,
         query: str,
-        scope: str = "all",
+        scope: MemoryScope | str = "all",
         context_lines: int = 3,
     ) -> str:
         """Search markdown files via ``grep -rni`` with context lines.
 
         Returns the raw grep output as a string (file paths + matches).
         """
-        scope = scope if scope in _VALID_SCOPES else "all"
+        scope = self._normalize_scope(scope)
         context_lines = max(0, min(int(context_lines), 20))
-        search_dir = str(self.root / scope) if scope != "all" else str(self.root)
+        search_dir = self._scope_root(scope)
 
         if not query:
             return ""
@@ -142,7 +142,7 @@ class MarkdownMemory:
                 f"-C{context_lines}",
                 "--",
                 query,
-                search_dir,
+                str(search_dir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -155,7 +155,7 @@ class MarkdownMemory:
         return await asyncio.to_thread(
             self._search_keyword_sync,
             query,
-            Path(search_dir),
+            search_dir,
             context_lines,
         )
 
@@ -167,7 +167,6 @@ class MarkdownMemory:
         self,
         start: str,
         end: Optional[str] = None,
-        scope: str = "daily",
     ) -> str:
         """Read all daily files within a date range and concatenate them.
 
@@ -195,10 +194,10 @@ class MarkdownMemory:
     # List files
     # ------------------------------------------------------------------
 
-    async def list_files(self, scope: str = "all") -> List[str]:
+    async def list_files(self, scope: MemoryScope | str = "all") -> List[str]:
         """List markdown files in a scope directory."""
-        scope = scope if scope in _VALID_SCOPES else "all"
-        search_dir = self.root / scope if scope != "all" else self.root
+        scope = self._normalize_scope(scope)
+        search_dir = self._scope_root(scope)
         return await asyncio.to_thread(self._list_files_sync, search_dir)
 
     # ------------------------------------------------------------------
@@ -214,11 +213,25 @@ class MarkdownMemory:
         return monday, sunday
 
     @staticmethod
-    def week_range_for(d: date) -> Tuple[date, date]:
-        """Return (monday, sunday) of the ISO week containing *d*."""
-        monday = d - timedelta(days=d.weekday())
+    def week_range_for(target_date: date) -> Tuple[date, date]:
+        """Return (monday, sunday) of the ISO week containing *target_date*."""
+        monday = target_date - timedelta(days=target_date.weekday())
         sunday = monday + timedelta(days=6)
         return monday, sunday
+
+    # ------------------------------------------------------------------
+    # Scope helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_scope(scope: MemoryScope | str) -> MemoryScope:
+        if scope in _VALID_SCOPES:
+            return cast(MemoryScope, scope)
+        return "all"
+
+    def _scope_root(self, scope: MemoryScope | str) -> Path:
+        normalized_scope = self._normalize_scope(scope)
+        return self.root if normalized_scope == "all" else self.root / normalized_scope
 
     # ------------------------------------------------------------------
     # Internal I/O primitives (stdin-pipe based for safety)

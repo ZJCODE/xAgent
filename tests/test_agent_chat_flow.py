@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from pydantic import BaseModel
 
-from xagent.components.message.base_messages import MessageStorageBase
+from xagent.components.message import MessageStorageBase
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient

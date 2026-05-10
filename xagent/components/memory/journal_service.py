@@ -1,24 +1,26 @@
-"""Simplified LLM service for diary entry formatting and summary generation."""
+"""LLM-backed formatting service for diary memory."""
 
-import logging
+from __future__ import annotations
+
 import json
+import logging
 from datetime import datetime
 from typing import List, Optional
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from ....schemas.memory import DiaryEntry, SummaryOutput
+from ...schemas.memory import DiaryEntry, SummaryOutput
 
 
 class JournalLLMService:
-    """LLM service for formatting diary entries and generating periodic summaries."""
+    """Format conversation snippets and summaries for the diary memory store."""
 
     def __init__(
         self,
         client: Optional[AsyncOpenAI] = None,
         model: str = "gpt-5.4-mini",
-    ):
+    ) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.openai_client = client or AsyncOpenAI()
         self.model = model
@@ -28,10 +30,7 @@ class JournalLLMService:
         messages: List[dict],
         journal_date: str,
     ) -> str:
-        """Format conversation messages into a diary-style prose entry.
-
-        Returns plain text suitable for appending to the daily markdown file.
-        """
+        """Format conversation messages into diary prose for one day."""
         if not messages:
             return ""
 
@@ -46,8 +45,8 @@ class JournalLLMService:
                 user_prompt=user_prompt,
             )
             return self._normalize_content(parsed.content)
-        except Exception as exc:
-            self.logger.error("Error formatting diary entry: %s", exc)
+        except Exception as exception:
+            self.logger.error("Error formatting diary entry: %s", exception)
             return self._fallback_entry(messages)
 
     async def generate_summary(
@@ -56,13 +55,7 @@ class JournalLLMService:
         period_type: str,
         period_label: str,
     ) -> str:
-        """Generate a periodic summary (weekly/monthly/yearly) from source material.
-
-        Args:
-            source_content: The raw diary/summary text to summarize.
-            period_type: One of ``weekly``, ``monthly``, ``yearly``.
-            period_label: Human-readable label (e.g. "2026-03-16 to 2026-03-22").
-        """
+        """Generate a weekly, monthly, or yearly diary summary."""
         if not source_content.strip():
             return ""
 
@@ -76,13 +69,9 @@ class JournalLLMService:
                 user_prompt=user_prompt,
             )
             return self._normalize_content(parsed.content)
-        except Exception as exc:
-            self.logger.error("Error generating %s summary: %s", period_type, exc)
+        except Exception as exception:
+            self.logger.error("Error generating %s summary: %s", period_type, exception)
             return ""
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def build_diary_system_prompt(journal_date: str, current_date: str | None = None) -> str:
@@ -140,6 +129,12 @@ Requirements:
 - Keep it concise but complete. Aim for 300-800 characters for weekly, 500-1200 for monthly, 800-2000 for yearly.
 - Return JSON only, shaped as {{"content": "period summary"}}."""
 
+    @staticmethod
+    def build_summary_user_prompt(period_type: str, period_label: str, source_content: str) -> str:
+        return f"""Generate a {period_type} summary for {period_label} based on this source material:
+
+{source_content}"""
+
     async def _call_structured(
         self,
         output_type: type[BaseModel],
@@ -169,27 +164,18 @@ Requirements:
         return output_type.model_validate_json(content)
 
     @staticmethod
-    def build_summary_user_prompt(period_type: str, period_label: str, source_content: str) -> str:
-        return f"""Generate a {period_type} summary for {period_label} based on this source material:
-
-{source_content}"""
-
-    @staticmethod
     def _format_transcript(messages: List[dict]) -> str:
-        """Format messages into a simple transcript string."""
         lines: List[str] = []
-        for msg in messages:
-            role = msg.get("role", "unknown")
-            sender = msg.get("sender_id", role)
-            content = str(msg.get("content", "")).strip()
-            if not content:
-                continue
-            lines.append(f"[{sender}]: {content}")
+        for message in messages:
+            role = message.get("role", "unknown")
+            sender = message.get("sender_id", role)
+            content = str(message.get("content", "")).strip()
+            if content:
+                lines.append(f"[{sender}]: {content}")
         return "\n".join(lines)
 
     @staticmethod
     def _normalize_content(content: str) -> str:
-        """Collapse excessive blank lines and strip edges."""
         lines: List[str] = []
         previous_blank = False
         for raw_line in str(content or "").splitlines():
@@ -209,11 +195,10 @@ Requirements:
 
     @staticmethod
     def _fallback_entry(messages: List[dict]) -> str:
-        """Simple fallback when the LLM call fails."""
         parts: List[str] = []
-        for msg in messages:
-            content = str(msg.get("content", "")).strip()
-            sender = msg.get("sender_id", msg.get("role", ""))
+        for message in messages:
+            content = str(message.get("content", "")).strip()
+            sender = message.get("sender_id", message.get("role", ""))
             if content:
                 parts.append(f"{sender}: {content}")
         return "\n".join(parts)

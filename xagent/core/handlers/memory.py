@@ -9,8 +9,7 @@ from datetime import date, timedelta
 from typing import TYPE_CHECKING, List
 
 if TYPE_CHECKING:
-    from ...components.memory.markdown_memory import MarkdownMemory
-    from ...components.memory.helper.llm_service import JournalLLMService
+    from ...components.memory import JournalLLMService, MarkdownMemory
 
 logger = logging.getLogger(__name__)
 

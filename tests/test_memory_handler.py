@@ -7,7 +7,7 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import AsyncMock, patch
 
-from xagent.components.memory.markdown_memory import MarkdownMemory
+from xagent.components.memory import MarkdownMemory
 from xagent.core.handlers.memory import MemoryHandler
 
 

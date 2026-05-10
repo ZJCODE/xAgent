@@ -6,9 +6,13 @@ from typing import AsyncGenerator, List, Optional, Union
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from ..components import MessageStorageBase, MessageStorageInMemory, MessageStorageLocal
-from ..components.memory.markdown_memory import MarkdownMemory
-from ..components.memory.helper.llm_service import JournalLLMService
+from ..components import (
+    MarkdownMemory,
+    MessageStorageBase,
+    MessageStorageLocal,
+    MessageStoragePrivateTemp,
+)
+from ..components.memory import JournalLLMService
 from .config import AgentConfig, MemoryMode, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .tools import ToolExecutor, ToolManager
@@ -151,8 +155,8 @@ class Agent:
         """Generate a reply from the agent given a user message.
 
         Args:
-            private: When True, messages are stored in an isolated in-memory
-                buffer (discarded on switch back to normal mode). Memory
+            private: When True, messages are stored in an isolated temporary
+                private buffer (discarded on switch back to normal mode). Memory
                 *reads* are preserved but all memory *writes* are suppressed.
         """
         if output_type is None:
@@ -163,7 +167,7 @@ class Agent:
         # Private-mode: lazily create or discard the ephemeral handler
         if private and self._private_handler is None:
             self._private_handler = MessageHandler(
-                message_storage=MessageStorageInMemory(),
+                message_storage=MessageStoragePrivateTemp(),
                 system_prompt=self.system_prompt,
             )
         elif not private and self._private_handler is not None:

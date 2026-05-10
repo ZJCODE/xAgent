@@ -74,7 +74,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("chat", output)
         self.assertIn("server", output)
 
-    def test_legacy_flags_are_not_supported(self):
+    def test_root_flags_are_not_supported(self):
         with self.assertRaises(SystemExit):
             build_parser().parse_args(["--init"])
         with self.assertRaises(SystemExit):

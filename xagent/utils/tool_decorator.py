@@ -2,51 +2,20 @@
 import asyncio
 import functools
 import inspect
-import sys
+import types
 import enum
 from typing import Any, Callable, Dict, Literal, Optional, Union, get_args, get_origin, get_type_hints
 
 
 def _create_async_wrapper(func: Callable) -> Callable:
-    """
-    Create an async wrapper for a function using first principles approach.
-    
-    Key principles:
-    1. Preserve function identity and metadata
-    2. Efficient async/sync detection
-    3. Robust error handling
-    4. Optimal execution strategy based on context
-    """
-    # If already async, return as-is (zero-cost abstraction)
+    """Return an async callable while preserving function metadata."""
     if asyncio.iscoroutinefunction(func):
         return func
-    
-    # Cache the check for asyncio.to_thread availability (avoid repeated hasattr calls)
-    _has_to_thread = hasattr(asyncio, "to_thread")
-    
+
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
-        """Async wrapper that handles both sync and async execution contexts."""
-        try:
-            # Check if we're in an async context
-            loop = asyncio.get_running_loop()
-            
-            # Execute in thread pool to avoid blocking the event loop
-            if _has_to_thread:
-                # asyncio.to_thread is more efficient and preferred (Python 3.9+)
-                return await asyncio.to_thread(func, *args, **kwargs)
-            else:
-                # Fallback to run_in_executor for older Python versions
-                return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
-                
-        except RuntimeError:
-            # No event loop running - execute synchronously
-            # This handles cases where the function is called outside async context
-            return func(*args, **kwargs)
-        except Exception as e:
-            # Preserve original exception context and stack trace
-            raise e from None
-    
+        return await asyncio.to_thread(func, *args, **kwargs)
+
     return async_wrapper
 
 
@@ -83,16 +52,12 @@ def python_type_to_openai_type(py_type: Any) -> Dict[str, Any]:
         if non_none_args:
             return python_type_to_openai_type(non_none_args[0])
 
-    # Python 3.10+ union syntax (X | Y) - check for types.UnionType
-    if sys.version_info >= (3, 10):
-        import types
-        if isinstance(py_type, types.UnionType):
-            union_args = getattr(py_type, "__args__", ())
-            if union_args:
-                # Handle union by taking the first non-None type
-                non_none_args = [a for a in union_args if a is not type(None)]
-                if non_none_args:
-                    return python_type_to_openai_type(non_none_args[0])
+    if isinstance(py_type, types.UnionType):
+        union_args = getattr(py_type, "__args__", ())
+        if union_args:
+            non_none_args = [a for a in union_args if a is not type(None)]
+            if non_none_args:
+                return python_type_to_openai_type(non_none_args[0])
 
     # Sequence-like -> array
     if origin in (list, set, tuple):

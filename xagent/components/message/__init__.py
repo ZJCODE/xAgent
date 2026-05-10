@@ -1,9 +1,12 @@
-from .base_messages import MessageStorageBase
-from .local_messages import MessageStorageLocal
-from .memory_messages import MessageStorageInMemory
+"""Short-term conversation message storage backends."""
+
+from .base import MessageBatch, MessageStorageBase
+from .local import MessageStorageLocal
+from .private_temp import MessageStoragePrivateTemp
 
 __all__ = [
+    "MessageBatch",
     "MessageStorageBase",
     "MessageStorageLocal",
-    "MessageStorageInMemory",
+    "MessageStoragePrivateTemp",
 ]

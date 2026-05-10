@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING, Optional
 from xagent.utils.tool_decorator import function_tool
 
 if TYPE_CHECKING:
-    from xagent.components.memory.markdown_memory import MarkdownMemory
-    from xagent.components.memory.helper.llm_service import JournalLLMService
+    from xagent.components.memory import JournalLLMService, MarkdownMemory
 
 
 def create_write_daily_memory_tool(
@@ -96,10 +95,9 @@ def create_search_memory_tool(
                 results = await memory.search_date_range(
                     start=parts[0].strip(),
                     end=parts[1].strip(),
-                    scope=scope,
                 )
             else:
-                results = await memory.search_date_range(start=date.strip(), scope=scope)
+                results = await memory.search_date_range(start=date.strip())
         elif query and date:
             # Date-scoped keyword search: read date range, then grep within it
             if " to " in date:
@@ -107,10 +105,9 @@ def create_search_memory_tool(
                 date_content = await memory.search_date_range(
                     start=parts[0].strip(),
                     end=parts[1].strip(),
-                    scope=scope,
                 )
             else:
-                date_content = await memory.search_date_range(start=date.strip(), scope=scope)
+                date_content = await memory.search_date_range(start=date.strip())
             # Filter lines matching the keyword
             if date_content:
                 import re

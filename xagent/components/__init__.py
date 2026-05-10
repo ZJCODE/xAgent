@@ -1,9 +1,12 @@
-from .message import MessageStorageBase, MessageStorageLocal, MessageStorageInMemory
-from .memory import MarkdownMemory
+"""Infrastructure components used by the agent runtime."""
+
+from .memory.markdown_memory import MarkdownMemory, MemoryScope
+from .message import MessageStorageBase, MessageStorageLocal, MessageStoragePrivateTemp
 
 __all__ = [
+    "MemoryScope",
     "MessageStorageBase",
     "MessageStorageLocal",
-    "MessageStorageInMemory",
+    "MessageStoragePrivateTemp",
     "MarkdownMemory",
 ]

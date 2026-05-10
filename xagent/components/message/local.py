@@ -1,66 +1,70 @@
+"""SQLite-backed message-history storage."""
+
+from __future__ import annotations
+
 import asyncio
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
-from .base_messages import MessageStorageBase
+from .base import MessageBatch, MessageStorageBase
 from ...schemas import Message, MessageType
 
 
 class MessageStorageLocalConfig:
-    """Configuration constants for MessageStorageLocal."""
+    """Configuration constants for ``MessageStorageLocal``."""
 
     DEFAULT_PATH = "~/.xagent/messages.sqlite3"
     DEFAULT_MESSAGE_COUNT = 100
     CONNECT_TIMEOUT = 5.0
     TABLE_NAME = "messages"
-    LEGACY_COLUMNS = {"id", "conversation_id", "timestamp", "message_json"}
     CURRENT_COLUMNS = {"id", "timestamp", "message_json"}
 
 
 class MessageStorageLocal(MessageStorageBase):
-    """Local persistent single-stream message storage backed by SQLite."""
+    """Persistent message storage for one ordered stream, backed by SQLite."""
 
-    def __init__(self, path: Optional[str] = None):
+    def __init__(self, path: Optional[str] = None) -> None:
         self.path = Path(path or MessageStorageLocalConfig.DEFAULT_PATH).expanduser()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger(f"{self.__class__.__name__}")
+        self.logger = logging.getLogger(self.__class__.__name__)
         self._initialize_database()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.path), timeout=MessageStorageLocalConfig.CONNECT_TIMEOUT)
-        conn.row_factory = sqlite3.Row
-        return conn
+        connection = sqlite3.connect(
+            str(self.path),
+            timeout=MessageStorageLocalConfig.CONNECT_TIMEOUT,
+        )
+        connection.row_factory = sqlite3.Row
+        return connection
 
     def _initialize_database(self) -> None:
-        with self._connect() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+        with self._connect() as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
             columns = {
                 row["name"]
-                for row in conn.execute(
+                for row in connection.execute(
                     f"PRAGMA table_info({MessageStorageLocalConfig.TABLE_NAME})"
                 ).fetchall()
             }
 
             if not columns:
-                self._create_current_schema(conn)
+                self._create_current_schema(connection)
             elif columns == MessageStorageLocalConfig.CURRENT_COLUMNS:
-                self._ensure_current_indexes(conn)
-            elif columns == MessageStorageLocalConfig.LEGACY_COLUMNS:
-                self._migrate_legacy_schema(conn)
+                self._ensure_current_indexes(connection)
             else:
                 self.logger.warning(
                     "Unexpected messages schema at %s; recreating storage table.",
                     self.path,
                 )
-                conn.execute(f"DROP TABLE IF EXISTS {MessageStorageLocalConfig.TABLE_NAME}")
-                self._create_current_schema(conn)
+                connection.execute(f"DROP TABLE IF EXISTS {MessageStorageLocalConfig.TABLE_NAME}")
+                self._create_current_schema(connection)
 
-            conn.commit()
+            connection.commit()
 
-    def _create_current_schema(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
+    def _create_current_schema(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {MessageStorageLocalConfig.TABLE_NAME} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,65 +73,49 @@ class MessageStorageLocal(MessageStorageBase):
             )
             """
         )
-        self._ensure_current_indexes(conn)
+        self._ensure_current_indexes(connection)
 
-    def _ensure_current_indexes(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
+    def _ensure_current_indexes(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
             f"""
             CREATE INDEX IF NOT EXISTS idx_{MessageStorageLocalConfig.TABLE_NAME}_id
             ON {MessageStorageLocalConfig.TABLE_NAME} (id)
             """
         )
 
-    def _migrate_legacy_schema(self, conn: sqlite3.Connection) -> None:
-        legacy_table = f"{MessageStorageLocalConfig.TABLE_NAME}_legacy"
-        conn.execute(f"ALTER TABLE {MessageStorageLocalConfig.TABLE_NAME} RENAME TO {legacy_table}")
-        self._create_current_schema(conn)
-        conn.execute(
-            f"""
-            INSERT INTO {MessageStorageLocalConfig.TABLE_NAME} (id, timestamp, message_json)
-            SELECT id, timestamp, message_json
-            FROM {legacy_table}
-            ORDER BY id
-            """
-        )
-        conn.execute(f"DROP TABLE {legacy_table}")
-        self.logger.info("Migrated legacy conversation-scoped message storage at %s", self.path)
-
     async def add_messages(
         self,
-        messages: Union[Message, List[Message]],
+        messages: MessageBatch,
         **kwargs,
     ) -> None:
-        normalized = messages if isinstance(messages, list) else [messages]
-        if not normalized:
+        normalized_messages = self.normalize_messages(messages)
+        if not normalized_messages:
             return
-        await asyncio.to_thread(self._add_messages_sync, normalized)
+        await asyncio.to_thread(self._add_messages_sync, normalized_messages)
 
     def _add_messages_sync(self, messages: List[Message]) -> None:
-        rows = [(msg.timestamp, msg.model_dump_json()) for msg in messages]
-        with self._connect() as conn:
-            conn.executemany(
+        rows = [(message.timestamp, message.model_dump_json()) for message in messages]
+        with self._connect() as connection:
+            connection.executemany(
                 f"""
                 INSERT INTO {MessageStorageLocalConfig.TABLE_NAME} (timestamp, message_json)
                 VALUES (?, ?)
                 """,
                 rows,
             )
-            conn.commit()
+            connection.commit()
 
     async def get_messages(
         self,
         count: int = MessageStorageLocalConfig.DEFAULT_MESSAGE_COUNT,
         offset: int = 0,
     ) -> List[Message]:
-        if count <= 0:
-            raise ValueError("count must be a positive integer")
+        count, offset = self.validate_pagination(count, offset)
         return await asyncio.to_thread(self._get_messages_sync, count, offset)
 
     def _get_messages_sync(self, count: int, offset: int = 0) -> List[Message]:
-        with self._connect() as conn:
-            rows = conn.execute(
+        with self._connect() as connection:
+            rows = connection.execute(
                 f"""
                 SELECT message_json
                 FROM {MessageStorageLocalConfig.TABLE_NAME}
@@ -141,25 +129,25 @@ class MessageStorageLocal(MessageStorageBase):
         for row in reversed(rows):
             try:
                 messages.append(Message.model_validate_json(row["message_json"]))
-            except Exception as exc:
-                self.logger.warning("Skipping invalid local message: %s", exc)
+            except Exception as exception:
+                self.logger.warning("Skipping invalid local message: %s", exception)
         return messages
 
     async def clear_messages(self) -> None:
         await asyncio.to_thread(self._clear_messages_sync)
 
     def _clear_messages_sync(self) -> None:
-        with self._connect() as conn:
-            conn.execute(f"DELETE FROM {MessageStorageLocalConfig.TABLE_NAME}")
-            conn.commit()
+        with self._connect() as connection:
+            connection.execute(f"DELETE FROM {MessageStorageLocalConfig.TABLE_NAME}")
+            connection.commit()
 
     async def pop_message(self) -> Optional[Message]:
         return await asyncio.to_thread(self._pop_message_sync)
 
     def _pop_message_sync(self) -> Optional[Message]:
-        with self._connect() as conn:
+        with self._connect() as connection:
             while True:
-                row = conn.execute(
+                row = connection.execute(
                     f"""
                     SELECT id, message_json
                     FROM {MessageStorageLocalConfig.TABLE_NAME}
@@ -170,16 +158,16 @@ class MessageStorageLocal(MessageStorageBase):
                 if row is None:
                     return None
 
-                conn.execute(
+                connection.execute(
                     f"DELETE FROM {MessageStorageLocalConfig.TABLE_NAME} WHERE id = ?",
                     (row["id"],),
                 )
-                conn.commit()
+                connection.commit()
 
                 try:
                     message = Message.model_validate_json(row["message_json"])
-                except Exception as exc:
-                    self.logger.warning("Skipping invalid popped local message: %s", exc)
+                except Exception as exception:
+                    self.logger.warning("Skipping invalid popped local message: %s", exception)
                     continue
 
                 if not self._is_tool_message(message):
@@ -192,8 +180,8 @@ class MessageStorageLocal(MessageStorageBase):
         return await asyncio.to_thread(self._get_message_count_sync)
 
     def _get_message_count_sync(self) -> int:
-        with self._connect() as conn:
-            row = conn.execute(
+        with self._connect() as connection:
+            row = connection.execute(
                 f"""
                 SELECT COUNT(*) AS message_count
                 FROM {MessageStorageLocalConfig.TABLE_NAME}

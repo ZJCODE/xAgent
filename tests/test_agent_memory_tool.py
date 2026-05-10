@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from datetime import date
 
-from xagent.components.memory.markdown_memory import MarkdownMemory
+from xagent.components.memory import MarkdownMemory
 from xagent.tools.memory_tool import (
     create_write_daily_memory_tool,
     create_search_memory_tool,
