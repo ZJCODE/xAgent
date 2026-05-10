@@ -21,7 +21,8 @@ server:
 |---|---|---|---|
 | `name` | string | `"Agent"` | Agent identifier |
 | `system_prompt` | string | `"You are a helpful assistant."` | Base system prompt |
-| `model` | string | `"gpt-5.4-mini"` | OpenAI model name |
+| `model` | string | `"gpt-5.4-mini"` | OpenAI-compatible chat model name |
+| `provider` | object | `null` | Optional OpenAI-compatible provider client config |
 | `workspace` | string | `"~/.xagent"` | Local storage root for the shared SQLite database |
 | `capabilities` | object | `{}` | Tool configuration |
 | `output_schema` | object | `null` | Structured output schema |
@@ -42,15 +43,11 @@ There is no `conversation_mode` config. All chats use the same continuous messag
 agent:
   capabilities:
     tools:
-      - "web_search"
-      - "draw_image"
       - "run_command"
 ```
 
 Available built-in tools:
 
-- `web_search`
-- `draw_image`
 - `run_command`
 
 ### Custom Toolkit
@@ -59,6 +56,29 @@ Load custom tools at runtime:
 
 ```bash
 xagent-server --config agent.yaml --toolkit_path my_toolkit/
+```
+
+## Provider
+
+By default xAgent uses the OpenAI SDK defaults, including `OPENAI_API_KEY`.
+Set `agent.provider` for OpenAI-compatible providers:
+
+```yaml
+agent:
+  model: "deepseek-v4-pro"
+  provider:
+    base_url: "https://api.deepseek.com"
+    api_key_env: "DEEPSEEK_API_KEY"
+```
+
+MiniMax example:
+
+```yaml
+agent:
+  model: "MiniMax-M2.7"
+  provider:
+    base_url: "https://api.minimax.io/v1"
+    api_key_env: "MINIMAX_API_KEY"
 ```
 
 ## Storage Layout
@@ -129,7 +149,6 @@ agent:
 
   capabilities:
     tools:
-      - "web_search"
       - "run_command"
 
 server:

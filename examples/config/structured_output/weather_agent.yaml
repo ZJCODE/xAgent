@@ -4,10 +4,6 @@ agent:
     You return weather information in a strict structured format.
     Prefer concise, factual responses.
   model: "gpt-5.4-mini"
-  capabilities:
-    tools:
-      - "web_search"
-
   output_schema:
     class_name: "WeatherReport"
     fields:

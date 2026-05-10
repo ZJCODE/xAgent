@@ -175,8 +175,6 @@ async def delete(memory_ids: list[str]) -> None
 
 Built-in tools:
 
-- `web_search`
-- `draw_image`
 - `run_command`
 
 ### `function_tool`

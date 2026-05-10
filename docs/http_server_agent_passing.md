@@ -19,14 +19,14 @@ server.run()
 ```python
 from xagent.core import Agent
 from xagent.interfaces import AgentHTTPServer
-from xagent.tools import web_search, draw_image
+from xagent.tools import run_command
 
 # Create custom agent
 agent = Agent(
     name="MyCustomAgent",
     system_prompt="You are a specialized assistant.",
     model="gpt-5.4-mini",
-    tools=[web_search, draw_image]
+    tools=[run_command]
 )
 
 # Create server with agent
@@ -41,36 +41,36 @@ server.run()
 ```python
 from xagent.core import Agent
 from xagent.interfaces import AgentHTTPServer
-from xagent.tools import web_search, draw_image
+from xagent.tools import run_command
 
-def create_research_agent():
-    """Create specialized research agent."""
+def create_ops_agent():
+    """Create specialized local-ops agent."""
     return Agent(
-        name="ResearchAgent",
-        system_prompt="You are a research specialist.",
+        name="OpsAgent",
+        system_prompt="You help inspect local project state safely.",
         model="gpt-5.4-mini",
-        tools=[web_search],
-        workspace="./data/research_agent"
+        tools=[run_command],
+        workspace="./data/ops_agent"
     )
 
-def create_creative_agent():
-    """Create specialized creative agent."""
+def create_chat_agent():
+    """Create specialized chat-only agent."""
     return Agent(
-        name="CreativeAgent", 
-        system_prompt="You are a creative visual assistant.",
+        name="ChatAgent",
+        system_prompt="You are a concise assistant.",
         model="gpt-5.4-mini",
-        tools=[draw_image]
+        tools=[]
     )
 
-# Start research agent server on port 8010
-research_agent = create_research_agent()
-research_server = AgentHTTPServer(agent=research_agent)
-# research_server.run(host="localhost", port=8010)
+# Start ops agent server on port 8010
+ops_agent = create_ops_agent()
+ops_server = AgentHTTPServer(agent=ops_agent)
+# ops_server.run(host="localhost", port=8010)
 
-# Start creative agent server on port 8011
-creative_agent = create_creative_agent()
-creative_server = AgentHTTPServer(agent=creative_agent)
-# creative_server.run(host="localhost", port=8011)
+# Start chat agent server on port 8011
+chat_agent = create_chat_agent()
+chat_server = AgentHTTPServer(agent=chat_agent)
+# chat_server.run(host="localhost", port=8011)
 ```
 
 ## Benefits
@@ -83,4 +83,4 @@ creative_server = AgentHTTPServer(agent=creative_agent)
 
 ## Compatibility
 
-The new agent parameter is fully backward compatible. Existing code using config files will continue to work unchanged.
+The `agent` parameter works alongside config-file startup. Built-in tools are provider-neutral; add search, image, or other provider-specific capabilities through a custom toolkit.

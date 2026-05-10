@@ -1,10 +1,12 @@
 import unittest
 from types import SimpleNamespace
 
+from pydantic import BaseModel
+
 from xagent.components.message.base_messages import MessageStorageBase
 from xagent.core.agent import Agent
 from xagent.core.config import ReplyType
-from xagent.core.handlers.model import ModelClient
+from xagent.core.handlers.model import ChatToolCall, ModelClient
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.tools.executor import ToolExecutor
 from xagent.schemas import Message, RoleType
@@ -69,32 +71,162 @@ class FakeToolExecutor:
     async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools):
         self.seen_input_messages.append(list(input_messages))
         input_messages.extend([
-            {"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{}"},
-            {"type": "function_call_output", "call_id": "call-1", "output": "lookup result"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }],
+            },
+            {"role": "tool", "tool_call_id": "call-1", "content": "lookup result"},
         ])
         return None
 
 
 class FakeToolCall:
     def __init__(self, name="lookup", arguments="{}", call_id="call-1"):
-        self.type = "function_call"
+        self.type = "function"
         self.name = name
         self.arguments = arguments
         self.call_id = call_id
 
 
-class ModelClientResponseTests(unittest.TestCase):
+class FakeChatCompletions:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.responses.pop(0)
+
+
+class FakeOpenAIClient:
+    def __init__(self, responses):
+        self.chat_completions = FakeChatCompletions(responses)
+        self.chat = SimpleNamespace(completions=self.chat_completions)
+
+
+class AsyncChunkStream:
+    def __init__(self, chunks):
+        self._chunks = iter(chunks)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration
+
+
+def _chat_response(content=None, tool_calls=None):
+    message = SimpleNamespace(content=content, tool_calls=tool_calls or [])
+    return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
+
+
+class StructuredAnswer(BaseModel):
+    answer: str
+
+
+class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
     def test_non_stream_response_prioritizes_tool_calls_over_text(self):
-        tool_call = FakeToolCall()
-        response = SimpleNamespace(
-            output_text="I will look that up first.",
-            output=[SimpleNamespace(type="message"), tool_call],
+        raw_tool_call = SimpleNamespace(
+            id="call-1",
+            type="function",
+            function=SimpleNamespace(name="lookup", arguments="{}"),
         )
+        response = _chat_response(content="I will look that up first.", tool_calls=[raw_tool_call])
 
         reply_type, payload = ModelClient._handle_non_stream(response)
 
         self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload, [tool_call])
+        self.assertEqual(payload, [ChatToolCall(call_id="call-1", name="lookup", arguments="{}")])
+
+    async def test_call_uses_chat_completions_with_system_message(self):
+        client = FakeOpenAIClient([_chat_response(content="ok")])
+        model = ModelClient(client=client, model="test-model")
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "hello"}],
+            tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+            instructions="Core Rules",
+        )
+
+        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
+        self.assertEqual(payload, "ok")
+        call = client.chat_completions.calls[0]
+        self.assertEqual(call["model"], "test-model")
+        self.assertEqual(call["messages"][0], {"role": "system", "content": "Core Rules"})
+        self.assertEqual(call["messages"][1], {"role": "user", "content": "hello"})
+        self.assertEqual(call["tool_choice"], "auto")
+
+    async def test_structured_output_uses_json_object_and_pydantic_validation(self):
+        client = FakeOpenAIClient([_chat_response(content='{"answer": "ok"}')])
+        model = ModelClient(client=client, model="test-model")
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "answer as json"}],
+            tool_specs=None,
+            instructions="Return JSON",
+            output_type=StructuredAnswer,
+        )
+
+        self.assertEqual(reply_type, ReplyType.STRUCTURED_REPLY)
+        self.assertEqual(payload.answer, "ok")
+        call = client.chat_completions.calls[0]
+        self.assertEqual(call["response_format"], {"type": "json_object"})
+        self.assertIn("JSON schema", call["messages"][0]["content"])
+
+    async def test_stream_text_yields_chunks_and_stores_final_text(self):
+        chunks = [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Hel", tool_calls=None))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="lo", tool_calls=None))]),
+        ]
+        client = FakeOpenAIClient([AsyncChunkStream(chunks)])
+        model = ModelClient(client=client, model="test-model")
+        stored = []
+
+        async def store_reply(text):
+            stored.append(text)
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "hello"}],
+            tool_specs=None,
+            stream=True,
+            store_reply=store_reply,
+        )
+
+        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
+        collected = []
+        async for chunk in payload:
+            collected.append(chunk)
+        self.assertEqual(collected, ["Hel", "lo"])
+        self.assertEqual(stored, ["Hello"])
+
+    async def test_stream_tool_calls_accumulates_split_arguments(self):
+        chunks = [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(tool_calls=[
+                SimpleNamespace(index=0, id="call-1", type="function", function=SimpleNamespace(name="lookup", arguments='{"value"'))
+            ], content=None))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(tool_calls=[
+                SimpleNamespace(index=0, id=None, type=None, function=SimpleNamespace(name=None, arguments=': "ok"}'))
+            ], content=None))]),
+        ]
+        client = FakeOpenAIClient([AsyncChunkStream(chunks)])
+        model = ModelClient(client=client, model="test-model")
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "lookup"}],
+            tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+            stream=True,
+        )
+
+        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
+        self.assertEqual(payload, [ChatToolCall(call_id="call-1", name="lookup", arguments='{"value": "ok"}')])
 
 
 class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
@@ -177,8 +309,10 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         second_call_messages = model_client.calls[1]
         # No system message — input starts with transcript user message
         self.assertEqual(len(first_call_messages), 1)
-        self.assertEqual(second_call_messages[1]["type"], "function_call")
-        self.assertEqual(second_call_messages[2]["type"], "function_call_output")
+        self.assertEqual(second_call_messages[1]["role"], "assistant")
+        self.assertEqual(second_call_messages[1]["tool_calls"][0]["function"]["name"], "lookup")
+        self.assertEqual(second_call_messages[2]["role"], "tool")
+        self.assertEqual(second_call_messages[2]["tool_call_id"], "call-1")
         self.assertEqual(
             [message.role for message in storage.messages],
             [RoleType.USER, RoleType.ASSISTANT],
@@ -197,14 +331,46 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
             client=None,
         )
 
-        tool_messages, image_data, description = await executor.execute_single(
+        tool_message, image_data, description = await executor.execute_single(
             FakeToolCall(name="lookup", arguments='{"value": "ok"}')
         )
 
-        self.assertEqual(len(tool_messages), 2)
+        self.assertEqual(tool_message["role"], "tool")
+        self.assertEqual(tool_message["tool_call_id"], "call-1")
+        self.assertEqual(tool_message["content"], '{"value": "ok"}')
         self.assertIsNone(image_data)
         self.assertIsNone(description)
         self.assertEqual(storage.messages, [])
+
+    async def test_handle_tool_calls_appends_standard_assistant_and_tool_messages(self):
+        async def first() -> str:
+            return "one"
+
+        async def second() -> str:
+            return "two"
+
+        storage = InMemoryMessageStorage()
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"first": first, "second": second}),
+            message_storage=storage,
+            client=None,
+        )
+        messages = [{"role": "user", "content": "run tools"}]
+
+        result = await executor.handle_tool_calls(
+            [
+                FakeToolCall(name="first", call_id="call-1"),
+                FakeToolCall(name="second", call_id="call-2"),
+            ],
+            messages,
+            max_concurrent_tools=2,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(messages[1]["role"], "assistant")
+        self.assertEqual(len(messages[1]["tool_calls"]), 2)
+        self.assertEqual(messages[2], {"role": "tool", "tool_call_id": "call-1", "content": "one"})
+        self.assertEqual(messages[3], {"role": "tool", "tool_call_id": "call-2", "content": "two"})
 
 
 if __name__ == "__main__":

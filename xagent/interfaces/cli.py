@@ -220,8 +220,6 @@ def create_default_config_file(config_path: str = "config/agent.yaml"):
 
   capabilities:
     tools:
-      - "web_search"
-      - "draw_image"
       - "run_command"
 
   # workspace: "~/.xagent"

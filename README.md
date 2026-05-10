@@ -149,7 +149,12 @@ agent:
 
   capabilities:
     tools:
-      - "web_search"
+      - "run_command"
+
+  # Optional OpenAI-compatible provider override:
+  # provider:
+  #   base_url: "https://api.deepseek.com"
+  #   api_key_env: "DEEPSEEK_API_KEY"
 
 server:
   host: "0.0.0.0"

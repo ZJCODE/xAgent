@@ -75,7 +75,7 @@ class Agent:
             memory_dir = str(default_workspace / f"{_normalize_agent_identifier(self.name)}_memory")
 
         self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
-        self.llm_service = JournalLLMService(model=self.model)
+        self.llm_service = JournalLLMService(client=self.client, model=self.model)
         self.memory_handler = MemoryHandler(
             memory=self.markdown_memory,
             llm_service=self.llm_service,
@@ -201,7 +201,7 @@ class Agent:
             tool_names = [n for n in self.tool_manager._tools if n not in excluded]
             tool_specs = self.tool_manager.cached_tool_specs
             if excluded and tool_specs:
-                tool_specs = [s for s in tool_specs if s.get("name") not in excluded] or None
+                tool_specs = [s for s in tool_specs if self._tool_spec_name(s) not in excluded] or None
 
             instructions = msg_handler.build_instructions(tool_names=tool_names)
             iteration_messages = [
@@ -274,3 +274,7 @@ class Agent:
         if private:
             return self._MEMORY_WRITE_TOOL_NAMES
         return set()
+
+    @staticmethod
+    def _tool_spec_name(tool_spec: dict) -> str:
+        return tool_spec.get("function", {}).get("name") or tool_spec.get("name")

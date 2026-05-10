@@ -1,10 +1,12 @@
 """Simplified LLM service for diary entry formatting and summary generation."""
 
 import logging
+import json
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 from ....schemas.memory import DiaryEntry, SummaryOutput
 
@@ -12,9 +14,13 @@ from ....schemas.memory import DiaryEntry, SummaryOutput
 class JournalLLMService:
     """LLM service for formatting diary entries and generating periodic summaries."""
 
-    def __init__(self, model: str = "gpt-5.4-mini"):
+    def __init__(
+        self,
+        client: Optional[AsyncOpenAI] = None,
+        model: str = "gpt-5.4-mini",
+    ):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.openai_client = AsyncOpenAI()
+        self.openai_client = client or AsyncOpenAI()
         self.model = model
 
     async def format_diary_entry(
@@ -34,15 +40,11 @@ class JournalLLMService:
         user_prompt = self.build_diary_user_prompt(journal_date, transcript)
 
         try:
-            response = await self.openai_client.responses.parse(
-                model=self.model,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                text_format=DiaryEntry,
+            parsed = await self._call_structured(
+                output_type=DiaryEntry,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
             )
-            parsed = response.output_parsed or DiaryEntry()
             return self._normalize_content(parsed.content)
         except Exception as exc:
             self.logger.error("Error formatting diary entry: %s", exc)
@@ -68,15 +70,11 @@ class JournalLLMService:
         user_prompt = self.build_summary_user_prompt(period_type, period_label, source_content)
 
         try:
-            response = await self.openai_client.responses.parse(
-                model=self.model,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                text_format=SummaryOutput,
+            parsed = await self._call_structured(
+                output_type=SummaryOutput,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
             )
-            parsed = response.output_parsed or SummaryOutput()
             return self._normalize_content(parsed.content)
         except Exception as exc:
             self.logger.error("Error generating %s summary: %s", period_type, exc)
@@ -104,14 +102,14 @@ Writing requirements:
 - Preserve important details: distinctive wording, commitments, preferences, emotional tone.
 - Different users must stay clearly separated. Never merge one user's content into another's.
 - Every important fact must remain attributed to the speaker who said or experienced it.
-- Prefer explicit attribution phrases such as "With alice, ...", "bob mentioned ...", or "carol preferred ..." when multiple speakers appear.
+- Prefer explicit attribution phrases such as "With abc, ...", "jun mentioned ...", or "T preferred ..." when multiple speakers appear.
 - Never imply that different speakers shared the same preference, plan, event, or history unless the source explicitly says so.
 - If attribution is uncertain, keep that uncertainty instead of collapsing multiple speakers into one narrative.
 - Aim for 100-300 characters when the source is brief, 200-500 when substantial.
 - This is only a diary entry. Do not give advice, proposals, or recommendations.
 - Do not end with offers to help or assistant-style closing language.
 
-Return plain text as a natural diary-style entry."""
+Return JSON only, shaped as {{"content": "natural diary-style entry"}}."""
 
     @staticmethod
     def build_diary_user_prompt(journal_date: str, transcript: str) -> str:
@@ -139,7 +137,36 @@ Requirements:
 - For monthly: focus on broader themes, recurring patterns, major milestones.
 - For yearly: focus on the big picture - major phases, turning points, growth areas.
 - This is a summary, not advice. Do not give recommendations or next steps.
-- Keep it concise but complete. Aim for 300-800 characters for weekly, 500-1200 for monthly, 800-2000 for yearly."""
+- Keep it concise but complete. Aim for 300-800 characters for weekly, 500-1200 for monthly, 800-2000 for yearly.
+- Return JSON only, shaped as {{"content": "period summary"}}."""
+
+    async def _call_structured(
+        self,
+        output_type: type[BaseModel],
+        system_prompt: str,
+        user_prompt: str,
+    ) -> BaseModel:
+        schema = json.dumps(output_type.model_json_schema(), ensure_ascii=False)
+        response = await self.openai_client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"{system_prompt}\n\n"
+                        "Return only a valid JSON object that conforms to this JSON schema. "
+                        "Do not wrap the JSON in markdown.\n\n"
+                        f"JSON schema:\n{schema}"
+                    ),
+                },
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+        )
+        choices = getattr(response, "choices", []) or []
+        message = getattr(choices[0], "message", None) if choices else None
+        content = getattr(message, "content", "") or ""
+        return output_type.model_validate_json(content)
 
     @staticmethod
     def build_summary_user_prompt(period_type: str, period_label: str, source_content: str) -> str:

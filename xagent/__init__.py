@@ -23,8 +23,7 @@ __all__ = [
     "function_tool",
 
     # Built-in tools
-    "web_search",
-    "draw_image",
+    "run_command",
     
     # Meta
     "__version__"
@@ -36,8 +35,7 @@ _EXPORTS = {
     "AgentCLI": (".interfaces", "AgentCLI"),
     "Message": (".schemas", "Message"),
     "function_tool": (".utils", "function_tool"),
-    "web_search": (".tools", "web_search"),
-    "draw_image": (".tools", "draw_image"),
+    "run_command": (".tools", "run_command"),
     "MessageStorageBase": (".components", "MessageStorageBase"),
     "MessageStorageLocal": (".components", "MessageStorageLocal"),
     "MarkdownMemory": (".components", "MarkdownMemory"),

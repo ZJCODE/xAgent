@@ -7,8 +7,6 @@ agent:
 
   capabilities:
     tools:
-      - "web_search"
-      - "draw_image"
       - "run_command"
 
   # workspace: "~/.xagent"  # Root directory for local storage (single SQLite database)

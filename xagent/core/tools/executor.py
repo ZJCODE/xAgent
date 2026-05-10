@@ -1,15 +1,14 @@
 import asyncio
 import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from openai import AsyncOpenAI
 
 from ..config import AgentConfig
 from .manager import ToolManager
 from ...components import MessageStorageBase
-from ...schemas import Message, ToolCall, RoleType, MessageType
-from ...utils.image_utils import is_image_output, extract_source
+from ...utils.image_utils import extract_source, is_image_output
 
 
 logger = logging.getLogger(__name__)
@@ -43,9 +42,15 @@ class ToolExecutor:
         if not tool_calls:
             return None
 
-        function_calls = [tc for tc in tool_calls if getattr(tc, "type", None) == "function_call"]
+        function_calls = [tc for tc in tool_calls if self._tool_name(tc)]
         if not function_calls:
             return None
+
+        input_messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [self._to_chat_tool_call(tc) for tc in function_calls],
+        })
 
         semaphore = asyncio.Semaphore(max_concurrent_tools)
 
@@ -59,9 +64,8 @@ class ToolExecutor:
         pending_images = []
         pending_descriptions = []
 
-        for tool_messages, image_data, description in results:
-            if tool_messages:
-                input_messages.extend([msg.to_model_input() for msg in tool_messages])
+        for tool_message, image_data, description in results:
+            input_messages.append(tool_message)
             if image_data:
                 pending_images.append(image_data)
             if description:
@@ -78,18 +82,24 @@ class ToolExecutor:
     async def execute_single(
         self,
         tool_call,
-    ) -> tuple[Optional[list], Optional[str], Optional[str]]:
-        """Execute a single tool call and return (messages, image_data, description)."""
-        name = getattr(tool_call, "name", None)
+    ) -> tuple[dict, Optional[str], Optional[str]]:
+        """Execute a single tool call and return (tool_message, image_data, description)."""
+        name = self._tool_name(tool_call)
+        call_id = self._tool_call_id(tool_call)
+        raw_arguments = self._tool_arguments(tool_call)
+
         try:
-            args = json.loads(getattr(tool_call, "arguments", "{}"))
+            args = json.loads(raw_arguments or "{}")
         except Exception as e:
             logger.error("Tool args parse error: %s", e)
-            return None, None, None
+            return self._tool_result_message(call_id, f"Tool args parse error: {e}"), None, None
+
+        if not isinstance(args, dict):
+            return self._tool_result_message(call_id, "Tool args must be a JSON object."), None, None
 
         func = self.tool_manager.get_tool(name)
         if not func:
-            return None, None, None
+            return self._tool_result_message(call_id, f"Tool `{name}` not found."), None, None
 
         logger.info("Calling tool: %s with args: %s", name, args)
 
@@ -101,7 +111,6 @@ class ToolExecutor:
 
         result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
 
-        # Detect image results
         image_data = None
         model_output = result_str
         if is_image_output(result_str):
@@ -114,35 +123,8 @@ class ToolExecutor:
                 f"Image description: {caption}]"
             )
 
-        tool_call_msg = Message(
-            type=MessageType.FUNCTION_CALL,
-            role=RoleType.TOOL,
-            sender_id=name,
-            content=f"Calling tool: `{name}` with args: {args}",
-            tool_call=ToolCall(
-                call_id=getattr(tool_call, "call_id", ""),
-                name=name,
-                arguments=json.dumps(args, ensure_ascii=False)
-            )
-        )
-
-        def _format_preview(text: str) -> str:
-            if len(text) <= AgentConfig.TOOL_RESULT_PREVIEW_LENGTH:
-                return text
-            return text[:AgentConfig.TOOL_RESULT_PREVIEW_LENGTH] + '...'
-
-        tool_res_msg = Message(
-            type=MessageType.FUNCTION_CALL_OUTPUT,
-            role=RoleType.TOOL,
-            sender_id=name,
-            content=f"Tool `{name}` result: {_format_preview(result_str)}",
-            tool_call=ToolCall(
-                call_id=getattr(tool_call, "call_id", "001"),
-                output=model_output
-            )
-        )
-
-        return [tool_call_msg, tool_res_msg], image_data, model_output if image_data else None
+        logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
+        return self._tool_result_message(call_id, model_output), image_data, model_output if image_data else None
 
     async def _caption_image(self, image_data_uri: str, prompt_hint: str = "") -> str:
         """Use a vision model to generate a detailed description of an image."""
@@ -151,17 +133,19 @@ class ToolExecutor:
             caption_prompt += f"\n\nOriginal generation prompt: \"{prompt_hint}\""
 
         try:
-            response = await self.client.responses.create(
+            response = await self.client.chat.completions.create(
                 model=AgentConfig.IMAGE_CAPTION_MODEL,
-                input=[{
+                messages=[{
                     "role": "user",
                     "content": [
-                        {"type": "input_text", "text": caption_prompt},
-                        {"type": "input_image", "image_url": image_data_uri},
-                    ]
+                        {"type": "text", "text": caption_prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_uri}},
+                    ],
                 }],
             )
-            caption = getattr(response, "output_text", "") or ""
+            choices = getattr(response, "choices", []) or []
+            message = getattr(choices[0], "message", None) if choices else None
+            caption = getattr(message, "content", "") or ""
             if caption.strip():
                 return caption.strip()
         except Exception as e:
@@ -170,3 +154,54 @@ class ToolExecutor:
         if prompt_hint:
             return f"Generated image based on prompt: \"{prompt_hint}\""
         return "An image was generated and displayed to the user."
+
+    @staticmethod
+    def _field(obj: Any, name: str, default: Any = None) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(name, default)
+        return getattr(obj, name, default)
+
+    @classmethod
+    def _tool_call_id(cls, tool_call) -> str:
+        return cls._field(tool_call, "call_id") or cls._field(tool_call, "id") or "call_0"
+
+    @classmethod
+    def _tool_name(cls, tool_call) -> Optional[str]:
+        name = cls._field(tool_call, "name")
+        if name:
+            return name
+        function = cls._field(tool_call, "function") or {}
+        return cls._field(function, "name")
+
+    @classmethod
+    def _tool_arguments(cls, tool_call) -> str:
+        arguments = cls._field(tool_call, "arguments")
+        if arguments is not None:
+            return arguments
+        function = cls._field(tool_call, "function") or {}
+        return cls._field(function, "arguments") or "{}"
+
+    @classmethod
+    def _to_chat_tool_call(cls, tool_call) -> dict:
+        return {
+            "id": cls._tool_call_id(tool_call),
+            "type": "function",
+            "function": {
+                "name": cls._tool_name(tool_call),
+                "arguments": cls._tool_arguments(tool_call) or "{}",
+            },
+        }
+
+    @staticmethod
+    def _tool_result_message(call_id: str, content: str) -> dict:
+        return {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": content,
+        }
+
+    @staticmethod
+    def _format_preview(text: str) -> str:
+        if len(text) <= AgentConfig.TOOL_RESULT_PREVIEW_LENGTH:
+            return text
+        return text[:AgentConfig.TOOL_RESULT_PREVIEW_LENGTH] + "..."

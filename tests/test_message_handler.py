@@ -130,10 +130,10 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
         self.assertEqual(transcript_message["role"], "user")
         self.assertIsInstance(transcript_message["content"], list)
-        self.assertEqual(transcript_message["content"][0]["type"], "input_text")
-        self.assertEqual(transcript_message["content"][1]["type"], "input_image")
+        self.assertEqual(transcript_message["content"][0]["type"], "text")
+        self.assertEqual(transcript_message["content"][1]["type"], "image_url")
         self.assertEqual(
-            transcript_message["content"][1]["image_url"],
+            transcript_message["content"][1]["image_url"]["url"],
             "https://example.com/screenshot.png",
         )
 

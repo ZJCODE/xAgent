@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Type
 
 # Third-party imports
 import yaml
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, create_model
 
 # Local imports
@@ -145,7 +146,7 @@ class BaseAgentRunner:
                 "system_prompt": BaseAgentConfig.DEFAULT_SYSTEM_PROMPT,
                 "model": BaseAgentConfig.DEFAULT_MODEL,
                 "capabilities": {
-                    "tools": ["web_search", "run_command"],  # Default tools
+                    "tools": ["run_command"],  # Default provider-neutral tools
                 },
             },
             "server": {
@@ -351,16 +352,38 @@ class BaseAgentRunner:
         
         tools = self._load_agent_tools(agent_cfg)
         output_type = self._get_output_type(agent_cfg)
+        client = self._initialize_client(agent_cfg)
 
         return Agent(
             name=agent_cfg.get("name"),
             system_prompt=agent_cfg.get("system_prompt"),
             model=agent_cfg.get("model"),
+            client=client,
             tools=tools,
             output_type=output_type,
             message_storage=self.message_storage,
             workspace=str(self.workspace),
         )
+
+    def _initialize_client(self, agent_cfg: Dict[str, Any]) -> Optional[AsyncOpenAI]:
+        """Build an OpenAI-compatible async client from optional provider config."""
+        provider_cfg = agent_cfg.get("provider") or {}
+        if not provider_cfg:
+            return None
+
+        client_kwargs: Dict[str, Any] = {}
+        base_url = provider_cfg.get("base_url")
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        api_key_env = provider_cfg.get("api_key_env")
+        if api_key_env:
+            api_key = os.environ.get(api_key_env)
+            if not api_key:
+                raise ValueError(f"Environment variable '{api_key_env}' is required for provider API key.")
+            client_kwargs["api_key"] = api_key
+
+        return AsyncOpenAI(**client_kwargs)
     
     def _load_agent_tools(self, agent_cfg: Dict[str, Any]) -> List[Any]:
         """Load tools from built-in registry and optional toolkit registry."""

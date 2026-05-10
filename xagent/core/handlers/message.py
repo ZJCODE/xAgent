@@ -136,9 +136,9 @@ class MessageHandler:
         if not latest_images:
             return {"role": RoleType.USER.value, "content": transcript_text}
 
-        content = [{"type": "input_text", "text": transcript_text}]
+        content = [{"type": "text", "text": transcript_text}]
         content.extend(
-            {"type": "input_image", "image_url": image_source}
+            {"type": "image_url", "image_url": {"url": image_source}}
             for image_source in latest_images
         )
         return {"role": RoleType.USER.value, "content": content}
@@ -212,8 +212,11 @@ class MessageHandler:
 
     @staticmethod
     def sanitize_input_messages(input_messages: list) -> list:
-        """Remove leading function call output messages."""
-        while input_messages and input_messages[0].get("type") == MessageType.FUNCTION_CALL_OUTPUT:
+        """Remove leading tool result messages, which are invalid without a prior assistant tool call."""
+        while input_messages and (
+            input_messages[0].get("type") == MessageType.FUNCTION_CALL_OUTPUT
+            or input_messages[0].get("role") == RoleType.TOOL.value
+        ):
             input_messages.pop(0)
         return input_messages
 

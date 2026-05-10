@@ -5,10 +5,6 @@ agent:
     Keep the output concise, useful, and consistent with the schema.
   model: "gpt-5.4-mini"
 
-  capabilities:
-    tools:
-      - "web_search"
-
   output_schema:
     class_name: "ContentReport"
     fields:

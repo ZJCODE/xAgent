@@ -144,19 +144,23 @@ def function_tool(
                 required.append(param.name)
         
         # Build tool spec
-        tool_spec = {
-            "type": "function",
+        function_spec = {
             "name": name or func.__name__,
             "description": description or (func.__doc__.split('\n')[0] if func.__doc__ else f"Function {func.__name__}"),
             "parameters": {
                 "type": "object",
                 "properties": properties,
                 "required": required,
-                "additionalProperties": False
+                "additionalProperties": False,
             }
         }
         if strict:
-            tool_spec["strict"] = True
+            function_spec["strict"] = True
+
+        tool_spec = {
+            "type": "function",
+            "function": function_spec,
+        }
 
         # Create async wrapper using first principles approach
         async_func = _create_async_wrapper(func)

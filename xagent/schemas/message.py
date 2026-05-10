@@ -140,20 +140,20 @@ class Message(BaseModel):
         raise ValueError(f"Unsupported message type: {self.type}")
 
     def to_model_input(self) -> dict:
-        """Convert the message to an OpenAI responses input item."""
+        """Convert the message to a Chat Completions message."""
         if self.type == MessageType.Message:
             text_content = self.content
             if self.sender_id and self.role == RoleType.USER:
                 text_content = f"[{self.sender_id}] {text_content}"
 
             if self.multimodal and self.multimodal.image:
-                content = [{"type": "input_text", "text": text_content}]
+                content = [{"type": "text", "text": text_content}]
 
                 images = self.multimodal.image if isinstance(self.multimodal.image, list) else [self.multimodal.image]
                 for image in images:
                     content.append({
-                        "type": "input_image",
-                        "image_url": image.source,
+                        "type": "image_url",
+                        "image_url": {"url": image.source},
                     })
                 return {
                     "role": self.role.value,
@@ -164,15 +164,29 @@ class Message(BaseModel):
                 "content": text_content,
             }
 
-        if self.type in [MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT]:
+        if self.type == MessageType.FUNCTION_CALL:
+            return {
+                "role": RoleType.ASSISTANT.value,
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": self.tool_call.call_id,
+                        "type": "function",
+                        "function": {
+                            "name": self.tool_call.name,
+                            "arguments": self.tool_call.arguments or "{}",
+                        },
+                    }
+                ],
+            }
+
+        if self.type == MessageType.FUNCTION_CALL_OUTPUT:
             return {
                 k: v
                 for k, v in {
-                    "call_id": self.tool_call.call_id,
-                    "type": self.type.value,
-                    "name": self.tool_call.name,
-                    "arguments": self.tool_call.arguments,
-                    "output": self.tool_call.output,
+                    "role": RoleType.TOOL.value,
+                    "tool_call_id": self.tool_call.call_id,
+                    "content": self.tool_call.output,
                 }.items()
                 if v is not None
             }

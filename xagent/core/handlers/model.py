@@ -1,19 +1,50 @@
+import json
 import logging
-from typing import Callable, Awaitable, List, Optional
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..config import AgentConfig, ReplyType
-from ...schemas import MessageType
 
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class ChatToolCall:
+    """Provider-neutral function tool call used internally by the agent loop."""
+
+    call_id: str
+    name: str
+    arguments: str
+    type: str = "function"
+
+    @classmethod
+    def from_raw(cls, raw_tool_call: Any) -> "ChatToolCall":
+        function = ModelClient._field(raw_tool_call, "function") or {}
+        return cls(
+            call_id=ModelClient._field(raw_tool_call, "id") or "",
+            name=ModelClient._field(function, "name") or "",
+            arguments=ModelClient._field(function, "arguments") or "{}",
+            type=ModelClient._field(raw_tool_call, "type") or "function",
+        )
+
+    def to_chat_dict(self) -> dict:
+        return {
+            "id": self.call_id,
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "arguments": self.arguments or "{}",
+            },
+        }
+
+
 class ModelClient:
-    """Handles all interactions with the OpenAI model: structured, non-stream, and stream responses."""
+    """Handles Chat Completions model calls, including tools, structured JSON, and streaming."""
 
     def __init__(
         self,
@@ -51,21 +82,21 @@ class ModelClient:
         """
         try:
             if output_type is not None:
-                return await self._handle_structured(messages, tool_specs, output_type, instructions)
+                stream = False
 
-            response = await self.client.responses.create(
-                model=self.model,
-                instructions=instructions,
-                tools=tool_specs or [],
-                input=messages,
-                stream=stream,
-                truncation="auto",
+            response = await self.client.chat.completions.create(
+                **self._build_create_params(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                    output_type=output_type,
+                    stream=stream,
+                )
             )
 
-            if not stream:
-                return self._handle_non_stream(response)
-            else:
+            if stream:
                 return await self._handle_stream(response, store_reply)
+            return self._handle_non_stream(response, output_type)
 
         except Exception as e:
             logger.exception("Model call failed: %s", e)
@@ -78,40 +109,75 @@ class ModelClient:
                 return ReplyType.ERROR, stream_generator()
             return ReplyType.ERROR, f"Model call error: {str(e)}"
 
-    async def _handle_structured(
+    def _build_create_params(
         self,
         messages: list,
         tool_specs: Optional[list],
-        output_type: type[BaseModel],
-        instructions: Optional[str] = None,
-    ) -> tuple[ReplyType, object]:
-        """Handle structured output via responses.parse."""
-        response = await self.client.responses.parse(
-            model=self.model,
-            instructions=instructions,
-            tools=tool_specs if tool_specs else [],
-            input=messages,
-            text_format=output_type,
-            truncation="auto",
-        )
-        tool_calls = self._extract_tool_calls(response)
-        if tool_calls:
-            return ReplyType.TOOL_CALL, tool_calls
-
-        if hasattr(response, "output_parsed") and response.output_parsed is not None:
-            return ReplyType.STRUCTURED_REPLY, response.output_parsed
-
-        # Fall through to standard response handling
-        return self._handle_non_stream(response)
+        instructions: Optional[str],
+        output_type: Optional[type[BaseModel]],
+        stream: bool,
+    ) -> dict:
+        params = {
+            "model": self.model,
+            "messages": self._build_chat_messages(messages, instructions, output_type),
+            "stream": stream,
+        }
+        if tool_specs:
+            params["tools"] = tool_specs
+            params["tool_choice"] = "auto"
+        if output_type is not None:
+            params["response_format"] = {"type": "json_object"}
+        return params
 
     @staticmethod
-    def _handle_non_stream(response) -> tuple[ReplyType, object]:
+    def _build_chat_messages(
+        messages: list,
+        instructions: Optional[str],
+        output_type: Optional[type[BaseModel]] = None,
+    ) -> list:
+        chat_messages = []
+        system_content = ModelClient._structured_instructions(instructions, output_type)
+        if system_content:
+            chat_messages.append({"role": "system", "content": system_content})
+        chat_messages.extend(messages)
+        return chat_messages
+
+    @staticmethod
+    def _structured_instructions(
+        instructions: Optional[str],
+        output_type: Optional[type[BaseModel]],
+    ) -> str:
+        if output_type is None:
+            return instructions or ""
+
+        schema = json.dumps(output_type.model_json_schema(), ensure_ascii=False)
+        structured_prompt = (
+            "Structured output: return only one valid JSON object that conforms to this JSON schema. "
+            "Do not wrap the JSON in markdown and do not include any prose before or after it.\n\n"
+            f"JSON schema:\n{schema}"
+        )
+        if not instructions:
+            return structured_prompt
+        return f"{instructions}\n\n{structured_prompt}"
+
+    @staticmethod
+    def _handle_non_stream(
+        response,
+        output_type: Optional[type[BaseModel]] = None,
+    ) -> tuple[ReplyType, object]:
         """Handle a non-streaming model response."""
         tool_calls = ModelClient._extract_tool_calls(response)
         if tool_calls:
             return ReplyType.TOOL_CALL, tool_calls
 
         text = ModelClient._extract_response_text(response)
+        if output_type is not None and text:
+            try:
+                return ReplyType.STRUCTURED_REPLY, output_type.model_validate_json(text)
+            except Exception as exc:
+                logger.exception("Structured output validation failed: %s", exc)
+                return ReplyType.ERROR, f"Structured output validation failed: {str(exc)}"
+
         if text:
             return ReplyType.SIMPLE_REPLY, text
 
@@ -124,48 +190,37 @@ class ModelClient:
         store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a streaming model response."""
-        prefix_events = []
-        last_response = None
+        prefix_chunks = []
+        tool_call_parts: dict[int, dict] = {}
         stream_kind = None
 
-        async for event in response:
-            prefix_events.append(event)
-            event_response = getattr(event, "response", None)
-            if event_response is not None:
-                last_response = event_response
-            stream_kind = self._classify_stream_event(event)
+        async for chunk in response:
+            prefix_chunks.append(chunk)
+            self._merge_stream_tool_calls(tool_call_parts, chunk)
+            if self._chunk_has_tool_calls(chunk):
+                stream_kind = ReplyType.TOOL_CALL
+            elif self._extract_stream_text_delta(chunk):
+                stream_kind = ReplyType.SIMPLE_REPLY
             if stream_kind is not None:
                 break
 
         if stream_kind == ReplyType.SIMPLE_REPLY:
             async def stream_generator():
-                nonlocal last_response
-                text_parts: List[str] = []
+                text_parts: list[str] = []
 
-                for evt in prefix_events:
-                    evt_response = getattr(evt, "response", None)
-                    if evt_response is not None:
-                        last_response = evt_response
-                    content = self._extract_stream_text_delta(evt)
+                for chunk in prefix_chunks:
+                    content = self._extract_stream_text_delta(chunk)
                     if content:
                         text_parts.append(content)
                         yield content
 
-                async for evt in response:
-                    evt_response = getattr(evt, "response", None)
-                    if evt_response is not None:
-                        last_response = evt_response
-                    content = self._extract_stream_text_delta(evt)
+                async for chunk in response:
+                    content = self._extract_stream_text_delta(chunk)
                     if content:
                         text_parts.append(content)
                         yield content
 
-                final_text = self._extract_response_text(
-                    last_response,
-                    "".join(text_parts),
-                )
-                if final_text and not text_parts:
-                    yield final_text
+                final_text = "".join(text_parts)
                 if final_text:
                     if store_reply:
                         await store_reply(final_text)
@@ -173,24 +228,15 @@ class ModelClient:
             return ReplyType.SIMPLE_REPLY, stream_generator()
 
         if stream_kind == ReplyType.TOOL_CALL:
-            async for event in response:
-                event_response = getattr(event, "response", None)
-                if event_response is not None:
-                    last_response = event_response
+            async for chunk in response:
+                self._merge_stream_tool_calls(tool_call_parts, chunk)
 
-            tool_output = self._extract_tool_calls(last_response)
-            if tool_output:
-                return ReplyType.TOOL_CALL, tool_output
+            tool_calls = self._finalize_stream_tool_calls(tool_call_parts)
+            if tool_calls:
+                return ReplyType.TOOL_CALL, tool_calls
 
             logger.warning("Stream response ended without tool output")
             return ReplyType.ERROR, "No tool output from model response."
-
-        final_text = self._extract_response_text(last_response)
-        if final_text:
-            async def stream_generator():
-                yield final_text
-
-            return ReplyType.SIMPLE_REPLY, stream_generator()
 
         logger.warning("Stream response contains no recognized output")
 
@@ -202,70 +248,114 @@ class ModelClient:
     # ---- Static helpers ----
 
     @staticmethod
-    def _classify_stream_event(event) -> Optional[ReplyType]:
-        """Infer the high-level response kind from a stream event."""
-        resp = getattr(event, "response", None)
-        if resp is not None:
-            if ModelClient._extract_tool_calls(resp):
-                return ReplyType.TOOL_CALL
-            if getattr(resp, "output_text", ""):
-                return ReplyType.SIMPLE_REPLY
+    def _field(obj: Any, name: str, default: Any = None) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(name, default)
+        return getattr(obj, name, default)
 
-        event_type = getattr(event, "type", None)
-        if event_type and "function_call" in event_type:
-            return ReplyType.TOOL_CALL
-        if event_type == "response.output_text.delta":
-            return ReplyType.SIMPLE_REPLY
-
-        item = getattr(event, "item", None)
-        item_type = getattr(item, "type", None)
-        if isinstance(item, dict):
-            item_type = item.get("type")
-        if item_type == "message":
-            return ReplyType.SIMPLE_REPLY
-        if item_type == "function_call":
-            return ReplyType.TOOL_CALL
-
-        return None
+    @staticmethod
+    def _first_choice(response) -> Any:
+        choices = ModelClient._field(response, "choices") or []
+        return choices[0] if choices else None
 
     @staticmethod
     def _extract_tool_calls(response) -> list:
-        """Return function-call output items from a completed model response."""
-        output_items = getattr(response, "output", None) or []
-        return [item for item in output_items if ModelClient._is_function_call(item)]
+        """Return normalized function tool calls from a completed chat response."""
+        choice = ModelClient._first_choice(response)
+        if choice is None:
+            return []
+        message = ModelClient._field(choice, "message")
+        raw_tool_calls = ModelClient._field(message, "tool_calls") or []
+        return [
+            ChatToolCall.from_raw(tool_call)
+            for tool_call in raw_tool_calls
+            if ModelClient._field(tool_call, "type") in (None, "function")
+        ]
 
     @staticmethod
-    def _is_function_call(item) -> bool:
-        if getattr(item, "type", None) == "function_call":
-            return True
-        if isinstance(item, dict):
-            return item.get("type") == "function_call"
-        return False
+    def _chunk_choices(chunk) -> list:
+        return ModelClient._field(chunk, "choices") or []
 
     @staticmethod
-    def _extract_stream_text_delta(event) -> str:
-        """Return a text delta from a stream event when present."""
-        if getattr(event, "type", None) == "response.output_text.delta":
-            return getattr(event, "delta", "") or ""
+    def _extract_stream_text_delta(chunk) -> str:
+        """Return a text delta from a Chat Completions chunk when present."""
+        for choice in ModelClient._chunk_choices(chunk):
+            delta = ModelClient._field(choice, "delta")
+            content = ModelClient._field(delta, "content")
+            if isinstance(content, str) and content:
+                return content
         return ""
 
     @staticmethod
     def _extract_response_text(response, fallback_text: str = "") -> str:
-        """Extract the final text content from a completed model response."""
-        if response is None:
+        """Extract assistant message text from a completed chat response."""
+        choice = ModelClient._first_choice(response)
+        if choice is None:
             return fallback_text
 
-        output_text = getattr(response, "output_text", None)
-        if output_text:
-            return output_text
-
-        output_items = getattr(response, "output", None) or []
-        for output_item in output_items:
-            if getattr(output_item, "type", None) != "message":
-                continue
-            for content_item in getattr(output_item, "content", []) or []:
-                text_value = getattr(content_item, "text", None)
-                if text_value:
-                    return text_value
+        message = ModelClient._field(choice, "message")
+        content = ModelClient._field(message, "content")
+        if isinstance(content, str) and content:
+            return content
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if ModelClient._field(item, "type") == "text":
+                    text = ModelClient._field(item, "text")
+                    if text:
+                        text_parts.append(text)
+            if text_parts:
+                return "".join(text_parts)
 
         return fallback_text
+
+    @staticmethod
+    def _chunk_has_tool_calls(chunk) -> bool:
+        for choice in ModelClient._chunk_choices(chunk):
+            delta = ModelClient._field(choice, "delta")
+            if ModelClient._field(delta, "tool_calls"):
+                return True
+        return False
+
+    @staticmethod
+    def _merge_stream_tool_calls(tool_call_parts: dict[int, dict], chunk) -> None:
+        for choice in ModelClient._chunk_choices(chunk):
+            delta = ModelClient._field(choice, "delta")
+            for raw_tool_call in ModelClient._field(delta, "tool_calls") or []:
+                index = ModelClient._field(raw_tool_call, "index")
+                if index is None:
+                    index = len(tool_call_parts)
+                part = tool_call_parts.setdefault(
+                    int(index),
+                    {
+                        "id": "",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    },
+                )
+                call_id = ModelClient._field(raw_tool_call, "id")
+                if call_id:
+                    part["id"] = call_id
+                call_type = ModelClient._field(raw_tool_call, "type")
+                if call_type:
+                    part["type"] = call_type
+
+                function = ModelClient._field(raw_tool_call, "function") or {}
+                name = ModelClient._field(function, "name")
+                if name:
+                    part["function"]["name"] = name
+                arguments = ModelClient._field(function, "arguments")
+                if arguments:
+                    part["function"]["arguments"] += arguments
+
+    @staticmethod
+    def _finalize_stream_tool_calls(tool_call_parts: dict[int, dict]) -> list[ChatToolCall]:
+        tool_calls = []
+        for index in sorted(tool_call_parts):
+            part = tool_call_parts[index]
+            if not part["id"]:
+                part["id"] = f"call_{index}"
+            tool_call = ChatToolCall.from_raw(part)
+            if tool_call.name:
+                tool_calls.append(tool_call)
+        return tool_calls

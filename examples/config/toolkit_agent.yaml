@@ -7,7 +7,6 @@ agent:
 
   capabilities:
     tools:
-      - "web_search"
       - "char_count"
 
 server:

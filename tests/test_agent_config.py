@@ -1,6 +1,10 @@
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 from xagent.core.config import AgentConfig
+from xagent.interfaces.base import BaseAgentRunner
 
 
 class AgentConfigPromptTests(unittest.TestCase):
@@ -32,8 +36,33 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("just use the name directly", prompt)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class ProviderConfigTests(unittest.TestCase):
+    def test_provider_config_builds_openai_compatible_client(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "agent.yaml"
+            config_path.write_text(
+                """
+agent:
+  name: "ProviderAgent"
+  model: "deepseek-v4-pro"
+  workspace: "{workspace}"
+  provider:
+    base_url: "https://api.deepseek.com"
+    api_key_env: "DEEPSEEK_API_KEY"
+  capabilities:
+    tools: []
+server:
+  host: "127.0.0.1"
+  port: 8010
+""".format(workspace=tmpdir),
+                encoding="utf-8",
+            )
+
+            with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}):
+                runner = BaseAgentRunner(config_path=str(config_path))
+
+            self.assertEqual(runner.agent.model, "deepseek-v4-pro")
+            self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.deepseek.com")
 
 
 if __name__ == "__main__":

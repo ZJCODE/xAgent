@@ -300,10 +300,10 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
             "custom_tool": lambda: None,
         }
         tool_specs = [
-            {"name": "write_daily_memory"},
-            {"name": "search_memory"},
-            {"name": "generate_memory_summary"},
-            {"name": "custom_tool"},
+            {"type": "function", "function": {"name": "write_daily_memory"}},
+            {"type": "function", "function": {"name": "search_memory"}},
+            {"type": "function", "function": {"name": "generate_memory_summary"}},
+            {"type": "function", "function": {"name": "custom_tool"}},
         ]
 
         class SpecCapturingModelClient(CapturingModelClient):
@@ -333,7 +333,7 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
             enable_memory=True,
         )
 
-        spec_names = {s["name"] for s in model_client.received_tool_specs}
+        spec_names = {s["function"]["name"] for s in model_client.received_tool_specs}
         self.assertIn("search_memory", spec_names)
         self.assertIn("custom_tool", spec_names)
         self.assertNotIn("write_daily_memory", spec_names)

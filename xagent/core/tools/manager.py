@@ -24,10 +24,11 @@ class ToolManager:
     def register_tools(self, tools: Optional[list]) -> None:
         """Register tool functions. Each must be async and have a ``tool_spec``."""
         for fn in tools or []:
+            tool_name = self._tool_spec_name(fn.tool_spec)
             if not asyncio.iscoroutinefunction(fn):
-                raise TypeError(f"Tool function '{fn.tool_spec['name']}' must be async.")
-            if fn.tool_spec["name"] not in self._tools:
-                self._tools[fn.tool_spec["name"]] = fn
+                raise TypeError(f"Tool function '{tool_name}' must be async.")
+            if tool_name not in self._tools:
+                self._tools[tool_name] = fn
         self._cache_dirty = True
 
     def get_tool(self, name: str):
@@ -45,3 +46,7 @@ class ToolManager:
         tools = list(self._tools.values())
         self._tool_specs_cache = [fn.tool_spec for fn in tools] if tools else None
         self._cache_dirty = False
+
+    @staticmethod
+    def _tool_spec_name(tool_spec: dict) -> str:
+        return tool_spec.get("function", {}).get("name") or tool_spec.get("name")
