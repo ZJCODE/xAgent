@@ -15,9 +15,9 @@ This guide summarizes practical recommendations for building stable, maintainabl
 
 ## 3) Prefer Configuration for Deployments
 
-- Use `xagent-cli --init` to scaffold config and toolkit.
-- Keep runtime settings in `config/agent.yaml`.
-- Avoid hardcoding model and server settings in application code for production.
+- Use `xagent --init` to create `~/.xagent/config.yaml`.
+- Use `--dir` to keep separate agent profiles and local storage roots.
+- Keep provider settings in config and server host/port in deployment commands.
 
 See: [Configuration Reference](configuration_reference.md)
 
@@ -38,7 +38,7 @@ See: [Memory System](memory.md)
 
 ## 6) Production Readiness Checklist
 
-- Set required env vars (`OPENAI_API_KEY`, optional `REDIS_URL`).
+- Set provider credentials in `config.yaml` or through your process environment.
 - Add health checks and basic monitoring.
 - Use bounded retries and request timeouts.
 - Validate model output format when integrating with downstream systems.

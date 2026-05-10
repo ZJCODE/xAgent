@@ -1,8 +1,4 @@
-# Standard library imports
-import importlib.util
 import logging
-import os
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
@@ -15,7 +11,7 @@ from pydantic import BaseModel, Field, create_model
 from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..components import MessageStorageBase, MessageStorageLocal
-from ..tools import TOOL_REGISTRY
+from ..tools import run_command
 
 
 class BaseAgentConfig:
@@ -33,7 +29,9 @@ If you are unsure about something, be honest instead of making things up. If you
 
 Always make the conversation feel light, genuine, warm, and like talking with a real friend.
 """
-    DEFAULT_MODEL = "gpt-5.4"
+    DEFAULT_MODEL = AgentConfig.DEFAULT_MODEL
+    DEFAULT_CONFIG_DIR = AgentConfig.DEFAULT_WORKSPACE
+    CONFIG_FILENAME = "config.yaml"
     DEFAULT_HOST = "0.0.0.0"
     DEFAULT_PORT = 8010
 
@@ -44,69 +42,67 @@ class BaseAgentRunner:
     This class provides a standardized way to:
     - Load and validate agent configurations from YAML files
     - Initialize agents with tools
-    - Manage message databases and toolkit registries
+    - Manage message databases
     - Create dynamic Pydantic models from schema definitions
     
     Attributes:
         config: Loaded configuration dictionary
         agent: Initialized Agent instance
         message_storage: Optional message storage instance
-        toolkit_path: Path to additional toolkit directory
+        config_dir: Directory containing config.yaml and local runtime data
     """
     
     def __init__(
         self, 
-        config_path: Optional[str] = None, 
-        toolkit_path: Optional[str] = None
+        config_dir: Optional[str] = None,
     ):
         """
         Initialize BaseAgentRunner.
         
         Args:
-            config_path: Path to configuration file. If None, uses default configuration
-            toolkit_path: Path to toolkit directory. If None, no additional tools loaded
+            config_dir: Directory containing config.yaml. If None, uses ~/.xagent
             
         Raises:
             yaml.YAMLError: If configuration file is invalid
-            ImportError: If toolkit module cannot be loaded
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         
-        # Store paths for later use
-        self.toolkit_path = toolkit_path
+        self.config_dir = self._resolve_config_dir(config_dir)
+        self.config_path = self.config_dir / BaseAgentConfig.CONFIG_FILENAME
         
         # Load and validate configuration
-        self.config = self._load_config(config_path)
+        self.config = self._load_config(self.config_path)
         
-        # Resolve workspace directory for local storage
-        self.workspace = self._resolve_workspace()
+        # Local runtime data lives beside config.yaml.
+        self.workspace = self.config_dir
 
         # Initialize components in dependency order
         self.message_storage = self._initialize_message_storage()
         self.agent = self._initialize_agent()
         
-    def _load_config(self, cfg_path: Optional[str]) -> Dict[str, Any]:
+    def _resolve_config_dir(self, config_dir: Optional[str]) -> Path:
+        """Resolve the xAgent runtime directory."""
+        raw_dir = config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR
+        return Path(raw_dir).expanduser().resolve()
+
+    def _load_config(self, cfg_path: Path) -> Dict[str, Any]:
         """
         Load YAML configuration file with error handling.
         
         Args:
-            cfg_path: Path to config file. If None, uses default configuration
+            cfg_path: Path to config.yaml
             
         Returns:
             Configuration dictionary
             
         Raises:
             yaml.YAMLError: If YAML file is malformed
-            FileNotFoundError: If specified config file doesn't exist
         """
-        if cfg_path is None:
+        if not cfg_path.is_file():
             return self._get_default_config()
         
-        if not os.path.isfile(cfg_path):
-            raise FileNotFoundError(f"Configuration file not found: {cfg_path}")
-        
         try:
-            with open(cfg_path, "r", encoding="utf-8") as f:
+            with cfg_path.open("r", encoding="utf-8") as f:
                 config = yaml.safe_load(f)
                 return self._validate_config(config)
         except yaml.YAMLError as e:
@@ -128,8 +124,8 @@ class BaseAgentRunner:
         # Ensure required sections exist
         if "agent" not in config:
             config["agent"] = {}
-        if "server" not in config:
-            config["server"] = {}
+        if "provider" not in config["agent"]:
+            config["agent"]["provider"] = {}
         
         return config
     
@@ -144,109 +140,11 @@ class BaseAgentRunner:
             "agent": {
                 "name": BaseAgentConfig.DEFAULT_AGENT_NAME,
                 "system_prompt": BaseAgentConfig.DEFAULT_SYSTEM_PROMPT,
-                "model": BaseAgentConfig.DEFAULT_MODEL,
-                "capabilities": {
-                    "tools": ["run_command"],  # Default provider-neutral tools
+                "provider": {
+                    "model": BaseAgentConfig.DEFAULT_MODEL,
                 },
-            },
-            "server": {
-                "host": BaseAgentConfig.DEFAULT_HOST,
-                "port": BaseAgentConfig.DEFAULT_PORT
             }
         }
-
-    def _resolve_workspace(self) -> Path:
-        """Resolve workspace directory from YAML config or default.
-
-        Priority (highest to lowest):
-        1. ``agent.workspace`` in the YAML configuration
-        2. Default ``~/.xagent``
-        """
-        agent_cfg = self.config.get("agent", {})
-        cfg_workspace = agent_cfg.get("workspace")
-        if cfg_workspace:
-            workspace = Path(cfg_workspace).expanduser().resolve()
-            self.logger.info("Workspace from config: %s", workspace)
-            return workspace
-
-        workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
-        return workspace
-
-    def _load_toolkit_registry(self, toolkit_path: Optional[str]) -> Dict[str, Any]:
-        """
-        Dynamically load TOOLKIT_REGISTRY from a toolkit directory.
-        
-        Args:
-            toolkit_path: Path to toolkit directory (only directory paths supported)
-            
-        Returns:
-            Dictionary containing loaded toolkit registry, empty if unavailable
-            
-        Note:
-            Only directory paths are supported; do not pass __init__.py directly.
-            Returns empty dict if loading fails or toolkit is unavailable.
-        """
-        if not toolkit_path:
-            return {}
-            
-        try:
-            resolved_path = self._resolve_toolkit_path(toolkit_path)
-            
-            if not self._is_valid_toolkit_directory(resolved_path):
-                return {}
-            
-            return self._import_toolkit_module(resolved_path)
-            
-        except Exception as e:
-            self.logger.warning(
-                "Failed to load TOOLKIT_REGISTRY from %s: %s",
-                toolkit_path,
-                e,
-            )
-            return {}
-    
-    def _resolve_toolkit_path(self, toolkit_path: str) -> str:
-        """Resolve relative toolkit paths against this file's directory."""
-        if os.path.isabs(toolkit_path):
-            return toolkit_path
-        if os.path.exists(toolkit_path):
-            return toolkit_path
-        
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base_dir, toolkit_path)
-    
-    def _is_valid_toolkit_directory(self, path: str) -> bool:
-        """Check if path is a valid toolkit directory with __init__.py."""
-        return (
-            os.path.isdir(path) and 
-            os.path.isfile(os.path.join(path, "__init__.py"))
-        )
-    
-    def _import_toolkit_module(self, toolkit_path: str) -> Dict[str, Any]:
-        """Import toolkit module and extract TOOLKIT_REGISTRY."""
-
-        DYNAMIC_TOOLKIT_MODULE_NAME = "xagent_dynamic_toolkit"
-
-        init_path = os.path.join(toolkit_path, "__init__.py")
-
-        # Create module spec with submodule search locations for relative imports
-        spec = importlib.util.spec_from_file_location(
-            DYNAMIC_TOOLKIT_MODULE_NAME,
-            init_path,
-            submodule_search_locations=[toolkit_path],
-        )
-        
-        if not spec or not spec.loader:
-            return {}
-        
-        # Load and execute module
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[DYNAMIC_TOOLKIT_MODULE_NAME] = module
-        spec.loader.exec_module(module)  # type: ignore[attr-defined]
-        
-        # Extract registry
-        registry = getattr(module, "TOOLKIT_REGISTRY", {})
-        return registry if isinstance(registry, dict) else {}
     
     def _create_output_model_from_schema(
         self, 
@@ -357,7 +255,7 @@ class BaseAgentRunner:
         return Agent(
             name=agent_cfg.get("name"),
             system_prompt=agent_cfg.get("system_prompt"),
-            model=agent_cfg.get("model"),
+            model=self._get_agent_model(agent_cfg),
             client=client,
             tools=tools,
             output_type=output_type,
@@ -365,10 +263,17 @@ class BaseAgentRunner:
             workspace=str(self.workspace),
         )
 
+    def _get_agent_model(self, agent_cfg: Dict[str, Any]) -> Optional[str]:
+        """Read the model from provider.model, with legacy agent.model fallback."""
+        provider_cfg = agent_cfg.get("provider") or {}
+        if isinstance(provider_cfg, dict) and provider_cfg.get("model"):
+            return provider_cfg.get("model")
+        return agent_cfg.get("model")
+
     def _initialize_client(self, agent_cfg: Dict[str, Any]) -> Optional[AsyncOpenAI]:
         """Build an OpenAI-compatible async client from optional provider config."""
         provider_cfg = agent_cfg.get("provider") or {}
-        if not provider_cfg:
+        if not provider_cfg or not isinstance(provider_cfg, dict):
             return None
 
         client_kwargs: Dict[str, Any] = {}
@@ -376,37 +281,20 @@ class BaseAgentRunner:
         if base_url:
             client_kwargs["base_url"] = base_url
 
-        api_key_env = provider_cfg.get("api_key_env")
-        if api_key_env:
-            api_key = os.environ.get(api_key_env)
-            if not api_key:
-                raise ValueError(f"Environment variable '{api_key_env}' is required for provider API key.")
+        api_key = provider_cfg.get("api_key")
+        if api_key:
             client_kwargs["api_key"] = api_key
+
+        if not client_kwargs:
+            return None
 
         return AsyncOpenAI(**client_kwargs)
     
     def _load_agent_tools(self, agent_cfg: Dict[str, Any]) -> List[Any]:
-        """Load tools from built-in registry and optional toolkit registry."""
-        capabilities = agent_cfg.get("capabilities", {})
-        tool_names = capabilities.get("tools", [])
-        
-        # Support legacy format for backward compatibility
-        if "tools" in agent_cfg and "tools" not in capabilities:
-            tool_names = agent_cfg.get("tools", [])
-        
-        # Combine registries
-        toolkit_registry = self._load_toolkit_registry(self.toolkit_path)
-        combined_registry: Dict[str, Any] = {**TOOL_REGISTRY, **toolkit_registry}
-        
-        # Load requested tools
-        tools = []
-        for name in tool_names:
-            if name in combined_registry:
-                tools.append(combined_registry[name])
-            else:
-                self.logger.warning("Tool '%s' not found in registry", name)
-        
-        return tools
+        """Load default built-in tools."""
+        if "capabilities" in agent_cfg or "tools" in agent_cfg:
+            self.logger.warning("Configured tools are ignored; run_command is built in by default.")
+        return [run_command]
     
     def _get_output_type(self, agent_cfg: Dict[str, Any]) -> Optional[Type[BaseModel]]:
         """Get output type from configuration schema."""

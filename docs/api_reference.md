@@ -78,12 +78,13 @@ follow_up = await agent.chat(
 
 ```python
 AgentHTTPServer(
-    config_path: Optional[str] = None,
-    toolkit_path: Optional[str] = None,
+    config_dir: Optional[str] = None,
     agent: Optional[Agent] = None,
     enable_web: bool = True,
 )
 ```
+
+`config_dir` points to a directory containing `config.yaml`; it defaults to `~/.xagent`.
 
 ### Main Endpoints
 
@@ -175,7 +176,7 @@ async def delete(memory_ids: list[str]) -> None
 
 Built-in tools:
 
-- `run_command`
+- `run_command` is enabled by default for config-driven runners
 
 ### `function_tool`
 

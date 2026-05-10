@@ -4,13 +4,13 @@ The AgentHTTPServer now supports direct Agent instance passing, providing more f
 
 ## Usage Examples
 
-### Traditional Config-Based Approach
+### Config Directory Approach
 
 ```python
 from xagent.interfaces import AgentHTTPServer
 
-# Create server with config file
-server = AgentHTTPServer(config_path="agent.yaml")
+# Read config.yaml from the selected xAgent directory
+server = AgentHTTPServer(config_dir="~/.xagent")
 server.run()
 ```
 
@@ -83,4 +83,4 @@ chat_server = AgentHTTPServer(agent=chat_agent)
 
 ## Compatibility
 
-The `agent` parameter works alongside config-file startup. Built-in tools are provider-neutral; add search, image, or other provider-specific capabilities through a custom toolkit.
+The `agent` parameter works alongside config-directory startup. Register custom tools directly through `Agent(tools=[...])`.

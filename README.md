@@ -21,22 +21,35 @@ xAgent is a single-agent runtime with three entry points: Python API, CLI, and H
 pip install myxagent
 ```
 
-### Set environment variables
+### Create a config
 
 ```bash
-export OPENAI_API_KEY=your_openai_api_key
+xagent --init
+```
+
+Then set your provider in `~/.xagent/config.yaml`:
+
+```yaml
+agent:
+  name: "Agent"
+  system_prompt: |
+    You are a helpful assistant.
+
+  provider:
+    model: "gpt-5.4-mini"
+    api_key: "your_api_key_here"
 ```
 
 ### Start the CLI
 
 ```bash
-xagent-cli
+xagent
 ```
 
 Single-shot mode:
 
 ```bash
-xagent-cli --ask "Hello"
+xagent --ask "Hello"
 ```
 
 ## Message Model
@@ -59,6 +72,12 @@ Open the Web UI automatically:
 
 ```bash
 xagent-server --open
+```
+
+Configure host and port at startup:
+
+```bash
+xagent-server --host 127.0.0.1 --port 8010
 ```
 
 Send a chat message:
@@ -129,12 +148,12 @@ asyncio.run(main())
 
 `image_source` accepts a single value or a list of values. Each item can be an image URL, local file path, or base64 data URI.
 
-## Configure with `agent.yaml`
+## Configure with `config.yaml`
 
 Generate a starter config:
 
 ```bash
-xagent-cli --init
+xagent --init
 ```
 
 Example:
@@ -145,27 +164,20 @@ agent:
   system_prompt: |
     You are a helpful AI assistant.
     Answer clearly and accurately.
-  model: "gpt-5.4-mini"
 
-  capabilities:
-    tools:
-      - "run_command"
-
-  # Optional OpenAI-compatible provider override:
-  # provider:
-  #   base_url: "https://api.deepseek.com"
-  #   api_key_env: "DEEPSEEK_API_KEY"
-
-server:
-  host: "0.0.0.0"
-  port: 8010
+  provider:
+    model: "gpt-5.4-mini"
+    # base_url: "https://api.deepseek.com"
+    api_key: "your_api_key_here"
 ```
 
-Run with config:
+`run_command` is built in by default and does not need YAML configuration.
+
+Use a different xAgent directory:
 
 ```bash
-xagent-cli --config config/agent.yaml --toolkit_path my_toolkit
-xagent-server --config config/agent.yaml --toolkit_path my_toolkit --open
+xagent --dir ./my-agent
+xagent-server --dir ./my-agent --host 0.0.0.0 --port 8010 --open
 ```
 
 ## Documentation

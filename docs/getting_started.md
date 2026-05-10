@@ -5,7 +5,7 @@ This guide gets xAgent running with the continuous agent message stream in a few
 ## Prerequisites
 
 - Python 3.12+
-- OpenAI API key
+- API key for an OpenAI-compatible provider
 
 ## Install
 
@@ -13,10 +13,20 @@ This guide gets xAgent running with the continuous agent message stream in a few
 pip install myxagent
 ```
 
-## Set Environment Variables
+## Create a Config
 
 ```bash
-export OPENAI_API_KEY=your_openai_api_key
+xagent --init
+```
+
+Edit `~/.xagent/config.yaml` and set your provider:
+
+```yaml
+agent:
+  name: "Agent"
+  provider:
+    model: "gpt-5.4-mini"
+    api_key: "your_api_key_here"
 ```
 
 ## Core Concepts
@@ -30,13 +40,13 @@ Single-user and multi-user interactions use the same runtime model. The only dif
 ## Start with the CLI
 
 ```bash
-xagent-cli
+xagent
 ```
 
 Single-shot mode:
 
 ```bash
-xagent-cli --ask "Who are you?"
+xagent --ask "Who are you?"
 ```
 
 Inside the CLI:
@@ -51,6 +61,12 @@ xagent-server
 
 - API base: `http://localhost:8010`
 - Web UI: `http://localhost:8010`
+
+Set host and port at startup:
+
+```bash
+xagent-server --host 127.0.0.1 --port 8010
+```
 
 Example request:
 
@@ -100,22 +116,15 @@ async def main():
 asyncio.run(main())
 ```
 
-## Generate a Starter Config
+## Use Another xAgent Directory
 
 ```bash
-xagent-cli --init
+xagent --init --dir ./my-agent
+xagent --dir ./my-agent --ask "Hello"
+xagent-server --dir ./my-agent --host 0.0.0.0 --port 8010
 ```
 
-This creates:
-
-- `config/agent.yaml`
-- `my_toolkit/` with starter custom tools
-
-Then run:
-
-```bash
-xagent-server --config config/agent.yaml --toolkit_path my_toolkit
-```
+The selected directory contains `config.yaml` and local xAgent runtime data.
 
 ## Next Reading
 

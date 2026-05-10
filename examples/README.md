@@ -3,8 +3,7 @@
 This folder is organized by how people usually learn the project:
 
 - [`demo/`](./demo/README.md): curated Python examples for the main runtime APIs
-- [`config/`](./config/README.md): YAML-first examples for `xagent-server` and `xagent-cli`
-- [`toolkit/`](./toolkit/README.md): local custom tools for config-driven runs
+- [`config/`](./config/README.md): YAML-first examples for `xagent-server` and `xagent`
 
 Best-practice rules used in this directory:
 
@@ -20,8 +19,8 @@ Typical starting points:
 python examples/demo/basic_chat.py
 
 # Config-driven server
-xagent-server --config examples/config/agent.yaml
+xagent-server --dir examples/config
 
-# Config-driven server with custom toolkit tools
-xagent-server --config examples/config/toolkit_agent.yaml --toolkit_path examples/toolkit
+# Config-driven CLI
+xagent --dir examples/config --ask "Hello"
 ```

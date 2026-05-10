@@ -1,9 +1,9 @@
 import unittest
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 from xagent.core.config import AgentConfig
+from xagent.interfaces.cli import create_default_config_file
 from xagent.interfaces.base import BaseAgentRunner
 
 
@@ -39,30 +39,56 @@ class AgentConfigPromptTests(unittest.TestCase):
 class ProviderConfigTests(unittest.TestCase):
     def test_provider_config_builds_openai_compatible_client(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "agent.yaml"
+            config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
                 """
 agent:
   name: "ProviderAgent"
-  model: "deepseek-v4-pro"
-  workspace: "{workspace}"
   provider:
+    model: "deepseek-v4-pro"
     base_url: "https://api.deepseek.com"
-    api_key_env: "DEEPSEEK_API_KEY"
-  capabilities:
-    tools: []
-server:
-  host: "127.0.0.1"
-  port: 8010
-""".format(workspace=tmpdir),
+    api_key: "test-key"
+""",
                 encoding="utf-8",
             )
 
-            with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}):
-                runner = BaseAgentRunner(config_path=str(config_path))
+            runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertEqual(runner.agent.model, "deepseek-v4-pro")
             self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.deepseek.com")
+
+    def test_default_run_command_is_not_configured_in_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+agent:
+  name: "ToolAgent"
+  provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+""",
+                encoding="utf-8",
+            )
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertIn("run_command", runner.agent.tools)
+
+    def test_init_creates_only_config_yaml_in_selected_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = create_default_config_file(tmpdir)
+
+            self.assertEqual(config_path, Path(tmpdir).resolve() / "config.yaml")
+            self.assertTrue(config_path.is_file())
+            self.assertFalse((Path(tmpdir) / "my_toolkit").exists())
+
+            config_text = config_path.read_text(encoding="utf-8")
+            self.assertIn("provider:", config_text)
+            self.assertIn("model:", config_text)
+            self.assertNotIn("workspace:", config_text)
+            self.assertNotIn("server:", config_text)
+            self.assertNotIn("capabilities:", config_text)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Configuration Reference
 
-xAgent supports YAML-based configuration for CLI and HTTP server startup.
+xAgent supports a directory-based `config.yaml` for CLI and HTTP server startup.
 
 ## Minimal Config
 
@@ -8,12 +8,12 @@ xAgent supports YAML-based configuration for CLI and HTTP server startup.
 agent:
   name: "MyAgent"
   system_prompt: "You are a helpful assistant."
-  model: "gpt-5.4-mini"
-
-server:
-  host: "0.0.0.0"
-  port: 8010
+  provider:
+    model: "gpt-5.4-mini"
+    api_key: "your_api_key_here"
 ```
+
+By default xAgent reads `~/.xagent/config.yaml`. Use `--dir` to select another directory.
 
 ## Agent Section
 
@@ -21,10 +21,7 @@ server:
 |---|---|---|---|
 | `name` | string | `"Agent"` | Agent identifier |
 | `system_prompt` | string | `"You are a helpful assistant."` | Base system prompt |
-| `model` | string | `"gpt-5.4-mini"` | OpenAI-compatible chat model name |
-| `provider` | object | `null` | Optional OpenAI-compatible provider client config |
-| `workspace` | string | `"~/.xagent"` | Local storage root for the shared SQLite database |
-| `capabilities` | object | `{}` | Tool configuration |
+| `provider` | object | `{ model: "gpt-5.4-mini" }` | OpenAI-compatible provider config |
 | `output_schema` | object | `null` | Structured output schema |
 
 There is no `conversation_mode` config. All chats use the same continuous message-stream model.
@@ -35,59 +32,48 @@ There is no `conversation_mode` config. All chats use the same continuous messag
 - recent context comes from the agent's single message stream
 - single-user and multi-user interactions use the same runtime path
 
-## Capabilities
+## Built-in Tools
 
-### Built-in Tools
+`run_command` is enabled by default. It is not configured in YAML.
 
-```yaml
-agent:
-  capabilities:
-    tools:
-      - "run_command"
-```
-
-Available built-in tools:
-
-- `run_command`
-
-### Custom Toolkit
-
-Load custom tools at runtime:
-
-```bash
-xagent-server --config agent.yaml --toolkit_path my_toolkit/
-```
+Register custom tools programmatically with the Python API: `Agent(tools=[...])`.
 
 ## Provider
 
-By default xAgent uses the OpenAI SDK defaults, including `OPENAI_API_KEY`.
 Set `agent.provider` for OpenAI-compatible providers:
 
 ```yaml
 agent:
-  model: "deepseek-v4-pro"
   provider:
+    model: "deepseek-v4-pro"
     base_url: "https://api.deepseek.com"
-    api_key_env: "DEEPSEEK_API_KEY"
+    api_key: "your_deepseek_api_key"
 ```
 
 MiniMax example:
 
 ```yaml
 agent:
-  model: "MiniMax-M2.7"
   provider:
+    model: "MiniMax-M2.7"
     base_url: "https://api.minimax.io/v1"
-    api_key_env: "MINIMAX_API_KEY"
+    api_key: "your_minimax_api_key"
+```
+
+## HTTP Server Runtime Flags
+
+Host and port are runtime settings, not YAML settings:
+
+```bash
+xagent-server --host 127.0.0.1 --port 8010
 ```
 
 ## Storage Layout
 
-By default the built-in runtime stores data locally:
+By default the built-in runtime stores data locally under the selected xAgent directory.
 
-```yaml
-agent:
-  workspace: "./my_project_data"
+```bash
+xagent --dir ./my-project-agent
 ```
 
 Local mode stores:
@@ -98,7 +84,8 @@ Local mode stores:
 Workspace layout:
 
 ```text
-<workspace>/
+<xagent-dir>/
+  config.yaml
   <agent_name>_messages.sqlite3
   <agent_name>_memory/
     daily/
@@ -144,14 +131,8 @@ agent:
   system_prompt: |
     You are a helpful assistant.
     Be concise and accurate.
-  model: "gpt-5.4-mini"
-  workspace: "./data"
 
-  capabilities:
-    tools:
-      - "run_command"
-
-server:
-  host: "0.0.0.0"
-  port: 8010
+  provider:
+    model: "gpt-5.4-mini"
+    api_key: "your_api_key_here"
 ```

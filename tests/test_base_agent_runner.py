@@ -27,41 +27,37 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
     def test_runner_defaults_to_local_message_storage(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             resolved_tmpdir = Path(tmpdir).resolve()
-            config_path = Path(tmpdir) / "agent.yaml"
+            config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
                 "\n".join(
                     [
                         "agent:",
                         '  name: "Research Agent"',
-                        f'  workspace: "{resolved_tmpdir}"',
-                        "server: {}",
                     ]
                 ),
                 encoding="utf-8",
             )
 
             with patch("xagent.interfaces.base.MessageStorageLocal", _FakeMessageStorageLocal):
-                runner = _RunnerWithoutAgent(config_path=str(config_path))
+                runner = _RunnerWithoutAgent(config_dir=str(resolved_tmpdir))
 
             self.assertEqual(runner.message_storage.path, str(resolved_tmpdir / "research_agent_messages.sqlite3"))
             self.assertFalse(hasattr(runner, "memory_storage"))
 
     def test_runner_message_storage_factory_is_overridable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "agent.yaml"
+            config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
                 "\n".join(
                     [
                         "agent:",
                         '  name: "Extensible Agent"',
-                        f'  workspace: "{tmpdir}"',
-                        "server: {}",
                     ]
                 ),
                 encoding="utf-8",
             )
 
-            runner = _RunnerWithCustomStorage(config_path=str(config_path))
+            runner = _RunnerWithCustomStorage(config_dir=tmpdir)
 
             self.assertEqual(
                 runner.message_storage,

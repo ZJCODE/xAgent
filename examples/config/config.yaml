@@ -1,0 +1,10 @@
+agent:
+  name: "StarterAgent"
+  system_prompt: |
+    You are a helpful assistant.
+    Answer clearly and keep responses practical.
+
+  provider:
+    model: "gpt-5.4-mini"
+    # base_url: "https://api.deepseek.com"
+    # api_key: "your_api_key_here"

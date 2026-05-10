@@ -1,13 +1,11 @@
 import argparse
 import asyncio
 import logging
-import os
 import uuid
+from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
-
-from .base import BaseAgentRunner
+from .base import BaseAgentConfig, BaseAgentRunner
 
 
 class AgentCLI(BaseAgentRunner):
@@ -15,8 +13,7 @@ class AgentCLI(BaseAgentRunner):
 
     def __init__(
         self,
-        config_path: Optional[str] = None,
-        toolkit_path: Optional[str] = None,
+        config_dir: Optional[str] = None,
         verbose: bool = False,
     ):
         self.verbose = verbose
@@ -31,8 +28,7 @@ class AgentCLI(BaseAgentRunner):
             logging.getLogger().setLevel(logging.INFO)
             logging.getLogger("xagent").setLevel(logging.INFO)
 
-        super().__init__(config_path, toolkit_path)
-        self.config_path = config_path if config_path and os.path.isfile(config_path) else None
+        super().__init__(config_dir=config_dir)
 
     async def chat_interactive(
         self,
@@ -160,8 +156,13 @@ class AgentCLI(BaseAgentRunner):
         print("│" + " " * 18 + "🤖 Welcome to xAgent CLI!" + " " * 15 + "│")
         print("╰" + "─" * 58 + "╯")
 
-        config_msg = f"📁 Config: {self.config_path}" if self.config_path else "📁 Config: Default configuration"
+        config_msg = (
+            f"📁 Config: {self.config_path}"
+            if self.config_path.is_file()
+            else f"📁 Config: default values ({self.config_path} not found)"
+        )
         print(f"\n{config_msg}")
+        print(f"📂 Dir: {self.config_dir}")
         print(f"🤖 Agent: {self.agent.name}")
         print(f"🧠 Model: {self.agent.model}")
 
@@ -205,100 +206,57 @@ class AgentCLI(BaseAgentRunner):
             print("│ No built-in tools available                              │")
         print("╰───────────────────────────────────────────────────────────╯")
 
-def create_default_config_file(config_path: str = "config/agent.yaml"):
-    """Create a default configuration file and toolkit directory structure."""
-    config_dir = os.path.dirname(config_path)
-    if config_dir and not os.path.exists(config_dir):
-        os.makedirs(config_dir)
+def create_default_config_file(config_dir: Optional[str] = None) -> Path:
+    """Create a default config.yaml file in the xAgent runtime directory."""
+    resolved_dir = Path(config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
+    resolved_dir.mkdir(parents=True, exist_ok=True)
+    config_path = resolved_dir / BaseAgentConfig.CONFIG_FILENAME
+
+    if config_path.exists():
+        print("╭─────────────────────────────────────────────────────────╮")
+        print("│ ℹ️  xAgent configuration already exists.                │")
+        print("╰─────────────────────────────────────────────────────────╯")
+        print(f"📁 Config: {config_path}")
+        return config_path
 
     default_config_yaml = """agent:
   name: "Agent"
   system_prompt: |
     You are a helpful assistant.
     Answer clearly and keep responses practical.
-  model: "gpt-5.4"
 
-  capabilities:
-    tools:
-      - "run_command"
-
-  # workspace: "~/.xagent"
-
-server:
-  host: "0.0.0.0"
-  port: 8010
+  provider:
+    model: "gpt-5.4-mini"
+    # base_url: "https://api.deepseek.com"
+    # api_key: "your_api_key_here"
 """
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        f.write(default_config_yaml)
-
-    toolkit_dir = "my_toolkit"
-    if not os.path.exists(toolkit_dir):
-        os.makedirs(toolkit_dir)
-
-    init_content = """from .tools import *
-
-TOOLKIT_REGISTRY = {
-    "calculate_square": calculate_square,
-    "fetch_weather": fetch_weather
-}
-"""
-
-    with open(os.path.join(toolkit_dir, "__init__.py"), "w", encoding="utf-8") as f:
-        f.write(init_content)
-
-    tools_content = """import asyncio
-from xagent.utils.tool_decorator import function_tool
-
-@function_tool()
-def calculate_square(n: int) -> int:
-    \"\"\"Calculate the square of a number.\"\"\"
-    return n * n
-
-@function_tool()
-async def fetch_weather(city: str) -> str:
-    \"\"\"Fetch weather data from an API.\"\"\"
-    await asyncio.sleep(0.5)
-    return f"Weather in {city}: 22°C, Sunny"
-"""
-
-    with open(os.path.join(toolkit_dir, "tools.py"), "w", encoding="utf-8") as f:
-        f.write(tools_content)
+    config_path.write_text(default_config_yaml, encoding="utf-8")
 
     print("╭─────────────────────────────────────────────────────────╮")
-    print("│ ✅ Configuration and Toolkit Created Successfully!      │")
+    print("│ ✅ xAgent configuration created successfully!           │")
     print("╰─────────────────────────────────────────────────────────╯")
     print(f"📁 Config: {config_path}")
-    print(f"🛠️  Toolkit: {toolkit_dir}/")
+    return config_path
 
 
 def main():
     parser = argparse.ArgumentParser(description="xAgent CLI - Interactive chat agent")
-    parser.add_argument("--config", default=None, help="Config file path (if not specified, uses default configuration)")
-    parser.add_argument("--toolkit_path", default=None, help="Toolkit directory path (if not specified, no additional tools will be loaded)")
+    parser.add_argument("--dir", default=None, help="Directory containing config.yaml (default: ~/.xagent)")
     parser.add_argument("--user_id", help="Speaker identifier for the chat")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    parser.add_argument("--env", default=".env", help="Path to .env file")
     parser.add_argument("--ask", metavar="MESSAGE", help="Ask a single question instead of starting interactive chat")
-    parser.add_argument("--init", action="store_true", help="Create default configuration file and exit")
+    parser.add_argument("--init", action="store_true", help="Create config.yaml in the selected directory and exit")
 
     args = parser.parse_args()
 
-    if os.path.exists(args.env):
-        load_dotenv(args.env, override=True)
-        if args.verbose:
-            print(f"\n✅ Loaded .env file from: {args.env}\n")
-    elif args.verbose:
-        print(f"\n⚠️  .env file not found: {args.env}\n")
-
     try:
         if args.init:
-            create_default_config_file("config/agent.yaml")
+            create_default_config_file(args.dir)
             return
 
         agent_cli = AgentCLI(
-            config_path=args.config,
-            toolkit_path=args.toolkit_path,
+            config_dir=args.dir,
             verbose=args.verbose,
         )
 

@@ -3,7 +3,11 @@ agent:
   system_prompt: |
     You return weather information in a strict structured format.
     Prefer concise, factual responses.
-  model: "gpt-5.4-mini"
+
+  provider:
+    model: "gpt-5.4-mini"
+    # api_key: "your_api_key_here"
+
   output_schema:
     class_name: "WeatherReport"
     fields:
@@ -16,7 +20,3 @@ agent:
       condition:
         type: "str"
         description: "Short weather condition summary"
-
-server:
-  host: "0.0.0.0"
-  port: 8010

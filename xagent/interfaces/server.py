@@ -1,20 +1,18 @@
 import argparse
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import uvicorn
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .base import BaseAgentRunner
+from .base import BaseAgentConfig, BaseAgentRunner
 from ..core.agent import Agent
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -39,8 +37,7 @@ class AgentHTTPServer(BaseAgentRunner):
 
     def __init__(
         self,
-        config_path: Optional[str] = None,
-        toolkit_path: Optional[str] = None,
+        config_dir: Optional[str] = None,
         agent: Optional[Agent] = None,
         enable_web: bool = True,
     ):
@@ -48,10 +45,10 @@ class AgentHTTPServer(BaseAgentRunner):
 
         if agent is not None:
             self.agent = agent
-            self.config = {"server": {"host": "0.0.0.0", "port": 8010}}
+            self.config = {}
             self.message_storage = self.agent.message_storage
         else:
-            super().__init__(config_path, toolkit_path)
+            super().__init__(config_dir=config_dir)
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         self.app = self._create_app()
@@ -388,9 +385,8 @@ class AgentHTTPServer(BaseAgentRunner):
             return result
 
     def run(self, host: str = None, port: int = None, open_browser: bool = False) -> None:
-        server_cfg = self.config.get("server", {})
-        host = host or server_cfg.get("host", "0.0.0.0")
-        port = port or server_cfg.get("port", 8010)
+        host = host if host is not None else BaseAgentConfig.DEFAULT_HOST
+        port = port if port is not None else BaseAgentConfig.DEFAULT_PORT
 
         self.logger.info("Starting xAgent HTTP Server on %s:%s", host, port)
         self.logger.info("Agent: %s", self.agent.name)
@@ -427,26 +423,17 @@ app = None
 
 
 def main():
-    logger = logging.getLogger("xAgent.HTTPServer.main")
-
     parser = argparse.ArgumentParser(description="xAgent HTTP Server")
-    parser.add_argument("--config", default=None, help="Config file path (if not specified, uses default configuration)")
-    parser.add_argument("--toolkit_path", default=None, help="Toolkit directory path (if not specified, no additional tools will be loaded)")
+    parser.add_argument("--dir", default=None, help="Directory containing config.yaml (default: ~/.xagent)")
     parser.add_argument("--host", default=None, help="Host to bind to")
     parser.add_argument("--port", type=int, default=None, help="Port to bind to")
-    parser.add_argument("--env", default=".env", help="Path to .env file")
     parser.add_argument("--open", action="store_true", dest="open_browser", help="Auto-open the web UI in the default browser")
     parser.add_argument("--no-web", action="store_true", dest="no_web", help="Disable the built-in web UI (API-only mode)")
 
     args = parser.parse_args()
 
-    if os.path.exists(args.env):
-        load_dotenv(args.env, override=True)
-        logger.info("Loaded environment from %s", args.env)
-
     server = AgentHTTPServer(
-        config_path=args.config,
-        toolkit_path=args.toolkit_path,
+        config_dir=args.dir,
         enable_web=not args.no_web,
     )
     server.run(host=args.host, port=args.port, open_browser=args.open_browser)

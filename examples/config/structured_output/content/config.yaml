@@ -3,7 +3,10 @@ agent:
   system_prompt: |
     You generate structured content briefs.
     Keep the output concise, useful, and consistent with the schema.
-  model: "gpt-5.4-mini"
+
+  provider:
+    model: "gpt-5.4-mini"
+    # api_key: "your_api_key_here"
 
   output_schema:
     class_name: "ContentReport"
@@ -22,7 +25,3 @@ agent:
         type: "list"
         items: "str"
         description: "Relevant categorization labels"
-
-server:
-  host: "0.0.0.0"
-  port: 8010
