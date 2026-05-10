@@ -20,6 +20,9 @@ class BaseAgentConfig:
 
     DEFAULT_MODEL = AgentConfig.DEFAULT_MODEL
     DEFAULT_CONFIG_DIR = AgentConfig.DEFAULT_WORKSPACE
+    MEMORY_DIRNAME = AgentConfig.MEMORY_DIRNAME
+    MESSAGE_DIRNAME = AgentConfig.MESSAGE_DIRNAME
+    MESSAGE_DB_FILENAME = AgentConfig.MESSAGE_DB_FILENAME
     CONFIG_FILENAME = "config.yaml"
     IDENTITY_FILENAME = "identity.md"
     DEFAULT_HOST = "0.0.0.0"
@@ -343,7 +346,7 @@ class BaseAgentRunner:
         return self._create_message_storage()
 
     def _get_message_storage_path(self) -> Path:
-        return self.workspace / "messages.sqlite3"
+        return self.workspace / BaseAgentConfig.MESSAGE_DIRNAME / BaseAgentConfig.MESSAGE_DB_FILENAME
 
     def _create_message_storage(self) -> MessageStorageBase:
         return MessageStorageLocal(path=str(self._get_message_storage_path()))

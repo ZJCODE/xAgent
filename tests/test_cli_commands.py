@@ -1,8 +1,21 @@
 import argparse
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from xagent.interfaces.cli import build_parser, handle_server, main
+from xagent.interfaces.cli import InitSelection, build_parser, handle_init, handle_server, main
+
+
+def _selection() -> InitSelection:
+    return InitSelection(
+        provider="openai",
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="gpt-5.4-mini",
+        identity="# Identity\n\nTest agent.\n",
+        search_provider="openai",
+    )
 
 
 class CLICommandTests(unittest.TestCase):
@@ -79,6 +92,52 @@ class CLICommandTests(unittest.TestCase):
             build_parser().parse_args(["--init"])
         with self.assertRaises(SystemExit):
             build_parser().parse_args(["--ask", "Hello"])
+
+    def test_init_force_can_keep_runtime_dirs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "config.yaml").write_text("provider:\n  model: old\n", encoding="utf-8")
+            (root / "identity.md").write_text("old", encoding="utf-8")
+            memory_marker = root / "memory" / "entry.md"
+            messages_marker = root / "messages" / "messages.sqlite3"
+            memory_marker.parent.mkdir()
+            messages_marker.parent.mkdir()
+            memory_marker.write_text("keep-memory", encoding="utf-8")
+            messages_marker.write_text("keep-messages", encoding="utf-8")
+            args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
+
+            with patch("xagent.interfaces.cli._prompt_yes_no", return_value=False) as prompt:
+                with patch("xagent.interfaces.cli.collect_init_selection", return_value=_selection()):
+                    exit_code = handle_init(args)
+
+            self.assertEqual(exit_code, 0)
+            prompt.assert_called_once()
+            self.assertEqual(memory_marker.read_text(encoding="utf-8"), "keep-memory")
+            self.assertEqual(messages_marker.read_text(encoding="utf-8"), "keep-messages")
+
+    def test_init_force_can_clear_runtime_dirs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "config.yaml").write_text("provider:\n  model: old\n", encoding="utf-8")
+            (root / "identity.md").write_text("old", encoding="utf-8")
+            memory_marker = root / "memory" / "entry.md"
+            messages_marker = root / "messages" / "messages.sqlite3"
+            memory_marker.parent.mkdir()
+            messages_marker.parent.mkdir()
+            memory_marker.write_text("clear-memory", encoding="utf-8")
+            messages_marker.write_text("clear-messages", encoding="utf-8")
+            args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
+
+            with patch("xagent.interfaces.cli._prompt_yes_no", return_value=True) as prompt:
+                with patch("xagent.interfaces.cli.collect_init_selection", return_value=_selection()):
+                    exit_code = handle_init(args)
+
+            self.assertEqual(exit_code, 0)
+            prompt.assert_called_once()
+            self.assertTrue((root / "memory").is_dir())
+            self.assertTrue((root / "messages").is_dir())
+            self.assertFalse(memory_marker.exists())
+            self.assertFalse(messages_marker.exists())
 
     def test_server_handler_passes_options_to_server(self):
         args = argparse.Namespace(

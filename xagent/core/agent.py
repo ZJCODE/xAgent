@@ -57,22 +57,22 @@ class Agent:
             self.message_storage = message_storage
         elif workspace_path is not None:
             self.message_storage = MessageStorageLocal(
-                path=str(workspace_path / "messages.sqlite3")
+                path=str(self._message_storage_path(workspace_path))
             )
         else:
             default_workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
             default_workspace.mkdir(parents=True, exist_ok=True)
             self.message_storage = MessageStorageLocal(
-                path=str(default_workspace / "messages.sqlite3")
+                path=str(self._message_storage_path(default_workspace))
             )
 
         # Markdown-based memory system
         if workspace_path is not None:
-            memory_dir = str(workspace_path / "memory")
+            memory_dir = str(self._memory_dir(workspace_path))
         else:
             default_workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
             default_workspace.mkdir(parents=True, exist_ok=True)
-            memory_dir = str(default_workspace / "memory")
+            memory_dir = str(self._memory_dir(default_workspace))
 
         self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
         self.llm_service = JournalLLMService(client=self.client, model=self.model)
@@ -112,6 +112,14 @@ class Agent:
     @property
     def tools(self) -> dict:
         return self.tool_manager.tools
+
+    @classmethod
+    def _message_storage_path(cls, workspace: Path) -> Path:
+        return workspace / AgentConfig.MESSAGE_DIRNAME / AgentConfig.MESSAGE_DB_FILENAME
+
+    @classmethod
+    def _memory_dir(cls, workspace: Path) -> Path:
+        return workspace / AgentConfig.MEMORY_DIRNAME
 
     async def __call__(
         self,

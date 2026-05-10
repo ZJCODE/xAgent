@@ -15,7 +15,7 @@ from ...schemas import Message, MessageType
 class MessageStorageLocalConfig:
     """Configuration constants for ``MessageStorageLocal``."""
 
-    DEFAULT_PATH = "~/.xagent/messages.sqlite3"
+    DEFAULT_PATH = "~/.xagent/messages/messages.sqlite3"
     DEFAULT_MESSAGE_COUNT = 100
     CONNECT_TIMEOUT = 5.0
     TABLE_NAME = "messages"

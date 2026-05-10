@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import getpass
 import logging
+import shutil
 import sys
 import uuid
 from dataclasses import dataclass
@@ -220,6 +221,8 @@ class InitResult:
 
     config_path: Path
     identity_path: Path
+    memory_dir: Path
+    messages_dir: Path
     wrote_files: bool
     conflicts: Tuple[Path, ...]
 
@@ -363,6 +366,24 @@ def _prompt_text(
     return value
 
 
+def _prompt_yes_no(
+    prompt: str,
+    *,
+    default: bool = False,
+    input_func: Callable[[str], str] = input,
+) -> bool:
+    suffix = " [Y/n]" if default else " [y/N]"
+    while True:
+        value = input_func(f"{prompt}{suffix}: ").strip().lower()
+        if not value:
+            return default
+        if value in {"y", "yes"}:
+            return True
+        if value in {"n", "no"}:
+            return False
+        print("Please answer y or n.")
+
+
 def _select_option(
     title: str,
     options: Sequence[str],
@@ -489,12 +510,15 @@ def init_agent_directory(
     force: bool = False,
     schema: bool = False,
     selection: Optional[InitSelection] = None,
+    clear_runtime_data: bool = False,
 ) -> InitResult:
-    """Create config.yaml and identity.md in the selected xAgent directory."""
+    """Create config.yaml, identity.md, and runtime directories."""
     resolved_dir = Path(config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
     resolved_dir.mkdir(parents=True, exist_ok=True)
     config_path = resolved_dir / BaseAgentConfig.CONFIG_FILENAME
     identity_path = resolved_dir / BaseAgentConfig.IDENTITY_FILENAME
+    memory_dir = resolved_dir / BaseAgentConfig.MEMORY_DIRNAME
+    messages_dir = resolved_dir / BaseAgentConfig.MESSAGE_DIRNAME
     managed_paths = (config_path, identity_path)
     conflicts = tuple(path for path in managed_paths if path.exists())
 
@@ -508,9 +532,17 @@ def init_agent_directory(
         return InitResult(
             config_path=config_path,
             identity_path=identity_path,
+            memory_dir=memory_dir,
+            messages_dir=messages_dir,
             wrote_files=False,
             conflicts=conflicts,
         )
+
+    if clear_runtime_data:
+        _clear_runtime_directory(memory_dir)
+        _clear_runtime_directory(messages_dir)
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    messages_dir.mkdir(parents=True, exist_ok=True)
 
     selection = selection or _default_init_selection()
     config_path.write_text(_config_yaml(selection, schema=schema), encoding="utf-8")
@@ -521,12 +553,23 @@ def init_agent_directory(
     print("╰─────────────────────────────────────────────────────────╯")
     print(f"Config: {config_path}")
     print(f"Identity: {identity_path}")
+    print(f"Memory: {memory_dir}")
+    print(f"Messages: {messages_dir}")
     return InitResult(
         config_path=config_path,
         identity_path=identity_path,
+        memory_dir=memory_dir,
+        messages_dir=messages_dir,
         wrote_files=True,
         conflicts=(),
     )
+
+
+def _clear_runtime_directory(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
 
 
 def _add_dir_argument(parser: argparse.ArgumentParser) -> None:
@@ -617,12 +660,20 @@ def handle_init(args: argparse.Namespace) -> int:
         )
         return 0 if result.wrote_files else 1
 
+    clear_runtime_data = False
+    if args.force:
+        clear_runtime_data = _prompt_yes_no(
+            "Clear existing memory/ and messages/ data as part of init --force?",
+            default=False,
+        )
+
     selection = collect_init_selection()
     result = init_agent_directory(
         args.config_dir,
         force=args.force,
         schema=args.schema,
         selection=selection,
+        clear_runtime_data=clear_runtime_data,
     )
     return 0 if result.wrote_files else 1
 

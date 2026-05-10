@@ -13,6 +13,9 @@ class AgentConfig:
 
     DEFAULT_MODEL = "gpt-5.4-mini"
     DEFAULT_WORKSPACE = "~/.xagent"
+    MEMORY_DIRNAME = "memory"
+    MESSAGE_DIRNAME = "messages"
+    MESSAGE_DB_FILENAME = "messages.sqlite3"
     DEFAULT_USER_ID = "default_user"
     DEFAULT_HISTORY_COUNT = 100
     MAX_TRANSCRIPT_MESSAGES = 40

@@ -43,7 +43,10 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
             with patch("xagent.interfaces.base.MessageStorageLocal", _FakeMessageStorageLocal):
                 runner = _RunnerWithoutAgent(config_dir=str(resolved_tmpdir))
 
-            self.assertEqual(runner.message_storage.path, str(resolved_tmpdir / "messages.sqlite3"))
+            self.assertEqual(
+                runner.message_storage.path,
+                str(resolved_tmpdir / "messages" / "messages.sqlite3"),
+            )
             self.assertFalse(hasattr(runner, "memory_storage"))
 
     def test_runner_message_storage_factory_is_overridable(self):
