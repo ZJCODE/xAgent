@@ -52,6 +52,15 @@ class FeishuAdapterConfig:
         enable_memory: Pass-through to the agent's long-term memory.
         history_count / max_iter / max_concurrent_tools: Per-turn knobs
             forwarded to ``agent.chat`` and ``agent.observe``.
+        prefetch_context: When True, pre-fetch the replied-to message,
+            topic/thread siblings, and recent group history before replying
+            to an @-mention, and prime them into ``agent.observe`` first
+            (so the agent has the same context a human would scroll up to
+            read). Requires the app to have ``im:message:readonly`` (or
+            ``im:message``); falls back silently when the scope is missing.
+        chat_history_count: How many recent group messages to pull on each
+            @-mention. ``0`` disables history pulls (parent / thread still
+            pulled if applicable).
         advanced: Raw pass-through kwargs for ``FeishuChannel`` (policy,
             safety, ...). Reserved for power users.
     """
@@ -67,6 +76,10 @@ class FeishuAdapterConfig:
     history_count: Optional[int] = None
     max_iter: Optional[int] = None
     max_concurrent_tools: Optional[int] = None
+
+    prefetch_context: bool = True
+    chat_history_count: int = 10
+    prefetch_timeout: float = 5.0
 
     advanced: Dict[str, Any] = field(default_factory=dict)
 

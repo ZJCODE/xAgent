@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from ...core.agent import Agent
 from .config import FeishuAdapterConfig
+from .history import FeishuHistoryFetcher, format_context_recap
 
 
 class _FeishuLogRedactionFilter(logging.Filter):
@@ -63,6 +64,8 @@ class FeishuAdapter:
         self.config = config
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self._channel = None  # type: ignore[var-annotated]
+        self._history_fetcher: Optional[FeishuHistoryFetcher] = None
+        self._warned_mention_fallback = False
         self._stop_event = asyncio.Event()
 
     # ------------------------------------------------------------------
@@ -207,10 +210,10 @@ class FeishuAdapter:
             getattr(event, "sender_id", None),
         )
 
-    async def _on_reconnecting(self, _: Any) -> None:
+    async def _on_reconnecting(self, *_: Any) -> None:
         self.logger.warning("FeishuChannel reconnecting…")
 
-    async def _on_reconnected(self, _: Any) -> None:
+    async def _on_reconnected(self, *_: Any) -> None:
         self.logger.info("FeishuChannel reconnected.")
 
     # ------------------------------------------------------------------
@@ -237,29 +240,42 @@ class FeishuAdapter:
             self.logger.debug("Skipping message without chat_id: %r", msg)
             return
 
-        if not text:
-            self.logger.debug("Skipping non-text message (chat_type=%s)", chat_type)
-            return
-
         if chat_type == "p2p":
+            if not text:
+                self.logger.debug("Skipping non-text direct message")
+                return
             await self._handle_chat(
                 chat_id=chat_id,
                 message_id=message_id,
                 user_id=sender_id,
                 text=text,
                 is_group=False,
+                raw_msg=msg,
             )
             return
 
         if chat_type in {"group", "topic"}:
             if self._is_bot_mentioned(msg):
+                if not text:
+                    text = "The user mentioned you without adding any text."
+                self.logger.info(
+                    "Feishu @mention routed to chat: chat_type=%s chat_id=%s message_id=%s sender_id=%s",
+                    chat_type,
+                    chat_id,
+                    message_id,
+                    sender_id,
+                )
                 await self._handle_chat(
                     chat_id=chat_id,
                     message_id=message_id,
                     user_id=sender_id,
                     text=text,
                     is_group=True,
+                    raw_msg=msg,
                 )
+                return
+            if not text:
+                self.logger.debug("Skipping non-text group message (chat_type=%s)", chat_type)
                 return
             await self._handle_observe(
                 chat_id=chat_id,
@@ -287,10 +303,50 @@ class FeishuAdapter:
         if bool(getattr(msg, "mentioned_bot", False)):
             return True
 
-        bot_open_id = self._bot_open_id()
-        if not bot_open_id:
+        mentions = list(getattr(msg, "mentions", []) or [])
+        if not mentions:
             return False
-        return any(getattr(mention, "open_id", None) == bot_open_id for mention in getattr(msg, "mentions", []) or [])
+
+        bot_open_id = self._bot_open_id()
+        if bot_open_id:
+            return any(self._mention_field(mention, "open_id") == bot_open_id for mention in mentions)
+
+        bot_name = self._bot_name()
+        if bot_name and any(self._mention_field(mention, "name") == bot_name for mention in mentions):
+            return True
+
+        # The SDK can receive group @ events before bot identity has resolved.
+        # In that window `mentioned_bot` is false and we cannot compare open_id.
+        # Treat mentioned group/topic messages as addressed so direct @bot does
+        # not go silent; once identity resolves the precise open_id path above
+        # takes over.
+        if not self._warned_mention_fallback:
+            self.logger.warning(
+                "Bot identity is not resolved; treating mentioned group/topic message as @bot"
+            )
+            self._warned_mention_fallback = True
+        return True
+
+    @staticmethod
+    def _mention_field(mention: Any, field_name: str) -> Optional[str]:
+        if isinstance(mention, dict):
+            value = mention.get(field_name)
+            if isinstance(value, str) and value:
+                return value
+            mention_id = mention.get("id")
+            if isinstance(mention_id, dict):
+                nested = mention_id.get(field_name)
+                if isinstance(nested, str) and nested:
+                    return nested
+            return None
+        value = getattr(mention, field_name, None)
+        if isinstance(value, str) and value:
+            return value
+        mention_id = getattr(mention, "id", None)
+        nested = getattr(mention_id, field_name, None) if mention_id is not None else None
+        if isinstance(nested, str) and nested:
+            return nested
+        return None
 
     def _bot_open_id(self) -> Optional[str]:
         channel = self._channel
@@ -301,6 +357,157 @@ class FeishuAdapter:
         if open_id:
             return open_id
         return getattr(channel, "_bot_open_id", None)
+
+    def _bot_name(self) -> Optional[str]:
+        channel = self._channel
+        if channel is None:
+            return None
+        identity = getattr(channel, "bot_identity", None)
+        name = getattr(identity, "name", None)
+        if isinstance(name, str) and name:
+            return name
+        return None
+
+    # ------------------------------------------------------------------
+    # Context prefetch (observe-then-chat)
+    # ------------------------------------------------------------------
+
+    def _get_history_fetcher(self) -> Optional[FeishuHistoryFetcher]:
+        if not self.config.prefetch_context:
+            return None
+        if self._channel is None:
+            return None
+        if self._history_fetcher is None:
+            self._history_fetcher = FeishuHistoryFetcher(self._channel, self.logger)
+        return self._history_fetcher
+
+    async def _prime_context(
+        self,
+        *,
+        chat_id: str,
+        current_message_id: Optional[str],
+        raw_msg: Any,
+        is_group: bool,
+        user_id: str,
+    ) -> None:
+        fetcher = self._get_history_fetcher()
+        if fetcher is None:
+            return
+
+        parent_id = self._reply_to_message_id(raw_msg)
+        thread_id = self._thread_id(raw_msg) if is_group else None
+        history_count = self.config.chat_history_count if is_group else 0
+
+        if not parent_id and not thread_id and history_count <= 0:
+            return
+
+        try:
+            # Hard cap the prefetch so a slow / unauthorized Feishu API
+            # never blocks the @-mention reply.
+            records = await asyncio.wait_for(
+                fetcher.fetch_context(
+                    chat_id=chat_id,
+                    current_message_id=current_message_id,
+                    parent_message_id=parent_id,
+                    thread_id=thread_id,
+                    history_count=history_count,
+                ),
+                timeout=self.config.prefetch_timeout,
+            )
+        except asyncio.TimeoutError:
+            self.logger.warning(
+                "Feishu context prefetch timed out after %.1fs; continuing without it",
+                self.config.prefetch_timeout,
+            )
+            return
+        except Exception:
+            self.logger.exception("Feishu context prefetch failed; continuing without it")
+            return
+
+        if not records:
+            self.logger.debug(
+                "Feishu context prefetch returned no records (chat_id=%s, parent=%s, thread=%s, n=%d)",
+                chat_id,
+                parent_id,
+                thread_id,
+                history_count,
+            )
+            return
+
+        recap = format_context_recap(records, bot_open_id=self._bot_open_id())
+        if not recap.strip():
+            return
+
+        self.logger.info(
+            "Priming agent with %d Feishu context message(s) before chat (chat_id=%s)",
+            len(records),
+            chat_id,
+        )
+
+        observe_kwargs: dict[str, Any] = {
+            "context": recap,
+            "current_user_id": user_id,
+            "source": "feishu",
+            "event_type": "history_recap",
+            "sender_id": user_id,
+            "metadata": {
+                "chat_id": chat_id,
+                "current_message_id": current_message_id,
+                "addressed_to_agent": False,
+                "context_only": True,
+                "record_count": len(records),
+                "record_sources": sorted({r.source for r in records}),
+            },
+            "enable_memory": self.config.enable_memory,
+            # Ingest-only: no LLM call, no chance of swallowing the @-reply.
+            "no_reply": True,
+        }
+        if self.config.max_concurrent_tools is not None:
+            observe_kwargs["max_concurrent_tools"] = self.config.max_concurrent_tools
+
+        try:
+            await self.agent.observe(**observe_kwargs)
+        except Exception:
+            self.logger.exception("agent.observe(history_recap) failed; continuing")
+
+    @staticmethod
+    def _reply_to_message_id(msg: Any) -> Optional[str]:
+        if msg is None:
+            return None
+        # Typed InboundMessage exposes `reply_to_message_id`.
+        direct = getattr(msg, "reply_to_message_id", None)
+        if isinstance(direct, str) and direct:
+            return direct
+        reply = getattr(msg, "reply", None)
+        if reply is None:
+            return None
+        nested = getattr(reply, "message_id", None)
+        if isinstance(nested, str) and nested:
+            return nested
+        if isinstance(reply, dict):
+            value = reply.get("message_id")
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    @staticmethod
+    def _thread_id(msg: Any) -> Optional[str]:
+        if msg is None:
+            return None
+        direct = getattr(msg, "thread_id", None)
+        if isinstance(direct, str) and direct:
+            return direct
+        conversation = getattr(msg, "conversation", None)
+        if conversation is None:
+            return None
+        thread_id = getattr(conversation, "thread_id", None)
+        if isinstance(thread_id, str) and thread_id:
+            return thread_id
+        if isinstance(conversation, dict):
+            value = conversation.get("thread_id")
+            if isinstance(value, str) and value:
+                return value
+        return None
 
     # ------------------------------------------------------------------
     # Chat path
@@ -314,7 +521,20 @@ class FeishuAdapter:
         user_id: str,
         text: str,
         is_group: bool,
+        raw_msg: Any = None,
     ) -> None:
+        # Scroll up: pull surrounding context the bot didn't see, and prime
+        # it through ``agent.observe`` (like a human catching up before
+        # speaking). Safe no-op when no context is available or the app
+        # lacks history-read scopes.
+        await self._prime_context(
+            chat_id=chat_id,
+            current_message_id=message_id,
+            raw_msg=raw_msg,
+            is_group=is_group,
+            user_id=user_id,
+        )
+
         chat_kwargs = self._chat_kwargs(user_id=user_id, text=text)
 
         if self.config.stream and not self.agent.output_type:
@@ -329,6 +549,11 @@ class FeishuAdapter:
         result = await self.agent.chat(**chat_kwargs)
         reply_text = self._stringify(result)
         if not reply_text:
+            self.logger.warning(
+                "Agent returned empty Feishu reply: chat_id=%s message_id=%s",
+                chat_id,
+                message_id,
+            )
             return
         await self._send_markdown(
             chat_id=chat_id,

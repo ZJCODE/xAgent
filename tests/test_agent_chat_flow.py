@@ -460,6 +460,34 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(memory_handler.experience_messages, [storage.messages[0]])
         self.assertFalse(memory_handler.caused_reply)
 
+    async def test_observe_no_reply_skips_llm_decision_but_stores_event(self):
+        storage = InMemoryMessageStorage()
+        memory_handler = FakeMemoryHandler()
+        # No model responses queued — observe(no_reply=True) must NOT call the model.
+        model_client = CapturingModelClient([])
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            memory_handler=memory_handler,
+        )
+
+        result = await Agent.observe(
+            agent,
+            context="预拉取的群历史 recap。",
+            current_user_id="alice",
+            source="feishu",
+            event_type="history_recap",
+            no_reply=True,
+        )
+
+        self.assertFalse(result.replied)
+        self.assertIsNone(result.reply)
+        self.assertEqual(len(storage.messages), 1)
+        self.assertEqual(storage.messages[0].type, MessageType.CONTEXT_EVENT)
+        self.assertEqual(model_client.calls, [])
+        self.assertEqual(memory_handler.experience_messages, [storage.messages[0]])
+        self.assertFalse(memory_handler.caused_reply)
+
     async def test_observe_stores_reply_and_preserves_overheard_attribution(self):
         storage = InMemoryMessageStorage()
         memory_handler = FakeMemoryHandler()

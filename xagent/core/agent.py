@@ -308,8 +308,19 @@ class Agent:
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         enable_memory: bool = True,
         private: bool = False,
+        no_reply: bool = False,
     ) -> AgentTurnResult:
-        """Record an environmental observation and decide whether to speak."""
+        """Record an environmental observation and decide whether to speak.
+
+        Args:
+            no_reply: When True, skip the LLM "should I speak?" decision
+                entirely. The context event is still stored (and a memory
+                experience write is still scheduled), so subsequent
+                ``chat`` / ``observe`` calls will see the new context.
+                Use this for pure ingestion (e.g. priming the agent with
+                prefetched chat history) where you never want this call to
+                produce a reply on its own.
+        """
         msg_handler = self._message_handler_for_mode(private=private)
         memory_mode = MemoryMode.from_flags(enable_memory=enable_memory, private=private)
         memory_mode_token = self._set_memory_mode(memory_mode)
@@ -322,6 +333,22 @@ class Agent:
                 sender_id=sender_id,
                 metadata=metadata,
             )
+
+            if no_reply:
+                # Ingest-only path: no LLM call, no decision, no reply.
+                self._schedule_experience_write(
+                    msg_handler=msg_handler,
+                    memory_mode=memory_mode,
+                    messages=[event_msg],
+                )
+                return AgentTurnResult(
+                    kind="observe",
+                    replied=False,
+                    reply=None,
+                    event_id=event_msg.timestamp,
+                    event_type=event_type,
+                    source=source,
+                )
 
             effective_history_count = self._effective_history_count(history_count)
             recent_messages = await msg_handler.get_recent_messages(
