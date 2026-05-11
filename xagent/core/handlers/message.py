@@ -1,6 +1,6 @@
 import time
 import logging
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
 from ...components import MessageStorageBase
@@ -26,7 +26,7 @@ class MessageHandler:
         user_message: str,
         user_id: str,
         image_source: Optional[Union[str, List[str]]] = None,
-    ) -> None:
+    ) -> Message:
         """Store a user message, auto-detecting embedded image URLs."""
         detected = extract_image_urls_from_text(user_message)
         if detected:
@@ -43,10 +43,31 @@ class MessageHandler:
             sender_id=user_id,
         )
         await self.message_storage.add_messages(msg)
+        return msg
 
-    async def store_model_reply(self, reply_text: str, sender_id: str) -> None:
+    async def store_model_reply(self, reply_text: str, sender_id: str) -> Message:
         model_msg = Message.create(content=reply_text, role=RoleType.ASSISTANT, sender_id=sender_id)
         await self.message_storage.add_messages(model_msg)
+        return model_msg
+
+    async def store_context_event(
+        self,
+        context: str,
+        source: str = "environment",
+        event_type: str = "observation",
+        sender_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Message:
+        """Store a non-direct observation from the agent's environment."""
+        event_msg = Message.create_context_event(
+            content=context,
+            source=source,
+            event_type=event_type,
+            sender_id=sender_id,
+            metadata=metadata,
+        )
+        await self.message_storage.add_messages(event_msg)
+        return event_msg
 
     async def get_recent_messages(
         self,
@@ -76,22 +97,36 @@ class MessageHandler:
         ]
 
     @staticmethod
+    def filter_context_events(messages: List[Message]) -> List[Message]:
+        """Keep persisted environment observations/context events."""
+        return [msg for msg in messages if msg.type == MessageType.CONTEXT_EVENT]
+
+    @staticmethod
     def build_recent_transcript_message(
         messages: List[Message],
         current_user_id: str,
         memory_context: str = "",
+        turn_kind: str = "chat",
+        context_events: Optional[List[Message]] = None,
         max_messages: int = AgentConfig.MAX_TRANSCRIPT_MESSAGES,
         max_total_chars: int = AgentConfig.MAX_TRANSCRIPT_CHARS,
         max_message_chars: int = AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS,
+        max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
+        max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
     ) -> dict:
         """Collapse recent conversation history into one user transcript message.
 
         Includes per-turn dynamic context that changes each call:
           - Runtime metadata (current speaker, date)
           - Recent diary memory (conditional)
-          - Conversation transcript with speaker labels
+                    - Recent experience in chronological order
         """
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
+        observation_messages = (
+            MessageHandler.filter_context_events(messages)
+            if context_events is None
+            else MessageHandler.filter_context_events(context_events)
+        )
         budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
             conversation_messages,
             max_messages=max_messages,
@@ -99,6 +134,15 @@ class MessageHandler:
             max_message_chars=max_message_chars,
         )
         budgeted_messages = [msg for msg, _ in budgeted_entries]
+        budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
+            observation_messages,
+            max_events=max_context_events,
+            max_event_chars=max_context_event_chars,
+        )
+        experience_entries = MessageHandler._merge_experience_entries(
+            budgeted_entries,
+            budgeted_observations,
+        )
 
         transcript_lines: list[str] = []
 
@@ -117,32 +161,28 @@ class MessageHandler:
             )
             transcript_lines.append("")
 
-        # --- Conversation transcript ---
+        # --- Recent experience ---
         transcript_lines.append("==========\n")
         transcript_lines.append("")
+        transcript_lines.append("**Recent Experience** (conversation and observations in chronological order):")
+        transcript_lines.append("")
 
-        if omitted_count:
-            transcript_lines.append(f"[Earlier transcript omitted: {omitted_count} messages]")
+        if omitted_count or omitted_observation_count:
+            transcript_lines.append(
+                MessageHandler._format_omitted_experience_note(
+                    omitted_messages=omitted_count,
+                    omitted_observations=omitted_observation_count,
+                )
+            )
             transcript_lines.append("")
 
-        for msg, content in budgeted_entries:
-            speaker = MessageHandler._format_transcript_speaker(msg)
-            transcript_lines.append(f"[speaker={speaker}]")
-            transcript_lines.append(content)
-
-            image_count = MessageHandler._count_message_images(msg)
-            if image_count:
-                noun = "image" if image_count == 1 else "images"
-                transcript_lines.append(f"[Attached {noun}: {image_count}]")
-
+        for entry_type, msg, content in experience_entries:
+            transcript_lines.extend(
+                MessageHandler._format_experience_entry(entry_type, msg, content)
+            )
             transcript_lines.append("")
 
-        transcript_lines.append(
-            "\n==========\n\nNow reply directly to the latest message "
-            f"from {current_user_id}. Respond as yourself — do not suggest, "
-            "propose alternatives, or wrap your reply in quotes. "
-            "Never mention internal labels, tags, or message formatting in your reply."
-        )
+        transcript_lines.append(MessageHandler._build_turn_instruction(turn_kind, current_user_id))
 
         transcript_text = "\n".join(transcript_lines).strip()
         latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id)
@@ -155,6 +195,109 @@ class MessageHandler:
             for image_source in latest_images
         )
         return {"role": RoleType.USER.value, "content": content}
+
+    @staticmethod
+    def _merge_experience_entries(
+        conversation_entries: List[tuple[Message, str]],
+        observation_entries: List[tuple[Message, str]],
+    ) -> List[tuple[str, Message, str]]:
+        entries = [
+            ("message", msg, content)
+            for msg, content in conversation_entries
+        ]
+        entries.extend(
+            ("observation", msg, content)
+            for msg, content in observation_entries
+        )
+        return sorted(entries, key=lambda entry: entry[1].timestamp)
+
+    @staticmethod
+    def _format_omitted_experience_note(
+        omitted_messages: int,
+        omitted_observations: int,
+    ) -> str:
+        parts: list[str] = []
+        if omitted_messages:
+            noun = "message" if omitted_messages == 1 else "messages"
+            parts.append(f"{omitted_messages} conversation {noun}")
+        if omitted_observations:
+            noun = "observation" if omitted_observations == 1 else "observations"
+            parts.append(f"{omitted_observations} {noun}")
+        return "[Earlier experience omitted: " + ", ".join(parts) + "]"
+
+    @staticmethod
+    def _format_experience_entry(
+        entry_type: str,
+        message: Message,
+        content: str,
+    ) -> List[str]:
+        if entry_type == "observation":
+            return [MessageHandler._format_context_event_header(message), content]
+
+        lines = [
+            f"[speaker={MessageHandler._format_transcript_speaker(message)}]",
+            content,
+        ]
+        image_count = MessageHandler._count_message_images(message)
+        if image_count:
+            noun = "image" if image_count == 1 else "images"
+            lines.append(f"[Attached {noun}: {image_count}]")
+        return lines
+
+    @staticmethod
+    def _budget_context_events(
+        messages: List[Message],
+        max_events: int,
+        max_event_chars: int,
+    ) -> tuple[List[tuple[Message, str]], int]:
+        if not messages:
+            return [], 0
+
+        event_limit = max(1, int(max_events or AgentConfig.MAX_CONTEXT_EVENTS))
+        per_event_limit = max(1, int(max_event_chars or AgentConfig.MAX_CONTEXT_EVENT_CHARS))
+        omitted_count = max(0, len(messages) - event_limit)
+        selected = messages[-event_limit:]
+        return [
+            (
+                msg,
+                MessageHandler._truncate_transcript_content(
+                    msg.content.strip() or "[Empty observation]",
+                    per_event_limit,
+                ),
+            )
+            for msg in selected
+        ], omitted_count
+
+    @staticmethod
+    def _format_context_event_header(message: Message) -> str:
+        metadata = message.metadata or {}
+        source = metadata.get("source") or message.sender_id or "environment"
+        event_type = metadata.get("event_type") or "observation"
+        speaker = metadata.get("speaker_id") or metadata.get("speaker") or message.sender_id
+        addressed_to_agent = metadata.get("addressed_to_agent")
+        parts = [f"source={source}", f"type={event_type}"]
+        if speaker:
+            parts.append(f"speaker={speaker}")
+        if addressed_to_agent is not None:
+            parts.append(f"addressed_to_agent={bool(addressed_to_agent)}")
+        return "[observation " + " ".join(parts) + "]"
+
+    @staticmethod
+    def _build_turn_instruction(turn_kind: str, current_user_id: str) -> str:
+        if turn_kind == "observe":
+            return (
+                "\n==========\n\nYou have just received an observation from the environment. "
+                "Decide whether speaking is useful, timely, and socially appropriate. "
+                "If silence is better, set replied to false and reply to null. "
+                "If you should speak, set replied to true and provide only the words you would say. "
+                "Never mention internal labels, observations, metadata, tags, or message formatting in your reply."
+            )
+        return (
+            "\n==========\n\nNow reply directly to the latest message "
+            f"from {current_user_id}. Respond as yourself — do not suggest, "
+            "propose alternatives, or wrap your reply in quotes. "
+            "Never mention internal labels, tags, or message formatting in your reply."
+        )
 
     @staticmethod
     def _budget_transcript_entries(

@@ -137,6 +137,40 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             "https://example.com/screenshot.png",
         )
 
+    def test_observations_are_interleaved_in_recent_experience(self):
+        alice = Message.create("Hi", role=RoleType.USER, sender_id="alice")
+        alice.timestamp = 1.0
+        observation = Message.create_context_event(
+            "Bob mentioned the room is getting noisy.",
+            source="microphone",
+            event_type="overheard_speech",
+            sender_id="bob",
+            metadata={
+                "speaker_id": "bob",
+                "addressed_to_agent": False,
+            },
+        )
+        observation.timestamp = 2.0
+        bob = Message.create("Can you hear that?", role=RoleType.USER, sender_id="bob")
+        bob.timestamp = 3.0
+
+        transcript = MessageHandler.build_recent_transcript_message(
+            [bob, observation, alice],
+            current_user_id="alice",
+            turn_kind="observe",
+        )["content"]
+
+        self.assertIn("Recent Experience", transcript)
+        self.assertNotIn("Recent Observations", transcript)
+        self.assertIn("source=microphone", transcript)
+        self.assertIn("type=overheard_speech", transcript)
+        self.assertIn("addressed_to_agent=False", transcript)
+        self.assertIn("[speaker=alice]", transcript)
+        self.assertIn("[speaker=bob]", transcript)
+        self.assertLess(transcript.index("[speaker=alice]"), transcript.index("[observation source=microphone"))
+        self.assertLess(transcript.index("[observation source=microphone"), transcript.index("[speaker=bob]"))
+        self.assertIn("set replied to false", transcript)
+
 
 if __name__ == "__main__":
     unittest.main()

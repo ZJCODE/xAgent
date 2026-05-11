@@ -9,7 +9,7 @@ from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.tools.executor import ToolExecutor
-from xagent.schemas import Message, RoleType
+from xagent.schemas import ContextReplyDecision, Message, MessageType, RoleType
 
 
 class InMemoryMessageStorage(MessageStorageBase):
@@ -52,12 +52,18 @@ class FakeToolManager:
 class FakeMemoryHandler:
     def __init__(self):
         self.scheduled_messages = None
+        self.experience_messages = None
+        self.caused_reply = None
 
     async def get_recent_context(self):
         return ""
 
     def schedule_diary_write(self, messages):
         self.scheduled_messages = messages
+
+    def schedule_experience_write(self, messages, caused_reply=False):
+        self.experience_messages = messages
+        self.caused_reply = caused_reply
 
 
 class CapturingModelClient:
@@ -271,7 +277,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
-    def _build_agent(self, storage, model_client, tool_executor=None, tools=None):
+    def _build_agent(self, storage, model_client, tool_executor=None, tools=None, memory_handler=None):
         agent = Agent.__new__(Agent)
         agent.output_type = None
         agent.system_prompt = ""
@@ -281,7 +287,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.model_client = model_client
         agent.message_storage = storage
         agent.message_handler = MessageHandler(message_storage=storage, system_prompt="")
-        agent.memory_handler = FakeMemoryHandler()
+        agent.memory_handler = memory_handler or FakeMemoryHandler()
         agent.tool_executor = tool_executor or FakeToolExecutor()
         return agent
 
@@ -400,7 +406,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             max_message_chars=10,
         )["content"]
 
-        self.assertIn("[Earlier transcript omitted: 2 messages]", transcript)
+        self.assertIn("[Earlier experience omitted: 2 conversation messages]", transcript)
         self.assertNotIn("message-0", transcript)
         self.assertIn("message-2", transcript)
         self.assertIn("[Content truncated: 20 chars omitted]", transcript)
@@ -422,6 +428,70 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(model_message["content"], list)
         self.assertEqual(model_message["content"][1]["image_url"]["url"], image_url)
+
+    async def test_observe_can_choose_no_reply_without_storing_assistant_message(self):
+        storage = InMemoryMessageStorage()
+        memory_handler = FakeMemoryHandler()
+        model_client = CapturingModelClient([
+            (ReplyType.STRUCTURED_REPLY, ContextReplyDecision(replied=False, reply=None)),
+        ])
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            memory_handler=memory_handler,
+        )
+
+        result = await Agent.observe(
+            agent,
+            context="看到有人靠近门口。",
+            current_user_id="alice",
+            source="camera",
+            event_type="presence",
+            max_iter=2,
+        )
+
+        self.assertFalse(result.replied)
+        self.assertIsNone(result.reply)
+        self.assertEqual(len(storage.messages), 1)
+        self.assertEqual(storage.messages[0].type, MessageType.CONTEXT_EVENT)
+        transcript = model_client.calls[0][0]["content"]
+        self.assertIn("Recent Experience", transcript)
+        self.assertIn("看到有人靠近门口。", transcript)
+        self.assertEqual(memory_handler.experience_messages, [storage.messages[0]])
+        self.assertFalse(memory_handler.caused_reply)
+
+    async def test_observe_stores_reply_and_preserves_overheard_attribution(self):
+        storage = InMemoryMessageStorage()
+        memory_handler = FakeMemoryHandler()
+        model_client = CapturingModelClient([
+            (ReplyType.STRUCTURED_REPLY, ContextReplyDecision(replied=True, reply="我听到了，先保持安静观察。")),
+        ])
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            memory_handler=memory_handler,
+        )
+
+        result = await Agent.observe(
+            agent,
+            context="Bob 说活动可能要提前开始。",
+            current_user_id="alice",
+            source="microphone",
+            event_type="overheard_speech",
+            sender_id="bob",
+            metadata={"speaker_id": "bob", "addressed_to_agent": False},
+            max_iter=2,
+        )
+
+        self.assertTrue(result.replied)
+        self.assertEqual(result.reply, "我听到了，先保持安静观察。")
+        self.assertEqual([message.role for message in storage.messages], [RoleType.ENVIRONMENT, RoleType.ASSISTANT])
+        self.assertEqual(storage.messages[0].metadata["speaker_id"], "bob")
+        transcript = model_client.calls[0][0]["content"]
+        self.assertIn("speaker=bob", transcript)
+        self.assertIn("addressed_to_agent=False", transcript)
+        self.assertEqual(memory_handler.experience_messages, storage.messages)
+        self.assertTrue(memory_handler.caused_reply)
 
 
 class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):

@@ -4,6 +4,7 @@ import unittest
 import httpx
 
 from xagent.interfaces.server import AgentHTTPServer
+from xagent.schemas import AgentTurnResult
 
 
 class FakeMessageStorage:
@@ -48,6 +49,29 @@ class SlowStreamingAgent:
             yield "late"
 
         return generator()
+
+
+class ObservingAgent:
+    model = "test-model"
+    tools = {}
+
+    def __init__(self):
+        self.message_storage = FakeMessageStorage()
+        self.observed_kwargs = None
+
+    async def __call__(self, **kwargs):
+        return "ok"
+
+    async def observe(self, **kwargs):
+        self.observed_kwargs = kwargs
+        return AgentTurnResult(
+            kind="observe",
+            replied=False,
+            reply=None,
+            event_id=123.0,
+            event_type=kwargs.get("event_type"),
+            source=kwargs.get("source"),
+        )
 
 
 class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
@@ -126,6 +150,31 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"delta": "first"', response.text)
         self.assertIn('"error": "Agent chat timed out."', response.text)
         self.assertIn("data: [DONE]", response.text)
+
+    async def test_observe_endpoint_returns_structured_no_reply_result(self):
+        agent = ObservingAgent()
+        server = AgentHTTPServer(agent=agent, enable_web=False)
+
+        async with await self._client(server) as client:
+            response = await client.post("/observe", json={
+                "context": "看到有人靠近门口。",
+                "current_user_id": "alice",
+                "source": "camera",
+                "event_type": "presence",
+                "metadata": {"memory_policy": "always"},
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "kind": "observe",
+            "replied": False,
+            "reply": None,
+            "event_id": 123.0,
+            "event_type": "presence",
+            "source": "camera",
+        })
+        self.assertEqual(agent.observed_kwargs["context"], "看到有人靠近门口。")
+        self.assertEqual(agent.observed_kwargs["metadata"], {"memory_policy": "always"})
 
 
 if __name__ == "__main__":

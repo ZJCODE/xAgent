@@ -21,6 +21,9 @@ class AgentConfig:
     MAX_TRANSCRIPT_MESSAGES = 40
     MAX_TRANSCRIPT_CHARS = 24000
     MAX_TRANSCRIPT_MESSAGE_CHARS = 4000
+    MAX_CONTEXT_EVENTS = 12
+    MAX_CONTEXT_EVENT_CHARS = 1000
+    MAX_EXPERIENCE_MEMORY_EVENTS = 20
     DEFAULT_MAX_ITER = 10
     DEFAULT_MAX_CONCURRENT_TOOLS = 10  # Maximum concurrent tool calls
     HTTP_TIMEOUT = 600.0  # 10 minutes
@@ -92,6 +95,15 @@ class AgentConfig:
             "- If search fails or returns no useful results, say that plainly and answer only from reliable context.\n"
         ),
     }
+
+    CONTEXT_EVENT_DECISION_PROMPT = (
+        "**Observation Response Policy:**\n"
+        "- Observations are things you noticed, overheard, received, or remembered; they are not automatically requests.\n"
+        "- Silence is valid for routine, low-value, repeated, or non-actionable updates.\n"
+        "- Speaking is appropriate when the event is urgent, safety-relevant, time-sensitive, addressed to you, or clearly useful for coordination.\n"
+        "- Preserve attribution: overheard speech belongs to the observed speaker, not necessarily the current speaker.\n"
+        "- Never mention internal observation sections, metadata, schemas, labels, or formatting.\n"
+    )
 
     DEFAULT_SYSTEM_PROMPT = (
         "**Context:**\n"

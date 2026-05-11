@@ -34,6 +34,22 @@ class AgentInput(BaseModel):
     private: Optional[bool] = False
 
 
+class ObserveInput(BaseModel):
+    """Request body for observation endpoint."""
+
+    context: str
+    current_user_id: Optional[str] = AgentConfig.DEFAULT_USER_ID
+    source: Optional[str] = "environment"
+    event_type: Optional[str] = "observation"
+    sender_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    history_count: Optional[int] = AgentConfig.DEFAULT_HISTORY_COUNT
+    max_iter: Optional[int] = AgentConfig.DEFAULT_MAX_ITER
+    max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
+    enable_memory: Optional[bool] = True
+    private: Optional[bool] = False
+
+
 class AgentHTTPServer(BaseAgentRunner):
     """HTTP server for xAgent."""
 
@@ -93,6 +109,21 @@ class AgentHTTPServer(BaseAgentRunner):
             private=input_data.private,
         )
 
+    async def _call_observe(self, input_data: ObserveInput):
+        return await self.agent.observe(
+            context=input_data.context,
+            current_user_id=input_data.current_user_id or AgentConfig.DEFAULT_USER_ID,
+            source=input_data.source or "environment",
+            event_type=input_data.event_type or "observation",
+            sender_id=input_data.sender_id,
+            metadata=input_data.metadata,
+            history_count=input_data.history_count or AgentConfig.DEFAULT_HISTORY_COUNT,
+            max_iter=input_data.max_iter or AgentConfig.DEFAULT_MAX_ITER,
+            max_concurrent_tools=input_data.max_concurrent_tools or AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+            enable_memory=True if input_data.enable_memory is None else input_data.enable_memory,
+            private=bool(input_data.private),
+        )
+
     async def _run_chat_with_limits(self, input_data: AgentInput, stream: bool):
         await self._acquire_chat_slot()
         try:
@@ -103,6 +134,19 @@ class AgentHTTPServer(BaseAgentRunner):
             )
         except asyncio.TimeoutError as exc:
             raise HTTPException(status_code=504, detail="Agent chat timed out.") from exc
+        finally:
+            self._chat_semaphore.release()
+
+    async def _run_observe_with_limits(self, input_data: ObserveInput):
+        await self._acquire_chat_slot()
+        try:
+            deadline = time.monotonic() + self._chat_timeout
+            return await self._await_before_deadline(
+                self._call_observe(input_data),
+                deadline,
+            )
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="Agent observe timed out.") from exc
         finally:
             self._chat_semaphore.release()
 
@@ -260,6 +304,23 @@ class AgentHTTPServer(BaseAgentRunner):
                 self.logger.error("Agent processing error for %s: %s", input_data.user_id, exc)
                 raise HTTPException(status_code=500, detail=f"Agent processing error: {str(exc)}")
 
+        @app.post("/observe")
+        async def observe(input_data: ObserveInput):
+            self.logger.info(
+                "Observation request from %s, source=%s, type=%s",
+                input_data.current_user_id,
+                input_data.source,
+                input_data.event_type,
+            )
+            try:
+                response = await self._run_observe_with_limits(input_data)
+                return self._response_payload(response)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                self.logger.error("Agent observe error for %s: %s", input_data.current_user_id, exc)
+                raise HTTPException(status_code=500, detail=f"Agent observe error: {str(exc)}")
+
         @app.post("/clear_messages")
         async def clear_messages():
             self.logger.info("Clear messages request")
@@ -412,6 +473,7 @@ class AgentHTTPServer(BaseAgentRunner):
                     "content": msg.content,
                     "sender_id": msg.sender_id,
                     "timestamp": msg.timestamp,
+                    "metadata": msg.metadata,
                 }
                 if msg.tool_call:
                     item["tool_call"] = {

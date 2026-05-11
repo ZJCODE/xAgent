@@ -1,6 +1,6 @@
 import time
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -36,6 +36,7 @@ class MultiModalContent(BaseModel):
 
 class MessageType(Enum):
     Message = "message"
+    CONTEXT_EVENT = "context_event"
     FUNCTION_CALL = "function_call"
     FUNCTION_CALL_OUTPUT = "function_call_output"
 
@@ -45,6 +46,36 @@ class RoleType(Enum):
     ASSISTANT = "assistant"
     SYSTEM = "system"
     TOOL = "tool"
+    ENVIRONMENT = "environment"
+
+
+class ContextEventInput(BaseModel):
+    """Input payload for non-direct environmental observations."""
+
+    context: str = Field(..., description="Observed context or overheard content")
+    current_user_id: str = Field("default_user", description="Current nearby/active user, if known")
+    source: str = Field("environment", description="Stable source of the observation")
+    event_type: str = Field("observation", description="Category of observation")
+    sender_id: Optional[str] = Field(None, description="Speaker or originator when the event contains speech")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional event metadata")
+
+
+class ContextReplyDecision(BaseModel):
+    """Structured model decision for an observation turn."""
+
+    replied: bool = Field(..., description="Whether the agent should speak in response")
+    reply: Optional[str] = Field(None, description="Natural-language reply when replied is true")
+
+
+class AgentTurnResult(BaseModel):
+    """Public result for an agent turn that may choose silence."""
+
+    kind: str = Field(..., description="Turn kind, such as chat or observe")
+    replied: bool = Field(..., description="Whether an assistant reply was produced")
+    reply: Optional[str] = Field(None, description="Assistant reply when one was produced")
+    event_id: Optional[float] = Field(None, description="Timestamp identity for the triggering event")
+    event_type: Optional[str] = Field(None, description="Context event category")
+    source: Optional[str] = Field(None, description="Context event source")
 
 class Message(BaseModel):
     """Message model for communication between roles."""
@@ -55,6 +86,7 @@ class Message(BaseModel):
     timestamp: float = Field(default_factory=time.time, description="The timestamp of when the message was sent")
     tool_call: Optional[ToolCall] = Field(None, description="tool/function calls associated with the message")
     multimodal: Optional[MultiModalContent] = Field(None, description="Multi-modal content associated with the message")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional message metadata")
 
     @classmethod
     def create(
@@ -117,15 +149,39 @@ class Message(BaseModel):
             multimodal=multimodal,
         )
 
+    @classmethod
+    def create_context_event(
+        cls,
+        content: str,
+        source: str = "environment",
+        event_type: str = "observation",
+        sender_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "Message":
+        """Create a persisted observation/context event."""
+        event_metadata = dict(metadata or {})
+        event_metadata.setdefault("source", source)
+        event_metadata.setdefault("event_type", event_type)
+        return cls(
+            role=RoleType.ENVIRONMENT,
+            type=MessageType.CONTEXT_EVENT,
+            sender_id=sender_id or source,
+            content=content,
+            metadata=event_metadata,
+        )
+
     def to_dict(self) -> dict:
         """Convert the message to a storage-safe dictionary representation."""
         base = {
             "role": self.role.value,
             "sender_id": self.sender_id,
             "content": self.content,
+            "metadata": self.metadata,
         }
 
-        if self.type == MessageType.Message:
+        if self.type in {MessageType.Message, MessageType.CONTEXT_EVENT}:
+            if self.type != MessageType.Message:
+                base["type"] = self.type.value
             return base
         if self.type in [MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT]:
             result = {
@@ -162,6 +218,12 @@ class Message(BaseModel):
             return {
                 "role": self.role.value,
                 "content": text_content,
+            }
+
+        if self.type == MessageType.CONTEXT_EVENT:
+            return {
+                "role": RoleType.SYSTEM.value,
+                "content": self.content,
             }
 
         if self.type == MessageType.FUNCTION_CALL:

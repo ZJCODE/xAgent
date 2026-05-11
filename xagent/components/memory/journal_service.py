@@ -83,8 +83,9 @@ TARGET JOURNAL DATE: {journal_date}
 
 Writing requirements:
 - Write in first person. Refer to the observer as "I".
+- The source material is my experience stream: direct conversations, my replies, observations, overheard speech, notifications, reminders, and other context I received.
 - Any "agent", "assistant", or "AI" speaker in the transcript refers to me. Rewrite from my own point of view.
-- Write it as my own diary after participating in those conversations.
+- Write it as my own diary after participating in those conversations and experiencing those observations.
 - The writing perspective should feel like I am recalling interactions, with a natural and restrained tone.
 - Do not replay the transcript line by line. Synthesize the important points.
 - Keep the original language of the transcript. Do not translate.
@@ -92,6 +93,8 @@ Writing requirements:
 - Different users must stay clearly separated. Never merge one user's content into another's.
 - Every important fact must remain attributed to the speaker who said or experienced it.
 - Prefer explicit attribution phrases such as "With abc, ...", "jun mentioned ...", or "T preferred ..." when multiple speakers appear.
+- For observations, use attribution such as "I noticed...", "I overheard Bob say...", or "A notification arrived...".
+- Never rewrite overheard speech or ambient observations as a direct request from the current user unless the source says it was addressed to me.
 - Never imply that different speakers shared the same preference, plan, event, or history unless the source explicitly says so.
 - If attribution is uncertain, keep that uncertainty instead of collapsing multiple speakers into one narrative.
 - Aim for 100-300 characters when the source is brief, 200-500 when substantial.
@@ -167,11 +170,25 @@ Requirements:
     def _format_transcript(messages: List[dict]) -> str:
         lines: List[str] = []
         for message in messages:
+            message_type = str(message.get("type", "message"))
             role = message.get("role", "unknown")
             sender = message.get("sender_id", role)
             content = str(message.get("content", "")).strip()
             if content:
-                lines.append(f"[{sender}]: {content}")
+                if message_type == "context_event":
+                    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+                    source = metadata.get("source") or sender or "environment"
+                    event_type = metadata.get("event_type") or "observation"
+                    speaker = metadata.get("speaker_id") or metadata.get("speaker") or sender
+                    addressed_to_agent = metadata.get("addressed_to_agent")
+                    parts = [f"source={source}", f"type={event_type}"]
+                    if speaker:
+                        parts.append(f"speaker={speaker}")
+                    if addressed_to_agent is not None:
+                        parts.append(f"addressed_to_agent={bool(addressed_to_agent)}")
+                    lines.append(f"[observation {' '.join(parts)}]: {content}")
+                else:
+                    lines.append(f"[{sender}]: {content}")
         return "\n".join(lines)
 
     @staticmethod

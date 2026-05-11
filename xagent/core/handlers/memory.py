@@ -8,6 +8,9 @@ import time
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, List
 
+from ..config import AgentConfig
+from ...schemas import Message, MessageType
+
 if TYPE_CHECKING:
     from ...components.memory import JournalLLMService, MarkdownMemory
 
@@ -77,6 +80,58 @@ class MemoryHandler:
 
         if threshold_met and interval_met:
             self._flush_diary_write()
+
+    def schedule_experience_write(
+        self,
+        messages: List[Message],
+        caused_reply: bool = False,
+    ) -> None:
+        """Accumulate agent experiences for diary memory.
+
+        The experience stream includes direct conversations and meaningful
+        observations. Tool messages remain transient and are intentionally not
+        written as diary source material.
+        """
+        records = [
+            self._experience_record(message)
+            for message in messages[-AgentConfig.MAX_EXPERIENCE_MEMORY_EVENTS:]
+            if self._is_memory_worthy_experience(message, caused_reply=caused_reply)
+        ]
+        self.schedule_diary_write(records)
+
+    @staticmethod
+    def _experience_record(message: Message) -> dict:
+        metadata = dict(message.metadata or {})
+        return {
+            "role": message.role.value,
+            "type": message.type.value,
+            "sender_id": message.sender_id,
+            "content": message.content,
+            "metadata": metadata,
+        }
+
+    @staticmethod
+    def _is_memory_worthy_experience(
+        message: Message,
+        caused_reply: bool = False,
+    ) -> bool:
+        if message.type == MessageType.Message:
+            return bool(message.content.strip())
+        if message.type != MessageType.CONTEXT_EVENT:
+            return False
+
+        metadata = message.metadata or {}
+        policy = str(metadata.get("memory_policy", "auto")).lower()
+        if policy == "never":
+            return False
+        if policy == "always" or metadata.get("memory_worthy") is True:
+            return True
+        if caused_reply:
+            return True
+
+        event_type = str(metadata.get("event_type", "observation")).lower()
+        routine_types = {"heartbeat", "ping", "sensor_tick", "presence_tick"}
+        return event_type not in routine_types and bool(message.content.strip())
 
     def _flush_diary_write(self) -> None:
         """Spawn a background task to format and append pending messages."""

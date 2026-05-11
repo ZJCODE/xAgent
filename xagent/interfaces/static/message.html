@@ -129,6 +129,14 @@
       background: rgba(168, 85, 247, 0.08);
       border-color: rgba(168, 85, 247, 0.15);
     }
+    .msg-card.role-environment {
+      background: rgba(14, 165, 233, 0.04);
+      border-color: rgba(14, 165, 233, 0.12);
+    }
+    .dark .msg-card.role-environment {
+      background: rgba(14, 165, 233, 0.08);
+      border-color: rgba(14, 165, 233, 0.15);
+    }
     .badge {
       display: inline-flex;
       align-items: center;
@@ -144,6 +152,7 @@
     .badge-assistant { background: #059669; color: #fff; }
     .badge-tool { background: #2563eb; color: #fff; }
     .badge-system { background: #7c3aed; color: #fff; }
+    .badge-environment { background: #0284c7; color: #fff; }
     .sender-pill {
       display: inline-flex;
       align-items: center;
@@ -193,6 +202,16 @@
       background: rgba(139, 92, 246, 0.18);
       color: #ede9fe;
       border-color: rgba(167, 139, 250, 0.22);
+    }
+    .sender-pill.role-environment {
+      background: rgba(14, 165, 233, 0.1);
+      color: #0369a1;
+      border-color: rgba(14, 165, 233, 0.16);
+    }
+    .dark .sender-pill.role-environment {
+      background: rgba(14, 165, 233, 0.18);
+      color: #e0f2fe;
+      border-color: rgba(56, 189, 248, 0.22);
     }
     .md-body p { margin: 0.35em 0; }
     .md-body pre {
@@ -382,6 +401,14 @@
         </details>`;
       }
 
+      let metadataHtml = '';
+      if (m.metadata && Object.keys(m.metadata).length > 0) {
+        metadataHtml = `<details class="tool-detail">
+          <summary class="cursor-pointer font-medium">Context metadata</summary>
+          <pre class="text-xs bg-gray-900 text-gray-100 p-2 rounded-lg overflow-x-auto mt-2">${esc(JSON.stringify(m.metadata, null, 2))}</pre>
+        </details>`;
+      }
+
       return `<div class="msg-card ${roleClass}">
         <div class="flex items-center gap-2 flex-wrap">
           <span class="badge ${badgeClass}">${esc(m.role)}</span>
@@ -391,6 +418,7 @@
         </div>
         ${body}
         ${toolHtml}
+        ${metadataHtml}
       </div>`;
     }).join('');
   }

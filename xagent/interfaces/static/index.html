@@ -132,6 +132,37 @@
       color: #18181b;
     }
 
+    .observation-bubble {
+      background: rgba(14, 165, 233, 0.08);
+      border: 1px solid rgba(14, 165, 233, 0.16);
+      color: var(--text-primary);
+      box-shadow: var(--shadow-card);
+    }
+
+    .dark .observation-bubble {
+      background: rgba(14, 165, 233, 0.11);
+      border-color: rgba(56, 189, 248, 0.2);
+    }
+
+    .silence-bubble {
+      background: rgba(113, 113, 122, 0.08);
+      border: 1px solid rgba(113, 113, 122, 0.14);
+      color: var(--text-secondary);
+    }
+
+    .observe-grid {
+      display: grid;
+      grid-template-columns: minmax(96px, 0.7fr) minmax(120px, 0.9fr) minmax(220px, 2fr) auto;
+      gap: 0.6rem;
+      align-items: end;
+    }
+
+    @media (max-width: 768px) {
+      .observe-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
     .ghost-button {
       background: rgba(255, 255, 255, 0.6);
       border: 1px solid var(--border-soft);
@@ -718,6 +749,24 @@ function createChatPanel(panelId, containerEl, options = {}) {
       </section>
       <section data-pid="${panelId}_imagePreview" class="hidden border-t border-black/5 dark:border-white/10 px-3 sm:px-6 py-3 bg-white/20 dark:bg-black/10">
       </section>
+      <section class="border-t border-black/5 dark:border-white/10 px-3 sm:px-6 py-3 bg-white/10 dark:bg-black/10">
+        <div class="observe-grid">
+          <label class="inline-field text-sm min-w-0">
+            <span class="inline-label">Source</span>
+            <input data-pid="${panelId}_observeSource" type="text" class="inline-input text-sm" value="web" />
+          </label>
+          <label class="inline-field text-sm min-w-0">
+            <span class="inline-label">Type</span>
+            <input data-pid="${panelId}_observeType" type="text" class="inline-input text-sm" value="observation" />
+          </label>
+          <textarea data-pid="${panelId}_observeInput" rows="1" placeholder="Observe context..."
+            class="resize-none max-h-28 overflow-y-auto px-4 py-3 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-sky-700 dark:focus:ring-sky-300 placeholder:text-gray-400 dark:placeholder:text-gray-500"
+          ></textarea>
+          <button data-pid="${panelId}_observeBtn" title="Observe" class="h-11 px-5 shrink-0 rounded-2xl bg-sky-700 text-white dark:bg-sky-300 dark:text-gray-950 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
+            Observe
+          </button>
+        </div>
+      </section>
       <section class="border-t border-black/5 dark:border-white/10 px-3 sm:px-6 py-4 bg-transparent">
         <div class="panel-muted rounded-[28px] p-2 sm:p-3 flex items-end gap-2 sm:gap-3">
           <button data-pid="${panelId}_imageBtn" title="Upload image" class="ghost-button h-11 w-11 shrink-0 rounded-2xl hover:bg-white dark:hover:bg-gray-900 flex items-center justify-center transition">
@@ -780,6 +829,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
     const slim = state.messages.map(m => ({
       role: m.role,
       content: m.content,
+      meta: m.meta,
       images: (m.images || []).map(() => '[image]'),
     }));
     try { localStorage.setItem(historyKey, JSON.stringify(slim)); } catch {}
@@ -813,8 +863,12 @@ function createChatPanel(panelId, containerEl, options = {}) {
     state.sending = v;
     const sendBtn = el('sendBtn');
     const chatInput = el('chatInput');
+    const observeBtn = el('observeBtn');
+    const observeInput = el('observeInput');
     if (sendBtn) sendBtn.disabled = v;
     if (chatInput) chatInput.disabled = v;
+    if (observeBtn) observeBtn.disabled = v;
+    if (observeInput) observeInput.disabled = v;
   }
 
   /* ── Messages ── */
@@ -830,16 +884,30 @@ function createChatPanel(panelId, containerEl, options = {}) {
 
     const bubble = document.createElement('div');
     const isUser = message.role === 'user';
-    bubble.className = `max-w-[92%] sm:max-w-[80%] lg:max-w-[68%] rounded-[24px] px-4 py-3.5 text-sm leading-relaxed ${isUser
+    const isObservation = message.role === 'observation';
+    const isSilence = message.role === 'silence';
+    const bubbleClass = isUser
       ? 'user-bubble rounded-br-md'
-      : 'assistant-bubble rounded-bl-md'}`;
+      : isObservation
+        ? 'observation-bubble rounded-bl-md'
+        : isSilence
+          ? 'silence-bubble rounded-bl-md'
+          : 'assistant-bubble rounded-bl-md';
+    bubble.className = `max-w-[92%] sm:max-w-[80%] lg:max-w-[68%] rounded-[24px] px-4 py-3.5 text-sm leading-relaxed ${bubbleClass}`;
 
     const label = document.createElement('div');
     label.className = `mb-2 text-[11px] uppercase tracking-[0.18em] ${isUser
       ? 'text-white/60 dark:text-black/50'
       : 'text-gray-400 dark:text-gray-500'}`;
-    label.textContent = isUser ? 'You' : 'xAgent';
+    label.textContent = isUser ? 'You' : isObservation ? 'Observation' : 'xAgent';
     bubble.appendChild(label);
+
+    if (message.meta) {
+      const meta = document.createElement('div');
+      meta.className = 'mb-2 text-[11px] text-gray-400 dark:text-gray-500';
+      meta.textContent = message.meta;
+      bubble.appendChild(meta);
+    }
 
     const contentEl = document.createElement('div');
     contentEl.className = 'msg-content';
@@ -1043,6 +1111,80 @@ function createChatPanel(panelId, containerEl, options = {}) {
     }
   }
 
+  async function sendObservation() {
+    if (state.sending) return;
+    const input = el('observeInput');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+
+    const source = (el('observeSource')?.value || '').trim() || 'web';
+    const eventType = (el('observeType')?.value || '').trim() || 'observation';
+    const settings = getSettings();
+    const observationMessage = {
+      role: 'observation',
+      content: text,
+      meta: `${source} / ${eventType}`,
+    };
+    state.messages.push(observationMessage);
+    appendMessageBubble(observationMessage);
+
+    input.value = '';
+    input.style.height = 'auto';
+    setSending(true);
+    saveSettings();
+    if (!showPanelSettings) saveGlobalSettings();
+
+    const resultMessage = { role: 'assistant', content: '' };
+    state.messages.push(resultMessage);
+    const messageIndex = state.messages.length - 1;
+    const { contentEl, wrapper } = appendMessageBubble(resultMessage, true);
+
+    const payload = {
+      context: text,
+      current_user_id: settings.userId,
+      source,
+      event_type: eventType,
+      enable_memory: settings.memory,
+      private: settings.private,
+      metadata: {
+        submitted_from: 'web',
+      },
+    };
+
+    try {
+      const response = await fetch(`${API_BASE}/observe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+      const result = await response.json();
+      if (result.replied && result.reply) {
+        renderMarkdown(contentEl, String(result.reply));
+        state.messages[messageIndex].content = String(result.reply);
+      } else {
+        state.messages[messageIndex].role = 'silence';
+        state.messages[messageIndex].content = 'No reply';
+        if (wrapper) {
+          wrapper.remove();
+        }
+        appendMessageBubble(state.messages[messageIndex]);
+      }
+      saveHistory();
+    } catch (error) {
+      const errText = String(error?.message || error);
+      contentEl.innerHTML = `<div class="text-red-500">Error: ${escapeHtml(errText)}</div>`;
+      state.messages[messageIndex].content = `Error: ${errText}`;
+      saveHistory();
+    } finally {
+      setSending(false);
+      const observeInput = el('observeInput');
+      if (observeInput) requestAnimationFrame(() => observeInput.focus({ preventScroll: true }));
+      scrollToBottom();
+    }
+  }
+
   function clearChat() {
     state.messages = [];
     try { localStorage.removeItem(historyKey); } catch {}
@@ -1058,12 +1200,15 @@ function createChatPanel(panelId, containerEl, options = {}) {
 
   function bindEvents() {
     const chatInput = el('chatInput');
+    const observeInput = el('observeInput');
     const imageInput = el('imageInput');
     const sendBtn = el('sendBtn');
+    const observeBtn = el('observeBtn');
     const imageBtn = el('imageBtn');
     const clearBtn = el('clearBtn');
 
     if (sendBtn) sendBtn.addEventListener('click', sendMessage);
+    if (observeBtn) observeBtn.addEventListener('click', sendObservation);
     if (imageBtn) imageBtn.addEventListener('click', () => imageInput?.click());
     if (clearBtn) clearBtn.addEventListener('click', clearChat);
 
@@ -1088,6 +1233,16 @@ function createChatPanel(panelId, containerEl, options = {}) {
         if (event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
           sendMessage();
+        }
+      });
+    }
+
+    if (observeInput) {
+      observeInput.addEventListener('input', () => autoResize(observeInput));
+      observeInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          sendObservation();
         }
       });
     }

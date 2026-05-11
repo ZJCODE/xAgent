@@ -1,6 +1,7 @@
 import unittest
 
 from xagent.components.memory import JournalLLMService
+from xagent.schemas import Message
 
 
 class JournalLLMServicePromptTests(unittest.TestCase):
@@ -13,6 +14,8 @@ class JournalLLMServicePromptTests(unittest.TestCase):
         self.assertIn("Different users must stay clearly separated", prompt)
         self.assertIn("Every important fact must remain attributed to the speaker", prompt)
         self.assertIn('Prefer explicit attribution phrases such as "With abc, ...", "jun mentioned ...", or "T preferred ..."', prompt)
+        self.assertIn("observations, overheard speech, notifications, reminders", prompt)
+        self.assertIn("I overheard Bob say", prompt)
         self.assertIn("Never imply that different speakers shared the same preference, plan, event, or history", prompt)
         self.assertIn("If attribution is uncertain, keep that uncertainty", prompt)
 
@@ -27,6 +30,28 @@ class JournalLLMServicePromptTests(unittest.TestCase):
         self.assertIn("Preferences, plans, commitments, and experiences must stay attached to the speaker", prompt)
         self.assertIn('Generic labels such as "User A", "User B", "用户A", or "用户B" are local aliases inside a single source entry', prompt)
         self.assertIn("If the source material leaves attribution uncertain", prompt)
+
+    def test_format_transcript_distinguishes_context_events(self):
+        event = Message.create_context_event(
+            "Bob 说活动可能要提前开始。",
+            source="microphone",
+            event_type="overheard_speech",
+            sender_id="bob",
+            metadata={"speaker_id": "bob", "addressed_to_agent": False},
+        )
+
+        transcript = JournalLLMService._format_transcript([
+            {
+                "role": event.role.value,
+                "type": event.type.value,
+                "sender_id": event.sender_id,
+                "content": event.content,
+                "metadata": event.metadata,
+            }
+        ])
+
+        self.assertIn("[observation source=microphone type=overheard_speech speaker=bob addressed_to_agent=False]", transcript)
+        self.assertIn("Bob 说活动可能要提前开始。", transcript)
 
 
 if __name__ == "__main__":
