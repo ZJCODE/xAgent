@@ -152,7 +152,7 @@
 
     .observe-grid {
       display: grid;
-      grid-template-columns: minmax(96px, 0.7fr) minmax(120px, 0.9fr) minmax(220px, 2fr) auto;
+        grid-template-columns: minmax(0, 1fr) auto;
       gap: 0.6rem;
       align-items: end;
     }
@@ -618,8 +618,12 @@ function renderMarkdown(target, content) {
 }
 
 function autoResize(textarea) {
+  const computedStyle = window.getComputedStyle(textarea);
+  const parsedMaxHeight = Number.parseFloat(computedStyle.maxHeight);
+  const maxHeight = Number.isFinite(parsedMaxHeight) ? parsedMaxHeight : 160;
   textarea.style.height = 'auto';
-  textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+  textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
 }
 
 /* ─── Global settings (single-mode only) ─── */
@@ -751,16 +755,8 @@ function createChatPanel(panelId, containerEl, options = {}) {
       </section>
       <section class="border-t border-black/5 dark:border-white/10 px-3 sm:px-6 py-3 bg-white/10 dark:bg-black/10">
         <div class="observe-grid">
-          <label class="inline-field text-sm min-w-0">
-            <span class="inline-label">Source</span>
-            <input data-pid="${panelId}_observeSource" type="text" class="inline-input text-sm" value="web" />
-          </label>
-          <label class="inline-field text-sm min-w-0">
-            <span class="inline-label">Type</span>
-            <input data-pid="${panelId}_observeType" type="text" class="inline-input text-sm" value="observation" />
-          </label>
           <textarea data-pid="${panelId}_observeInput" rows="1" placeholder="Observe context..."
-            class="resize-none max-h-28 overflow-y-auto px-4 py-3 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-sky-700 dark:focus:ring-sky-300 placeholder:text-gray-400 dark:placeholder:text-gray-500"
+            class="min-h-[46px] leading-6 resize-none max-h-28 overflow-hidden px-4 py-3 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-sky-700 dark:focus:ring-sky-300 placeholder:text-gray-400 dark:placeholder:text-gray-500"
           ></textarea>
           <button data-pid="${panelId}_observeBtn" title="Observe" class="h-11 px-5 shrink-0 rounded-2xl bg-sky-700 text-white dark:bg-sky-300 dark:text-gray-950 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
             Observe
@@ -776,7 +772,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
           </button>
           <input data-pid="${panelId}_imageInput" type="file" accept="image/jpeg,image/png" multiple class="hidden" />
           <textarea data-pid="${panelId}_chatInput" rows="1" placeholder="Message xAgent..."
-            class="flex-1 resize-none max-h-40 overflow-y-auto px-4 py-3 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white placeholder:text-gray-400 dark:placeholder:text-gray-500"
+            class="flex-1 min-h-[46px] leading-6 resize-none max-h-40 overflow-hidden px-4 py-3 rounded-2xl border border-black/5 dark:border-white/10 bg-white/80 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white placeholder:text-gray-400 dark:placeholder:text-gray-500"
           ></textarea>
           <button data-pid="${panelId}_sendBtn" title="Send" class="h-11 px-5 shrink-0 rounded-2xl bg-gray-950 text-white dark:bg-white dark:text-gray-950 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
             Send
@@ -826,12 +822,14 @@ function createChatPanel(panelId, containerEl, options = {}) {
   /* ── History ── */
 
   function saveHistory() {
-    const slim = state.messages.map(m => ({
-      role: m.role,
-      content: m.content,
-      meta: m.meta,
-      images: (m.images || []).map(() => '[image]'),
-    }));
+    const slim = state.messages
+      .filter(m => m.role !== 'silence')
+      .map(m => ({
+        role: m.role,
+        content: m.content,
+        meta: m.meta,
+        images: (m.images || []).map(() => '[image]'),
+      }));
     try { localStorage.setItem(historyKey, JSON.stringify(slim)); } catch {}
   }
 
@@ -841,8 +839,11 @@ function createChatPanel(panelId, containerEl, options = {}) {
       if (!raw) return;
       const msgs = JSON.parse(raw);
       if (!Array.isArray(msgs) || msgs.length === 0) return;
-      state.messages = msgs;
-      msgs.forEach(m => appendMessageBubble(m));
+      const visibleMessages = msgs.filter(m => m?.role !== 'silence');
+      if (visibleMessages.length === 0) return;
+      state.messages = visibleMessages;
+      if (visibleMessages.length !== msgs.length) saveHistory();
+      visibleMessages.forEach(m => appendMessageBubble(m));
     } catch {}
   }
 
@@ -1118,13 +1119,12 @@ function createChatPanel(panelId, containerEl, options = {}) {
     const text = input.value.trim();
     if (!text) return;
 
-    const source = (el('observeSource')?.value || '').trim() || 'web';
-    const eventType = (el('observeType')?.value || '').trim() || 'observation';
+    const source = 'web';
+    const eventType = 'observation';
     const settings = getSettings();
     const observationMessage = {
       role: 'observation',
       content: text,
-      meta: `${source} / ${eventType}`,
     };
     state.messages.push(observationMessage);
     appendMessageBubble(observationMessage);
@@ -1164,12 +1164,8 @@ function createChatPanel(panelId, containerEl, options = {}) {
         renderMarkdown(contentEl, String(result.reply));
         state.messages[messageIndex].content = String(result.reply);
       } else {
-        state.messages[messageIndex].role = 'silence';
-        state.messages[messageIndex].content = 'No reply';
-        if (wrapper) {
-          wrapper.remove();
-        }
-        appendMessageBubble(state.messages[messageIndex]);
+        state.messages.splice(messageIndex, 1);
+        if (wrapper) wrapper.remove();
       }
       saveHistory();
     } catch (error) {
