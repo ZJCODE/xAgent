@@ -767,8 +767,8 @@ _FEISHU_CONFIG_TEMPLATE = """\
 #
 # Routing is hardcoded and behaves like a real human teammate:
 #   - Direct chat (p2p)        -> reply
-#   - Group, bot @mentioned    -> reply
-#   - Group, not @mentioned    -> agent.observe (agent decides)
+#   - Group, bot @mentioned    -> pull recent history, then reply
+#   - Group, not @mentioned    -> ignore
 #
 # Use ${{ENV_VAR}} to interpolate from environment variables.
 app_id: {app_id}
@@ -778,6 +778,7 @@ app_secret: {app_secret}
 # log_level: info        # debug | info | warn | error
 # stream: false          # stream tokens to a Feishu card
 # enable_memory: true    # forward to agent long-term memory
+# group_history_count: 10 # recent group/topic messages to read on @mention
 """
 
 

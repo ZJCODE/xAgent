@@ -1,22 +1,16 @@
-"""Pull recent chat context from Feishu Open APIs.
+"""Pull recent group context from Feishu Open APIs.
 
-Feishu only pushes the bot messages it is allowed to see (DMs, @-mentions,
-group-message events). To behave like a teammate that "scrolls up before
-replying", the adapter calls :class:`FeishuHistoryFetcher` to retrieve the
-surrounding context (the replied-to message, topic/thread siblings, and
-recent group history) and feeds the result into ``agent.observe`` before
-``agent.chat``.
-
-All API calls degrade gracefully: missing scopes, missing SDK attributes, or
-transport errors yield an empty result rather than raising.
+The adapter only needs one operation for Phase 1: when the bot is mentioned
+in a group/topic, read a small window of recent messages so the reply is
+grounded in the current conversation. Missing scopes, missing SDK attributes,
+or transport errors yield an empty result rather than raising.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, Optional
 
 
 @dataclass(frozen=True)
@@ -28,18 +22,18 @@ class FeishuMessageRecord:
     sender_name: Optional[str]
     text: str
     create_time_ms: int
-    source: str  # "parent" | "thread" | "history"
+    source: str = "chat"  # "chat" | "thread"
 
 
 _TEXTUAL_TYPES = {"text", "post"}
 
 
 class FeishuHistoryFetcher:
-    """Fetch surrounding context for an inbound Feishu message.
+    """Fetch recent group/topic context for an inbound Feishu message.
 
-    The fetcher is a thin wrapper over ``channel.fetch_message`` and the
-    ``im.v1.message.alist`` OpenAPI; it normalizes responses into
-    :class:`FeishuMessageRecord` and dedupes/sorts results.
+    The fetcher is a thin wrapper over the ``im.v1.message.alist`` OpenAPI;
+    it normalizes responses into
+    :class:`FeishuMessageRecord` values ordered oldest -> newest.
     """
 
     _MAX_PAGE_SIZE = 50  # Feishu API hard cap
@@ -48,80 +42,35 @@ class FeishuHistoryFetcher:
         self._channel = channel
         self._logger = logger or logging.getLogger(self.__class__.__name__)
 
-    async def fetch_context(
+    async def fetch_recent_messages(
         self,
         *,
         chat_id: str,
         current_message_id: Optional[str],
-        parent_message_id: Optional[str] = None,
         thread_id: Optional[str] = None,
         history_count: int = 0,
-    ) -> List[FeishuMessageRecord]:
-        """Return recent context messages ordered oldest -> newest.
+    ) -> list[FeishuMessageRecord]:
+        """Return recent group/topic messages ordered oldest -> newest.
 
         The triggering message (``current_message_id``) is always excluded.
         """
-        records: dict[str, FeishuMessageRecord] = {}
+        if history_count <= 0:
+            return []
 
-        tasks: list[asyncio.Task[List[FeishuMessageRecord]]] = []
-        if parent_message_id:
-            tasks.append(asyncio.create_task(self._get_message(parent_message_id, "parent")))
-        if thread_id:
-            tasks.append(
-                asyncio.create_task(
-                    self._list_messages("thread", thread_id, history_count or 20, source="thread")
-                )
-            )
-        if history_count > 0:
-            tasks.append(
-                asyncio.create_task(
-                    self._list_messages("chat", chat_id, history_count, source="history")
-                )
-            )
+        container_id_type = "thread" if thread_id else "chat"
+        container_id = thread_id or chat_id
+        if not container_id:
+            return []
 
-        for batch in await asyncio.gather(*tasks, return_exceptions=True):
-            if isinstance(batch, BaseException):
-                self._logger.debug("Feishu history fetch raised: %s", batch)
-                continue
-            for rec in batch:
-                # Earlier sources win (parent > thread > history).
-                records.setdefault(rec.message_id, rec)
-
+        records = await self._list_messages(
+            container_id_type,
+            container_id,
+            history_count,
+            source=container_id_type,
+        )
         if current_message_id:
-            records.pop(current_message_id, None)
-
-        return sorted(records.values(), key=lambda r: r.create_time_ms)
-
-    # ------------------------------------------------------------------
-    # Single-message fetch
-    # ------------------------------------------------------------------
-
-    async def _get_message(self, message_id: str, source: str) -> List[FeishuMessageRecord]:
-        fetch = getattr(self._channel, "fetch_message", None)
-        if fetch is None:
-            return []
-        try:
-            payload = await fetch(message_id)
-        except Exception as exc:
-            self._logger.info("Feishu fetch_message(%s) failed: %s", message_id, exc)
-            return []
-        item = self._extract_first_item(payload)
-        if item is None:
-            return []
-        rec = self._normalize_item(item, source=source)
-        return [rec] if rec else []
-
-    @staticmethod
-    def _extract_first_item(payload: Any) -> Optional[dict]:
-        if not isinstance(payload, dict):
-            return None
-        data = payload.get("data") or {}
-        items = data.get("items") if isinstance(data, dict) else None
-        if isinstance(items, list) and items:
-            return items[0]
-        if isinstance(data, dict) and data.get("message_id"):
-            return data
-        return None
+            records = [rec for rec in records if rec.message_id != current_message_id]
+        return sorted(records, key=lambda r: r.create_time_ms)
 
     # ------------------------------------------------------------------
     # List fetch
@@ -134,7 +83,7 @@ class FeishuHistoryFetcher:
         page_size: int,
         *,
         source: str,
-    ) -> List[FeishuMessageRecord]:
+    ) -> list[FeishuMessageRecord]:
         client = getattr(self._channel, "client", None)
         if client is None:
             return []
@@ -174,7 +123,7 @@ class FeishuHistoryFetcher:
             return []
 
         items = getattr(getattr(response, "data", None), "items", None) or []
-        normalized: List[FeishuMessageRecord] = []
+        normalized: list[FeishuMessageRecord] = []
         for item in items:
             rec = self._normalize_item(item, source=source)
             if rec is not None:
@@ -191,6 +140,8 @@ class FeishuHistoryFetcher:
         message_id = get("message_id")
         if not message_id:
             return None
+        if bool(get("deleted")):
+            return None
         sender = get("sender")
         sender_get = cls._attr_getter(sender) if sender is not None else (lambda _k: None)
         sender_id = sender_get("id") or sender_get("sender_id") or ""
@@ -198,7 +149,9 @@ class FeishuHistoryFetcher:
         msg_type = get("msg_type") or ""
         body = get("body")
         body_content = cls._attr_getter(body)("content") if body is not None else None
-        text = cls._render_content(msg_type, body_content)
+        text = cls._render_content(msg_type, body_content).strip()
+        if not text:
+            return None
         create_time_raw = get("create_time") or 0
         try:
             create_time_ms = int(create_time_raw)
@@ -270,18 +223,18 @@ class FeishuHistoryFetcher:
         return "\n".join(p for p in parts if p).strip()
 
 
-def format_context_recap(
+def format_group_history(
     records: Iterable[FeishuMessageRecord],
     *,
     bot_open_id: Optional[str] = None,
 ) -> str:
-    """Render a list of context messages as a transcript for ``agent.observe``."""
+    """Render recent Feishu messages as a compact transcript for ``agent.chat``."""
     lines: list[str] = []
     for rec in records:
         who = rec.sender_name or rec.sender_id or "unknown"
         if bot_open_id and rec.sender_id == bot_open_id:
             who = f"{who} (bot)"
-        tag = f"[{rec.source}]"
         text = rec.text or ""
-        lines.append(f"{tag} {who}: {text}".rstrip())
+        if text.strip():
+            lines.append(f"{who}: {text}".rstrip())
     return "\n".join(lines)

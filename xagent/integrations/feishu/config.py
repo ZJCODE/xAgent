@@ -37,8 +37,7 @@ class FeishuAdapterConfig:
 
     * ``p2p`` direct chats: always reply.
     * ``group`` / ``topic`` with @bot: reply.
-    * ``group`` / ``topic`` without @bot: passed to ``agent.observe``;
-      the agent itself decides whether to speak.
+    * ``group`` / ``topic`` without @bot: ignore.
 
     Only credentials and a handful of operational defaults are configurable.
 
@@ -51,16 +50,10 @@ class FeishuAdapterConfig:
             output to be streamable text (no ``output_schema``).
         enable_memory: Pass-through to the agent's long-term memory.
         history_count / max_iter / max_concurrent_tools: Per-turn knobs
-            forwarded to ``agent.chat`` and ``agent.observe``.
-        prefetch_context: When True, pre-fetch the replied-to message,
-            topic/thread siblings, and recent group history before replying
-            to an @-mention, and prime them into ``agent.observe`` first
-            (so the agent has the same context a human would scroll up to
-            read). Requires the app to have ``im:message:readonly`` (or
-            ``im:message``); falls back silently when the scope is missing.
-        chat_history_count: How many recent group messages to pull on each
-            @-mention. ``0`` disables history pulls (parent / thread still
-            pulled if applicable).
+            forwarded to ``agent.chat``.
+        group_history_count: How many recent Feishu group/topic messages to
+            pull on each @mention. ``0`` disables history pulls.
+        history_fetch_timeout: Maximum seconds to wait for Feishu history.
         advanced: Raw pass-through kwargs for ``FeishuChannel`` (policy,
             safety, ...). Reserved for power users.
     """
@@ -77,17 +70,8 @@ class FeishuAdapterConfig:
     max_iter: Optional[int] = None
     max_concurrent_tools: Optional[int] = None
 
-    prefetch_context: bool = True
-    chat_history_count: int = 10
-    prefetch_timeout: float = 5.0
-
-    # --- reliability knobs (added for openclaw-inspired hardening) -------
-    # All optional with safe defaults; existing feishu.yaml files keep
-    # working unchanged.
-    dedup_state_dir: Optional[str] = None
-    pending_history_size: int = 20
-    pending_history_ttl_seconds: float = 30 * 60.0
-    identity_resolve_timeout: float = 5.0
+    group_history_count: int = 10
+    history_fetch_timeout: float = 5.0
 
     advanced: Dict[str, Any] = field(default_factory=dict)
 

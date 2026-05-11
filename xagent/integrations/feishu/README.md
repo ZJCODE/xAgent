@@ -24,7 +24,7 @@ official SDK already provides:
 - Inbound message normalization (`content_text`, `mentioned_bot`, `chat_type`, …)
 - Outbound text / markdown / card sending
 - Streaming card replies (LLM-style token output)
-- Mention policy, dedup, retries
+- Mention policy and retries
 
 `FeishuAdapter` only adds xAgent-specific routing.
 
@@ -46,8 +46,9 @@ In the [Feishu Open Platform](https://open.feishu.cn/) developer console:
 4. Grant permissions:
    - `im:message`
    - `im:message.p2p_msg`
-   - `im:message.group_at_msg`  (and `im:message.group_msg` if you plan to
-     listen to non-mentioned group messages)
+   - `im:message.group_at_msg`
+   - `im:message.group_msg` and `im:message:readonly` (or equivalent history
+     scopes) if you want the bot to read recent group history after an @mention
    - `im:message:send_as_bot`
 5. Re-publish / re-install the app.
 6. Copy `App ID` and `App Secret`.
@@ -72,6 +73,7 @@ app_secret: your_secret  # or ${LARK_APP_SECRET}
 # log_level: info
 # stream: false
 # enable_memory: true
+# group_history_count: 10
 ```
 
 `${ENV_VAR}` placeholders are expanded at load time — keep secrets out of git.
@@ -93,14 +95,15 @@ The adapter behaves like a real human teammate:
 | Message | Routed to | Notes |
 |---|---|---|
 | Direct chat (`p2p`) | `agent.chat` | Always reply, sent as a fresh message (no quoting). |
-| Group / topic, bot @mentioned | `agent.chat` | Always reply. Anchored to the source message via `reply_to`; never as a Feishu topic/thread reply. |
-| Group / topic, not @mentioned | `agent.observe` | The agent decides whether to speak. Replies are sent as fresh group messages. |
+| Group / topic, bot @mentioned | `agent.chat` | Pulls recent Feishu history first, then replies. Anchored to the source message via `reply_to`; never as a Feishu topic/thread reply. |
+| Group / topic, not @mentioned | ignored | The bot does not listen or speak unless explicitly addressed. |
 | Non-text content | ignored (Phase 1) | Image/file routing is on the roadmap. |
 
-> **Permission check.** For the bot to see un-addressed group messages
-> (the `observe` path), the Feishu app needs `im:message.group_msg`
-> in addition to `im:message.group_at_msg`. Without it the SDK will never
-> receive them, regardless of any client-side setting.
+> **Permission check.** The bot can reply to group @mentions with
+> `im:message.group_at_msg`. To read recent group history after the @mention,
+> the app also needs Feishu history/group message read permissions such as
+> `im:message:readonly` plus `im:message.group_msg`. If those permissions are
+> missing, xAgent simply replies using the current @message.
 
 User identity is the Feishu **`open_id`** (`msg.sender_id`). xAgent's memory
 layer is keyed by this stable id, so long-term memory survives across
