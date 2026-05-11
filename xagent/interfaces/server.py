@@ -8,11 +8,11 @@ from typing import Any, Dict, List, Optional, Union
 
 from posthog import host
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .base import BaseAgentConfig, BaseAgentRunner
 from ..core.agent import Agent
@@ -157,7 +157,7 @@ class AgentHTTPServer(BaseAgentRunner):
         finally:
             self._chat_semaphore.release()
 
-    async def _stream_chat_events(self, input_data: AgentInput):
+    async def _chat_stream_events(self, input_data: AgentInput):
         acquired = False
         try:
             await self._acquire_chat_slot()
@@ -169,25 +169,96 @@ class AgentHTTPServer(BaseAgentRunner):
             )
             if hasattr(response, "__aiter__"):
                 async for delta in self._iterate_before_deadline(response, deadline):
-                    yield self._sse({"delta": delta})
+                    yield {"type": "delta", "delta": delta}
             else:
-                yield self._sse({"message": self._response_payload(response)})
-            yield "data: [DONE]\n\n"
+                yield {"type": "message", "message": self._response_payload(response)}
         except HTTPException as exc:
             self.logger.warning("Streaming chat rejected for %s: %s", input_data.user_id, exc.detail)
-            yield self._sse({"error": exc.detail, "status_code": exc.status_code})
-            yield "data: [DONE]\n\n"
+            yield {"type": "error", "error": exc.detail, "status_code": exc.status_code}
         except asyncio.TimeoutError:
             self.logger.error("Streaming chat timed out for %s", input_data.user_id)
-            yield self._sse({"error": "Agent chat timed out.", "status_code": 504})
-            yield "data: [DONE]\n\n"
+            yield {"type": "error", "error": "Agent chat timed out.", "status_code": 504}
         except Exception as exc:
             self.logger.error("Streaming error for %s: %s", input_data.user_id, exc)
-            yield self._sse({"error": str(exc)})
-            yield "data: [DONE]\n\n"
+            yield {"type": "error", "error": str(exc)}
         finally:
             if acquired:
                 self._chat_semaphore.release()
+        yield {"type": "done"}
+
+    async def _stream_chat_events(self, input_data: AgentInput):
+        async for event in self._chat_stream_events(input_data):
+            if event.get("type") == "done":
+                yield "data: [DONE]\n\n"
+                continue
+            yield self._sse(self._sse_event_payload(event))
+
+    async def _send_websocket_chat_events(self, websocket: WebSocket, input_data: AgentInput) -> None:
+        if input_data.stream:
+            async for event in self._chat_stream_events(input_data):
+                await websocket.send_json(event)
+            return
+
+        try:
+            response = await self._run_chat_with_limits(input_data, stream=False)
+            await websocket.send_json({
+                "type": "message",
+                "message": self._response_payload(response),
+            })
+        except HTTPException as exc:
+            self.logger.warning("WebSocket chat rejected for %s: %s", input_data.user_id, exc.detail)
+            await websocket.send_json({
+                "type": "error",
+                "error": exc.detail,
+                "status_code": exc.status_code,
+            })
+        except Exception as exc:
+            self.logger.error("WebSocket chat error for %s: %s", input_data.user_id, exc)
+            await websocket.send_json({
+                "type": "error",
+                "error": f"Agent processing error: {str(exc)}",
+            })
+        finally:
+            await websocket.send_json({"type": "done"})
+
+    async def _send_websocket_observe_events(self, websocket: WebSocket, input_data: ObserveInput) -> None:
+        try:
+            response = await self._run_observe_with_limits(input_data)
+            await websocket.send_json({
+                "type": "result",
+                "result": self._response_payload(response),
+            })
+        except HTTPException as exc:
+            self.logger.warning("WebSocket observe rejected for %s: %s", input_data.current_user_id, exc.detail)
+            await websocket.send_json({
+                "type": "error",
+                "error": exc.detail,
+                "status_code": exc.status_code,
+            })
+        except Exception as exc:
+            self.logger.error("WebSocket observe error for %s: %s", input_data.current_user_id, exc)
+            await websocket.send_json({
+                "type": "error",
+                "error": f"Agent observe error: {str(exc)}",
+            })
+        finally:
+            await websocket.send_json({"type": "done"})
+
+    async def _send_websocket_error(
+        self,
+        websocket: WebSocket,
+        error: str,
+        *,
+        status_code: Optional[int] = None,
+        details: Optional[Any] = None,
+    ) -> None:
+        payload: Dict[str, Any] = {"type": "error", "error": error}
+        if status_code is not None:
+            payload["status_code"] = status_code
+        if details is not None:
+            payload["details"] = details
+        await websocket.send_json(payload)
+        await websocket.send_json({"type": "done"})
 
     async def _await_before_deadline(self, awaitable, deadline: float):
         return await asyncio.wait_for(awaitable, timeout=self._remaining_time(deadline))
@@ -206,6 +277,10 @@ class AgentHTTPServer(BaseAgentRunner):
     @staticmethod
     def _sse(payload: dict) -> str:
         return f"data: {json.dumps(payload)}\n\n"
+
+    @staticmethod
+    def _sse_event_payload(event: dict) -> dict:
+        return {key: value for key, value in event.items() if key != "type"}
 
     @staticmethod
     def _response_payload(response):
@@ -332,6 +407,89 @@ class AgentHTTPServer(BaseAgentRunner):
             except Exception as exc:
                 self.logger.error("Agent processing error for %s: %s", input_data.user_id, exc)
                 raise HTTPException(status_code=500, detail=f"Agent processing error: {str(exc)}")
+
+        @app.websocket("/ws/chat")
+        async def websocket_chat(websocket: WebSocket):
+            await websocket.accept()
+            self.logger.info("WebSocket chat connected")
+
+            while True:
+                try:
+                    raw_payload = await websocket.receive_json()
+                    input_data = AgentInput.model_validate(raw_payload)
+                    self.logger.info(
+                        "WebSocket chat request from %s, stream=%s",
+                        input_data.user_id,
+                        input_data.stream,
+                    )
+                    await self._send_websocket_chat_events(websocket, input_data)
+                except WebSocketDisconnect:
+                    self.logger.info("WebSocket chat disconnected")
+                    break
+                except json.JSONDecodeError as exc:
+                    self.logger.warning("Invalid WebSocket chat JSON: %s", exc)
+                    await self._send_websocket_error(
+                        websocket,
+                        "Invalid JSON payload.",
+                        status_code=400,
+                        details=str(exc),
+                    )
+                except ValidationError as exc:
+                    self.logger.warning("Invalid WebSocket chat payload: %s", exc)
+                    await self._send_websocket_error(
+                        websocket,
+                        "Invalid chat payload.",
+                        status_code=422,
+                        details=exc.errors(),
+                    )
+                except Exception as exc:
+                    self.logger.error("Unexpected WebSocket chat error: %s", exc)
+                    await self._send_websocket_error(
+                        websocket,
+                        f"Agent processing error: {str(exc)}",
+                    )
+
+        @app.websocket("/ws/observe")
+        async def websocket_observe(websocket: WebSocket):
+            await websocket.accept()
+            self.logger.info("WebSocket observe connected")
+
+            while True:
+                try:
+                    raw_payload = await websocket.receive_json()
+                    input_data = ObserveInput.model_validate(raw_payload)
+                    self.logger.info(
+                        "WebSocket observe request from %s, source=%s, type=%s",
+                        input_data.current_user_id,
+                        input_data.source,
+                        input_data.event_type,
+                    )
+                    await self._send_websocket_observe_events(websocket, input_data)
+                except WebSocketDisconnect:
+                    self.logger.info("WebSocket observe disconnected")
+                    break
+                except json.JSONDecodeError as exc:
+                    self.logger.warning("Invalid WebSocket observe JSON: %s", exc)
+                    await self._send_websocket_error(
+                        websocket,
+                        "Invalid JSON payload.",
+                        status_code=400,
+                        details=str(exc),
+                    )
+                except ValidationError as exc:
+                    self.logger.warning("Invalid WebSocket observe payload: %s", exc)
+                    await self._send_websocket_error(
+                        websocket,
+                        "Invalid observe payload.",
+                        status_code=422,
+                        details=exc.errors(),
+                    )
+                except Exception as exc:
+                    self.logger.error("Unexpected WebSocket observe error: %s", exc)
+                    await self._send_websocket_error(
+                        websocket,
+                        f"Agent observe error: {str(exc)}",
+                    )
 
         @app.post("/observe")
         async def observe(input_data: ObserveInput):

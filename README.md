@@ -47,6 +47,7 @@ xagent server --open
 ```
 
 The web page is best for longer conversations, streaming replies, and image input.
+Use the Transport selector to compare regular HTTP/SSE with WebSocket chat delivery.
 
 ## Chat And Observe
 
@@ -55,6 +56,14 @@ Use `chat` when someone is directly addressing the agent and expects a reply.
 Use `observe` for context the agent notices or overhears: ambient speech, room state, notifications, reminders, or sensor updates. An observation is saved to the message stream, then the agent decides whether speaking is useful. If silence is better, `observe` returns `replied=false` and no assistant message is added.
 
 Diary memory is built from the agent's experience stream, not only direct chats. Meaningful observations can be summarized alongside conversations, with attribution preserved so overheard speech is not confused with a direct request from the current user.
+
+## API Transports
+
+`POST /chat` remains the default HTTP interface. Set `stream=true` to receive server-sent events.
+
+`/ws/chat` accepts the same chat JSON over WebSocket and returns JSON frames: `delta`, `message`, `error`, and `done`.
+
+`/ws/observe` accepts the same observe JSON over WebSocket and returns `result`, `error`, and `done` frames.
 
 ## Best Practices
 

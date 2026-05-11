@@ -321,6 +321,48 @@
       color: var(--text-secondary);
     }
 
+    .inline-select {
+      min-width: 130px;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--text-primary);
+      font-size: 1rem;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .inline-select option {
+      background: #ffffff;
+      color: #18181b;
+    }
+
+    .dark .inline-select option {
+      background: #18181b;
+      color: #fafafa;
+    }
+
+    .header-select {
+      min-width: 108px;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--text-primary);
+      font-size: 0.875rem;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .header-select option {
+      background: #ffffff;
+      color: #18181b;
+    }
+
+    .dark .header-select option {
+      background: #18181b;
+      color: #fafafa;
+    }
+
     .inline-switch {
       display: inline-flex;
       align-items: center;
@@ -436,6 +478,11 @@
       font-size: 0.85rem;
     }
 
+    .panel-settings-bar .inline-select {
+      min-width: 92px;
+      font-size: 0.85rem;
+    }
+
     .panel-settings-bar .inline-switch {
       min-height: 34px;
       padding: 0 0.25rem 0 0.65rem;
@@ -544,6 +591,13 @@
               <span>Dual</span>
               <input id="optDual" type="checkbox" class="w-3.5 h-3.5 accent-current" />
             </label>
+            <label id="headerTransportControl" class="ghost-button text-sm px-3 py-1.5 rounded-full inline-flex items-center gap-2 hover:bg-white/80 dark:hover:bg-gray-900 transition">
+              <span>Transport</span>
+              <select id="optTransport" class="header-select">
+                <option value="http">HTTP</option>
+                <option value="websocket">WebSocket</option>
+              </select>
+            </label>
             <button id="toggleThemeBtn" class="ghost-button text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Theme</button>
           </div>
         </div>
@@ -631,6 +685,7 @@ function autoResize(textarea) {
 function saveGlobalSettings() {
   const settings = {
     userId: document.getElementById('userId').value,
+    transport: document.getElementById('optTransport').value,
     stream: document.getElementById('optStream').checked,
     memory: document.getElementById('optMemory').checked,
     private: document.getElementById('optPrivate').checked,
@@ -644,6 +699,7 @@ function restoreGlobalSettings() {
   const settings = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
 
   document.getElementById('userId').value = settings.userId || 'web_user';
+  document.getElementById('optTransport').value = settings.transport || 'http';
   document.getElementById('optStream').checked = settings.stream !== false;
   document.getElementById('optMemory').checked = settings.memory !== false;
   document.getElementById('optPrivate').checked = !!settings.private;
@@ -722,6 +778,13 @@ function createChatPanel(panelId, containerEl, options = {}) {
           <span class="inline-label">User</span>
           <input data-pid="${panelId}_userId" type="text" class="inline-input text-sm" value="web_user" />
         </label>
+        <label class="inline-field text-sm">
+          <span class="inline-label">Transport</span>
+          <select data-pid="${panelId}_optTransport" class="inline-select text-sm">
+            <option value="http">HTTP</option>
+            <option value="websocket">WebSocket</option>
+          </select>
+        </label>
         <div class="inline-switch">
           <label class="setting-toggle cursor-pointer">
             <span class="setting-toggle-text">Stream</span>
@@ -787,6 +850,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
     if (showPanelSettings) {
       return {
         userId: (el('userId')?.value || '').trim() || 'web_user',
+        transport: el('optTransport')?.value || 'http',
         stream: el('optStream')?.checked ?? true,
         memory: el('optMemory')?.checked ?? true,
         private: el('optPrivate')?.checked ?? false,
@@ -794,6 +858,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
     }
     return {
       userId: (document.getElementById('userId')?.value || '').trim() || 'web_user',
+      transport: document.getElementById('optTransport')?.value || 'http',
       stream: document.getElementById('optStream')?.checked ?? true,
       memory: document.getElementById('optMemory')?.checked ?? true,
       private: document.getElementById('optPrivate')?.checked ?? false,
@@ -811,6 +876,8 @@ function createChatPanel(panelId, containerEl, options = {}) {
     const s = JSON.parse(localStorage.getItem(settingsKey) || '{}');
     const userIdEl = el('userId');
     if (userIdEl) userIdEl.value = s.userId || (panelId === 'left' ? 'John' : 'Alice');
+    const transportEl = el('optTransport');
+    if (transportEl) transportEl.value = s.transport || 'http';
     const streamEl = el('optStream');
     if (streamEl) streamEl.checked = s.stream !== false;
     const memoryEl = el('optMemory');
@@ -975,6 +1042,25 @@ function createChatPanel(panelId, containerEl, options = {}) {
 
   /* ── Chat operations ── */
 
+  function renderReplyPayload(contentEl, reply) {
+    if (typeof reply === 'object' && reply !== null) {
+      const text = JSON.stringify(reply, null, 2);
+      contentEl.innerHTML = `<pre>${escapeHtml(text)}</pre>`;
+      return text;
+    }
+
+    const text = reply == null ? '' : String(reply);
+    renderMarkdown(contentEl, text);
+    return text;
+  }
+
+  function webSocketUrl(path) {
+    const base = API_BASE || window.location.origin;
+    const url = new URL(path, base);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return url.toString();
+  }
+
   async function regularChat(payload, contentEl, messageIndex) {
     contentEl.innerHTML = '<span class="text-gray-400">Thinking...</span>';
     const response = await fetch(`${API_BASE}/chat`, {
@@ -984,15 +1070,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
     const result = await response.json();
-    const reply = result.reply;
-    if (typeof reply === 'object') {
-      const text = JSON.stringify(reply, null, 2);
-      contentEl.innerHTML = `<pre>${escapeHtml(text)}</pre>`;
-      state.messages[messageIndex].content = text;
-      return;
-    }
-    renderMarkdown(contentEl, reply || '');
-    state.messages[messageIndex].content = reply || '';
+    state.messages[messageIndex].content = renderReplyPayload(contentEl, result.reply);
   }
 
   async function streamChat(payload, contentEl, messageIndex) {
@@ -1031,13 +1109,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
             continue;
           }
           if (parsed.message) {
-            if (typeof parsed.message === 'object') {
-              fullText = JSON.stringify(parsed.message, null, 2);
-              contentEl.innerHTML = `<pre>${escapeHtml(fullText)}</pre>`;
-            } else {
-              fullText = parsed.message;
-              renderMarkdown(contentEl, fullText);
-            }
+            fullText = renderReplyPayload(contentEl, parsed.message);
             scrollToBottom();
           }
         } catch (error) {
@@ -1050,6 +1122,140 @@ function createChatPanel(panelId, containerEl, options = {}) {
     state.messages[messageIndex].content = fullText;
     contentEl.classList.remove('typing-cursor');
     saveHistory();
+  }
+
+  async function websocketChat(payload, contentEl, messageIndex) {
+    contentEl.classList.toggle('typing-cursor', !!payload.stream);
+    if (!payload.stream) {
+      contentEl.innerHTML = '<span class="text-gray-400">Thinking...</span>';
+    }
+
+    await new Promise((resolve, reject) => {
+      const socket = new WebSocket(webSocketUrl('/ws/chat'));
+      let fullText = '';
+      let settled = false;
+
+      const settle = (error = null) => {
+        if (settled) return;
+        settled = true;
+        contentEl.classList.remove('typing-cursor');
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close(1000);
+        }
+        if (error) {
+          reject(error);
+        } else {
+          state.messages[messageIndex].content = fullText;
+          saveHistory();
+          resolve();
+        }
+      };
+
+      socket.addEventListener('open', () => {
+        socket.send(JSON.stringify(payload));
+      });
+
+      socket.addEventListener('message', (event) => {
+        let parsed;
+        try {
+          parsed = JSON.parse(event.data);
+        } catch {
+          settle(new Error('Invalid WebSocket response.'));
+          return;
+        }
+
+        if (parsed.type === 'error' || parsed.error) {
+          settle(new Error(parsed.error || 'WebSocket chat failed.'));
+          return;
+        }
+
+        if (parsed.type === 'delta' && parsed.delta) {
+          fullText += parsed.delta;
+          renderMarkdown(contentEl, fullText);
+          scrollToBottom();
+          return;
+        }
+
+        if (parsed.type === 'message') {
+          fullText = renderReplyPayload(contentEl, parsed.message);
+          scrollToBottom();
+          return;
+        }
+
+        if (parsed.type === 'done') {
+          settle();
+        }
+      });
+
+      socket.addEventListener('error', () => {
+        settle(new Error('WebSocket connection failed.'));
+      });
+
+      socket.addEventListener('close', () => {
+        if (!settled) {
+          settle(new Error('WebSocket connection closed before completion.'));
+        }
+      });
+    });
+  }
+
+  async function websocketObserve(payload) {
+    return await new Promise((resolve, reject) => {
+      const socket = new WebSocket(webSocketUrl('/ws/observe'));
+      let settled = false;
+      let result = null;
+
+      const settle = (error = null) => {
+        if (settled) return;
+        settled = true;
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close(1000);
+        }
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      };
+
+      socket.addEventListener('open', () => {
+        socket.send(JSON.stringify(payload));
+      });
+
+      socket.addEventListener('message', (event) => {
+        let parsed;
+        try {
+          parsed = JSON.parse(event.data);
+        } catch {
+          settle(new Error('Invalid WebSocket response.'));
+          return;
+        }
+
+        if (parsed.type === 'error' || parsed.error) {
+          settle(new Error(parsed.error || 'WebSocket observe failed.'));
+          return;
+        }
+
+        if (parsed.type === 'result') {
+          result = parsed.result;
+          return;
+        }
+
+        if (parsed.type === 'done') {
+          settle();
+        }
+      });
+
+      socket.addEventListener('error', () => {
+        settle(new Error('WebSocket connection failed.'));
+      });
+
+      socket.addEventListener('close', () => {
+        if (!settled) {
+          settle(new Error('WebSocket connection closed before completion.'));
+        }
+      });
+    });
   }
 
   async function sendMessage() {
@@ -1094,7 +1300,9 @@ function createChatPanel(panelId, containerEl, options = {}) {
     const { contentEl } = appendMessageBubble(assistantMessage, true);
 
     try {
-      if (payload.stream) {
+      if (settings.transport === 'websocket') {
+        await websocketChat(payload, contentEl, messageIndex);
+      } else if (payload.stream) {
         await streamChat(payload, contentEl, messageIndex);
       } else {
         await regularChat(payload, contentEl, messageIndex);
@@ -1150,13 +1358,18 @@ function createChatPanel(panelId, containerEl, options = {}) {
     };
 
     try {
-      const response = await fetch(`${API_BASE}/observe`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-      const result = await response.json();
+      let result;
+      if (settings.transport === 'websocket') {
+        result = await websocketObserve(payload);
+      } else {
+        const response = await fetch(`${API_BASE}/observe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+        result = await response.json();
+      }
       if (result.replied && result.reply) {
         renderMarkdown(contentEl, String(result.reply));
         state.messages[messageIndex].content = String(result.reply);
@@ -1242,7 +1455,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
 
     // Panel-level settings save
     if (showPanelSettings) {
-      ['userId', 'optStream', 'optMemory', 'optPrivate'].forEach((suffix) => {
+      ['userId', 'optTransport', 'optStream', 'optMemory', 'optPrivate'].forEach((suffix) => {
         const input = el(suffix);
         if (input) input.addEventListener('change', saveSettings);
       });
@@ -1277,6 +1490,7 @@ function mountPanels() {
   if (isDualMode()) {
     // Hide global settings bar (each panel has its own)
     document.getElementById('globalSettingsBar').style.display = 'none';
+    document.getElementById('headerTransportControl').style.display = 'none';
 
     // Widen the container for dual panels
     if (outerContainer) {
@@ -1314,6 +1528,7 @@ function mountPanels() {
   } else {
     // Show global settings bar
     document.getElementById('globalSettingsBar').style.display = '';
+    document.getElementById('headerTransportControl').style.display = '';
 
     // Restore original container width
     if (outerContainer) {
@@ -1376,7 +1591,7 @@ function updateGlobalPrivateIndicator() {
 /* ─── Global event wiring ─── */
 
 function bindGlobalEvents() {
-  ['userId', 'optStream', 'optMemory', 'optPrivate'].forEach((id) => {
+  ['userId', 'optTransport', 'optStream', 'optMemory', 'optPrivate'].forEach((id) => {
     document.getElementById(id).addEventListener('change', () => {
       saveGlobalSettings();
       updateGlobalPrivateIndicator();

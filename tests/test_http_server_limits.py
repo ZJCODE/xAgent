@@ -2,6 +2,7 @@ import asyncio
 import unittest
 
 import httpx
+from fastapi.testclient import TestClient
 
 from xagent.interfaces.server import AgentHTTPServer
 from xagent.schemas import AgentTurnResult
@@ -47,6 +48,24 @@ class SlowStreamingAgent:
             yield "first"
             await asyncio.sleep(1)
             yield "late"
+
+        return generator()
+
+
+class FastStreamingAgent:
+    model = "test-model"
+    tools = {}
+
+    def __init__(self):
+        self.message_storage = FakeMessageStorage()
+
+    async def __call__(self, stream=False, **kwargs):
+        if not stream:
+            return "ok"
+
+        async def generator():
+            yield "hel"
+            yield "lo"
 
         return generator()
 
@@ -175,6 +194,104 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(agent.observed_kwargs["context"], "看到有人靠近门口。")
         self.assertEqual(agent.observed_kwargs["metadata"], {"memory_policy": "always"})
+
+
+class AgentWebSocketServerTests(unittest.TestCase):
+    def test_websocket_chat_returns_message_and_done(self):
+        server = AgentHTTPServer(agent=FastStreamingAgent(), enable_web=False)
+
+        with TestClient(server.app) as client:
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json({
+                    "user_id": "alice",
+                    "user_message": "hello",
+                    "stream": False,
+                })
+
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "message",
+                    "message": "ok",
+                })
+                self.assertEqual(websocket.receive_json(), {"type": "done"})
+
+    def test_websocket_streaming_chat_emits_deltas_and_done(self):
+        server = AgentHTTPServer(agent=FastStreamingAgent(), enable_web=False)
+
+        with TestClient(server.app) as client:
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json({
+                    "user_id": "alice",
+                    "user_message": "stream please",
+                    "stream": True,
+                })
+
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "delta",
+                    "delta": "hel",
+                })
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "delta",
+                    "delta": "lo",
+                })
+                self.assertEqual(websocket.receive_json(), {"type": "done"})
+
+    def test_websocket_streaming_chat_timeout_emits_error_and_done(self):
+        server = AgentHTTPServer(
+            agent=SlowStreamingAgent(),
+            enable_web=False,
+            max_concurrent_chats=1,
+            chat_queue_timeout=1.0,
+            chat_timeout=0.05,
+        )
+
+        with TestClient(server.app) as client:
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json({
+                    "user_id": "alice",
+                    "user_message": "stream timeout",
+                    "stream": True,
+                })
+
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "delta",
+                    "delta": "first",
+                })
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "error",
+                    "error": "Agent chat timed out.",
+                    "status_code": 504,
+                })
+                self.assertEqual(websocket.receive_json(), {"type": "done"})
+
+    def test_websocket_observe_returns_result_and_done(self):
+        agent = ObservingAgent()
+        server = AgentHTTPServer(agent=agent, enable_web=False)
+
+        with TestClient(server.app) as client:
+            with client.websocket_connect("/ws/observe") as websocket:
+                websocket.send_json({
+                    "context": "灯开了。",
+                    "current_user_id": "alice",
+                    "source": "sensor",
+                    "event_type": "light",
+                    "metadata": {"room": "study"},
+                })
+
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "result",
+                    "result": {
+                        "kind": "observe",
+                        "replied": False,
+                        "reply": None,
+                        "event_id": 123.0,
+                        "event_type": "light",
+                        "source": "sensor",
+                    },
+                })
+                self.assertEqual(websocket.receive_json(), {"type": "done"})
+
+        self.assertEqual(agent.observed_kwargs["context"], "灯开了。")
+        self.assertEqual(agent.observed_kwargs["metadata"], {"room": "study"})
 
 
 if __name__ == "__main__":
