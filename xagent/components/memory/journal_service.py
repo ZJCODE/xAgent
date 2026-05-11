@@ -176,17 +176,7 @@ Requirements:
             content = str(message.get("content", "")).strip()
             if content:
                 if message_type == "context_event":
-                    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-                    source = metadata.get("source") or sender or "environment"
-                    event_type = metadata.get("event_type") or "observation"
-                    speaker = metadata.get("speaker_id") or metadata.get("speaker") or sender
-                    addressed_to_agent = metadata.get("addressed_to_agent")
-                    parts = [f"source={source}", f"type={event_type}"]
-                    if speaker:
-                        parts.append(f"speaker={speaker}")
-                    if addressed_to_agent is not None:
-                        parts.append(f"addressed_to_agent={bool(addressed_to_agent)}")
-                    lines.append(f"[observation {' '.join(parts)}]: {content}")
+                    lines.append(f"[ambient context]: {content}")
                 else:
                     lines.append(f"[{sender}]: {content}")
         return "\n".join(lines)

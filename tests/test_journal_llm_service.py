@@ -50,7 +50,8 @@ class JournalLLMServicePromptTests(unittest.TestCase):
             }
         ])
 
-        self.assertIn("[observation source=microphone type=overheard_speech speaker=bob addressed_to_agent=False]", transcript)
+        self.assertIn("[ambient context]: Bob 说活动可能要提前开始。", transcript)
+        self.assertNotIn("[observation ", transcript)
         self.assertIn("Bob 说活动可能要提前开始。", transcript)
 
 

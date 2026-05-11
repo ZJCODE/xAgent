@@ -162,13 +162,13 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
         self.assertIn("Recent Experience", transcript)
         self.assertNotIn("Recent Observations", transcript)
-        self.assertIn("source=microphone", transcript)
-        self.assertIn("type=overheard_speech", transcript)
-        self.assertIn("addressed_to_agent=False", transcript)
+        self.assertIn("[ambient context]", transcript)
+        self.assertNotIn("[observation ", transcript)
+        self.assertNotIn("Current speaker:", transcript)
         self.assertIn("[speaker=alice]", transcript)
         self.assertIn("[speaker=bob]", transcript)
-        self.assertLess(transcript.index("[speaker=alice]"), transcript.index("[observation source=microphone"))
-        self.assertLess(transcript.index("[observation source=microphone"), transcript.index("[speaker=bob]"))
+        self.assertLess(transcript.index("[speaker=alice]"), transcript.index("[ambient context]"))
+        self.assertLess(transcript.index("[ambient context]"), transcript.index("[speaker=bob]"))
         self.assertIn("set replied to false", transcript)
 
 

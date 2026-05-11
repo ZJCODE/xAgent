@@ -116,8 +116,8 @@ class MessageHandler:
     ) -> dict:
         """Collapse recent conversation history into one user transcript message.
 
-        Includes per-turn dynamic context that changes each call:
-          - Runtime metadata (current speaker, date)
+                Includes per-turn dynamic context that changes each call:
+                    - Runtime metadata (date, and current speaker for direct chat turns)
           - Recent diary memory (conditional)
                     - Recent experience in chronological order
         """
@@ -148,7 +148,8 @@ class MessageHandler:
 
         # --- Runtime context ---
         transcript_lines.append(AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip())
-        transcript_lines.append(f"- Current speaker: {current_user_id}")
+        if turn_kind != "observe":
+            transcript_lines.append(f"- Current speaker: {current_user_id}")
         transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
         transcript_lines.append("")
 
@@ -185,6 +186,11 @@ class MessageHandler:
         transcript_lines.append(MessageHandler._build_turn_instruction(turn_kind, current_user_id))
 
         transcript_text = "\n".join(transcript_lines).strip()
+
+        print("=== Built transcript message content ===")
+        print(transcript_text)
+        print("=== End transcript message content ===")
+
         latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id)
         if not latest_images:
             return {"role": RoleType.USER.value, "content": transcript_text}
@@ -270,17 +276,7 @@ class MessageHandler:
 
     @staticmethod
     def _format_context_event_header(message: Message) -> str:
-        metadata = message.metadata or {}
-        source = metadata.get("source") or message.sender_id or "environment"
-        event_type = metadata.get("event_type") or "observation"
-        speaker = metadata.get("speaker_id") or metadata.get("speaker") or message.sender_id
-        addressed_to_agent = metadata.get("addressed_to_agent")
-        parts = [f"source={source}", f"type={event_type}"]
-        if speaker:
-            parts.append(f"speaker={speaker}")
-        if addressed_to_agent is not None:
-            parts.append(f"addressed_to_agent={bool(addressed_to_agent)}")
-        return "[observation " + " ".join(parts) + "]"
+        return "[ambient context]"
 
     @staticmethod
     def _build_turn_instruction(turn_kind: str, current_user_id: str) -> str:

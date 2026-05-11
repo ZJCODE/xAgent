@@ -488,8 +488,9 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([message.role for message in storage.messages], [RoleType.ENVIRONMENT, RoleType.ASSISTANT])
         self.assertEqual(storage.messages[0].metadata["speaker_id"], "bob")
         transcript = model_client.calls[0][0]["content"]
-        self.assertIn("speaker=bob", transcript)
-        self.assertIn("addressed_to_agent=False", transcript)
+        self.assertIn("[ambient context]", transcript)
+        self.assertNotIn("[observation ", transcript)
+        self.assertIn("Bob 说活动可能要提前开始。", transcript)
         self.assertEqual(memory_handler.experience_messages, storage.messages)
         self.assertTrue(memory_handler.caused_reply)
 
