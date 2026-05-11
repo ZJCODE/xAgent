@@ -51,6 +51,12 @@ class ObserveInput(BaseModel):
     private: Optional[bool] = False
 
 
+class IdentityInput(BaseModel):
+    """Request body for updating identity.md."""
+
+    identity: str
+
+
 class AgentHTTPServer(BaseAgentRunner):
     """HTTP server for xAgent."""
 
@@ -221,6 +227,28 @@ class AgentHTTPServer(BaseAgentRunner):
             raise HTTPException(status_code=500, detail="Memory storage path is unavailable")
         return Path(memory_root).expanduser().resolve()
 
+    def _get_identity_path(self) -> Path:
+        identity_path = getattr(self, "identity_path", None)
+        if identity_path is None:
+            raise HTTPException(status_code=500, detail="Identity file path is unavailable")
+        return Path(identity_path).expanduser().resolve()
+
+    def _get_agent_identity(self) -> str:
+        identity = getattr(self.agent, "identity", None)
+        if identity is None:
+            identity = getattr(self.agent, "system_prompt", "")
+        return identity or ""
+
+    def _set_agent_identity(self, identity: str) -> None:
+        if hasattr(self.agent, "set_identity"):
+            self.agent.set_identity(identity)
+        else:
+            self.agent.system_prompt = identity
+            message_handler = getattr(self.agent, "message_handler", None)
+            if message_handler is not None:
+                message_handler.system_prompt = identity
+        self.identity = identity
+
     def _create_app(self) -> FastAPI:
         app = FastAPI(
             title="xAgent HTTP Agent Server",
@@ -342,13 +370,60 @@ class AgentHTTPServer(BaseAgentRunner):
             """Return agent metadata for monitoring pages."""
             memory_dir = str(self._get_memory_root())
             storage_info = self.message_storage.get_stream_info() if hasattr(self.message_storage, "get_stream_info") else {}
+            identity = self._get_agent_identity()
+            try:
+                identity_path = self._get_identity_path()
+                identity_path_value = str(identity_path)
+                identity_editable = True
+            except HTTPException:
+                identity_path_value = ""
+                identity_editable = False
             return {
                 "model": self.agent.model,
                 "workspace": str(getattr(self, "workspace", "")),
                 "memory_dir": memory_dir,
                 "message_storage": storage_info,
                 "tools": list(self.agent.tools.keys()),
-                "system_prompt": getattr(self.agent, "system_prompt", "") or "",
+                "identity": identity,
+                "identity_file": BaseAgentConfig.IDENTITY_FILENAME,
+                "identity_path": identity_path_value,
+                "identity_editable": identity_editable,
+                "system_prompt": identity,
+            }
+
+        @app.get("/api/agent/identity", tags=["Monitoring"])
+        async def agent_identity():
+            """Return identity.md content."""
+            identity_path = self._get_identity_path()
+            if not identity_path.is_file():
+                raise HTTPException(status_code=404, detail="identity.md not found")
+            content = identity_path.read_text(encoding="utf-8")
+            return {
+                "identity": content,
+                "path": str(identity_path),
+                "filename": identity_path.name,
+                "modified": identity_path.stat().st_mtime,
+            }
+
+        @app.put("/api/agent/identity", tags=["Monitoring"])
+        async def update_agent_identity(input_data: IdentityInput):
+            """Persist identity.md and update the running agent."""
+            identity = input_data.identity.strip()
+            if not identity:
+                raise HTTPException(status_code=400, detail="Identity cannot be empty")
+
+            identity_path = self._get_identity_path()
+            identity_path.parent.mkdir(parents=True, exist_ok=True)
+            file_content = f"{identity}\n"
+            identity_path.write_text(file_content, encoding="utf-8")
+            self._set_agent_identity(identity)
+
+            return {
+                "status": "ok",
+                "identity": file_content,
+                "path": str(identity_path),
+                "filename": identity_path.name,
+                "modified": identity_path.stat().st_mtime,
             }
 
         @app.get("/api/memory/tree", tags=["Monitoring"])

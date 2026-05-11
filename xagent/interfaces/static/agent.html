@@ -121,7 +121,11 @@
       background: var(--bg-tertiary);
       border: 1px solid var(--border-soft);
     }
-    .system-prompt-box {
+    .identity-editor {
+      width: 100%;
+      height: min(52vh, 520px);
+      min-height: 320px;
+      resize: vertical;
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
       font-size: 0.82rem;
       line-height: 1.65;
@@ -131,13 +135,48 @@
       border-radius: 1rem;
       background: rgba(24, 24, 27, 0.03);
       border: 1px solid var(--border-soft);
-      max-height: 420px;
       overflow-y: auto;
       color: var(--text-primary);
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
     }
-    .dark .system-prompt-box {
+    .identity-editor:focus {
+      border-color: rgba(59, 130, 246, 0.45);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+    }
+    .identity-editor:disabled {
+      cursor: not-allowed;
+      opacity: 0.72;
+    }
+    .dark .identity-editor {
       background: rgba(255, 255, 255, 0.03);
     }
+    .action-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.45rem 0.8rem;
+      border-radius: 0.75rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      transition: all 0.2s ease;
+    }
+    .action-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+    .primary-button {
+      background: var(--text-primary);
+      color: var(--bg-primary);
+      border: 1px solid transparent;
+    }
+    .secondary-button {
+      background: rgba(255, 255, 255, 0.45);
+      color: var(--text-primary);
+      border: 1px solid var(--border-soft);
+    }
+    .dark .secondary-button { background: rgba(255, 255, 255, 0.06); }
+    .identity-file { word-break: break-all; }
   </style>
 </head>
 <body class="h-full text-gray-900 dark:text-gray-100">
@@ -218,10 +257,31 @@
             </div>
           </div>
 
-          <!-- System prompt -->
+          <!-- Identity -->
           <div class="panel-muted info-card">
-            <div class="info-label mb-3">System Prompt</div>
-            <div id="systemPrompt" class="system-prompt-box">—</div>
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+              <div>
+                <div class="info-label mb-1">Identity</div>
+                <div id="identityFile" class="identity-file text-xs text-gray-500 dark:text-gray-400">identity.md</div>
+              </div>
+              <div class="flex items-center gap-2">
+                <button id="revertIdentityBtn" class="action-button secondary-button" disabled>
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 14L4 9m0 0l5-5M4 9h11a5 5 0 010 10h-1"/>
+                  </svg>
+                  Revert
+                </button>
+                <button id="saveIdentityBtn" class="action-button primary-button" disabled>
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 21H7a2 2 0 01-2-2V5a2 2 0 012-2h8l4 4v12a2 2 0 01-2 2z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 3v7h8"/>
+                  </svg>
+                  Save
+                </button>
+              </div>
+            </div>
+            <textarea id="identityEditor" class="identity-editor" spellcheck="false">—</textarea>
+            <div id="identityStatus" class="mt-2 text-xs text-gray-500 dark:text-gray-400">—</div>
           </div>
 
           <!-- Danger zone -->
@@ -255,6 +315,9 @@
 <script>
 const API_BASE = '';
 const THEME_KEY = 'xagent_agent_theme';
+let originalIdentity = '';
+let identityEditable = false;
+let identitySaving = false;
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -273,6 +336,75 @@ function restoreTheme() {
 
 function saveTheme() {
   localStorage.setItem(THEME_KEY, JSON.stringify(document.documentElement.classList.contains('dark')));
+}
+
+function setIdentityStatus(message, color = '') {
+  const statusEl = document.getElementById('identityStatus');
+  statusEl.textContent = message;
+  statusEl.style.color = color;
+}
+
+function updateIdentityControls() {
+  const editor = document.getElementById('identityEditor');
+  const saveBtn = document.getElementById('saveIdentityBtn');
+  const revertBtn = document.getElementById('revertIdentityBtn');
+  const dirty = editor.value !== originalIdentity;
+
+  editor.disabled = !identityEditable || identitySaving;
+  saveBtn.disabled = !identityEditable || !dirty || identitySaving;
+  revertBtn.disabled = !identityEditable || !dirty || identitySaving;
+
+  if (!identityEditable) {
+    setIdentityStatus('identity.md unavailable', '#ef4444');
+  } else if (identitySaving) {
+    setIdentityStatus('Saving...');
+  } else if (dirty) {
+    setIdentityStatus('Unsaved changes', '#f59e0b');
+  } else {
+    setIdentityStatus('Saved', '#22c55e');
+  }
+}
+
+function setIdentityEditorValue(identity) {
+  originalIdentity = String(identity ?? '');
+  document.getElementById('identityEditor').value = originalIdentity;
+  updateIdentityControls();
+}
+
+async function saveIdentity() {
+  const editor = document.getElementById('identityEditor');
+  const identity = editor.value.trim();
+  if (!identity) {
+    setIdentityStatus('Identity cannot be empty', '#ef4444');
+    return;
+  }
+
+  identitySaving = true;
+  updateIdentityControls();
+  let errorMessage = '';
+  try {
+    const res = await fetch(`${API_BASE}/api/agent/identity`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identity }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+
+    if (data.path) {
+      document.getElementById('identityFile').textContent = data.path;
+    }
+    originalIdentity = data.identity ?? `${identity}\n`;
+    editor.value = originalIdentity;
+  } catch (e) {
+    errorMessage = `Error: ${e.message}`;
+  } finally {
+    identitySaving = false;
+    updateIdentityControls();
+    if (errorMessage) {
+      setIdentityStatus(errorMessage, '#ef4444');
+    }
+  }
 }
 
 async function checkHealth() {
@@ -294,15 +426,17 @@ async function loadAgentConfig() {
   const content = document.getElementById('content');
 
   try {
-    const [infoRes, statsRes] = await Promise.all([
+    const [infoRes, statsRes, identityRes] = await Promise.all([
       fetch(`${API_BASE}/api/agent/info`),
       fetch(`${API_BASE}/api/messages/stats`),
+      fetch(`${API_BASE}/api/agent/identity`),
     ]);
 
     if (!infoRes.ok) throw new Error(`Agent info: HTTP ${infoRes.status}`);
 
     const info = await infoRes.json();
     const stats = statsRes.ok ? await statsRes.json() : {};
+    const identityData = identityRes.ok ? await identityRes.json() : {};
 
     // Runtime summary
     document.getElementById('agentModel').textContent = info.model || 'Unknown model';
@@ -339,12 +473,10 @@ async function loadAgentConfig() {
       document.getElementById('toolList').innerHTML = '<span class="text-sm text-gray-400">No tools registered</span>';
     }
 
-    // System prompt
-    if (info.system_prompt) {
-      document.getElementById('systemPrompt').textContent = info.system_prompt;
-    } else {
-      document.getElementById('systemPrompt').textContent = '(no system prompt configured)';
-    }
+    // Identity
+    identityEditable = Boolean(info.identity_editable);
+    document.getElementById('identityFile').textContent = identityData.path || info.identity_path || info.identity_file || 'identity.md';
+    setIdentityEditorValue(identityData.identity ?? info.identity ?? info.system_prompt ?? '');
 
     loading.classList.add('hidden');
     content.classList.remove('hidden');
@@ -358,6 +490,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('toggleThemeBtn').addEventListener('click', () => {
     document.documentElement.classList.toggle('dark');
     saveTheme();
+  });
+
+  document.getElementById('identityEditor').addEventListener('input', updateIdentityControls);
+  document.getElementById('saveIdentityBtn').addEventListener('click', saveIdentity);
+  document.getElementById('revertIdentityBtn').addEventListener('click', () => {
+    document.getElementById('identityEditor').value = originalIdentity;
+    updateIdentityControls();
   });
 
   document.getElementById('clearMemoryBtn').addEventListener('click', async () => {

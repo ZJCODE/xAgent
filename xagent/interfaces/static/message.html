@@ -401,14 +401,6 @@
         </details>`;
       }
 
-      let metadataHtml = '';
-      if (m.metadata && Object.keys(m.metadata).length > 0) {
-        metadataHtml = `<details class="tool-detail">
-          <summary class="cursor-pointer font-medium">Context metadata</summary>
-          <pre class="text-xs bg-gray-900 text-gray-100 p-2 rounded-lg overflow-x-auto mt-2">${esc(JSON.stringify(m.metadata, null, 2))}</pre>
-        </details>`;
-      }
-
       return `<div class="msg-card ${roleClass}">
         <div class="flex items-center gap-2 flex-wrap">
           <span class="badge ${badgeClass}">${esc(m.role)}</span>
@@ -418,7 +410,6 @@
         </div>
         ${body}
         ${toolHtml}
-        ${metadataHtml}
       </div>`;
     }).join('');
   }

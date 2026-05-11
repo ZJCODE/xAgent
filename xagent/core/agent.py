@@ -111,6 +111,19 @@ class Agent:
         )
 
     @property
+    def identity(self) -> str:
+        return self.system_prompt
+
+    @identity.setter
+    def identity(self, value: str) -> None:
+        self.set_identity(value)
+
+    def set_identity(self, identity: str) -> None:
+        self.system_prompt = identity or ""
+        if hasattr(self, "message_handler"):
+            self.message_handler.system_prompt = self.system_prompt
+
+    @property
     def tools(self) -> dict:
         return self.tool_manager.tools
 
