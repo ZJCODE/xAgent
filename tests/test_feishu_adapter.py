@@ -1,6 +1,8 @@
 import unittest
 import logging
 import asyncio
+import os
+import tempfile
 from types import SimpleNamespace
 
 try:
@@ -31,6 +33,19 @@ class _FakeAgent:
         return SimpleNamespace(replied=False, reply=None)
 
 
+class _SlowObserveAgent(_FakeAgent):
+    def __init__(self, *, started: asyncio.Event, release: asyncio.Event):
+        super().__init__()
+        self.started = started
+        self.release = release
+
+    async def observe(self, **kwargs):
+        self.observe_calls.append(kwargs)
+        self.started.set()
+        await self.release.wait()
+        return SimpleNamespace(replied=False, reply=None)
+
+
 class _FakeChannel:
     def __init__(self, bot_open_id="ou_bot"):
         self.bot_identity = SimpleNamespace(open_id=bot_open_id)
@@ -42,6 +57,17 @@ class _FakeChannel:
 
 
 class FeishuAdapterTests(unittest.TestCase):
+    def setUp(self):
+        self._state_tmp = tempfile.TemporaryDirectory()
+        self._prev_state_dir = os.environ.get("XAGENT_STATE_DIR")
+        os.environ["XAGENT_STATE_DIR"] = self._state_tmp.name
+
+    def tearDown(self):
+        if self._prev_state_dir is None:
+            os.environ.pop("XAGENT_STATE_DIR", None)
+        else:
+            os.environ["XAGENT_STATE_DIR"] = self._prev_state_dir
+        self._state_tmp.cleanup()
     @unittest.skipIf(LogLevel is None, "lark-oapi is not installed")
     def test_normalize_log_level_accepts_yaml_friendly_strings(self):
         self.assertEqual(FeishuAdapter._normalize_log_level("info", LogLevel), LogLevel.INFO)
@@ -235,6 +261,7 @@ class FeishuAdapterTests(unittest.TestCase):
             chat_id="oc_group",
             message_id="om_observed",
             sender_id="ou_user",
+            sender_name="Alice",
             content_text="ambient group message",
             mentioned_bot=False,
             mentions=[],
@@ -244,6 +271,11 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(len(agent.observe_calls), 1)
         self.assertNotIn("private", agent.observe_calls[0])
+        self.assertEqual(
+            agent.observe_calls[0]["context"],
+            "[ambient_context]\nIn the Feishu group, user Alice said:\nambient group message",
+        )
+        self.assertEqual(agent.observe_calls[0]["metadata"]["sender_name"], "Alice")
         self.assertEqual(agent.observe_calls[0]["metadata"]["addressed_to_agent"], False)
         self.assertEqual(adapter._channel.sent[0], ("oc_group", {"markdown": "observe reply"}, None))
 
@@ -259,6 +291,7 @@ class FeishuAdapterTests(unittest.TestCase):
             chat_id="oc_topic",
             message_id="om_topic",
             sender_id="ou_user",
+            sender_name="Bob",
             content_text="hello everyone",
             mentioned_bot=False,
             mentions=[],
@@ -268,6 +301,10 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(len(agent.chat_calls), 0)
         self.assertEqual(len(agent.observe_calls), 1)
+        self.assertEqual(
+            agent.observe_calls[0]["context"],
+            "[ambient_context]\nIn the Feishu group, user Bob said:\nhello everyone",
+        )
         # Agent declined to speak -> nothing sent.
         self.assertEqual(adapter._channel.sent, [])
 
@@ -280,6 +317,83 @@ class FeishuAdapterTests(unittest.TestCase):
         opts = adapter._send_opts(message_id="om_x", is_group=True)
         self.assertEqual(opts, {"reply_to": "om_x"})
         self.assertNotIn("reply_in_thread", opts)
+
+    def test_topic_group_anchors_reply_to_root_message(self):
+        agent = _FakeAgent()
+        adapter = FeishuAdapter(
+            agent=agent,
+            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"),
+        )
+        adapter._channel = _FakeChannel(bot_open_id="ou_bot")
+        msg = SimpleNamespace(
+            chat_type="topic",
+            chat_id="oc_topic",
+            message_id="om_inside_thread",
+            sender_id="ou_user",
+            content_text="@Mono hi",
+            mentioned_bot=True,
+            mentions=[SimpleNamespace(open_id="ou_bot")],
+            root_id="om_topic_root",
+        )
+
+        asyncio.run(adapter._dispatch(msg))
+
+        # Reply must anchor on the topic root, not the buried child message.
+        self.assertEqual(adapter._channel.sent[0][2], {"reply_to": "om_topic_root"})
+
+    def test_duplicate_message_is_skipped(self):
+        agent = _FakeAgent()
+        adapter = FeishuAdapter(
+            agent=agent,
+            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"),
+        )
+        adapter._channel = _FakeChannel()
+        msg = SimpleNamespace(
+            chat_type="p2p",
+            chat_id="oc_dm",
+            message_id="om_dup",
+            sender_id="ou_user",
+            content_text="hello",
+        )
+
+        asyncio.run(adapter._dispatch(msg))
+        asyncio.run(adapter._dispatch(msg))
+
+        # Only one chat call despite two dispatches with the same message_id.
+        self.assertEqual(len(agent.chat_calls), 1)
+
+    def test_pending_history_is_preserved_after_group_reply(self):
+        agent = _FakeAgent()
+        adapter = FeishuAdapter(
+            agent=agent,
+            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"),
+        )
+        adapter._channel = _FakeChannel(bot_open_id="ou_bot")
+        # First, an unmentioned group message gets recorded in pending history.
+        prior = SimpleNamespace(
+            chat_type="group",
+            chat_id="oc_group",
+            message_id="om_prior",
+            sender_id="ou_other",
+            content_text="some chatter",
+            mentioned_bot=False,
+            mentions=[],
+        )
+        asyncio.run(adapter._dispatch(prior))
+        self.assertEqual(len(adapter._pending_history.peek(chat_id="oc_group")), 1)
+        # Then an @bot mention triggers a reply, which should clear history.
+        ping = SimpleNamespace(
+            chat_type="group",
+            chat_id="oc_group",
+            message_id="om_ping",
+            sender_id="ou_user",
+            content_text="@Mono hi",
+            mentioned_bot=True,
+            mentions=[SimpleNamespace(open_id="ou_bot")],
+        )
+        asyncio.run(adapter._dispatch(ping))
+        history = adapter._pending_history.peek(chat_id="oc_group")
+        self.assertEqual([entry.message_id for entry in history], ["om_prior", "om_ping"])
 
     def test_reconnect_handlers_accept_sdk_no_arg_callbacks(self):
         adapter = FeishuAdapter(
@@ -313,8 +427,50 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(FeishuAdapter._message_text(msg), "merged text")
 
+    def test_on_message_returns_before_slow_observe_finishes(self):
+        async def scenario():
+            started = asyncio.Event()
+            release = asyncio.Event()
+            agent = _SlowObserveAgent(started=started, release=release)
+            adapter = FeishuAdapter(
+                agent=agent,
+                config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"),
+            )
+            adapter._channel = _FakeChannel(bot_open_id="ou_bot")
+            msg = SimpleNamespace(
+                chat_type="group",
+                chat_id="oc_group",
+                message_id="om_slow_observe",
+                sender_id="ou_user",
+                sender_name="Alice",
+                content_text="slow ambient message",
+                mentioned_bot=False,
+                mentions=[],
+            )
+
+            await asyncio.wait_for(adapter._on_message(msg), timeout=0.05)
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            self.assertEqual(len(adapter._processing_tasks), 1)
+            release.set()
+            while adapter._processing_tasks:
+                await asyncio.sleep(0.01)
+            self.assertEqual(len(agent.observe_calls), 1)
+
+        asyncio.run(scenario())
+
 
 class FeishuPrefetchTests(unittest.TestCase):
+    def setUp(self):
+        self._state_tmp = tempfile.TemporaryDirectory()
+        self._prev_state_dir = os.environ.get("XAGENT_STATE_DIR")
+        os.environ["XAGENT_STATE_DIR"] = self._state_tmp.name
+
+    def tearDown(self):
+        if self._prev_state_dir is None:
+            os.environ.pop("XAGENT_STATE_DIR", None)
+        else:
+            os.environ["XAGENT_STATE_DIR"] = self._prev_state_dir
+        self._state_tmp.cleanup()
     """``observe`` then ``chat`` when the bot is @mentioned in a group."""
 
     def _make_channel(self, *, records, fetch_parent=None, bot_open_id="ou_bot"):
@@ -416,6 +572,53 @@ class FeishuPrefetchTests(unittest.TestCase):
         self.assertEqual(fetch_kwargs["parent_message_id"], "om_old2")
         self.assertIsNone(fetch_kwargs["thread_id"])
         self.assertEqual(fetch_kwargs["history_count"], 10)
+
+    def test_prefetch_merges_pending_history_with_api_records(self):
+        from xagent.integrations.feishu.history import FeishuMessageRecord
+
+        records = [
+            FeishuMessageRecord(
+                message_id="om_api",
+                sender_id="ou_api",
+                sender_name="ApiUser",
+                text="api recovered line",
+                create_time_ms=2,
+                source="history",
+            )
+        ]
+        agent = _FakeAgent()
+        adapter = FeishuAdapter(
+            agent=agent,
+            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"),
+        )
+        adapter._channel = self._make_channel(records=records)
+        adapter._pending_history.record(
+            chat_id="oc_group",
+            message_id="om_pending",
+            sender_id="ou_local",
+            sender_name="LocalUser",
+            text="local pending line",
+        )
+        msg = SimpleNamespace(
+            chat_type="group",
+            chat_id="oc_group",
+            message_id="om_at",
+            sender_id="ou_user",
+            content_text="@Mono what's up",
+            mentioned_bot=True,
+            mentions=[SimpleNamespace(open_id="ou_bot")],
+            reply_to_message_id=None,
+            conversation=SimpleNamespace(thread_id=None),
+        )
+
+        asyncio.run(adapter._dispatch(msg))
+
+        observe_kwargs = agent.observe_calls[0]
+        self.assertIn("LocalUser", observe_kwargs["context"])
+        self.assertIn("local pending line", observe_kwargs["context"])
+        self.assertIn("ApiUser", observe_kwargs["context"])
+        self.assertIn("api recovered line", observe_kwargs["context"])
+        self.assertEqual(adapter._channel.captured_calls["fetch_kwargs"]["chat_id"], "oc_group")
 
     def test_topic_mention_passes_thread_id_to_fetcher(self):
         from xagent.integrations.feishu.history import FeishuMessageRecord

@@ -81,6 +81,14 @@ class FeishuAdapterConfig:
     chat_history_count: int = 10
     prefetch_timeout: float = 5.0
 
+    # --- reliability knobs (added for openclaw-inspired hardening) -------
+    # All optional with safe defaults; existing feishu.yaml files keep
+    # working unchanged.
+    dedup_state_dir: Optional[str] = None
+    pending_history_size: int = 20
+    pending_history_ttl_seconds: float = 30 * 60.0
+    identity_resolve_timeout: float = 5.0
+
     advanced: Dict[str, Any] = field(default_factory=dict)
 
     # --- factory helpers --------------------------------------------------

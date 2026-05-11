@@ -24,13 +24,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
+from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, Union
 
 from pydantic import BaseModel
 
 from ...core.agent import Agent
 from .config import FeishuAdapterConfig
-from .history import FeishuHistoryFetcher, format_context_recap
+from .dedup import PersistentDedup, default_state_dir
+from .history import FeishuHistoryFetcher, FeishuMessageRecord, format_context_recap
+from .pending_history import PendingHistoryEntry, PendingHistoryStore
+from .send import send_with_fallback
 
 
 class _FeishuLogRedactionFilter(logging.Filter):
@@ -67,6 +72,26 @@ class FeishuAdapter:
         self._history_fetcher: Optional[FeishuHistoryFetcher] = None
         self._warned_mention_fallback = False
         self._stop_event = asyncio.Event()
+
+        state_dir = (
+            Path(config.dedup_state_dir).expanduser()
+            if config.dedup_state_dir
+            else default_state_dir()
+        )
+        self._dedup = PersistentDedup(
+            namespace=config.app_id,
+            state_dir=state_dir,
+            logger=self.logger,
+        )
+        self._pending_history = PendingHistoryStore(
+            max_per_chat=config.pending_history_size,
+            ttl_seconds=config.pending_history_ttl_seconds,
+        )
+        self._chat_locks: dict[str, asyncio.Lock] = {}
+        self._processing_tasks_lock = threading.Lock()
+        self._processing_tasks: set[asyncio.Task[None]] = set()
+        self._eager_bot_open_id: Optional[str] = None
+        self._eager_bot_name: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -180,6 +205,7 @@ class FeishuAdapter:
         self._safe_stop()
 
     def _safe_stop(self) -> None:
+        self._cancel_processing_tasks()
         channel = self._channel
         if channel is None:
             return
@@ -188,13 +214,38 @@ class FeishuAdapter:
         except Exception:  # pragma: no cover - best-effort cleanup
             self.logger.debug("FeishuChannel stop raised", exc_info=True)
 
+    def _cancel_processing_tasks(self) -> None:
+        with self._processing_tasks_lock:
+            tasks = list(self._processing_tasks)
+        for task in tasks:
+            if task.done():
+                continue
+            try:
+                loop = task.get_loop()
+                if loop.is_running():
+                    loop.call_soon_threadsafe(task.cancel)
+                else:
+                    task.cancel()
+            except RuntimeError:  # pragma: no cover - loop already closed
+                pass
+
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
     async def _on_message(self, msg: Any) -> None:
+        task = asyncio.create_task(self._dispatch(msg))
+        with self._processing_tasks_lock:
+            self._processing_tasks.add(task)
+        task.add_done_callback(self._on_dispatch_task_done)
+
+    def _on_dispatch_task_done(self, task: asyncio.Task[None]) -> None:
+        with self._processing_tasks_lock:
+            self._processing_tasks.discard(task)
         try:
-            await self._dispatch(msg)
+            task.result()
+        except asyncio.CancelledError:
+            return
         except Exception:
             self.logger.exception("Unhandled error while processing Feishu message")
 
@@ -225,6 +276,7 @@ class FeishuAdapter:
         chat_id = getattr(msg, "chat_id", None)
         message_id = getattr(msg, "message_id", None)
         sender_id = getattr(msg, "sender_id", None) or "feishu_user"
+        sender_name = self._sender_name(msg) or sender_id
         text = self._message_text(msg)
 
         self.logger.debug(
@@ -240,6 +292,74 @@ class FeishuAdapter:
             self.logger.debug("Skipping message without chat_id: %r", msg)
             return
 
+        # Always record observable group/topic content so the next @-mention
+        # in this chat can be primed with recent context — independent of
+        # the routing decision below.
+        if chat_type in {"group", "topic"} and text:
+            self._pending_history.record(
+                chat_id=chat_id,
+                message_id=message_id,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                text=text,
+            )
+
+        # Persistent dedup: protects against SDK redelivery on WS reconnect
+        # and process restarts. We claim BEFORE the per-chat lock so the
+        # duplicate check is cheap and never blocks behind a slow turn.
+        claim = self._dedup.try_begin(message_id)
+        if claim == "duplicate":
+            self.logger.info(
+                "Feishu message already processed; skipping duplicate: chat_id=%s message_id=%s",
+                chat_id,
+                message_id,
+            )
+            return
+        if claim == "inflight":
+            self.logger.info(
+                "Feishu message already inflight; skipping: chat_id=%s message_id=%s",
+                chat_id,
+                message_id,
+            )
+            return
+        if claim == "invalid":
+            self.logger.debug("Feishu message missing message_id; processing without dedup")
+
+        finalize_id = message_id if claim == "claimed" else None
+
+        # Per-chat serialization: prevents a slow turn from starving later
+        # @-mentions in the SAME chat. Different chats remain parallel.
+        lock = self._chat_locks.get(chat_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._chat_locks[chat_id] = lock
+
+        try:
+            async with lock:
+                await self._route(
+                    msg=msg,
+                    chat_type=chat_type,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    text=text,
+                )
+        finally:
+            if finalize_id is not None:
+                self._dedup.finalize(finalize_id)
+
+    async def _route(
+        self,
+        *,
+        msg: Any,
+        chat_type: str,
+        chat_id: str,
+        message_id: Optional[str],
+        sender_id: str,
+        sender_name: str,
+        text: str,
+    ) -> None:
         if chat_type == "p2p":
             if not text:
                 self.logger.debug("Skipping non-text direct message")
@@ -281,6 +401,7 @@ class FeishuAdapter:
                 chat_id=chat_id,
                 message_id=message_id,
                 sender_id=sender_id,
+                sender_name=sender_name,
                 text=text,
             )
             return
@@ -298,6 +419,31 @@ class FeishuAdapter:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return ""
+
+    @staticmethod
+    def _sender_name(msg: Any) -> Optional[str]:
+        for field_name in ("sender_name", "user_name", "name"):
+            value = getattr(msg, field_name, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        for nested_name in ("sender", "user"):
+            nested = getattr(msg, nested_name, None)
+            if nested is None:
+                continue
+            for field_name in ("name", "sender_name", "user_name", "display_name"):
+                value = getattr(nested, field_name, None)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
+
+    @staticmethod
+    def _format_observe_context(*, sender_name: str, text: str) -> str:
+        return (
+            "[ambient_context]\n"
+            f"In the Feishu group, user {sender_name} said:\n"
+            f"{text}"
+        )
 
     def _is_bot_mentioned(self, msg: Any) -> bool:
         if bool(getattr(msg, "mentioned_bot", False)):
@@ -381,6 +527,57 @@ class FeishuAdapter:
             self._history_fetcher = FeishuHistoryFetcher(self._channel, self.logger)
         return self._history_fetcher
 
+    def _records_from_pending(
+        self,
+        *,
+        chat_id: str,
+        current_message_id: Optional[str],
+        limit: int,
+    ) -> list[FeishuMessageRecord]:
+        if limit <= 0:
+            return []
+        entries = self._pending_history.peek(
+            chat_id=chat_id,
+            exclude_message_id=current_message_id,
+            limit=limit,
+        )
+        records: list[FeishuMessageRecord] = []
+        for entry in entries:
+            records.append(
+                FeishuMessageRecord(
+                    message_id=entry.message_id or "",
+                    sender_id=entry.sender_id,
+                    sender_name=entry.sender_name,
+                    text=entry.text,
+                    create_time_ms=entry.timestamp_ms,
+                    source="history",
+                )
+            )
+        return records
+
+    @staticmethod
+    def _merge_context_records(
+        local_records: list[FeishuMessageRecord],
+        api_records: list[FeishuMessageRecord],
+        *,
+        current_message_id: Optional[str],
+    ) -> list[FeishuMessageRecord]:
+        merged: dict[str, FeishuMessageRecord] = {}
+
+        def key_for(record: FeishuMessageRecord) -> str:
+            if record.message_id:
+                return record.message_id
+            return f"{record.sender_id}:{record.create_time_ms}:{record.text}"
+
+        for record in [*api_records, *local_records]:
+            if current_message_id and record.message_id == current_message_id:
+                continue
+            key = key_for(record)
+            existing = merged.get(key)
+            if existing is None or (not existing.sender_name and record.sender_name):
+                merged[key] = record
+        return sorted(merged.values(), key=lambda item: item.create_time_ms)
+
     async def _prime_context(
         self,
         *,
@@ -390,43 +587,63 @@ class FeishuAdapter:
         is_group: bool,
         user_id: str,
     ) -> None:
-        fetcher = self._get_history_fetcher()
-        if fetcher is None:
-            return
-
         parent_id = self._reply_to_message_id(raw_msg)
         thread_id = self._thread_id(raw_msg) if is_group else None
         history_count = self.config.chat_history_count if is_group else 0
 
-        if not parent_id and not thread_id and history_count <= 0:
-            return
+        records: list[FeishuMessageRecord] = []
 
-        try:
-            # Hard cap the prefetch so a slow / unauthorized Feishu API
-            # never blocks the @-mention reply.
-            records = await asyncio.wait_for(
-                fetcher.fetch_context(
-                    chat_id=chat_id,
-                    current_message_id=current_message_id,
-                    parent_message_id=parent_id,
-                    thread_id=thread_id,
-                    history_count=history_count,
-                ),
-                timeout=self.config.prefetch_timeout,
+        # Primary source: messages observed live in this chat. This avoids
+        # the slow / permission-fragile history API for the common case
+        # (rapid @-mentions in an active group).
+        if is_group and history_count > 0:
+            records = self._records_from_pending(
+                chat_id=chat_id,
+                current_message_id=current_message_id,
+                limit=history_count,
             )
-        except asyncio.TimeoutError:
-            self.logger.warning(
-                "Feishu context prefetch timed out after %.1fs; continuing without it",
-                self.config.prefetch_timeout,
-            )
-            return
-        except Exception:
-            self.logger.exception("Feishu context prefetch failed; continuing without it")
-            return
+
+        # Supplement from the official history API whenever prefetch is
+        # enabled. Pending history is fast and catches events immediately;
+        # the API fills gaps from WS reconnect windows or SDK delivery delays.
+        needs_api = parent_id or thread_id or history_count > 0
+        if needs_api:
+            fetcher = self._get_history_fetcher()
+            if fetcher is not None:
+                try:
+                    # Hard cap the prefetch so a slow / unauthorized Feishu
+                    # API never blocks the @-mention reply.
+                    api_records = await asyncio.wait_for(
+                        fetcher.fetch_context(
+                            chat_id=chat_id,
+                            current_message_id=current_message_id,
+                            parent_message_id=parent_id,
+                            thread_id=thread_id,
+                            history_count=history_count,
+                        ),
+                        timeout=self.config.prefetch_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    self.logger.warning(
+                        "Feishu context prefetch timed out after %.1fs; continuing without it",
+                        self.config.prefetch_timeout,
+                    )
+                    api_records = []
+                except Exception:
+                    self.logger.exception(
+                        "Feishu context prefetch failed; continuing without it"
+                    )
+                    api_records = []
+                if api_records:
+                    records = self._merge_context_records(
+                        local_records=records,
+                        api_records=api_records,
+                        current_message_id=current_message_id,
+                    )
 
         if not records:
             self.logger.debug(
-                "Feishu context prefetch returned no records (chat_id=%s, parent=%s, thread=%s, n=%d)",
+                "No Feishu context to prime (chat_id=%s, parent=%s, thread=%s, n=%d)",
                 chat_id,
                 parent_id,
                 thread_id,
@@ -543,6 +760,7 @@ class FeishuAdapter:
                 message_id=message_id,
                 is_group=is_group,
                 chat_kwargs={**chat_kwargs, "stream": True},
+                raw_msg=raw_msg,
             )
             return
 
@@ -555,13 +773,14 @@ class FeishuAdapter:
                 message_id,
             )
             return
+        anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         await self._send_markdown(
             chat_id=chat_id,
-            message_id=message_id,
+            message_id=anchor,
             text=reply_text,
             is_group=is_group,
+            is_p2p=not is_group,
         )
-
     def _chat_kwargs(self, *, user_id: str, text: str) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "user_message": text,
@@ -583,8 +802,10 @@ class FeishuAdapter:
         message_id: Optional[str],
         is_group: bool,
         chat_kwargs: dict[str, Any],
+        raw_msg: Any = None,
     ) -> None:
         agent_stream = await self.agent.chat(**chat_kwargs)
+        anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         if not hasattr(agent_stream, "__aiter__"):
             # Agent fell back to non-stream (e.g. structured output); use the
             # plain reply path.
@@ -592,9 +813,10 @@ class FeishuAdapter:
             if reply_text:
                 await self._send_markdown(
                     chat_id=chat_id,
-                    message_id=message_id,
+                    message_id=anchor,
                     text=reply_text,
                     is_group=is_group,
+                    is_p2p=not is_group,
                 )
             return
 
@@ -603,10 +825,10 @@ class FeishuAdapter:
                 if chunk:
                     await stream.append(chunk)
 
-        opts = self._send_opts(message_id=message_id, is_group=is_group)
+        opts = self._send_opts(message_id=anchor, is_group=is_group)
         assert self._channel is not None
         result = await self._channel.stream(chat_id, {"markdown": producer}, opts)
-        self._log_send_result(result=result, chat_id=chat_id, message_id=message_id)
+        self._log_send_result(result=result, chat_id=chat_id, message_id=anchor)
 
     # ------------------------------------------------------------------
     # Observe path
@@ -618,10 +840,11 @@ class FeishuAdapter:
         chat_id: str,
         message_id: Optional[str],
         sender_id: str,
+        sender_name: str,
         text: str,
     ) -> None:
         observe_kwargs: dict[str, Any] = {
-            "context": text,
+            "context": self._format_observe_context(sender_name=sender_name, text=text),
             "current_user_id": sender_id,
             "source": "feishu",
             "event_type": "group_message",
@@ -629,6 +852,7 @@ class FeishuAdapter:
             "metadata": {
                 "chat_id": chat_id,
                 "message_id": message_id,
+                "sender_name": sender_name,
                 "addressed_to_agent": False,
             },
             "enable_memory": self.config.enable_memory,
@@ -653,6 +877,7 @@ class FeishuAdapter:
             message_id=None,
             text=reply_text,
             is_group=True,
+            is_p2p=False,
         )
 
     # ------------------------------------------------------------------
@@ -672,6 +897,39 @@ class FeishuAdapter:
             return None
         return {"reply_to": message_id}
 
+    def _reply_anchor(
+        self,
+        *,
+        raw_msg: Any,
+        message_id: Optional[str],
+    ) -> Optional[str]:
+        """Pick the right reply anchor for the current message.
+
+        For topic groups (话题群), anchoring to the triggering message
+        pushes the reply into a hidden sub-thread the user does not see.
+        We anchor to the topic's ``root`` message instead so the reply
+        renders in the main chat view, matching how human users reply.
+        For normal groups and p2p, the triggering message id is used.
+        """
+        if raw_msg is None:
+            return message_id
+        chat_type = getattr(raw_msg, "chat_type", None)
+        if chat_type == "topic":
+            root_id = self._root_message_id(raw_msg)
+            if root_id:
+                return root_id
+        return message_id
+
+    @staticmethod
+    def _root_message_id(msg: Any) -> Optional[str]:
+        if msg is None:
+            return None
+        for attr in ("root_id", "root_message_id"):
+            value = getattr(msg, attr, None)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
     async def _send_markdown(
         self,
         *,
@@ -679,12 +937,21 @@ class FeishuAdapter:
         message_id: Optional[str],
         text: str,
         is_group: bool,
+        is_p2p: Optional[bool] = None,
     ) -> None:
         assert self._channel is not None
-        opts = self._send_opts(message_id=message_id, is_group=is_group)
+        if is_p2p is None:
+            is_p2p = not is_group
         try:
-            result = await self._channel.send(chat_id, {"markdown": text}, opts)
-            self._log_send_result(result=result, chat_id=chat_id, message_id=message_id)
+            await send_with_fallback(
+                self._channel,
+                chat_id=chat_id,
+                payload={"markdown": text},
+                reply_to=message_id if (is_group and message_id) else None,
+                is_p2p=is_p2p,
+                logger=self.logger,
+                message_id=message_id,
+            )
         except Exception:
             self.logger.exception("Failed to send Feishu message to %s", chat_id)
 
