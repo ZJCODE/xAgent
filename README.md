@@ -65,6 +65,8 @@ Diary memory is built from the agent's experience stream, not only direct chats.
 
 `/ws/observe` accepts the same observe JSON over WebSocket and returns `result`, `error`, and `done` frames.
 
+For external integrations, configuration details, and full HTTP/WebSocket payload examples, see [TECHNICAL.md](TECHNICAL.md).
+
 ## Best Practices
 
 - Run `xagent init` before your first chat.
