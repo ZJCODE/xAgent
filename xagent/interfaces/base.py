@@ -25,7 +25,7 @@ class BaseAgentConfig:
     MESSAGE_DB_FILENAME = AgentConfig.MESSAGE_DB_FILENAME
     CONFIG_FILENAME = "config.yaml"
     IDENTITY_FILENAME = "identity.md"
-    DEFAULT_HOST = "0.0.0.0"
+    DEFAULT_HOST = "127.0.0.1"
     DEFAULT_PORT = 8010
 
 class BaseAgentRunner:

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from posthog import host
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -531,8 +532,18 @@ class AgentHTTPServer(BaseAgentRunner):
             import threading
             import webbrowser
 
-            browse_host = "localhost" if host in ("0.0.0.0", "::") else host
+            browse_host = host
+
+            # 0.0.0.0 不能直接用于浏览器访问
+            if browse_host == "0.0.0.0":
+                browse_host = "127.0.0.1"
+
+            # IPv6 浏览器 URL 需要 []
+            if ":" in browse_host and not browse_host.startswith("["):
+                browse_host = f"[{browse_host}]"
+
             url = f"http://{browse_host}:{port}"
+
             threading.Timer(1.5, lambda: webbrowser.open(url)).start()
 
         uvicorn.run(self.app, host=host, port=port)
