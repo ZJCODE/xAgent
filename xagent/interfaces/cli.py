@@ -640,6 +640,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     server_parser.set_defaults(handler=handle_server)
 
+    feishu_parser = subparsers.add_parser(
+        "feishu",
+        help="Run the Feishu (Lark) bot adapter using WebSocket long connection",
+    )
+    feishu_sub = feishu_parser.add_subparsers(dest="feishu_command", metavar="<subcommand>")
+
+    feishu_init = feishu_sub.add_parser("init", help="Create feishu.yaml in the runtime directory")
+    _add_dir_argument(feishu_init)
+    feishu_init.add_argument("--app-id", dest="app_id", default=None, help="Feishu app id (cli_xxx)")
+    feishu_init.add_argument("--app-secret", dest="app_secret", default=None, help="Feishu app secret")
+    feishu_init.add_argument("--force", action="store_true", help="Overwrite existing feishu.yaml")
+    feishu_init.set_defaults(handler=handle_feishu_init)
+
+    feishu_run = feishu_sub.add_parser("run", help="Connect to Feishu and serve messages")
+    _add_dir_argument(feishu_run)
+    feishu_run.add_argument(
+        "--config",
+        dest="feishu_config",
+        default=None,
+        help="Path to feishu.yaml (default: <dir>/feishu.yaml)",
+    )
+    feishu_run.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    feishu_run.set_defaults(handler=handle_feishu_run)
+
+    feishu_parser.set_defaults(handler=handle_feishu)
+
     return parser
 
 
@@ -730,6 +756,110 @@ def handle_server(args: argparse.Namespace) -> int:
 
     server = AgentHTTPServer(**server_kwargs)
     server.run(host=args.host, port=args.port, open_browser=args.open_browser)
+    return 0
+
+
+_FEISHU_CONFIG_FILENAME = "feishu.yaml"
+
+_FEISHU_CONFIG_TEMPLATE = """\
+# Feishu (Lark) bot adapter configuration.
+# Docs: xagent/integrations/feishu/README.md
+#
+# Routing is hardcoded and behaves like a real human teammate:
+#   - Direct chat (p2p)        -> reply
+#   - Group, bot @mentioned    -> reply
+#   - Group, not @mentioned    -> agent.observe (agent decides)
+#
+# Use ${{ENV_VAR}} to interpolate from environment variables.
+app_id: {app_id}
+app_secret: {app_secret}
+
+# Optional knobs (safe to delete):
+# log_level: info        # debug | info | warn | error
+# stream: false          # stream tokens to a Feishu card
+# enable_memory: true    # forward to agent long-term memory
+"""
+
+
+def _feishu_config_path(args: argparse.Namespace) -> Path:
+    raw_dir = getattr(args, "config_dir", None) or BaseAgentConfig.DEFAULT_CONFIG_DIR
+    base = Path(raw_dir).expanduser().resolve()
+    override = getattr(args, "feishu_config", None)
+    if override:
+        return Path(override).expanduser().resolve()
+    return base / _FEISHU_CONFIG_FILENAME
+
+
+def handle_feishu(args: argparse.Namespace) -> int:
+    # If invoked without a subcommand, default to "run".
+    if not getattr(args, "feishu_command", None):
+        args.feishu_command = "run"
+        args.feishu_config = getattr(args, "feishu_config", None)
+        args.verbose = getattr(args, "verbose", False)
+        return handle_feishu_run(args)
+    return 0
+
+
+def handle_feishu_init(args: argparse.Namespace) -> int:
+    config_path = _feishu_config_path(args)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if config_path.exists() and not args.force:
+        print(f"⚠️  {config_path} already exists. Use --force to overwrite.")
+        return 1
+
+    app_id = args.app_id or input("Feishu app_id (cli_xxx): ").strip()
+    if not app_id:
+        print("❌ app_id is required.")
+        return 1
+    app_secret = args.app_secret or getpass.getpass("Feishu app_secret: ").strip()
+    if not app_secret:
+        print("❌ app_secret is required.")
+        return 1
+
+    config_path.write_text(
+        _FEISHU_CONFIG_TEMPLATE.format(app_id=app_id, app_secret=app_secret),
+        encoding="utf-8",
+    )
+    print(f"✅ Wrote {config_path}")
+    print("Next: xagent feishu run --dir", args.config_dir or "~/.xagent")
+    return 0
+
+
+def handle_feishu_run(args: argparse.Namespace) -> int:
+    verbose = getattr(args, "verbose", False)
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    try:
+        from ..integrations.feishu import FeishuAdapter, FeishuAdapterConfig
+    except ImportError as exc:  # pragma: no cover - defensive
+        print(f"❌ Failed to import Feishu adapter: {exc}")
+        return 1
+
+    config_path = _feishu_config_path(args)
+    if not config_path.is_file():
+        print(f"❌ Feishu config not found: {config_path}")
+        print("   Run: xagent feishu init")
+        return 1
+
+    runner = BaseAgentRunner(config_dir=getattr(args, "config_dir", None))
+    feishu_config = FeishuAdapterConfig.from_file(config_path)
+    adapter = FeishuAdapter(agent=runner.agent, config=feishu_config)
+
+    print(f"🤖 xAgent ready (model={runner.agent.model})")
+    print(f"📡 Connecting to Feishu (app_id={feishu_config.app_id})…")
+    print("    Press Ctrl+C to stop.")
+
+    try:
+        adapter.run_blocking()
+    except KeyboardInterrupt:
+        print("\n👋 Feishu adapter stopped.")
+    except RuntimeError as exc:
+        print(f"❌ {exc}")
+        return 1
     return 0
 
 

@@ -169,6 +169,23 @@ class CLICommandTests(unittest.TestCase):
             open_browser=True,
         )
 
+    def test_parser_supports_feishu_run_command(self):
+        args = build_parser().parse_args([
+            "feishu",
+            "run",
+            "--dir",
+            "./agent-dir",
+            "--config",
+            "./feishu.yaml",
+            "--verbose",
+        ])
+
+        self.assertEqual(args.command, "feishu")
+        self.assertEqual(args.feishu_command, "run")
+        self.assertEqual(args.config_dir, "./agent-dir")
+        self.assertEqual(args.feishu_config, "./feishu.yaml")
+        self.assertTrue(args.verbose)
+
 
 if __name__ == "__main__":
     unittest.main()

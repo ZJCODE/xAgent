@@ -42,6 +42,9 @@ dependencies = [
 [project.scripts]
 xagent = "xagent.interfaces.cli:main"
 
+[project.optional-dependencies]
+feishu = ["lark-oapi>=1.4.16"]
+
 [project.urls]
 Repository = "https://github.com/ZJCODE/xagent"
 Issues = "https://github.com/ZJCODE/xagent/issues"
