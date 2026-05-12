@@ -208,17 +208,19 @@ class CLICommandTests(unittest.TestCase):
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         launcher_index = output.index("https://open.feishu.cn/page/launcher")
         copy_index = output.index("Copy your App ID and App Secret.")
-        wrote_index = output.index("✅ Wrote")
+        wrote_index = output.index("Wrote ")
+        finish_index = output.index("Finish setup in the Feishu Developer Console")
         app_index = output.index("https://open.feishu.cn/app")
         group_permission_index = output.index("im:message.group_msg")
         user_permission_index = output.index("contact:user.base:readonly")
 
         self.assertLess(launcher_index, copy_index)
         self.assertLess(copy_index, wrote_index)
-        self.assertLess(wrote_index, app_index)
+        self.assertLess(wrote_index, finish_index)
+        self.assertLess(finish_index, app_index)
         self.assertLess(app_index, group_permission_index)
         self.assertLess(group_permission_index, user_permission_index)
-        self.assertIn("Next: xagent feishu run --dir", output)
+        self.assertIn("Run: `xagent feishu run` to start your bot!", output)
 
 
 if __name__ == "__main__":
