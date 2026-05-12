@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from xagent.interfaces.cli import InitSelection, build_parser, handle_init, handle_server, main
+from xagent.interfaces.cli import InitSelection, build_parser, handle_feishu_init, handle_init, handle_server, main
 
 
 def _selection() -> InitSelection:
@@ -185,6 +185,32 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.config_dir, "./agent-dir")
         self.assertEqual(args.feishu_config, "./feishu.yaml")
         self.assertTrue(args.verbose)
+
+    def test_feishu_init_prints_guidance_and_permission_reminder(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                feishu_config=None,
+                app_id=None,
+                app_secret=None,
+                force=False,
+            )
+
+            with patch("builtins.input", return_value="cli_test") as input_mock:
+                with patch("xagent.interfaces.cli.getpass.getpass", return_value="secret") as getpass_mock:
+                    with patch("sys.stdout") as stdout:
+                        exit_code = handle_feishu_init(args)
+
+        self.assertEqual(exit_code, 0)
+        input_mock.assert_called_once_with("Feishu App ID: ")
+        getpass_mock.assert_called_once_with("Feishu App Secret: ")
+
+        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        self.assertIn("https://open.feishu.cn/page/launcher", output)
+        self.assertIn("https://open.feishu.cn/app", output)
+        self.assertIn("Copy your App ID and App Secret.", output)
+        self.assertIn("im:message.group_msg", output)
+        self.assertIn("contact:user.base:readonly", output)
 
 
 if __name__ == "__main__":

@@ -97,7 +97,7 @@ class FeishuAdapter:
         except ImportError as exc:  # pragma: no cover - import guard
             raise RuntimeError(
                 "The Feishu adapter requires the 'lark-oapi' package. "
-                "Install it with: pip install 'myxagent[feishu]'"
+                "Install it with: pip install myxagent"
             ) from exc
 
         kwargs: dict[str, Any] = {

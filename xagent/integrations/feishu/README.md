@@ -31,30 +31,18 @@ official SDK already provides:
 ## Install
 
 ```bash
-pip install 'myxagent[feishu]'
-# or, in an existing env:
-pip install lark-oapi
+pip install myxagent
 ```
 
-## Configure your Feishu bot once
+Configure your Feishu bot
 
-In the [Feishu Open Platform](https://open.feishu.cn/) developer console:
+1. Create an agent: https://open.feishu.cn/page/launcher
+2. Open your agent: https://open.feishu.cn/app
+3. Add extra permissions:
+    * im:message.group_msg (for group chats)
+    * contact:user.base:readonly (for user display names)
+4. Copy your App ID and App Secret.
 
-1. Create an app → enable **Bot** capability.
-2. **Event Subscription** → choose **WebSocket** (not webhook).
-3. Subscribe to event `im.message.receive_v1`.
-4. Grant permissions:
-   - `im:message`
-   - `im:message.p2p_msg`
-   - `im:message.group_at_msg`
-   - `im:message.group_msg` and `im:message:readonly` (or equivalent history
-     scopes) if you want the bot to read recent group history after an @mention
-   - `im:message:send_as_bot`
-   - Contact/user profile read permissions for `contact.v3.user.get`; if you
-     resolve IDs with `user_id_type: user_id`, Feishu also requires the related
-     user ID field permission.
-5. Re-publish / re-install the app.
-6. Copy `App ID` and `App Secret`.
 
 ## Configure xAgent
 
