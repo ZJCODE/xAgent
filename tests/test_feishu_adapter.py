@@ -51,6 +51,19 @@ class _FakeChannel:
         return SimpleNamespace(success=True, message_id="om_reply", error=None, raw=None)
 
 
+class _FakeUserResolver:
+    def __init__(self, names=None):
+        self.names = dict(names or {})
+        self.calls = []
+
+    async def resolve_name(self, user_id, fallback=None):
+        self.calls.append((user_id, fallback))
+        fallback_name = fallback.strip() if isinstance(fallback, str) and fallback.strip() else None
+        if fallback_name and fallback_name.startswith(("ou_", "on_", "cli_")):
+            fallback_name = None
+        return self.names.get(user_id) or fallback_name or "Feishu User"
+
+
 class FeishuAdapterTests(unittest.TestCase):
     @unittest.skipIf(LogLevel is None, "lark-oapi is not installed")
     def test_normalize_log_level_accepts_yaml_friendly_strings(self):
@@ -134,6 +147,42 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertNotIn("private", agent.chat_calls[0])
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user"})
 
+    def test_direct_chat_uses_resolved_name_for_agent_identity(self):
+        agent = _FakeAgent()
+        adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+        adapter._channel = _FakeChannel()
+        adapter._user_resolver = _FakeUserResolver({"ou_57abefd441c9b068703fa7b18543047e": "Alice"})
+        msg = SimpleNamespace(
+            chat_type="p2p",
+            chat_id="oc_dm",
+            message_id="om_user",
+            sender_id="ou_57abefd441c9b068703fa7b18543047e",
+            content_text="hello",
+        )
+
+        asyncio.run(adapter._dispatch(msg))
+
+        self.assertEqual(agent.chat_calls[0]["user_id"], "Alice")
+        self.assertNotIn("ou_57abefd441c9b068703fa7b18543047e", repr(agent.chat_calls[0]))
+
+    def test_direct_chat_does_not_use_id_like_sender_name_fallback(self):
+        agent = _FakeAgent()
+        adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+        adapter._channel = _FakeChannel()
+        msg = SimpleNamespace(
+            chat_type="p2p",
+            chat_id="oc_dm",
+            message_id="om_user",
+            sender_id="ou_user",
+            sender_name="ou_user",
+            content_text="hello",
+        )
+
+        asyncio.run(adapter._dispatch(msg))
+
+        self.assertEqual(agent.chat_calls[0]["user_id"], "Feishu User")
+        self.assertNotIn("ou_user", repr(agent.chat_calls[0]))
+
     def test_group_mention_detects_mentions_matching_bot_identity(self):
         agent = _FakeAgent()
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
@@ -151,7 +200,7 @@ class FeishuAdapterTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertEqual(len(agent.chat_calls), 1)
-        self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
+        self.assertEqual(agent.chat_calls[0]["user_id"], "Feishu User")
         self.assertEqual(adapter._channel.sent[0][2], {"reply_to": "om_group_msg", "uuid": "om_group_msg"})
         self.assertNotIn("reply_in_thread", adapter._channel.sent[0][2])
 
@@ -366,6 +415,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         agent = _FakeAgent()
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
         adapter._channel = _FakeChannel(bot_open_id="ou_bot")
+        adapter._user_resolver = _FakeUserResolver({"ou_user": "Carol"})
         msg = SimpleNamespace(
             chat_type="group",
             chat_id="oc_group",
@@ -386,7 +436,8 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertIn("Alice: hi all", user_message)
         self.assertIn("Bob: ready?", user_message)
         self.assertIn("[Current mention]", user_message)
-        self.assertIn("User: @Mono what's up", user_message)
+        self.assertIn("Carol: @Mono what's up", user_message)
+        self.assertNotIn("ou_user", user_message)
         self.assertEqual(captured["kwargs"]["chat_id"], "oc_group")
         self.assertEqual(captured["kwargs"]["current_message_id"], "om_at")
         self.assertIsNone(captured["kwargs"]["thread_id"])
@@ -460,6 +511,16 @@ class FeishuGroupHistoryTests(unittest.TestCase):
 
 
 class FeishuHistoryFetcherTests(unittest.TestCase):
+    def test_infer_user_id_type_uses_feishu_id_prefixes(self):
+        from xagent.integrations.feishu.users import infer_user_id_type, safe_display_name
+
+        self.assertEqual(infer_user_id_type("ou_57abefd441c9b068703fa7b18543047e"), "open_id")
+        self.assertEqual(infer_user_id_type("on_union"), "union_id")
+        self.assertEqual(infer_user_id_type("plain_user_id"), "user_id")
+        self.assertEqual(safe_display_name(" Alice "), "Alice")
+        self.assertIsNone(safe_display_name("ou_57abefd441c9b068703fa7b18543047e"))
+        self.assertIsNone(safe_display_name("cli_aa8be4ff193b9cdd"))
+
     def test_render_content_extracts_text_payload(self):
         from xagent.integrations.feishu.history import FeishuHistoryFetcher
 
@@ -533,7 +594,58 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
 
         self.assertEqual(records, [])
 
-    def test_format_group_history_marks_bot_sender(self):
+    def test_history_record_names_resolve_through_user_resolver(self):
+        from xagent.integrations.feishu.history import FeishuHistoryFetcher, FeishuMessageRecord
+
+        fetcher = FeishuHistoryFetcher(
+            channel=SimpleNamespace(),
+            user_resolver=_FakeUserResolver({"ou_alice": "Alice From Contact"}),
+        )
+
+        records = asyncio.run(
+            fetcher._resolve_record_names(
+                [FeishuMessageRecord("om_1", "ou_alice", None, "hi", 1)]
+            )
+        )
+
+        self.assertEqual(records[0].sender_name, "Alice From Contact")
+
+    def test_format_group_history_does_not_expose_open_id_fallback(self):
+        from xagent.integrations.feishu.history import FeishuMessageRecord, format_group_history
+
+        text = format_group_history([FeishuMessageRecord("om_1", "ou_alice", "ou_alice", "hi", 1)])
+
+        self.assertEqual(text, "Feishu User: hi")
+        self.assertNotIn("ou_alice", text)
+
+    @unittest.skipIf(LogLevel is None, "lark-oapi is not installed")
+    def test_user_resolver_calls_contact_v3_user_get(self):
+        from xagent.integrations.feishu.users import FeishuUserResolver
+
+        class FakeUserApi:
+            def __init__(self):
+                self.requests = []
+
+            def get(self, request):
+                self.requests.append(request)
+                user = SimpleNamespace(name="", nickname="Nickname", en_name="English Name")
+                return SimpleNamespace(success=lambda: True, data=SimpleNamespace(user=user))
+
+        user_api = FakeUserApi()
+        client = SimpleNamespace(contact=SimpleNamespace(v3=SimpleNamespace(user=user_api)))
+        resolver = FeishuUserResolver(SimpleNamespace(client=client))
+
+        name = asyncio.run(resolver.resolve_name("ou_57abefd441c9b068703fa7b18543047e"))
+        cached_name = asyncio.run(resolver.resolve_name("ou_57abefd441c9b068703fa7b18543047e"))
+
+        self.assertEqual(name, "Nickname")
+        self.assertEqual(cached_name, "Nickname")
+        self.assertEqual(len(user_api.requests), 1)
+        self.assertEqual(user_api.requests[0].user_id, "ou_57abefd441c9b068703fa7b18543047e")
+        self.assertEqual(user_api.requests[0].user_id_type, "open_id")
+        self.assertEqual(user_api.requests[0].department_id_type, "open_department_id")
+
+    def test_format_group_history_marks_bot_sender_as_you(self):
         from xagent.integrations.feishu.history import FeishuMessageRecord, format_group_history
 
         text = format_group_history(
@@ -541,7 +653,27 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
             bot_open_id="ou_bot",
         )
 
-        self.assertEqual(text, "Mono (bot): previous answer")
+        self.assertEqual(text, "You: previous answer")
+
+    def test_format_group_history_marks_bot_app_id_as_you(self):
+        from xagent.integrations.feishu.history import FeishuMessageRecord, format_group_history
+
+        text = format_group_history(
+            [FeishuMessageRecord("om_bot", "cli_aa8be4ff193b9cdd", None, "hey", 1)],
+            bot_app_id="cli_aa8be4ff193b9cdd",
+        )
+
+        self.assertEqual(text, "You: hey")
+
+    def test_format_group_history_marks_bot_app_id_name_as_you(self):
+        from xagent.integrations.feishu.history import FeishuMessageRecord, format_group_history
+
+        text = format_group_history(
+            [FeishuMessageRecord("om_bot", "", "cli_aa8be4ff193b9cdd", "where", 1)],
+            bot_app_id="cli_aa8be4ff193b9cdd",
+        )
+
+        self.assertEqual(text, "You: where")
 
 
 if __name__ == "__main__":

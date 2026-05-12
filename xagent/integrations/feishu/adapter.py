@@ -8,9 +8,9 @@ Routing is intentionally small:
 * ``group`` / ``topic`` without @mention: ignore.
 * Any other chat type is ignored.
 
-User identity is the Feishu ``sender_id`` (open_id). Because xAgent's memory
-layer is keyed by stable ``user_id``, that is the only choice that survives
-across sessions without an extra API call.
+Before a Feishu message reaches the agent, the sender ID is resolved to a
+display name through the official contact API. Internal ``ou_`` / ``on_`` IDs
+stay inside this adapter and are not passed into ``agent.chat``.
 
 Group replies are sent as plain replies anchored to the source message
 (``reply_to``); never as Feishu topic/thread replies. p2p replies are sent
@@ -34,6 +34,7 @@ from ...core.agent import Agent
 from .config import FeishuAdapterConfig
 from .history import FeishuHistoryFetcher, FeishuMessageRecord, format_group_history
 from .send import send_message
+from .users import FEISHU_USER_FALLBACK_NAME, FeishuUserResolver, safe_display_name
 
 
 class _FeishuLogRedactionFilter(logging.Filter):
@@ -68,6 +69,7 @@ class FeishuAdapter:
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self._channel = None  # type: ignore[var-annotated]
         self._history_fetcher: Optional[FeishuHistoryFetcher] = None
+        self._user_resolver: Optional[FeishuUserResolver] = None
         self._warned_mention_fallback = False
         self._stop_event = asyncio.Event()
         self._chat_locks: dict[str, asyncio.Lock] = {}
@@ -257,7 +259,7 @@ class FeishuAdapter:
         chat_id = getattr(msg, "chat_id", None)
         message_id = getattr(msg, "message_id", None)
         sender_id = getattr(msg, "sender_id", None) or "feishu_user"
-        sender_name = self._sender_name(msg) or sender_id
+        sender_fallback_name = self._sender_name(msg)
         sender_type = (getattr(msg, "sender_type", None) or "").lower()
         text = self._message_text(msg)
 
@@ -296,7 +298,7 @@ class FeishuAdapter:
                 chat_id=chat_id,
                 message_id=message_id,
                 sender_id=sender_id,
-                sender_name=sender_name,
+                sender_fallback_name=sender_fallback_name,
                 text=text,
             )
 
@@ -308,17 +310,18 @@ class FeishuAdapter:
         chat_id: str,
         message_id: Optional[str],
         sender_id: str,
-        sender_name: str,
+        sender_fallback_name: Optional[str],
         text: str,
     ) -> None:
         if chat_type == "p2p":
             if not text:
                 self.logger.debug("Skipping non-text direct message")
                 return
+            sender_name = await self._resolve_sender_name(sender_id, fallback=sender_fallback_name)
             await self._handle_chat(
                 chat_id=chat_id,
                 message_id=message_id,
-                user_id=sender_id,
+                user_id=sender_name,
                 sender_name=sender_name,
                 text=text,
                 is_group=False,
@@ -337,10 +340,11 @@ class FeishuAdapter:
                     message_id,
                     sender_id,
                 )
+                sender_name = await self._resolve_sender_name(sender_id, fallback=sender_fallback_name)
                 await self._handle_chat(
                     chat_id=chat_id,
                     message_id=message_id,
-                    user_id=sender_id,
+                    user_id=sender_name,
                     sender_name=sender_name,
                     text=text,
                     is_group=True,
@@ -385,6 +389,20 @@ class FeishuAdapter:
                 if isinstance(value, str) and value.strip():
                     return value.strip()
         return None
+
+    def _get_user_resolver(self) -> Optional[FeishuUserResolver]:
+        if self._channel is None:
+            return None
+        if self._user_resolver is None:
+            self._user_resolver = FeishuUserResolver(self._channel, self.logger)
+        return self._user_resolver
+
+    async def _resolve_sender_name(self, sender_id: str, *, fallback: Optional[str]) -> str:
+        resolver = self._get_user_resolver()
+        if resolver is None:
+            return safe_display_name(fallback) or FEISHU_USER_FALLBACK_NAME
+        name = await resolver.resolve_name(sender_id, fallback=fallback)
+        return name or FEISHU_USER_FALLBACK_NAME
 
     def _is_bot_mentioned(self, msg: Any) -> bool:
         if bool(getattr(msg, "mentioned_bot", False)):
@@ -463,7 +481,11 @@ class FeishuAdapter:
         if self._channel is None:
             return None
         if self._history_fetcher is None:
-            self._history_fetcher = FeishuHistoryFetcher(self._channel, self.logger)
+            self._history_fetcher = FeishuHistoryFetcher(
+                self._channel,
+                self.logger,
+                user_resolver=self._get_user_resolver(),
+            )
         return self._history_fetcher
 
     async def _fetch_group_history(
@@ -514,7 +536,11 @@ class FeishuAdapter:
             current_message_id=current_message_id,
             raw_msg=raw_msg,
         )
-        history_text = format_group_history(records, bot_open_id=self._bot_open_id())
+        history_text = format_group_history(
+            records,
+            bot_open_id=self._bot_open_id(),
+            bot_app_id=self.config.app_id,
+        )
         if not history_text.strip():
             return text
 

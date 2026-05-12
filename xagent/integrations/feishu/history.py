@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, Optional
+
+from .users import FEISHU_USER_FALLBACK_NAME, FeishuUserResolver, safe_display_name
 
 
 @dataclass(frozen=True)
@@ -38,9 +40,16 @@ class FeishuHistoryFetcher:
 
     _MAX_PAGE_SIZE = 50  # Feishu API hard cap
 
-    def __init__(self, channel: Any, logger: Optional[logging.Logger] = None) -> None:
+    def __init__(
+        self,
+        channel: Any,
+        logger: Optional[logging.Logger] = None,
+        *,
+        user_resolver: Optional[FeishuUserResolver] = None,
+    ) -> None:
         self._channel = channel
         self._logger = logger or logging.getLogger(self.__class__.__name__)
+        self._user_resolver = user_resolver or FeishuUserResolver(channel, self._logger)
 
     async def fetch_recent_messages(
         self,
@@ -128,7 +137,19 @@ class FeishuHistoryFetcher:
             rec = self._normalize_item(item, source=source)
             if rec is not None:
                 normalized.append(rec)
-        return normalized
+        return await self._resolve_record_names(normalized)
+
+    async def _resolve_record_names(self, records: list[FeishuMessageRecord]) -> list[FeishuMessageRecord]:
+        resolved_records: list[FeishuMessageRecord] = []
+        for record in records:
+            sender_name = await self._user_resolver.resolve_name(
+                record.sender_id,
+                fallback=record.sender_name,
+            )
+            if sender_name != record.sender_name:
+                record = replace(record, sender_name=sender_name)
+            resolved_records.append(record)
+        return resolved_records
 
     # ------------------------------------------------------------------
     # Normalization
@@ -227,13 +248,16 @@ def format_group_history(
     records: Iterable[FeishuMessageRecord],
     *,
     bot_open_id: Optional[str] = None,
+    bot_app_id: Optional[str] = None,
 ) -> str:
     """Render recent Feishu messages as a compact transcript for ``agent.chat``."""
+    bot_ids = {value for value in (bot_open_id, bot_app_id) if value}
     lines: list[str] = []
     for rec in records:
-        who = rec.sender_name or rec.sender_id or "unknown"
-        if bot_open_id and rec.sender_id == bot_open_id:
-            who = f"{who} (bot)"
+        if rec.sender_id in bot_ids or rec.sender_name in bot_ids:
+            who = "You"
+        else:
+            who = safe_display_name(rec.sender_name) or FEISHU_USER_FALLBACK_NAME
         text = rec.text or ""
         if text.strip():
             lines.append(f"{who}: {text}".rstrip())

@@ -50,6 +50,9 @@ In the [Feishu Open Platform](https://open.feishu.cn/) developer console:
    - `im:message.group_msg` and `im:message:readonly` (or equivalent history
      scopes) if you want the bot to read recent group history after an @mention
    - `im:message:send_as_bot`
+   - Contact/user profile read permissions for `contact.v3.user.get`; if you
+     resolve IDs with `user_id_type: user_id`, Feishu also requires the related
+     user ID field permission.
 5. Re-publish / re-install the app.
 6. Copy `App ID` and `App Secret`.
 
@@ -105,9 +108,12 @@ The adapter behaves like a real human teammate:
 > `im:message:readonly` plus `im:message.group_msg`. If those permissions are
 > missing, xAgent simply replies using the current @message.
 
-User identity is the Feishu **`open_id`** (`msg.sender_id`). xAgent's memory
-layer is keyed by this stable id, so long-term memory survives across
-sessions automatically.
+Before a message reaches xAgent, the adapter resolves Feishu sender IDs with
+the official `client.contact.v3.user.get(request)` API and passes the display
+name into `agent.chat`. This keeps internal IDs such as `ou_xxx` inside the
+Feishu layer instead of exposing them to prompts or memory keys. If the contact
+lookup is unavailable, the adapter falls back to a display name already present
+on the SDK event, then to a generic `Feishu User` label.
 
 The Feishu adapter always runs normal non-private turns. It does not expose
 or forward xAgent's `private` flag, because bot chat memory should remain
