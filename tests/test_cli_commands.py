@@ -4,7 +4,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from xagent.interfaces.cli import InitSelection, build_parser, handle_feishu_init, handle_init, handle_server, main
+from xagent.interfaces.cli import (
+    InitSelection,
+    build_parser,
+    handle_feishu_init,
+    handle_feishu_start,
+    handle_feishu_status,
+    handle_feishu_stop,
+    handle_init,
+    handle_server,
+    main,
+)
 
 
 def _selection() -> InitSelection:
@@ -169,22 +179,51 @@ class CLICommandTests(unittest.TestCase):
             open_browser=True,
         )
 
-    def test_parser_supports_feishu_run_command(self):
+    def test_parser_supports_feishu_start_command(self):
         args = build_parser().parse_args([
             "feishu",
-            "run",
+            "start",
             "--dir",
             "./agent-dir",
             "--config",
-            "./feishu.yaml",
-            "--verbose",
+            "./agent-dir/feishu/feishu.yaml",
+            "--foreground",
         ])
 
         self.assertEqual(args.command, "feishu")
-        self.assertEqual(args.feishu_command, "run")
+        self.assertEqual(args.feishu_command, "start")
         self.assertEqual(args.config_dir, "./agent-dir")
-        self.assertEqual(args.feishu_config, "./feishu.yaml")
-        self.assertTrue(args.verbose)
+        self.assertEqual(args.feishu_config, "./agent-dir/feishu/feishu.yaml")
+        self.assertTrue(args.foreground)
+        self.assertFalse(hasattr(args, "verbose"))
+
+    def test_parser_rejects_old_feishu_run_command(self):
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["feishu", "run"])
+
+    def test_parser_supports_feishu_stop_command(self):
+        args = build_parser().parse_args([
+            "feishu",
+            "stop",
+            "--dir",
+            "./agent-dir",
+        ])
+
+        self.assertEqual(args.command, "feishu")
+        self.assertEqual(args.feishu_command, "stop")
+        self.assertEqual(args.config_dir, "./agent-dir")
+
+    def test_parser_supports_feishu_status_command(self):
+        args = build_parser().parse_args([
+            "feishu",
+            "status",
+            "--dir",
+            "./agent-dir",
+        ])
+
+        self.assertEqual(args.command, "feishu")
+        self.assertEqual(args.feishu_command, "status")
+        self.assertEqual(args.config_dir, "./agent-dir")
 
     def test_feishu_init_prints_guidance_in_user_flow_order(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -200,10 +239,12 @@ class CLICommandTests(unittest.TestCase):
                 with patch("xagent.interfaces.cli.getpass.getpass", return_value="secret") as getpass_mock:
                     with patch("sys.stdout") as stdout:
                         exit_code = handle_feishu_init(args)
+            feishu_config_exists = (Path(tmpdir) / "feishu" / "feishu.yaml").is_file()
 
         self.assertEqual(exit_code, 0)
         input_mock.assert_called_once_with("Feishu App ID: ")
         getpass_mock.assert_called_once_with("Feishu App Secret: ")
+        self.assertTrue(feishu_config_exists)
 
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         launcher_index = output.index("https://open.feishu.cn/page/launcher")
@@ -220,7 +261,81 @@ class CLICommandTests(unittest.TestCase):
         self.assertLess(finish_index, app_index)
         self.assertLess(app_index, group_permission_index)
         self.assertLess(group_permission_index, user_permission_index)
-        self.assertIn("Run: `xagent feishu run` to start your bot!", output)
+        self.assertIn("Run: `xagent feishu start` to start your bot!", output)
+
+    def test_feishu_start_uses_background_by_default(self):
+        args = argparse.Namespace(
+            config_dir="./agent-dir",
+            feishu_config="./agent-dir/feishu/feishu.yaml",
+            foreground=False,
+            feishu_foreground_internal=False,
+        )
+
+        with patch("xagent.interfaces.cli._start_feishu_background", return_value=0) as background_run:
+            exit_code = handle_feishu_start(args)
+
+        self.assertEqual(exit_code, 0)
+        background_run.assert_called_once_with(args)
+
+    def test_feishu_start_foreground_stays_attached(self):
+        args = argparse.Namespace(
+            config_dir="./agent-dir",
+            feishu_config="./agent-dir/feishu/feishu.yaml",
+            foreground=True,
+            feishu_foreground_internal=False,
+        )
+
+        with patch("xagent.interfaces.cli._run_feishu_foreground", return_value=0) as foreground_run:
+            exit_code = handle_feishu_start(args)
+
+        self.assertEqual(exit_code, 0)
+        foreground_run.assert_called_once_with(args)
+
+    def test_feishu_stop_stops_running_process(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pid_path = Path(tmpdir) / "feishu" / "feishu.pid"
+            pid_path.parent.mkdir()
+            pid_path.write_text("4321\n", encoding="utf-8")
+            running = {"alive": True}
+
+            def fake_kill(pid: int, sig: int) -> None:
+                self.assertEqual(pid, 4321)
+                if sig == 0:
+                    if not running["alive"]:
+                        raise ProcessLookupError()
+                    return
+                running["alive"] = False
+
+            args = argparse.Namespace(config_dir=tmpdir)
+
+            with patch("xagent.interfaces.cli.os.kill", side_effect=fake_kill):
+                with patch("xagent.interfaces.cli.time.sleep"):
+                    with patch("sys.stdout") as stdout:
+                        exit_code = handle_feishu_stop(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(pid_path.exists())
+        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        self.assertIn("Stopped Feishu process 4321.", output)
+
+    def test_feishu_status_reports_running_process(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            feishu_dir = Path(tmpdir) / "feishu"
+            feishu_dir.mkdir()
+            (feishu_dir / "feishu.pid").write_text("4321\n", encoding="utf-8")
+            (feishu_dir / "feishu.yaml").write_text("app_id: cli_test\napp_secret: secret\n", encoding="utf-8")
+            args = argparse.Namespace(config_dir=tmpdir)
+
+            with patch("xagent.interfaces.cli.os.kill", return_value=None):
+                with patch("sys.stdout") as stdout:
+                    exit_code = handle_feishu_status(args)
+
+        self.assertEqual(exit_code, 0)
+        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        self.assertIn(f"Feishu dir: {feishu_dir.resolve()}", output)
+        self.assertIn("Config:", output)
+        self.assertIn("Status: running (pid=4321)", output)
+        self.assertIn("Stop: xagent feishu stop", output)
 
 
 if __name__ == "__main__":

@@ -2,8 +2,12 @@ import argparse
 import asyncio
 import getpass
 import logging
+import os
 import shutil
+import signal
+import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -421,8 +425,8 @@ def _select_search_provider(
 
 
 def _prompt_multiline_identity(input_func: Callable[[str], str] = input) -> str:
-    print("\nEnter the agent identity, or submit an empty value and finish with '.' to edit later.")
-    print("Finish with a single '.' on its own line.")
+    print("\nEnter agent identity, or leave blank to edit later.")
+    print("Type '.' on a new line to save.\n")
     lines = []
     while True:
         line = input_func("> ")
@@ -645,26 +649,44 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the Feishu (Lark) bot adapter using WebSocket long connection",
     )
     feishu_sub = feishu_parser.add_subparsers(dest="feishu_command", metavar="<subcommand>")
+    feishu_sub.required = True
 
-    feishu_init = feishu_sub.add_parser("init", help="Create feishu.yaml in the runtime directory")
+    feishu_init = feishu_sub.add_parser("init", help="Create feishu/feishu.yaml in the runtime directory")
     _add_dir_argument(feishu_init)
     feishu_init.add_argument("--app-id", dest="app_id", default=None, help="Feishu app id (cli_xxx)")
     feishu_init.add_argument("--app-secret", dest="app_secret", default=None, help="Feishu app secret")
-    feishu_init.add_argument("--force", action="store_true", help="Overwrite existing feishu.yaml")
+    feishu_init.add_argument("--force", action="store_true", help="Overwrite existing feishu/feishu.yaml")
     feishu_init.set_defaults(handler=handle_feishu_init)
 
-    feishu_run = feishu_sub.add_parser("run", help="Connect to Feishu and serve messages")
-    _add_dir_argument(feishu_run)
-    feishu_run.add_argument(
+    feishu_start = feishu_sub.add_parser("start", help="Start the Feishu adapter")
+    _add_dir_argument(feishu_start)
+    feishu_start.add_argument(
         "--config",
         dest="feishu_config",
         default=None,
-        help="Path to feishu.yaml (default: <dir>/feishu.yaml)",
+        help="Path to feishu.yaml (default: <dir>/feishu/feishu.yaml)",
     )
-    feishu_run.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    feishu_run.set_defaults(handler=handle_feishu_run)
+    feishu_start.add_argument(
+        "--foreground",
+        "-f",
+        action="store_true",
+        help="Run in foreground and print logs",
+    )
+    feishu_start.add_argument(
+        "--foreground-internal",
+        dest="feishu_foreground_internal",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    feishu_start.set_defaults(handler=handle_feishu_start)
 
-    feishu_parser.set_defaults(handler=handle_feishu)
+    feishu_stop = feishu_sub.add_parser("stop", help="Stop the Feishu adapter for this runtime directory")
+    _add_dir_argument(feishu_stop)
+    feishu_stop.set_defaults(handler=handle_feishu_stop)
+
+    feishu_status = feishu_sub.add_parser("status", help="Show Feishu adapter status")
+    _add_dir_argument(feishu_status)
+    feishu_status.set_defaults(handler=handle_feishu_status)
 
     return parser
 
@@ -760,6 +782,12 @@ def handle_server(args: argparse.Namespace) -> int:
 
 
 _FEISHU_CONFIG_FILENAME = "feishu.yaml"
+_FEISHU_DIRNAME = "feishu"
+_FEISHU_PID_FILENAME = "feishu.pid"
+_FEISHU_LOG_FILENAME = "feishu.log"
+_FEISHU_STARTUP_TIMEOUT = 2.0
+_FEISHU_STOP_TIMEOUT = 5.0
+_FEISHU_STOP_POLL_INTERVAL = 0.1
 
 _FEISHU_CONFIG_TEMPLATE = """\
 # Feishu (Lark) bot adapter configuration.
@@ -783,22 +811,300 @@ app_secret: {app_secret}
 
 
 def _feishu_config_path(args: argparse.Namespace) -> Path:
-    raw_dir = getattr(args, "config_dir", None) or BaseAgentConfig.DEFAULT_CONFIG_DIR
-    base = Path(raw_dir).expanduser().resolve()
     override = getattr(args, "feishu_config", None)
     if override:
         return Path(override).expanduser().resolve()
-    return base / _FEISHU_CONFIG_FILENAME
+    return _feishu_dir(args) / _FEISHU_CONFIG_FILENAME
 
 
-def handle_feishu(args: argparse.Namespace) -> int:
-    # If invoked without a subcommand, default to "run".
-    if not getattr(args, "feishu_command", None):
-        args.feishu_command = "run"
-        args.feishu_config = getattr(args, "feishu_config", None)
-        args.verbose = getattr(args, "verbose", False)
-        return handle_feishu_run(args)
+def _feishu_runtime_dir(args: argparse.Namespace) -> Path:
+    raw_dir = getattr(args, "config_dir", None) or BaseAgentConfig.DEFAULT_CONFIG_DIR
+    return Path(raw_dir).expanduser().resolve()
+
+
+def _feishu_dir(args: argparse.Namespace) -> Path:
+    return _feishu_runtime_dir(args) / _FEISHU_DIRNAME
+
+
+def _feishu_pid_path(args: argparse.Namespace) -> Path:
+    return _feishu_dir(args) / _FEISHU_PID_FILENAME
+
+
+def _feishu_log_path(args: argparse.Namespace) -> Path:
+    return _feishu_dir(args) / _FEISHU_LOG_FILENAME
+
+
+def _read_feishu_pid(pid_path: Path) -> Optional[int]:
+    if not pid_path.is_file():
+        return None
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def _write_feishu_pid(pid_path: Path, pid: int) -> None:
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(f"{pid}\n", encoding="utf-8")
+
+
+def _remove_feishu_pid(pid_path: Path, expected_pid: Optional[int] = None) -> None:
+    if not pid_path.exists():
+        return
+    if expected_pid is not None:
+        current_pid = _read_feishu_pid(pid_path)
+        if current_pid is not None and current_pid != expected_pid:
+            return
+    try:
+        pid_path.unlink()
+    except OSError:
+        pass
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _running_feishu_pid(args: argparse.Namespace, *, current_pid: Optional[int] = None) -> Optional[int]:
+    pid_path = _feishu_pid_path(args)
+    pid = _read_feishu_pid(pid_path)
+    if pid is None:
+        _remove_feishu_pid(pid_path)
+        return None
+    if current_pid is not None and pid == current_pid:
+        return pid
+    if _pid_is_running(pid):
+        return pid
+    _remove_feishu_pid(pid_path)
+    return None
+
+
+def _build_feishu_background_command(args: argparse.Namespace) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "xagent.interfaces.cli",
+        "feishu",
+        "start",
+        "--foreground-internal",
+    ]
+    config_dir = getattr(args, "config_dir", None)
+    if config_dir:
+        command.extend(["--dir", config_dir])
+    feishu_config = getattr(args, "feishu_config", None)
+    if feishu_config:
+        command.extend(["--config", feishu_config])
+    return command
+
+
+def _tail_text(path: Path, max_lines: int = 20) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = text.splitlines()
+    return "\n".join(lines[-max_lines:]).strip()
+
+
+def _wait_for_process_exit(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_is_running(pid):
+            return True
+        time.sleep(_FEISHU_STOP_POLL_INTERVAL)
+    return not _pid_is_running(pid)
+
+
+def _run_feishu_foreground(args: argparse.Namespace) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    try:
+        from ..integrations.feishu import FeishuAdapter, FeishuAdapterConfig
+    except ImportError as exc:  # pragma: no cover - defensive
+        print(f"❌ Failed to import Feishu adapter: {exc}")
+        return 1
+
+    config_path = _feishu_config_path(args)
+    if not config_path.is_file():
+        print(f"❌ Feishu config not found: {config_path}")
+        print("   Run: xagent feishu init")
+        return 1
+
+    current_pid = os.getpid()
+    existing_pid = _running_feishu_pid(args, current_pid=current_pid)
+    if existing_pid is not None and existing_pid != current_pid:
+        print(f"❌ Feishu is already running (pid={existing_pid}).")
+        print(f"   Stop it with: xagent feishu stop")
+        return 1
+
+    pid_path = _feishu_pid_path(args)
+    _write_feishu_pid(pid_path, current_pid)
+
+    runner = BaseAgentRunner(config_dir=getattr(args, "config_dir", None))
+    feishu_config = FeishuAdapterConfig.from_file(config_path)
+    adapter = FeishuAdapter(agent=runner.agent, config=feishu_config)
+
+    stop_requested = False
+    old_handlers: dict[int, object] = {}
+
+    def _handle_stop(signum: int, _frame) -> None:
+        nonlocal stop_requested
+        stop_requested = True
+        adapter._safe_stop()
+
+    for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+        if signum is None:
+            continue
+        old_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, _handle_stop)
+
+    print(f"xAgent Feishu ready (model={runner.agent.model})")
+    print(f"Connecting to Feishu (app_id={feishu_config.app_id})...")
+    if getattr(args, "foreground", False):
+        print("Press Ctrl+C to stop.")
+
+    try:
+        adapter.run_blocking()
+    except KeyboardInterrupt:
+        stop_requested = True
+    except RuntimeError as exc:
+        print(f"❌ {exc}")
+        return 1
+    finally:
+        for signum, previous_handler in old_handlers.items():
+            signal.signal(signum, previous_handler)
+        _remove_feishu_pid(pid_path, current_pid)
+
+    if stop_requested and getattr(args, "foreground", False):
+        print("\nFeishu adapter stopped.")
     return 0
+
+
+def _start_feishu_background(args: argparse.Namespace) -> int:
+    runtime_dir = _feishu_runtime_dir(args)
+    feishu_dir = _feishu_dir(args)
+    feishu_dir.mkdir(parents=True, exist_ok=True)
+
+    existing_pid = _running_feishu_pid(args)
+    if existing_pid is not None:
+        print(f"❌ Feishu is already running in the background (pid={existing_pid}).")
+        print(f"   Stop it with: xagent feishu stop")
+        return 1
+
+    log_path = _feishu_log_path(args)
+    command = _build_feishu_background_command(args)
+
+    with log_path.open("ab") as log_handle:
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
+        except OSError as exc:
+            print(f"❌ Failed to start Feishu in the background: {exc}")
+            return 1
+
+    pid_path = _feishu_pid_path(args)
+    _write_feishu_pid(pid_path, process.pid)
+
+    try:
+        process.wait(timeout=_FEISHU_STARTUP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        print(f"Started Feishu in background (pid={process.pid}).")
+        print(f"Logs: {log_path}")
+        print(f"Stop: xagent feishu stop")
+        return 0
+
+    _remove_feishu_pid(pid_path, process.pid)
+    recent_output = _tail_text(log_path)
+    print("❌ Feishu exited during startup.")
+    if recent_output:
+        print(recent_output)
+    else:
+        print(f"Check logs: {log_path}")
+    return process.returncode or 1
+
+
+def handle_feishu_status(args: argparse.Namespace) -> int:
+    runtime_dir = _feishu_runtime_dir(args)
+    feishu_dir = _feishu_dir(args)
+    config_path = _feishu_config_path(args)
+    pid_path = _feishu_pid_path(args)
+    log_path = _feishu_log_path(args)
+    pid = _running_feishu_pid(args)
+
+    print(f"Feishu dir: {feishu_dir}")
+    print(f"Config: {config_path} ({'exists' if config_path.is_file() else 'missing'})")
+    print(f"PID file: {pid_path}")
+    print(f"Logs: {log_path}")
+    if pid is None:
+        print("Status: stopped")
+        print(f"Start: xagent feishu start --dir {runtime_dir}")
+        return 0
+
+    print(f"Status: running (pid={pid})")
+    print(f"Stop: xagent feishu stop")
+    return 0
+
+
+def handle_feishu_stop(args: argparse.Namespace) -> int:
+    pid_path = _feishu_pid_path(args)
+    pid = _running_feishu_pid(args)
+    if pid is None:
+        print(f"No Feishu process is running for {_feishu_runtime_dir(args)}.")
+        return 0
+
+    stop_signal = getattr(signal, "SIGTERM", signal.SIGINT)
+    try:
+        os.kill(pid, stop_signal)
+    except ProcessLookupError:
+        _remove_feishu_pid(pid_path, pid)
+        print(f"Feishu process {pid} is already stopped.")
+        return 0
+    except PermissionError as exc:
+        print(f"❌ Failed to stop Feishu process {pid}: {exc}")
+        return 1
+
+    if _wait_for_process_exit(pid, _FEISHU_STOP_TIMEOUT):
+        _remove_feishu_pid(pid_path, pid)
+        print(f"Stopped Feishu process {pid}.")
+        return 0
+
+    kill_signal = getattr(signal, "SIGKILL", None)
+    if kill_signal is not None:
+        try:
+            os.kill(pid, kill_signal)
+        except ProcessLookupError:
+            _remove_feishu_pid(pid_path, pid)
+            print(f"Stopped Feishu process {pid}.")
+            return 0
+        except PermissionError as exc:
+            print(f"❌ Failed to force-stop Feishu process {pid}: {exc}")
+            return 1
+
+        if _wait_for_process_exit(pid, _FEISHU_STOP_TIMEOUT):
+            _remove_feishu_pid(pid_path, pid)
+            print(f"Force-stopped Feishu process {pid}.")
+            return 0
+
+    print(f"❌ Timed out while stopping Feishu process {pid}.")
+    return 1
 
 
 def handle_feishu_init(args: argparse.Namespace) -> int:
@@ -835,45 +1141,15 @@ def handle_feishu_init(args: argparse.Namespace) -> int:
     print("2. Add extra permissions:")
     print("  - im:message.group_msg (for group chats)")
     print("  - contact:user.base:readonly (for user display names)")
-    print(f"\nRun: `xagent feishu run` to start your bot!\n")
+    print(f"\nRun: `xagent feishu start` to start your bot!\n")
+    print("======================================================\n")
     return 0
 
 
-def handle_feishu_run(args: argparse.Namespace) -> int:
-    verbose = getattr(args, "verbose", False)
-    logging.basicConfig(
-        level=logging.INFO if verbose else logging.WARNING,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
-    try:
-        from ..integrations.feishu import FeishuAdapter, FeishuAdapterConfig
-    except ImportError as exc:  # pragma: no cover - defensive
-        print(f"❌ Failed to import Feishu adapter: {exc}")
-        return 1
-
-    config_path = _feishu_config_path(args)
-    if not config_path.is_file():
-        print(f"❌ Feishu config not found: {config_path}")
-        print("   Run: xagent feishu init")
-        return 1
-
-    runner = BaseAgentRunner(config_dir=getattr(args, "config_dir", None))
-    feishu_config = FeishuAdapterConfig.from_file(config_path)
-    adapter = FeishuAdapter(agent=runner.agent, config=feishu_config)
-
-    print(f"🤖 xAgent ready (model={runner.agent.model})")
-    print(f"📡 Connecting to Feishu (app_id={feishu_config.app_id})…")
-    print("    Press Ctrl+C to stop.")
-
-    try:
-        adapter.run_blocking()
-    except KeyboardInterrupt:
-        print("\n👋 Feishu adapter stopped.")
-    except RuntimeError as exc:
-        print(f"❌ {exc}")
-        return 1
-    return 0
+def handle_feishu_start(args: argparse.Namespace) -> int:
+    if getattr(args, "foreground", False) or getattr(args, "feishu_foreground_internal", False):
+        return _run_feishu_foreground(args)
+    return _start_feishu_background(args)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

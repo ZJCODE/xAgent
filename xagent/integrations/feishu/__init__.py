@@ -10,7 +10,7 @@ Quick start:
     from xagent.interfaces.base import BaseAgentRunner
 
     runner = BaseAgentRunner(config_dir="~/.xagent")
-    cfg = FeishuAdapterConfig.from_file("~/.xagent/feishu.yaml")
+    cfg = FeishuAdapterConfig.from_file("~/.xagent/feishu/feishu.yaml")
     adapter = FeishuAdapter(agent=runner.agent, config=cfg)
     asyncio.run(adapter.run())
 """

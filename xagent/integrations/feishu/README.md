@@ -50,11 +50,11 @@ Configure your Feishu bot
 # First time only (creates ~/.xagent/config.yaml + identity.md)
 xagent init
 
-# Create feishu.yaml under ~/.xagent/
+# Create feishu.yaml under ~/.xagent/feishu/
 xagent feishu init
 ```
 
-This writes `~/.xagent/feishu.yaml`:
+This writes `~/.xagent/feishu/feishu.yaml`:
 
 ```yaml
 app_id: cli_xxx
@@ -72,12 +72,26 @@ app_secret: your_secret  # or ${LARK_APP_SECRET}
 ## Run
 
 ```bash
-xagent feishu run
-# or with a custom runtime dir / config path:
-xagent feishu run --dir ~/.xagent --config ~/.xagent/feishu.yaml --verbose
+# default: start in the background
+xagent feishu start
+
+# stay in the foreground and stream logs to this terminal
+xagent feishu start --foreground
+
+# stop the managed Feishu process for this runtime dir
+xagent feishu stop
+
+# inspect PID, config path, log path, and running state
+xagent feishu status
+
+# custom runtime dir / config path:
+xagent feishu start --dir ~/.xagent --config ~/.xagent/feishu/feishu.yaml --foreground
 ```
 
-That's it. The bot is now live on Feishu.
+By default, `xagent feishu start` starts a detached process, writes its PID to
+`~/.xagent/feishu/feishu.pid`, and appends logs to
+`~/.xagent/feishu/feishu.log`. Use `--foreground` (or `-f`) when you want the
+bot to stay attached to your terminal so you can watch logs live.
 
 ## Routing rules (hardcoded — no knobs)
 
@@ -127,7 +141,7 @@ predictable across direct and group conversations.
 
 ## Streaming replies
 
-Set `stream: true` in `feishu.yaml`. The adapter uses
+Set `stream: true` in `~/.xagent/feishu/feishu.yaml`. The adapter uses
 `FeishuChannel.stream(...)` with markdown — Feishu renders the answer as a
 streaming card that updates token-by-token. Disabled automatically when the
 agent is configured with `output_schema` (structured output requires
@@ -141,7 +155,7 @@ from xagent.interfaces.base import BaseAgentRunner
 from xagent.integrations.feishu import FeishuAdapter, FeishuAdapterConfig
 
 runner = BaseAgentRunner(config_dir="~/.xagent")
-cfg = FeishuAdapterConfig.from_file("~/.xagent/feishu.yaml")
+cfg = FeishuAdapterConfig.from_file("~/.xagent/feishu/feishu.yaml")
 adapter = FeishuAdapter(agent=runner.agent, config=cfg)
 asyncio.run(adapter.run())
 ```
