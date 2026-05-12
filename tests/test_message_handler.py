@@ -1,5 +1,6 @@
 """Tests for MessageHandler system prompt memory injection."""
 
+from datetime import datetime
 import unittest
 
 from xagent.core.handlers.message import MessageHandler
@@ -18,8 +19,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             message_storage=_FakeMessageStorage(),
         )
         instructions = handler.build_instructions()
-        self.assertIn("Core Rules", instructions)
-        self.assertIn("Conversation Awareness", instructions)
+        self.assertIn("structured entries", instructions)
+        self.assertIn("Keep participants separate", instructions)
+        self.assertIn("Reply in your own voice", instructions)
         self.assertIn("You are a helpful assistant.", instructions)
         # Should NOT contain per-turn dynamic content
         self.assertNotIn("Recent Diary Memory", instructions)
@@ -104,12 +106,13 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
         self.assertEqual(transcript_message["role"], "user")
         self.assertIsInstance(transcript_message["content"], str)
-        self.assertIn("[speaker=alice]", transcript_message["content"])
+        self.assertIn("[speaker=alice][timestamp=", transcript_message["content"])
         self.assertIn("First answer", transcript_message["content"])
-        self.assertIn("[speaker=you]", transcript_message["content"])
-        self.assertIn("[speaker=bob]", transcript_message["content"])
+        self.assertIn("[speaker=you][timestamp=", transcript_message["content"])
+        self.assertIn("[speaker=bob][timestamp=", transcript_message["content"])
         self.assertNotIn("Tool output preview", transcript_message["content"])
         self.assertIn("latest message from bob", transcript_message["content"])
+        self.assertIn("direct answer or action", transcript_message["content"])
 
     def test_build_recent_transcript_message_keeps_latest_user_images(self):
         handler = MessageHandler(
@@ -157,16 +160,25 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             [bob, observation, alice],
             current_user_id="alice",
         )["content"]
+        alice_timestamp = datetime.fromtimestamp(alice.timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        observation_timestamp = datetime.fromtimestamp(observation.timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        bob_timestamp = datetime.fromtimestamp(bob.timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
         self.assertIn("Recent Experience", transcript)
         self.assertNotIn("Recent Observations", transcript)
-        self.assertIn("[ambient context]", transcript)
+        self.assertIn(f"[ambient context][timestamp={observation_timestamp}]", transcript)
         self.assertNotIn("[observation ", transcript)
         self.assertIn("Current speaker: alice", transcript)
-        self.assertIn("[speaker=alice]", transcript)
-        self.assertIn("[speaker=bob]", transcript)
-        self.assertLess(transcript.index("[speaker=alice]"), transcript.index("[ambient context]"))
-        self.assertLess(transcript.index("[ambient context]"), transcript.index("[speaker=bob]"))
+        self.assertIn(f"[speaker=alice][timestamp={alice_timestamp}]", transcript)
+        self.assertIn(f"[speaker=bob][timestamp={bob_timestamp}]", transcript)
+        self.assertLess(
+            transcript.index(f"[speaker=alice][timestamp={alice_timestamp}]"),
+            transcript.index(f"[ambient context][timestamp={observation_timestamp}]"),
+        )
+        self.assertLess(
+            transcript.index(f"[ambient context][timestamp={observation_timestamp}]"),
+            transcript.index(f"[speaker=bob][timestamp={bob_timestamp}]"),
+        )
         self.assertIn("latest message from alice", transcript)
 
 

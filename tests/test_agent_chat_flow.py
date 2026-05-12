@@ -320,7 +320,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[speaker=bob]", first_call_messages[0]["content"])
         # Instructions passed separately
         self.assertIsNotNone(model_client.instructions_calls[0])
-        self.assertIn("Core Rules", model_client.instructions_calls[0])
+        self.assertIn("Keep participants separate", model_client.instructions_calls[0])
         self.assertEqual(
             [message.role for message in storage.messages],
             [RoleType.USER, RoleType.ASSISTANT, RoleType.USER, RoleType.ASSISTANT],

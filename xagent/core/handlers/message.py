@@ -1,5 +1,6 @@
-import time
 import logging
+import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
@@ -179,7 +180,7 @@ class MessageHandler:
             )
             transcript_lines.append("")
 
-        transcript_lines.append(MessageHandler._build_turn_instruction(current_user_id))
+        transcript_lines.append(AgentConfig.build_turn_reply_prompt(current_user_id))
 
         transcript_text = "\n".join(transcript_lines).strip()
 
@@ -237,7 +238,7 @@ class MessageHandler:
             return [MessageHandler._format_context_event_header(message), content]
 
         lines = [
-            f"[speaker={MessageHandler._format_transcript_speaker(message)}]",
+            MessageHandler._format_transcript_message_header(message),
             content,
         ]
         image_count = MessageHandler._count_message_images(message)
@@ -272,16 +273,17 @@ class MessageHandler:
 
     @staticmethod
     def _format_context_event_header(message: Message) -> str:
-        return "[ambient context]"
+        return f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
 
     @staticmethod
-    def _build_turn_instruction(current_user_id: str) -> str:
-        return (
-            "\n==========\n\nNow reply directly to the latest message "
-            f"from {current_user_id}. Respond as yourself — do not suggest, "
-            "propose alternatives, or wrap your reply in quotes. "
-            "Never mention internal labels, tags, or message formatting in your reply."
-        )
+    def _format_transcript_message_header(message: Message) -> str:
+        speaker = MessageHandler._format_transcript_speaker(message)
+        timestamp = MessageHandler._format_transcript_timestamp(message)
+        return f"[speaker={speaker}][timestamp={timestamp}]"
+
+    @staticmethod
+    def _format_transcript_timestamp(message: Message) -> str:
+        return datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
     def _budget_transcript_entries(
@@ -327,12 +329,12 @@ class MessageHandler:
 
     @staticmethod
     def _estimate_transcript_entry_chars(message: Message, content: str) -> int:
-        speaker = MessageHandler._format_transcript_speaker(message)
+        header = MessageHandler._format_transcript_message_header(message)
         image_note_chars = 0
         image_count = MessageHandler._count_message_images(message)
         if image_count:
             image_note_chars = len(f"[Attached images: {image_count}]")
-        return len(speaker) + len(content) + image_note_chars + 8
+        return len(header) + len(content) + image_note_chars + 4
 
     @staticmethod
     def _count_message_images(message: Message) -> int:

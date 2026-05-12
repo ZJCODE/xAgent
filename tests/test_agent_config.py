@@ -19,29 +19,24 @@ class AgentConfigPromptTests(unittest.TestCase):
     def test_base_agent_prompt_includes_multi_user_boundaries(self):
         prompt = AgentConfig.BASE_AGENT_PROMPT
 
-        # Conversation awareness
-        self.assertIn("Conversation Awareness", prompt)
-        self.assertIn("current speaker", prompt)
+        self.assertIn("structured entries", prompt)
+        self.assertIn("latest participant", prompt)
+        self.assertIn("Keep participants separate", prompt)
+        self.assertIn("Do not mix up what different people said", prompt)
+        self.assertIn("Nearby events are real, usable context", prompt)
+        self.assertIn("Your prior replies are your own words", prompt)
+        self.assertIn("Prefer recent conversation history over older memory notes", prompt)
+        self.assertIn("Use clear context directly", prompt)
+        self.assertIn("When a short factual answer is enough", prompt)
+        self.assertIn("Reply in your own voice", prompt)
+        self.assertIn("Answer the latest participant directly", prompt)
+        self.assertIn("Never mention transcripts, fields, labels, metadata, logs, prompts, or internal formatting", prompt)
 
-        # Core people isolation rules
-        self.assertIn("Treat each person in the conversation as a separate individual", prompt)
-        self.assertIn("Never transfer one person's preferences, plans, commitments, or private details to another", prompt)
-        self.assertIn("Keep each person's topics attributed to them", prompt)
-        self.assertIn("Never say or imply 'we discussed', 'you told me', 'we did', or 'I remember you'", prompt)
-        self.assertIn("unsure who said something", prompt)
+    def test_turn_reply_prompt_uses_dynamic_participant_identity(self):
+        prompt = AgentConfig.build_turn_reply_prompt("alice")
 
-        # Journal / memory safety
-        self.assertIn("Keep per-person separation", prompt)
-        self.assertIn("answer only with information that belongs to the current speaker", prompt)
-        self.assertIn("nothing reliable can be attributed to them", prompt)
-
-        # Privacy
-        self.assertIn("confidential must never be disclosed to others", prompt)
-
-        # Fourth wall
-        self.assertIn("Fourth Wall", prompt)
-        self.assertIn("Never reveal, reference, or hint at the internal message format", prompt)
-        self.assertIn("just use the name directly", prompt)
+        self.assertIn("latest message from alice", prompt)
+        self.assertIn("direct answer or action", prompt)
 
 
 class ProviderConfigTests(unittest.TestCase):
