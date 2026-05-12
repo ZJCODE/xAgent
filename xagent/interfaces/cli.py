@@ -809,13 +809,10 @@ def handle_feishu_init(args: argparse.Namespace) -> int:
         print(f"⚠️  {config_path} already exists. Use --force to overwrite.")
         return 1
 
-    print("Feishu setup guide:")
-    print("1. Create an agent: https://open.feishu.cn/page/launcher")
-    print("2. Open your agent: https://open.feishu.cn/app")
-    print("3. Add extra permissions:")
-    print("  - im:message.group_msg (for group chats)")
-    print("  - contact:user.base:readonly (for user display names)")
-    print("4. Copy your App ID and App Secret.")
+    print("")
+    print("Feishu setup guide:\n")
+    print("1. Create an agent: https://open.feishu.cn/page/launcher\n")
+    print("2. Copy your App ID and App Secret.")
     print("")
 
     app_id = args.app_id or input("Feishu App ID: ").strip()
@@ -831,9 +828,14 @@ def handle_feishu_init(args: argparse.Namespace) -> int:
         _FEISHU_CONFIG_TEMPLATE.format(app_id=app_id, app_secret=app_secret),
         encoding="utf-8",
     )
-    print(f"✅ Wrote {config_path}")
-    print("Before running, ensure your bot has these permissions configured: im:message.group_msg, contact:user.base:readonly")
-    print("Next: xagent feishu run --dir", args.config_dir or "~/.xagent")
+    print(f"\nWrote {config_path}\n")
+    
+    print("===== Finish setup in the Feishu Developer Console =====\n")
+    print("1. Open your agent: https://open.feishu.cn/app\n")
+    print("2. Add extra permissions:")
+    print("  - im:message.group_msg (for group chats)")
+    print("  - contact:user.base:readonly (for user display names)")
+    print(f"\nRun: `xagent feishu run` to start your bot!\n")
     return 0
 
 

@@ -186,7 +186,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.feishu_config, "./feishu.yaml")
         self.assertTrue(args.verbose)
 
-    def test_feishu_init_prints_guidance_and_permission_reminder(self):
+    def test_feishu_init_prints_guidance_in_user_flow_order(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             args = argparse.Namespace(
                 config_dir=tmpdir,
@@ -206,11 +206,19 @@ class CLICommandTests(unittest.TestCase):
         getpass_mock.assert_called_once_with("Feishu App Secret: ")
 
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
-        self.assertIn("https://open.feishu.cn/page/launcher", output)
-        self.assertIn("https://open.feishu.cn/app", output)
-        self.assertIn("Copy your App ID and App Secret.", output)
-        self.assertIn("im:message.group_msg", output)
-        self.assertIn("contact:user.base:readonly", output)
+        launcher_index = output.index("https://open.feishu.cn/page/launcher")
+        copy_index = output.index("Copy your App ID and App Secret.")
+        wrote_index = output.index("✅ Wrote")
+        app_index = output.index("https://open.feishu.cn/app")
+        group_permission_index = output.index("im:message.group_msg")
+        user_permission_index = output.index("contact:user.base:readonly")
+
+        self.assertLess(launcher_index, copy_index)
+        self.assertLess(copy_index, wrote_index)
+        self.assertLess(wrote_index, app_index)
+        self.assertLess(app_index, group_permission_index)
+        self.assertLess(group_permission_index, user_permission_index)
+        self.assertIn("Next: xagent feishu run --dir", output)
 
 
 if __name__ == "__main__":
