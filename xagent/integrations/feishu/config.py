@@ -54,6 +54,8 @@ class FeishuAdapterConfig:
         group_history_count: How many recent Feishu group/topic messages to
             pull on each @mention. ``0`` disables history pulls.
         history_fetch_timeout: Maximum seconds to wait for Feishu history.
+        show_sender_ids: Include Feishu sender IDs such as ``ou_xxx`` or
+            ``cli_xxx`` in room-context speaker labels.
         advanced: Raw pass-through kwargs for ``FeishuChannel`` (policy,
             safety, ...). Reserved for power users.
     """
@@ -72,6 +74,7 @@ class FeishuAdapterConfig:
 
     group_history_count: int = 10
     history_fetch_timeout: float = 5.0
+    show_sender_ids: bool = True
 
     advanced: Dict[str, Any] = field(default_factory=dict)
 

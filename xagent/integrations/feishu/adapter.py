@@ -9,8 +9,10 @@ Routing is intentionally small:
 * Any other chat type is ignored.
 
 Before a Feishu message reaches the agent, the sender ID is resolved to a
-display name through the official contact API. Internal ``ou_`` / ``on_`` IDs
-stay inside this adapter and are not passed into ``agent.chat``.
+display name through the official contact API. By default, internal
+``ou_`` / ``on_`` IDs stay inside this adapter and are not passed into
+``agent.chat``. When ``show_sender_ids`` is enabled, group room context can
+render speakers as ``name(id)``.
 
 Group replies are sent as plain replies anchored to the source message
 (``reply_to``); never as Feishu topic/thread replies. p2p replies are sent
@@ -24,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import json
 import logging
 import re
 import threading
@@ -42,7 +45,7 @@ from .history import (
     sanitize_transcript_field,
 )
 from .send import send_message
-from .users import FEISHU_USER_FALLBACK_NAME, FeishuUserResolver, safe_display_name
+from .users import FEISHU_USER_FALLBACK_NAME, FeishuUserResolver, extract_feishu_id, safe_display_name
 
 
 class _FeishuLogRedactionFilter(logging.Filter):
@@ -71,10 +74,12 @@ class FeishuAdapter:
         config: FeishuAdapterConfig,
         *,
         logger: Optional[logging.Logger] = None,
+        show_sender_ids: Optional[bool] = None,
     ) -> None:
         self.agent = agent
         self.config = config
         self.logger = logger or logging.getLogger(self.__class__.__name__)
+        self.show_sender_ids = config.show_sender_ids if show_sender_ids is None else show_sender_ids
         self._channel = None  # type: ignore[var-annotated]
         self._history_fetcher: Optional[FeishuHistoryFetcher] = None
         self._user_resolver: Optional[FeishuUserResolver] = None
@@ -264,13 +269,14 @@ class FeishuAdapter:
     # ------------------------------------------------------------------
 
     async def _dispatch(self, msg: Any) -> None:
-        chat_type = getattr(msg, "chat_type", "unknown")
-        chat_id = getattr(msg, "chat_id", None)
-        message_id = getattr(msg, "message_id", None)
-        sender_id = getattr(msg, "sender_id", None) or "feishu_user"
+        chat_type = self._message_field(msg, "chat_type") or "unknown"
+        chat_id = self._message_field(msg, "chat_id")
+        message_id = self._message_field(msg, "message_id")
+        sender_id = self._sender_id(msg) or ""
         sender_fallback_name = self._sender_name(msg)
-        sender_type = (getattr(msg, "sender_type", None) or "").lower()
-        text = self._message_text(msg)
+        sender_type = self._sender_type(msg)
+        sender_id_type = self._sender_id_type(msg)
+        text = self._message_text(msg, show_mention_ids=self.show_sender_ids)
 
         self.logger.debug(
             "Feishu inbound: chat_type=%s chat_id=%s message_id=%s sender_id=%s text=%r",
@@ -285,9 +291,9 @@ class FeishuAdapter:
             self.logger.debug("Skipping message without chat_id: %r", msg)
             return
 
-        if sender_type in {"bot", "app"}:
+        if self._should_ignore_sender(sender_id, sender_type, chat_type):
             self.logger.debug(
-                "Ignoring Feishu message from bot/app sender: chat_id=%s message_id=%s",
+                "Ignoring Feishu message from current bot/app sender: chat_id=%s message_id=%s",
                 chat_id,
                 message_id,
             )
@@ -307,6 +313,8 @@ class FeishuAdapter:
                 chat_id=chat_id,
                 message_id=message_id,
                 sender_id=sender_id,
+                sender_id_type=sender_id_type,
+                sender_type=sender_type,
                 sender_fallback_name=sender_fallback_name,
                 text=text,
             )
@@ -319,6 +327,8 @@ class FeishuAdapter:
         chat_id: str,
         message_id: Optional[str],
         sender_id: str,
+        sender_id_type: Optional[str],
+        sender_type: str,
         sender_fallback_name: Optional[str],
         text: str,
     ) -> None:
@@ -326,11 +336,17 @@ class FeishuAdapter:
             if not text:
                 self.logger.debug("Skipping non-text direct message")
                 return
-            sender_name = await self._resolve_sender_name(sender_id, fallback=sender_fallback_name)
+            sender_name = await self._resolve_sender_name(
+                sender_id,
+                fallback=sender_fallback_name,
+                id_type=sender_id_type,
+                sender_type=sender_type,
+            )
             await self._handle_chat(
                 chat_id=chat_id,
                 message_id=message_id,
                 user_id=sender_name,
+                sender_id=sender_id,
                 sender_name=sender_name,
                 text=text,
                 is_group=False,
@@ -349,11 +365,17 @@ class FeishuAdapter:
                     message_id,
                     sender_id,
                 )
-                sender_name = await self._resolve_sender_name(sender_id, fallback=sender_fallback_name)
+                sender_name = await self._resolve_sender_name(
+                    sender_id,
+                    fallback=sender_fallback_name,
+                    id_type=sender_id_type,
+                    sender_type=sender_type,
+                )
                 await self._handle_chat(
                     chat_id=chat_id,
                     message_id=message_id,
                     user_id=sender_name,
+                    sender_id=sender_id,
                     sender_name=sender_name,
                     text=text,
                     is_group=True,
@@ -371,32 +393,137 @@ class FeishuAdapter:
         self.logger.debug("Ignoring chat_type=%s", chat_type)
 
     @staticmethod
-    def _message_text(msg: Any) -> str:
-        content_text = (getattr(msg, "content_text", None) or "").strip()
+    def _message_text(msg: Any, *, show_mention_ids: bool = False) -> str:
+        mentions = FeishuAdapter._message_mentions(msg)
+        content_text = FeishuAdapter._object_field(FeishuAdapter._message_object(msg) or msg, "content_text") or ""
+        content_text = content_text.strip()
         if content_text:
-            return replace_mentions(content_text, getattr(msg, "mentions", []) or [])
-        content = getattr(msg, "content", None)
+            return replace_mentions(content_text, mentions, show_mention_ids=show_mention_ids)
+        content = FeishuAdapter._message_field(msg, "content")
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except (TypeError, ValueError):
+                content = content.strip()
         for field_name in ("text", "title"):
-            value = getattr(content, field_name, None)
+            value = FeishuAdapter._raw_field(content, field_name)
             if isinstance(value, str) and value.strip():
-                return replace_mentions(value.strip(), getattr(msg, "mentions", []) or [])
+                return replace_mentions(value.strip(), mentions, show_mention_ids=show_mention_ids)
         return ""
+
+    @staticmethod
+    def _sender_id(msg: Any) -> Optional[str]:
+        sender_id, _sender_id_type = FeishuAdapter._sender_identity(msg)
+        return sender_id
+
+    @staticmethod
+    def _sender_type(msg: Any) -> str:
+        value = FeishuAdapter._object_field(msg, "sender_type")
+        if value:
+            return value.lower()
+        sender = FeishuAdapter._sender_object(msg)
+        value = FeishuAdapter._object_field(sender, "sender_type")
+        return value.lower() if value else ""
+
+    @staticmethod
+    def _sender_id_type(msg: Any) -> Optional[str]:
+        _sender_id, sender_id_type = FeishuAdapter._sender_identity(msg)
+        return sender_id_type
+
+    @staticmethod
+    def _sender_identity(msg: Any) -> tuple[Optional[str], Optional[str]]:
+        sender = FeishuAdapter._sender_object(msg)
+        explicit_id_type = FeishuAdapter._explicit_sender_id_type(msg, sender)
+        candidates = (
+            FeishuAdapter._raw_field(msg, "sender_id"),
+            FeishuAdapter._raw_field(sender, "sender_id"),
+            FeishuAdapter._raw_field(sender, "id"),
+            sender,
+        )
+        for candidate in candidates:
+            sender_id, sender_id_type = extract_feishu_id(candidate)
+            if sender_id:
+                return sender_id, explicit_id_type or sender_id_type
+        return None, explicit_id_type
+
+    @staticmethod
+    def _explicit_sender_id_type(msg: Any, sender: Any) -> Optional[str]:
+        for container in (msg, sender):
+            for field_name in ("sender_id_type", "id_type", "user_id_type"):
+                value = FeishuAdapter._object_field(container, field_name)
+                if value:
+                    return value.lower()
+        return None
+
+    @staticmethod
+    def _sender_object(msg: Any) -> Any:
+        sender = FeishuAdapter._raw_field(msg, "sender")
+        if sender is not None:
+            return sender
+        event = FeishuAdapter._raw_field(msg, "event")
+        return FeishuAdapter._raw_field(event, "sender")
+
+    @staticmethod
+    def _message_object(msg: Any) -> Any:
+        event = FeishuAdapter._raw_field(msg, "event")
+        message = FeishuAdapter._raw_field(event, "message")
+        if message is not None:
+            return message
+        return FeishuAdapter._raw_field(msg, "message")
+
+    @staticmethod
+    def _message_field(msg: Any, field_name: str) -> Any:
+        value = FeishuAdapter._raw_field(msg, field_name)
+        if value is not None:
+            return value
+        message = FeishuAdapter._message_object(msg)
+        return FeishuAdapter._raw_field(message, field_name)
+
+    @staticmethod
+    def _message_mentions(msg: Any) -> list[Any]:
+        mentions = FeishuAdapter._message_field(msg, "mentions") or []
+        return list(mentions) if isinstance(mentions, (list, tuple)) else []
+
+    def _should_ignore_sender(self, sender_id: str, sender_type: str, chat_type: str) -> bool:
+        if self._is_current_bot_sender(sender_id):
+            return True
+        return chat_type == "p2p" and sender_type in {"bot", "app"}
+
+    def _is_current_bot_sender(self, sender_id: str) -> bool:
+        if not sender_id:
+            return False
+        return sender_id in {self.config.app_id, self._bot_open_id()}
+
+    @staticmethod
+    def _object_field(obj: Any, field_name: str) -> Optional[str]:
+        value = FeishuAdapter._raw_field(obj, field_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    @staticmethod
+    def _raw_field(obj: Any, field_name: str) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(field_name)
+        return getattr(obj, field_name, None)
 
     @staticmethod
     def _sender_name(msg: Any) -> Optional[str]:
         for field_name in ("sender_name", "user_name", "name"):
-            value = getattr(msg, field_name, None)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
+            value = FeishuAdapter._object_field(msg, field_name)
+            if value:
+                return value
+        sender = FeishuAdapter._sender_object(msg)
         for nested_name in ("sender", "user"):
-            nested = getattr(msg, nested_name, None)
+            nested = sender if nested_name == "sender" else FeishuAdapter._raw_field(msg, nested_name)
             if nested is None:
                 continue
-            for field_name in ("name", "sender_name", "user_name", "display_name"):
-                value = getattr(nested, field_name, None)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
+            for field_name in ("name", "sender_name", "user_name", "display_name", "app_name", "bot_name"):
+                value = FeishuAdapter._object_field(nested, field_name)
+                if value:
+                    return value
         return None
 
     def _get_user_resolver(self) -> Optional[FeishuUserResolver]:
@@ -406,18 +533,30 @@ class FeishuAdapter:
             self._user_resolver = FeishuUserResolver(self._channel, self.logger)
         return self._user_resolver
 
-    async def _resolve_sender_name(self, sender_id: str, *, fallback: Optional[str]) -> str:
+    async def _resolve_sender_name(
+        self,
+        sender_id: str,
+        *,
+        fallback: Optional[str],
+        id_type: Optional[str] = None,
+        sender_type: Optional[str] = None,
+    ) -> str:
         resolver = self._get_user_resolver()
         if resolver is None:
             return safe_display_name(fallback) or FEISHU_USER_FALLBACK_NAME
-        name = await resolver.resolve_name(sender_id, fallback=fallback)
+        name = await resolver.resolve_name(
+            sender_id,
+            fallback=fallback,
+            id_type=id_type,
+            sender_type=sender_type,
+        )
         return name or FEISHU_USER_FALLBACK_NAME
 
     def _is_bot_mentioned(self, msg: Any) -> bool:
-        if bool(getattr(msg, "mentioned_bot", False)):
+        if bool(self._message_field(msg, "mentioned_bot")):
             return True
 
-        mentions = list(getattr(msg, "mentions", []) or [])
+        mentions = self._message_mentions(msg)
         if not mentions:
             return False
 
@@ -443,23 +582,13 @@ class FeishuAdapter:
 
     @staticmethod
     def _mention_field(mention: Any, field_name: str) -> Optional[str]:
-        if isinstance(mention, dict):
-            value = mention.get(field_name)
-            if isinstance(value, str) and value:
-                return value
-            mention_id = mention.get("id")
-            if isinstance(mention_id, dict):
-                nested = mention_id.get(field_name)
-                if isinstance(nested, str) and nested:
-                    return nested
-            return None
-        value = getattr(mention, field_name, None)
+        value = FeishuAdapter._object_field(mention, field_name)
         if isinstance(value, str) and value:
             return value
-        mention_id = getattr(mention, "id", None)
-        nested = getattr(mention_id, field_name, None) if mention_id is not None else None
-        if isinstance(nested, str) and nested:
-            return nested
+        if field_name in {"open_id", "user_id", "union_id", "app_id"}:
+            mention_id, mention_id_type = extract_feishu_id(mention)
+            if mention_id_type == field_name:
+                return mention_id
         return None
 
     def _bot_open_id(self) -> Optional[str]:
@@ -519,6 +648,7 @@ class FeishuAdapter:
                     current_message_id=current_message_id,
                     thread_id=self._thread_id(raw_msg),
                     history_count=history_count,
+                    show_sender_ids=self.show_sender_ids,
                 ),
                 timeout=self.config.history_fetch_timeout,
             )
@@ -537,6 +667,7 @@ class FeishuAdapter:
         chat_id: str,
         current_message_id: Optional[str],
         raw_msg: Any,
+        sender_id: str,
         sender_name: str,
         text: str,
     ) -> str:
@@ -548,7 +679,7 @@ class FeishuAdapter:
         room_name = await self._resolve_room_name(chat_id, raw_msg)
         current_record = FeishuMessageRecord(
             current_message_id or "",
-            "",
+            sender_id,
             sender_name,
             text,
             self._message_create_time_ms(raw_msg),
@@ -561,6 +692,7 @@ class FeishuAdapter:
             room_name=room_name,
             bot_open_id=self._bot_open_id(),
             bot_app_id=self.config.app_id,
+            show_sender_ids=self.show_sender_ids,
         )
 
     async def _resolve_room_name(self, chat_id: str, raw_msg: Any) -> Optional[str]:
@@ -582,23 +714,18 @@ class FeishuAdapter:
     def _message_room_name(msg: Any) -> Optional[str]:
         if msg is None:
             return None
+        message = FeishuAdapter._message_object(msg) or msg
         for field_name in ("chat_name", "group_name", "room_name"):
-            value = getattr(msg, field_name, None)
-            if value is None and isinstance(msg, dict):
-                value = msg.get(field_name)
+            value = FeishuAdapter._raw_field(message, field_name)
             safe_value = sanitize_transcript_field(value)
             if safe_value:
                 return safe_value
         for nested_name in ("chat", "conversation"):
-            nested = getattr(msg, nested_name, None)
-            if nested is None and isinstance(msg, dict):
-                nested = msg.get(nested_name)
+            nested = FeishuAdapter._raw_field(message, nested_name)
             if nested is None:
                 continue
             for field_name in ("chat_name", "group_name", "room_name", "name", "title"):
-                value = getattr(nested, field_name, None)
-                if value is None and isinstance(nested, dict):
-                    value = nested.get(field_name)
+                value = FeishuAdapter._raw_field(nested, field_name)
                 safe_value = sanitize_transcript_field(value)
                 if safe_value:
                     return safe_value
@@ -645,9 +772,7 @@ class FeishuAdapter:
         if msg is None:
             return int(time.time() * 1000)
         for field_name in ("create_time", "create_time_ms", "timestamp", "message_time", "event_time"):
-            value = getattr(msg, field_name, None)
-            if value is None and isinstance(msg, dict):
-                value = msg.get(field_name)
+            value = FeishuAdapter._message_field(msg, field_name)
             try:
                 return int(value)
             except (TypeError, ValueError):
@@ -658,19 +783,16 @@ class FeishuAdapter:
     def _thread_id(msg: Any) -> Optional[str]:
         if msg is None:
             return None
-        direct = getattr(msg, "thread_id", None)
+        direct = FeishuAdapter._message_field(msg, "thread_id")
         if isinstance(direct, str) and direct:
             return direct
-        conversation = getattr(msg, "conversation", None)
+        message = FeishuAdapter._message_object(msg) or msg
+        conversation = FeishuAdapter._raw_field(message, "conversation")
         if conversation is None:
             return None
-        thread_id = getattr(conversation, "thread_id", None)
+        thread_id = FeishuAdapter._raw_field(conversation, "thread_id")
         if isinstance(thread_id, str) and thread_id:
             return thread_id
-        if isinstance(conversation, dict):
-            value = conversation.get("thread_id")
-            if isinstance(value, str) and value:
-                return value
         return None
 
     # ------------------------------------------------------------------
@@ -683,6 +805,7 @@ class FeishuAdapter:
         chat_id: str,
         message_id: Optional[str],
         user_id: str,
+        sender_id: str,
         sender_name: str,
         text: str,
         is_group: bool,
@@ -694,6 +817,7 @@ class FeishuAdapter:
                 chat_id=chat_id,
                 current_message_id=message_id,
                 raw_msg=raw_msg,
+                sender_id=sender_id,
                 sender_name=sender_name,
                 text=text,
             )
@@ -837,7 +961,7 @@ class FeishuAdapter:
         """
         if raw_msg is None:
             return message_id
-        chat_type = getattr(raw_msg, "chat_type", None)
+        chat_type = self._message_field(raw_msg, "chat_type")
         if chat_type == "topic":
             root_id = self._root_message_id(raw_msg)
             if root_id:
@@ -849,7 +973,7 @@ class FeishuAdapter:
         if msg is None:
             return None
         for attr in ("root_id", "root_message_id"):
-            value = getattr(msg, attr, None)
+            value = FeishuAdapter._message_field(msg, attr)
             if isinstance(value, str) and value:
                 return value
         return None

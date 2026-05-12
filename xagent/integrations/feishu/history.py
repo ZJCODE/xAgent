@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Iterable, Optional
 
-from .users import FEISHU_USER_FALLBACK_NAME, FeishuUserResolver, safe_display_name
+from .users import FEISHU_USER_FALLBACK_NAME, FeishuUserResolver, extract_feishu_id, safe_display_name
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,8 @@ class FeishuMessageRecord:
     text: str
     create_time_ms: int
     source: str = "chat"  # "chat" | "thread"
+    sender_type: Optional[str] = None
+    sender_id_type: Optional[str] = None
 
 
 _TEXTUAL_TYPES = {"text", "post"}
@@ -59,6 +61,7 @@ class FeishuHistoryFetcher:
         current_message_id: Optional[str],
         thread_id: Optional[str] = None,
         history_count: int = 0,
+        show_sender_ids: bool = False,
     ) -> list[FeishuMessageRecord]:
         """Return recent group/topic messages ordered oldest -> newest.
 
@@ -77,6 +80,7 @@ class FeishuHistoryFetcher:
             container_id,
             history_count,
             source=container_id_type,
+            show_sender_ids=show_sender_ids,
         )
         if current_message_id:
             records = [rec for rec in records if rec.message_id != current_message_id]
@@ -93,6 +97,7 @@ class FeishuHistoryFetcher:
         page_size: int,
         *,
         source: str,
+        show_sender_ids: bool = False,
     ) -> list[FeishuMessageRecord]:
         client = getattr(self._channel, "client", None)
         if client is None:
@@ -135,7 +140,7 @@ class FeishuHistoryFetcher:
         items = getattr(getattr(response, "data", None), "items", None) or []
         normalized: list[FeishuMessageRecord] = []
         for item in items:
-            rec = self._normalize_item(item, source=source)
+            rec = self._normalize_item(item, source=source, show_sender_ids=show_sender_ids)
             if rec is not None:
                 normalized.append(rec)
         return await self._resolve_record_names(normalized)
@@ -146,6 +151,8 @@ class FeishuHistoryFetcher:
             sender_name = await self._user_resolver.resolve_name(
                 record.sender_id,
                 fallback=record.sender_name,
+                id_type=record.sender_id_type,
+                sender_type=record.sender_type,
             )
             if sender_name != record.sender_name:
                 record = replace(record, sender_name=sender_name)
@@ -157,7 +164,13 @@ class FeishuHistoryFetcher:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _normalize_item(cls, item: Any, *, source: str) -> Optional[FeishuMessageRecord]:
+    def _normalize_item(
+        cls,
+        item: Any,
+        *,
+        source: str,
+        show_sender_ids: bool = False,
+    ) -> Optional[FeishuMessageRecord]:
         get = cls._attr_getter(item)
         message_id = get("message_id")
         if not message_id:
@@ -166,13 +179,35 @@ class FeishuHistoryFetcher:
             return None
         sender = get("sender")
         sender_get = cls._attr_getter(sender) if sender is not None else (lambda _k: None)
-        sender_id = sender_get("id") or sender_get("sender_id") or ""
-        sender_name = sender_get("name")
+        sender_id, extracted_sender_id_type = extract_feishu_id(sender)
+        if not sender_id:
+            sender_id, extracted_sender_id_type = extract_feishu_id(get("sender_id"))
+        sender_name = cls._first_present(
+            sender_get("name"),
+            sender_get("sender_name"),
+            sender_get("user_name"),
+            sender_get("display_name"),
+            sender_get("app_name"),
+            sender_get("bot_name"),
+        )
+        sender_type = cls._first_present(sender_get("sender_type"), get("sender_type"))
+        sender_id_type = cls._first_present(
+            sender_get("id_type"),
+            sender_get("user_id_type"),
+            sender_get("sender_id_type"),
+            get("sender_id_type"),
+            get("user_id_type"),
+            extracted_sender_id_type,
+        )
         msg_type = get("msg_type") or ""
         mentions = get("mentions") or []
         body = get("body")
         body_content = cls._attr_getter(body)("content") if body is not None else None
-        text = replace_mentions(cls._render_content(msg_type, body_content), mentions).strip()
+        text = replace_mentions(
+            cls._render_content(msg_type, body_content),
+            mentions,
+            show_mention_ids=show_sender_ids,
+        ).strip()
         if not text:
             return None
         create_time_raw = get("create_time") or 0
@@ -187,7 +222,16 @@ class FeishuHistoryFetcher:
             text=text,
             create_time_ms=create_time_ms,
             source=source,
+            sender_type=str(sender_type).lower() if sender_type else None,
+            sender_id_type=str(sender_id_type).lower() if sender_id_type else None,
         )
+
+    @staticmethod
+    def _first_present(*values: Any) -> Optional[str]:
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
 
     @staticmethod
     def _attr_getter(obj: Any):
@@ -251,6 +295,7 @@ def format_group_history(
     *,
     bot_open_id: Optional[str] = None,
     bot_app_id: Optional[str] = None,
+    show_sender_ids: bool = False,
 ) -> str:
     """Render recent Feishu messages as compact room-context lines."""
     bot_ids = {value for value in (bot_open_id, bot_app_id) if value}
@@ -259,11 +304,43 @@ def format_group_history(
         if rec.sender_id in bot_ids or rec.sender_name in bot_ids:
             speaker = "you"
         else:
-            speaker = safe_display_name(rec.sender_name) or FEISHU_USER_FALLBACK_NAME
+            speaker = format_sender_label(
+                rec.sender_name,
+                rec.sender_id,
+                sender_type=rec.sender_type,
+                show_sender_ids=show_sender_ids,
+            )
         text = rec.text or ""
         if text.strip():
             lines.append(format_room_context_line(speaker, rec.create_time_ms, text))
     return "\n".join(lines).strip()
+
+
+def format_sender_label(
+    sender_name: Optional[str],
+    sender_id: Optional[str],
+    *,
+    sender_type: Optional[str] = None,
+    show_sender_ids: bool = False,
+) -> str:
+    """Render a transcript speaker, optionally appending ``(sender_id)``."""
+    safe_name = safe_display_name(sender_name)
+    safe_id = sanitize_sender_id(sender_id)
+    fallback_name = fallback_sender_label(sender_type)
+    if safe_name and safe_id and show_sender_ids:
+        return f"{safe_name}({safe_id})"
+    if safe_name:
+        return safe_name
+    if safe_id and show_sender_ids:
+        return f"{fallback_name}({safe_id})"
+    return fallback_name
+
+
+def fallback_sender_label(sender_type: Optional[str]) -> str:
+    normalized = (sender_type or "").strip().lower()
+    if normalized in {"app", "bot"}:
+        return "Feishu Bot"
+    return FEISHU_USER_FALLBACK_NAME
 
 
 def format_room_context(
@@ -273,11 +350,17 @@ def format_room_context(
     room_name: Optional[str] = None,
     bot_open_id: Optional[str] = None,
     bot_app_id: Optional[str] = None,
+    show_sender_ids: bool = False,
 ) -> str:
     """Render a Feishu group/topic context block for ``agent.chat``."""
     safe_room_id = sanitize_transcript_field(room_id)
     safe_room_name = sanitize_transcript_field(room_name)
-    body = format_group_history(records, bot_open_id=bot_open_id, bot_app_id=bot_app_id)
+    body = format_group_history(
+        records,
+        bot_open_id=bot_open_id,
+        bot_app_id=bot_app_id,
+        show_sender_ids=show_sender_ids,
+    )
     if not safe_room_id or not body:
         return body
     header_lines = ["[room context]"]
@@ -302,7 +385,12 @@ def format_feishu_timestamp(create_time_ms: int) -> str:
     return datetime.fromtimestamp(seconds).strftime("%Y-%m-%d %H:%M")
 
 
-def replace_mentions(text: str, mentions: Iterable[Any]) -> str:
+def replace_mentions(
+    text: str,
+    mentions: Iterable[Any],
+    *,
+    show_mention_ids: bool = False,
+) -> str:
     """Replace Feishu mention keys such as ``@_user_1`` with display names."""
     rendered = text or ""
     for mention in mentions or []:
@@ -312,9 +400,18 @@ def replace_mentions(text: str, mentions: Iterable[Any]) -> str:
             or _mention_attr(mention, "user_name")
             or _mention_attr(mention, "display_name")
         )
-        if not key or not name:
+        mention_id, _mention_id_type = extract_feishu_id(mention)
+        if not key:
             continue
+        if not name:
+            if not show_mention_ids or not mention_id:
+                continue
+            name = mention_id
         replacement = name if name.startswith("@") else f"@{name}"
+        safe_mention_id = sanitize_sender_id(mention_id)
+        normalized_name = name[1:] if name.startswith("@") else name
+        if show_mention_ids and safe_mention_id and safe_mention_id != normalized_name:
+            replacement = f"{replacement}({safe_mention_id})"
         rendered = rendered.replace(key, replacement)
     return rendered
 
@@ -326,6 +423,10 @@ def sanitize_transcript_field(value: Optional[str]) -> Optional[str]:
     if not normalized:
         return None
     return normalized.replace("\n", " ").replace("]", "")
+
+
+def sanitize_sender_id(value: Optional[str]) -> Optional[str]:
+    return sanitize_transcript_field(value)
 
 
 def _mention_attr(mention: Any, field_name: str) -> Optional[str]:

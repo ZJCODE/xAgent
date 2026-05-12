@@ -40,7 +40,9 @@ Configure your Feishu bot
 2. Open your agent: https://open.feishu.cn/app
 3. Add extra permissions:
     * im:message.group_msg (for group chats)
+    * im:message.group_at_msg.include_bot:readonly (for group @mentions from users and bots)
     * contact:user.base:readonly (for user display names)
+    * admin:app.info:readonly (for other bot or agent display names)
 4. Copy your App ID and App Secret.
 
 
@@ -105,9 +107,11 @@ The adapter behaves like a real human teammate:
 | Non-text content | ignored (Phase 1) | Image/file routing is on the roadmap. |
 
 > **Permission check.** The bot can reply to group @mentions with
-> `im:message.group_at_msg`. To read recent group history after the @mention,
+> `im:message.group_at_msg`; use
+> `im:message.group_at_msg.include_bot:readonly` when other bots in the group
+> may @ the current bot. To read recent group history after the @mention,
 > the app also needs Feishu history/group message read permissions such as
-> `im:message:readonly` plus `im:message.group_msg`. If those permissions are
+> `im:message:readonly` plus `im:message.group_msg`, `admin:app.info:readonly`. If those permissions are
 > missing, xAgent simply replies using the current @message.
 
 Before a message reaches xAgent, the adapter resolves Feishu sender IDs with
@@ -116,6 +120,11 @@ name into `agent.chat`. This keeps internal IDs such as `ou_xxx` inside the
 Feishu layer instead of exposing them to prompts or memory keys. If the contact
 lookup is unavailable, the adapter falls back to a display name already present
 on the SDK event, then to a generic `Feishu User` label.
+
+For messages sent by other Feishu apps or bot agents, the adapter resolves the
+sender's `app_id` with `client.application.v6.application.get(request)`. Querying
+other apps requires Feishu's application information permission; without it,
+those senders fall back the same way as unresolved users.
 
 For group/topic traffic, the adapter wraps recent messages plus the current
 mention in a room-context block before calling `agent.chat`:
@@ -131,9 +140,14 @@ you 2026-05-12 15:05: hey Telos
 ```
 
 The block includes `room_id` and adds `room_name` when the Feishu group name is
-available. Direct chats do not use room context. Feishu mention placeholders
-such as `@_user_1` are replaced from message mention metadata when names are
-available, for example `@Tom`.
+available. Direct chats do not use room context. When `show_sender_ids` is
+enabled, speaker labels and mention replacements include IDs from the receive
+event, for example `Telos(ou_xxx)` or `@Tom(ou_xxx)`. If Feishu denies the
+contact/app lookup but the message API still returned a sender ID, xAgent keeps
+that signal as `Feishu User(ou_xxx)` or `Feishu Bot(cli_xxx)` instead of
+collapsing multiple senders into the same anonymous label. Feishu mention
+placeholders such as `@_user_1` are replaced from message mention metadata when
+names are available.
 
 The Feishu adapter always runs normal non-private turns. It does not expose
 or forward xAgent's `private` flag, because bot chat memory should remain

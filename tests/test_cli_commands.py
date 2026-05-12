@@ -253,14 +253,18 @@ class CLICommandTests(unittest.TestCase):
         finish_index = output.index("Finish setup in the Feishu Developer Console")
         app_index = output.index("https://open.feishu.cn/app")
         group_permission_index = output.index("im:message.group_msg")
+        include_bot_permission_index = output.index("im:message.group_at_msg.include_bot:readonly")
         user_permission_index = output.index("contact:user.base:readonly")
+        app_permission_index = output.index("admin:app.info:readonly")
 
         self.assertLess(launcher_index, copy_index)
         self.assertLess(copy_index, wrote_index)
         self.assertLess(wrote_index, finish_index)
         self.assertLess(finish_index, app_index)
         self.assertLess(app_index, group_permission_index)
-        self.assertLess(group_permission_index, user_permission_index)
+        self.assertLess(group_permission_index, include_bot_permission_index)
+        self.assertLess(include_bot_permission_index, user_permission_index)
+        self.assertLess(user_permission_index, app_permission_index)
         self.assertIn("Run: `xagent feishu start` to start your bot!", output)
 
     def test_feishu_start_uses_background_by_default(self):

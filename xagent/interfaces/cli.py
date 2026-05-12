@@ -1140,7 +1140,9 @@ def handle_feishu_init(args: argparse.Namespace) -> int:
     print("1. Open your agent: https://open.feishu.cn/app\n")
     print("2. Add extra permissions:")
     print("  - im:message.group_msg (for group chats)")
+    print("  - im:message.group_at_msg.include_bot:readonly (for group @mentions from users and bots)")
     print("  - contact:user.base:readonly (for user display names)")
+    print("  - admin:app.info:readonly (for other bot or agent display names)")
     print(f"\nRun: `xagent feishu start` to start your bot!\n")
     print("======================================================\n")
     return 0
