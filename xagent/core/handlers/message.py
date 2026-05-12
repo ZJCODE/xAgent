@@ -184,9 +184,9 @@ class MessageHandler:
 
         transcript_text = "\n".join(transcript_lines).strip()
 
-        print("=== Built transcript message content ===")
-        print(transcript_text)
-        print("=== End transcript message content ===")
+        # print("=== Built transcript message content ===")
+        # print(transcript_text)
+        # print("=== End transcript message content ===")
 
         latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id)
         if not latest_images:

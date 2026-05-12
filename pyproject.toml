@@ -30,7 +30,6 @@ dependencies = [
     "openai>=1.98.0",
     
     # HTTP clients
-    "httpx[socks]>=0.28.1",
     "requests>=2.32.0",
     
     # Utilities
