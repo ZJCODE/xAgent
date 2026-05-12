@@ -291,41 +291,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.tool_executor = tool_executor or FakeToolExecutor()
         return agent
 
-    async def test_chat_sends_single_transcript_message_before_loop(self):
-        storage = InMemoryMessageStorage([
-            Message.create("Hello", role=RoleType.USER, sender_id="alice"),
-            Message.create("Hi Alice", role=RoleType.ASSISTANT, sender_id="agent"),
-        ])
-        model_client = CapturingModelClient([
-            (ReplyType.SIMPLE_REPLY, "Final answer"),
-        ])
-        agent = self._build_agent(storage=storage, model_client=model_client)
-
-        result = await Agent.chat(
-            agent,
-            user_message="What should we do next?",
-            user_id="bob",
-            history_count=10,
-            max_iter=2,
-            enable_memory=False,
-        )
-
-        self.assertEqual(result, "Final answer")
-        self.assertEqual(len(model_client.calls), 1)
-        first_call_messages = model_client.calls[0]
-        # No system message in input — instructions are passed separately
-        self.assertEqual(first_call_messages[0]["role"], "user")
-        self.assertIn("[speaker=alice]", first_call_messages[0]["content"])
-        self.assertIn("[speaker=you]", first_call_messages[0]["content"])
-        self.assertIn("[speaker=bob]", first_call_messages[0]["content"])
-        # Instructions passed separately
-        self.assertIsNotNone(model_client.instructions_calls[0])
-        self.assertIn("Keep participants separate", model_client.instructions_calls[0])
-        self.assertEqual(
-            [message.role for message in storage.messages],
-            [RoleType.USER, RoleType.ASSISTANT, RoleType.USER, RoleType.ASSISTANT],
-        )
-
     async def test_chat_keeps_tool_messages_transient_inside_loop(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([

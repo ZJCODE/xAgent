@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any, Iterable, Optional
 
 from .users import FEISHU_USER_FALLBACK_NAME, FeishuUserResolver, safe_display_name
@@ -168,9 +169,10 @@ class FeishuHistoryFetcher:
         sender_id = sender_get("id") or sender_get("sender_id") or ""
         sender_name = sender_get("name")
         msg_type = get("msg_type") or ""
+        mentions = get("mentions") or []
         body = get("body")
         body_content = cls._attr_getter(body)("content") if body is not None else None
-        text = cls._render_content(msg_type, body_content).strip()
+        text = replace_mentions(cls._render_content(msg_type, body_content), mentions).strip()
         if not text:
             return None
         create_time_raw = get("create_time") or 0
@@ -250,15 +252,81 @@ def format_group_history(
     bot_open_id: Optional[str] = None,
     bot_app_id: Optional[str] = None,
 ) -> str:
-    """Render recent Feishu messages as a compact transcript for ``agent.chat``."""
+    """Render recent Feishu messages as compact room-context lines."""
     bot_ids = {value for value in (bot_open_id, bot_app_id) if value}
     lines: list[str] = []
     for rec in records:
         if rec.sender_id in bot_ids or rec.sender_name in bot_ids:
-            who = "You"
+            speaker = "you"
         else:
-            who = safe_display_name(rec.sender_name) or FEISHU_USER_FALLBACK_NAME
+            speaker = safe_display_name(rec.sender_name) or FEISHU_USER_FALLBACK_NAME
         text = rec.text or ""
         if text.strip():
-            lines.append(f"{who}: {text}".rstrip())
-    return "\n".join(lines)
+            lines.append(format_room_context_line(speaker, rec.create_time_ms, text))
+    return "\n".join(lines).strip()
+
+
+def format_room_context(
+    room: str,
+    records: Iterable[FeishuMessageRecord],
+    *,
+    bot_open_id: Optional[str] = None,
+    bot_app_id: Optional[str] = None,
+) -> str:
+    """Render a Feishu group/topic context block for ``agent.chat``."""
+    safe_room = sanitize_transcript_field(room)
+    body = format_group_history(records, bot_open_id=bot_open_id, bot_app_id=bot_app_id)
+    if not safe_room or not body:
+        return body
+    return f"[room context: {safe_room}]\n{body}\n[/room context]"
+
+
+def format_room_context_line(speaker: str, create_time_ms: int, text: str) -> str:
+    """Return one compact room-context line."""
+    safe_speaker = sanitize_transcript_field(speaker) or FEISHU_USER_FALLBACK_NAME
+    one_line_text = " ".join((text or "").split())
+    return f"{safe_speaker} {format_feishu_timestamp(create_time_ms)}: {one_line_text}"
+
+
+def format_feishu_timestamp(create_time_ms: int) -> str:
+    """Format a Feishu timestamp for compact room-context lines."""
+    if create_time_ms <= 0:
+        return datetime.fromtimestamp(0).strftime("%Y-%m-%d %H:%M")
+    seconds = create_time_ms / 1000 if create_time_ms > 10_000_000_000 else create_time_ms
+    return datetime.fromtimestamp(seconds).strftime("%Y-%m-%d %H:%M")
+
+
+def replace_mentions(text: str, mentions: Iterable[Any]) -> str:
+    """Replace Feishu mention keys such as ``@_user_1`` with display names."""
+    rendered = text or ""
+    for mention in mentions or []:
+        key = _mention_attr(mention, "key")
+        name = safe_display_name(
+            _mention_attr(mention, "name")
+            or _mention_attr(mention, "user_name")
+            or _mention_attr(mention, "display_name")
+        )
+        if not key or not name:
+            continue
+        replacement = name if name.startswith("@") else f"@{name}"
+        rendered = rendered.replace(key, replacement)
+    return rendered
+
+
+def sanitize_transcript_field(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return normalized.replace("\n", " ").replace("]", "")
+
+
+def _mention_attr(mention: Any, field_name: str) -> Optional[str]:
+    if isinstance(mention, dict):
+        value = mention.get(field_name)
+    else:
+        value = getattr(mention, field_name, None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None

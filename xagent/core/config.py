@@ -117,6 +117,8 @@ class AgentConfig:
         "- `[speaker=Name][timestamp=Time]` followed by text means that Name said that text at that time.\n"
         "- First-person words in a speaker entry, such as 'I', 'me', 'my', or '我', refer to that entry's speaker.\n"
         "- `[speaker=you][timestamp=Time]` means your own previous reply at that time, not something another participant said.\n"
+        "- `[room context: Room]` followed by lines like `Name YYYY-MM-DD HH:mm: text`, ending with `[/room context]`, means those lines are recent messages from the same room.\n"
+        "- Inside room context, `you YYYY-MM-DD HH:mm: text` means your own previous reply in that room. Use the room label only to keep room conversations separate.\n"
         "- `[ambient context][timestamp=Time]` followed by text means nearby situational context observed or provided at that time.\n"
         "- Ambient context is usable awareness of the shared situation, but it is not a participant message and should not be attributed to any speaker.\n"
         "- Use these markers internally for attribution and timing, but never mention markers, fields, labels, timestamps, transcript structure, metadata, or internal formatting to users.\n"

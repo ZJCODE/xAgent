@@ -115,6 +115,21 @@ Feishu layer instead of exposing them to prompts or memory keys. If the contact
 lookup is unavailable, the adapter falls back to a display name already present
 on the SDK event, then to a generic `Feishu User` label.
 
+For group/topic traffic, the adapter wraps recent messages plus the current
+mention in a room-context block before calling `agent.chat`:
+
+```text
+[room context: Project Room]
+Telos 2026-05-12 15:05: @Mono hey
+you 2026-05-12 15:05: hey Telos
+[/room context]
+```
+
+The room label uses the Feishu group name when available and falls back to the
+`chat_id`. Direct chats do not use room context. Feishu mention placeholders
+such as `@_user_1` are replaced from message mention metadata when names are
+available, for example `@Tom`.
+
 The Feishu adapter always runs normal non-private turns. It does not expose
 or forward xAgent's `private` flag, because bot chat memory should remain
 predictable across direct and group conversations.

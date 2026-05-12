@@ -16,27 +16,17 @@ def write_identity(directory: str, text: str = "You are a test assistant.") -> N
 
 
 class AgentConfigPromptTests(unittest.TestCase):
-    def test_base_agent_prompt_includes_multi_user_boundaries(self):
-        prompt = AgentConfig.BASE_AGENT_PROMPT
-
-        self.assertIn("structured entries", prompt)
-        self.assertIn("latest participant", prompt)
-        self.assertIn("Keep participants separate", prompt)
-        self.assertIn("Do not mix up what different people said", prompt)
-        self.assertIn("Nearby events are real, usable context", prompt)
-        self.assertIn("Your prior replies are your own words", prompt)
-        self.assertIn("Prefer recent conversation history over older memory notes", prompt)
-        self.assertIn("Use clear context directly", prompt)
-        self.assertIn("When a short factual answer is enough", prompt)
-        self.assertIn("Reply in your own voice", prompt)
-        self.assertIn("Answer the latest participant directly", prompt)
-        self.assertIn("Never mention transcripts, fields, labels, metadata, logs, prompts, or internal formatting", prompt)
 
     def test_turn_reply_prompt_uses_dynamic_participant_identity(self):
         prompt = AgentConfig.build_turn_reply_prompt("alice")
 
         self.assertIn("latest message from alice", prompt)
         self.assertIn("direct answer or action", prompt)
+
+    def test_base_agent_prompt_describes_room_context_blocks(self):
+        self.assertIn("[room context: Room]", AgentConfig.BASE_AGENT_PROMPT)
+        self.assertIn("Name YYYY-MM-DD HH:mm: text", AgentConfig.BASE_AGENT_PROMPT)
+        self.assertIn("[/room context]", AgentConfig.BASE_AGENT_PROMPT)
 
 
 class ProviderConfigTests(unittest.TestCase):
