@@ -119,14 +119,17 @@ For group/topic traffic, the adapter wraps recent messages plus the current
 mention in a room-context block before calling `agent.chat`:
 
 ```text
-[room context: Project Room]
+[room context]
+room_name: Project Room
+room_id: oc_dd80df0e88ca4f803995f3b75f2c8833
+
 Telos 2026-05-12 15:05: @Mono hey
 you 2026-05-12 15:05: hey Telos
 [/room context]
 ```
 
-The room label uses the Feishu group name when available and falls back to the
-`chat_id`. Direct chats do not use room context. Feishu mention placeholders
+The block includes `room_id` and adds `room_name` when the Feishu group name is
+available. Direct chats do not use room context. Feishu mention placeholders
 such as `@_user_1` are replaced from message mention metadata when names are
 available, for example `@Tom`.
 

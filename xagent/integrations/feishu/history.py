@@ -267,18 +267,24 @@ def format_group_history(
 
 
 def format_room_context(
-    room: str,
+    room_id: str,
     records: Iterable[FeishuMessageRecord],
     *,
+    room_name: Optional[str] = None,
     bot_open_id: Optional[str] = None,
     bot_app_id: Optional[str] = None,
 ) -> str:
     """Render a Feishu group/topic context block for ``agent.chat``."""
-    safe_room = sanitize_transcript_field(room)
+    safe_room_id = sanitize_transcript_field(room_id)
+    safe_room_name = sanitize_transcript_field(room_name)
     body = format_group_history(records, bot_open_id=bot_open_id, bot_app_id=bot_app_id)
-    if not safe_room or not body:
+    if not safe_room_id or not body:
         return body
-    return f"[room context: {safe_room}]\n{body}\n[/room context]"
+    header_lines = ["[room context]"]
+    if safe_room_name:
+        header_lines.append(f"room_name: {safe_room_name}")
+    header_lines.append(f"room_id: {safe_room_id}")
+    return "\n".join([*header_lines, "", body, "[/room context]"])
 
 
 def format_room_context_line(speaker: str, create_time_ms: int, text: str) -> str:

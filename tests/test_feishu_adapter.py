@@ -239,7 +239,8 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
-        self.assertIn("[room context: oc_group]", agent.chat_calls[0]["user_message"])
+        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
+        self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
         self.assertIn(": The user mentioned you without adding any text.", agent.chat_calls[0]["user_message"])
         self.assertIn("[/room context]", agent.chat_calls[0]["user_message"])
         self.assertEqual(adapter._channel.sent[0][2], {"reply_to": "om_empty_at", "uuid": "om_empty_at"})
@@ -436,7 +437,9 @@ class FeishuGroupHistoryTests(unittest.TestCase):
 
         self.assertEqual(agent.observe_calls, [])
         user_message = agent.chat_calls[0]["user_message"]
-        self.assertIn("[room context: oc_group]", user_message)
+        self.assertIn("[room context]", user_message)
+        self.assertIn("room_id: oc_group", user_message)
+        self.assertNotIn("room_name:", user_message)
         self.assertIn("[/room context]", user_message)
         self.assertNotIn("[Feishu group context]", user_message)
         self.assertNotIn("The following recent group messages are context only", user_message)
@@ -495,7 +498,8 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertNotIn("kwargs", captured)
-        self.assertIn("[room context: oc_group]", agent.chat_calls[0]["user_message"])
+        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
+        self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
         self.assertIn(": @Tom hi", agent.chat_calls[0]["user_message"])
         self.assertIn("[/room context]", agent.chat_calls[0]["user_message"])
 
@@ -508,7 +512,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
 
             def get(self, request):
                 self.requests.append(request)
-                return SimpleNamespace(success=lambda: True, data=SimpleNamespace(chat=SimpleNamespace(name="Project Room")))
+                return SimpleNamespace(success=lambda: True, data=SimpleNamespace(name="Project Room"))
 
         chat_api = FakeChatApi()
         client = SimpleNamespace(im=SimpleNamespace(v1=SimpleNamespace(chat=chat_api)))
@@ -533,7 +537,10 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertEqual(chat_api.requests[0].chat_id, "oc_group")
-        self.assertIn("[room context: Project Room]", agent.chat_calls[0]["user_message"])
+        self.assertEqual(chat_api.requests[0].user_id_type, "open_id")
+        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
+        self.assertIn("room_name: Project Room", agent.chat_calls[0]["user_message"])
+        self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
         self.assertIn(f"Telos {format_feishu_timestamp(1700000000000)}: @Mono hey", agent.chat_calls[0]["user_message"])
 
     def test_history_failure_still_replies_to_current_mention(self):
@@ -553,7 +560,8 @@ class FeishuGroupHistoryTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
-        self.assertIn("[room context: oc_group]", agent.chat_calls[0]["user_message"])
+        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
+        self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
         self.assertIn(": @Mono hi", agent.chat_calls[0]["user_message"])
         self.assertEqual(adapter._channel.sent[0][2], {"reply_to": "om_at", "uuid": "om_at"})
 
@@ -726,9 +734,26 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
         text = format_room_context(
             "oc_group",
             [FeishuMessageRecord("om_1", "ou_alice", "Alice", "hi", 1)],
+            room_name="Agent Test",
         )
 
-        self.assertEqual(text, f"[room context: oc_group]\nAlice {format_feishu_timestamp(1)}: hi\n[/room context]")
+        self.assertEqual(
+            text,
+            f"[room context]\nroom_name: Agent Test\nroom_id: oc_group\n\nAlice {format_feishu_timestamp(1)}: hi\n[/room context]",
+        )
+
+    def test_format_room_context_omits_room_name_when_missing(self):
+        from xagent.integrations.feishu.history import FeishuMessageRecord, format_feishu_timestamp, format_room_context
+
+        text = format_room_context(
+            "oc_group",
+            [FeishuMessageRecord("om_1", "ou_alice", "Alice", "hi", 1)],
+        )
+
+        self.assertEqual(
+            text,
+            f"[room context]\nroom_id: oc_group\n\nAlice {format_feishu_timestamp(1)}: hi\n[/room context]",
+        )
 
     def test_format_group_history_marks_bot_app_id_as_you(self):
         from xagent.integrations.feishu.history import FeishuMessageRecord, format_feishu_timestamp, format_group_history

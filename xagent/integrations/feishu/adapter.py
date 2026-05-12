@@ -78,7 +78,7 @@ class FeishuAdapter:
         self._channel = None  # type: ignore[var-annotated]
         self._history_fetcher: Optional[FeishuHistoryFetcher] = None
         self._user_resolver: Optional[FeishuUserResolver] = None
-        self._room_label_cache: dict[str, str] = {}
+        self._room_name_cache: dict[str, str] = {}
         self._warned_mention_fallback = False
         self._stop_event = asyncio.Event()
         self._chat_locks: dict[str, asyncio.Lock] = {}
@@ -545,7 +545,7 @@ class FeishuAdapter:
             current_message_id=current_message_id,
             raw_msg=raw_msg,
         )
-        room_label = await self._resolve_room_label(chat_id, raw_msg)
+        room_name = await self._resolve_room_name(chat_id, raw_msg)
         current_record = FeishuMessageRecord(
             current_message_id or "",
             "",
@@ -556,26 +556,27 @@ class FeishuAdapter:
         context_records = [*records, current_record]
 
         return format_room_context(
-            room_label,
+            chat_id,
             context_records,
+            room_name=room_name,
             bot_open_id=self._bot_open_id(),
             bot_app_id=self.config.app_id,
         )
 
-    async def _resolve_room_label(self, chat_id: str, raw_msg: Any) -> str:
+    async def _resolve_room_name(self, chat_id: str, raw_msg: Any) -> Optional[str]:
         event_room_name = self._message_room_name(raw_msg)
         if event_room_name:
-            self._room_label_cache[chat_id] = event_room_name
+            self._room_name_cache[chat_id] = event_room_name
             return event_room_name
 
-        cached = self._room_label_cache.get(chat_id)
+        cached = self._room_name_cache.get(chat_id)
         if cached:
             return cached
 
-        fetched = await self._fetch_room_name(chat_id)
-        room_label = sanitize_transcript_field(fetched) or chat_id
-        self._room_label_cache[chat_id] = room_label
-        return room_label
+        room_name = await self._fetch_room_name(chat_id)
+        if room_name:
+            self._room_name_cache[chat_id] = room_name
+        return room_name
 
     @staticmethod
     def _message_room_name(msg: Any) -> Optional[str]:
@@ -613,7 +614,7 @@ class FeishuAdapter:
         except ImportError:  # pragma: no cover - import guard
             return None
 
-        request = GetChatRequest.builder().chat_id(chat_id).build()
+        request = GetChatRequest.builder().chat_id(chat_id).user_id_type("open_id").build()
         try:
             getter = client.im.v1.chat.get
             response = await asyncio.to_thread(getter, request)
@@ -632,8 +633,12 @@ class FeishuAdapter:
             )
             return None
 
-        chat = getattr(getattr(response, "data", None), "chat", None)
-        return sanitize_transcript_field(getattr(chat, "name", None))
+        data = getattr(response, "data", None)
+        room_name = getattr(data, "name", None)
+        if room_name is None:
+            chat = getattr(data, "chat", None)
+            room_name = getattr(chat, "name", None)
+        return sanitize_transcript_field(room_name)
 
     @staticmethod
     def _message_create_time_ms(msg: Any) -> int:
