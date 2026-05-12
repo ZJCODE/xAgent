@@ -96,15 +96,6 @@ class AgentConfig:
         ),
     }
 
-    CONTEXT_EVENT_DECISION_PROMPT = (
-        "**Observation Response Policy:**\n"
-        "- Observations are things you noticed, overheard, received, or remembered; they are not automatically requests.\n"
-        "- Silence is valid for routine, low-value, repeated, or non-actionable updates.\n"
-        "- Speaking is appropriate when the event is urgent, safety-relevant, time-sensitive, addressed to you, or clearly useful for coordination.\n"
-        "- Preserve attribution: overheard speech belongs to the observed speaker, not necessarily the current speaker.\n"
-        "- Never mention internal observation sections, metadata, schemas, labels, or formatting.\n"
-    )
-
     DEFAULT_SYSTEM_PROMPT = (
         "**Context:**\n"
     )

@@ -170,14 +170,13 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"error": "Agent chat timed out."', response.text)
         self.assertIn("data: [DONE]", response.text)
 
-    async def test_observe_endpoint_returns_structured_no_reply_result(self):
+    async def test_observe_endpoint_returns_ingestion_result(self):
         agent = ObservingAgent()
         server = AgentHTTPServer(agent=agent, enable_web=False)
 
         async with await self._client(server) as client:
             response = await client.post("/observe", json={
                 "context": "看到有人靠近门口。",
-                "current_user_id": "alice",
                 "source": "camera",
                 "event_type": "presence",
                 "metadata": {"memory_policy": "always"},
@@ -271,7 +270,6 @@ class AgentWebSocketServerTests(unittest.TestCase):
             with client.websocket_connect("/ws/observe") as websocket:
                 websocket.send_json({
                     "context": "灯开了。",
-                    "current_user_id": "alice",
                     "source": "sensor",
                     "event_type": "light",
                     "metadata": {"room": "study"},

@@ -53,9 +53,9 @@ Use the Transport selector to compare regular HTTP/SSE with WebSocket chat deliv
 
 Use `chat` when someone is directly addressing the agent and expects a reply.
 
-Use `observe` for context the agent notices or overhears: ambient speech, room state, notifications, reminders, or sensor updates. An observation is saved to the message stream, then the agent decides whether speaking is useful. If silence is better, `observe` returns `replied=false` and no assistant message is added.
+Use `observe` for context the agent notices or overhears: ambient speech, room state, notifications, reminders, or sensor updates. An observation is saved to the message stream for future context and memory, but it does not generate an immediate reply.
 
-Diary memory is built from the agent's experience stream, not only direct chats. Meaningful observations can be summarized alongside conversations, with attribution preserved so overheard speech is not confused with a direct request from the current user.
+Diary memory is built from the agent's experience stream, not only direct chats. Meaningful observations can be summarized alongside conversations; preserve attribution in the observation text or metadata so overheard speech is not confused with a direct request from the current user.
 
 ## API Transports
 

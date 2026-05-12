@@ -1343,24 +1343,15 @@ function createChatPanel(panelId, containerEl, options = {}) {
     saveSettings();
     if (!showPanelSettings) saveGlobalSettings();
 
-    const resultMessage = { role: 'assistant', content: '' };
-    state.messages.push(resultMessage);
-    const messageIndex = state.messages.length - 1;
-    const { contentEl, wrapper } = appendMessageBubble(resultMessage, true);
-
     const payload = {
       context: text,
-      current_user_id: settings.userId,
       source,
       event_type: eventType,
-      enable_memory: settings.memory,
-      private: settings.private,
     };
 
     try {
-      let result;
       if (settings.transport === 'websocket') {
-        result = await websocketObserve(payload);
+        await websocketObserve(payload);
       } else {
         const response = await fetch(`${API_BASE}/observe`, {
           method: 'POST',
@@ -1368,20 +1359,15 @@ function createChatPanel(panelId, containerEl, options = {}) {
           body: JSON.stringify(payload),
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-        result = await response.json();
-      }
-      if (result.replied && result.reply) {
-        renderMarkdown(contentEl, String(result.reply));
-        state.messages[messageIndex].content = String(result.reply);
-      } else {
-        state.messages.splice(messageIndex, 1);
-        if (wrapper) wrapper.remove();
+        await response.json();
       }
       saveHistory();
     } catch (error) {
       const errText = String(error?.message || error);
+      const errorMessage = { role: 'assistant', content: `Error: ${errText}` };
+      state.messages.push(errorMessage);
+      const { contentEl } = appendMessageBubble(errorMessage, true);
       contentEl.innerHTML = `<div class="text-red-500">Error: ${escapeHtml(errText)}</div>`;
-      state.messages[messageIndex].content = `Error: ${errText}`;
       saveHistory();
     } finally {
       setSending(false);

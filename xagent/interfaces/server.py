@@ -39,16 +39,9 @@ class ObserveInput(BaseModel):
     """Request body for observation endpoint."""
 
     context: str
-    current_user_id: Optional[str] = AgentConfig.DEFAULT_USER_ID
     source: Optional[str] = "environment"
     event_type: Optional[str] = "observation"
-    sender_id: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
-    history_count: Optional[int] = AgentConfig.DEFAULT_HISTORY_COUNT
-    max_iter: Optional[int] = AgentConfig.DEFAULT_MAX_ITER
-    max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
-    enable_memory: Optional[bool] = True
-    private: Optional[bool] = False
 
 
 class IdentityInput(BaseModel):
@@ -119,16 +112,9 @@ class AgentHTTPServer(BaseAgentRunner):
     async def _call_observe(self, input_data: ObserveInput):
         return await self.agent.observe(
             context=input_data.context,
-            current_user_id=input_data.current_user_id or AgentConfig.DEFAULT_USER_ID,
             source=input_data.source or "environment",
             event_type=input_data.event_type or "observation",
-            sender_id=input_data.sender_id,
             metadata=input_data.metadata,
-            history_count=input_data.history_count or AgentConfig.DEFAULT_HISTORY_COUNT,
-            max_iter=input_data.max_iter or AgentConfig.DEFAULT_MAX_ITER,
-            max_concurrent_tools=input_data.max_concurrent_tools or AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-            enable_memory=True if input_data.enable_memory is None else input_data.enable_memory,
-            private=bool(input_data.private),
         )
 
     async def _run_chat_with_limits(self, input_data: AgentInput, stream: bool):
@@ -229,14 +215,24 @@ class AgentHTTPServer(BaseAgentRunner):
                 "result": self._response_payload(response),
             })
         except HTTPException as exc:
-            self.logger.warning("WebSocket observe rejected for %s: %s", input_data.current_user_id, exc.detail)
+            self.logger.warning(
+                "WebSocket observe rejected: source=%s type=%s detail=%s",
+                input_data.source,
+                input_data.event_type,
+                exc.detail,
+            )
             await websocket.send_json({
                 "type": "error",
                 "error": exc.detail,
                 "status_code": exc.status_code,
             })
         except Exception as exc:
-            self.logger.error("WebSocket observe error for %s: %s", input_data.current_user_id, exc)
+            self.logger.error(
+                "WebSocket observe error: source=%s type=%s error=%s",
+                input_data.source,
+                input_data.event_type,
+                exc,
+            )
             await websocket.send_json({
                 "type": "error",
                 "error": f"Agent observe error: {str(exc)}",
@@ -459,8 +455,7 @@ class AgentHTTPServer(BaseAgentRunner):
                     raw_payload = await websocket.receive_json()
                     input_data = ObserveInput.model_validate(raw_payload)
                     self.logger.info(
-                        "WebSocket observe request from %s, source=%s, type=%s",
-                        input_data.current_user_id,
+                        "WebSocket observe request: source=%s, type=%s",
                         input_data.source,
                         input_data.event_type,
                     )
@@ -494,8 +489,7 @@ class AgentHTTPServer(BaseAgentRunner):
         @app.post("/observe")
         async def observe(input_data: ObserveInput):
             self.logger.info(
-                "Observation request from %s, source=%s, type=%s",
-                input_data.current_user_id,
+                "Observation request: source=%s, type=%s",
                 input_data.source,
                 input_data.event_type,
             )
@@ -505,7 +499,12 @@ class AgentHTTPServer(BaseAgentRunner):
             except HTTPException:
                 raise
             except Exception as exc:
-                self.logger.error("Agent observe error for %s: %s", input_data.current_user_id, exc)
+                self.logger.error(
+                    "Agent observe error: source=%s type=%s error=%s",
+                    input_data.source,
+                    input_data.event_type,
+                    exc,
+                )
                 raise HTTPException(status_code=500, detail=f"Agent observe error: {str(exc)}")
 
         @app.post("/clear_messages")

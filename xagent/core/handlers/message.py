@@ -55,7 +55,6 @@ class MessageHandler:
         context: str,
         source: str = "environment",
         event_type: str = "observation",
-        sender_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Message:
         """Store a non-direct observation from the agent's environment."""
@@ -63,7 +62,6 @@ class MessageHandler:
             content=context,
             source=source,
             event_type=event_type,
-            sender_id=sender_id,
             metadata=metadata,
         )
         await self.message_storage.add_messages(event_msg)
@@ -106,7 +104,6 @@ class MessageHandler:
         messages: List[Message],
         current_user_id: str,
         memory_context: str = "",
-        turn_kind: str = "chat",
         context_events: Optional[List[Message]] = None,
         max_messages: int = AgentConfig.MAX_TRANSCRIPT_MESSAGES,
         max_total_chars: int = AgentConfig.MAX_TRANSCRIPT_CHARS,
@@ -117,7 +114,7 @@ class MessageHandler:
         """Collapse recent conversation history into one user transcript message.
 
                 Includes per-turn dynamic context that changes each call:
-                    - Runtime metadata (date, and current speaker for direct chat turns)
+                    - Runtime metadata (date and current speaker)
           - Recent diary memory (conditional)
                     - Recent experience in chronological order
         """
@@ -148,8 +145,7 @@ class MessageHandler:
 
         # --- Runtime context ---
         transcript_lines.append(AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip())
-        if turn_kind != "observe":
-            transcript_lines.append(f"- Current speaker: {current_user_id}")
+        transcript_lines.append(f"- Current speaker: {current_user_id}")
         transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
         transcript_lines.append("")
 
@@ -183,7 +179,7 @@ class MessageHandler:
             )
             transcript_lines.append("")
 
-        transcript_lines.append(MessageHandler._build_turn_instruction(turn_kind, current_user_id))
+        transcript_lines.append(MessageHandler._build_turn_instruction(current_user_id))
 
         transcript_text = "\n".join(transcript_lines).strip()
 
@@ -279,15 +275,7 @@ class MessageHandler:
         return "[ambient context]"
 
     @staticmethod
-    def _build_turn_instruction(turn_kind: str, current_user_id: str) -> str:
-        if turn_kind == "observe":
-            return (
-                "\n==========\n\nYou have just received an observation from the environment. "
-                "Decide whether speaking is useful, timely, and socially appropriate. "
-                "If silence is better, set replied to false and reply to null. "
-                "If you should speak, set replied to true and provide only the words you would say. "
-                "Never mention internal labels, observations, metadata, tags, or message formatting in your reply."
-            )
+    def _build_turn_instruction(current_user_id: str) -> str:
         return (
             "\n==========\n\nNow reply directly to the latest message "
             f"from {current_user_id}. Respond as yourself — do not suggest, "

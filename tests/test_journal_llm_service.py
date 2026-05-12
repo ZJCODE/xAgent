@@ -36,7 +36,6 @@ class JournalLLMServicePromptTests(unittest.TestCase):
             "Bob 说活动可能要提前开始。",
             source="microphone",
             event_type="overheard_speech",
-            sender_id="bob",
             metadata={"speaker_id": "bob", "addressed_to_agent": False},
         )
 
@@ -53,6 +52,7 @@ class JournalLLMServicePromptTests(unittest.TestCase):
         self.assertIn("[ambient context]: Bob 说活动可能要提前开始。", transcript)
         self.assertNotIn("[observation ", transcript)
         self.assertIn("Bob 说活动可能要提前开始。", transcript)
+        self.assertIsNone(event.sender_id)
 
 
 if __name__ == "__main__":

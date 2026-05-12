@@ -9,7 +9,7 @@ from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.tools.executor import ToolExecutor
-from xagent.schemas import ContextReplyDecision, Message, MessageType, RoleType
+from xagent.schemas import Message, MessageType, RoleType
 
 
 class InMemoryMessageStorage(MessageStorageBase):
@@ -429,12 +429,10 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(model_message["content"], list)
         self.assertEqual(model_message["content"][1]["image_url"]["url"], image_url)
 
-    async def test_observe_can_choose_no_reply_without_storing_assistant_message(self):
+    async def test_observe_ingests_event_without_calling_model(self):
         storage = InMemoryMessageStorage()
         memory_handler = FakeMemoryHandler()
-        model_client = CapturingModelClient([
-            (ReplyType.STRUCTURED_REPLY, ContextReplyDecision(replied=False, reply=None)),
-        ])
+        model_client = CapturingModelClient([])
         agent = self._build_agent(
             storage=storage,
             model_client=model_client,
@@ -444,26 +442,23 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await Agent.observe(
             agent,
             context="看到有人靠近门口。",
-            current_user_id="alice",
             source="camera",
             event_type="presence",
-            max_iter=2,
         )
 
         self.assertFalse(result.replied)
         self.assertIsNone(result.reply)
         self.assertEqual(len(storage.messages), 1)
         self.assertEqual(storage.messages[0].type, MessageType.CONTEXT_EVENT)
-        transcript = model_client.calls[0][0]["content"]
-        self.assertIn("Recent Experience", transcript)
-        self.assertIn("看到有人靠近门口。", transcript)
+        self.assertEqual(storage.messages[0].metadata["source"], "camera")
+        self.assertEqual(storage.messages[0].metadata["event_type"], "presence")
+        self.assertEqual(model_client.calls, [])
         self.assertEqual(memory_handler.experience_messages, [storage.messages[0]])
         self.assertFalse(memory_handler.caused_reply)
 
-    async def test_observe_no_reply_skips_llm_decision_but_stores_event(self):
+    async def test_observe_stores_ingested_history_recap(self):
         storage = InMemoryMessageStorage()
         memory_handler = FakeMemoryHandler()
-        # No model responses queued — observe(no_reply=True) must NOT call the model.
         model_client = CapturingModelClient([])
         agent = self._build_agent(
             storage=storage,
@@ -474,10 +469,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await Agent.observe(
             agent,
             context="预拉取的群历史 recap。",
-            current_user_id="alice",
             source="feishu",
             event_type="history_recap",
-            no_reply=True,
         )
 
         self.assertFalse(result.replied)
@@ -488,12 +481,10 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(memory_handler.experience_messages, [storage.messages[0]])
         self.assertFalse(memory_handler.caused_reply)
 
-    async def test_observe_stores_reply_and_preserves_overheard_attribution(self):
+    async def test_observe_preserves_overheard_attribution_in_metadata(self):
         storage = InMemoryMessageStorage()
         memory_handler = FakeMemoryHandler()
-        model_client = CapturingModelClient([
-            (ReplyType.STRUCTURED_REPLY, ContextReplyDecision(replied=True, reply="我听到了，先保持安静观察。")),
-        ])
+        model_client = CapturingModelClient([])
         agent = self._build_agent(
             storage=storage,
             model_client=model_client,
@@ -503,24 +494,19 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await Agent.observe(
             agent,
             context="Bob 说活动可能要提前开始。",
-            current_user_id="alice",
             source="microphone",
             event_type="overheard_speech",
-            sender_id="bob",
             metadata={"speaker_id": "bob", "addressed_to_agent": False},
-            max_iter=2,
         )
 
-        self.assertTrue(result.replied)
-        self.assertEqual(result.reply, "我听到了，先保持安静观察。")
-        self.assertEqual([message.role for message in storage.messages], [RoleType.ENVIRONMENT, RoleType.ASSISTANT])
+        self.assertFalse(result.replied)
+        self.assertIsNone(result.reply)
+        self.assertEqual([message.role for message in storage.messages], [RoleType.ENVIRONMENT])
+        self.assertIsNone(storage.messages[0].sender_id)
         self.assertEqual(storage.messages[0].metadata["speaker_id"], "bob")
-        transcript = model_client.calls[0][0]["content"]
-        self.assertIn("[ambient context]", transcript)
-        self.assertNotIn("[observation ", transcript)
-        self.assertIn("Bob 说活动可能要提前开始。", transcript)
+        self.assertEqual(model_client.calls, [])
         self.assertEqual(memory_handler.experience_messages, storage.messages)
-        self.assertTrue(memory_handler.caused_reply)
+        self.assertFalse(memory_handler.caused_reply)
 
 
 class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):

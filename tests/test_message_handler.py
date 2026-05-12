@@ -144,7 +144,6 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             "Bob mentioned the room is getting noisy.",
             source="microphone",
             event_type="overheard_speech",
-            sender_id="bob",
             metadata={
                 "speaker_id": "bob",
                 "addressed_to_agent": False,
@@ -157,19 +156,18 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         transcript = MessageHandler.build_recent_transcript_message(
             [bob, observation, alice],
             current_user_id="alice",
-            turn_kind="observe",
         )["content"]
 
         self.assertIn("Recent Experience", transcript)
         self.assertNotIn("Recent Observations", transcript)
         self.assertIn("[ambient context]", transcript)
         self.assertNotIn("[observation ", transcript)
-        self.assertNotIn("Current speaker:", transcript)
+        self.assertIn("Current speaker: alice", transcript)
         self.assertIn("[speaker=alice]", transcript)
         self.assertIn("[speaker=bob]", transcript)
         self.assertLess(transcript.index("[speaker=alice]"), transcript.index("[ambient context]"))
         self.assertLess(transcript.index("[ambient context]"), transcript.index("[speaker=bob]"))
-        self.assertIn("set replied to false", transcript)
+        self.assertIn("latest message from alice", transcript)
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(messages), 1)
             self.assertEqual(messages[0].type, MessageType.CONTEXT_EVENT)
             self.assertEqual(messages[0].role, RoleType.ENVIRONMENT)
+            self.assertIsNone(messages[0].sender_id)
             self.assertEqual(messages[0].metadata["source"], "camera")
             self.assertEqual(messages[0].metadata["event_type"], "presence")
             self.assertEqual(messages[0].metadata["memory_policy"], "always")

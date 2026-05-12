@@ -53,18 +53,9 @@ class ContextEventInput(BaseModel):
     """Input payload for non-direct environmental observations."""
 
     context: str = Field(..., description="Observed context or overheard content")
-    current_user_id: str = Field("default_user", description="Current nearby/active user, if known")
     source: str = Field("environment", description="Stable source of the observation")
     event_type: str = Field("observation", description="Category of observation")
-    sender_id: Optional[str] = Field(None, description="Speaker or originator when the event contains speech")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional event metadata")
-
-
-class ContextReplyDecision(BaseModel):
-    """Structured model decision for an observation turn."""
-
-    replied: bool = Field(..., description="Whether the agent should speak in response")
-    reply: Optional[str] = Field(None, description="Natural-language reply when replied is true")
 
 
 class AgentTurnResult(BaseModel):
@@ -155,7 +146,6 @@ class Message(BaseModel):
         content: str,
         source: str = "environment",
         event_type: str = "observation",
-        sender_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> "Message":
         """Create a persisted observation/context event."""
@@ -165,7 +155,7 @@ class Message(BaseModel):
         return cls(
             role=RoleType.ENVIRONMENT,
             type=MessageType.CONTEXT_EVENT,
-            sender_id=sender_id or source,
+            sender_id=None,
             content=content,
             metadata=event_metadata,
         )

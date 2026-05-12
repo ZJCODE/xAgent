@@ -16,7 +16,7 @@ from ..components.memory import JournalLLMService
 from .config import AgentConfig, MemoryMode, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .tools import ToolExecutor, ToolManager
-from ..schemas import AgentTurnResult, ContextReplyDecision, Message
+from ..schemas import AgentTurnResult, Message
 from ..tools import create_write_daily_memory_tool, create_search_memory_tool, create_generate_summary_tool
 
 
@@ -298,168 +298,31 @@ class Agent:
     async def observe(
         self,
         context: str,
-        current_user_id: str = AgentConfig.DEFAULT_USER_ID,
         source: str = "environment",
         event_type: str = "observation",
-        sender_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
-        max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
-        max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-        enable_memory: bool = True,
-        private: bool = False,
-        no_reply: bool = False,
     ) -> AgentTurnResult:
-        """Record an environmental observation and decide whether to speak.
-
-        Args:
-            no_reply: When True, skip the LLM "should I speak?" decision
-                entirely. The context event is still stored (and a memory
-                experience write is still scheduled), so subsequent
-                ``chat`` / ``observe`` calls will see the new context.
-                Use this for pure ingestion (e.g. priming the agent with
-                prefetched chat history) where you never want this call to
-                produce a reply on its own.
-        """
-        msg_handler = self._message_handler_for_mode(private=private)
-        memory_mode = MemoryMode.from_flags(enable_memory=enable_memory, private=private)
-        memory_mode_token = self._set_memory_mode(memory_mode)
-
-        try:
-            event_msg = await msg_handler.store_context_event(
-                context=context,
-                source=source,
-                event_type=event_type,
-                sender_id=sender_id,
-                metadata=metadata,
-            )
-
-            if no_reply:
-                # Ingest-only path: no LLM call, no decision, no reply.
-                self._schedule_experience_write(
-                    msg_handler=msg_handler,
-                    memory_mode=memory_mode,
-                    messages=[event_msg],
-                )
-                return AgentTurnResult(
-                    kind="observe",
-                    replied=False,
-                    reply=None,
-                    event_id=event_msg.timestamp,
-                    event_type=event_type,
-                    source=source,
-                )
-
-            effective_history_count = self._effective_history_count(history_count)
-            recent_messages = await msg_handler.get_recent_messages(
-                history_count=effective_history_count,
-            )
-
-            memory_context = ""
-            if memory_mode.can_read:
-                memory_context = await self.memory_handler.get_recent_context()
-
-            excluded = self._excluded_memory_tools(memory_mode=memory_mode)
-            tool_names = [n for n in self.tool_manager._tools if n not in excluded]
-            tool_specs = self.tool_manager.cached_tool_specs
-            if excluded and tool_specs:
-                tool_specs = [s for s in tool_specs if self._tool_spec_name(s) not in excluded] or None
-
-            instructions = msg_handler.build_instructions(tool_names=tool_names)
-            instructions = f"{instructions}\n\n{AgentConfig.CONTEXT_EVENT_DECISION_PROMPT}"
-            iteration_messages = [
-                msg_handler.build_recent_transcript_message(
-                    recent_messages,
-                    current_user_id=current_user_id,
-                    memory_context=memory_context,
-                    turn_kind="observe",
-                )
-            ]
-            input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
-
-            for _ in range(max_iter):
-                reply_type, response = await self.model_client.call(
-                    messages=input_messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    output_type=ContextReplyDecision,
-                    stream=False,
-                )
-
-                if reply_type == ReplyType.STRUCTURED_REPLY:
-                    return await self._handle_observation_decision(
-                        msg_handler=msg_handler,
-                        memory_mode=memory_mode,
-                        event_msg=event_msg,
-                        decision=response,
-                    )
-
-                if reply_type == ReplyType.SIMPLE_REPLY:
-                    decision = self._decision_from_simple_response(str(response))
-                    return await self._handle_observation_decision(
-                        msg_handler=msg_handler,
-                        memory_mode=memory_mode,
-                        event_msg=event_msg,
-                        decision=decision,
-                    )
-
-                if reply_type == ReplyType.TOOL_CALL:
-                    tool_result = await self.tool_executor.handle_tool_calls(
-                        response,
-                        iteration_messages,
-                        max_concurrent_tools,
-                    )
-                    if tool_result is not None:
-                        image_data, description = tool_result
-                        assistant_msg = await msg_handler.store_model_reply(
-                            description,
-                            self._assistant_sender_id,
-                        )
-                        self._schedule_experience_write(
-                            msg_handler=msg_handler,
-                            memory_mode=memory_mode,
-                            messages=[event_msg, assistant_msg],
-                            caused_reply=True,
-                        )
-                        return AgentTurnResult(
-                            kind="observe",
-                            replied=True,
-                            reply=image_data,
-                            event_id=event_msg.timestamp,
-                            event_type=event_type,
-                            source=source,
-                        )
-                    input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
-                    continue
-
-                logger.error("Unknown observation reply type: %s", reply_type)
-                break
-
-            self._schedule_experience_write(
-                msg_handler=msg_handler,
-                memory_mode=memory_mode,
-                messages=[event_msg],
-            )
-            return AgentTurnResult(
-                kind="observe",
-                replied=False,
-                reply=None,
-                event_id=event_msg.timestamp,
-                event_type=event_type,
-                source=source,
-            )
-
-        except Exception as exc:
-            logger.exception("Agent observe error: %s", exc)
-            return AgentTurnResult(
-                kind="observe",
-                replied=True,
-                reply="Sorry, something went wrong.",
-                event_type=event_type,
-                source=source,
-            )
-        finally:
-            self._reset_memory_mode(memory_mode_token)
+        """Record environmental context without generating a reply."""
+        event_msg = await self.message_handler.store_context_event(
+            context=context,
+            source=source,
+            event_type=event_type,
+            metadata=metadata,
+        )
+        self._schedule_experience_write(
+            msg_handler=self.message_handler,
+            memory_mode=MemoryMode.FULL,
+            messages=[event_msg],
+        )
+        event_metadata = event_msg.metadata or {}
+        return AgentTurnResult(
+            kind="observe",
+            replied=False,
+            reply=None,
+            event_id=event_msg.timestamp,
+            event_type=event_metadata.get("event_type"),
+            source=event_metadata.get("source"),
+        )
 
     def _message_handler_for_mode(self, private: bool) -> MessageHandler:
         """Return the storage handler for normal or private mode."""
@@ -488,55 +351,6 @@ class Agent:
             memory_mode=memory_mode,
             messages=[*triggering_messages, assistant_msg],
         )
-
-    async def _handle_observation_decision(
-        self,
-        msg_handler: MessageHandler,
-        memory_mode: MemoryMode,
-        event_msg: Message,
-        decision: ContextReplyDecision,
-    ) -> AgentTurnResult:
-        reply_text = (decision.reply or "").strip()
-        if decision.replied and reply_text:
-            assistant_msg = await msg_handler.store_model_reply(
-                reply_text,
-                self._assistant_sender_id,
-            )
-            self._schedule_experience_write(
-                msg_handler=msg_handler,
-                memory_mode=memory_mode,
-                messages=[event_msg, assistant_msg],
-                caused_reply=True,
-            )
-            return AgentTurnResult(
-                kind="observe",
-                replied=True,
-                reply=reply_text,
-                event_id=event_msg.timestamp,
-                event_type=(event_msg.metadata or {}).get("event_type"),
-                source=(event_msg.metadata or {}).get("source"),
-            )
-
-        self._schedule_experience_write(
-            msg_handler=msg_handler,
-            memory_mode=memory_mode,
-            messages=[event_msg],
-        )
-        return AgentTurnResult(
-            kind="observe",
-            replied=False,
-            reply=None,
-            event_id=event_msg.timestamp,
-            event_type=(event_msg.metadata or {}).get("event_type"),
-            source=(event_msg.metadata or {}).get("source"),
-        )
-
-    @staticmethod
-    def _decision_from_simple_response(response: str) -> ContextReplyDecision:
-        text = response.strip()
-        if not text:
-            return ContextReplyDecision(replied=False, reply=None)
-        return ContextReplyDecision(replied=True, reply=text)
 
     def _schedule_experience_write(
         self,
