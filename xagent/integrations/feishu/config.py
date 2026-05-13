@@ -74,7 +74,7 @@ class FeishuAdapterConfig:
 
     group_history_count: int = 10
     history_fetch_timeout: float = 5.0
-    show_sender_ids: bool = True
+    show_sender_ids: bool = False
 
     advanced: Dict[str, Any] = field(default_factory=dict)
 
