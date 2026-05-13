@@ -52,21 +52,23 @@ Configure your Feishu bot
 # First time only (creates ~/.xagent/config.yaml + identity.md)
 xagent init
 
-# Create feishu.yaml under ~/.xagent/feishu/
-xagent feishu init
+# Add channels.feishu to ~/.xagent/config.yaml
+xagent init feishu
 ```
 
-This writes `~/.xagent/feishu/feishu.yaml`:
+This updates `~/.xagent/config.yaml`:
 
 ```yaml
-app_id: cli_xxx
-app_secret: your_secret  # or ${LARK_APP_SECRET}
-
-# Optional:
-# log_level: info
-# stream: false
-# enable_memory: true
-# group_history_count: 10
+channels:
+  feishu:
+    enabled: true
+    app_id: cli_xxx
+    app_secret: your_secret  # or ${LARK_APP_SECRET}
+    log_level: info
+    stream: false
+    enable_memory: true
+    group_history_count: 10
+    show_sender_ids: true
 ```
 
 `${ENV_VAR}` placeholders are expanded at load time — keep secrets out of git.
@@ -74,26 +76,26 @@ app_secret: your_secret  # or ${LARK_APP_SECRET}
 ## Run
 
 ```bash
-# default: start in the background
-xagent feishu start
+# foreground: stay attached and stream logs to this terminal
+xagent run --channel feishu
 
-# stay in the foreground and stream logs to this terminal
-xagent feishu start --foreground
+# background: managed process with PID and log files
+xagent start --channel feishu
 
 # stop the managed Feishu process for this runtime dir
-xagent feishu stop
+xagent stop --channel feishu
 
-# inspect PID, config path, log path, and running state
-xagent feishu status
+# inspect PID, log path, and running state
+xagent status --channel feishu
 
-# custom runtime dir / config path:
-xagent feishu start --dir ~/.xagent --config ~/.xagent/feishu/feishu.yaml --foreground
+# custom runtime dir:
+xagent run --channel feishu --dir ~/.xagent
 ```
 
-By default, `xagent feishu start` starts a detached process, writes its PID to
-`~/.xagent/feishu/feishu.pid`, and appends logs to
-`~/.xagent/feishu/feishu.log`. Use `--foreground` (or `-f`) when you want the
-bot to stay attached to your terminal so you can watch logs live.
+`xagent start --channel feishu` starts a detached process, writes its PID to
+`~/.xagent/run/feishu.pid`, and appends logs to `~/.xagent/logs/feishu.log`.
+Use `xagent run --channel feishu` when you want the bot attached to your
+terminal so you can watch logs live.
 
 ## Routing rules (hardcoded — no knobs)
 
@@ -134,15 +136,15 @@ mention in a room-context block before calling `agent.chat`:
 room_name: Project Room
 room_id: oc_dd80df0e88ca4f803995f3b75f2c8833
 
-Telos 2026-05-12 15:05: @Mono hey
+Telos(ou_xxx) 2026-05-12 15:05: @Mono hey
 you 2026-05-12 15:05: hey Telos
 [/room context]
 ```
 
 The block includes `room_id` and adds `room_name` when the Feishu group name is
-available. Direct chats do not use room context. When `show_sender_ids` is
-enabled, speaker labels and mention replacements include IDs from the receive
-event, for example `Telos(ou_xxx)` or `@Tom(ou_xxx)`. If Feishu denies the
+available. Direct chats do not use room context. By default, speaker labels and
+mention replacements include IDs from the receive event, for example
+`Telos(ou_xxx)` or `@Tom(ou_xxx)`. If Feishu denies the
 contact/app lookup but the message API still returned a sender ID, xAgent keeps
 that signal as `Feishu User(ou_xxx)` or `Feishu Bot(cli_xxx)` instead of
 collapsing multiple senders into the same anonymous label. Feishu mention
@@ -155,7 +157,7 @@ predictable across direct and group conversations.
 
 ## Streaming replies
 
-Set `stream: true` in `~/.xagent/feishu/feishu.yaml`. The adapter uses
+Set `channels.feishu.stream: true` in `~/.xagent/config.yaml`. The adapter uses
 `FeishuChannel.stream(...)` with markdown — Feishu renders the answer as a
 streaming card that updates token-by-token. Disabled automatically when the
 agent is configured with `output_schema` (structured output requires
@@ -169,7 +171,7 @@ from xagent.interfaces.base import BaseAgentRunner
 from xagent.integrations.feishu import FeishuAdapter, FeishuAdapterConfig
 
 runner = BaseAgentRunner(config_dir="~/.xagent")
-cfg = FeishuAdapterConfig.from_file("~/.xagent/feishu/feishu.yaml")
+cfg = FeishuAdapterConfig.from_dict(runner.config["channels"]["feishu"])
 adapter = FeishuAdapter(agent=runner.agent, config=cfg)
 asyncio.run(adapter.run())
 ```
@@ -177,7 +179,7 @@ asyncio.run(adapter.run())
 ## Operational notes
 
 - xAgent runs **in-process** with the adapter. Nothing listens on a public
-  port. Even when you keep the HTTP server (`xagent server`) running, it
+  port. Even when you keep the HTTP/Web channel (`xagent start --channel web`) running, it
   stays bound to `127.0.0.1` — the adapter never goes through HTTP.
 - `run_command` is a built-in xAgent tool with shell-execution capability.
   Audit your `identity.md` and consider running the adapter in a container

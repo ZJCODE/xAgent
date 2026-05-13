@@ -43,17 +43,45 @@ The CLI is best for quick questions, terminal work, and short back-and-forth ses
 Start xAgent and open the web page in your browser:
 
 ```bash
-xagent server --open
+xagent run --channel web --open
 ```
 
 The web page is best for longer conversations, streaming replies, and image input.
 Use the Transport selector to compare regular HTTP/SSE with WebSocket chat delivery.
+
+Run it as a managed background service instead:
+
+```bash
+xagent start --channel web
+xagent status
+xagent logs --channel web
+xagent stop --channel web
+```
+
+Use `--channel http` for the API without the built-in web page, `--channel feishu` for the Feishu bot, and comma-separated channels such as `--channel web,feishu` when you want both.
+
+## Use From Feishu
+
+Configure the Feishu channel after the base init:
+
+```bash
+xagent init feishu
+xagent start --channel feishu
+```
+
+`xagent start --channel all` starts every enabled channel in `config.yaml`.
 
 ## Chat And Observe
 
 Use `chat` when someone is directly addressing the agent and expects a reply.
 
 Use `observe` for context the agent notices or overhears: ambient speech, room state, notifications, reminders, or sensor updates. An observation is saved to the message stream for future context and memory, but it does not generate an immediate reply.
+
+From the CLI:
+
+```bash
+xagent observe "Bob mentioned the demo may move to 3pm" --source feishu --event-type group_message
+```
 
 Diary memory is built from the agent's experience stream, not only direct chats. Meaningful observations can be summarized alongside conversations; preserve attribution in the observation text or metadata so overheard speech is not confused with a direct request from the current user.
 

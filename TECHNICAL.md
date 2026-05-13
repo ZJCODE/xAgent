@@ -6,7 +6,7 @@
 
 xAgent 由三个主要部分组成：
 
-- CLI 入口：`xagent.interfaces.cli`，提供 `xagent init`、`xagent chat`、`xagent server`。
+- CLI 入口：`xagent.interfaces.cli`，提供 `xagent init`、`xagent chat`、`xagent run/start/stop/status/logs` 等命令。
 - Agent 运行时：`xagent.core.agent.Agent`，负责对话、观察事件、工具调用、消息流和长期记忆。
 - HTTP 服务：`xagent.interfaces.server.AgentHTTPServer`，基于 FastAPI，对外提供 HTTP、SSE 和 WebSocket 接口。
 
@@ -14,14 +14,14 @@ xAgent 由三个主要部分组成：
 
 ```bash
 xagent init --dir ~/.xagent
-xagent server --dir ~/.xagent --host 127.0.0.1 --port 8010
+xagent run --channel web --dir ~/.xagent --host 127.0.0.1 --port 8010
 ```
 
 服务默认绑定：
 
 - Host：`127.0.0.1`
 - Port：`8010`
-- Web UI：默认开启，可用 `--no-web` 关闭
+- Web UI：`web` channel 默认开启；用 `--channel http` 只启动 API，不挂载内置网页
 - API 文档：FastAPI 默认提供 `/docs` 和 `/openapi.json`
 
 > 当前服务端没有内置 API 鉴权。对外网、飞书、企业 IM 或公网回调接入时，应放在自己的网关或适配服务后面，先完成平台签名校验、鉴权、限流和审计，再转发到 xAgent。
@@ -41,15 +41,23 @@ xagent server --dir ~/.xagent --host 127.0.0.1 --port 8010
     yearly/
   messages/
     messages.sqlite3
+  run/
+    web.pid
+    feishu.pid
+  logs/
+    web.log
+    feishu.log
 ```
 
 ### 2.1 config.yaml
 
-`config.yaml` 只支持三个顶层键：
+`config.yaml` 支持这些顶层键：
 
 - `provider`：必填，模型提供方配置。
 - `search`：可选，联网搜索工具配置。
 - `output_schema`：可选，结构化输出配置。
+- `channels`：可选，HTTP/Web/Feishu 等运行入口配置。
+- `runtime`：可选，CLI 运行时默认值。
 
 出现其他顶层键会在启动时失败，例如 `agent`、`system_prompt`、`server`、`workspace` 都不是当前支持的配置项。
 
@@ -63,6 +71,14 @@ provider:
   model: gpt-5.4-mini
 search:
   provider: openai
+channels:
+  http:
+    enabled: true
+    host: 127.0.0.1
+    port: 8010
+    web: true
+runtime:
+  default_channel: web
 ```
 
 `provider.model` 是必填项。`provider.name` 建议填写，用于区分 OpenAI、DeepSeek、Qwen 或自定义 OpenAI-compatible 服务。`provider.base_url` 和 `provider.api_key` 会传给 OpenAI SDK 的 `AsyncOpenAI` 客户端；如果二者都不提供，则使用 SDK 默认客户端行为。
@@ -144,10 +160,38 @@ Content-Type: application/json
 {"identity":"# Identity\n\nYou are a helpful assistant."}
 ```
 
+### 2.5 channels
+
+`channels.http` 控制 HTTP API 和内置网页。`web: true` 时，对用户暴露为 `web` channel；`web: false` 时，对用户暴露为 `http` channel。`web` 包含 HTTP API、SSE 和 WebSocket，只是额外挂载静态页面。
+
+```yaml
+channels:
+  http:
+    enabled: true
+    host: 127.0.0.1
+    port: 8010
+    web: true
+```
+
+`channels.feishu` 由 `xagent init feishu` 写入。`${ENV_VAR}` 形式会在 Feishu adapter 加载配置时展开，也可通过 `LARK_APP_ID` 和 `LARK_APP_SECRET` 提供凭据。
+
+```yaml
+channels:
+  feishu:
+    enabled: true
+    app_id: cli_xxx
+    app_secret: ${LARK_APP_SECRET}
+    log_level: info
+    stream: false
+    enable_memory: true
+    group_history_count: 10
+    show_sender_ids: true
+```
+
 ## 3. 启动参数
 
 ```bash
-xagent server \
+xagent run --channel web \
   --dir ~/.xagent \
   --host 127.0.0.1 \
   --port 8010 \
@@ -156,13 +200,27 @@ xagent server \
   --chat-timeout 600
 ```
 
+`run` 表示前台运行，适合开发和调试。`start` 表示托管后台运行，会把 PID 写入 `<dir>/run/{channel}.pid`，日志写入 `<dir>/logs/{channel}.log`。
+
+```bash
+xagent start --channel web
+xagent start --channel http,feishu
+xagent start --channel all
+xagent status --channel all
+xagent logs --channel feishu --follow
+xagent stop --channel all
+```
+
 参数说明：
 
 - `--dir`：运行目录，默认 `~/.xagent`。
 - `--host`：监听地址，默认 `127.0.0.1`。
 - `--port`：监听端口，默认 `8010`。
 - `--open`：启动后打开 Web UI。
-- `--no-web`：关闭内置 Web UI，但 API 仍可用。
+- `--channel web`：启动 HTTP API + 内置 Web UI。
+- `--channel http`：只启动 HTTP API、SSE 和 WebSocket，不挂载内置 Web UI。
+- `--channel feishu`：启动飞书 WebSocket 长连接适配器。
+- `--channel all`：启动 `config.yaml` 中已启用的所有 channel。
 - `--max-concurrent-chats`：最大并发对话/观察请求数，默认 `4`。
 - `--queue-timeout`：等待可用并发槽的秒数，默认 `30`；超时返回 429。
 - `--chat-timeout`：单次对话/观察总超时时间，默认 `600` 秒；超时返回 504 或流式错误帧。

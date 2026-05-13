@@ -116,11 +116,19 @@ class BaseAgentRunner:
         if not isinstance(config, dict):
             raise ValueError("Configuration must be a dictionary")
         
-        allowed_config_keys = {"provider", "search", "output_schema"}
+        allowed_config_keys = {"provider", "search", "output_schema", "channels", "runtime"}
         unsupported_keys = sorted(set(config) - allowed_config_keys)
         if unsupported_keys:
             joined_keys = ", ".join(unsupported_keys)
             raise ValueError(f"Unsupported config key(s): {joined_keys}")
+
+        channels_cfg = config.get("channels")
+        if channels_cfg is not None and not isinstance(channels_cfg, dict):
+            raise ValueError("channels must be a dictionary")
+
+        runtime_cfg = config.get("runtime")
+        if runtime_cfg is not None and not isinstance(runtime_cfg, dict):
+            raise ValueError("runtime must be a dictionary")
 
         provider_cfg = config.get("provider")
         if not isinstance(provider_cfg, dict) or not provider_cfg:
