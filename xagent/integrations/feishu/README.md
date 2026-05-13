@@ -179,7 +179,7 @@ asyncio.run(adapter.run())
 ## Operational notes
 
 - xAgent runs **in-process** with the adapter. Nothing listens on a public
-  port. Even when you keep the HTTP/Web channel (`xagent start --channel web`) running, it
+  port. Even when you keep the API channel (`xagent start --channel api`) running, it
   stays bound to `127.0.0.1` — the adapter never goes through HTTP.
 - `run_command` is a built-in xAgent tool with shell-execution capability.
   Audit your `identity.md` and consider running the adapter in a container

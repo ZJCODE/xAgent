@@ -125,10 +125,29 @@ class BaseAgentRunner:
         channels_cfg = config.get("channels")
         if channels_cfg is not None and not isinstance(channels_cfg, dict):
             raise ValueError("channels must be a dictionary")
+        if isinstance(channels_cfg, dict):
+            allowed_channel_keys = {"api", "feishu"}
+            unsupported_channel_keys = sorted(set(channels_cfg) - allowed_channel_keys)
+            if unsupported_channel_keys:
+                if "websocket" in unsupported_channel_keys:
+                    raise ValueError(
+                        "channels.websocket is not supported; websocket is an API transport, "
+                        "not a channel. Use channels.api."
+                    )
+                if "http" in unsupported_channel_keys:
+                    raise ValueError("channels.http has been replaced by channels.api")
+                if "web" in unsupported_channel_keys:
+                    raise ValueError("channels.web has been replaced by channels.api.web_ui")
+                joined_keys = ", ".join(unsupported_channel_keys)
+                raise ValueError(f"Unsupported channels key(s): {joined_keys}")
 
         runtime_cfg = config.get("runtime")
         if runtime_cfg is not None and not isinstance(runtime_cfg, dict):
             raise ValueError("runtime must be a dictionary")
+        if isinstance(runtime_cfg, dict) and "default_channel" in runtime_cfg:
+            default_channel = runtime_cfg.get("default_channel")
+            if default_channel not in {"api", "feishu", "all"}:
+                raise ValueError("runtime.default_channel must be one of: api, feishu, all")
 
         provider_cfg = config.get("provider")
         if not isinstance(provider_cfg, dict) or not provider_cfg:

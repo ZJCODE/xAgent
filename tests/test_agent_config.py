@@ -93,11 +93,11 @@ provider:
             self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
             self.assertEqual(config["provider"]["name"], "openai")
             self.assertEqual(config["search"]["provider"], "openai")
-            self.assertTrue(config["channels"]["http"]["enabled"])
-            self.assertTrue(config["channels"]["http"]["web"])
-            self.assertEqual(config["channels"]["http"]["host"], "127.0.0.1")
-            self.assertEqual(config["channels"]["http"]["port"], 8010)
-            self.assertEqual(config["runtime"]["default_channel"], "web")
+            self.assertTrue(config["channels"]["api"]["enabled"])
+            self.assertTrue(config["channels"]["api"]["web_ui"])
+            self.assertEqual(config["channels"]["api"]["host"], "127.0.0.1")
+            self.assertEqual(config["channels"]["api"]["port"], 8010)
+            self.assertEqual(config["runtime"]["default_channel"], "api")
             self.assertNotIn("system_prompt:", config_text)
             self.assertNotIn("output_schema:", config_text)
             self.assertNotIn("workspace:", config_text)
@@ -414,11 +414,35 @@ provider:
             with self.assertRaisesRegex(ValueError, "Unsupported config key"):
                 BaseAgentRunner(config_dir=tmpdir)
 
-        def test_config_accepts_channels_and_runtime_sections(self):
-                with tempfile.TemporaryDirectory() as tmpdir:
-                        config_path = Path(tmpdir) / "config.yaml"
-                        config_path.write_text(
-                                """
+    def test_config_accepts_channels_and_runtime_sections(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    api:
+        enabled: true
+        web_ui: true
+runtime:
+    default_channel: api
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertEqual(runner.config["runtime"]["default_channel"], "api")
+            self.assertTrue(runner.config["channels"]["api"]["enabled"])
+
+    def test_config_rejects_legacy_http_channel_section(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
 provider:
     model: "gpt-5.4-mini"
     api_key: "test-key"
@@ -427,16 +451,14 @@ channels:
         enabled: true
         web: true
 runtime:
-    default_channel: web
+    default_channel: api
 """,
-                                encoding="utf-8",
-                        )
-                        write_identity(tmpdir)
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
 
-                        runner = BaseAgentRunner(config_dir=tmpdir)
-
-                        self.assertEqual(runner.config["runtime"]["default_channel"], "web")
-                        self.assertTrue(runner.config["channels"]["http"]["enabled"])
+            with self.assertRaisesRegex(ValueError, "channels.http has been replaced by channels.api"):
+                BaseAgentRunner(config_dir=tmpdir)
 
 
 if __name__ == "__main__":

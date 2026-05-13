@@ -7,11 +7,19 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 import yaml
 
 
-CHANNEL_WEB = "web"
-CHANNEL_HTTP = "http"
+CHANNEL_API = "api"
 CHANNEL_FEISHU = "feishu"
 CHANNEL_ALL = "all"
-VALID_CHANNELS = {CHANNEL_WEB, CHANNEL_HTTP, CHANNEL_FEISHU}
+VALID_CHANNELS = {CHANNEL_API, CHANNEL_FEISHU}
+
+WEBSOCKET_IS_TRANSPORT_ERROR = (
+    "websocket is an API transport, not a channel; use --channel api "
+    "and connect to /ws/chat or /ws/observe."
+)
+LEGACY_CHANNEL_ERRORS = {
+    "web": "web is now channels.api.web_ui, not a channel; use --channel api.",
+    "http": "http is now the api channel; use --channel api.",
+}
 
 
 class ChannelSelectionError(ValueError):
@@ -35,21 +43,20 @@ def enabled_channels_from_config(config: Optional[Mapping[str, Any]]) -> list[st
     channels = config.get("channels") if isinstance(config, Mapping) else None
     channels = channels if isinstance(channels, Mapping) else {}
 
-    http_cfg = channels.get(CHANNEL_HTTP)
-    http_cfg = http_cfg if isinstance(http_cfg, Mapping) else {}
-    http_enabled = bool(http_cfg.get("enabled", True))
-    web_enabled = bool(http_cfg.get("web", True))
+    api_cfg = channels.get(CHANNEL_API)
+    api_cfg = api_cfg if isinstance(api_cfg, Mapping) else {}
+    api_enabled = bool(api_cfg.get("enabled", True))
 
     result: list[str] = []
-    if http_enabled:
-        result.append(CHANNEL_WEB if web_enabled else CHANNEL_HTTP)
+    if api_enabled:
+        result.append(CHANNEL_API)
 
     feishu_cfg = channels.get(CHANNEL_FEISHU)
     feishu_cfg = feishu_cfg if isinstance(feishu_cfg, Mapping) else {}
     if bool(feishu_cfg.get("enabled", False)):
         result.append(CHANNEL_FEISHU)
 
-    return result or [CHANNEL_WEB]
+    return result or [CHANNEL_API]
 
 
 def normalize_channel_values(
@@ -71,22 +78,24 @@ def normalize_channel_values(
                     if enabled not in selected:
                         selected.append(enabled)
                 continue
+            if channel == "websocket":
+                raise ChannelSelectionError(WEBSOCKET_IS_TRANSPORT_ERROR)
+            if channel in LEGACY_CHANNEL_ERRORS:
+                raise ChannelSelectionError(LEGACY_CHANNEL_ERRORS[channel])
             if channel not in VALID_CHANNELS:
                 valid = ", ".join(sorted(VALID_CHANNELS | {CHANNEL_ALL}))
                 raise ChannelSelectionError(f"Unknown channel {channel!r}. Expected one of: {valid}.")
             if channel not in selected:
                 selected.append(channel)
 
-    if CHANNEL_HTTP in selected and CHANNEL_WEB in selected:
-        raise ChannelSelectionError("web already includes the HTTP API; choose either web or http, not both.")
-    return selected or [CHANNEL_WEB]
+    return selected or [CHANNEL_API]
 
 
-def http_config(config: Mapping[str, Any]) -> dict[str, Any]:
+def api_config(config: Mapping[str, Any]) -> dict[str, Any]:
     channels = config.get("channels") if isinstance(config, Mapping) else None
     if not isinstance(channels, Mapping):
         return {}
-    data = channels.get(CHANNEL_HTTP)
+    data = channels.get(CHANNEL_API)
     return dict(data) if isinstance(data, Mapping) else {}
 
 

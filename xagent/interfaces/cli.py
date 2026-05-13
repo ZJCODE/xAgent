@@ -18,13 +18,12 @@ import yaml
 
 from .base import BaseAgentConfig, BaseAgentRunner
 from .channels import (
+    CHANNEL_API,
     CHANNEL_FEISHU,
-    CHANNEL_HTTP,
-    CHANNEL_WEB,
     ChannelSelectionError,
+    api_config,
     enabled_channels_from_config,
     feishu_config,
-    http_config,
     load_config_file,
     normalize_channel_values,
 )
@@ -336,15 +335,15 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
             "model": selection.model,
         },
         "channels": {
-            "http": {
+            "api": {
                 "enabled": True,
                 "host": BaseAgentConfig.DEFAULT_HOST,
                 "port": BaseAgentConfig.DEFAULT_PORT,
-                "web": True,
+                "web_ui": True,
             }
         },
         "runtime": {
-            "default_channel": "web",
+            "default_channel": "api",
         },
     }
     search_config = {"provider": selection.search_provider or "none"}
@@ -620,14 +619,14 @@ def _add_channel_argument(
         action="append",
         default=None,
         metavar="CHANNELS",
-        help=f"Channel(s) to use: web, http, feishu, all, or comma-separated values (default: {default_label})",
+        help=f"Channel(s) to use: api, feishu, all, or comma-separated values (default: {default_label})",
     )
 
 
-def _add_http_runtime_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--host", default=None, help="HTTP host override")
-    parser.add_argument("--port", type=int, default=None, help="HTTP port override")
-    parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the web UI")
+def _add_api_runtime_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--host", default=None, help="API host override")
+    parser.add_argument("--port", type=int, default=None, help="API port override")
+    parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the API web UI")
     parser.add_argument(
         "--max-concurrent-chats",
         type=int,
@@ -677,14 +676,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="Run one or more channels in the foreground")
     _add_dir_argument(run_parser)
-    _add_channel_argument(run_parser, default_label="web")
-    _add_http_runtime_arguments(run_parser)
+    _add_channel_argument(run_parser, default_label="api")
+    _add_api_runtime_arguments(run_parser)
     run_parser.set_defaults(handler=handle_run)
 
     start_parser = subparsers.add_parser("start", help="Start one or more channels in the background")
     _add_dir_argument(start_parser)
-    _add_channel_argument(start_parser, default_label="web")
-    _add_http_runtime_arguments(start_parser)
+    _add_channel_argument(start_parser, default_label="api")
+    _add_api_runtime_arguments(start_parser)
     start_parser.set_defaults(handler=handle_start)
 
     stop_parser = subparsers.add_parser("stop", help="Stop managed background channels")
@@ -695,7 +694,7 @@ def build_parser() -> argparse.ArgumentParser:
     restart_parser = subparsers.add_parser("restart", help="Restart managed background channels")
     _add_dir_argument(restart_parser)
     _add_channel_argument(restart_parser, default_label="all")
-    _add_http_runtime_arguments(restart_parser)
+    _add_api_runtime_arguments(restart_parser)
     restart_parser.set_defaults(handler=handle_restart)
 
     status_parser = subparsers.add_parser("status", help="Show managed channel status")
@@ -800,9 +799,9 @@ def build_parser() -> argparse.ArgumentParser:
     version_parser.set_defaults(handler=handle_version)
 
     internal_run = subparsers.add_parser("_run-channel", help=argparse.SUPPRESS)
-    internal_run.add_argument("channel", choices=(CHANNEL_WEB, CHANNEL_HTTP, CHANNEL_FEISHU))
+    internal_run.add_argument("channel", choices=(CHANNEL_API, CHANNEL_FEISHU))
     _add_dir_argument(internal_run)
-    _add_http_runtime_arguments(internal_run)
+    _add_api_runtime_arguments(internal_run)
     internal_run.set_defaults(handler=handle_run_channel_internal)
     _hide_subparser_choice(subparsers, "_run-channel")
 
@@ -960,13 +959,12 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
     return command
 
 
-def _http_runtime_values(
-    channel: str,
+def _api_runtime_values(
     args: argparse.Namespace,
     config: dict[str, Any],
 ) -> tuple[dict[str, Any], Optional[str], Optional[int], bool]:
-    http_cfg = http_config(config)
-    enable_web = channel == CHANNEL_WEB
+    api_cfg = api_config(config)
+    enable_web = bool(api_cfg.get("web_ui", True))
     server_kwargs: dict[str, Any] = {
         "config_dir": getattr(args, "config_dir", None),
         "enable_web": enable_web,
@@ -980,25 +978,24 @@ def _http_runtime_values(
     for args_attr, server_key in runtime_mapping:
         value = getattr(args, args_attr, None)
         if value is None:
-            value = http_cfg.get(args_attr)
+            value = api_cfg.get(args_attr)
         if value is not None:
             server_kwargs[server_key] = value
 
-    host = getattr(args, "host", None) or http_cfg.get("host")
+    host = getattr(args, "host", None) or api_cfg.get("host")
     port = getattr(args, "port", None)
     if port is None:
-        port = http_cfg.get("port")
+        port = api_cfg.get("port")
     open_browser = bool(getattr(args, "open_browser", False) and enable_web)
     return server_kwargs, host, port, open_browser
 
 
-def _run_http_channel(channel: str, args: argparse.Namespace, config: dict[str, Any]) -> int:
+def _run_api_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
     from .server import AgentHTTPServer
 
-    server_kwargs, host, port, open_browser = _http_runtime_values(channel, args, config)
+    server_kwargs, host, port, open_browser = _api_runtime_values(args, config)
     server = AgentHTTPServer(**server_kwargs)
-    label = "web" if channel == CHANNEL_WEB else "http"
-    print(f"xAgent {label} channel ready (model={server.agent.model}).")
+    print(f"xAgent api channel ready (model={server.agent.model}).")
     server.run(host=host, port=port, open_browser=open_browser)
     return 0
 
@@ -1061,8 +1058,8 @@ def _run_feishu_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
 
 
 def _run_channel(channel: str, args: argparse.Namespace, config: dict[str, Any]) -> int:
-    if channel in {CHANNEL_WEB, CHANNEL_HTTP}:
-        return _run_http_channel(channel, args, config)
+    if channel == CHANNEL_API:
+        return _run_api_channel(args, config)
     if channel == CHANNEL_FEISHU:
         return _run_feishu_channel(args, config)
     print(f"Unknown channel: {channel}")
@@ -1079,7 +1076,7 @@ def handle_run_channel_internal(args: argparse.Namespace) -> int:
 
 def handle_run(args: argparse.Namespace) -> int:
     try:
-        channels, config = _select_channels(args, default=CHANNEL_WEB)
+        channels, config = _select_channels(args, default=CHANNEL_API)
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
@@ -1116,7 +1113,7 @@ def handle_run(args: argparse.Namespace) -> int:
 
 def handle_start(args: argparse.Namespace) -> int:
     try:
-        channels, _config = _select_channels(args, default=CHANNEL_WEB)
+        channels, _config = _select_channels(args, default=CHANNEL_API)
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
@@ -1274,12 +1271,12 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
         print("App Secret is required.")
         return 1
 
-    http_cfg = channels_cfg.setdefault("http", {})
-    if isinstance(http_cfg, dict):
-        http_cfg.setdefault("enabled", True)
-        http_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
-        http_cfg.setdefault("port", BaseAgentConfig.DEFAULT_PORT)
-        http_cfg.setdefault("web", True)
+    api_cfg = channels_cfg.setdefault("api", {})
+    if isinstance(api_cfg, dict):
+        api_cfg.setdefault("enabled", True)
+        api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
+        api_cfg.setdefault("port", BaseAgentConfig.DEFAULT_PORT)
+        api_cfg.setdefault("web_ui", True)
 
     channels_cfg["feishu"] = {
         "enabled": True,
@@ -1291,7 +1288,7 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
         "group_history_count": 10,
         "show_sender_ids": True,
     }
-    config.setdefault("runtime", {}).setdefault("default_channel", "web")
+    config.setdefault("runtime", {}).setdefault("default_channel", "api")
 
     config_path.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
     print(f"\nUpdated {config_path} with channels.feishu\n")
@@ -1531,8 +1528,8 @@ def handle_version(_args: argparse.Namespace) -> int:
 
 
 def handle_legacy_server(_args: argparse.Namespace) -> int:
-    print("`xagent server` has been replaced by `xagent run --channel web` for foreground use")
-    print("or `xagent start --channel web` for managed background use.")
+    print("`xagent server` has been replaced by `xagent run --channel api` for foreground use")
+    print("or `xagent start --channel api` for managed background use.")
     return 1
 
 

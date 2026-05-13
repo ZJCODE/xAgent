@@ -43,14 +43,14 @@ def _write_runtime(directory: str, *, feishu: bool = False) -> None:
         },
         "search": {"provider": "openai"},
         "channels": {
-            "http": {
+            "api": {
                 "enabled": True,
                 "host": "127.0.0.1",
                 "port": 8010,
-                "web": True,
+                "web_ui": True,
             }
         },
-        "runtime": {"default_channel": "web"},
+        "runtime": {"default_channel": "api"},
     }
     if feishu:
         config["channels"]["feishu"] = {
@@ -121,7 +121,7 @@ class CLICommandTests(unittest.TestCase):
             "--dir",
             "./agent-dir",
             "--channel",
-            "web,feishu",
+            "api,feishu",
             "--host",
             "127.0.0.1",
             "--port",
@@ -136,7 +136,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(args.command, "start")
         self.assertEqual(args.config_dir, "./agent-dir")
-        self.assertEqual(args.channels, ["web,feishu"])
+        self.assertEqual(args.channels, ["api,feishu"])
         self.assertEqual(args.host, "127.0.0.1")
         self.assertEqual(args.port, 8010)
         self.assertEqual(args.max_concurrent_chats, 2)
@@ -249,9 +249,9 @@ class CLICommandTests(unittest.TestCase):
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         self.assertIn("xagent start --channel feishu", output)
 
-    def test_run_channel_web_passes_options_to_server(self):
+    def test_run_channel_api_passes_options_to_server(self):
         args = argparse.Namespace(
-            channel="web",
+            channel="api",
             config_dir="./agent-dir",
             host="127.0.0.1",
             port=8010,
@@ -285,7 +285,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir, feishu=True)
             args = argparse.Namespace(
                 config_dir=tmpdir,
-                channels=["web,feishu"],
+                channels=["api,feishu"],
                 host=None,
                 port=None,
                 open_browser=False,
@@ -299,17 +299,19 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(starter.call_count, 2)
+        self.assertEqual(starter.call_args_list[0].kwargs["pid_path"], Path(tmpdir).resolve() / "run" / "api.pid")
+        self.assertEqual(starter.call_args_list[0].kwargs["log_path"], Path(tmpdir).resolve() / "logs" / "api.log")
 
     def test_stop_uses_managed_pid_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True)
-            args = argparse.Namespace(config_dir=tmpdir, channels=["feishu"])
+            args = argparse.Namespace(config_dir=tmpdir, channels=["api"])
 
             with patch("xagent.interfaces.cli.stop_managed_process", return_value=(True, "stopped")) as stopper:
                 exit_code = handle_stop(args)
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(stopper.call_args.args[0], Path(tmpdir).resolve() / "run" / "feishu.pid")
+        self.assertEqual(stopper.call_args.args[0], Path(tmpdir).resolve() / "run" / "api.pid")
 
     def test_status_reports_running_process(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -325,12 +327,12 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("feishu: running pid=4321", output)
         self.assertIn("run/feishu.pid", output)
 
-    def test_http_and_web_cannot_be_selected_together(self):
+    def test_websocket_is_rejected_as_transport_not_channel(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
             args = argparse.Namespace(
                 config_dir=tmpdir,
-                channels=["http,web"],
+                channels=["websocket"],
                 host=None,
                 port=None,
                 open_browser=False,
@@ -344,7 +346,8 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
-        self.assertIn("web already includes", output)
+        self.assertIn("websocket is an API transport, not a channel", output)
+        self.assertIn("--channel api", output)
 
     def test_legacy_commands_print_migration_guidance(self):
         with patch("sys.stdout") as stdout:
@@ -354,7 +357,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(server_code, 1)
         self.assertEqual(feishu_code, 1)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
-        self.assertIn("xagent run --channel web", output)
+        self.assertIn("xagent run --channel api", output)
         self.assertIn("xagent init feishu", output)
 
 

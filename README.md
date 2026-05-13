@@ -43,22 +43,22 @@ The CLI is best for quick questions, terminal work, and short back-and-forth ses
 Start xAgent and open the web page in your browser:
 
 ```bash
-xagent run --channel web --open
+xagent run --channel api --open
 ```
 
 The web page is best for longer conversations, streaming replies, and image input.
-Use the Transport selector to compare regular HTTP/SSE with WebSocket chat delivery.
+Use the Transport selector to compare regular HTTP/SSE with WebSocket chat delivery. WebSocket is an API transport, not a separate channel.
 
 Run it as a managed background service instead:
 
 ```bash
-xagent start --channel web
+xagent start --channel api
 xagent status
-xagent logs --channel web
-xagent stop --channel web
+xagent logs --channel api
+xagent stop --channel api
 ```
 
-Use `--channel http` for the API without the built-in web page, `--channel feishu` for the Feishu bot, and comma-separated channels such as `--channel web,feishu` when you want both.
+Use `--channel api` for HTTP JSON, SSE, WebSocket, and the optional built-in web page. Use `--channel feishu` for the Feishu bot, and comma-separated channels such as `--channel api,feishu` when you want both.
 
 ## Use From Feishu
 
