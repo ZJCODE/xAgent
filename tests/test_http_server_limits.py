@@ -70,6 +70,15 @@ class FastStreamingAgent:
         return generator()
 
 
+class FlushTrackingAgent(FastStreamingAgent):
+    def __init__(self):
+        super().__init__()
+        self.flushed = False
+
+    async def flush_memory(self):
+        self.flushed = True
+
+
 class ObservingAgent:
     model = "test-model"
     tools = {}
@@ -196,6 +205,15 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentWebSocketServerTests(unittest.TestCase):
+    def test_shutdown_flushes_agent_memory(self):
+        agent = FlushTrackingAgent()
+        server = AgentHTTPServer(agent=agent, enable_web=False)
+
+        with TestClient(server.app):
+            pass
+
+        self.assertTrue(agent.flushed)
+
     def test_websocket_chat_returns_message_and_done(self):
         server = AgentHTTPServer(agent=FastStreamingAgent(), enable_web=False)
 

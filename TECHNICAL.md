@@ -39,6 +39,7 @@ xagent run --channel api --dir ~/.xagent --host 127.0.0.1 --port 8010
     weekly/
     monthly/
     yearly/
+    people/
   messages/
     messages.sqlite3
   run/
@@ -58,6 +59,7 @@ xagent run --channel api --dir ~/.xagent --host 127.0.0.1 --port 8010
 - `output_schema`：可选，结构化输出配置。
 - `channels`：可选，API/Feishu 等可托管运行入口配置。
 - `runtime`：可选，CLI 运行时默认值。
+- `memory`：可选，长期记忆读取窗口和后台写入策略。
 
 出现其他顶层键会在启动时失败，例如 `agent`、`system_prompt`、`server`、`workspace` 都不是当前支持的配置项。
 
@@ -79,6 +81,11 @@ channels:
     web_ui: true
 runtime:
   default_channel: api
+memory:
+  recent_days: 7
+  stale_flush_seconds: 120
+  message_threshold: 10
+  min_interval_seconds: 300
 ```
 
 `provider.model` 是必填项。`provider.name` 建议填写，用于区分 OpenAI、DeepSeek、Qwen 或自定义 OpenAI-compatible 服务。`provider.base_url` 和 `provider.api_key` 会传给 OpenAI SDK 的 `AsyncOpenAI` 客户端；如果二者都不提供，则使用 SDK 默认客户端行为。
@@ -128,7 +135,26 @@ search:
 
 当搜索开启时，Agent 会加载 `web_search` 工具；无论搜索是否开启，`run_command` 工具都会作为内置工具加载。
 
-### 2.3 output_schema
+### 2.3 memory
+
+`memory` 控制长期记忆读取窗口和后台写入策略：
+
+```yaml
+memory:
+  recent_days: 7
+  stale_flush_seconds: 120
+  message_threshold: 10
+  min_interval_seconds: 300
+```
+
+- `recent_days`：每轮对话自动注入最近多少天的 daily diary，默认 `7`。
+- `stale_flush_seconds`：pending 消息在内存中停留超过该秒数后强制写入，默认 `120`。
+- `message_threshold`：达到多少条经验记录后触发批量写入，默认 `10`。
+- `min_interval_seconds`：普通批量写入之间的最小间隔，默认 `300`。stale flush 和正常 shutdown flush 不会被它阻止。
+
+人物档案保存在 `memory/people/`。它只追加带日期和证据片段的稳定信息；默认不会把所有人物档案注入每一轮 prompt，需要时可通过记忆搜索读取。
+
+### 2.4 output_schema
 
 `output_schema` 用于把模型回复约束为 Pydantic 结构。支持字段类型：`str`、`int`、`float`、`bool`、`list`、`dict`；`list` 可以通过 `items` 指定元素类型。
 
@@ -149,7 +175,7 @@ output_schema:
 
 启用结构化输出后，Agent 会使用 JSON object 模式，并且内部会关闭流式文本增量。即使请求里传 `stream: true`，SSE/WebSocket 也会返回一个完整 `message`，而不是多个 `delta`。
 
-### 2.4 identity.md
+### 2.5 identity.md
 
 `identity.md` 是必填文件，内容不能为空。它定义 Agent 的身份、语气和行为边界。服务启动时会读取该文件；也可以通过 HTTP 接口热更新：
 
@@ -160,7 +186,7 @@ Content-Type: application/json
 {"identity":"# Identity\n\nYou are a helpful assistant."}
 ```
 
-### 2.5 channels
+### 2.6 channels
 
 `channels.api` 控制 API channel。它始终暴露 HTTP JSON、SSE 和 WebSocket；`web_ui: true` 只控制是否额外挂载内置静态页面，不影响 `/chat`、`/observe`、`/ws/chat` 或 `/ws/observe`。
 
@@ -697,9 +723,14 @@ memory/
   weekly/<year>/<week_start>_to_<week_end>.md
   monthly/<year>/<year-month>.md
   yearly/<year>.md
+  people/<person-key>.md
 ```
 
 Agent 会基于对话和观察事件异步整理日记式记忆。`enable_memory` 和 `private` 会影响 `/chat` 的记忆行为：
+
+后台写入会先缓存在内存里；达到 `memory.message_threshold` 且满足普通间隔时会批量写入。如果消息在 pending 中超过 `memory.stale_flush_seconds`，会强制写入。CLI、API server 和 Feishu channel 正常退出时也会 flush pending，避免短对话低于阈值时丢失。
+
+`memory/people/` 是人物档案层。只有日记写入成功后，系统才会尝试从同一批消息中抽取有明确人物归属、带证据 quote 的稳定信息并追加到对应 profile。人物档案更新失败不会影响 daily diary 写入。
 
 | 参数 | 读取记忆 | 写入记忆 | 写入主消息库 |
 | --- | --- | --- | --- |

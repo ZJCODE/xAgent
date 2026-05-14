@@ -12,15 +12,6 @@ CHANNEL_FEISHU = "feishu"
 CHANNEL_ALL = "all"
 VALID_CHANNELS = {CHANNEL_API, CHANNEL_FEISHU}
 
-WEBSOCKET_IS_TRANSPORT_ERROR = (
-    "websocket is an API transport, not a channel; use --channel api "
-    "and connect to /ws/chat or /ws/observe."
-)
-LEGACY_CHANNEL_ERRORS = {
-    "web": "web is now channels.api.web_ui, not a channel; use --channel api.",
-    "http": "http is now the api channel; use --channel api.",
-}
-
 
 class ChannelSelectionError(ValueError):
     """Raised when a user provided an invalid channel selection."""
@@ -78,10 +69,6 @@ def normalize_channel_values(
                     if enabled not in selected:
                         selected.append(enabled)
                 continue
-            if channel == "websocket":
-                raise ChannelSelectionError(WEBSOCKET_IS_TRANSPORT_ERROR)
-            if channel in LEGACY_CHANNEL_ERRORS:
-                raise ChannelSelectionError(LEGACY_CHANNEL_ERRORS[channel])
             if channel not in VALID_CHANNELS:
                 valid = ", ".join(sorted(VALID_CHANNELS | {CHANNEL_ALL}))
                 raise ChannelSelectionError(f"Unknown channel {channel!r}. Expected one of: {valid}.")

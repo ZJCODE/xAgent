@@ -21,6 +21,10 @@ class BaseAgentConfig:
     DEFAULT_MODEL = AgentConfig.DEFAULT_MODEL
     DEFAULT_CONFIG_DIR = AgentConfig.DEFAULT_WORKSPACE
     MEMORY_DIRNAME = AgentConfig.MEMORY_DIRNAME
+    MEMORY_RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
+    MEMORY_MESSAGE_THRESHOLD = AgentConfig.MEMORY_MESSAGE_THRESHOLD
+    MEMORY_MIN_INTERVAL_SECONDS = AgentConfig.MEMORY_MIN_INTERVAL_SECONDS
+    MEMORY_STALE_FLUSH_SECONDS = AgentConfig.MEMORY_STALE_FLUSH_SECONDS
     MESSAGE_DIRNAME = AgentConfig.MESSAGE_DIRNAME
     MESSAGE_DB_FILENAME = AgentConfig.MESSAGE_DB_FILENAME
     CONFIG_FILENAME = "config.yaml"
@@ -116,7 +120,7 @@ class BaseAgentRunner:
         if not isinstance(config, dict):
             raise ValueError("Configuration must be a dictionary")
         
-        allowed_config_keys = {"provider", "search", "output_schema", "channels", "runtime"}
+        allowed_config_keys = {"provider", "search", "output_schema", "channels", "runtime", "memory"}
         unsupported_keys = sorted(set(config) - allowed_config_keys)
         if unsupported_keys:
             joined_keys = ", ".join(unsupported_keys)
@@ -129,15 +133,6 @@ class BaseAgentRunner:
             allowed_channel_keys = {"api", "feishu"}
             unsupported_channel_keys = sorted(set(channels_cfg) - allowed_channel_keys)
             if unsupported_channel_keys:
-                if "websocket" in unsupported_channel_keys:
-                    raise ValueError(
-                        "channels.websocket is not supported; websocket is an API transport, "
-                        "not a channel. Use channels.api."
-                    )
-                if "http" in unsupported_channel_keys:
-                    raise ValueError("channels.http has been replaced by channels.api")
-                if "web" in unsupported_channel_keys:
-                    raise ValueError("channels.web has been replaced by channels.api.web_ui")
                 joined_keys = ", ".join(unsupported_channel_keys)
                 raise ValueError(f"Unsupported channels key(s): {joined_keys}")
 
@@ -148,6 +143,8 @@ class BaseAgentRunner:
             default_channel = runtime_cfg.get("default_channel")
             if default_channel not in {"api", "feishu", "all"}:
                 raise ValueError("runtime.default_channel must be one of: api, feishu, all")
+
+        self._validate_memory_config(config.get("memory"))
 
         provider_cfg = config.get("provider")
         if not isinstance(provider_cfg, dict) or not provider_cfg:
@@ -160,6 +157,53 @@ class BaseAgentRunner:
         self._validate_search_config(config.get("search"), provider_cfg)
         
         return config
+
+    def _validate_memory_config(self, memory_cfg: Optional[Dict[str, Any]]) -> None:
+        """Validate optional long-term memory configuration."""
+        if memory_cfg is None:
+            return
+        if not isinstance(memory_cfg, dict):
+            raise ValueError("memory must be a dictionary")
+
+        allowed_memory_keys = {
+            "recent_days",
+            "message_threshold",
+            "min_interval_seconds",
+            "stale_flush_seconds",
+        }
+        unsupported_memory_keys = sorted(set(memory_cfg) - allowed_memory_keys)
+        if unsupported_memory_keys:
+            joined_keys = ", ".join(unsupported_memory_keys)
+            raise ValueError(f"Unsupported memory key(s): {joined_keys}")
+
+        for key in ("recent_days", "message_threshold"):
+            if key in memory_cfg:
+                self._validate_positive_int(memory_cfg[key], f"memory.{key}")
+        if "min_interval_seconds" in memory_cfg:
+            self._validate_non_negative_number(
+                memory_cfg["min_interval_seconds"],
+                "memory.min_interval_seconds",
+            )
+        if "stale_flush_seconds" in memory_cfg:
+            self._validate_positive_number(
+                memory_cfg["stale_flush_seconds"],
+                "memory.stale_flush_seconds",
+            )
+
+    @staticmethod
+    def _validate_positive_int(value: Any, name: str) -> None:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+
+    @staticmethod
+    def _validate_positive_number(value: Any, name: str) -> None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(f"{name} must be a positive number")
+
+    @staticmethod
+    def _validate_non_negative_number(value: Any, name: str) -> None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ValueError(f"{name} must be a non-negative number")
 
     def _validate_search_config(
         self,
@@ -308,6 +352,7 @@ class BaseAgentRunner:
             output_type=output_type,
             message_storage=self.message_storage,
             workspace=str(self.workspace),
+            memory_config=agent_cfg.get("memory") or {},
         )
 
     def _get_agent_model(self, agent_cfg: Dict[str, Any]) -> Optional[str]:

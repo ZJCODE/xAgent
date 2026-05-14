@@ -18,6 +18,7 @@ class _FakeAgent:
     def __init__(self):
         self.chat_calls = []
         self.observe_calls = []
+        self.flush_count = 0
 
     async def chat(self, **kwargs):
         self.chat_calls.append(kwargs)
@@ -26,6 +27,9 @@ class _FakeAgent:
     async def observe(self, **kwargs):
         self.observe_calls.append(kwargs)
         return SimpleNamespace(replied=False, reply=None)
+
+    async def flush_memory(self):
+        self.flush_count += 1
 
 
 class _SlowChatAgent(_FakeAgent):
@@ -77,37 +81,26 @@ class FeishuAdapterTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             FeishuAdapter._normalize_log_level("chatty", LogLevel)
 
-    def test_unknown_top_level_keys_are_ignored_but_advanced_block_forwards(self):
+    def test_advanced_block_forwards(self):
         cfg = FeishuAdapterConfig.from_dict(
             {
                 "app_id": "cli_test",
                 "app_secret": "secret",
-                "custom_sdk_kwarg": "ignored",
                 "advanced": {"policy": "marker"},
             }
         )
 
         self.assertEqual(cfg.advanced, {"policy": "marker"})
 
-    def test_legacy_config_keys_are_silently_ignored(self):
-        cfg = FeishuAdapterConfig.from_dict(
-            {
-                "app_id": "cli_test",
-                "app_secret": "secret",
-                "group_require_mention": True,
-                "observe_group": True,
-                "prefetch_context": False,
-                "chat_history_count": 0,
-                "dedup_state_dir": "/tmp/old",
-            }
-        )
-
-        self.assertEqual(cfg.advanced, {})
-        self.assertFalse(hasattr(cfg, "group_require_mention"))
-        self.assertFalse(hasattr(cfg, "observe_group"))
-        self.assertFalse(hasattr(cfg, "prefetch_context"))
-        self.assertEqual(cfg.group_history_count, 10)
-        self.assertTrue(cfg.show_sender_ids)
+    def test_unknown_top_level_key_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, r"Unsupported Feishu config key\(s\): custom_sdk_kwarg"):
+            FeishuAdapterConfig.from_dict(
+                {
+                    "app_id": "cli_test",
+                    "app_secret": "secret",
+                    "custom_sdk_kwarg": "unsupported",
+                }
+            )
 
     def test_config_accepts_show_sender_ids(self):
         cfg = FeishuAdapterConfig.from_dict(
@@ -119,6 +112,14 @@ class FeishuAdapterTests(unittest.TestCase):
         )
 
         self.assertTrue(cfg.show_sender_ids)
+
+    def test_stop_flushes_agent_memory(self):
+        agent = _FakeAgent()
+        adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+
+        asyncio.run(adapter.stop())
+
+        self.assertEqual(agent.flush_count, 1)
 
     def test_log_redaction_hides_ws_credentials(self):
         record = logging.LogRecord(

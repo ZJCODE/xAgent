@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from datetime import date, timedelta
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from ..config import AgentConfig
 from ...schemas import Message, MessageType
@@ -24,20 +24,38 @@ class MemoryHandler:
     implementation.  No SQLite, no FTS — just files + shell commands.
     """
 
-    RECENT_DAYS = 3
-    MESSAGE_THRESHOLD = 10
-    MIN_INTERVAL_SECONDS = 300
+    RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
+    MESSAGE_THRESHOLD = AgentConfig.MEMORY_MESSAGE_THRESHOLD
+    MIN_INTERVAL_SECONDS = AgentConfig.MEMORY_MIN_INTERVAL_SECONDS
+    STALE_FLUSH_SECONDS = AgentConfig.MEMORY_STALE_FLUSH_SECONDS
 
     def __init__(
         self,
         memory: MarkdownMemory,
         llm_service: JournalLLMService,
+        *,
+        recent_days: Optional[int] = None,
+        message_threshold: Optional[int] = None,
+        min_interval_seconds: Optional[float] = None,
+        stale_flush_seconds: Optional[float] = None,
     ) -> None:
         self.memory = memory
         self.llm_service = llm_service
+        self.recent_days = self._positive_int(recent_days, self.RECENT_DAYS)
+        self.message_threshold = self._positive_int(message_threshold, self.MESSAGE_THRESHOLD)
+        self.min_interval_seconds = self._non_negative_float(
+            min_interval_seconds,
+            self.MIN_INTERVAL_SECONDS,
+        )
+        self.stale_flush_seconds = self._positive_float(
+            stale_flush_seconds,
+            self.STALE_FLUSH_SECONDS,
+        )
         self._background_tasks: set[asyncio.Task] = set()
         self._pending_messages: List[dict] = []
+        self._pending_started_at: Optional[float] = None
         self._last_write_time: float = 0.0
+        self._flush_timer_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------
     # Context retrieval (injected into system prompt every turn)
@@ -49,7 +67,7 @@ class MemoryHandler:
         This is injected verbatim into the system prompt so the model always
         has recent diary context without needing a tool call.
         """
-        days = days or self.RECENT_DAYS
+        days = days or self.recent_days
         entries = await self.memory.read_recent_dailies(days=days)
         if not entries:
             return ""
@@ -66,8 +84,9 @@ class MemoryHandler:
     def schedule_diary_write(self, messages: List[dict]) -> None:
         """Accumulate messages and schedule a background diary write when appropriate.
 
-        Waits until ``MESSAGE_THRESHOLD`` is reached **and**
-        ``MIN_INTERVAL_SECONDS`` have elapsed since the last write.
+        Flushes immediately for regular batches when the threshold and write
+        interval allow it, and always schedules a stale fallback so short
+        conversations cannot sit only in RAM indefinitely.
         """
         if not messages:
             return
@@ -75,11 +94,36 @@ class MemoryHandler:
         self._pending_messages.extend(messages)
 
         now = time.time()
-        threshold_met = len(self._pending_messages) >= self.MESSAGE_THRESHOLD
-        interval_met = (now - self._last_write_time) >= self.MIN_INTERVAL_SECONDS
+        if self._pending_started_at is None:
+            self._pending_started_at = now
 
-        if threshold_met and interval_met:
+        threshold_met = len(self._pending_messages) >= self.message_threshold
+        interval_met = (now - self._last_write_time) >= self.min_interval_seconds
+        stale_met = (now - self._pending_started_at) >= self.stale_flush_seconds
+
+        if stale_met or (threshold_met and interval_met):
             self._flush_diary_write()
+            return
+
+        self._schedule_flush_timer(now)
+
+    async def flush_pending(self) -> None:
+        """Write pending messages now and wait for in-flight memory tasks."""
+        self._cancel_flush_timer()
+
+        if self._pending_messages:
+            batch = list(self._pending_messages)
+            self._pending_messages.clear()
+            self._pending_started_at = None
+            self._last_write_time = time.time()
+            await self._do_diary_write(batch)
+
+        if self._background_tasks:
+            tasks = list(self._background_tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.error("Background memory task failed during flush: %s", result)
 
     def schedule_experience_write(
         self,
@@ -138,8 +182,11 @@ class MemoryHandler:
         if not self._pending_messages:
             return
 
+        self._cancel_flush_timer()
+
         batch = list(self._pending_messages)
         self._pending_messages.clear()
+        self._pending_started_at = None
         self._last_write_time = time.time()
 
         task = asyncio.create_task(self._do_diary_write(batch))
@@ -156,9 +203,44 @@ class MemoryHandler:
             )
             if content.strip():
                 await self.memory.append_daily(content)
+                await self._update_people_profiles(messages, content, today_str)
                 logger.debug("Background diary write: %d msgs → %d chars", len(messages), len(content))
         except Exception as exc:
             logger.error("Background diary write failed: %s", exc)
+
+    async def _update_people_profiles(
+        self,
+        messages: List[dict],
+        diary_entry: str,
+        journal_date: str,
+    ) -> None:
+        extractor = getattr(self.llm_service, "extract_people_profile_updates", None)
+        writer = getattr(self.memory, "append_people_profile", None)
+        if extractor is None or writer is None:
+            return
+
+        try:
+            profile_updates = await extractor(
+                messages=messages,
+                diary_entry=diary_entry,
+                journal_date=journal_date,
+            )
+            updates = getattr(profile_updates, "updates", []) or []
+            for update in updates:
+                update_data = update.model_dump() if hasattr(update, "model_dump") else dict(update)
+                person_key = str(update_data.get("person_key") or "").strip()
+                fact = str(update_data.get("fact") or "").strip()
+                evidence = str(update_data.get("evidence") or "").strip()
+                if not person_key or not fact or not evidence:
+                    continue
+                await writer(
+                    person_key=person_key,
+                    facts=[update_data],
+                    display_name=str(update_data.get("display_name") or person_key).strip(),
+                    target_date=date.fromisoformat(journal_date),
+                )
+        except Exception as exc:
+            logger.warning("People profile update skipped: %s", exc)
 
     # ------------------------------------------------------------------
     # Summary auto-generation
@@ -252,3 +334,76 @@ class MemoryHandler:
             return
         if exc is not None:
             logger.error("Background memory task failed: %s", exc)
+
+    def _schedule_flush_timer(self, now: Optional[float] = None) -> None:
+        if not self._pending_messages or self._pending_started_at is None:
+            return
+
+        now = now or time.time()
+        next_deadline = self._pending_started_at + self.stale_flush_seconds
+        if len(self._pending_messages) >= self.message_threshold:
+            next_deadline = min(next_deadline, self._last_write_time + self.min_interval_seconds)
+        delay = max(0.0, next_deadline - now)
+
+        self._cancel_flush_timer()
+        task = asyncio.create_task(self._run_flush_timer(delay))
+        self._flush_timer_task = task
+        task.add_done_callback(self._on_flush_timer_done)
+
+    async def _run_flush_timer(self, delay: float) -> None:
+        await asyncio.sleep(delay)
+        self._flush_timer_task = None
+        self._flush_diary_write()
+
+    def _on_flush_timer_done(self, task: asyncio.Task) -> None:
+        if self._flush_timer_task is task:
+            self._flush_timer_task = None
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            logger.error("Memory flush timer failed: %s", exc)
+
+    def _cancel_flush_timer(self) -> None:
+        task = self._flush_timer_task
+        if task is None:
+            return
+        try:
+            current_task = asyncio.current_task()
+        except RuntimeError:
+            current_task = None
+        if task is not current_task and not task.done():
+            task.cancel()
+        if task is not current_task:
+            self._flush_timer_task = None
+
+    @staticmethod
+    def _positive_int(value: Optional[int], default: int) -> int:
+        if value is None:
+            return default
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
+
+    @staticmethod
+    def _positive_float(value: Optional[float], default: float) -> float:
+        if value is None:
+            return float(default)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        return parsed if parsed > 0 else float(default)
+
+    @staticmethod
+    def _non_negative_float(value: Optional[float], default: float) -> float:
+        if value is None:
+            return float(default)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        return parsed if parsed >= 0 else float(default)

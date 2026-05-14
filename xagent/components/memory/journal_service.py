@@ -10,7 +10,7 @@ from typing import List, Optional
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from ...schemas.memory import DiaryEntry, SummaryOutput
+from ...schemas.memory import DiaryEntry, PeopleProfileUpdates, SummaryOutput
 
 
 class JournalLLMService:
@@ -72,6 +72,38 @@ class JournalLLMService:
         except Exception as exception:
             self.logger.error("Error generating %s summary: %s", period_type, exception)
             return ""
+
+    async def extract_people_profile_updates(
+        self,
+        messages: List[dict],
+        diary_entry: str,
+        journal_date: str,
+    ) -> PeopleProfileUpdates:
+        """Extract quote-backed stable people facts from a diary source batch."""
+        if not messages:
+            return PeopleProfileUpdates()
+
+        transcript = self._format_transcript(messages)
+        if not transcript.strip():
+            return PeopleProfileUpdates()
+
+        system_prompt = self.build_people_profile_system_prompt(journal_date)
+        user_prompt = self.build_people_profile_user_prompt(
+            journal_date=journal_date,
+            transcript=transcript,
+            diary_entry=diary_entry,
+        )
+
+        try:
+            parsed = await self._call_structured(
+                output_type=PeopleProfileUpdates,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+            return parsed
+        except Exception as exception:
+            self.logger.error("Error extracting people profile updates: %s", exception)
+            return PeopleProfileUpdates()
 
     @staticmethod
     def build_diary_system_prompt(journal_date: str, current_date: str | None = None) -> str:
@@ -137,6 +169,34 @@ Requirements:
         return f"""Generate a {period_type} summary for {period_label} based on this source material:
 
 {source_content}"""
+
+    @staticmethod
+    def build_people_profile_system_prompt(journal_date: str) -> str:
+        return f"""You extract durable people profile facts from an experience transcript.
+
+TARGET DATE: {journal_date}
+
+Requirements:
+- Return only stable, reusable facts about a person: preferences, roles, relationships, commitments, ongoing projects, long-term constraints, or recurring interaction patterns.
+- Each update must be tied to exactly one person.
+- person_key must be the exact speaker label from the transcript, such as the text inside [Alice].
+- Do not create updates for [agent], [assistant], [ambient context], unknown speakers, or uncertain attribution.
+- Do not infer personality labels from a single moment. Prefer concrete facts the person stated or clearly demonstrated.
+- evidence is required. It must be a short direct quote or exact source phrase from the transcript.
+- If no stable quote-backed people facts are present, return {{"updates": []}}.
+- Keep the original language of the source. Do not translate.
+
+Return JSON only, shaped as {{"updates": [{{"person_key": "speaker", "display_name": "name", "fact": "fact", "evidence": "quote", "source": "source note"}}]}}."""
+
+    @staticmethod
+    def build_people_profile_user_prompt(journal_date: str, transcript: str, diary_entry: str) -> str:
+        return f"""For {journal_date}, extract people profile updates from this transcript.
+
+Transcript:
+{transcript}
+
+Diary entry already written:
+{diary_entry}"""
 
     async def _call_structured(
         self,

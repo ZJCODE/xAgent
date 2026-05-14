@@ -1,16 +1,19 @@
 """Markdown-file store for long-term diary memory."""
 
 import asyncio
+import hashlib
 import logging
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
-MemoryScope = Literal["daily", "weekly", "monthly", "yearly", "all"]
+MemoryScope = Literal["daily", "weekly", "monthly", "yearly", "people", "all"]
 
-_VALID_SCOPES: set[str] = {"daily", "weekly", "monthly", "yearly", "all"}
+_VALID_SCOPES: set[str] = {"daily", "weekly", "monthly", "yearly", "people", "all"}
+_PROFILE_SAFE_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class MarkdownMemory:
@@ -49,12 +52,15 @@ class MarkdownMemory:
     def yearly_path(self, year: int) -> Path:
         return self.root / "yearly" / f"{year}.md"
 
+    def people_path(self, person_key: str) -> Path:
+        return self.root / "people" / f"{self.people_slug(person_key)}.md"
+
     # ------------------------------------------------------------------
     # Directory bootstrap (sync, called once in __init__)
     # ------------------------------------------------------------------
 
     def _ensure_dirs_sync(self) -> None:
-        for sub in ("daily", "weekly", "monthly", "yearly"):
+        for sub in ("daily", "weekly", "monthly", "yearly", "people"):
             (self.root / sub).mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -80,6 +86,43 @@ class MarkdownMemory:
         async with self._write_lock:
             await self._append_file(path, block)
         logger.debug("Appended daily entry: %s (%d chars)", path, len(content))
+        return path
+
+    async def append_people_profile(
+        self,
+        person_key: str,
+        facts: List[dict],
+        *,
+        display_name: Optional[str] = None,
+        target_date: Optional[date] = None,
+    ) -> Optional[Path]:
+        """Append quote-backed facts to a person's markdown profile."""
+        normalized_facts = self._normalize_profile_facts(facts)
+        if not normalized_facts:
+            return None
+
+        profile_date = target_date or date.today()
+        path = self.people_path(person_key)
+        await self._mkdir(path.parent)
+
+        async with self._write_lock:
+            existing = await asyncio.to_thread(self._read_text_sync, path)
+            new_facts = [
+                fact for fact in normalized_facts
+                if not self._profile_fact_exists(existing, fact)
+            ]
+            if not new_facts:
+                return path
+
+            block = self._format_people_profile_block(
+                person_key=person_key,
+                display_name=display_name,
+                facts=new_facts,
+                profile_date=profile_date,
+                existing=existing,
+            )
+            await self._append_file(path, block)
+        logger.debug("Appended people profile: %s (%d facts)", path, len(new_facts))
         return path
 
     # ------------------------------------------------------------------
@@ -233,6 +276,15 @@ class MarkdownMemory:
         normalized_scope = self._normalize_scope(scope)
         return self.root if normalized_scope == "all" else self.root / normalized_scope
 
+    @staticmethod
+    def people_slug(person_key: str) -> str:
+        raw_key = str(person_key or "").strip() or "person"
+        slug_base = _PROFILE_SAFE_CHARS_RE.sub("-", raw_key).strip(".-_").lower()
+        if not slug_base:
+            slug_base = "person"
+        digest = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:10]
+        return f"{slug_base[:48]}-{digest}"
+
     # ------------------------------------------------------------------
     # Internal I/O primitives (stdin-pipe based for safety)
     # ------------------------------------------------------------------
@@ -303,3 +355,54 @@ class MarkdownMemory:
         if blocks and blocks[-1] == "--":
             blocks.pop()
         return "\n".join(blocks)
+
+    @staticmethod
+    def _normalize_profile_facts(facts: List[dict]) -> List[dict]:
+        normalized: List[dict] = []
+        for item in facts:
+            if not isinstance(item, dict):
+                continue
+            fact = str(item.get("fact") or "").strip()
+            evidence = str(item.get("evidence") or "").strip()
+            if not fact or not evidence:
+                continue
+            normalized.append({
+                "fact": fact,
+                "evidence": evidence,
+                "source": str(item.get("source") or "").strip(),
+            })
+        return normalized
+
+    @staticmethod
+    def _profile_fact_exists(existing: str, fact: dict) -> bool:
+        return fact["fact"] in existing and fact["evidence"] in existing
+
+    @staticmethod
+    def _format_people_profile_block(
+        *,
+        person_key: str,
+        display_name: Optional[str],
+        facts: List[dict],
+        profile_date: date,
+        existing: str,
+    ) -> str:
+        lines: List[str] = []
+        if not existing.strip():
+            title = (display_name or person_key).strip() or person_key
+            lines.extend([
+                f"# {title}",
+                "",
+                f"Person key: `{person_key}`",
+                "",
+            ])
+        elif not existing.endswith("\n"):
+            lines.append("")
+
+        lines.extend([f"## {profile_date.isoformat()}", ""])
+        for fact in facts:
+            lines.append(f"- {fact['fact']}")
+            lines.append(f"  - Evidence: {fact['evidence']}")
+            if fact.get("source"):
+                lines.append(f"  - Source: {fact['source']}")
+        lines.append("")
+        return "\n".join(lines)

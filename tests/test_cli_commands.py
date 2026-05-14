@@ -9,10 +9,9 @@ import yaml
 from xagent.interfaces.cli import (
     InitSelection,
     build_parser,
+    handle_config,
     handle_init,
     handle_init_feishu,
-    handle_legacy_feishu,
-    handle_legacy_server,
     handle_run_channel_internal,
     handle_start,
     handle_status,
@@ -327,12 +326,12 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("feishu: running pid=4321", output)
         self.assertIn("run/feishu.pid", output)
 
-    def test_websocket_is_rejected_as_transport_not_channel(self):
+    def test_unknown_channel_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
             args = argparse.Namespace(
                 config_dir=tmpdir,
-                channels=["websocket"],
+                channels=["custom"],
                 host=None,
                 port=None,
                 open_browser=False,
@@ -346,19 +345,9 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
-        self.assertIn("websocket is an API transport, not a channel", output)
-        self.assertIn("--channel api", output)
-
-    def test_legacy_commands_print_migration_guidance(self):
-        with patch("sys.stdout") as stdout:
-            server_code = handle_legacy_server(argparse.Namespace())
-            feishu_code = handle_legacy_feishu(argparse.Namespace())
-
-        self.assertEqual(server_code, 1)
-        self.assertEqual(feishu_code, 1)
-        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
-        self.assertIn("xagent run --channel api", output)
-        self.assertIn("xagent init feishu", output)
+        self.assertIn("Unknown channel 'custom'", output)
+        self.assertIn("api", output)
+        self.assertIn("feishu", output)
 
 
 if __name__ == "__main__":

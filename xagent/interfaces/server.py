@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -325,11 +326,24 @@ class AgentHTTPServer(BaseAgentRunner):
             title="xAgent HTTP Agent Server",
             description="HTTP API for xAgent continuous-stream AI",
             version="1.0.0",
+            lifespan=self._lifespan,
         )
         self._add_routes(app)
         if self._enable_web:
             self._add_web_ui(app)
         return app
+
+    @asynccontextmanager
+    async def _lifespan(self, app: FastAPI):
+        try:
+            yield
+        finally:
+            await self._flush_agent_memory()
+
+    async def _flush_agent_memory(self) -> None:
+        flusher = getattr(self.agent, "flush_memory", None)
+        if flusher is not None:
+            await flusher()
 
     def _add_web_ui(self, app: FastAPI) -> None:
         if _STATIC_DIR.is_dir():

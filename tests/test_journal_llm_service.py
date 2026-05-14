@@ -54,6 +54,16 @@ class JournalLLMServicePromptTests(unittest.TestCase):
         self.assertIn("Bob 说活动可能要提前开始。", transcript)
         self.assertIsNone(event.sender_id)
 
+    def test_people_profile_prompt_requires_quotes_and_stable_facts(self):
+        prompt = JournalLLMService.build_people_profile_system_prompt("2026-05-14")
+
+        self.assertIn("stable, reusable facts", prompt)
+        self.assertIn("person_key must be the exact speaker label", prompt)
+        self.assertIn("evidence is required", prompt)
+        self.assertIn("Do not infer personality labels from a single moment", prompt)
+        self.assertIn("unknown speakers, or uncertain attribution", prompt)
+        self.assertIn('{"updates": []}', prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

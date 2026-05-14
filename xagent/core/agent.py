@@ -38,6 +38,7 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         message_storage: Optional[MessageStorageBase] = None,
         workspace: Optional[str] = None,
+        memory_config: Optional[Dict[str, Any]] = None,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.client = client or AsyncOpenAI()
@@ -77,9 +78,14 @@ class Agent:
 
         self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
         self.llm_service = JournalLLMService(client=self.client, model=self.model)
+        memory_config = memory_config or {}
         self.memory_handler = MemoryHandler(
             memory=self.markdown_memory,
             llm_service=self.llm_service,
+            recent_days=memory_config.get("recent_days"),
+            message_threshold=memory_config.get("message_threshold"),
+            min_interval_seconds=memory_config.get("min_interval_seconds"),
+            stale_flush_seconds=memory_config.get("stale_flush_seconds"),
         )
 
         bound_tools = list(tools or [])
@@ -134,6 +140,11 @@ class Agent:
     @classmethod
     def _memory_dir(cls, workspace: Path) -> Path:
         return workspace / AgentConfig.MEMORY_DIRNAME
+
+    async def flush_memory(self) -> None:
+        flusher = getattr(self.memory_handler, "flush_pending", None)
+        if flusher is not None:
+            await flusher()
 
     async def __call__(
         self,

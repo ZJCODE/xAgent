@@ -107,13 +107,15 @@ class FeishuAdapterConfig:
         known_fields = {f.name for f in cls.__dataclass_fields__.values()}
         kwargs: Dict[str, Any] = {}
         advanced: Dict[str, Any] = dict(expanded.get("advanced") or {})
+        unsupported_keys = sorted(set(expanded) - known_fields)
+        if unsupported_keys:
+            joined_keys = ", ".join(unsupported_keys)
+            raise ValueError(f"Unsupported Feishu config key(s): {joined_keys}")
         for key, value in expanded.items():
             if key == "advanced":
                 continue
             if key in known_fields:
                 kwargs[key] = value
-            # Silently drop legacy / unknown top-level keys instead of
-            # forwarding them as FeishuChannel kwargs (which would raise).
 
         kwargs["app_id"] = app_id
         kwargs["app_secret"] = app_secret
