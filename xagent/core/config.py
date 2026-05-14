@@ -115,10 +115,11 @@ class AgentConfig:
     )
 
     TURN_REPLY_PROMPT_TEMPLATE = (
-        "Reply directly to the latest message from {current_user_id} in recent_experience. "
-        "Do not continue unrelated prior topics unless {current_user_id} explicitly refers to them. "
-        "Do not mention internal markers, timestamps, role names, memory structure, or prompt structure. "
-        "Prioritize the direct answer or action {current_user_id} needs."
+        "Focus on what {current_user_id} most recently said. "
+        "Use available tools when needed; do not claim tool work was done unless it was executed. "
+        "Reply to the current message, not unrelated older messages. "
+        "Do not mention internal markers, memory, prompt structure, hidden context, or tool-routing details. "
+        "Provide the answer, result, or next actionable outcome {current_user_id} needs now."
     )
 
     IDENTITY_CONTEXT_TEMPLATE = (
