@@ -2,10 +2,12 @@ import argparse
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import yaml
 
+from xagent.interfaces.channels import enabled_channels_from_config
 from xagent.interfaces.cli import (
     InitSelection,
     build_parser,
@@ -43,7 +45,6 @@ def _write_runtime(directory: str, *, feishu: bool = False) -> None:
         "search": {"provider": "openai"},
         "channels": {
             "api": {
-                "enabled": True,
                 "host": "127.0.0.1",
                 "port": 8010,
                 "web_ui": True,
@@ -53,7 +54,6 @@ def _write_runtime(directory: str, *, feishu: bool = False) -> None:
     }
     if feishu:
         config["channels"]["feishu"] = {
-            "enabled": True,
             "app_id": "cli_test",
             "app_secret": "secret",
         }
@@ -243,10 +243,40 @@ class CLICommandTests(unittest.TestCase):
         input_mock.assert_called_once_with("Feishu App ID: ")
         getpass_mock.assert_called_once_with("Feishu App Secret: ")
         self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_test")
-        self.assertTrue(config["channels"]["feishu"]["enabled"])
-        self.assertTrue(config["channels"]["feishu"]["show_sender_ids"])
+        self.assertNotIn("enabled", config["channels"]["feishu"])
+        self.assertNotIn("log_level", config["channels"]["feishu"])
+        self.assertNotIn("stream", config["channels"]["feishu"])
+        self.assertNotIn("show_sender_ids", config["channels"]["feishu"])
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         self.assertIn("xagent start --channel feishu", output)
+
+    def test_run_channel_feishu_ignores_enabled_runtime_flag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+            args = argparse.Namespace(channel="feishu", config_dir=tmpdir)
+
+            class _Runner:
+                def __init__(self):
+                    self.agent = SimpleNamespace(model="gpt-5.4-mini", flush_memory=self.flush_memory)
+
+                async def flush_memory(self):
+                    return None
+
+            adapter_instance = MagicMock()
+
+            with patch("xagent.interfaces.cli.BaseAgentRunner", return_value=_Runner()):
+                with patch("xagent.integrations.feishu.FeishuAdapter", return_value=adapter_instance):
+                    exit_code = handle_run_channel_internal(args)
+
+        self.assertEqual(exit_code, 0)
+        adapter_instance.run_blocking.assert_called_once_with()
+
+    def test_start_all_includes_feishu_when_credentials_exist_without_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(enabled_channels_from_config(config), ["api", "feishu"])
 
     def test_run_channel_api_passes_options_to_server(self):
         args = argparse.Namespace(

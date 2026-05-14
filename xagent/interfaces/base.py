@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, create_model
 from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..components import MessageStorageBase, MessageStorageLocal
+from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
 from ..tools import create_web_search_tool, run_command
 from ..tools.search_tool import SEARCH_PROVIDER_OPENAI, normalize_search_provider
 
@@ -74,6 +75,7 @@ class BaseAgentRunner:
         
         # Local runtime data lives beside config.yaml.
         self.workspace = self.config_dir
+        self.observability = self._initialize_observability(self.config)
 
         # Initialize components in dependency order
         self.message_storage = self._initialize_message_storage()
@@ -120,7 +122,15 @@ class BaseAgentRunner:
         if not isinstance(config, dict):
             raise ValueError("Configuration must be a dictionary")
         
-        allowed_config_keys = {"provider", "search", "output_schema", "channels", "runtime", "memory"}
+        allowed_config_keys = {
+            "provider",
+            "search",
+            "output_schema",
+            "channels",
+            "runtime",
+            "memory",
+            "observability",
+        }
         unsupported_keys = sorted(set(config) - allowed_config_keys)
         if unsupported_keys:
             joined_keys = ", ".join(unsupported_keys)
@@ -145,6 +155,7 @@ class BaseAgentRunner:
                 raise ValueError("runtime.default_channel must be one of: api, feishu, all")
 
         self._validate_memory_config(config.get("memory"))
+        self._validate_observability_config(config.get("observability"))
 
         provider_cfg = config.get("provider")
         if not isinstance(provider_cfg, dict) or not provider_cfg:
@@ -189,6 +200,59 @@ class BaseAgentRunner:
                 memory_cfg["stale_flush_seconds"],
                 "memory.stale_flush_seconds",
             )
+
+    def _validate_observability_config(self, observability_cfg: Optional[Dict[str, Any]]) -> None:
+        """Validate optional Langfuse observability configuration."""
+        if observability_cfg is None:
+            return
+        if not isinstance(observability_cfg, dict):
+            raise ValueError("observability must be a dictionary")
+
+        allowed_observability_keys = {
+            "enabled",
+            "provider",
+            "public_key",
+            "secret_key",
+            "base_url",
+            "sample_rate",
+            "debug",
+            "tracing_enabled",
+        }
+        unsupported_observability_keys = sorted(set(observability_cfg) - allowed_observability_keys)
+        if unsupported_observability_keys:
+            joined_keys = ", ".join(unsupported_observability_keys)
+            raise ValueError(f"Unsupported observability key(s): {joined_keys}")
+
+        if "enabled" in observability_cfg and not isinstance(observability_cfg["enabled"], bool):
+            raise ValueError("observability.enabled must be a boolean")
+        if not observability_cfg.get("enabled", False):
+            return
+
+        provider = observability_cfg.get("provider")
+        if not isinstance(provider, str) or provider.strip().lower() != "langfuse":
+            raise ValueError("observability.provider must be langfuse")
+
+        for key in ("public_key", "secret_key"):
+            value = observability_cfg.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"observability.{key} is required when observability is enabled")
+
+        if "base_url" in observability_cfg:
+            base_url = observability_cfg.get("base_url")
+            if not isinstance(base_url, str) or not base_url.strip():
+                raise ValueError("observability.base_url must be a non-empty string")
+        if "sample_rate" in observability_cfg:
+            sample_rate = observability_cfg.get("sample_rate")
+            if (
+                isinstance(sample_rate, bool)
+                or not isinstance(sample_rate, (int, float))
+                or sample_rate < 0
+                or sample_rate > 1
+            ):
+                raise ValueError("observability.sample_rate must be between 0 and 1")
+        for key in ("debug", "tracing_enabled"):
+            if key in observability_cfg and not isinstance(observability_cfg[key], bool):
+                raise ValueError(f"observability.{key} must be a boolean")
 
     @staticmethod
     def _validate_positive_int(value: Any, name: str) -> None:
@@ -353,7 +417,12 @@ class BaseAgentRunner:
             message_storage=self.message_storage,
             workspace=str(self.workspace),
             memory_config=agent_cfg.get("memory") or {},
+            observability=self.observability,
         )
+
+    def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:
+        """Build the optional observability runtime."""
+        return create_observability_runtime(agent_cfg.get("observability"))
 
     def _get_agent_model(self, agent_cfg: Dict[str, Any]) -> Optional[str]:
         """Read the model from provider.model."""
@@ -377,10 +446,7 @@ class BaseAgentRunner:
         if api_key:
             client_kwargs["api_key"] = api_key
 
-        if not client_kwargs:
-            return None
-
-        return AsyncOpenAI(**client_kwargs)
+        return self.observability.create_client(client_kwargs)
     
     def _load_agent_tools(
         self,

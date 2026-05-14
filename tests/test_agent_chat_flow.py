@@ -9,6 +9,7 @@ from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.tools.executor import ToolExecutor
+from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
 
 
@@ -64,6 +65,32 @@ class FakeMemoryHandler:
     def schedule_experience_write(self, messages, caused_reply=False):
         self.experience_messages = messages
         self.caused_reply = caused_reply
+
+
+class FakeObservabilityRuntime:
+    enabled = True
+
+    def __init__(self):
+        self.turn_kwargs = None
+        self.entered = False
+        self.exited = False
+        self.flushed = False
+
+    def create_client(self, client_kwargs):
+        return None
+
+    def agent_turn(self, **kwargs):
+        self.turn_kwargs = kwargs
+        return self
+
+    def __enter__(self):
+        self.entered = True
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.exited = True
+
+    async def flush(self):
+        self.flushed = True
 
 
 class CapturingModelClient:
@@ -277,12 +304,22 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
-    def _build_agent(self, storage, model_client, tool_executor=None, tools=None, memory_handler=None):
+    def _build_agent(
+        self,
+        storage,
+        model_client,
+        tool_executor=None,
+        tools=None,
+        memory_handler=None,
+        observability=None,
+    ):
         agent = Agent.__new__(Agent)
+        agent.model = AgentConfig.DEFAULT_MODEL
         agent.output_type = None
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent"
         agent._private_handler = None
+        agent.observability = observability or NoopObservabilityRuntime()
         agent.tool_manager = FakeToolManager(tools=tools)
         agent.model_client = model_client
         agent.message_storage = storage
@@ -327,6 +364,48 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             [message.role for message in storage.messages],
             [RoleType.USER, RoleType.ASSISTANT],
         )
+
+    async def test_chat_wraps_turn_in_observability_context(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "Traced answer"),
+        ])
+        observability = FakeObservabilityRuntime()
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            observability=observability,
+        )
+
+        result = await Agent.chat(
+            agent,
+            user_message="trace this",
+            user_id="alice",
+            stream=True,
+            private=True,
+        )
+
+        self.assertEqual(result, "Traced answer")
+        self.assertTrue(observability.entered)
+        self.assertTrue(observability.exited)
+        self.assertEqual(observability.turn_kwargs["user_id"], "alice")
+        self.assertEqual(observability.turn_kwargs["model"], AgentConfig.DEFAULT_MODEL)
+        self.assertTrue(observability.turn_kwargs["private"])
+        self.assertEqual(observability.turn_kwargs["memory_mode"], "read_only")
+        self.assertTrue(observability.turn_kwargs["stream"])
+
+    async def test_flush_memory_flushes_observability(self):
+        storage = InMemoryMessageStorage()
+        observability = FakeObservabilityRuntime()
+        agent = self._build_agent(
+            storage=storage,
+            model_client=CapturingModelClient([]),
+            observability=observability,
+        )
+
+        await Agent.flush_memory(agent)
+
+        self.assertTrue(observability.flushed)
 
     async def test_chat_caps_history_before_loading_messages(self):
         storage = InMemoryMessageStorage([

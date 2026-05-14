@@ -254,6 +254,10 @@ class InitSelection:
     identity: str
     search_provider: str = "none"
     search_api_key: str = ""
+    observability_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = ""
 
 
 OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -263,6 +267,9 @@ CUSTOM_BASE_URL_PLACEHOLDER = "https://api.example.com/v1"
 API_KEY_PLACEHOLDER = "your_api_key_here"
 BRAVE_SEARCH_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 MODEL_PLACEHOLDER = "your_model_here"
+LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
+LANGFUSE_PUBLIC_KEY_PLACEHOLDER = "pk-lf-..."
+LANGFUSE_SECRET_KEY_PLACEHOLDER = "sk-lf-..."
 
 OPENAI_MODELS = (
     "gpt-5.4",
@@ -336,7 +343,6 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
         },
         "channels": {
             "api": {
-                "enabled": True,
                 "host": BaseAgentConfig.DEFAULT_HOST,
                 "port": BaseAgentConfig.DEFAULT_PORT,
                 "web_ui": True,
@@ -356,6 +362,14 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
     if search_config["provider"] == "brave":
         search_config["api_key"] = selection.search_api_key or BRAVE_SEARCH_API_KEY_PLACEHOLDER
     config["search"] = search_config
+    if selection.observability_enabled:
+        config["observability"] = {
+            "enabled": True,
+            "provider": "langfuse",
+            "public_key": selection.langfuse_public_key or LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
+            "secret_key": selection.langfuse_secret_key or LANGFUSE_SECRET_KEY_PLACEHOLDER,
+            "base_url": selection.langfuse_base_url or LANGFUSE_BASE_URL,
+        }
     if schema:
         config["output_schema"] = _weather_output_schema()
     return yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
@@ -524,6 +538,31 @@ def collect_init_selection(
         if not search_api_key:
             search_api_key = BRAVE_SEARCH_API_KEY_PLACEHOLDER
 
+    observability_enabled = _prompt_yes_no(
+        "Enable Langfuse observability?",
+        default=False,
+        input_func=input_func,
+    )
+    langfuse_public_key = ""
+    langfuse_secret_key = ""
+    langfuse_base_url = ""
+    if observability_enabled:
+        langfuse_public_key = _prompt_text(
+            "Langfuse public key",
+            default=LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
+            input_func=input_func,
+        )
+        langfuse_secret_key = secret_input_func(
+            "Langfuse secret key (leave blank to fill in later): "
+        ).strip()
+        if not langfuse_secret_key:
+            langfuse_secret_key = LANGFUSE_SECRET_KEY_PLACEHOLDER
+        langfuse_base_url = _prompt_text(
+            "Langfuse base URL",
+            default=LANGFUSE_BASE_URL,
+            input_func=input_func,
+        )
+
     identity = _prompt_multiline_identity(input_func=input_func)
 
     return InitSelection(
@@ -534,6 +573,10 @@ def collect_init_selection(
         identity=identity,
         search_provider=search_provider,
         search_api_key=search_api_key,
+        observability_enabled=observability_enabled,
+        langfuse_public_key=langfuse_public_key,
+        langfuse_secret_key=langfuse_secret_key,
+        langfuse_base_url=langfuse_base_url,
     )
 
 
@@ -1278,20 +1321,15 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
 
     api_cfg = channels_cfg.setdefault("api", {})
     if isinstance(api_cfg, dict):
-        api_cfg.setdefault("enabled", True)
         api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
         api_cfg.setdefault("port", BaseAgentConfig.DEFAULT_PORT)
         api_cfg.setdefault("web_ui", True)
 
     channels_cfg["feishu"] = {
-        "enabled": True,
         "app_id": app_id,
         "app_secret": app_secret,
-        "log_level": "info",
-        "stream": False,
         "enable_memory": True,
         "group_history_count": 10,
-        "show_sender_ids": True,
     }
     config.setdefault("runtime", {}).setdefault("default_channel", "api")
 

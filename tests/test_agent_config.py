@@ -7,12 +7,18 @@ from unittest.mock import patch
 import yaml
 
 from xagent.core.config import AgentConfig
+from xagent.interfaces.channels import enabled_channels_from_config
 from xagent.interfaces.cli import InitSelection, collect_init_selection, init_agent_directory
 from xagent.interfaces.base import BaseAgentRunner
 
 
 def write_identity(directory: str, text: str = "You are a test assistant.") -> None:
     (Path(directory) / "identity.md").write_text(text, encoding="utf-8")
+
+
+class RunnerWithoutAgent(BaseAgentRunner):
+    def _initialize_agent(self):
+        return object()
 
 
 class AgentConfigPromptTests(unittest.TestCase):
@@ -93,15 +99,17 @@ provider:
             self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
             self.assertEqual(config["provider"]["name"], "openai")
             self.assertEqual(config["search"]["provider"], "openai")
-            self.assertTrue(config["channels"]["api"]["enabled"])
+            self.assertNotIn("enabled", config["channels"]["api"])
             self.assertTrue(config["channels"]["api"]["web_ui"])
             self.assertEqual(config["channels"]["api"]["host"], "127.0.0.1")
             self.assertEqual(config["channels"]["api"]["port"], 8010)
+            self.assertEqual(enabled_channels_from_config(config), ["api"])
             self.assertEqual(config["runtime"]["default_channel"], "api")
             self.assertEqual(config["memory"]["recent_days"], 7)
             self.assertEqual(config["memory"]["stale_flush_seconds"], 120)
             self.assertEqual(config["memory"]["message_threshold"], 10)
             self.assertEqual(config["memory"]["min_interval_seconds"], 300)
+            self.assertNotIn("observability", config)
             self.assertNotIn("system_prompt:", config_text)
             self.assertNotIn("output_schema:", config_text)
             self.assertNotIn("workspace:", config_text)
@@ -192,11 +200,41 @@ provider:
             self.assertEqual(config["search"]["provider"], "none")
             self.assertEqual(result.identity_path.read_text(encoding="utf-8"), "# Identity\n\nYou report weather.\n")
 
+    def test_init_writes_observability_only_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                api_key="secret-key",
+                model="gpt-5.4-mini",
+                identity="# Identity\n\nYou report traces.\n",
+                search_provider="none",
+                observability_enabled=True,
+                langfuse_public_key="pk-lf-test",
+                langfuse_secret_key="sk-lf-test",
+                langfuse_base_url="https://us.cloud.langfuse.com",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                config["observability"],
+                {
+                    "enabled": True,
+                    "provider": "langfuse",
+                    "public_key": "pk-lf-test",
+                    "secret_key": "sk-lf-test",
+                    "base_url": "https://us.cloud.langfuse.com",
+                },
+            )
+
     def test_collect_init_selection_supports_custom_identity(self):
         answers = iter([
             "1",
             "4",
             "1",
+            "",
             "You investigate codebases.",
             ".",
         ])
@@ -213,11 +251,34 @@ provider:
         self.assertEqual(selection.search_provider, "openai")
         self.assertEqual(selection.identity, "# Identity\n\nYou investigate codebases.\n")
 
+    def test_collect_init_selection_supports_langfuse_observability(self):
+        answers = iter([
+            "1",
+            "",
+            "4",
+            "y",
+            "pk-lf-test",
+            "https://jp.cloud.langfuse.com",
+            ".",
+        ])
+        secrets = iter(["openai-key", "sk-lf-test"])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: next(secrets),
+        )
+
+        self.assertTrue(selection.observability_enabled)
+        self.assertEqual(selection.langfuse_public_key, "pk-lf-test")
+        self.assertEqual(selection.langfuse_secret_key, "sk-lf-test")
+        self.assertEqual(selection.langfuse_base_url, "https://jp.cloud.langfuse.com")
+
     def test_collect_init_selection_deepseek_decide_later_uses_model_placeholder(self):
         answers = iter([
             "2",
             "3",
             "3",
+            "",
             ".",
         ])
 
@@ -238,6 +299,7 @@ provider:
             "3",
             "3",
             "1",
+            "",
             ".",
         ])
 
@@ -257,6 +319,7 @@ provider:
             "1",
             "",
             "3",
+            "",
             ".",
         ])
         secrets = iter(["openai-key", "brave-key"])
@@ -275,6 +338,7 @@ provider:
             "2",
             "1",
             "1",
+            "",
             ".",
         ])
 
@@ -290,6 +354,7 @@ provider:
 
     def test_collect_init_selection_does_not_label_defaults(self):
         answers = iter([
+            "",
             "",
             "",
             "",
@@ -428,7 +493,6 @@ provider:
     api_key: "test-key"
 channels:
     api:
-        enabled: true
         web_ui: true
 runtime:
     default_channel: api
@@ -440,7 +504,8 @@ runtime:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertEqual(runner.config["runtime"]["default_channel"], "api")
-            self.assertTrue(runner.config["channels"]["api"]["enabled"])
+            self.assertNotIn("enabled", runner.config["channels"]["api"])
+            self.assertEqual(enabled_channels_from_config(runner.config), ["api"])
 
     def test_config_accepts_memory_section_and_passes_to_handler(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -466,6 +531,111 @@ memory:
             self.assertEqual(runner.agent.memory_handler.stale_flush_seconds, 30)
             self.assertEqual(runner.agent.memory_handler.message_threshold, 3)
             self.assertEqual(runner.agent.memory_handler.min_interval_seconds, 0)
+
+    def test_config_accepts_disabled_observability_without_credentials(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+observability:
+    enabled: false
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertFalse(runner.observability.enabled)
+
+    def test_config_accepts_enabled_langfuse_observability(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+observability:
+    enabled: true
+    provider: langfuse
+    public_key: pk-lf-test
+    secret_key: sk-lf-test
+    base_url: https://cloud.langfuse.com
+    sample_rate: 0.5
+    debug: false
+    tracing_enabled: true
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = RunnerWithoutAgent(config_dir=tmpdir)
+
+            self.assertTrue(runner.observability.enabled)
+
+    def test_config_rejects_invalid_observability_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+observability:
+    enabled: true
+    provider: other
+    public_key: pk-lf-test
+    secret_key: sk-lf-test
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "observability.provider"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_enabled_observability_without_secret_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+observability:
+    enabled: true
+    provider: langfuse
+    public_key: pk-lf-test
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "observability.secret_key"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_invalid_observability_sample_rate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+observability:
+    enabled: true
+    provider: langfuse
+    public_key: pk-lf-test
+    secret_key: sk-lf-test
+    sample_rate: 2
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "observability.sample_rate"):
+                BaseAgentRunner(config_dir=tmpdir)
 
     def test_config_rejects_invalid_memory_section(self):
         with tempfile.TemporaryDirectory() as tmpdir:

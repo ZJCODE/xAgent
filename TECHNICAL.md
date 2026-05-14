@@ -60,6 +60,7 @@ xagent run --channel api --dir ~/.xagent --host 127.0.0.1 --port 8010
 - `channels`：可选，API/Feishu 等可托管运行入口配置。
 - `runtime`：可选，CLI 运行时默认值。
 - `memory`：可选，长期记忆读取窗口和后台写入策略。
+- `observability`：可选，Langfuse 观测与 tracing 配置。
 
 出现其他顶层键会在启动时失败，例如 `agent`、`system_prompt`、`server`、`workspace` 都不是当前支持的配置项。
 
@@ -75,7 +76,6 @@ search:
   provider: openai
 channels:
   api:
-    enabled: true
     host: 127.0.0.1
     port: 8010
     web_ui: true
@@ -135,7 +135,33 @@ search:
 
 当搜索开启时，Agent 会加载 `web_search` 工具；无论搜索是否开启，`run_command` 工具都会作为内置工具加载。
 
-### 2.3 memory
+### 2.3 observability
+
+`observability` 用于启用 Langfuse 对 OpenAI-compatible 模型调用的观测。默认 `xagent init` 不写这个顶层键，等价于关闭观测；只有在初始化时明确选择启用，或手动添加 `enabled: true` 时才会加载 Langfuse wrapper。
+
+```yaml
+observability:
+  enabled: true
+  provider: langfuse
+  public_key: pk-lf-...
+  secret_key: sk-lf-...
+  base_url: https://cloud.langfuse.com
+  sample_rate: 1.0
+  debug: false
+  tracing_enabled: true
+```
+
+- `provider`：当前仅支持 `langfuse`。
+- `public_key` / `secret_key`：Langfuse 项目凭据。`xagent init` 启用观测时会写入本地 `config.yaml`。
+- `base_url`：Langfuse 服务地址。EU 默认是 `https://cloud.langfuse.com`；也可使用 US、Japan、HIPAA 或自托管地址。
+- `sample_rate`：可选，范围 `0.0` 到 `1.0`。
+- `debug` / `tracing_enabled`：可选，分别映射 Langfuse SDK 的调试和 tracing 开关。
+
+启用后，xAgent 会在创建 OpenAI-compatible `AsyncOpenAI` client 时使用 `langfuse.openai.AsyncOpenAI`。主对话、流式回复、工具调用循环、图片 caption、长期记忆 LLM 格式化以及 OpenAI built-in search 都会共用这个 client。Chat Completions 是主要覆盖路径；OpenAI Responses API search 目前按 Langfuse SDK 能力做 best-effort 捕获。
+
+Langfuse SDK 会在后台排队发送事件。CLI 单次 chat、observe、Feishu 进程退出和 API server lifespan shutdown 都会复用 xAgent 的 flush 路径，尽量在进程结束前提交观测事件。flush 失败只会写 warning，不会阻止消息或记忆落盘。
+
+### 2.4 memory
 
 `memory` 控制长期记忆读取窗口和后台写入策略：
 
@@ -154,7 +180,7 @@ memory:
 
 人物档案保存在 `memory/people/`。它只追加带日期和证据片段的稳定信息；默认不会把所有人物档案注入每一轮 prompt，需要时可通过记忆搜索读取。
 
-### 2.4 output_schema
+### 2.5 output_schema
 
 `output_schema` 用于把模型回复约束为 Pydantic 结构。支持字段类型：`str`、`int`、`float`、`bool`、`list`、`dict`；`list` 可以通过 `items` 指定元素类型。
 
@@ -175,7 +201,7 @@ output_schema:
 
 启用结构化输出后，Agent 会使用 JSON object 模式，并且内部会关闭流式文本增量。即使请求里传 `stream: true`，SSE/WebSocket 也会返回一个完整 `message`，而不是多个 `delta`。
 
-### 2.5 identity.md
+### 2.6 identity.md
 
 `identity.md` 是必填文件，内容不能为空。它定义 Agent 的身份、语气和行为边界。服务启动时会读取该文件；也可以通过 HTTP 接口热更新：
 
@@ -186,14 +212,13 @@ Content-Type: application/json
 {"identity":"# Identity\n\nYou are a helpful assistant."}
 ```
 
-### 2.6 channels
+### 2.7 channels
 
 `channels.api` 控制 API channel。它始终暴露 HTTP JSON、SSE 和 WebSocket；`web_ui: true` 只控制是否额外挂载内置静态页面，不影响 `/chat`、`/observe`、`/ws/chat` 或 `/ws/observe`。
 
 ```yaml
 channels:
   api:
-    enabled: true
     host: 127.0.0.1
     port: 8010
     web_ui: true
@@ -206,14 +231,10 @@ channels:
 ```yaml
 channels:
   feishu:
-    enabled: true
     app_id: cli_xxx
     app_secret: ${LARK_APP_SECRET}
-    log_level: info
-    stream: false
     enable_memory: true
     group_history_count: 10
-    show_sender_ids: true
 ```
 
 ## 3. 启动参数

@@ -61,14 +61,10 @@ This updates `~/.xagent/config.yaml`:
 ```yaml
 channels:
   feishu:
-    enabled: true
     app_id: cli_xxx
     app_secret: your_secret  # or ${LARK_APP_SECRET}
-    log_level: info
-    stream: false
     enable_memory: true
     group_history_count: 10
-    show_sender_ids: true
 ```
 
 `${ENV_VAR}` placeholders are expanded at load time — keep secrets out of git.

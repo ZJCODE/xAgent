@@ -13,6 +13,12 @@ CHANNEL_ALL = "all"
 VALID_CHANNELS = {CHANNEL_API, CHANNEL_FEISHU}
 
 
+def _feishu_channel_enabled(config: Mapping[str, Any]) -> bool:
+    if "enabled" in config:
+        return bool(config.get("enabled"))
+    return bool(config.get("app_id") and config.get("app_secret"))
+
+
 class ChannelSelectionError(ValueError):
     """Raised when a user provided an invalid channel selection."""
 
@@ -44,7 +50,7 @@ def enabled_channels_from_config(config: Optional[Mapping[str, Any]]) -> list[st
 
     feishu_cfg = channels.get(CHANNEL_FEISHU)
     feishu_cfg = feishu_cfg if isinstance(feishu_cfg, Mapping) else {}
-    if bool(feishu_cfg.get("enabled", False)):
+    if _feishu_channel_enabled(feishu_cfg):
         result.append(CHANNEL_FEISHU)
 
     return result or [CHANNEL_API]
@@ -91,4 +97,9 @@ def feishu_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(channels, Mapping):
         return {}
     data = channels.get(CHANNEL_FEISHU)
-    return dict(data) if isinstance(data, Mapping) else {}
+    if not isinstance(data, Mapping):
+        return {}
+
+    runtime_config = dict(data)
+    runtime_config.pop("enabled", None)
+    return runtime_config

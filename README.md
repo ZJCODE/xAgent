@@ -22,6 +22,8 @@ Follow the prompts to choose your provider, model, API key, search provider, and
 
 Search is optional. OpenAI providers can use OpenAI built-in web search without an extra key, DuckDuckGo, Brave Search, or no search. Other providers can use DuckDuckGo, Brave Search, or no search. Brave Search requires a Brave Search API key in `search.api_key` or `BRAVE_SEARCH_API_KEY`.
 
+Langfuse observability is included for teams that need LLM tracing, latency, usage, and error monitoring. It is disabled by default; `xagent init` can write an `observability` block only when you choose to enable it.
+
 ## Use From The CLI
 
 Start an interactive chat:

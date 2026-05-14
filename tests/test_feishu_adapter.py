@@ -102,6 +102,16 @@ class FeishuAdapterTests(unittest.TestCase):
                 }
             )
 
+    def test_config_defaults_hide_sender_ids(self):
+        cfg = FeishuAdapterConfig.from_dict(
+            {
+                "app_id": "cli_test",
+                "app_secret": "secret",
+            }
+        )
+
+        self.assertFalse(cfg.show_sender_ids)
+
     def test_config_accepts_show_sender_ids(self):
         cfg = FeishuAdapterConfig.from_dict(
             {
@@ -251,8 +261,9 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertEqual(resolver.calls[0], ("ou_sender", None, "open_id", "user"))
         user_message = agent.chat_calls[0]["user_message"]
-        self.assertIn("Alice(ou_sender)", user_message)
-        self.assertIn("@Mono(ou_bot) @Tom(ou_tom) hi", user_message)
+        self.assertIn("Alice ", user_message)
+        self.assertNotIn("Alice(ou_sender)", user_message)
+        self.assertIn("@Mono @Tom hi", user_message)
 
     def test_group_mention_from_other_bot_sender_is_routed(self):
         agent = _FakeAgent()
@@ -279,7 +290,8 @@ class FeishuAdapterTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertEqual(len(agent.chat_calls), 1)
-        self.assertIn("Helper Bot(ou_helper_bot)", agent.chat_calls[0]["user_message"])
+        self.assertIn("Helper Bot ", agent.chat_calls[0]["user_message"])
+        self.assertNotIn("Helper Bot(ou_helper_bot)", agent.chat_calls[0]["user_message"])
 
     def test_direct_chat_does_not_use_id_like_sender_name_fallback(self):
         agent = _FakeAgent()
@@ -559,15 +571,15 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertNotIn("[Feishu group context]", user_message)
         self.assertNotIn("The following recent group messages are context only", user_message)
         self.assertNotIn("[Current mention]", user_message)
-        self.assertIn(f"Alice(ou_alice) {format_feishu_timestamp(1700000000000)}: hi all", user_message)
-        self.assertIn(f"Bob(ou_bob) {format_feishu_timestamp(1700000001000)}: ready?", user_message)
-        self.assertIn(f"Carol(ou_user) {format_feishu_timestamp(1700000002000)}: @Mono what's up", user_message)
+        self.assertIn(f"Alice {format_feishu_timestamp(1700000000000)}: hi all", user_message)
+        self.assertIn(f"Bob {format_feishu_timestamp(1700000001000)}: ready?", user_message)
+        self.assertIn(f"Carol {format_feishu_timestamp(1700000002000)}: @Mono what's up", user_message)
         self.assertNotIn("metadata", agent.chat_calls[0])
         self.assertEqual(captured["kwargs"]["chat_id"], "oc_group")
         self.assertEqual(captured["kwargs"]["current_message_id"], "om_at")
         self.assertIsNone(captured["kwargs"]["thread_id"])
         self.assertEqual(captured["kwargs"]["history_count"], 10)
-        self.assertTrue(captured["kwargs"]["show_sender_ids"])
+        self.assertFalse(captured["kwargs"]["show_sender_ids"])
 
     def test_group_mention_can_show_sender_ids_when_enabled(self):
         from xagent.integrations.feishu.history import format_feishu_timestamp
@@ -685,7 +697,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
         self.assertIn("room_name: Project Room", agent.chat_calls[0]["user_message"])
         self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
-        self.assertIn(f"Telos(ou_user) {format_feishu_timestamp(1700000000000)}: @Mono hey", agent.chat_calls[0]["user_message"])
+        self.assertIn(f"Telos {format_feishu_timestamp(1700000000000)}: @Mono hey", agent.chat_calls[0]["user_message"])
 
     def test_history_failure_still_replies_to_current_mention(self):
         self._patch_fetcher(error=RuntimeError("no scope"))

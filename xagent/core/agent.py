@@ -13,6 +13,7 @@ from ..components import (
     MessageStoragePrivateTemp,
 )
 from ..components.memory import JournalLLMService
+from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
 from .config import AgentConfig, MemoryMode, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .tools import ToolExecutor, ToolManager
@@ -39,9 +40,11 @@ class Agent:
         message_storage: Optional[MessageStorageBase] = None,
         workspace: Optional[str] = None,
         memory_config: Optional[Dict[str, Any]] = None,
+        observability: Optional[ObservabilityRuntime] = None,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
-        self.client = client or AsyncOpenAI()
+        self.observability = observability or NoopObservabilityRuntime()
+        self.client = client or self.observability.create_client({}) or AsyncOpenAI()
         self.output_type = output_type
         self.system_prompt = system_prompt or ""
         self._assistant_sender_id = "agent"
@@ -145,6 +148,12 @@ class Agent:
         flusher = getattr(self.memory_handler, "flush_pending", None)
         if flusher is not None:
             await flusher()
+        observability_flusher = getattr(self._observability_runtime(), "flush", None)
+        if observability_flusher is not None:
+            try:
+                await observability_flusher()
+            except Exception as exc:
+                logger.warning("Failed to flush observability events: %s", exc)
 
     async def __call__(
         self,
@@ -200,8 +209,19 @@ class Agent:
         msg_handler = self._message_handler_for_mode(private=private)
         memory_mode = MemoryMode.from_flags(enable_memory=enable_memory, private=private)
         memory_mode_token = self._set_memory_mode(memory_mode)
+        model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
+        turn_context = self._observability_runtime().agent_turn(
+            user_id=user_id,
+            model=model_name,
+            private=private,
+            memory_mode=memory_mode.value,
+            stream=stream,
+        )
+        entered_observability = False
 
         try:
+            turn_context.__enter__()
+            entered_observability = True
             user_msg = await msg_handler.store_user_message(
                 user_message,
                 user_id,
@@ -304,6 +324,11 @@ class Agent:
             logger.exception("Agent chat error: %s", exc)
             return "Sorry, something went wrong."
         finally:
+            if entered_observability:
+                try:
+                    turn_context.__exit__(None, None, None)
+                except Exception as exc:
+                    logger.warning("Failed to close observability context: %s", exc)
             self._reset_memory_mode(memory_mode_token)
 
     async def observe(
@@ -345,6 +370,13 @@ class Agent:
         elif not private and self._private_handler is not None:
             self._private_handler = None
         return self._private_handler or self.message_handler
+
+    def _observability_runtime(self) -> ObservabilityRuntime:
+        observability = getattr(self, "observability", None)
+        if observability is None:
+            observability = NoopObservabilityRuntime()
+            self.observability = observability
+        return observability
 
     async def _store_reply_and_schedule_experience(
         self,
