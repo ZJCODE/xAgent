@@ -1,7 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Union
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -68,7 +68,7 @@ class ModelClient:
         self,
         messages: list,
         tool_specs: Optional[list],
-        instructions: Optional[str] = None,
+        instructions: Optional[Union[str, list[dict]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         store_reply: Optional[Callable[..., Awaitable]] = None,
@@ -119,7 +119,7 @@ class ModelClient:
         self,
         messages: list,
         tool_specs: Optional[list],
-        instructions: Optional[str],
+        instructions: Optional[Union[str, list[dict]]],
         output_type: Optional[type[BaseModel]],
         stream: bool,
     ) -> dict:
@@ -138,10 +138,22 @@ class ModelClient:
     @staticmethod
     def _build_chat_messages(
         messages: list,
-        instructions: Optional[str],
+        instructions: Optional[Union[str, list[dict]]],
         output_type: Optional[type[BaseModel]] = None,
     ) -> list:
         chat_messages = []
+        if isinstance(instructions, list):
+            chat_messages.extend(dict(message) for message in instructions)
+            structured_content = ModelClient._structured_instructions(None, output_type)
+            if structured_content:
+                chat_messages.append({
+                    "role": "system",
+                    "name": "structured_output",
+                    "content": structured_content,
+                })
+            chat_messages.extend(messages)
+            return chat_messages
+
         system_content = ModelClient._structured_instructions(instructions, output_type)
         if system_content:
             chat_messages.append({"role": "system", "content": system_content})

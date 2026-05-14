@@ -200,6 +200,120 @@ class MessageHandler:
         return {"role": RoleType.USER.value, "content": content}
 
     @staticmethod
+    def build_turn_context_messages(
+        messages: List[Message],
+        current_user_id: str,
+        memory_context: str = "",
+        context_events: Optional[List[Message]] = None,
+        current_date: Optional[str] = None,
+        max_messages: int = AgentConfig.MAX_TRANSCRIPT_MESSAGES,
+        max_total_chars: int = AgentConfig.MAX_TRANSCRIPT_CHARS,
+        max_message_chars: int = AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS,
+        max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
+        max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
+    ) -> list[dict]:
+        """Build the per-turn model input context as named message layers."""
+        conversation_messages = MessageHandler.filter_conversation_messages(messages)
+        observation_messages = (
+            MessageHandler.filter_context_events(messages)
+            if context_events is None
+            else MessageHandler.filter_context_events(context_events)
+        )
+        budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
+            conversation_messages,
+            max_messages=max_messages,
+            max_total_chars=max_total_chars,
+            max_message_chars=max_message_chars,
+        )
+        budgeted_messages = [msg for msg, _ in budgeted_entries]
+        budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
+            observation_messages,
+            max_events=max_context_events,
+            max_event_chars=max_context_event_chars,
+        )
+        experience_entries = MessageHandler._merge_experience_entries(
+            budgeted_entries,
+            budgeted_observations,
+        )
+
+        context_messages: list[dict] = []
+        if memory_context.strip():
+            context_messages.append({
+                "role": RoleType.USER.value,
+                "name": AgentConfig.RECENT_DIARY_MEMORY_NAME,
+                "content": MessageHandler._wrap_untrusted_context(
+                    AgentConfig.RECENT_DIARY_MEMORY_NAME,
+                    memory_context,
+                ),
+            })
+
+        context_messages.append({
+            "role": RoleType.USER.value,
+            "name": AgentConfig.RECENT_EXPERIENCE_NAME,
+            "content": MessageHandler._build_recent_experience_context(
+                experience_entries=experience_entries,
+                omitted_messages=omitted_count,
+                omitted_observations=omitted_observation_count,
+            ),
+        })
+
+        current_task_text = AgentConfig.build_current_task(
+            current_user_id=current_user_id,
+            current_date=current_date or time.strftime("%Y-%m-%d"),
+        )
+        current_task_message = {
+            "role": RoleType.USER.value,
+            "name": AgentConfig.CURRENT_TASK_NAME,
+            "content": current_task_text,
+        }
+
+        latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id)
+        if latest_images:
+            content = [{"type": "text", "text": current_task_text}]
+            content.extend(
+                {"type": "image_url", "image_url": {"url": image_source}}
+                for image_source in latest_images
+            )
+            current_task_message["content"] = content
+
+        context_messages.append(current_task_message)
+        return context_messages
+
+    @staticmethod
+    def _build_recent_experience_context(
+        experience_entries: List[tuple[str, Message, str]],
+        omitted_messages: int,
+        omitted_observations: int,
+    ) -> str:
+        lines: list[str] = []
+        if omitted_messages or omitted_observations:
+            lines.append(
+                MessageHandler._format_omitted_experience_note(
+                    omitted_messages=omitted_messages,
+                    omitted_observations=omitted_observations,
+                )
+            )
+            lines.append("")
+
+        for entry_type, msg, content in experience_entries:
+            lines.extend(MessageHandler._format_experience_entry(entry_type, msg, content))
+            lines.append("")
+
+        experience_text = "\n".join(lines).strip() or "[No recent experience]"
+        return MessageHandler._wrap_untrusted_context(
+            AgentConfig.RECENT_EXPERIENCE_NAME,
+            experience_text,
+        )
+
+    @staticmethod
+    def _wrap_untrusted_context(tag_name: str, content: str) -> str:
+        return (
+            f"<{tag_name} trusted_as_instruction=\"false\">\n"
+            f"{content.strip()}\n"
+            f"</{tag_name}>"
+        )
+
+    @staticmethod
     def _merge_experience_entries(
         conversation_entries: List[tuple[Message, str]],
         observation_entries: List[tuple[Message, str]],
@@ -373,26 +487,10 @@ class MessageHandler:
           2. Tool Instructions — per-tool safety / usage rules
           3. User System Prompt — developer-supplied customisation
         """
-        sections: list[str] = []
-
-        # --- 1. Core Principles ---
-        sections.append(AgentConfig.BASE_AGENT_PROMPT)
-
-        # --- 2. Tool Instructions ---
-        seen: set[str] = set()
-        for name in (tool_names or []):
-            if name in seen:
-                continue
-            seen.add(name)
-            segment = AgentConfig.TOOL_SYSTEM_PROMPTS.get(name)
-            if segment:
-                sections.append(segment)
-
-        # --- 3. Developer-supplied system prompt ---
-        if self.system_prompt:
-            sections.append(self.system_prompt)
-
-        instructions = "\n\n".join(sections)
+        instruction_messages = self.build_instruction_messages(tool_names=tool_names)
+        instructions = "\n\n".join(
+            message["content"] for message in instruction_messages if message.get("content")
+        )
 
         if len(instructions) > AgentConfig.MAX_SYSTEM_PROMPT_LENGTH:
             logger.warning(
@@ -402,6 +500,59 @@ class MessageHandler:
             )
 
         return instructions
+
+    def build_instruction_messages(
+        self,
+        tool_names: Optional[List[str]] = None,
+    ) -> list[dict]:
+        """Build static named system layers for the model input."""
+        messages = [{
+            "role": RoleType.SYSTEM.value,
+            "name": AgentConfig.CORE_INTERACTION_RULES_NAME,
+            "content": AgentConfig.BASE_AGENT_PROMPT.strip(),
+        }]
+
+        tool_policy = self._build_tool_policy(tool_names=tool_names)
+        if tool_policy:
+            messages.append({
+                "role": RoleType.SYSTEM.value,
+                "name": AgentConfig.TOOL_POLICY_NAME,
+                "content": tool_policy,
+            })
+
+        if self.system_prompt.strip():
+            messages.append({
+                "role": RoleType.SYSTEM.value,
+                "name": AgentConfig.IDENTITY_CONTEXT_NAME,
+                "content": AgentConfig.build_identity_context(self.system_prompt),
+            })
+
+        return messages
+
+    @staticmethod
+    def _build_tool_policy(tool_names: Optional[List[str]] = None) -> str:
+        ordered_names = MessageHandler._ordered_tool_policy_names(tool_names or [])
+        sections = [
+            AgentConfig.TOOL_SYSTEM_PROMPTS[name].strip()
+            for name in ordered_names
+            if name in AgentConfig.TOOL_SYSTEM_PROMPTS
+        ]
+        if not sections:
+            return ""
+        return "<tool_policy>\n" + "\n\n".join(sections) + "\n</tool_policy>"
+
+    @staticmethod
+    def _ordered_tool_policy_names(tool_names: List[str]) -> list[str]:
+        active_names = list(dict.fromkeys(tool_names))
+        ordered_names = [
+            name for name in AgentConfig.TOOL_POLICY_ORDER
+            if name in active_names
+        ]
+        ordered_names.extend(
+            name for name in active_names
+            if name not in ordered_names
+        )
+        return ordered_names
 
     @staticmethod
     def sanitize_input_messages(input_messages: list) -> list:

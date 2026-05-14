@@ -243,14 +243,12 @@ class Agent:
             if excluded and tool_specs:
                 tool_specs = [s for s in tool_specs if self._tool_spec_name(s) not in excluded] or None
 
-            instructions = msg_handler.build_instructions(tool_names=tool_names)
-            iteration_messages = [
-                msg_handler.build_recent_transcript_message(
-                    recent_messages,
-                    current_user_id=user_id,
-                    memory_context=memory_context,
-                )
-            ]
+            instructions = msg_handler.build_instruction_messages(tool_names=tool_names)
+            iteration_messages = msg_handler.build_turn_context_messages(
+                recent_messages,
+                current_user_id=user_id,
+                memory_context=memory_context,
+            )
             input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 
             for _ in range(max_iter):

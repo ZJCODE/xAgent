@@ -225,6 +225,40 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["messages"][1], {"role": "user", "content": "hello"})
         self.assertEqual(call["tool_choice"], "auto")
 
+    async def test_call_preserves_named_instruction_messages(self):
+        client = FakeOpenAIClient([_chat_response(content="ok")])
+        model = ModelClient(client=client, model="test-model")
+        instruction_messages = [
+            {
+                "role": "system",
+                "name": AgentConfig.CORE_INTERACTION_RULES_NAME,
+                "content": "Core Rules",
+            },
+            {
+                "role": "system",
+                "name": AgentConfig.TOOL_POLICY_NAME,
+                "content": "<tool_policy>Policy</tool_policy>",
+            },
+        ]
+        user_messages = [
+            {
+                "role": "user",
+                "name": AgentConfig.CURRENT_TASK_NAME,
+                "content": "<current_task>Task</current_task>",
+            }
+        ]
+
+        reply_type, payload = await model.call(
+            messages=user_messages,
+            tool_specs=None,
+            instructions=instruction_messages,
+        )
+
+        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
+        self.assertEqual(payload, "ok")
+        call = client.chat_completions.calls[0]
+        self.assertEqual(call["messages"], [*instruction_messages, *user_messages])
+
     async def test_structured_output_uses_json_object_and_pydantic_validation(self):
         client = FakeOpenAIClient([_chat_response(content='{"answer": "ok"}')])
         model = ModelClient(client=client, model="test-model")
@@ -354,12 +388,15 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(model_client.calls), 2)
         first_call_messages = model_client.calls[0]
         second_call_messages = model_client.calls[1]
-        # No system message — input starts with transcript user message
-        self.assertEqual(len(first_call_messages), 1)
-        self.assertEqual(second_call_messages[1]["role"], "assistant")
-        self.assertEqual(second_call_messages[1]["tool_calls"][0]["function"]["name"], "lookup")
-        self.assertEqual(second_call_messages[2]["role"], "tool")
-        self.assertEqual(second_call_messages[2]["tool_call_id"], "call-1")
+        self.assertEqual(
+            [message["name"] for message in first_call_messages],
+            [AgentConfig.RECENT_EXPERIENCE_NAME, AgentConfig.CURRENT_TASK_NAME],
+        )
+        self.assertEqual(model_client.instructions_calls[0][0]["name"], AgentConfig.CORE_INTERACTION_RULES_NAME)
+        self.assertEqual(second_call_messages[2]["role"], "assistant")
+        self.assertEqual(second_call_messages[2]["tool_calls"][0]["function"]["name"], "lookup")
+        self.assertEqual(second_call_messages[3]["role"], "tool")
+        self.assertEqual(second_call_messages[3]["tool_call_id"], "call-1")
         self.assertEqual(
             [message.role for message in storage.messages],
             [RoleType.USER, RoleType.ASSISTANT],
@@ -427,7 +464,10 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "Final answer")
         self.assertEqual(storage.last_count, AgentConfig.MAX_TRANSCRIPT_MESSAGES)
-        transcript = model_client.calls[0][0]["content"]
+        transcript = next(
+            message for message in model_client.calls[0]
+            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
+        )["content"]
         self.assertNotIn("old-00", transcript)
         self.assertNotIn("old-10", transcript)
         self.assertIn("old-49", transcript)

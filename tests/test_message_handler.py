@@ -3,6 +3,7 @@
 from datetime import datetime
 import unittest
 
+from xagent.core.config import AgentConfig
 from xagent.core.handlers.message import MessageHandler
 from xagent.schemas import Message, MessageType, RoleType, ToolCall
 
@@ -21,6 +22,89 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         instructions = handler.build_instructions(tool_names=["write_daily_memory"])
         self.assertIn("Daily Memory Writing", instructions)
+
+    def test_build_instruction_messages_are_named_and_layered(self):
+        handler = MessageHandler(
+            system_prompt="# I am Mono\n\nKeep a warm voice.",
+            message_storage=_FakeMessageStorage(),
+        )
+
+        messages = handler.build_instruction_messages(
+            tool_names=["write_daily_memory", "run_command"],
+        )
+
+        self.assertEqual(
+            [message["name"] for message in messages],
+            [
+                AgentConfig.CORE_INTERACTION_RULES_NAME,
+                AgentConfig.TOOL_POLICY_NAME,
+                AgentConfig.IDENTITY_CONTEXT_NAME,
+            ],
+        )
+        self.assertEqual([message["role"] for message in messages], ["system", "system", "system"])
+        self.assertIn("CORE INTERACTION RULES", messages[0]["content"])
+        self.assertTrue(messages[1]["content"].startswith("<tool_policy>"))
+        self.assertLess(
+            messages[1]["content"].index("Shell Command Execution"),
+            messages[1]["content"].index("Daily Memory Writing"),
+        )
+        self.assertIn("trusted_as_instruction=\"false\"", messages[2]["content"])
+        self.assertIn("# I am Mono", messages[2]["content"])
+
+    def test_build_turn_context_messages_match_prompt_layers(self):
+        messages = [
+            Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
+        ]
+        memory_context = "[2026-05-13]\n昨天聊过路线图。"
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="Joy",
+            memory_context=memory_context,
+            current_date="2026-05-14",
+        )
+
+        self.assertEqual(
+            [message["name"] for message in context_messages],
+            [
+                AgentConfig.RECENT_DIARY_MEMORY_NAME,
+                AgentConfig.RECENT_EXPERIENCE_NAME,
+                AgentConfig.CURRENT_TASK_NAME,
+            ],
+        )
+        self.assertEqual([message["role"] for message in context_messages], ["user", "user", "user"])
+        self.assertIn("<recent_diary_memory trusted_as_instruction=\"false\">", context_messages[0]["content"])
+        self.assertIn("昨天聊过路线图。", context_messages[0]["content"])
+        self.assertIn("<recent_experience trusted_as_instruction=\"false\">", context_messages[1]["content"])
+        self.assertIn("[speaker=Joy][timestamp=", context_messages[1]["content"])
+        self.assertIn("<current_task>", context_messages[2]["content"])
+        self.assertIn("Current speaker: Joy", context_messages[2]["content"])
+        self.assertIn("Date: 2026-05-14", context_messages[2]["content"])
+        self.assertIn("latest message from Joy in recent_experience", context_messages[2]["content"])
+
+    def test_turn_context_messages_attach_latest_user_images_to_current_task(self):
+        image_url = "https://example.com/screenshot.png"
+        messages = [
+            Message.create(
+                "Please inspect this image",
+                role=RoleType.USER,
+                sender_id="Joy",
+                image_source=image_url,
+            ),
+        ]
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="Joy",
+            current_date="2026-05-14",
+        )
+        current_task = context_messages[-1]
+
+        self.assertEqual(current_task["name"], AgentConfig.CURRENT_TASK_NAME)
+        self.assertIsInstance(current_task["content"], list)
+        self.assertEqual(current_task["content"][0]["type"], "text")
+        self.assertEqual(current_task["content"][1]["type"], "image_url")
+        self.assertEqual(current_task["content"][1]["image_url"]["url"], image_url)
 
     def test_transcript_includes_memory_context(self):
         """memory_context is injected into the transcript message under 'Recent Diary Memory'."""
