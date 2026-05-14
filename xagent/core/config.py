@@ -137,7 +137,7 @@ class AgentConfig:
     CURRENT_TASK_TEMPLATE = (
         "<current_task>\n"
         "Current speaker: {current_user_id}\n"
-        "Date: {current_date}\n"
+        "Current time: {current_time}\n"
         "\n"
         "{reply_prompt}\n"
         "</current_task>"
@@ -198,10 +198,15 @@ class AgentConfig:
         return AgentConfig.IDENTITY_CONTEXT_TEMPLATE.format(identity=identity.strip())
 
     @staticmethod
-    def build_current_task(current_user_id: str, current_date: str) -> str:
+    def build_current_task(
+        current_user_id: str,
+        current_time: str = "",
+        current_date: str = "",
+    ) -> str:
+        resolved_current_time = current_time or current_date
         return AgentConfig.CURRENT_TASK_TEMPLATE.format(
             current_user_id=current_user_id,
-            current_date=current_date,
+            current_time=resolved_current_time,
             reply_prompt=AgentConfig.build_turn_reply_prompt(current_user_id),
         )
 

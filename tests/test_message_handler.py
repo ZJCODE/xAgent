@@ -61,7 +61,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             messages,
             current_user_id="Joy",
             memory_context=memory_context,
-            current_date="2026-05-14",
+            current_time="2026-05-14 09:30",
         )
 
         self.assertEqual(
@@ -79,7 +79,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("[speaker=Joy][timestamp=", context_messages[1]["content"])
         self.assertIn("<current_task>", context_messages[2]["content"])
         self.assertIn("Current speaker: Joy", context_messages[2]["content"])
-        self.assertIn("Date: 2026-05-14", context_messages[2]["content"])
+        self.assertIn("Current time: 2026-05-14 09:30", context_messages[2]["content"])
         self.assertIn("latest message from Joy in recent_experience", context_messages[2]["content"])
 
     def test_turn_context_messages_attach_latest_user_images_to_current_task(self):
@@ -96,7 +96,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         context_messages = MessageHandler.build_turn_context_messages(
             messages,
             current_user_id="Joy",
-            current_date="2026-05-14",
+            current_time="2026-05-14 09:30",
         )
         current_task = context_messages[-1]
 

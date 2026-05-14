@@ -205,6 +205,7 @@ class MessageHandler:
         current_user_id: str,
         memory_context: str = "",
         context_events: Optional[List[Message]] = None,
+        current_time: Optional[str] = None,
         current_date: Optional[str] = None,
         max_messages: int = AgentConfig.MAX_TRANSCRIPT_MESSAGES,
         max_total_chars: int = AgentConfig.MAX_TRANSCRIPT_CHARS,
@@ -259,7 +260,11 @@ class MessageHandler:
 
         current_task_text = AgentConfig.build_current_task(
             current_user_id=current_user_id,
-            current_date=current_date or time.strftime("%Y-%m-%d"),
+            current_time=(
+                current_time
+                or current_date
+                or datetime.now().strftime("%Y-%m-%d %H:%M")
+            ),
         )
         current_task_message = {
             "role": RoleType.USER.value,
