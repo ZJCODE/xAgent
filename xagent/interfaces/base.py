@@ -32,6 +32,8 @@ class BaseAgentConfig:
     IDENTITY_FILENAME = "identity.md"
     DEFAULT_HOST = "127.0.0.1"
     DEFAULT_PORT = 8010
+    RUNTIME_HEARTBEAT_ENABLED = AgentConfig.RUNTIME_HEARTBEAT_ENABLED
+    RUNTIME_HEARTBEAT_INTERVAL_SECONDS = AgentConfig.RUNTIME_HEARTBEAT_INTERVAL_SECONDS
 
 class BaseAgentRunner:
     """
@@ -149,10 +151,27 @@ class BaseAgentRunner:
         runtime_cfg = config.get("runtime")
         if runtime_cfg is not None and not isinstance(runtime_cfg, dict):
             raise ValueError("runtime must be a dictionary")
-        if isinstance(runtime_cfg, dict) and "default_channel" in runtime_cfg:
-            default_channel = runtime_cfg.get("default_channel")
-            if default_channel not in {"api", "feishu", "all"}:
-                raise ValueError("runtime.default_channel must be one of: api, feishu, all")
+        if isinstance(runtime_cfg, dict):
+            allowed_runtime_keys = {
+                "default_channel",
+                "heartbeat_enabled",
+                "heartbeat_interval_seconds",
+            }
+            unsupported_runtime_keys = sorted(set(runtime_cfg) - allowed_runtime_keys)
+            if unsupported_runtime_keys:
+                joined_keys = ", ".join(unsupported_runtime_keys)
+                raise ValueError(f"Unsupported runtime key(s): {joined_keys}")
+            if "default_channel" in runtime_cfg:
+                default_channel = runtime_cfg.get("default_channel")
+                if default_channel not in {"api", "feishu", "all"}:
+                    raise ValueError("runtime.default_channel must be one of: api, feishu, all")
+            if "heartbeat_enabled" in runtime_cfg and not isinstance(runtime_cfg["heartbeat_enabled"], bool):
+                raise ValueError("runtime.heartbeat_enabled must be a boolean")
+            if "heartbeat_interval_seconds" in runtime_cfg:
+                self._validate_positive_number(
+                    runtime_cfg["heartbeat_interval_seconds"],
+                    "runtime.heartbeat_interval_seconds",
+                )
 
         self._validate_memory_config(config.get("memory"))
         self._validate_observability_config(config.get("observability"))

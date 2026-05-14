@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 from .base import BaseAgentConfig, BaseAgentRunner
 from ..core.agent import Agent
 from ..core.config import AgentConfig
+from ..core.runtime import create_runtime_heartbeat
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -335,9 +336,23 @@ class AgentHTTPServer(BaseAgentRunner):
 
     @asynccontextmanager
     async def _lifespan(self, app: FastAPI):
+        heartbeat = create_runtime_heartbeat(
+            self.agent,
+            self.config.get("runtime") if isinstance(self.config, dict) else None,
+            logger_=self.logger,
+        )
         try:
+            if heartbeat is not None:
+                await heartbeat.start()
+                self.logger.info(
+                    "Runtime heartbeat started (interval=%ss)",
+                    heartbeat.interval_seconds,
+                )
             yield
         finally:
+            if heartbeat is not None:
+                await heartbeat.stop()
+                self.logger.info("Runtime heartbeat stopped")
             await self._flush_agent_memory()
 
     async def _flush_agent_memory(self) -> None:

@@ -308,15 +308,13 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
         """Private mode should remove write memory tools but keep search_memory."""
         main_storage = MessageStoragePrivateTemp()
         tools = {
-            "write_daily_memory": lambda: None,
+            "write_memory": lambda: None,
             "search_memory": lambda: None,
-            "generate_memory_summary": lambda: None,
             "custom_tool": lambda: None,
         }
         tool_specs = [
-            {"type": "function", "function": {"name": "write_daily_memory"}},
+            {"type": "function", "function": {"name": "write_memory"}},
             {"type": "function", "function": {"name": "search_memory"}},
-            {"type": "function", "function": {"name": "generate_memory_summary"}},
             {"type": "function", "function": {"name": "custom_tool"}},
         ]
 
@@ -350,22 +348,19 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
         spec_names = {s["function"]["name"] for s in model_client.received_tool_specs}
         self.assertIn("search_memory", spec_names)
         self.assertIn("custom_tool", spec_names)
-        self.assertNotIn("write_daily_memory", spec_names)
-        self.assertNotIn("generate_memory_summary", spec_names)
+        self.assertNotIn("write_memory", spec_names)
 
     async def test_memory_disabled_filters_all_memory_tools(self):
         """Disabling memory should remove read and write memory tools."""
         main_storage = MessageStoragePrivateTemp()
         tools = {
-            "write_daily_memory": lambda: None,
+            "write_memory": lambda: None,
             "search_memory": lambda: None,
-            "generate_memory_summary": lambda: None,
             "custom_tool": lambda: None,
         }
         tool_specs = [
-            {"type": "function", "function": {"name": "write_daily_memory"}},
+            {"type": "function", "function": {"name": "write_memory"}},
             {"type": "function", "function": {"name": "search_memory"}},
-            {"type": "function", "function": {"name": "generate_memory_summary"}},
             {"type": "function", "function": {"name": "custom_tool"}},
         ]
 

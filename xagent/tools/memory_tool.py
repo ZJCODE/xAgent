@@ -1,36 +1,35 @@
-"""Dedicated memory tools for the markdown-based diary system."""
+"""Dedicated tools for long-term memory access."""
 
 from __future__ import annotations
 
-from datetime import date
 from typing import TYPE_CHECKING, Optional
 
 from xagent.utils.tool_decorator import function_tool
 
 if TYPE_CHECKING:
-    from xagent.components.memory import JournalLLMService, MarkdownMemory
+    from xagent.components.memory import MarkdownMemory
 
 
-def create_write_daily_memory_tool(
+def create_write_memory_tool(
     memory: MarkdownMemory,
     is_enabled,
 ):
-    """Create a tool that appends a diary entry to today's daily markdown file."""
+    """Create a tool that records long-term useful memory."""
 
     @function_tool(
-        name="write_daily_memory",
+        name="write_memory",
         description=(
-            "Append a diary entry to today's daily memory file. "
-            "Use this when you want to record something worth remembering — "
-            "a key decision, preference, commitment, or notable event from the conversation. "
-            "You compose the content yourself in natural diary style."
+            "Record long-term useful memory from the conversation. "
+            "Use this for stable preferences, important facts, decisions, commitments, "
+            "or notable context that should help future interactions. "
+            "Keep entries concise, factual, and clearly attributed when needed."
         ),
         param_descriptions={
-            "content": "The diary entry text to append. Write in first person, natural diary style.",
+            "content": "The memory note to record. Keep it concise, useful, and grounded in the conversation.",
         },
     )
-    async def write_daily_memory(content: str) -> dict:
-        """Append a diary entry to the daily markdown file."""
+    async def write_memory(content: str) -> dict:
+        """Record a long-term memory note."""
         if not is_enabled():
             return {"status": "disabled", "message": "Memory writing is disabled for this turn."}
 
@@ -38,36 +37,32 @@ def create_write_daily_memory_tool(
         if not content:
             return {"status": "skipped", "message": "Empty content, nothing written."}
 
-        path = await memory.append_daily(content)
-        return {
-            "status": "ok",
-            "date": date.today().isoformat(),
-            "file": str(path),
-        }
+        await memory.append_daily(content)
+        return {"status": "ok", "message": "Memory recorded."}
 
-    return write_daily_memory
+    return write_memory
 
 
 def create_search_memory_tool(
     memory: MarkdownMemory,
     is_enabled,
 ):
-    """Create a tool for searching memory files by keyword or date range."""
+    """Create a tool for searching long-term memory by keyword or date range."""
 
     @function_tool(
         name="search_memory",
         description=(
-            "Search older diary/memory files by keyword or date range. "
+            "Search long-term memory by keyword or date range. "
             "Use this when the user asks about past conversations, preferences, plans, "
             "or remembered facts that are not in the recent context. "
-            "Do not call this on every turn — prefer the recent diary context already "
+            "Do not call this on every turn — prefer the recent memory context already "
             "in the system prompt."
         ),
         param_descriptions={
-            "query": "Keyword to search for via grep. Leave empty when only searching by date.",
+            "query": "Keyword to search for. Leave empty when only searching by date.",
             "date": "A single date (YYYY-MM-DD) or date range (YYYY-MM-DD to YYYY-MM-DD) to read.",
-            "scope": "Which memory directory to search: daily, weekly, monthly, yearly, people, or all. Default: all.",
-            "context_lines": "Number of context lines around each grep match. Default: 3.",
+            "scope": "Which memory area to search: daily, weekly, monthly, yearly, people, or all. Default: all.",
+            "context_lines": "Number of context lines around each keyword match. Default: 3.",
         },
     )
     async def search_memory(
@@ -128,103 +123,3 @@ def create_search_memory_tool(
         return {"results": results, "enabled": True}
 
     return search_memory
-
-
-def create_generate_summary_tool(
-    memory: MarkdownMemory,
-    llm_service: JournalLLMService,
-    is_enabled,
-):
-    """Create a tool for generating weekly/monthly/yearly summaries."""
-
-    @function_tool(
-        name="generate_memory_summary",
-        description=(
-            "Generate a periodic summary (weekly, monthly, or yearly) from daily diary entries. "
-            "Use this when the user asks to summarize a period, or when you determine "
-            "a completed period needs a summary. Weekly summaries are based on daily entries, "
-            "monthly on daily entries, yearly on monthly summaries."
-        ),
-        param_descriptions={
-            "period_type": "Type of summary: 'weekly', 'monthly', or 'yearly'.",
-            "target_date": (
-                "A date within the target period (YYYY-MM-DD). "
-                "For weekly: any date in that week. "
-                "For monthly: any date in that month (e.g. 2026-03-01). "
-                "For yearly: any date in that year (e.g. 2026-01-01). "
-                "Defaults to today if omitted."
-            ),
-        },
-    )
-    async def generate_memory_summary(
-        period_type: str = "weekly",
-        target_date: Optional[str] = None,
-    ) -> dict:
-        """Generate a summary for the specified period."""
-        if not is_enabled():
-            return {"status": "disabled", "message": "Memory writing is disabled for this turn."}
-
-        from datetime import date as date_cls, timedelta
-
-        period_type = period_type.lower()
-        if period_type not in ("weekly", "monthly", "yearly"):
-            return {"status": "error", "message": f"Invalid period_type: {period_type}"}
-
-        d = date_cls.fromisoformat(target_date) if target_date else date_cls.today()
-
-        if period_type == "weekly":
-            week_start, week_end = memory.week_range_for(d)
-            source = await memory.search_date_range(
-                start=week_start.isoformat(),
-                end=week_end.isoformat(),
-            )
-            label = f"{week_start.isoformat()} to {week_end.isoformat()}"
-            out_path = memory.weekly_path(week_start, week_end)
-
-        elif period_type == "monthly":
-            import calendar
-            first_day = d.replace(day=1)
-            last_day = d.replace(day=calendar.monthrange(d.year, d.month)[1])
-            source = await memory.search_date_range(
-                start=first_day.isoformat(),
-                end=last_day.isoformat(),
-            )
-            label = f"{d.year}-{d.month:02d}"
-            out_path = memory.monthly_path(d.year, d.month)
-
-        else:  # yearly
-            # For yearly, read monthly summaries
-            parts: list[str] = []
-            for m in range(1, 13):
-                mp = memory.monthly_path(d.year, m)
-                text = await memory.read_file(mp)
-                if text.strip():
-                    parts.append(f"# {d.year}-{m:02d}\n\n{text}")
-            source = "\n\n".join(parts)
-            label = str(d.year)
-            out_path = memory.yearly_path(d.year)
-
-        if not source.strip():
-            return {
-                "status": "skipped",
-                "message": f"No source material found for {period_type} summary ({label}).",
-            }
-
-        summary = await llm_service.generate_summary(
-            source_content=source,
-            period_type=period_type,
-            period_label=label,
-        )
-        if not summary:
-            return {"status": "error", "message": "LLM failed to generate summary."}
-
-        await memory.write_summary(out_path, summary)
-        return {
-            "status": "ok",
-            "period_type": period_type,
-            "label": label,
-            "file": str(out_path),
-            "summary": summary,
-        }
-
-    return generate_memory_summary

@@ -131,6 +131,34 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(agent.flush_count, 1)
 
+    def test_on_message_routes_to_owner_event_loop(self):
+        async def run_test():
+            agent = _FakeAgent()
+            adapter = FeishuAdapter(
+                agent=agent,
+                config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"),
+            )
+            adapter._owner_loop = asyncio.get_running_loop()
+            message = object()
+            routed = asyncio.Event()
+            routed_messages = []
+
+            def fake_create_dispatch_task(routed_message):
+                routed_messages.append(routed_message)
+                routed.set()
+
+            adapter._create_dispatch_task = fake_create_dispatch_task
+
+            async def invoke_from_other_loop():
+                await adapter._on_message(message)
+
+            await asyncio.to_thread(lambda: asyncio.run(invoke_from_other_loop()))
+            await asyncio.wait_for(routed.wait(), timeout=1.0)
+
+            self.assertEqual(routed_messages, [message])
+
+        asyncio.run(run_test())
+
     def test_log_redaction_hides_ws_credentials(self):
         record = logging.LogRecord(
             name="Lark",

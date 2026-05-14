@@ -105,10 +105,12 @@ provider:
             self.assertEqual(config["channels"]["api"]["port"], 8010)
             self.assertEqual(enabled_channels_from_config(config), ["api"])
             self.assertEqual(config["runtime"]["default_channel"], "api")
+            self.assertTrue(config["runtime"]["heartbeat_enabled"])
+            self.assertEqual(config["runtime"]["heartbeat_interval_seconds"], 300)
             self.assertEqual(config["memory"]["recent_days"], 7)
-            self.assertEqual(config["memory"]["stale_flush_seconds"], 120)
-            self.assertEqual(config["memory"]["message_threshold"], 10)
-            self.assertEqual(config["memory"]["min_interval_seconds"], 300)
+            self.assertEqual(config["memory"]["stale_flush_seconds"], AgentConfig.MEMORY_STALE_FLUSH_SECONDS)
+            self.assertEqual(config["memory"]["message_threshold"], AgentConfig.MEMORY_MESSAGE_THRESHOLD)
+            self.assertEqual(config["memory"]["min_interval_seconds"], AgentConfig.MEMORY_MIN_INTERVAL_SECONDS)
             self.assertNotIn("observability", config)
             self.assertNotIn("system_prompt:", config_text)
             self.assertNotIn("output_schema:", config_text)
@@ -496,6 +498,8 @@ channels:
         web_ui: true
 runtime:
     default_channel: api
+    heartbeat_enabled: false
+    heartbeat_interval_seconds: 12
 """,
                 encoding="utf-8",
             )
@@ -504,6 +508,8 @@ runtime:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertEqual(runner.config["runtime"]["default_channel"], "api")
+            self.assertFalse(runner.config["runtime"]["heartbeat_enabled"])
+            self.assertEqual(runner.config["runtime"]["heartbeat_interval_seconds"], 12)
             self.assertNotIn("enabled", runner.config["channels"]["api"])
             self.assertEqual(enabled_channels_from_config(runner.config), ["api"])
 
@@ -653,6 +659,42 @@ memory:
             write_identity(tmpdir)
 
             with self.assertRaisesRegex(ValueError, "memory.recent_days"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_invalid_runtime_heartbeat_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+runtime:
+    heartbeat_enabled: "yes"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "runtime.heartbeat_enabled"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_invalid_runtime_heartbeat_interval(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+runtime:
+    heartbeat_interval_seconds: 0
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "runtime.heartbeat_interval_seconds"):
                 BaseAgentRunner(config_dir=tmpdir)
 
     def test_config_rejects_unsupported_channel_section(self):

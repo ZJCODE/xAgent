@@ -13,11 +13,15 @@ from xagent.schemas.memory import PeopleProfileFact, PeopleProfileUpdates
 class _FakeLLMService:
     """Stub that returns the messages joined as a simple entry."""
 
+    def __init__(self):
+        self.summary_calls = []
+
     async def format_diary_entry(self, messages, journal_date):
         parts = [str(m.get("content", "")) for m in messages if m.get("content")]
         return "\n".join(parts)
 
     async def generate_summary(self, source_content, period_type, period_label):
+        self.summary_calls.append((source_content, period_type, period_label))
         return f"[Summary: {period_type} {period_label}]"
 
 
@@ -158,6 +162,42 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
         self.assertIn("write the diary anyway", today_text)
+
+    async def test_generate_previous_weekly_summary_if_missing_writes_summary(self):
+        today = date(2026, 5, 18)  # Monday
+        week_start = date(2026, 5, 11)
+        week_end = date(2026, 5, 17)
+        await self.memory.append_daily("Previous week memory", target_date=week_start)
+
+        generated = await self.handler.generate_previous_weekly_summary_if_missing(today=today)
+
+        self.assertTrue(generated)
+        summary_text = await self.memory.read_file(self.memory.weekly_path(week_start, week_end))
+        self.assertIn("[Summary: weekly 2026-05-11 to 2026-05-17]", summary_text)
+
+    async def test_generate_previous_weekly_summary_if_missing_skips_existing_summary(self):
+        today = date(2026, 5, 18)  # Monday
+        week_start = date(2026, 5, 11)
+        week_end = date(2026, 5, 17)
+        await self.memory.append_daily("Previous week memory", target_date=week_start)
+        await self.memory.write_summary(self.memory.weekly_path(week_start, week_end), "Existing")
+
+        generated = await self.handler.generate_previous_weekly_summary_if_missing(today=today)
+
+        self.assertFalse(generated)
+        self.assertEqual(self.llm.summary_calls, [])
+        summary_text = await self.memory.read_file(self.memory.weekly_path(week_start, week_end))
+        self.assertEqual(summary_text, "Existing")
+
+    async def test_generate_previous_weekly_summary_if_missing_skips_empty_source(self):
+        today = date(2026, 5, 18)  # Monday
+        week_start = date(2026, 5, 11)
+        week_end = date(2026, 5, 17)
+
+        generated = await self.handler.generate_previous_weekly_summary_if_missing(today=today)
+
+        self.assertFalse(generated)
+        self.assertFalse(self.memory.weekly_path(week_start, week_end).exists())
 
 
 if __name__ == "__main__":

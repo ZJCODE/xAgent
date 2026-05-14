@@ -20,8 +20,10 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             system_prompt="",
             message_storage=_FakeMessageStorage(),
         )
-        instructions = handler.build_instructions(tool_names=["write_daily_memory"])
-        self.assertIn("Daily Memory Writing", instructions)
+        instructions = handler.build_instructions(tool_names=["write_memory"])
+        self.assertIn("Long-Term Memory Writing", instructions)
+        self.assertIn("write_memory", instructions)
+        self.assertNotIn("write_daily_memory", instructions)
 
     def test_build_instruction_messages_are_named_and_layered(self):
         handler = MessageHandler(
@@ -30,7 +32,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
 
         messages = handler.build_instruction_messages(
-            tool_names=["write_daily_memory", "run_command"],
+            tool_names=["write_memory", "run_command"],
         )
 
         self.assertEqual(
@@ -46,8 +48,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertTrue(messages[1]["content"].startswith("<tool_policy>"))
         self.assertLess(
             messages[1]["content"].index("Shell Command Execution"),
-            messages[1]["content"].index("Daily Memory Writing"),
+            messages[1]["content"].index("Long-Term Memory Writing"),
         )
+        self.assertNotIn("generate_memory_summary", messages[1]["content"])
         self.assertIn("trusted_as_instruction=\"false\"", messages[2]["content"])
         self.assertIn("# I am Mono", messages[2]["content"])
 
@@ -67,13 +70,13 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertEqual(
             [message["name"] for message in context_messages],
             [
-                AgentConfig.RECENT_DIARY_MEMORY_NAME,
+                AgentConfig.RECENT_MEMORY_NAME,
                 AgentConfig.RECENT_EXPERIENCE_NAME,
                 AgentConfig.CURRENT_TASK_NAME,
             ],
         )
         self.assertEqual([message["role"] for message in context_messages], ["user", "user", "user"])
-        self.assertIn("<recent_diary_memory trusted_as_instruction=\"false\">", context_messages[0]["content"])
+        self.assertIn("<recent_memory trusted_as_instruction=\"false\">", context_messages[0]["content"])
         self.assertIn("昨天聊过路线图。", context_messages[0]["content"])
         self.assertIn("<recent_experience trusted_as_instruction=\"false\">", context_messages[1]["content"])
         self.assertIn("[speaker=Joy][timestamp=", context_messages[1]["content"])
@@ -107,7 +110,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertEqual(current_task["content"][1]["image_url"]["url"], image_url)
 
     def test_transcript_includes_memory_context(self):
-        """memory_context is injected into the transcript message under 'Recent Diary Memory'."""
+        """memory_context is injected into the transcript message under 'Recent Memory'."""
         handler = MessageHandler(
             system_prompt="You are a helpful assistant.",
             message_storage=_FakeMessageStorage(),
@@ -121,7 +124,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             current_user_id="alice",
             memory_context=memory_context,
         )
-        self.assertIn("Recent Diary Memory", transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"])
+        self.assertIn("Recent Memory", transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"])
         self.assertIn("[2026-03-18]", transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"])
         self.assertIn("今天主要围绕路线图推进。", transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"])
 
@@ -140,7 +143,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             memory_context="",
         )
         content = transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"]
-        self.assertNotIn("Recent Diary Memory", content)
+        self.assertNotIn("Recent Memory", content)
 
     def test_build_recent_transcript_message_contains_runtime_context(self):
         handler = MessageHandler(

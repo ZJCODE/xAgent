@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from unittest.mock import patch
 
 import httpx
 from fastapi.testclient import TestClient
@@ -205,6 +206,33 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentWebSocketServerTests(unittest.TestCase):
+    def test_lifespan_starts_and_stops_runtime_heartbeat(self):
+        class FakeHeartbeat:
+            interval_seconds = 300
+
+            def __init__(self):
+                self.started = False
+                self.stopped = False
+
+            async def start(self):
+                self.started = True
+
+            async def stop(self):
+                self.stopped = True
+
+        agent = FlushTrackingAgent()
+        heartbeat = FakeHeartbeat()
+        server = AgentHTTPServer(agent=agent, enable_web=False)
+
+        with patch("xagent.interfaces.server.create_runtime_heartbeat", return_value=heartbeat) as factory:
+            with TestClient(server.app):
+                pass
+
+        factory.assert_called_once()
+        self.assertTrue(heartbeat.started)
+        self.assertTrue(heartbeat.stopped)
+        self.assertTrue(agent.flushed)
+
     def test_shutdown_flushes_agent_memory(self):
         agent = FlushTrackingAgent()
         server = AgentHTTPServer(agent=agent, enable_web=False)

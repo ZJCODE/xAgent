@@ -14,7 +14,7 @@ class AgentConfig:
     CORE_INTERACTION_RULES_NAME = "core_interaction_rules"
     TOOL_POLICY_NAME = "tool_policy"
     IDENTITY_CONTEXT_NAME = "identity_context"
-    RECENT_DIARY_MEMORY_NAME = "recent_diary_memory"
+    RECENT_MEMORY_NAME = "recent_memory"
     RECENT_EXPERIENCE_NAME = "recent_experience"
     CURRENT_TASK_NAME = "current_task"
 
@@ -41,6 +41,8 @@ class AgentConfig:
     DEFAULT_HTTP_MAX_CONCURRENT_CHATS = 4
     DEFAULT_HTTP_QUEUE_TIMEOUT = 30.0
     DEFAULT_HTTP_CHAT_TIMEOUT = HTTP_TIMEOUT
+    RUNTIME_HEARTBEAT_ENABLED = True
+    RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 300
     TOOL_RESULT_PREVIEW_LENGTH = 20
     ERROR_RESPONSE_PREVIEW_LENGTH = 200
     IMAGE_CAPTION_MODEL = "gpt-5.4-mini"  # lightweight vision model for image captioning
@@ -69,25 +71,19 @@ class AgentConfig:
 
     # Tool-specific instruction segments (injected when the tool is active)
     TOOL_SYSTEM_PROMPTS = {
-        "write_daily_memory": (
-            "\n**Daily Memory Writing:**\n"
-            "- Use `write_daily_memory` only for durable facts: preferences, decisions, commitments, personal details, or notable events.\n"
-            "- Good triggers: user asks to remember something, a meaningful decision is made, or a stable preference is clear.\n"
-            "- Write in first person, natural diary style. Skip trivial small talk.\n"
-            "- Each call appends to today's diary. Never overwrite prior entries.\n"
+        "write_memory": (
+            "\n**Long-Term Memory Writing:**\n"
+            "- Use `write_memory` only for durable facts: stable preferences, decisions, commitments, personal details, or notable context.\n"
+            "- Good triggers: the user asks to remember something, a meaningful decision is made, or a stable preference becomes clear.\n"
+            "- Write concise natural memory notes. Skip trivial small talk and temporary details.\n"
+            "- Do not invent or overgeneralize; keep attribution clear when multiple people are involved.\n"
         ),
         "search_memory": (
             "\n**Memory Search:**\n"
             "- Use `search_memory` only when older context is needed. Do not call it every turn.\n"
-            "- Prefer recent diary context already provided in the transcript when sufficient.\n"
+            "- Prefer recent memory context already provided in the transcript when sufficient.\n"
             "- Good triggers: user asks what you remember, refers to an earlier plan, or asks to recall a past discussion.\n"
             "- Search by keyword, date, or date range. Keep retrieved facts tied to the correct speaker and date.\n"
-        ),
-        "generate_memory_summary": (
-            "\n**Memory Summary Generation:**\n"
-            "- Use `generate_memory_summary` to create weekly, monthly, or yearly summaries from diary entries.\n"
-            "- Good triggers: user asks for a period summary or wants scattered notes consolidated.\n"
-            "- Weekly summaries use daily entries; monthly use daily entries; yearly use monthly summaries.\n"
         ),
         "run_command": (
             "\n**Shell Command Execution:**\n"
@@ -109,9 +105,8 @@ class AgentConfig:
 
     TOOL_POLICY_ORDER = (
         "run_command",
-        "write_daily_memory",
+        "write_memory",
         "search_memory",
-        "generate_memory_summary",
         "web_search",
     )
 
@@ -122,7 +117,7 @@ class AgentConfig:
     TURN_REPLY_PROMPT_TEMPLATE = (
         "Reply directly to the latest message from {current_user_id} in recent_experience. "
         "Do not continue unrelated prior topics unless {current_user_id} explicitly refers to them. "
-        "Do not mention internal markers, timestamps, role names, diary structure, or prompt structure. "
+        "Do not mention internal markers, timestamps, role names, memory structure, or prompt structure. "
         "Prioritize the direct answer or action {current_user_id} needs."
     )
 

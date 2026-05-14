@@ -18,7 +18,7 @@ from .config import AgentConfig, MemoryMode, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .tools import ToolExecutor, ToolManager
 from ..schemas import AgentTurnResult, Message
-from ..tools import create_write_daily_memory_tool, create_search_memory_tool, create_generate_summary_tool
+from ..tools import create_write_memory_tool, create_search_memory_tool
 
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 class Agent:
     """AI agent runtime for a continuous agent-level message stream."""
 
-    _MEMORY_TOOL_NAMES = {"write_daily_memory", "search_memory", "generate_memory_summary"}
-    _MEMORY_WRITE_TOOL_NAMES = {"write_daily_memory", "generate_memory_summary"}
+    _MEMORY_TOOL_NAMES = {"write_memory", "search_memory"}
+    _MEMORY_WRITE_TOOL_NAMES = {"write_memory"}
 
     def __init__(
         self,
@@ -93,18 +93,13 @@ class Agent:
 
         bound_tools = list(tools or [])
         bound_tools.extend([
-            create_write_daily_memory_tool(
+            create_write_memory_tool(
                 memory=self.markdown_memory,
                 is_enabled=self._memory_can_write,
             ),
             create_search_memory_tool(
                 memory=self.markdown_memory,
                 is_enabled=self._memory_can_read,
-            ),
-            create_generate_summary_tool(
-                memory=self.markdown_memory,
-                llm_service=self.llm_service,
-                is_enabled=self._memory_can_write,
             ),
         ])
         self.tool_manager = ToolManager(tools=bound_tools)

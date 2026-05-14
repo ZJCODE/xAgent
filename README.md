@@ -85,9 +85,9 @@ From the CLI:
 xagent observe "Bob mentioned the demo may move to 3pm" --source feishu --event-type group_message
 ```
 
-Diary memory is built from the agent's experience stream, not only direct chats. Meaningful observations can be summarized alongside conversations; preserve attribution in the observation text or metadata so overheard speech is not confused with a direct request from the current user.
+Long-term memory is built from the agent's experience stream, not only direct chats. Meaningful observations can be consolidated alongside conversations; preserve attribution in the observation text or metadata so overheard speech is not confused with a direct request from the current user.
 
-Memory writes are buffered for efficiency, then flushed by batch size, by a stale-message fallback, and on normal CLI/server shutdown. Recent diary context defaults to 7 days and can be changed in `memory.recent_days`. When diary entries contain quote-backed stable information about a person, xAgent can also append that evidence to `memory/people/` profiles.
+Memory writes are buffered for efficiency, then flushed by batch size, by a stale-message fallback, runtime heartbeat in long-lived API/Feishu processes, and normal CLI/server shutdown. Recent memory context defaults to 7 days and can be changed in `memory.recent_days`. When memory entries contain quote-backed stable information about a person, xAgent can also append that evidence to `memory/people/` profiles.
 
 ## API Transports
 

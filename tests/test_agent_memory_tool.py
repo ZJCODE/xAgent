@@ -1,4 +1,4 @@
-"""Tests for memory tool factories (write_daily_memory, search_memory, generate_memory_summary)."""
+"""Tests for memory tool factories (write_memory, search_memory)."""
 
 import asyncio
 import tempfile
@@ -7,9 +7,8 @@ from datetime import date
 
 from xagent.components.memory import MarkdownMemory
 from xagent.tools.memory_tool import (
-    create_write_daily_memory_tool,
+    create_write_memory_tool,
     create_search_memory_tool,
-    create_generate_summary_tool,
 )
 
 
@@ -30,23 +29,24 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
     def _is_enabled(self):
         return self._enabled
 
-    async def test_write_daily_memory_appends_entry(self):
-        tool = create_write_daily_memory_tool(self.memory, self._is_enabled)
-        result = await tool("This is a test diary entry")
+    async def test_write_memory_records_entry(self):
+        tool = create_write_memory_tool(self.memory, self._is_enabled)
+        result = await tool("This is a test memory note")
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["date"], date.today().isoformat())
+        self.assertEqual(result["message"], "Memory recorded.")
+        self.assertNotIn("file", result)
 
         text = await self.memory.read_file(self.memory.daily_path(date.today()))
-        self.assertIn("test diary entry", text)
+        self.assertIn("test memory note", text)
 
-    async def test_write_daily_memory_disabled(self):
+    async def test_write_memory_disabled(self):
         self._enabled = False
-        tool = create_write_daily_memory_tool(self.memory, self._is_enabled)
+        tool = create_write_memory_tool(self.memory, self._is_enabled)
         result = await tool("Should not be written")
         self.assertEqual(result["status"], "disabled")
 
-    async def test_write_daily_memory_empty_content(self):
-        tool = create_write_daily_memory_tool(self.memory, self._is_enabled)
+    async def test_write_memory_empty_content(self):
+        tool = create_write_memory_tool(self.memory, self._is_enabled)
         result = await tool("   ")
         self.assertEqual(result["status"], "skipped")
 

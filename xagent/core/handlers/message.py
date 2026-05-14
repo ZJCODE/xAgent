@@ -116,7 +116,7 @@ class MessageHandler:
 
                 Includes per-turn dynamic context that changes each call:
                     - Runtime metadata (date and current speaker)
-          - Recent diary memory (conditional)
+          - Recent memory (conditional)
                     - Recent experience in chronological order
         """
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -150,10 +150,10 @@ class MessageHandler:
         transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
         transcript_lines.append("")
 
-        # --- Recent diary memory (conditional) ---
+        # --- Recent memory (conditional) ---
         if memory_context:
             transcript_lines.append(
-                "**Recent Diary Memory** "
+            "**Recent Memory** "
                 "(attribution rules per instructions):\n\n"
                 + memory_context
             )
@@ -241,9 +241,9 @@ class MessageHandler:
         if memory_context.strip():
             context_messages.append({
                 "role": RoleType.USER.value,
-                "name": AgentConfig.RECENT_DIARY_MEMORY_NAME,
+                "name": AgentConfig.RECENT_MEMORY_NAME,
                 "content": MessageHandler._wrap_untrusted_context(
-                    AgentConfig.RECENT_DIARY_MEMORY_NAME,
+                    AgentConfig.RECENT_MEMORY_NAME,
                     memory_context,
                 ),
             })

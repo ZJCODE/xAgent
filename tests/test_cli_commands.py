@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
 
@@ -247,6 +247,8 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("log_level", config["channels"]["feishu"])
         self.assertNotIn("stream", config["channels"]["feishu"])
         self.assertNotIn("show_sender_ids", config["channels"]["feishu"])
+        self.assertTrue(config["runtime"]["heartbeat_enabled"])
+        self.assertEqual(config["runtime"]["heartbeat_interval_seconds"], 300)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         self.assertIn("xagent start --channel feishu", output)
 
@@ -263,13 +265,14 @@ class CLICommandTests(unittest.TestCase):
                     return None
 
             adapter_instance = MagicMock()
+            adapter_instance.run = AsyncMock()
 
             with patch("xagent.interfaces.cli.BaseAgentRunner", return_value=_Runner()):
                 with patch("xagent.integrations.feishu.FeishuAdapter", return_value=adapter_instance):
                     exit_code = handle_run_channel_internal(args)
 
         self.assertEqual(exit_code, 0)
-        adapter_instance.run_blocking.assert_called_once_with()
+        adapter_instance.run.assert_awaited_once_with()
 
     def test_start_all_includes_feishu_when_credentials_exist_without_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:

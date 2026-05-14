@@ -249,19 +249,12 @@ class MemoryHandler:
     async def check_and_generate_summaries(self) -> None:
         """Check if any completed periods need summary generation.
 
-        Called in the background after each chat turn.  Only generates
-        summaries for periods that are fully in the past and whose summary
-        file does not yet exist.
+        Only generates summaries for periods that are fully in the past and
+        whose summary file does not yet exist.
         """
         today = date.today()
 
-        # Weekly: check last week
-        last_week_day = today - timedelta(days=7)
-        week_start, week_end = self.memory.week_range_for(last_week_day)
-        if week_end < today:
-            wp = self.memory.weekly_path(week_start, week_end)
-            if not wp.exists():
-                await self._generate_weekly(week_start, week_end)
+        await self.generate_previous_weekly_summary_if_missing(today=today)
 
         # Monthly: check last month
         if today.month == 1:
@@ -278,18 +271,37 @@ class MemoryHandler:
         if not yp.exists():
             await self._generate_yearly(last_year_val)
 
-    async def _generate_weekly(self, week_start: date, week_end: date) -> None:
+    async def generate_previous_weekly_summary_if_missing(
+        self,
+        today: Optional[date] = None,
+    ) -> bool:
+        """Generate the previous completed week's summary if it is missing."""
+        current_day = today or date.today()
+        last_week_day = current_day - timedelta(days=7)
+        week_start, week_end = self.memory.week_range_for(last_week_day)
+        if week_end >= current_day:
+            return False
+
+        weekly_path = self.memory.weekly_path(week_start, week_end)
+        if weekly_path.exists():
+            return False
+
+        return await self._generate_weekly(week_start, week_end)
+
+    async def _generate_weekly(self, week_start: date, week_end: date) -> bool:
         source = await self.memory.search_date_range(
             start=week_start.isoformat(),
             end=week_end.isoformat(),
         )
         if not source.strip():
-            return
+            return False
         label = f"{week_start.isoformat()} to {week_end.isoformat()}"
         summary = await self.llm_service.generate_summary(source, "weekly", label)
         if summary:
             await self.memory.write_summary(self.memory.weekly_path(week_start, week_end), summary)
             logger.info("Generated weekly summary: %s", label)
+            return True
+        return False
 
     async def _generate_monthly(self, year: int, month: int) -> None:
         import calendar

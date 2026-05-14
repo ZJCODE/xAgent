@@ -15,8 +15,8 @@ objects for the current agent stream.
 
 ## Memory
 
-Long-term diary memory. The memory package stores and formats durable diary
-entries, summaries, and quote-backed people profiles.
+Long-term memory. The memory package stores and formats durable memory entries,
+runtime-maintained summaries, and quote-backed people profiles.
 
 - `memory/markdown_memory.py`: markdown file layout, reads, writes, listing, and search.
-- `memory/journal_service.py`: LLM formatting for diary entries, summaries, and people profile updates.
+- `memory/journal_service.py`: LLM formatting for memory entries, summaries, and people profile updates.

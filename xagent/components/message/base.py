@@ -2,7 +2,7 @@
 
 Message storage is the short-term conversation history layer. It persists
 ``Message`` objects in one ordered stream and deliberately knows nothing about
-long-term diary memory or summary generation.
+long-term memory maintenance.
 """
 
 from __future__ import annotations

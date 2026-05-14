@@ -81,11 +81,13 @@ channels:
     web_ui: true
 runtime:
   default_channel: api
+  heartbeat_enabled: true
+  heartbeat_interval_seconds: 300
 memory:
   recent_days: 7
-  stale_flush_seconds: 120
-  message_threshold: 10
-  min_interval_seconds: 300
+  stale_flush_seconds: 300
+  message_threshold: 20
+  min_interval_seconds: 900
 ```
 
 `provider.model` 是必填项。`provider.name` 建议填写，用于区分 OpenAI、DeepSeek、Qwen 或自定义 OpenAI-compatible 服务。`provider.base_url` 和 `provider.api_key` 会传给 OpenAI SDK 的 `AsyncOpenAI` 客户端；如果二者都不提供，则使用 SDK 默认客户端行为。
@@ -168,15 +170,17 @@ Langfuse SDK 会在后台排队发送事件。CLI 单次 chat、observe、Feishu
 ```yaml
 memory:
   recent_days: 7
-  stale_flush_seconds: 120
-  message_threshold: 10
-  min_interval_seconds: 300
+  stale_flush_seconds: 300
+  message_threshold: 20
+  min_interval_seconds: 900
 ```
 
-- `recent_days`：每轮对话自动注入最近多少天的 daily diary，默认 `7`。
-- `stale_flush_seconds`：pending 消息在内存中停留超过该秒数后强制写入，默认 `120`。
-- `message_threshold`：达到多少条经验记录后触发批量写入，默认 `10`。
-- `min_interval_seconds`：普通批量写入之间的最小间隔，默认 `300`。stale flush 和正常 shutdown flush 不会被它阻止。
+- `recent_days`：每轮对话自动注入最近多少天的长期记忆上下文，默认 `7`。
+- `stale_flush_seconds`：短对话记录超过该秒数仍未批量写入时会被强制写入，默认 `300`。
+- `message_threshold`：达到多少条经验记录后触发批量写入，默认 `20`。
+- `min_interval_seconds`：普通批量写入之间的最小间隔，默认 `900`。stale flush 和正常 shutdown flush 不会被它阻止。
+
+`runtime.heartbeat_enabled` 控制长驻运行时心跳，默认开启；`runtime.heartbeat_interval_seconds` 默认为 `300`。API server lifespan 和 Feishu daemon 会启动 heartbeat；CLI 单次/交互 chat 不启动。第一版 heartbeat 只做记忆维护：定期 flush 待写入记忆，并在每周一为上一周生成 weekly summary。summary 生成不是模型可见工具。
 
 人物档案保存在 `memory/people/`。它只追加带日期和证据片段的稳定信息；默认不会把所有人物档案注入每一轮 prompt，需要时可通过记忆搜索读取。
 
@@ -477,7 +481,7 @@ POST /clear_messages
     "backend": "local",
     "path": "/Users/you/.xagent/messages/messages.sqlite3"
   },
-  "tools": ["run_command", "web_search", "write_daily_memory", "search_memory", "generate_memory_summary"],
+  "tools": ["run_command", "web_search", "write_memory", "search_memory"],
   "identity": "# Identity\n\nYou are a helpful assistant.",
   "identity_file": "identity.md",
   "identity_path": "/Users/you/.xagent/identity.md",
@@ -747,11 +751,11 @@ memory/
   people/<person-key>.md
 ```
 
-Agent 会基于对话和观察事件异步整理日记式记忆。`enable_memory` 和 `private` 会影响 `/chat` 的记忆行为：
+Agent 会基于对话和观察事件异步整理长期记忆。`enable_memory` 和 `private` 会影响 `/chat` 的记忆行为：
 
-后台写入会先缓存在内存里；达到 `memory.message_threshold` 且满足普通间隔时会批量写入。如果消息在 pending 中超过 `memory.stale_flush_seconds`，会强制写入。CLI、API server 和 Feishu channel 正常退出时也会 flush pending，避免短对话低于阈值时丢失。
+后台写入会先累积；达到 `memory.message_threshold` 且满足普通间隔时会批量写入。如果记录停留超过 `memory.stale_flush_seconds`，会强制写入。CLI、API server 和 Feishu channel 正常退出时也会 flush 记忆，避免短对话低于阈值时丢失。长驻 API/Feishu 运行时还会通过 runtime heartbeat 定期执行相同维护，并在每周一生成上一周 weekly summary。
 
-`memory/people/` 是人物档案层。只有日记写入成功后，系统才会尝试从同一批消息中抽取有明确人物归属、带证据 quote 的稳定信息并追加到对应 profile。人物档案更新失败不会影响 daily diary 写入。
+`memory/people/` 是人物档案层。只有长期记忆写入成功后，系统才会尝试从同一批消息中抽取有明确人物归属、带证据 quote 的稳定信息并追加到对应 profile。人物档案更新失败不会影响主记忆写入。
 
 | 参数 | 读取记忆 | 写入记忆 | 写入主消息库 |
 | --- | --- | --- | --- |

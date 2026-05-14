@@ -86,6 +86,7 @@ class FeishuAdapter:
         self._room_name_cache: dict[str, str] = {}
         self._warned_mention_fallback = False
         self._stop_event = asyncio.Event()
+        self._owner_loop: Optional[asyncio.AbstractEventLoop] = None
         self._chat_locks: dict[str, asyncio.Lock] = {}
         self._processing_tasks_lock = threading.Lock()
         self._processing_tasks: set[asyncio.Task[None]] = set()
@@ -147,6 +148,7 @@ class FeishuAdapter:
         event loop.
         """
         loop = asyncio.get_running_loop()
+        self._owner_loop = loop
         run_task = loop.run_in_executor(None, self.run_blocking)
         stop_task = asyncio.create_task(self._stop_event.wait())
         try:
@@ -165,6 +167,7 @@ class FeishuAdapter:
         finally:
             self._safe_stop()
             await self._flush_agent_memory()
+            self._owner_loop = None
 
     def run_blocking(self) -> None:
         """Connect to Feishu and serve events until stopped.
@@ -238,6 +241,18 @@ class FeishuAdapter:
     # ------------------------------------------------------------------
 
     async def _on_message(self, msg: Any) -> None:
+        owner_loop = self._owner_loop
+        if owner_loop is not None and owner_loop.is_running():
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            if current_loop is not owner_loop:
+                owner_loop.call_soon_threadsafe(self._create_dispatch_task, msg)
+                return
+        self._create_dispatch_task(msg)
+
+    def _create_dispatch_task(self, msg: Any) -> None:
         task = asyncio.create_task(self._dispatch(msg))
         with self._processing_tasks_lock:
             self._processing_tasks.add(task)

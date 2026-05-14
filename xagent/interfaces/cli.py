@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional, Sequence, Tuple
 
 import yaml
 
+from ..core.runtime import create_runtime_heartbeat
 from .base import BaseAgentConfig, BaseAgentRunner
 from .channels import (
     CHANNEL_API,
@@ -350,6 +351,8 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
         },
         "runtime": {
             "default_channel": "api",
+            "heartbeat_enabled": BaseAgentConfig.RUNTIME_HEARTBEAT_ENABLED,
+            "heartbeat_interval_seconds": BaseAgentConfig.RUNTIME_HEARTBEAT_INTERVAL_SECONDS,
         },
         "memory": {
             "recent_days": BaseAgentConfig.MEMORY_RECENT_DAYS,
@@ -1069,36 +1072,61 @@ def _run_feishu_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
     runner = BaseAgentRunner(config_dir=getattr(args, "config_dir", None))
     adapter = FeishuAdapter(agent=runner.agent, config=feishu_runtime_config)
 
-    stop_requested = False
-    old_handlers: dict[int, object] = {}
+    async def _run_daemon() -> bool:
+        heartbeat = create_runtime_heartbeat(
+            runner.agent,
+            config.get("runtime") if isinstance(config, dict) else None,
+            logger_=logging.getLogger(__name__),
+        )
+        stop_requested = False
+        loop = asyncio.get_running_loop()
+        old_handlers: dict[int, object] = {}
+        signal_handlers: list[int] = []
 
-    def _handle_stop(signum: int, _frame) -> None:
-        nonlocal stop_requested
-        stop_requested = True
-        adapter._safe_stop()
+        def _request_stop() -> None:
+            nonlocal stop_requested
+            stop_requested = True
+            adapter._stop_event.set()
+            adapter._safe_stop()
 
-    for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
-        if signum is None:
-            continue
-        old_handlers[signum] = signal.getsignal(signum)
-        signal.signal(signum, _handle_stop)
+        def _handle_stop(_signum: int, _frame) -> None:
+            loop.call_soon_threadsafe(_request_stop)
+
+        for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+            if signum is None:
+                continue
+            try:
+                loop.add_signal_handler(signum, _request_stop)
+                signal_handlers.append(signum)
+            except (NotImplementedError, RuntimeError):
+                old_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, _handle_stop)
+
+        try:
+            if heartbeat is not None:
+                await heartbeat.start()
+            await adapter.run()
+        finally:
+            for signum in signal_handlers:
+                try:
+                    loop.remove_signal_handler(signum)
+                except (NotImplementedError, RuntimeError):
+                    pass
+            for signum, previous_handler in old_handlers.items():
+                signal.signal(signum, previous_handler)
+            if heartbeat is not None:
+                await heartbeat.stop()
+        return stop_requested
 
     print(f"xAgent Feishu channel ready (model={runner.agent.model}).")
     print(f"Connecting to Feishu (app_id={feishu_runtime_config.app_id})...")
     try:
-        adapter.run_blocking()
+        stop_requested = asyncio.run(_run_daemon())
     except KeyboardInterrupt:
         stop_requested = True
     except RuntimeError as exc:
         print(f"{exc}")
         return 1
-    finally:
-        for signum, previous_handler in old_handlers.items():
-            signal.signal(signum, previous_handler)
-        try:
-            asyncio.run(runner.agent.flush_memory())
-        except Exception as exc:
-            logging.getLogger(__name__).warning("Failed to flush memory on Feishu shutdown: %s", exc)
 
     if stop_requested:
         print("Feishu channel stopped.")
@@ -1331,7 +1359,13 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
         "enable_memory": True,
         "group_history_count": 10,
     }
-    config.setdefault("runtime", {}).setdefault("default_channel", "api")
+    runtime_cfg = config.setdefault("runtime", {})
+    runtime_cfg.setdefault("default_channel", "api")
+    runtime_cfg.setdefault("heartbeat_enabled", BaseAgentConfig.RUNTIME_HEARTBEAT_ENABLED)
+    runtime_cfg.setdefault(
+        "heartbeat_interval_seconds",
+        BaseAgentConfig.RUNTIME_HEARTBEAT_INTERVAL_SECONDS,
+    )
 
     config_path.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
     print(f"\nUpdated {config_path} with channels.feishu\n")
