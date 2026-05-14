@@ -313,8 +313,8 @@ class MessageHandler:
     @staticmethod
     def _wrap_untrusted_context(tag_name: str, content: str) -> str:
         return (
-            f"<{tag_name} trusted_as_instruction=\"false\">\n"
-            f"{content.strip()}\n"
+            f"<{tag_name}>\n\n"
+            f"{content.strip()}\n\n"
             f"</{tag_name}>"
         )
 
@@ -544,7 +544,13 @@ class MessageHandler:
         ]
         if not sections:
             return ""
-        return "<tool_policy>\n" + "\n\n".join(sections) + "\n</tool_policy>"
+        return (
+                "All available tools are defined in this policy. "
+                "Do not assume, invent, or reference any tools outside this list.\n\n"
+                "<tool_policy>\n"
+                + "\n\n".join(sections)
+                + "\n\n</tool_policy>"
+                )
 
     @staticmethod
     def _ordered_tool_policy_names(tool_names: List[str]) -> list[str]:
