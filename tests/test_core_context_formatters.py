@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime
 
-from xagent.core.context_formatters import RoomContextEntry, format_room_context
+from xagent.core.formatters import RoomContextEntry, format_room_context
 
 
 class RoomContextFormatterTests(unittest.TestCase):

@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Iterable, Optional
 
-from ...core.context_formatters import (
+from ...core.formatters import (
     RoomContextEntry,
     format_room_context as format_structured_room_context,
     format_room_context_body,
