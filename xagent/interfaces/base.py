@@ -14,7 +14,11 @@ from ..core.providers import SDK_OPENAI, normalize_provider_name, normalize_sdk,
 from ..components import MessageStorageBase, MessageStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
 from ..tools import create_web_search_tool, run_command
-from ..tools.search_tool import SEARCH_PROVIDER_OPENAI, normalize_search_provider
+from ..tools.search_tool import (
+    SEARCH_PROVIDER_OPENAI,
+    is_placeholder_api_key,
+    normalize_search_provider,
+)
 
 
 class BaseAgentConfig:
@@ -328,7 +332,11 @@ class BaseAgentRunner:
 
         search_provider = normalize_search_provider(search_cfg.get("provider"))
         if search_provider == SEARCH_PROVIDER_OPENAI and not self._is_openai_provider(provider_cfg):
-            raise ValueError("search.provider 'openai' requires an OpenAI provider")
+            api_key = str(search_cfg.get("api_key") or "").strip()
+            if is_placeholder_api_key(api_key):
+                raise ValueError(
+                    "search.provider 'openai' requires search.api_key when provider is not OpenAI"
+                )
 
     @staticmethod
     def _is_openai_provider(provider_cfg: Dict[str, Any]) -> bool:
@@ -341,6 +349,8 @@ class BaseAgentRunner:
             return provider_name == "openai"
 
         base_url = str(provider_cfg.get("base_url") or "").strip().rstrip("/")
+        if not base_url:
+            return True
         return base_url == "https://api.openai.com/v1"
 
     def _load_identity(self, identity_path: Path) -> str:
@@ -514,6 +524,44 @@ class BaseAgentRunner:
             return AsyncAnthropic(**client_kwargs)
 
         return self.observability.create_client(client_kwargs)
+
+    def _initialize_search_client(
+        self,
+        agent_cfg: Dict[str, Any],
+        *,
+        model_client: Optional[Any],
+    ) -> Optional[Any]:
+        """Build the client used by OpenAI built-in search."""
+        search_cfg = agent_cfg.get("search") or {}
+        if not isinstance(search_cfg, dict):
+            return model_client
+
+        search_provider = normalize_search_provider(search_cfg.get("provider"))
+        if search_provider != SEARCH_PROVIDER_OPENAI:
+            return model_client
+
+        provider_cfg = agent_cfg.get("provider") or {}
+        is_openai_provider = isinstance(provider_cfg, dict) and self._is_openai_provider(provider_cfg)
+        search_api_key = str(search_cfg.get("api_key") or "").strip()
+        if search_api_key and not is_placeholder_api_key(search_api_key):
+            return self.observability.create_client({"api_key": search_api_key})
+
+        if is_openai_provider:
+            return model_client
+        return None
+
+    def _get_search_model(self, agent_cfg: Dict[str, Any]) -> Optional[str]:
+        search_cfg = agent_cfg.get("search") or {}
+        if isinstance(search_cfg, dict) and search_cfg.get("model"):
+            return search_cfg.get("model")
+
+        provider_cfg = agent_cfg.get("provider") or {}
+        configured_search_provider = search_cfg.get("provider") if isinstance(search_cfg, dict) else None
+        search_provider = normalize_search_provider(configured_search_provider)
+        if search_provider == SEARCH_PROVIDER_OPENAI:
+            if not isinstance(provider_cfg, dict) or not self._is_openai_provider(provider_cfg):
+                return AgentConfig.DEFAULT_MODEL
+        return self._get_agent_model(agent_cfg)
     
     def _load_agent_tools(
         self,
@@ -526,10 +574,11 @@ class BaseAgentRunner:
             self.logger.warning("Configured tools are ignored; run_command is built in by default.")
 
         tools = [run_command]
+        search_client = self._initialize_search_client(agent_cfg, model_client=client)
         search_tool = create_web_search_tool(
             agent_cfg.get("search"),
-            client=client,
-            model=self._get_agent_model(agent_cfg),
+            client=search_client,
+            model=self._get_search_model(agent_cfg),
         )
         if search_tool is not None:
             tools.append(search_tool)

@@ -20,7 +20,7 @@ xagent init
 
 Follow the prompts to choose your provider, model, API key, search provider, and optional identity. xAgent selects the SDK from the provider: OpenAI, DeepSeek, and Qwen use the OpenAI SDK; MiniMax and Anthropic use the Anthropic SDK. For a custom provider, `xagent init` asks which SDK to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
 
-Search is optional. The OpenAI provider can use OpenAI built-in web search without an extra key, DuckDuckGo, Brave Search, or no search. Other providers can use DuckDuckGo, Brave Search, or no search. Brave Search requires a Brave Search API key in `search.api_key` or `BRAVE_SEARCH_API_KEY`.
+Search is optional. Any provider can use OpenAI built-in web search, DuckDuckGo, Brave Search, or no search. OpenAI built-in search reuses the main API key when the main provider is OpenAI; non-OpenAI providers must set an OpenAI key in `search.api_key`. Brave Search requires a Brave Search API key in `search.api_key` or `BRAVE_SEARCH_API_KEY`.
 
 Langfuse observability is included for teams that need LLM tracing, latency, usage, and error monitoring. It is disabled by default; `xagent init` can write an `observability` block only when you choose to enable it.
 

@@ -282,6 +282,7 @@ QWEN_BASE_URL = provider_base_url(PROVIDER_QWEN)
 CUSTOM_OPENAI_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, SDK_OPENAI)
 CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, SDK_ANTHROPIC)
 API_KEY_PLACEHOLDER = "your_api_key_here"
+OPENAI_SEARCH_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
 BRAVE_SEARCH_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 MODEL_PLACEHOLDER = "your_model_here"
 LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
@@ -330,9 +331,12 @@ OPENAI_SEARCH_PROVIDERS = (
 )
 NON_OPENAI_SEARCH_PROVIDERS = (
     "duckduckgo",
+    "openai",
     "brave",
     "none",
 )
+
+
 def _default_init_selection() -> InitSelection:
     return InitSelection(
         provider="openai",
@@ -396,8 +400,14 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
         },
     }
     search_config = {"provider": selection.search_provider or "none"}
-    if search_config["provider"] == "brave":
-        search_config["api_key"] = selection.search_api_key or BRAVE_SEARCH_API_KEY_PLACEHOLDER
+    if search_config["provider"] == "openai" and selection.provider != PROVIDER_OPENAI:
+        search_config["api_key"] = selection.search_api_key or OPENAI_SEARCH_API_KEY_PLACEHOLDER
+    elif search_config["provider"] == "openai" and selection.search_api_key:
+        search_config["api_key"] = selection.search_api_key
+    elif search_config["provider"] == "brave":
+        search_config["api_key"] = BRAVE_SEARCH_API_KEY_PLACEHOLDER
+        if selection.search_api_key:
+            search_config["api_key"] = selection.search_api_key
     config["search"] = search_config
     if selection.observability_enabled:
         config["observability"] = {
@@ -605,7 +615,13 @@ def collect_init_selection(
 
     search_provider = _select_search_provider(provider, input_func=input_func)
     search_api_key = ""
-    if search_provider == "brave":
+    if search_provider == "openai" and provider != PROVIDER_OPENAI:
+        search_api_key = secret_input_func(
+            "OpenAI API key for search (leave blank to fill in later): "
+        ).strip()
+        if not search_api_key:
+            search_api_key = OPENAI_SEARCH_API_KEY_PLACEHOLDER
+    elif search_provider == "brave":
         search_api_key = secret_input_func("Brave Search API key (leave blank to fill in later): ").strip()
         if not search_api_key:
             search_api_key = BRAVE_SEARCH_API_KEY_PLACEHOLDER

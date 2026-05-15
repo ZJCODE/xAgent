@@ -300,6 +300,24 @@ provider:
             self.assertEqual(config["search"]["provider"], "none")
             self.assertEqual(result.identity_path.read_text(encoding="utf-8"), "# Identity\n\nYou report weather.\n")
 
+    def test_init_writes_openai_search_key_for_non_openai_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="deepseek",
+                base_url="https://api.deepseek.com",
+                api_key="deepseek-key",
+                model="deepseek-v4-pro",
+                identity="# Identity\n\nYou search with OpenAI.\n",
+                search_provider="openai",
+                search_api_key="openai-search-key",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["search"]["provider"], "openai")
+            self.assertEqual(config["search"]["api_key"], "openai-search-key")
+
     def test_init_writes_sdk_only_for_custom_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
@@ -396,7 +414,7 @@ provider:
         answers = iter([
             "2",
             "3",
-            "3",
+            "4",
             "",
             ".",
         ])
@@ -434,6 +452,25 @@ provider:
         self.assertEqual(selection.api_key, "qwen-key")
         self.assertEqual(selection.model, "qwen3.6-max-preview")
         self.assertEqual(selection.search_provider, "duckduckgo")
+
+    def test_collect_init_selection_supports_openai_search_for_non_openai_provider(self):
+        answers = iter([
+            "2",
+            "1",
+            "2",
+            "",
+            ".",
+        ])
+        secrets = iter(["deepseek-key", "openai-search-key"])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: next(secrets),
+        )
+
+        self.assertEqual(selection.provider, "deepseek")
+        self.assertEqual(selection.search_provider, "openai")
+        self.assertEqual(selection.search_api_key, "openai-search-key")
 
     def test_collect_init_selection_supports_brave_search_api_key(self):
         answers = iter([
@@ -518,7 +555,7 @@ provider:
         self.assertEqual(selection.model, "your_model_here")
         self.assertEqual(selection.search_provider, "duckduckgo")
 
-    def test_collect_init_selection_non_openai_excludes_openai_search(self):
+    def test_collect_init_selection_non_openai_includes_openai_search(self):
         answers = iter([
             "2",
             "1",
@@ -535,7 +572,7 @@ provider:
 
         search_output = stdout.getvalue().split("Search provider", 1)[1].split("Enter the agent identity", 1)[0]
         self.assertEqual(selection.search_provider, "duckduckgo")
-        self.assertNotIn("openai", search_output)
+        self.assertIn("openai", search_output)
 
     def test_collect_init_selection_does_not_label_defaults(self):
         answers = iter([
@@ -598,7 +635,7 @@ search:
             self.assertIn("run_command", runner.agent.tools)
             self.assertNotIn("web_search", runner.agent.tools)
 
-    def test_config_rejects_openai_search_for_non_openai_provider(self):
+    def test_config_rejects_openai_search_for_non_openai_provider_without_search_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -614,8 +651,41 @@ search:
             )
             write_identity(tmpdir)
 
-            with self.assertRaisesRegex(ValueError, "search.provider 'openai'"):
+            with self.assertRaisesRegex(ValueError, "requires search.api_key"):
                 BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_accepts_openai_search_for_non_openai_provider_with_search_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    base_url: "https://api.deepseek.com"
+    api_key: "deepseek-key"
+search:
+    provider: "openai"
+    api_key: "openai-search-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            web_search_tool = runner.agent.tools["web_search"]
+            search_provider = next(
+                cell.cell_contents
+                for cell in web_search_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredSearchProvider"
+            )
+
+            self.assertIn("web_search", runner.agent.tools)
+            self.assertEqual(search_provider.model, AgentConfig.DEFAULT_MODEL)
+            self.assertEqual(
+                str(search_provider.client.base_url).rstrip("/"),
+                "https://api.openai.com/v1",
+            )
 
     def test_config_rejects_name_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:

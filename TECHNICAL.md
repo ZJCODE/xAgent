@@ -151,7 +151,7 @@ provider:
 
 `search.provider` 支持：
 
-- `openai`：使用 OpenAI Responses API 的内置 web search，仅当 `provider.name: openai` 或 `provider.base_url: https://api.openai.com/v1` 时允许。
+- `openai`：使用 OpenAI Responses API 的内置 web search。任意模型 provider 都可选择；当主 `provider` 不是 OpenAI 时，必须额外配置 `search.api_key` 作为 OpenAI API key。可选 `search.model` 指定用于搜索的 OpenAI 模型，默认使用 `gpt-5.4-mini`。
 - `duckduckgo`：不需要 API key。
 - `brave`：需要 `search.api_key`，也可通过环境变量 `BRAVE_SEARCH_API_KEY` 或 `BRAVE_API_KEY` 提供。
 - `none`：关闭联网搜索工具。
@@ -163,6 +163,21 @@ search:
   provider: brave
   api_key: YOUR_BRAVE_SEARCH_API_KEY
   safesearch: moderate
+```
+
+非 OpenAI provider 使用 OpenAI search 示例：
+
+```yaml
+provider:
+  name: deepseek
+  base_url: https://api.deepseek.com
+  api_key: YOUR_DEEPSEEK_API_KEY
+  model: deepseek-v4-pro
+
+search:
+  provider: openai
+  api_key: YOUR_OPENAI_API_KEY
+  model: gpt-5.4-mini
 ```
 
 当搜索开启时，Agent 会加载 `web_search` 工具；无论搜索是否开启，`run_command` 工具都会作为内置工具加载。

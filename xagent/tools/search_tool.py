@@ -37,6 +37,8 @@ BRAVE_API_KEY_ENV_VARS = ("BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY")
 PLACEHOLDER_API_KEYS = {
     "your_api_key",
     "your_api_key_here",
+    "your_openai_api_key",
+    "your_openai_api_key_here",
     "your_brave_search_api_key",
 }
 
@@ -254,7 +256,7 @@ class ConfiguredSearchProvider:
         search_lang: Optional[str],
     ) -> dict:
         api_key = _get_brave_api_key(self.config)
-        if _is_placeholder_api_key(api_key):
+        if is_placeholder_api_key(api_key):
             return _error_response(
                 self.provider,
                 query,
@@ -632,9 +634,14 @@ def _get_brave_api_key(config: dict) -> str:
     return ""
 
 
-def _is_placeholder_api_key(api_key: str) -> bool:
+def is_placeholder_api_key(api_key: str) -> bool:
+    """Return whether an API key is empty or still a template placeholder."""
     normalized = api_key.strip().lower()
     return not normalized or normalized in PLACEHOLDER_API_KEYS
+
+
+def _is_placeholder_api_key(api_key: str) -> bool:
+    return is_placeholder_api_key(api_key)
 
 
 def _field(obj: Any, name: str, default: Any = None) -> Any:
