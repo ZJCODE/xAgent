@@ -16,6 +16,18 @@ from typing import Any, Callable, Optional, Sequence, Tuple
 
 import yaml
 
+from ..core.providers import (
+    KNOWN_PROVIDERS,
+    PROVIDER_ANTHROPIC,
+    PROVIDER_CUSTOM,
+    PROVIDER_DEEPSEEK,
+    PROVIDER_MINIMAX,
+    PROVIDER_OPENAI,
+    PROVIDER_QWEN,
+    SDK_ANTHROPIC,
+    SDK_OPENAI,
+    provider_base_url,
+)
 from ..core.runtime import create_runtime_heartbeat
 from .base import BaseAgentConfig, BaseAgentRunner
 from .channels import (
@@ -253,6 +265,7 @@ class InitSelection:
     api_key: str
     model: str
     identity: str
+    sdk: str = ""
     search_provider: str = "none"
     search_api_key: str = ""
     observability_enabled: bool = False
@@ -261,10 +274,13 @@ class InitSelection:
     langfuse_base_url: str = ""
 
 
-OPENAI_BASE_URL = "https://api.openai.com/v1"
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-CUSTOM_BASE_URL_PLACEHOLDER = "https://api.example.com/v1"
+OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
+DEEPSEEK_BASE_URL = provider_base_url(PROVIDER_DEEPSEEK)
+ANTHROPIC_BASE_URL = provider_base_url(PROVIDER_ANTHROPIC)
+MINIMAX_BASE_URL = provider_base_url(PROVIDER_MINIMAX)
+QWEN_BASE_URL = provider_base_url(PROVIDER_QWEN)
+CUSTOM_OPENAI_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, SDK_OPENAI)
+CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, SDK_ANTHROPIC)
 API_KEY_PLACEHOLDER = "your_api_key_here"
 BRAVE_SEARCH_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 MODEL_PLACEHOLDER = "your_model_here"
@@ -279,9 +295,25 @@ OPENAI_MODELS = (
     "gpt-5.5",
     "Decide later",
 )
+ANTHROPIC_MODELS = (
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-1-20250805",
+    "claude-3-5-haiku-20241022",
+    "Decide later",
+)
 DEEPSEEK_MODELS = (
     "deepseek-v4-flash",
     "deepseek-v4-pro",
+    "Decide later",
+)
+MINIMAX_MODELS = (
+    "MiniMax-M2.7",
+    "MiniMax-M2.7-highspeed",
+    "MiniMax-M2.5",
+    "MiniMax-M2.5-highspeed",
+    "MiniMax-M2.1",
+    "MiniMax-M2.1-highspeed",
+    "MiniMax-M2",
     "Decide later",
 )
 QWEN_MODELS = (
@@ -301,8 +333,6 @@ NON_OPENAI_SEARCH_PROVIDERS = (
     "brave",
     "none",
 )
-
-
 def _default_init_selection() -> InitSelection:
     return InitSelection(
         provider="openai",
@@ -335,13 +365,17 @@ def _weather_output_schema() -> dict:
 
 
 def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
+    provider_config = {
+        "name": selection.provider,
+        "base_url": selection.base_url,
+        "api_key": selection.api_key,
+        "model": selection.model,
+    }
+    if selection.provider == PROVIDER_CUSTOM:
+        provider_config["sdk"] = selection.sdk or SDK_OPENAI
+
     config = {
-        "provider": {
-            "name": selection.provider,
-            "base_url": selection.base_url,
-            "api_key": selection.api_key,
-            "model": selection.model,
-        },
+        "provider": provider_config,
         "channels": {
             "api": {
                 "host": BaseAgentConfig.DEFAULT_HOST,
@@ -461,10 +495,22 @@ def _select_search_provider(
     *,
     input_func: Callable[[str], str] = input,
 ) -> str:
-    options = OPENAI_SEARCH_PROVIDERS if provider == "openai" else NON_OPENAI_SEARCH_PROVIDERS
+    options = OPENAI_SEARCH_PROVIDERS if provider == PROVIDER_OPENAI else NON_OPENAI_SEARCH_PROVIDERS
     return _select_option(
         "Search provider",
         options,
+        default_index=0,
+        input_func=input_func,
+    )
+
+
+def _select_custom_sdk(
+    *,
+    input_func: Callable[[str], str] = input,
+) -> str:
+    return _select_option(
+        "Custom provider SDK",
+        (SDK_OPENAI, SDK_ANTHROPIC),
         default_index=0,
         input_func=input_func,
     )
@@ -493,11 +539,12 @@ def collect_init_selection(
 
     provider = _select_option(
         "Provider",
-        ("openai", "deepseek", "qwen", "custom"),
+        KNOWN_PROVIDERS,
         input_func=input_func,
     )
+    sdk = ""
 
-    if provider == "openai":
+    if provider == PROVIDER_OPENAI:
         selected_model = _select_option(
             "OpenAI model",
             OPENAI_MODELS,
@@ -505,7 +552,15 @@ def collect_init_selection(
             input_func=input_func,
         )
         base_url = OPENAI_BASE_URL
-    elif provider == "deepseek":
+    elif provider == PROVIDER_ANTHROPIC:
+        selected_model = _select_option(
+            "Anthropic model",
+            ANTHROPIC_MODELS,
+            default_index=0,
+            input_func=input_func,
+        )
+        base_url = ANTHROPIC_BASE_URL
+    elif provider == PROVIDER_DEEPSEEK:
         selected_model = _select_option(
             "DeepSeek model",
             DEEPSEEK_MODELS,
@@ -513,7 +568,15 @@ def collect_init_selection(
             input_func=input_func,
         )
         base_url = DEEPSEEK_BASE_URL
-    elif provider == "qwen":
+    elif provider == PROVIDER_MINIMAX:
+        selected_model = _select_option(
+            "MiniMax model",
+            MINIMAX_MODELS,
+            default_index=0,
+            input_func=input_func,
+        )
+        base_url = MINIMAX_BASE_URL
+    elif provider == PROVIDER_QWEN:
         selected_model = _select_option(
             "Qwen model",
             QWEN_MODELS,
@@ -522,10 +585,16 @@ def collect_init_selection(
         )
         base_url = QWEN_BASE_URL
     else:
+        sdk = _select_custom_sdk(input_func=input_func)
         selected_model = "Decide later"
+        default_base_url = (
+            CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER
+            if sdk == SDK_ANTHROPIC
+            else CUSTOM_OPENAI_BASE_URL_PLACEHOLDER
+        )
         base_url = _prompt_text(
             "Custom provider base URL",
-            default=CUSTOM_BASE_URL_PLACEHOLDER,
+            default=default_base_url,
             input_func=input_func,
         )
 
@@ -570,6 +639,7 @@ def collect_init_selection(
 
     return InitSelection(
         provider=provider,
+        sdk=sdk,
         base_url=base_url,
         api_key=api_key,
         model=model,

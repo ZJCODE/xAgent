@@ -45,6 +45,7 @@ class AgentConfig:
     RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 300
     TOOL_RESULT_PREVIEW_LENGTH = 20
     ERROR_RESPONSE_PREVIEW_LENGTH = 200
+    DEFAULT_MAX_TOKENS = 4096
     IMAGE_CAPTION_MODEL = "gpt-5.4-mini"  # lightweight vision model for image captioning
     IMAGE_CAPTION_PROMPT = (
         "Describe this image in detail for future reference. Include: subject matter, "

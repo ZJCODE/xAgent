@@ -90,7 +90,7 @@ memory:
   min_interval_seconds: 900
 ```
 
-`provider.model` 是必填项。`provider.name` 建议填写，用于区分 OpenAI、DeepSeek、Qwen 或自定义 OpenAI-compatible 服务。`provider.base_url` 和 `provider.api_key` 会传给 OpenAI SDK 的 `AsyncOpenAI` 客户端；如果二者都不提供，则使用 SDK 默认客户端行为。
+`provider.model` 是必填项。`provider.name` 决定默认 SDK：OpenAI、DeepSeek、Qwen 使用 OpenAI SDK，MiniMax 和 Anthropic 使用 Anthropic SDK。`custom` provider 需要显式填写 `provider.sdk: openai` 或 `provider.sdk: anthropic`。`provider.base_url` 和 `provider.api_key` 会传给对应 SDK 客户端；Anthropic SDK 路径会使用 Messages API，并在工具调用后回传完整 assistant content blocks，以兼容 thinking/tool_use 要求。
 
 常见提供方：
 
@@ -102,12 +102,19 @@ provider:
   api_key: your_api_key_here
   model: gpt-5.4-mini
 
-# DeepSeek
+# DeepSeek via OpenAI-compatible API
 provider:
   name: deepseek
   base_url: https://api.deepseek.com
   api_key: your_api_key_here
   model: deepseek-v4-pro
+
+# MiniMax via Anthropic-compatible API
+provider:
+  name: minimax
+  base_url: https://api.minimaxi.com/anthropic
+  api_key: your_api_key_here
+  model: MiniMax-M2.7
 
 # Qwen OpenAI-compatible
 provider:
@@ -115,6 +122,29 @@ provider:
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   api_key: your_api_key_here
   model: qwen3.6-flash
+
+# Anthropic
+provider:
+  name: anthropic
+  base_url: https://api.anthropic.com
+  api_key: your_api_key_here
+  model: claude-sonnet-4-20250514
+
+# Custom OpenAI-compatible
+provider:
+  name: custom
+  sdk: openai
+  base_url: https://api.example.com/v1
+  api_key: your_api_key_here
+  model: your_model_here
+
+# Custom Anthropic-compatible
+provider:
+  name: custom
+  sdk: anthropic
+  base_url: https://api.example.com/anthropic
+  api_key: your_api_key_here
+  model: your_model_here
 ```
 
 ### 2.2 search
@@ -159,7 +189,7 @@ observability:
 - `sample_rate`：可选，范围 `0.0` 到 `1.0`。
 - `debug` / `tracing_enabled`：可选，分别映射 Langfuse SDK 的调试和 tracing 开关。
 
-启用后，xAgent 会在创建 OpenAI-compatible `AsyncOpenAI` client 时使用 `langfuse.openai.AsyncOpenAI`。主对话、流式回复、工具调用循环、图片 caption、长期记忆 LLM 格式化以及 OpenAI built-in search 都会共用这个 client。Chat Completions 是主要覆盖路径；OpenAI Responses API search 目前按 Langfuse SDK 能力做 best-effort 捕获。
+启用后，xAgent 会在创建 OpenAI-compatible `AsyncOpenAI` client 时使用 `langfuse.openai.AsyncOpenAI`。主对话、流式回复、工具调用循环、图片 caption、长期记忆 LLM 格式化以及 OpenAI built-in search 都会共用这个 client。Anthropic SDK 路径当前使用 Anthropic SDK 原生客户端，不经过 Langfuse OpenAI wrapper。Chat Completions 是主要覆盖路径；OpenAI Responses API search 目前按 Langfuse SDK 能力做 best-effort 捕获。
 
 Langfuse SDK 会在后台排队发送事件。CLI 单次 chat、observe、Feishu 进程退出和 API server lifespan shutdown 都会复用 xAgent 的 flush 路径，尽量在进程结束前提交观测事件。flush 失败只会写 warning，不会阻止消息或记忆落盘。
 

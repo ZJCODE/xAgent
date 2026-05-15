@@ -3,8 +3,6 @@ import json
 import logging
 from typing import Any, Optional
 
-from openai import AsyncOpenAI
-
 from ..config import AgentConfig
 from .manager import ToolManager
 from ...components import MessageStorageBase
@@ -21,7 +19,7 @@ class ToolExecutor:
         self,
         tool_manager: ToolManager,
         message_storage: MessageStorageBase,
-        client: AsyncOpenAI,
+        client: Any,
     ):
         self.tool_manager = tool_manager
         self.message_storage = message_storage
@@ -54,6 +52,9 @@ class ToolExecutor:
         reasoning_content = self._tool_reasoning_content(function_calls[0])
         if reasoning_content is not None:
             assistant_message["reasoning_content"] = reasoning_content
+        content_blocks = self._tool_content_blocks(function_calls[0])
+        if content_blocks is not None:
+            assistant_message["content_blocks"] = content_blocks
         input_messages.append(assistant_message)
 
         semaphore = asyncio.Semaphore(max_concurrent_tools)
@@ -188,6 +189,10 @@ class ToolExecutor:
     @classmethod
     def _tool_reasoning_content(cls, tool_call) -> Optional[str]:
         return cls._field(tool_call, "reasoning_content")
+
+    @classmethod
+    def _tool_content_blocks(cls, tool_call) -> Optional[list[dict]]:
+        return cls._field(tool_call, "content_blocks")
 
     @classmethod
     def _to_chat_tool_call(cls, tool_call) -> dict:

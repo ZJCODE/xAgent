@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -18,12 +17,16 @@ class JournalLLMService:
 
     def __init__(
         self,
-        client: Optional[AsyncOpenAI] = None,
+        client: Optional[Any] = None,
         model: str = "gpt-5.4-mini",
+        backend: str = "openai",
+        max_tokens: int = 4096,
     ) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.openai_client = client or AsyncOpenAI()
+        self.client = client or AsyncOpenAI()
         self.model = model
+        self.backend = backend
+        self.max_tokens = max_tokens
 
     async def format_diary_entry(
         self,
@@ -204,27 +207,23 @@ Diary entry already written:
         system_prompt: str,
         user_prompt: str,
     ) -> BaseModel:
-        schema = json.dumps(output_type.model_json_schema(), ensure_ascii=False)
-        response = await self.openai_client.chat.completions.create(
+        from ...core.handlers.model import ModelClient
+
+        model_client = ModelClient(
+            client=self.client,
             model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"{system_prompt}\n\n"
-                        "Return only a valid JSON object that conforms to this JSON schema. "
-                        "Do not wrap the JSON in markdown.\n\n"
-                        f"JSON schema:\n{schema}"
-                    ),
-                },
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
+            backend=self.backend,
+            max_tokens=self.max_tokens,
         )
-        choices = getattr(response, "choices", []) or []
-        message = getattr(choices[0], "message", None) if choices else None
-        content = getattr(message, "content", "") or ""
-        return output_type.model_validate_json(content)
+        reply_type, payload = await model_client.call(
+            messages=[{"role": "user", "content": user_prompt}],
+            tool_specs=None,
+            instructions=system_prompt,
+            output_type=output_type,
+        )
+        if getattr(reply_type, "value", None) == "structured_reply":
+            return payload
+        raise ValueError(f"LLM did not return structured output: {payload}")
 
     @staticmethod
     def _format_transcript(messages: List[dict]) -> str:

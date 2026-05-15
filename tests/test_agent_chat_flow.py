@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from xagent.components.message import MessageStorageBase
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
-from xagent.core.handlers.model import ChatToolCall, ModelClient
+from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.tools.executor import ToolExecutor
 from xagent.integrations.langfuse import NoopObservabilityRuntime
@@ -150,6 +150,21 @@ class FakeOpenAIClient:
         self.chat = SimpleNamespace(completions=self.chat_completions)
 
 
+class FakeAnthropicMessages:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.responses.pop(0)
+
+
+class FakeAnthropicClient:
+    def __init__(self, responses):
+        self.messages = FakeAnthropicMessages(responses)
+
+
 class AsyncChunkStream:
     def __init__(self, chunks):
         self._chunks = iter(chunks)
@@ -171,6 +186,10 @@ def _chat_response(content=None, tool_calls=None, reasoning_content=None):
         reasoning_content=reasoning_content,
     )
     return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
+
+
+def _anthropic_response(content):
+    return SimpleNamespace(content=content, stop_reason="end_turn")
 
 
 class StructuredAnswer(BaseModel):
@@ -225,7 +244,111 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["messages"][1], {"role": "user", "content": "hello"})
         self.assertEqual(call["tool_choice"], "auto")
 
-    async def test_call_preserves_named_instruction_messages(self):
+    async def test_call_uses_anthropic_messages_backend(self):
+        client = FakeAnthropicClient([
+            _anthropic_response([{"type": "text", "text": "ok"}])
+        ])
+        model = ModelClient(
+            client=client,
+            model="MiniMax-M2.7",
+            backend="anthropic",
+            max_tokens=1234,
+        )
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "hello"}],
+            tool_specs=[{
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Look up data",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }],
+            instructions="Core Rules",
+        )
+
+        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
+        self.assertEqual(payload, "ok")
+        call = client.messages.calls[0]
+        self.assertEqual(call["model"], "MiniMax-M2.7")
+        self.assertEqual(call["max_tokens"], 1234)
+        self.assertEqual(call["system"], "Core Rules")
+        self.assertEqual(call["messages"], [{"role": "user", "content": "hello"}])
+        self.assertEqual(
+            call["tools"],
+            [{
+                "name": "lookup",
+                "description": "Look up data",
+                "input_schema": {"type": "object", "properties": {}},
+            }],
+        )
+        self.assertEqual(call["tool_choice"], {"type": "auto"})
+
+    async def test_anthropic_tool_call_preserves_content_blocks_for_next_turn(self):
+        response_blocks = [
+            {"type": "thinking", "thinking": "Need a lookup.", "signature": "sig"},
+            {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"query": "x"}},
+        ]
+        client = FakeAnthropicClient([_anthropic_response(response_blocks)])
+        model = ModelClient(client=client, model="MiniMax-M2.7", backend="anthropic")
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "hello"}],
+            tool_specs=[{
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {"type": "object"}},
+            }],
+        )
+
+        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
+        self.assertEqual(payload[0].call_id, "toolu_1")
+        self.assertEqual(payload[0].name, "lookup")
+        self.assertEqual(payload[0].arguments, '{"query": "x"}')
+        self.assertEqual(payload[0].content_blocks, response_blocks)
+
+    async def test_anthropic_request_replays_assistant_tool_content_blocks(self):
+        content_blocks = [
+            {"type": "thinking", "thinking": "Need a lookup.", "signature": "sig"},
+            {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"query": "x"}},
+        ]
+        client = FakeAnthropicClient([
+            _anthropic_response([{"type": "text", "text": "done"}])
+        ])
+        model = ModelClient(client=client, model="MiniMax-M2.7", backend="anthropic")
+
+        await model.call(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "toolu_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": '{"query": "x"}'},
+                    }],
+                    "content_blocks": content_blocks,
+                },
+                {"role": "tool", "tool_call_id": "toolu_1", "content": "lookup result"},
+            ],
+            tool_specs=None,
+        )
+
+        call = client.messages.calls[0]
+        self.assertEqual(call["messages"][0], {"role": "assistant", "content": content_blocks})
+        self.assertEqual(
+            call["messages"][1],
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "lookup result",
+                }],
+            },
+        )
+
+    async def test_call_strips_top_level_message_names(self):
         client = FakeOpenAIClient([_chat_response(content="ok")])
         model = ModelClient(client=client, model="test-model")
         instruction_messages = [
@@ -257,7 +380,58 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
         self.assertEqual(payload, "ok")
         call = client.chat_completions.calls[0]
-        self.assertEqual(call["messages"], [*instruction_messages, *user_messages])
+        self.assertEqual(
+            call["messages"],
+            [
+                {"role": "system", "content": "Core Rules"},
+                {"role": "system", "content": "<tool_policy>Policy</tool_policy>"},
+                {"role": "user", "content": "<current_task>Task</current_task>"},
+            ],
+        )
+        self.assertEqual(instruction_messages[0]["name"], AgentConfig.CORE_INTERACTION_RULES_NAME)
+        self.assertEqual(user_messages[0]["name"], AgentConfig.CURRENT_TASK_NAME)
+
+    async def test_call_strips_structured_output_message_name(self):
+        client = FakeOpenAIClient([_chat_response(content='{"answer": "ok"}')])
+        model = ModelClient(client=client, model="test-model")
+
+        reply_type, payload = await model.call(
+            messages=[{
+                "role": "user",
+                "name": AgentConfig.CURRENT_TASK_NAME,
+                "content": "answer as json",
+            }],
+            tool_specs=None,
+            instructions=[{
+                "role": "system",
+                "name": AgentConfig.CORE_INTERACTION_RULES_NAME,
+                "content": "Return JSON",
+            }],
+            output_type=StructuredAnswer,
+        )
+
+        self.assertEqual(reply_type, ReplyType.STRUCTURED_REPLY)
+        self.assertEqual(payload.answer, "ok")
+        call = client.chat_completions.calls[0]
+        self.assertTrue(all("name" not in message for message in call["messages"]))
+        self.assertIn("JSON schema", call["messages"][1]["content"])
+
+    def test_strip_message_names_preserves_tool_call_function_names(self):
+        messages = [{
+            "role": "assistant",
+            "name": "assistant_layer",
+            "content": None,
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }],
+        }]
+
+        stripped = ModelClient._strip_message_names(messages)
+
+        self.assertNotIn("name", stripped[0])
+        self.assertEqual(stripped[0]["tool_calls"][0]["function"]["name"], "lookup")
 
     async def test_structured_output_uses_json_object_and_pydantic_validation(self):
         client = FakeOpenAIClient([_chat_response(content='{"answer": "ok"}')])
@@ -335,6 +509,39 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
                 reasoning_content="I should call the lookup tool.",
             )],
         )
+
+    async def test_model_call_exception_returns_error_event(self):
+        class FailingChatCompletions:
+            async def create(self, **kwargs):
+                raise RuntimeError("provider rejected messages")
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=FailingChatCompletions())
+        )
+        model = ModelClient(client=client, model="test-model")
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "hello"}],
+            tool_specs=None,
+        )
+
+        self.assertEqual(reply_type, ReplyType.ERROR)
+        self.assertIsInstance(payload, ModelErrorEvent)
+        self.assertEqual(payload.code, "model_call_failed")
+        self.assertEqual(payload.message, "Model call failed.")
+        self.assertIn("provider rejected messages", payload.details)
+
+    def test_structured_validation_error_returns_error_event(self):
+        response = _chat_response(content='{"wrong": "shape"}')
+
+        reply_type, payload = ModelClient._handle_non_stream(
+            response,
+            output_type=StructuredAnswer,
+        )
+
+        self.assertEqual(reply_type, ReplyType.ERROR)
+        self.assertIsInstance(payload, ModelErrorEvent)
+        self.assertEqual(payload.code, "structured_output_validation_failed")
 
 
 class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
@@ -472,6 +679,32 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("old-10", transcript)
         self.assertIn("old-49", transcript)
         self.assertIn("latest request", transcript)
+
+    async def test_chat_hides_model_error_event_from_user(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (
+                ReplyType.ERROR,
+                ModelErrorEvent(
+                    code="model_call_failed",
+                    message="Model call failed.",
+                    details="provider rejected messages",
+                ),
+            ),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        result = await Agent.chat(
+            agent,
+            user_message="hello",
+            user_id="alice",
+            max_iter=1,
+        )
+
+        self.assertEqual(result, "Sorry, I encountered an error while processing your request.")
+        stored_messages = await storage.get_messages(10)
+        self.assertEqual(len(stored_messages), 1)
+        self.assertEqual(stored_messages[0].content, "hello")
 
     async def test_transcript_budget_omits_older_messages_and_truncates_content(self):
         messages = [

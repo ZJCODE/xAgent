@@ -4,12 +4,13 @@ from typing import Any, Dict, List, Optional, Type
 
 # Third-party imports
 import yaml
-from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
 from pydantic import BaseModel, Field, create_model
 
 # Local imports
 from ..core.agent import Agent
 from ..core.config import AgentConfig
+from ..core.providers import SDK_OPENAI, normalize_provider_name, normalize_sdk, provider_config_sdk
 from ..components import MessageStorageBase, MessageStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
 from ..tools import create_web_search_tool, run_command
@@ -183,6 +184,9 @@ class BaseAgentRunner:
         provider_model = provider_cfg.get("model")
         if not isinstance(provider_model, str) or not provider_model.strip():
             raise ValueError("provider.model is required")
+        self._validate_provider_config(provider_cfg)
+        if "max_tokens" in provider_cfg:
+            self._validate_positive_int(provider_cfg["max_tokens"], "provider.max_tokens")
 
         self._validate_search_config(config.get("search"), provider_cfg)
         
@@ -288,6 +292,29 @@ class BaseAgentRunner:
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise ValueError(f"{name} must be a non-negative number")
 
+    @staticmethod
+    def _validate_provider_config(provider_cfg: Dict[str, Any]) -> None:
+        allowed_provider_keys = {
+            "name",
+            "sdk",
+            "base_url",
+            "api_key",
+            "model",
+            "max_tokens",
+        }
+        unsupported_provider_keys = sorted(set(provider_cfg) - allowed_provider_keys)
+        if unsupported_provider_keys:
+            joined_keys = ", ".join(unsupported_provider_keys)
+            raise ValueError(f"Unsupported provider key(s): {joined_keys}")
+
+        provider_name = normalize_provider_name(provider_cfg.get("name"))
+        if "sdk" in provider_cfg:
+            normalize_sdk(provider_cfg.get("sdk"))
+        if provider_name == "custom" and "sdk" not in provider_cfg:
+            raise ValueError("provider.sdk is required when provider.name is custom")
+        if provider_name and provider_name != "custom" and "sdk" in provider_cfg:
+            raise ValueError("provider.sdk is only supported when provider.name is custom")
+
     def _validate_search_config(
         self,
         search_cfg: Optional[Dict[str, Any]],
@@ -305,6 +332,10 @@ class BaseAgentRunner:
 
     @staticmethod
     def _is_openai_provider(provider_cfg: Dict[str, Any]) -> bool:
+        sdk = provider_config_sdk(provider_cfg)
+        if sdk != SDK_OPENAI:
+            return False
+
         provider_name = str(provider_cfg.get("name") or "").strip().lower()
         if provider_name:
             return provider_name == "openai"
@@ -430,6 +461,8 @@ class BaseAgentRunner:
         return Agent(
             system_prompt=self.identity,
             model=self._get_agent_model(agent_cfg),
+            model_backend=self._get_provider_backend(agent_cfg),
+            model_max_tokens=self._get_provider_max_tokens(agent_cfg),
             client=client,
             tools=tools,
             output_type=output_type,
@@ -450,8 +483,20 @@ class BaseAgentRunner:
             return provider_cfg.get("model")
         return None
 
-    def _initialize_client(self, agent_cfg: Dict[str, Any]) -> Optional[AsyncOpenAI]:
-        """Build an OpenAI-compatible async client from optional provider config."""
+    def _get_provider_backend(self, agent_cfg: Dict[str, Any]) -> str:
+        provider_cfg = agent_cfg.get("provider") or {}
+        if isinstance(provider_cfg, dict):
+            return provider_config_sdk(provider_cfg)
+        return SDK_OPENAI
+
+    def _get_provider_max_tokens(self, agent_cfg: Dict[str, Any]) -> int:
+        provider_cfg = agent_cfg.get("provider") or {}
+        if isinstance(provider_cfg, dict) and provider_cfg.get("max_tokens"):
+            return int(provider_cfg["max_tokens"])
+        return AgentConfig.DEFAULT_MAX_TOKENS
+
+    def _initialize_client(self, agent_cfg: Dict[str, Any]) -> Optional[Any]:
+        """Build an async model client from optional provider config."""
         provider_cfg = agent_cfg.get("provider") or {}
         if not provider_cfg or not isinstance(provider_cfg, dict):
             return None
@@ -465,13 +510,16 @@ class BaseAgentRunner:
         if api_key:
             client_kwargs["api_key"] = api_key
 
+        if self._get_provider_backend(agent_cfg) == "anthropic":
+            return AsyncAnthropic(**client_kwargs)
+
         return self.observability.create_client(client_kwargs)
     
     def _load_agent_tools(
         self,
         agent_cfg: Dict[str, Any],
         *,
-        client: Optional[AsyncOpenAI] = None,
+        client: Optional[Any] = None,
     ) -> List[Any]:
         """Load default built-in tools."""
         if "capabilities" in agent_cfg or "tools" in agent_cfg:

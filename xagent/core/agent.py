@@ -3,7 +3,6 @@ from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from ..components import (
@@ -34,7 +33,9 @@ class Agent:
         self,
         system_prompt: Optional[str] = None,
         model: Optional[str] = None,
-        client: Optional[AsyncOpenAI] = None,
+        client: Optional[Any] = None,
+        model_backend: str = "openai",
+        model_max_tokens: int = AgentConfig.DEFAULT_MAX_TOKENS,
         tools: Optional[List] = None,
         output_type: Optional[type[BaseModel]] = None,
         message_storage: Optional[MessageStorageBase] = None,
@@ -43,8 +44,19 @@ class Agent:
         observability: Optional[ObservabilityRuntime] = None,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
+        self.model_backend = model_backend
+        self.model_max_tokens = model_max_tokens
         self.observability = observability or NoopObservabilityRuntime()
-        self.client = client or self.observability.create_client({}) or AsyncOpenAI()
+        self.client = client or self.observability.create_client({})
+        if self.client is None:
+            if str(self.model_backend).strip().lower() == "anthropic":
+                from anthropic import AsyncAnthropic
+
+                self.client = AsyncAnthropic()
+            else:
+                from openai import AsyncOpenAI
+
+                self.client = AsyncOpenAI()
         self.output_type = output_type
         self.system_prompt = system_prompt or ""
         self._assistant_sender_id = "agent"
@@ -80,7 +92,12 @@ class Agent:
             memory_dir = str(self._memory_dir(default_workspace))
 
         self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
-        self.llm_service = JournalLLMService(client=self.client, model=self.model)
+        self.llm_service = JournalLLMService(
+            client=self.client,
+            model=self.model,
+            backend=self.model_backend,
+            max_tokens=self.model_max_tokens,
+        )
         memory_config = memory_config or {}
         self.memory_handler = MemoryHandler(
             memory=self.markdown_memory,
@@ -103,7 +120,12 @@ class Agent:
             ),
         ])
         self.tool_manager = ToolManager(tools=bound_tools)
-        self.model_client = ModelClient(client=self.client, model=self.model)
+        self.model_client = ModelClient(
+            client=self.client,
+            model=self.model,
+            backend=self.model_backend,
+            max_tokens=self.model_max_tokens,
+        )
         self.message_handler = MessageHandler(
             message_storage=self.message_storage,
             system_prompt=self.system_prompt,
@@ -306,6 +328,10 @@ class Agent:
                         return image_data
                     input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
                     continue
+
+                if reply_type == ReplyType.ERROR:
+                    logger.error("Model returned error event: %s", response)
+                    return "Sorry, I encountered an error while processing your request."
 
                 logger.error("Unknown reply type: %s", reply_type)
                 return "Sorry, I encountered an error while processing your request."
