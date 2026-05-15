@@ -13,6 +13,14 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Iterable, Optional
 
+from ...core.context_formatters import (
+    RoomContextEntry,
+    format_room_context as format_structured_room_context,
+    format_room_context_body,
+    format_room_context_entry,
+    format_room_context_timestamp,
+    sanitize_room_context_field,
+)
 from .users import FEISHU_USER_FALLBACK_NAME, FeishuUserResolver, extract_feishu_id, safe_display_name
 
 
@@ -298,22 +306,13 @@ def format_group_history(
     show_sender_ids: bool = False,
 ) -> str:
     """Render recent Feishu messages as compact room-context lines."""
-    bot_ids = {value for value in (bot_open_id, bot_app_id) if value}
-    lines: list[str] = []
-    for rec in records:
-        if rec.sender_id in bot_ids or rec.sender_name in bot_ids:
-            speaker = "you"
-        else:
-            speaker = format_sender_label(
-                rec.sender_name,
-                rec.sender_id,
-                sender_type=rec.sender_type,
-                show_sender_ids=show_sender_ids,
-            )
-        text = rec.text or ""
-        if text.strip():
-            lines.append(format_room_context_line(speaker, rec.create_time_ms, text))
-    return "\n".join(lines).strip()
+    entries = _build_room_context_entries(
+        records,
+        bot_open_id=bot_open_id,
+        bot_app_id=bot_app_id,
+        show_sender_ids=show_sender_ids,
+    )
+    return format_room_context_body(entries)
 
 
 def format_sender_label(
@@ -353,36 +352,29 @@ def format_room_context(
     show_sender_ids: bool = False,
 ) -> str:
     """Render a Feishu group/topic context block for ``agent.chat``."""
-    safe_room_id = sanitize_transcript_field(room_id)
-    safe_room_name = sanitize_transcript_field(room_name)
-    body = format_group_history(
+    entries = _build_room_context_entries(
         records,
         bot_open_id=bot_open_id,
         bot_app_id=bot_app_id,
         show_sender_ids=show_sender_ids,
     )
-    if not safe_room_id or not body:
-        return body
-    header_lines = ["[room context]"]
-    if safe_room_name:
-        header_lines.append(f"room_name: {safe_room_name}")
-    header_lines.append(f"room_id: {safe_room_id}")
-    return "\n".join([*header_lines, "", body, "[/room context]"])
+    return format_structured_room_context(room_id, entries, room_name=room_name)
 
 
 def format_room_context_line(speaker: str, create_time_ms: int, text: str) -> str:
     """Return one compact room-context line."""
     safe_speaker = sanitize_transcript_field(speaker) or FEISHU_USER_FALLBACK_NAME
-    one_line_text = " ".join((text or "").split())
-    return f"{safe_speaker} {format_feishu_timestamp(create_time_ms)}: {one_line_text}"
+    entry = RoomContextEntry(
+        speaker_label=safe_speaker,
+        occurred_at=_feishu_timestamp_to_datetime(create_time_ms),
+        text=text,
+    )
+    return format_room_context_entry(entry) or ""
 
 
 def format_feishu_timestamp(create_time_ms: int) -> str:
     """Format a Feishu timestamp for compact room-context lines."""
-    if create_time_ms <= 0:
-        return datetime.fromtimestamp(0).strftime("%Y-%m-%d %H:%M")
-    seconds = create_time_ms / 1000 if create_time_ms > 10_000_000_000 else create_time_ms
-    return datetime.fromtimestamp(seconds).strftime("%Y-%m-%d %H:%M")
+    return format_room_context_timestamp(_feishu_timestamp_to_datetime(create_time_ms))
 
 
 def replace_mentions(
@@ -417,12 +409,7 @@ def replace_mentions(
 
 
 def sanitize_transcript_field(value: Optional[str]) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    if not normalized:
-        return None
-    return normalized.replace("\n", " ").replace("]", "")
+    return sanitize_room_context_field(value)
 
 
 def sanitize_sender_id(value: Optional[str]) -> Optional[str]:
@@ -437,3 +424,43 @@ def _mention_attr(mention: Any, field_name: str) -> Optional[str]:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _build_room_context_entries(
+    records: Iterable[FeishuMessageRecord],
+    *,
+    bot_open_id: Optional[str] = None,
+    bot_app_id: Optional[str] = None,
+    show_sender_ids: bool = False,
+) -> list[RoomContextEntry]:
+    bot_ids = {value for value in (bot_open_id, bot_app_id) if value}
+    entries: list[RoomContextEntry] = []
+    for record in records:
+        text = record.text or ""
+        if not text.strip():
+            continue
+        is_self = record.sender_id in bot_ids or record.sender_name in bot_ids
+        speaker_label = "you"
+        if not is_self:
+            speaker_label = format_sender_label(
+                record.sender_name,
+                record.sender_id,
+                sender_type=record.sender_type,
+                show_sender_ids=show_sender_ids,
+            )
+        entries.append(
+            RoomContextEntry(
+                speaker_label=speaker_label,
+                occurred_at=_feishu_timestamp_to_datetime(record.create_time_ms),
+                text=text,
+                is_self=is_self,
+            )
+        )
+    return entries
+
+
+def _feishu_timestamp_to_datetime(create_time_ms: int) -> datetime:
+    if create_time_ms <= 0:
+        return datetime.fromtimestamp(0)
+    seconds = create_time_ms / 1000 if create_time_ms > 10_000_000_000 else create_time_ms
+    return datetime.fromtimestamp(seconds)
