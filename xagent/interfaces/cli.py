@@ -27,6 +27,7 @@ from ..core.providers import (
     SDK_ANTHROPIC,
     SDK_OPENAI,
     provider_base_url,
+    provider_sdk,
 )
 from ..core.runtime import create_runtime_heartbeat
 from .base import BaseAgentConfig, BaseAgentRunner
@@ -614,14 +615,17 @@ def collect_init_selection(
         if not search_api_key:
             search_api_key = BRAVE_SEARCH_API_KEY_PLACEHOLDER
 
-    observability_enabled = _prompt_yes_no(
-        "Enable Langfuse observability?",
-        default=False,
-        input_func=input_func,
-    )
+    selected_sdk = provider_sdk(provider, sdk if provider == PROVIDER_CUSTOM else None)
+    observability_enabled = False
     langfuse_public_key = ""
     langfuse_secret_key = ""
     langfuse_base_url = ""
+    if selected_sdk == SDK_OPENAI:
+        observability_enabled = _prompt_yes_no(
+            "Enable Langfuse observability?",
+            default=False,
+            input_func=input_func,
+        )
     if observability_enabled:
         langfuse_public_key = _prompt_text(
             "Langfuse public key",

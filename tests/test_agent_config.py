@@ -414,6 +414,66 @@ provider:
         self.assertEqual(selection.langfuse_secret_key, "sk-lf-test")
         self.assertEqual(selection.langfuse_base_url, "https://jp.cloud.langfuse.com")
 
+    def test_collect_init_selection_skips_langfuse_prompt_for_anthropic_sdk(self):
+        answers = iter([
+            "5",
+            "",
+            "1",
+            ".",
+        ])
+
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            selection = collect_init_selection(
+                input_func=lambda prompt: next(answers),
+                secret_input_func=lambda prompt: "anthropic-key",
+            )
+
+        self.assertFalse(selection.observability_enabled)
+        self.assertNotIn("Enable Langfuse observability?", stdout.getvalue())
+
+    def test_collect_init_selection_skips_langfuse_prompt_for_custom_anthropic_sdk(self):
+        answers = iter([
+            "6",
+            "2",
+            "",
+            "1",
+            ".",
+        ])
+
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            selection = collect_init_selection(
+                input_func=lambda prompt: next(answers),
+                secret_input_func=lambda prompt: "custom-key",
+            )
+
+        self.assertEqual(selection.sdk, "anthropic")
+        self.assertFalse(selection.observability_enabled)
+        self.assertNotIn("Enable Langfuse observability?", stdout.getvalue())
+
+    def test_collect_init_selection_prompts_langfuse_for_custom_openai_sdk(self):
+        answers = iter([
+            "6",
+            "1",
+            "",
+            "1",
+            "y",
+            "pk-lf-test",
+            "",
+            ".",
+        ])
+        secrets = iter(["custom-key", "sk-lf-test"])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: next(secrets),
+        )
+
+        self.assertEqual(selection.sdk, "openai")
+        self.assertTrue(selection.observability_enabled)
+        self.assertEqual(selection.langfuse_public_key, "pk-lf-test")
+        self.assertEqual(selection.langfuse_secret_key, "sk-lf-test")
+        self.assertEqual(selection.langfuse_base_url, "https://cloud.langfuse.com")
+
     def test_collect_init_selection_deepseek_decide_later_uses_model_placeholder(self):
         answers = iter([
             "2",
