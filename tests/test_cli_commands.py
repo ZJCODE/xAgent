@@ -16,11 +16,11 @@ from xagent.interfaces.cli import (
     handle_init_feishu,
     handle_logs,
     handle_restart,
-    handle_run,
     handle_run_channel_internal,
     handle_start,
     handle_status,
     handle_stop,
+    handle_web,
     main,
 )
 from xagent.interfaces.processes import StartResult
@@ -115,13 +115,12 @@ class CLICommandTests(unittest.TestCase):
         self.assertFalse(args.memory)
         self.assertTrue(args.private)
 
-    def test_parser_supports_channel_lifecycle_commands(self):
+    def test_parser_supports_web_command(self):
         args = build_parser().parse_args([
-            "start",
+            "web",
             "--dir",
             "./agent-dir",
-            "--channel",
-            "api,feishu",
+            "--no-open",
             "--host",
             "127.0.0.1",
             "--port",
@@ -134,16 +133,36 @@ class CLICommandTests(unittest.TestCase):
             "9.5",
         ])
 
-        self.assertEqual(args.command, "start")
+        self.assertEqual(args.command, "web")
         self.assertEqual(args.config_dir, "./agent-dir")
-        self.assertEqual(args.channels, ["api,feishu"])
+        self.assertFalse(args.open_browser)
         self.assertEqual(args.host, "127.0.0.1")
         self.assertEqual(args.port, 8010)
         self.assertEqual(args.max_concurrent_chats, 2)
         self.assertEqual(args.queue_timeout, 3.5)
         self.assertEqual(args.chat_timeout, 9.5)
 
-    def test_parser_supports_observe_and_management_commands(self):
+    def test_parser_supports_service_lifecycle_commands(self):
+        args = build_parser().parse_args([
+            "service",
+            "start",
+            "api",
+            "--dir",
+            "./agent-dir",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8010",
+        ])
+
+        self.assertEqual(args.command, "service")
+        self.assertEqual(args.service_command, "start")
+        self.assertEqual(args.channels, "api")
+        self.assertEqual(args.config_dir, "./agent-dir")
+        self.assertEqual(args.host, "127.0.0.1")
+        self.assertEqual(args.port, 8010)
+
+    def test_parser_supports_observe_and_inspect_commands(self):
         observe = build_parser().parse_args([
             "observe",
             "ambient context",
@@ -155,27 +174,43 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(observe.command, "observe")
         self.assertEqual(observe.source, "sensor")
 
-        config = build_parser().parse_args(["config", "validate", "--dir", "./agent-dir"])
+        config = build_parser().parse_args(["inspect", "config", "validate", "--dir", "./agent-dir"])
         self.assertEqual(config.config_command, "validate")
 
-        memory = build_parser().parse_args(["memory", "search", "project", "--scope", "daily"])
+        memory = build_parser().parse_args(["inspect", "memory", "search", "project", "--scope", "daily"])
         self.assertEqual(memory.memory_command, "search")
         self.assertEqual(memory.query, "project")
 
-        messages = build_parser().parse_args(["messages", "list", "--count", "5"])
+        messages = build_parser().parse_args(["inspect", "messages", "list", "--count", "5"])
         self.assertEqual(messages.messages_command, "list")
         self.assertEqual(messages.count, 5)
 
-    def test_main_without_subcommand_prints_help(self):
-        with patch("sys.stdout") as stdout:
-            exit_code = main([])
+    def test_main_without_subcommand_prints_quick_start(self):
+        with patch("xagent.interfaces.cli._runtime_is_initialized", return_value=False):
+            with patch("sys.stdout") as stdout:
+                exit_code = main([])
 
         self.assertEqual(exit_code, 0)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        self.assertIn("Quick start", output)
         self.assertIn("init", output)
         self.assertIn("chat", output)
-        self.assertIn("start", output)
-        self.assertIn("status", output)
+        self.assertIn("web", output)
+
+    def test_root_help_groups_public_commands(self):
+        help_text = build_parser().format_help()
+
+        self.assertIn("Start here:", help_text)
+        self.assertIn("Runtime:", help_text)
+        self.assertIn("Advanced:", help_text)
+        self.assertIn("  web", help_text)
+        self.assertIn("  service", help_text)
+        self.assertNotIn("  run", help_text)
+        self.assertNotIn("  start", help_text)
+
+    def test_old_top_level_commands_are_rejected(self):
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["start"])
 
     def test_init_force_can_keep_runtime_dirs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -250,7 +285,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("show_sender_ids", config["channels"]["feishu"])
         self.assertNotIn("runtime", config)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
-        self.assertIn("xagent start --channel feishu", output)
+        self.assertIn("xagent service start feishu", output)
 
     def test_run_channel_feishu_ignores_enabled_runtime_flag(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -293,26 +328,25 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(enabled_channels_from_config(config), ["feishu"])
 
-    def test_run_defaults_to_api_when_multiple_channels_are_enabled(self):
+    def test_web_runs_api_channel_and_opens_browser_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True)
             args = argparse.Namespace(
                 config_dir=tmpdir,
-                channels=None,
                 host=None,
                 port=None,
-                open_browser=False,
+                open_browser=True,
                 max_concurrent_chats=None,
                 queue_timeout=None,
                 chat_timeout=None,
             )
 
-            with patch("xagent.interfaces.cli._run_channel", return_value=0) as runner:
-                exit_code = handle_run(args)
+            with patch("xagent.interfaces.cli._run_api_channel", return_value=0) as runner:
+                exit_code = handle_web(args)
 
         self.assertEqual(exit_code, 0)
         runner.assert_called_once()
-        self.assertEqual(runner.call_args.args[0], "api")
+        self.assertTrue(runner.call_args.args[0].open_browser)
 
     def test_start_defaults_to_feishu_when_only_feishu_is_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -503,7 +537,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
-        self.assertIn("--follow requires an explicit single --channel", output)
+        self.assertIn("--follow requires an explicit single channel", output)
 
     def test_logs_follow_rejects_all_channel_selector(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -515,7 +549,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
-        self.assertIn("--follow requires an explicit single --channel", output)
+        self.assertIn("--follow requires an explicit single channel", output)
 
     def test_unknown_channel_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:

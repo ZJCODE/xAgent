@@ -191,58 +191,41 @@ class AgentCLI(BaseAgentRunner):
         private: bool,
         verbose_mode: bool,
     ) -> None:
-        print("╭" + "─" * 58 + "╮")
-        print("│" + " " * 18 + "🤖 Welcome to xAgent CLI!" + " " * 15 + "│")
-        print("╰" + "─" * 58 + "╯")
-
         config_msg = (
-            f"📁 Config: {self.config_path}"
+            f"Config: {self.config_path}"
             if self.config_path.is_file()
-            else f"📁 Config: default values ({self.config_path} not found)"
+            else f"Config: default values ({self.config_path} not found)"
         )
-        print(f"\n{config_msg}")
-        print(f"📂 Dir: {self.config_dir}")
-        print(f"🧠 Model: {self.agent.model}")
-
-        total_tools = len(self.agent.tools)
-        print(f"🛠️  Tools: {total_tools} loaded")
-
-        status_indicators = [
-            f"{'🟢' if verbose_mode else '🔇'} Verbose: {'On' if verbose_mode else 'Off'}",
-            f"{'🌊' if stream else '📄'} Stream: {'On' if stream else 'Off'}",
-            f"{'🧠' if memory else '🚫'} Memory: {'On' if memory else 'Off'}",
-            f"{'🔒' if private else '🔓'} Private: {'On' if private else 'Off'}",
-        ]
-        print(f"⚙️  Status: {' | '.join(status_indicators)}")
-
-        print(f"\n{'─' * 60}")
-        print("🚀 Quick Start:")
-        print("  • Type your message to chat with the agent")
-        print("  • Use 'help' to see all available commands")
-        print("  • Use 'exit', 'quit', or 'bye' to end session")
-        print("  • Use 'clear' to reset the agent message stream")
-        print("  • Use 'stream on/off' to toggle response streaming")
-        print("  • Use 'memory on/off' to toggle memory storage")
-        print("  • Use 'private on/off' to toggle private mode")
-        print("─" * 60)
+        print("xAgent chat")
+        print(config_msg)
+        print(f"Dir: {self.config_dir}")
+        print(f"Model: {self.agent.model}")
+        print(f"Tools: {len(self.agent.tools)} loaded")
+        print(
+            "Status: "
+            f"verbose={'on' if verbose_mode else 'off'}, "
+            f"stream={'on' if stream else 'off'}, "
+            f"memory={'on' if memory else 'off'}, "
+            f"private={'on' if private else 'off'}"
+        )
+        print("")
+        print("Type a message to chat. Type 'help' for chat commands or 'exit' to quit.")
 
     def _show_help(self):
-        print("\n╭─ 📋 Commands ─────────────────────────────────────────────╮")
-        print("│ exit, quit, bye    Exit the chat session                  │")
-        print("│ clear              Clear the agent message stream         │")
-        print("│ stream on/off      Toggle streaming response mode         │")
-        print("│ memory on/off      Toggle memory storage mode             │")
-        print("│ private on/off     Toggle private (ephemeral) mode         │")
-        print("│ help               Show this help message                 │")
-        print("╰───────────────────────────────────────────────────────────╯")
+        print("\nChat commands:")
+        print("  exit, quit, bye    Exit the chat session")
+        print("  clear              Clear the agent message stream")
+        print("  stream on/off      Toggle streaming response mode")
+        print("  memory on/off      Toggle memory storage mode")
+        print("  private on/off     Toggle private ephemeral mode")
+        print("  help               Show this help message")
 
-        print("\n╭─ 🔧 Built-in Tools ───────────────────────────────────────╮")
+        print("\nBuilt-in tools:")
         if self.agent.tools:
-            for i, tool_name in enumerate(self.agent.tools.keys(), 1):
-                print(f"│ {i:2d}. {tool_name:<50}    │")
+            for tool_name in self.agent.tools.keys():
+                print(f"  {tool_name}")
         else:
-            print("│ No built-in tools available                              │")
-        print("╰───────────────────────────────────────────────────────────╯")
+            print("  No built-in tools available")
 
 
 @dataclass(frozen=True)
@@ -753,10 +736,34 @@ def _add_channel_argument(
     )
 
 
-def _add_api_runtime_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_service_channel_argument(parser: argparse.ArgumentParser, *, default_label: str) -> None:
+    parser.add_argument(
+        "channels",
+        nargs="?",
+        default=None,
+        metavar="channel",
+        choices=(CHANNEL_API, CHANNEL_FEISHU, "all"),
+        help=f"Channel to manage: api, feishu, or all (default: {default_label})",
+    )
+
+
+def _add_api_runtime_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    open_by_default: bool = False,
+) -> None:
     parser.add_argument("--host", default=None, help="API host override")
     parser.add_argument("--port", type=int, default=None, help="API port override")
-    parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the API web UI")
+    if open_by_default:
+        parser.add_argument(
+            "--open",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            dest="open_browser",
+            help="Open the API web UI",
+        )
+    else:
+        parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the API web UI")
     parser.add_argument(
         "--max-concurrent-chats",
         type=int,
@@ -783,8 +790,51 @@ def _hide_subparser_choice(subparsers: argparse._SubParsersAction, name: str) ->
     ]
 
 
+class XAgentArgumentParser(argparse.ArgumentParser):
+    """Root parser with task-oriented help instead of argparse's flat command list."""
+
+    def error(self, message: str) -> None:
+        if self.prog == "xagent" and "invalid choice" in message:
+            self.print_usage(sys.stderr)
+            self.exit(2, "xagent: error: unknown command. Use 'xagent --help' to see available commands.\n")
+        super().error(message)
+
+    def format_help(self) -> str:
+        if self.prog != "xagent":
+            return super().format_help()
+        return "\n".join([
+            "usage: xagent <command> ...",
+            "",
+            "xAgent command line interface",
+            "",
+            "Start here:",
+            "  init      Create config.yaml and identity.md",
+            "  chat      Chat with the configured agent",
+            "  web       Open the built-in web UI",
+            "",
+            "Runtime:",
+            "  observe   Ingest context without generating a reply",
+            "  service   Manage background channels",
+            "  doctor    Check local xAgent readiness",
+            "",
+            "Advanced:",
+            "  inspect   Inspect configuration, identity, memory, or messages",
+            "  version   Show xAgent version",
+            "",
+            "Examples:",
+            "  xagent init",
+            "  xagent chat \"Help me plan today\"",
+            "  xagent web",
+            "  xagent service start api",
+            "  xagent service logs feishu -f",
+            "",
+            "Use 'xagent <command> --help' for command-specific help.",
+            "",
+        ])
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = XAgentArgumentParser(
         prog="xagent",
         description="xAgent command line interface",
     )
@@ -796,49 +846,13 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--schema", action="store_true", help="Include a starter output_schema example")
     init_parser.set_defaults(handler=handle_init)
 
-    init_sub = init_parser.add_subparsers(dest="init_target", metavar="<target>")
+    init_sub = init_parser.add_subparsers(dest="init_target", metavar="[target]")
     init_feishu = init_sub.add_parser("feishu", help="Enable and configure the Feishu channel")
     _add_dir_argument(init_feishu)
     init_feishu.add_argument("--app-id", dest="app_id", default=None, help="Feishu app id (cli_xxx)")
     init_feishu.add_argument("--app-secret", dest="app_secret", default=None, help="Feishu app secret")
     init_feishu.add_argument("--force", action="store_true", help="Overwrite existing channels.feishu config")
     init_feishu.set_defaults(handler=handle_init_feishu)
-
-    run_parser = subparsers.add_parser("run", help="Run one or more channels in the foreground")
-    _add_dir_argument(run_parser)
-    _add_channel_argument(run_parser, default_label="auto")
-    _add_api_runtime_arguments(run_parser)
-    run_parser.set_defaults(handler=handle_run)
-
-    start_parser = subparsers.add_parser("start", help="Start one or more channels in the background")
-    _add_dir_argument(start_parser)
-    _add_channel_argument(start_parser, default_label="auto")
-    _add_api_runtime_arguments(start_parser)
-    start_parser.set_defaults(handler=handle_start)
-
-    stop_parser = subparsers.add_parser("stop", help="Stop managed background channels")
-    _add_dir_argument(stop_parser)
-    _add_channel_argument(stop_parser, default_label="all")
-    stop_parser.set_defaults(handler=handle_stop)
-
-    restart_parser = subparsers.add_parser("restart", help="Restart managed background channels")
-    _add_dir_argument(restart_parser)
-    _add_channel_argument(restart_parser, default_label="all")
-    _add_api_runtime_arguments(restart_parser)
-    restart_parser.set_defaults(handler=handle_restart)
-
-    status_parser = subparsers.add_parser("status", help="Show managed channel status")
-    _add_dir_argument(status_parser)
-    _add_channel_argument(status_parser, default_label="all")
-    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    status_parser.set_defaults(handler=handle_status)
-
-    logs_parser = subparsers.add_parser("logs", help="Show managed channel logs")
-    _add_dir_argument(logs_parser)
-    _add_channel_argument(logs_parser, default_label="all")
-    logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    logs_parser.set_defaults(handler=handle_logs)
 
     chat_parser = subparsers.add_parser("chat", help="Chat with the configured agent")
     chat_parser.add_argument("message", nargs="?", help="Single message to send; omit for interactive chat")
@@ -860,6 +874,11 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.add_argument("--private", action="store_true", help="Use ephemeral private mode")
     chat_parser.set_defaults(handler=handle_chat)
 
+    web_parser = subparsers.add_parser("web", help="Open the built-in web UI")
+    _add_dir_argument(web_parser)
+    _add_api_runtime_arguments(web_parser, open_by_default=True)
+    web_parser.set_defaults(handler=handle_web)
+
     observe_parser = subparsers.add_parser("observe", help="Ingest context without generating a reply")
     observe_parser.add_argument("text", help="Observation text to store")
     _add_dir_argument(observe_parser)
@@ -868,7 +887,51 @@ def build_parser() -> argparse.ArgumentParser:
     observe_parser.add_argument("--metadata", default=None, help="JSON object with observation metadata")
     observe_parser.set_defaults(handler=handle_observe)
 
-    config_parser = subparsers.add_parser("config", help="Show or validate config.yaml")
+    service_parser = subparsers.add_parser("service", help="Manage background channels")
+    service_sub = service_parser.add_subparsers(dest="service_command", metavar="<action>")
+    service_sub.required = True
+
+    service_start = service_sub.add_parser("start", help="Start a background channel")
+    _add_dir_argument(service_start)
+    _add_service_channel_argument(service_start, default_label="auto")
+    _add_api_runtime_arguments(service_start)
+    service_start.set_defaults(handler=handle_start)
+
+    service_stop = service_sub.add_parser("stop", help="Stop background channels")
+    _add_dir_argument(service_stop)
+    _add_service_channel_argument(service_stop, default_label="all")
+    service_stop.set_defaults(handler=handle_stop)
+
+    service_restart = service_sub.add_parser("restart", help="Restart background channels")
+    _add_dir_argument(service_restart)
+    _add_service_channel_argument(service_restart, default_label="all")
+    _add_api_runtime_arguments(service_restart)
+    service_restart.set_defaults(handler=handle_restart)
+
+    service_status = service_sub.add_parser("status", help="Show background channel status")
+    _add_dir_argument(service_status)
+    _add_service_channel_argument(service_status, default_label="all")
+    service_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    service_status.set_defaults(handler=handle_status)
+
+    service_logs = service_sub.add_parser("logs", help="Show background channel logs")
+    _add_dir_argument(service_logs)
+    _add_service_channel_argument(service_logs, default_label="all")
+    service_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
+    service_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
+    service_logs.set_defaults(handler=handle_logs)
+
+    doctor_parser = subparsers.add_parser("doctor", help="Check local xAgent readiness")
+    _add_dir_argument(doctor_parser)
+    _add_channel_argument(doctor_parser, default_label="all")
+    doctor_parser.add_argument("--online", action="store_true", help="Include network/model checks")
+    doctor_parser.set_defaults(handler=handle_doctor)
+
+    inspect_parser = subparsers.add_parser("inspect", help="Inspect configuration, identity, memory, or messages")
+    inspect_sub = inspect_parser.add_subparsers(dest="inspect_target", metavar="<target>")
+    inspect_sub.required = True
+
+    config_parser = inspect_sub.add_parser("config", help="Show or validate config.yaml")
     config_sub = config_parser.add_subparsers(dest="config_command", metavar="<subcommand>")
     config_sub.required = True
     for command_name in ("show", "validate", "path"):
@@ -876,7 +939,7 @@ def build_parser() -> argparse.ArgumentParser:
         _add_dir_argument(config_cmd)
         config_cmd.set_defaults(handler=handle_config)
 
-    identity_parser = subparsers.add_parser("identity", help="Show identity.md information")
+    identity_parser = inspect_sub.add_parser("identity", help="Show identity.md information")
     identity_sub = identity_parser.add_subparsers(dest="identity_command", metavar="<subcommand>")
     identity_sub.required = True
     for command_name in ("show", "path"):
@@ -884,7 +947,7 @@ def build_parser() -> argparse.ArgumentParser:
         _add_dir_argument(identity_cmd)
         identity_cmd.set_defaults(handler=handle_identity)
 
-    memory_parser = subparsers.add_parser("memory", help="Inspect or clear long-term memory files")
+    memory_parser = inspect_sub.add_parser("memory", help="Inspect or clear long-term memory files")
     memory_sub = memory_parser.add_subparsers(dest="memory_command", metavar="<subcommand>")
     memory_sub.required = True
     for command_name in ("stats", "list", "clear"):
@@ -903,7 +966,7 @@ def build_parser() -> argparse.ArgumentParser:
     memory_search.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "people", "all"))
     memory_search.set_defaults(handler=handle_memory)
 
-    messages_parser = subparsers.add_parser("messages", help="Inspect or clear the message stream")
+    messages_parser = inspect_sub.add_parser("messages", help="Inspect or clear the message stream")
     messages_sub = messages_parser.add_subparsers(dest="messages_command", metavar="<subcommand>")
     messages_sub.required = True
     messages_stats = messages_sub.add_parser("stats", help="Show message stream statistics")
@@ -918,12 +981,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_dir_argument(messages_clear)
     messages_clear.add_argument("--yes", action="store_true", help="Confirm clearing the message stream")
     messages_clear.set_defaults(handler=handle_messages)
-
-    doctor_parser = subparsers.add_parser("doctor", help="Check local xAgent readiness")
-    _add_dir_argument(doctor_parser)
-    _add_channel_argument(doctor_parser, default_label="all")
-    doctor_parser.add_argument("--online", action="store_true", help="Include network/model checks")
-    doctor_parser.set_defaults(handler=handle_doctor)
 
     version_parser = subparsers.add_parser("version", help="Show xAgent version")
     version_parser.set_defaults(handler=handle_version)
@@ -1035,6 +1092,15 @@ def handle_server(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_web(args: argparse.Namespace) -> int:
+    """Run the API channel in the foreground and open the built-in web UI."""
+    try:
+        config = _load_runtime_config(args)
+    except ChannelSelectionError as exc:
+        return _handle_channel_error(exc)
+    return _run_api_channel(args, config)
+
+
 def _runtime_dir(args: argparse.Namespace) -> Path:
     raw_dir = getattr(args, "config_dir", None) or BaseAgentConfig.DEFAULT_CONFIG_DIR
     return Path(raw_dir).expanduser().resolve()
@@ -1052,9 +1118,18 @@ def _load_runtime_config(args: argparse.Namespace) -> dict[str, Any]:
     return load_config_file(_runtime_dir(args))
 
 
+def _channel_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
+    values = getattr(args, "channels", None)
+    if values is None:
+        return None
+    if isinstance(values, str):
+        return [values]
+    return list(values)
+
+
 def _select_channels(args: argparse.Namespace, *, default: str) -> tuple[list[str], dict[str, Any]]:
     config = _load_runtime_config(args)
-    values = getattr(args, "channels", None)
+    values = _channel_arg_values(args)
     if values is None and default == "auto":
         channels = [default_start_channel_from_config(config)]
     else:
@@ -1373,7 +1448,7 @@ def _follow_log(path: Path) -> None:
 
 def handle_logs(args: argparse.Namespace) -> int:
     if getattr(args, "follow", False):
-        raw_channels = getattr(args, "channels", None)
+        raw_channels = _channel_arg_values(args)
         explicit_tokens = [
             token.strip().lower()
             for raw_channel in (raw_channels or [])
@@ -1381,7 +1456,7 @@ def handle_logs(args: argparse.Namespace) -> int:
             if token.strip()
         ]
         if len(explicit_tokens) != 1 or explicit_tokens[0] not in {CHANNEL_API, CHANNEL_FEISHU}:
-            print("--follow requires an explicit single --channel")
+            print("--follow requires an explicit single channel")
             return 1
 
     try:
@@ -1472,7 +1547,7 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
     print("  - im:message.group_at_msg.include_bot:readonly (for group @mentions from users and bots)")
     print("  - contact:user.base:readonly (for user display names)")
     print("  - admin:app.info:readonly (for other bot or agent display names)")
-    print("\nRun: `xagent start --channel feishu` or `xagent start --channel all` to start your bot.\n")
+    print("\nRun: `xagent service start feishu` or `xagent service start all` to start your bot.\n")
     print("======================================================\n")
     return 0
 
@@ -1703,12 +1778,55 @@ def handle_version(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _runtime_is_initialized(config_dir: Path) -> bool:
+    config_path = config_dir / BaseAgentConfig.CONFIG_FILENAME
+    identity_path = config_dir / BaseAgentConfig.IDENTITY_FILENAME
+    if not config_path.is_file() or not identity_path.is_file():
+        return False
+    try:
+        return bool(identity_path.read_text(encoding="utf-8").strip())
+    except OSError:
+        return False
+
+
+def print_quick_start() -> None:
+    config_dir = Path(BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
+    initialized = _runtime_is_initialized(config_dir)
+
+    print("xAgent")
+    print(f"Runtime dir: {config_dir}")
+    print("")
+    if not initialized:
+        print("Quick start:")
+        print("  xagent init")
+        print("")
+        print("After setup:")
+        print("  xagent chat")
+        print("  xagent web")
+        print("  xagent service")
+        print("  xagent doctor")
+    else:
+        print("Quick start:")
+        print("  xagent chat")
+        print("  xagent web")
+        print("  xagent service")
+        print("  xagent doctor")
+    print("")
+    print("Use 'xagent --help' to see all commands.")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv:
+        print_quick_start()
+        return 0
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
     if not hasattr(args, "handler"):
-        parser.print_help()
+        print_quick_start()
         return 0
 
     return args.handler(args)

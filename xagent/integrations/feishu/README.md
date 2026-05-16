@@ -72,26 +72,25 @@ channels:
 ## Run
 
 ```bash
-# foreground: stay attached and stream logs to this terminal
-xagent run --channel feishu
-
 # background: managed process with PID and log files
-xagent start --channel feishu
+xagent service start feishu
 
 # stop the managed Feishu process for this runtime dir
-xagent stop --channel feishu
+xagent service stop feishu
 
 # inspect PID, log path, and running state
-xagent status --channel feishu
+xagent service status feishu
+
+# follow logs
+xagent service logs feishu -f
 
 # custom runtime dir:
-xagent run --channel feishu --dir ~/.xagent
+xagent service start feishu --dir ~/.xagent
 ```
 
-`xagent start --channel feishu` starts a detached process, writes its PID to
+`xagent service start feishu` starts a detached process, writes its PID to
 `~/.xagent/run/feishu.pid`, and appends logs to `~/.xagent/logs/feishu.log`.
-Use `xagent run --channel feishu` when you want the bot attached to your
-terminal so you can watch logs live.
+Use `xagent service logs feishu -f` when you want to watch logs live.
 
 ## Routing rules (hardcoded — no knobs)
 
@@ -175,7 +174,7 @@ asyncio.run(adapter.run())
 ## Operational notes
 
 - xAgent runs **in-process** with the adapter. Nothing listens on a public
-  port. Even when you keep the API channel (`xagent start --channel api`) running, it
+  port. Even when you keep the API channel (`xagent service start api`) running, it
   stays bound to `127.0.0.1` — the adapter never goes through HTTP.
 - `run_command` is a built-in xAgent tool with shell-execution capability.
   Audit your `identity.md` and consider running the adapter in a container

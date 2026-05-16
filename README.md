@@ -45,7 +45,7 @@ The CLI is best for quick questions, terminal work, and short back-and-forth ses
 Start xAgent and open the web page in your browser:
 
 ```bash
-xagent run --channel api --open
+xagent web
 ```
 
 The web page is best for longer conversations, streaming replies, and image input.
@@ -54,13 +54,13 @@ Use the Transport selector to compare regular HTTP/SSE with WebSocket chat deliv
 Run it as a managed background service instead:
 
 ```bash
-xagent start --channel api
-xagent status
-xagent logs --channel api
-xagent stop --channel api
+xagent service start api
+xagent service status
+xagent service logs api
+xagent service stop api
 ```
 
-Use `--channel api` for HTTP JSON, SSE, WebSocket, and the built-in web page. Use `--channel feishu` for the Feishu bot, and comma-separated channels such as `--channel api,feishu` when you want both. Without `--channel`, `run` and `start` choose one enabled channel, preferring `api`.
+Use `api` for HTTP JSON, SSE, WebSocket, and the built-in web page. Use `feishu` for the Feishu bot, and `all` when you want every enabled channel. Without a channel, `service start` chooses one enabled channel, preferring `api`; other service actions default to `all`.
 
 ## Use From Feishu
 
@@ -68,10 +68,10 @@ Configure the Feishu channel after the base init:
 
 ```bash
 xagent init feishu
-xagent start --channel feishu
+xagent service start feishu
 ```
 
-`xagent start --channel all` starts every enabled channel in `config.yaml`.
+`xagent service start all` starts every enabled channel in `config.yaml`.
 
 ## Chat And Observe
 

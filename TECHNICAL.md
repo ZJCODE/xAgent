@@ -6,7 +6,7 @@
 
 xAgent 由三个主要部分组成：
 
-- CLI 入口：`xagent.interfaces.cli`，提供 `xagent init`、`xagent chat`、`xagent run/start/stop/status/logs` 等命令。
+- CLI 入口：`xagent.interfaces.cli`，提供 `xagent init`、`xagent chat`、`xagent web`、`xagent service ...` 等命令。
 - Agent 运行时：`xagent.core.agent.Agent`，负责对话、观察事件、工具调用、消息流和长期记忆。
 - HTTP 服务：`xagent.interfaces.server.AgentHTTPServer`，基于 FastAPI，对外提供 HTTP、SSE 和 WebSocket 接口。
 
@@ -14,7 +14,7 @@ xAgent 由三个主要部分组成：
 
 ```bash
 xagent init --dir ~/.xagent
-xagent run --channel api --dir ~/.xagent --host 127.0.0.1 --port 8010
+xagent web --dir ~/.xagent --host 127.0.0.1 --port 8010
 ```
 
 服务默认绑定：
@@ -247,9 +247,9 @@ channels:
     port: 8010
 ```
 
-`websocket` 是 API channel 内部的 transport，不是 channel。需要 WebSocket 时启动 `--channel api`，然后连接 `/ws/chat` 或 `/ws/observe`。
+`websocket` 是 API channel 内部的 transport，不是 channel。需要 WebSocket 时运行 `xagent web` 或 `xagent service start api`，然后连接 `/ws/chat` 或 `/ws/observe`。
 
-未显式传 `--channel` 时，`run` 和 `start` 会从已启用 channel 中选择单个入口：优先 `api`，如果只启用了 `feishu` 则选择 `feishu`。`stop`、`restart`、`status` 和 `logs` 默认使用 `all`。`logs --follow` 必须显式指定单个 channel。
+未显式传 channel 时，`xagent service start` 会从已启用 channel 中选择单个入口：优先 `api`，如果只启用了 `feishu` 则选择 `feishu`。`stop`、`restart`、`status` 和 `logs` 默认使用 `all`。`logs --follow` 必须显式指定单个 channel。
 
 `channels.feishu` 由 `xagent init feishu` 写入。`${ENV_VAR}` 形式会在 Feishu adapter 加载配置时展开，也可通过 `LARK_APP_ID` 和 `LARK_APP_SECRET` 提供凭据。
 
@@ -265,7 +265,7 @@ channels:
 ## 3. 启动参数
 
 ```bash
-xagent run --channel api \
+xagent web \
   --dir ~/.xagent \
   --host 127.0.0.1 \
   --port 8010 \
@@ -274,15 +274,14 @@ xagent run --channel api \
   --chat-timeout 600
 ```
 
-`run` 表示前台运行，适合开发和调试。`start` 表示托管后台运行，会把 PID 写入 `<dir>/run/{channel}.pid`，日志写入 `<dir>/logs/{channel}.log`。
+`web` 表示前台运行 API channel 并默认打开 Web UI，适合本地使用和调试。`service start` 表示托管后台运行，会把 PID 写入 `<dir>/run/{channel}.pid`，日志写入 `<dir>/logs/{channel}.log`。
 
 ```bash
-xagent start --channel api
-xagent start --channel api,feishu
-xagent start --channel all
-xagent status --channel all
-xagent logs --channel feishu --follow
-xagent stop --channel all
+xagent service start api
+xagent service start all
+xagent service status all
+xagent service logs feishu --follow
+xagent service stop all
 ```
 
 参数说明：
@@ -290,10 +289,10 @@ xagent stop --channel all
 - `--dir`：运行目录，默认 `~/.xagent`。
 - `--host`：监听地址，默认 `127.0.0.1`。
 - `--port`：监听端口，默认 `8010`。
-- `--open`：启动后打开 Web UI。
-- `--channel api`：启动 API channel，提供 HTTP JSON、SSE、WebSocket 和内置 Web UI。
-- `--channel feishu`：启动飞书 WebSocket 长连接适配器。
-- `--channel all`：启动 `config.yaml` 中已启用的所有 channel。
+- `--open` / `--no-open`：`xagent web` 启动后是否打开 Web UI，默认打开。
+- `api`：启动 API channel，提供 HTTP JSON、SSE、WebSocket 和内置 Web UI。
+- `feishu`：启动飞书 WebSocket 长连接适配器。
+- `all`：启动 `config.yaml` 中已启用的所有 channel。
 - `--max-concurrent-chats`：最大并发对话/观察请求数，默认 `4`。
 - `--queue-timeout`：等待可用并发槽的秒数，默认 `30`；超时返回 429。
 - `--chat-timeout`：单次对话/观察总超时时间，默认 `600` 秒；超时返回 504 或流式错误帧。
