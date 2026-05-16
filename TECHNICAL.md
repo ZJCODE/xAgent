@@ -21,7 +21,7 @@ xagent run --channel api --dir ~/.xagent --host 127.0.0.1 --port 8010
 
 - Host：`127.0.0.1`
 - Port：`8010`
-- API channel：提供 HTTP JSON、SSE、WebSocket，以及可选内置 Web UI
+- API channel：提供 HTTP JSON、SSE、WebSocket，以及内置 Web UI
 - API 文档：FastAPI 默认提供 `/docs` 和 `/openapi.json`
 
 > 当前服务端没有内置 API 鉴权。对外网、飞书、企业 IM 或公网回调接入时，应放在自己的网关或适配服务后面，先完成平台签名校验、鉴权、限流和审计，再转发到 xAgent。
@@ -58,8 +58,6 @@ xagent run --channel api --dir ~/.xagent --host 127.0.0.1 --port 8010
 - `search`：可选，联网搜索工具配置。
 - `output_schema`：可选，结构化输出配置。
 - `channels`：可选，API/Feishu 等可托管运行入口配置。
-- `runtime`：可选，CLI 运行时默认值。
-- `memory`：可选，长期记忆读取窗口和后台写入策略。
 - `observability`：可选，Langfuse 观测与 tracing 配置。
 
 出现其他顶层键会在启动时失败，例如 `agent`、`system_prompt`、`server`、`workspace` 都不是当前支持的配置项。
@@ -78,16 +76,6 @@ channels:
   api:
     host: 127.0.0.1
     port: 8010
-    web_ui: true
-runtime:
-  default_channel: api
-  heartbeat_enabled: true
-  heartbeat_interval_seconds: 300
-memory:
-  recent_days: 7
-  stale_flush_seconds: 300
-  message_threshold: 20
-  min_interval_seconds: 900
 ```
 
 `provider.model` 是必填项。`provider.name` 决定默认 SDK：OpenAI、DeepSeek、Qwen 使用 OpenAI SDK，MiniMax 和 Anthropic 使用 Anthropic SDK。`custom` provider 需要显式填写 `provider.sdk: openai` 或 `provider.sdk: anthropic`。`provider.base_url` 和 `provider.api_key` 会传给对应 SDK 客户端；Anthropic SDK 路径会使用 Messages API，并在工具调用后回传完整 assistant content blocks，以兼容 thinking/tool_use 要求。
@@ -210,22 +198,9 @@ Langfuse SDK 会在后台排队发送事件。CLI 单次 chat、observe、Feishu
 
 ### 2.4 memory
 
-`memory` 控制长期记忆读取窗口和后台写入策略：
+长期记忆默认自动管理，不需要在 `config.yaml` 中配置。每轮对话会自动注入最近 3 天的长期记忆上下文；后台写入会按内部批量策略、短会话兜底、长驻进程内部 heartbeat 和正常退出 flush 进行，避免普通用户理解或维护写入调度参数。
 
-```yaml
-memory:
-  recent_days: 7
-  stale_flush_seconds: 300
-  message_threshold: 20
-  min_interval_seconds: 900
-```
-
-- `recent_days`：每轮对话自动注入最近多少天的长期记忆上下文，默认 `7`。
-- `stale_flush_seconds`：短对话记录超过该秒数仍未批量写入时会被强制写入，默认 `300`。
-- `message_threshold`：达到多少条经验记录后触发批量写入，默认 `20`。
-- `min_interval_seconds`：普通批量写入之间的最小间隔，默认 `900`。stale flush 和正常 shutdown flush 不会被它阻止。
-
-`runtime.heartbeat_enabled` 控制长驻运行时心跳，默认开启；`runtime.heartbeat_interval_seconds` 默认为 `300`。API server lifespan 和 Feishu daemon 会启动 heartbeat；CLI 单次/交互 chat 不启动。第一版 heartbeat 只做记忆维护：定期 flush 待写入记忆，并在每周一为上一周生成 weekly summary。summary 生成不是模型可见工具。
+API server lifespan 和 Feishu daemon 会启动内部 heartbeat；CLI 单次/交互 chat 不启动。第一版 heartbeat 只做记忆维护：定期 flush 待写入记忆，并在每周一为上一周生成 weekly summary。summary 生成不是模型可见工具。
 
 人物档案保存在 `memory/people/`。它只追加带日期和证据片段的稳定信息；默认不会把所有人物档案注入每一轮 prompt，需要时可通过记忆搜索读取。
 
@@ -263,17 +238,18 @@ Content-Type: application/json
 
 ### 2.7 channels
 
-`channels.api` 控制 API channel。它始终暴露 HTTP JSON、SSE 和 WebSocket；`web_ui: true` 只控制是否额外挂载内置静态页面，不影响 `/chat`、`/observe`、`/ws/chat` 或 `/ws/observe`。
+`channels.api` 控制 API channel 的监听地址和端口。API channel 始终暴露 HTTP JSON、SSE、WebSocket 和内置静态页面；`--open` 只控制启动后是否打开浏览器，不改变服务能力。
 
 ```yaml
 channels:
   api:
     host: 127.0.0.1
     port: 8010
-    web_ui: true
 ```
 
 `websocket` 是 API channel 内部的 transport，不是 channel。需要 WebSocket 时启动 `--channel api`，然后连接 `/ws/chat` 或 `/ws/observe`。
+
+未显式传 `--channel` 时，`run` 和 `start` 会从已启用 channel 中选择单个入口：优先 `api`，如果只启用了 `feishu` 则选择 `feishu`。`stop`、`restart`、`status` 和 `logs` 默认使用 `all`。`logs --follow` 必须显式指定单个 channel。
 
 `channels.feishu` 由 `xagent init feishu` 写入。`${ENV_VAR}` 形式会在 Feishu adapter 加载配置时展开，也可通过 `LARK_APP_ID` 和 `LARK_APP_SECRET` 提供凭据。
 
@@ -315,7 +291,7 @@ xagent stop --channel all
 - `--host`：监听地址，默认 `127.0.0.1`。
 - `--port`：监听端口，默认 `8010`。
 - `--open`：启动后打开 Web UI。
-- `--channel api`：启动 API channel，提供 HTTP JSON、SSE、WebSocket 和可选内置 Web UI。
+- `--channel api`：启动 API channel，提供 HTTP JSON、SSE、WebSocket 和内置 Web UI。
 - `--channel feishu`：启动飞书 WebSocket 长连接适配器。
 - `--channel all`：启动 `config.yaml` 中已启用的所有 channel。
 - `--max-concurrent-chats`：最大并发对话/观察请求数，默认 `4`。
@@ -798,7 +774,7 @@ memory/
 
 Agent 会基于对话和观察事件异步整理长期记忆。`enable_memory` 和 `private` 会影响 `/chat` 的记忆行为：
 
-后台写入会先累积；达到 `memory.message_threshold` 且满足普通间隔时会批量写入。如果记录停留超过 `memory.stale_flush_seconds`，会强制写入。CLI、API server 和 Feishu channel 正常退出时也会 flush 记忆，避免短对话低于阈值时丢失。长驻 API/Feishu 运行时还会通过 runtime heartbeat 定期执行相同维护，并在每周一生成上一周 weekly summary。
+后台写入会先累积，并按内部批量阈值和短会话兜底策略写入。CLI、API server 和 Feishu channel 正常退出时也会 flush 记忆，避免短对话只停留在内存中。长驻 API/Feishu 运行时还会通过 runtime heartbeat 定期执行相同维护，并在每周一生成上一周 weekly summary。
 
 `memory/people/` 是人物档案层。只有长期记忆写入成功后，系统才会尝试从同一批消息中抽取有明确人物归属、带证据 quote 的稳定信息并追加到对应 profile。人物档案更新失败不会影响主记忆写入。
 

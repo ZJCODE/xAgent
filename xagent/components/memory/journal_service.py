@@ -111,32 +111,32 @@ class JournalLLMService:
     @staticmethod
     def build_diary_system_prompt(journal_date: str, current_date: str | None = None) -> str:
         current_date = current_date or datetime.now().strftime("%Y-%m-%d")
-        return f"""You are writing a daily diary entry from a first-person observer perspective.
+        return f"""Write a concise daily diary entry from my first-person perspective.
 
 CURRENT DATE: {current_date}
 TARGET JOURNAL DATE: {journal_date}
 
-Writing requirements:
-- Write in first person. Refer to the observer as "I".
-- The source material is my experience stream: direct conversations, my replies, observations, overheard speech, notifications, reminders, and other context I received.
-- Any "agent", "assistant", or "AI" speaker in the transcript refers to me. Rewrite from my own point of view.
-- Write it as my own diary after participating in those conversations and experiencing those observations.
-- The writing perspective should feel like I am recalling interactions, with a natural and restrained tone.
-- Do not replay the transcript line by line. Synthesize the important points.
-- Keep the original language of the transcript. Do not translate.
-- Preserve important details: distinctive wording, commitments, preferences, emotional tone.
-- Different users must stay clearly separated. Never merge one user's content into another's.
-- Every important fact must remain attributed to the speaker who said or experienced it.
-- Prefer explicit attribution phrases such as "With abc, ...", "jun mentioned ...", or "T preferred ..." when multiple speakers appear.
-- For observations, use attribution such as "I noticed...", "I overheard Bob say...", or "A notification arrived...".
-- Never rewrite overheard speech or ambient observations as a direct request from the current user unless the source says it was addressed to me.
-- Never imply that different speakers shared the same preference, plan, event, or history unless the source explicitly says so.
-- If attribution is uncertain, keep that uncertainty instead of collapsing multiple speakers into one narrative.
-- Aim for 100-300 characters when the source is brief, 200-500 when substantial.
-- This is only a diary entry. Do not give advice, proposals, or recommendations.
-- Do not end with offers to help or assistant-style closing language.
+Source meaning:
+- The transcript is my experience stream: direct conversations, my replies, observations, overheard speech, notifications, reminders, and other received context.
+- Speakers named "agent", "assistant", or "AI" are me; rewrite them as what I did, said, or noticed.
 
-Return JSON only, shaped as {{"content": "natural diary-style entry"}}."""
+Writing rules:
+- Use "I" and a natural, restrained diary tone.
+- Synthesize important points instead of replaying the transcript line by line.
+- Keep the source language and do not translate.
+- Preserve distinctive wording, commitments, preferences, emotional tone, and other durable details.
+- Aim for 100-300 characters for brief sources, 200-500 for substantial sources.
+
+Attribution rules:
+- Keep different people separate; never merge one person's facts, preferences, plans, or experiences into another's.
+- Attribute important facts to the speaker or source that said, experienced, or provided them.
+- For ambient context, use forms such as "I noticed...", "I overheard...", or "A notification arrived...".
+- Never turn overheard speech or ambient observations into a direct request unless the source says it was addressed to me.
+- If attribution is uncertain, keep the uncertainty visible.
+
+Output rules:
+- This is only a diary entry; do not give advice, proposals, recommendations, next steps, or assistant-style closings.
+- Return JSON only, shaped as {{"content": "natural diary-style entry"}}."""
 
     @staticmethod
     def build_diary_user_prompt(journal_date: str, transcript: str) -> str:
@@ -146,25 +146,26 @@ Return JSON only, shaped as {{"content": "natural diary-style entry"}}."""
 
     @staticmethod
     def build_summary_system_prompt(period_type: str, period_label: str) -> str:
-        return f"""You are generating a {period_type} summary of diary entries from a first-person perspective.
+        return f"""Write a concise {period_type} summary of diary entries from my first-person perspective.
 
 PERIOD: {period_label}
 
-Requirements:
-- Write in first person ("I").
-- Synthesize the key themes, events, decisions, and changes from the source material.
-- Highlight notable interactions, preferences expressed, commitments made, and emotional shifts.
-- Keep the original language. Do not translate.
-- Preserve speaker attribution throughout the summary. Do not flatten multiple people into one profile.
-- When several speakers appear, summarize them separately or in clearly attributed clauses.
-- Preferences, plans, commitments, and experiences must stay attached to the speaker who originally expressed or experienced them.
-- Generic labels such as "User A", "User B", "用户A", or "用户B" are local aliases inside a single source entry; do not merge them across different entries unless continuity is explicit.
-- If the source material leaves attribution uncertain, keep that uncertainty visible in the summary.
-- For weekly: focus on the main arc of the week, key people and what they were doing, important decisions.
-- For monthly: focus on broader themes, recurring patterns, major milestones.
-- For yearly: focus on the big picture - major phases, turning points, growth areas.
-- This is a summary, not advice. Do not give recommendations or next steps.
-- Keep it concise but complete. Aim for 300-800 characters for weekly, 500-1200 for monthly, 800-2000 for yearly.
+Summary rules:
+- Use "I"; keep the source language and do not translate.
+- Synthesize key themes, events, decisions, commitments, preferences, emotional shifts, and durable changes.
+- Preserve speaker attribution. Do not flatten multiple people into one profile.
+- Keep each person's preferences, plans, commitments, and experiences attached to that person.
+- Treat generic labels such as "User A", "User B", "用户A", or "用户B" as local to one source entry unless continuity is explicit.
+- If attribution is uncertain, keep the uncertainty visible.
+
+Period focus:
+- Weekly: main arc, key people, what they were doing, and important decisions.
+- Monthly: broader themes, recurring patterns, and major milestones.
+- Yearly: major phases, turning points, and growth areas.
+
+Output rules:
+- This is a summary, not advice; do not give recommendations or next steps.
+- Aim for 300-800 characters for weekly, 500-1200 for monthly, 800-2000 for yearly.
 - Return JSON only, shaped as {{"content": "period summary"}}."""
 
     @staticmethod

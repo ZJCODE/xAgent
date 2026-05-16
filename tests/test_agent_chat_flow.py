@@ -670,7 +670,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, "Final answer")
-        self.assertEqual(storage.last_count, AgentConfig.MAX_TRANSCRIPT_MESSAGES)
+        self.assertEqual(storage.last_count, AgentConfig.DEFAULT_HISTORY_COUNT)
         transcript = next(
             message for message in model_client.calls[0]
             if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME

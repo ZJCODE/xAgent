@@ -38,11 +38,11 @@ def load_config_file(config_dir: Path) -> dict[str, Any]:
 def enabled_channels_from_config(config: Optional[Mapping[str, Any]]) -> list[str]:
     """Return public channels enabled by config for the `all` selector."""
     channels = config.get("channels") if isinstance(config, Mapping) else None
-    channels = channels if isinstance(channels, Mapping) else {}
+    if not isinstance(channels, Mapping):
+        return [CHANNEL_API]
 
     api_cfg = channels.get(CHANNEL_API)
-    api_cfg = api_cfg if isinstance(api_cfg, Mapping) else {}
-    api_enabled = bool(api_cfg.get("enabled", True))
+    api_enabled = isinstance(api_cfg, Mapping) and bool(api_cfg.get("enabled", True))
 
     result: list[str] = []
     if api_enabled:
@@ -53,7 +53,20 @@ def enabled_channels_from_config(config: Optional[Mapping[str, Any]]) -> list[st
     if _feishu_channel_enabled(feishu_cfg):
         result.append(CHANNEL_FEISHU)
 
-    return result or [CHANNEL_API]
+    return result
+
+
+def default_start_channel_from_config(config: Optional[Mapping[str, Any]]) -> str:
+    """Choose the safest implicit channel for run/start commands."""
+    enabled = enabled_channels_from_config(config)
+    if not enabled:
+        raise ChannelSelectionError(
+            "No enabled channels found. Configure channels.api or channels.feishu, "
+            "or pass --channel explicitly."
+        )
+    if CHANNEL_API in enabled:
+        return CHANNEL_API
+    return enabled[0]
 
 
 def normalize_channel_values(
@@ -81,7 +94,12 @@ def normalize_channel_values(
             if channel not in selected:
                 selected.append(channel)
 
-    return selected or [CHANNEL_API]
+    if not selected:
+        raise ChannelSelectionError(
+            "No enabled channels found. Configure channels.api or channels.feishu, "
+            "or pass --channel explicitly."
+        )
+    return selected
 
 
 def api_config(config: Mapping[str, Any]) -> dict[str, Any]:

@@ -27,10 +27,6 @@ class BaseAgentConfig:
     DEFAULT_MODEL = AgentConfig.DEFAULT_MODEL
     DEFAULT_CONFIG_DIR = AgentConfig.DEFAULT_WORKSPACE
     MEMORY_DIRNAME = AgentConfig.MEMORY_DIRNAME
-    MEMORY_RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
-    MEMORY_MESSAGE_THRESHOLD = AgentConfig.MEMORY_MESSAGE_THRESHOLD
-    MEMORY_MIN_INTERVAL_SECONDS = AgentConfig.MEMORY_MIN_INTERVAL_SECONDS
-    MEMORY_STALE_FLUSH_SECONDS = AgentConfig.MEMORY_STALE_FLUSH_SECONDS
     MESSAGE_DIRNAME = AgentConfig.MESSAGE_DIRNAME
     MESSAGE_DB_FILENAME = AgentConfig.MESSAGE_DB_FILENAME
     CONFIG_FILENAME = "config.yaml"
@@ -135,7 +131,6 @@ class BaseAgentRunner:
             "output_schema",
             "channels",
             "runtime",
-            "memory",
             "observability",
         }
         unsupported_keys = sorted(set(config) - allowed_config_keys)
@@ -178,7 +173,6 @@ class BaseAgentRunner:
                     "runtime.heartbeat_interval_seconds",
                 )
 
-        self._validate_memory_config(config.get("memory"))
         self._validate_observability_config(config.get("observability"))
 
         provider_cfg = config.get("provider")
@@ -195,38 +189,6 @@ class BaseAgentRunner:
         self._validate_search_config(config.get("search"), provider_cfg)
         
         return config
-
-    def _validate_memory_config(self, memory_cfg: Optional[Dict[str, Any]]) -> None:
-        """Validate optional long-term memory configuration."""
-        if memory_cfg is None:
-            return
-        if not isinstance(memory_cfg, dict):
-            raise ValueError("memory must be a dictionary")
-
-        allowed_memory_keys = {
-            "recent_days",
-            "message_threshold",
-            "min_interval_seconds",
-            "stale_flush_seconds",
-        }
-        unsupported_memory_keys = sorted(set(memory_cfg) - allowed_memory_keys)
-        if unsupported_memory_keys:
-            joined_keys = ", ".join(unsupported_memory_keys)
-            raise ValueError(f"Unsupported memory key(s): {joined_keys}")
-
-        for key in ("recent_days", "message_threshold"):
-            if key in memory_cfg:
-                self._validate_positive_int(memory_cfg[key], f"memory.{key}")
-        if "min_interval_seconds" in memory_cfg:
-            self._validate_non_negative_number(
-                memory_cfg["min_interval_seconds"],
-                "memory.min_interval_seconds",
-            )
-        if "stale_flush_seconds" in memory_cfg:
-            self._validate_positive_number(
-                memory_cfg["stale_flush_seconds"],
-                "memory.stale_flush_seconds",
-            )
 
     def _validate_observability_config(self, observability_cfg: Optional[Dict[str, Any]]) -> None:
         """Validate optional Langfuse observability configuration."""
@@ -478,7 +440,6 @@ class BaseAgentRunner:
             output_type=output_type,
             message_storage=self.message_storage,
             workspace=str(self.workspace),
-            memory_config=agent_cfg.get("memory") or {},
             observability=self.observability,
         )
 

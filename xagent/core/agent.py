@@ -40,7 +40,6 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         message_storage: Optional[MessageStorageBase] = None,
         workspace: Optional[str] = None,
-        memory_config: Optional[Dict[str, Any]] = None,
         observability: Optional[ObservabilityRuntime] = None,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
@@ -98,14 +97,9 @@ class Agent:
             backend=self.model_backend,
             max_tokens=self.model_max_tokens,
         )
-        memory_config = memory_config or {}
         self.memory_handler = MemoryHandler(
             memory=self.markdown_memory,
             llm_service=self.llm_service,
-            recent_days=memory_config.get("recent_days"),
-            message_threshold=memory_config.get("message_threshold"),
-            min_interval_seconds=memory_config.get("min_interval_seconds"),
-            stale_flush_seconds=memory_config.get("stale_flush_seconds"),
         )
 
         bound_tools = list(tools or [])

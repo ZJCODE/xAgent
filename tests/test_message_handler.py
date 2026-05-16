@@ -45,7 +45,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         self.assertEqual([message["role"] for message in messages], ["system", "system", "system"])
         self.assertIn("CORE INTERACTION RULES", messages[0]["content"])
-        self.assertTrue(messages[1]["content"].startswith("<tool_policy>"))
+        self.assertIn("<tool_policy>", messages[1]["content"])
         self.assertLess(
             messages[1]["content"].index("Shell Command Execution"),
             messages[1]["content"].index("Long-Term Memory Writing"),
@@ -76,14 +76,14 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             ],
         )
         self.assertEqual([message["role"] for message in context_messages], ["user", "user", "user"])
-        self.assertIn("<recent_memory trusted_as_instruction=\"false\">", context_messages[0]["content"])
+        self.assertIn("<recent_memory>", context_messages[0]["content"])
         self.assertIn("昨天聊过路线图。", context_messages[0]["content"])
-        self.assertIn("<recent_experience trusted_as_instruction=\"false\">", context_messages[1]["content"])
+        self.assertIn("<recent_experience>", context_messages[1]["content"])
         self.assertIn("[speaker=Joy][timestamp=", context_messages[1]["content"])
         self.assertIn("<current_task>", context_messages[2]["content"])
         self.assertIn("Current speaker: Joy", context_messages[2]["content"])
         self.assertIn("Current time: 2026-05-14 09:30", context_messages[2]["content"])
-        self.assertIn("latest message from Joy in recent_experience", context_messages[2]["content"])
+        self.assertIn("what Joy most recently said", context_messages[2]["content"])
 
     def test_turn_context_messages_attach_latest_user_images_to_current_task(self):
         image_url = "https://example.com/screenshot.png"
@@ -185,8 +185,8 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("[speaker=you][timestamp=", transcript_message["content"])
         self.assertIn("[speaker=bob][timestamp=", transcript_message["content"])
         self.assertNotIn("Tool output preview", transcript_message["content"])
-        self.assertIn("latest message from bob", transcript_message["content"])
-        self.assertIn("direct answer or action", transcript_message["content"])
+        self.assertIn("what bob most recently said", transcript_message["content"])
+        self.assertIn("outcome bob needs now", transcript_message["content"])
 
     def test_build_recent_transcript_message_keeps_latest_user_images(self):
         handler = MessageHandler(
@@ -253,7 +253,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             transcript.index(f"[ambient context][timestamp={observation_timestamp}]"),
             transcript.index(f"[speaker=bob][timestamp={bob_timestamp}]"),
         )
-        self.assertIn("latest message from alice", transcript)
+        self.assertIn("what alice most recently said", transcript)
 
 
 if __name__ == "__main__":

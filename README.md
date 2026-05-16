@@ -60,7 +60,7 @@ xagent logs --channel api
 xagent stop --channel api
 ```
 
-Use `--channel api` for HTTP JSON, SSE, WebSocket, and the optional built-in web page. Use `--channel feishu` for the Feishu bot, and comma-separated channels such as `--channel api,feishu` when you want both.
+Use `--channel api` for HTTP JSON, SSE, WebSocket, and the built-in web page. Use `--channel feishu` for the Feishu bot, and comma-separated channels such as `--channel api,feishu` when you want both. Without `--channel`, `run` and `start` choose one enabled channel, preferring `api`.
 
 ## Use From Feishu
 
@@ -87,7 +87,7 @@ xagent observe "Bob mentioned the demo may move to 3pm" --source feishu --event-
 
 Long-term memory is built from the agent's experience stream, not only direct chats. Meaningful observations can be consolidated alongside conversations; preserve attribution in the observation text or metadata so overheard speech is not confused with a direct request from the current user.
 
-Memory writes are buffered for efficiency, then flushed by batch size, by a stale-message fallback, runtime heartbeat in long-lived API/Feishu processes, and normal CLI/server shutdown. Recent memory context defaults to 7 days and can be changed in `memory.recent_days`. When memory entries contain quote-backed stable information about a person, xAgent can also append that evidence to `memory/people/` profiles.
+Memory writes are buffered for efficiency, then flushed by batch size, by a stale-message fallback, runtime heartbeat in long-lived API/Feishu processes, and normal CLI/server shutdown. Recent memory context is managed automatically and defaults to the last 3 days. When memory entries contain quote-backed stable information about a person, xAgent can also append that evidence to `memory/people/` profiles.
 
 ## API Transports
 

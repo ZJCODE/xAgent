@@ -14,6 +14,9 @@ from xagent.interfaces.cli import (
     handle_config,
     handle_init,
     handle_init_feishu,
+    handle_logs,
+    handle_restart,
+    handle_run,
     handle_run_channel_internal,
     handle_start,
     handle_status,
@@ -47,10 +50,8 @@ def _write_runtime(directory: str, *, feishu: bool = False) -> None:
             "api": {
                 "host": "127.0.0.1",
                 "port": 8010,
-                "web_ui": True,
             }
         },
-        "runtime": {"default_channel": "api"},
     }
     if feishu:
         config["channels"]["feishu"] = {
@@ -247,8 +248,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("log_level", config["channels"]["feishu"])
         self.assertNotIn("stream", config["channels"]["feishu"])
         self.assertNotIn("show_sender_ids", config["channels"]["feishu"])
-        self.assertTrue(config["runtime"]["heartbeat_enabled"])
-        self.assertEqual(config["runtime"]["heartbeat_interval_seconds"], 300)
+        self.assertNotIn("runtime", config)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         self.assertIn("xagent start --channel feishu", output)
 
@@ -281,6 +281,88 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(enabled_channels_from_config(config), ["api", "feishu"])
 
+    def test_enabled_channels_do_not_implicitly_add_api_when_channels_are_explicit(self):
+        config = {
+            "channels": {
+                "feishu": {
+                    "app_id": "cli_test",
+                    "app_secret": "secret",
+                }
+            }
+        }
+
+        self.assertEqual(enabled_channels_from_config(config), ["feishu"])
+
+    def test_run_defaults_to_api_when_multiple_channels_are_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                channels=None,
+                host=None,
+                port=None,
+                open_browser=False,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+
+            with patch("xagent.interfaces.cli._run_channel", return_value=0) as runner:
+                exit_code = handle_run(args)
+
+        self.assertEqual(exit_code, 0)
+        runner.assert_called_once()
+        self.assertEqual(runner.call_args.args[0], "api")
+
+    def test_start_defaults_to_feishu_when_only_feishu_is_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+            config_path = Path(tmpdir) / "config.yaml"
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            del config["channels"]["api"]
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                channels=None,
+                host=None,
+                port=None,
+                open_browser=False,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+
+            with patch("xagent.interfaces.cli.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
+                exit_code = handle_start(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(starter.call_count, 1)
+        self.assertEqual(starter.call_args.kwargs["pid_path"], Path(tmpdir).resolve() / "run" / "feishu.pid")
+
+    def test_start_fails_when_no_channel_is_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_path = Path(tmpdir) / "config.yaml"
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            config["channels"]["api"]["enabled"] = False
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                channels=None,
+                host=None,
+                port=None,
+                open_browser=False,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+
+            with patch("xagent.interfaces.cli.start_background") as starter:
+                exit_code = handle_start(args)
+
+        self.assertEqual(exit_code, 1)
+        starter.assert_not_called()
+
     def test_run_channel_api_passes_options_to_server(self):
         args = argparse.Namespace(
             channel="api",
@@ -301,11 +383,41 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         server_class.assert_called_once_with(
             config_dir="./agent-dir",
-            enable_web=True,
             max_concurrent_chats=2,
             chat_queue_timeout=3.5,
             chat_timeout=9.5,
         )
+        server_instance.run.assert_called_once_with(
+            host="127.0.0.1",
+            port=8010,
+            open_browser=True,
+        )
+
+    def test_run_channel_api_ignores_legacy_web_ui_flag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_path = Path(tmpdir) / "config.yaml"
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            config["channels"]["api"]["web_ui"] = False
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            args = argparse.Namespace(
+                channel="api",
+                config_dir=tmpdir,
+                host=None,
+                port=None,
+                open_browser=True,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+            server_instance = MagicMock()
+            server_instance.agent.model = "gpt-5.4-mini"
+
+            with patch("xagent.interfaces.server.AgentHTTPServer", return_value=server_instance) as server_class:
+                exit_code = handle_run_channel_internal(args)
+
+        self.assertEqual(exit_code, 0)
+        server_class.assert_called_once_with(config_dir=tmpdir)
         server_instance.run.assert_called_once_with(
             host="127.0.0.1",
             port=8010,
@@ -345,6 +457,28 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(stopper.call_args.args[0], Path(tmpdir).resolve() / "run" / "api.pid")
 
+    def test_restart_defaults_to_all_enabled_channels(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                channels=None,
+                host=None,
+                port=None,
+                open_browser=False,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+
+            with patch("xagent.interfaces.cli.stop_managed_process", return_value=(True, "stopped")) as stopper:
+                with patch("xagent.interfaces.cli.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
+                    exit_code = handle_restart(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stopper.call_count, 2)
+        self.assertEqual(starter.call_count, 2)
+
     def test_status_reports_running_process(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True)
@@ -358,6 +492,30 @@ class CLICommandTests(unittest.TestCase):
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         self.assertIn("feishu: running pid=4321", output)
         self.assertIn("run/feishu.pid", output)
+
+    def test_logs_follow_requires_explicit_single_channel(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            args = argparse.Namespace(config_dir=tmpdir, channels=None, lines=10, follow=True)
+
+            with patch("sys.stdout") as stdout:
+                exit_code = handle_logs(args)
+
+        self.assertEqual(exit_code, 1)
+        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        self.assertIn("--follow requires an explicit single --channel", output)
+
+    def test_logs_follow_rejects_all_channel_selector(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            args = argparse.Namespace(config_dir=tmpdir, channels=["all"], lines=10, follow=True)
+
+            with patch("sys.stdout") as stdout:
+                exit_code = handle_logs(args)
+
+        self.assertEqual(exit_code, 1)
+        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        self.assertIn("--follow requires an explicit single --channel", output)
 
     def test_unknown_channel_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -35,7 +35,7 @@ from .channels import (
     CHANNEL_FEISHU,
     ChannelSelectionError,
     api_config,
-    enabled_channels_from_config,
+    default_start_channel_from_config,
     feishu_config,
     load_config_file,
     normalize_channel_values,
@@ -384,19 +384,7 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
             "api": {
                 "host": BaseAgentConfig.DEFAULT_HOST,
                 "port": BaseAgentConfig.DEFAULT_PORT,
-                "web_ui": True,
             }
-        },
-        "runtime": {
-            "default_channel": "api",
-            "heartbeat_enabled": BaseAgentConfig.RUNTIME_HEARTBEAT_ENABLED,
-            "heartbeat_interval_seconds": BaseAgentConfig.RUNTIME_HEARTBEAT_INTERVAL_SECONDS,
-        },
-        "memory": {
-            "recent_days": BaseAgentConfig.MEMORY_RECENT_DAYS,
-            "stale_flush_seconds": BaseAgentConfig.MEMORY_STALE_FLUSH_SECONDS,
-            "message_threshold": BaseAgentConfig.MEMORY_MESSAGE_THRESHOLD,
-            "min_interval_seconds": BaseAgentConfig.MEMORY_MIN_INTERVAL_SECONDS,
         },
     }
     search_config = {"provider": selection.search_provider or "none"}
@@ -814,13 +802,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="Run one or more channels in the foreground")
     _add_dir_argument(run_parser)
-    _add_channel_argument(run_parser, default_label="api")
+    _add_channel_argument(run_parser, default_label="auto")
     _add_api_runtime_arguments(run_parser)
     run_parser.set_defaults(handler=handle_run)
 
     start_parser = subparsers.add_parser("start", help="Start one or more channels in the background")
     _add_dir_argument(start_parser)
-    _add_channel_argument(start_parser, default_label="api")
+    _add_channel_argument(start_parser, default_label="auto")
     _add_api_runtime_arguments(start_parser)
     start_parser.set_defaults(handler=handle_start)
 
@@ -1062,7 +1050,11 @@ def _load_runtime_config(args: argparse.Namespace) -> dict[str, Any]:
 
 def _select_channels(args: argparse.Namespace, *, default: str) -> tuple[list[str], dict[str, Any]]:
     config = _load_runtime_config(args)
-    channels = normalize_channel_values(getattr(args, "channels", None), default=default, config=config)
+    values = getattr(args, "channels", None)
+    if values is None and default == "auto":
+        channels = [default_start_channel_from_config(config)]
+    else:
+        channels = normalize_channel_values(values, default=default, config=config)
     return channels, config
 
 
@@ -1097,10 +1089,8 @@ def _api_runtime_values(
     config: dict[str, Any],
 ) -> tuple[dict[str, Any], Optional[str], Optional[int], bool]:
     api_cfg = api_config(config)
-    enable_web = bool(api_cfg.get("web_ui", True))
     server_kwargs: dict[str, Any] = {
         "config_dir": getattr(args, "config_dir", None),
-        "enable_web": enable_web,
     }
 
     runtime_mapping = (
@@ -1119,7 +1109,7 @@ def _api_runtime_values(
     port = getattr(args, "port", None)
     if port is None:
         port = api_cfg.get("port")
-    open_browser = bool(getattr(args, "open_browser", False) and enable_web)
+    open_browser = bool(getattr(args, "open_browser", False))
     return server_kwargs, host, port, open_browser
 
 
@@ -1238,7 +1228,7 @@ def handle_run_channel_internal(args: argparse.Namespace) -> int:
 
 def handle_run(args: argparse.Namespace) -> int:
     try:
-        channels, config = _select_channels(args, default=CHANNEL_API)
+        channels, config = _select_channels(args, default="auto")
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
@@ -1273,12 +1263,7 @@ def handle_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def handle_start(args: argparse.Namespace) -> int:
-    try:
-        channels, _config = _select_channels(args, default=CHANNEL_API)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
+def _start_background_channels(args: argparse.Namespace, channels: list[str]) -> int:
     ok = True
     config_dir = _runtime_dir(args)
     for channel in channels:
@@ -1300,6 +1285,15 @@ def handle_start(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def handle_start(args: argparse.Namespace) -> int:
+    try:
+        channels, _config = _select_channels(args, default="auto")
+    except ChannelSelectionError as exc:
+        return _handle_channel_error(exc)
+
+    return _start_background_channels(args, channels)
+
+
 def handle_stop(args: argparse.Namespace) -> int:
     try:
         channels, _config = _select_channels(args, default="all")
@@ -1317,8 +1311,16 @@ def handle_stop(args: argparse.Namespace) -> int:
 
 
 def handle_restart(args: argparse.Namespace) -> int:
-    stop_code = handle_stop(args)
-    start_code = handle_start(args)
+    try:
+        channels, _config = _select_channels(args, default="all")
+    except ChannelSelectionError as exc:
+        return _handle_channel_error(exc)
+
+    restart_values = dict(vars(args))
+    restart_values["channels"] = channels
+    restart_args = argparse.Namespace(**restart_values)
+    stop_code = handle_stop(restart_args)
+    start_code = _start_background_channels(restart_args, channels)
     return 0 if stop_code == 0 and start_code == 0 else 1
 
 
@@ -1366,6 +1368,18 @@ def _follow_log(path: Path) -> None:
 
 
 def handle_logs(args: argparse.Namespace) -> int:
+    if getattr(args, "follow", False):
+        raw_channels = getattr(args, "channels", None)
+        explicit_tokens = [
+            token.strip().lower()
+            for raw_channel in (raw_channels or [])
+            for token in str(raw_channel).split(",")
+            if token.strip()
+        ]
+        if len(explicit_tokens) != 1 or explicit_tokens[0] not in {CHANNEL_API, CHANNEL_FEISHU}:
+            print("--follow requires an explicit single --channel")
+            return 1
+
     try:
         channels, _config = _select_channels(args, default="all")
     except ChannelSelectionError as exc:
@@ -1437,7 +1451,6 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
     if isinstance(api_cfg, dict):
         api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
         api_cfg.setdefault("port", BaseAgentConfig.DEFAULT_PORT)
-        api_cfg.setdefault("web_ui", True)
 
     channels_cfg["feishu"] = {
         "app_id": app_id,
@@ -1445,13 +1458,6 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
         "enable_memory": True,
         "group_history_count": 10,
     }
-    runtime_cfg = config.setdefault("runtime", {})
-    runtime_cfg.setdefault("default_channel", "api")
-    runtime_cfg.setdefault("heartbeat_enabled", BaseAgentConfig.RUNTIME_HEARTBEAT_ENABLED)
-    runtime_cfg.setdefault(
-        "heartbeat_interval_seconds",
-        BaseAgentConfig.RUNTIME_HEARTBEAT_INTERVAL_SECONDS,
-    )
 
     config_path.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
     print(f"\nUpdated {config_path} with channels.feishu\n")
