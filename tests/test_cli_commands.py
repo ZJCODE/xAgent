@@ -384,7 +384,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_test")
         self.assertNotIn("enabled", config["channels"]["feishu"])
         self.assertNotIn("log_level", config["channels"]["feishu"])
-        self.assertNotIn("stream", config["channels"]["feishu"])
+        self.assertIs(config["channels"]["feishu"]["stream"], False)
         self.assertNotIn("show_sender_ids", config["channels"]["feishu"])
         self.assertNotIn("runtime", config)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)

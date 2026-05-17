@@ -1635,6 +1635,7 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
     channels_cfg["feishu"] = {
         "app_id": app_id,
         "app_secret": app_secret,
+        "stream": False,
         "enable_memory": True,
         "group_history_count": 10,
     }
