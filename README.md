@@ -18,7 +18,7 @@ Run the first-time setup:
 xagent init
 ```
 
-Follow the prompts to choose your provider, model, API key, search provider, and optional identity. xAgent selects the SDK from the provider: OpenAI, DeepSeek, and Qwen use the OpenAI SDK; MiniMax and Anthropic use the Anthropic SDK. For a custom provider, `xagent init` asks which SDK to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
+Follow the prompts to choose your provider, model, API key, search provider, and optional identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. For a custom provider, `xagent init` asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
 
 Search is optional. Any provider can use OpenAI built-in web search, DuckDuckGo, Brave Search, or no search. OpenAI built-in search reuses the main API key when the main provider is OpenAI; non-OpenAI providers must set an OpenAI key in `search.api_key`. Brave Search requires a Brave Search API key in `search.api_key` or `BRAVE_SEARCH_API_KEY`.
 

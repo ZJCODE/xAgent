@@ -18,16 +18,18 @@ import yaml
 
 from ..core.providers import (
     KNOWN_PROVIDERS,
+    MODEL_API_ANTHROPIC_MESSAGES,
+    MODEL_API_OPENAI_CHAT_COMPLETIONS,
+    MODEL_API_OPENAI_RESPONSES,
     PROVIDER_ANTHROPIC,
     PROVIDER_CUSTOM,
     PROVIDER_DEEPSEEK,
     PROVIDER_MINIMAX,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
-    SDK_ANTHROPIC,
-    SDK_OPENAI,
+    model_api_uses_openai_client,
     provider_base_url,
-    provider_sdk,
+    provider_model_api,
 )
 from ..core.runtime import create_runtime_heartbeat
 from .base import BaseAgentConfig, BaseAgentRunner
@@ -249,7 +251,7 @@ class InitSelection:
     api_key: str
     model: str
     identity: str
-    sdk: str = ""
+    model_api: str = ""
     search_provider: str = "none"
     search_api_key: str = ""
     observability_enabled: bool = False
@@ -263,8 +265,8 @@ DEEPSEEK_BASE_URL = provider_base_url(PROVIDER_DEEPSEEK)
 ANTHROPIC_BASE_URL = provider_base_url(PROVIDER_ANTHROPIC)
 MINIMAX_BASE_URL = provider_base_url(PROVIDER_MINIMAX)
 QWEN_BASE_URL = provider_base_url(PROVIDER_QWEN)
-CUSTOM_OPENAI_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, SDK_OPENAI)
-CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, SDK_ANTHROPIC)
+CUSTOM_OPENAI_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_API_OPENAI_CHAT_COMPLETIONS)
+CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_API_ANTHROPIC_MESSAGES)
 API_KEY_PLACEHOLDER = "your_api_key_here"
 OPENAI_SEARCH_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
 BRAVE_SEARCH_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
@@ -360,7 +362,7 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
         "model": selection.model,
     }
     if selection.provider == PROVIDER_CUSTOM:
-        provider_config["sdk"] = selection.sdk or SDK_OPENAI
+        provider_config["model_api"] = selection.model_api or MODEL_API_OPENAI_CHAT_COMPLETIONS
 
     config = {
         "provider": provider_config,
@@ -486,13 +488,17 @@ def _select_search_provider(
     )
 
 
-def _select_custom_sdk(
+def _select_custom_model_api(
     *,
     input_func: Callable[[str], str] = input,
 ) -> str:
     return _select_option(
-        "Custom provider SDK",
-        (SDK_OPENAI, SDK_ANTHROPIC),
+        "Custom provider model API",
+        (
+            MODEL_API_OPENAI_CHAT_COMPLETIONS,
+            MODEL_API_OPENAI_RESPONSES,
+            MODEL_API_ANTHROPIC_MESSAGES,
+        ),
         default_index=0,
         input_func=input_func,
     )
@@ -524,7 +530,7 @@ def collect_init_selection(
         KNOWN_PROVIDERS,
         input_func=input_func,
     )
-    sdk = ""
+    model_api = ""
 
     if provider == PROVIDER_OPENAI:
         selected_model = _select_option(
@@ -567,11 +573,11 @@ def collect_init_selection(
         )
         base_url = QWEN_BASE_URL
     else:
-        sdk = _select_custom_sdk(input_func=input_func)
+        model_api = _select_custom_model_api(input_func=input_func)
         selected_model = "Decide later"
         default_base_url = (
             CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER
-            if sdk == SDK_ANTHROPIC
+            if model_api == MODEL_API_ANTHROPIC_MESSAGES
             else CUSTOM_OPENAI_BASE_URL_PLACEHOLDER
         )
         base_url = _prompt_text(
@@ -598,12 +604,15 @@ def collect_init_selection(
         if not search_api_key:
             search_api_key = BRAVE_SEARCH_API_KEY_PLACEHOLDER
 
-    selected_sdk = provider_sdk(provider, sdk if provider == PROVIDER_CUSTOM else None)
+    provider_api_cfg = {"name": provider}
+    if model_api:
+        provider_api_cfg["model_api"] = model_api
+    selected_model_api = provider_model_api(provider_api_cfg)
     observability_enabled = False
     langfuse_public_key = ""
     langfuse_secret_key = ""
     langfuse_base_url = ""
-    if selected_sdk == SDK_OPENAI:
+    if model_api_uses_openai_client(selected_model_api):
         observability_enabled = _prompt_yes_no(
             "Enable Langfuse observability?",
             default=False,
@@ -630,7 +639,7 @@ def collect_init_selection(
 
     return InitSelection(
         provider=provider,
-        sdk=sdk,
+        model_api=model_api,
         base_url=base_url,
         api_key=api_key,
         model=model,

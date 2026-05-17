@@ -10,7 +10,14 @@ from pydantic import BaseModel, Field, create_model
 # Local imports
 from ..core.agent import Agent
 from ..core.config import AgentConfig
-from ..core.providers import SDK_OPENAI, normalize_provider_name, normalize_sdk, provider_config_sdk
+from ..core.providers import (
+    legacy_sdk_model_api,
+    model_api_uses_anthropic_client,
+    normalize_provider_name,
+    normalize_model_api,
+    provider_is_official_openai,
+    provider_model_api,
+)
 from ..components import MessageStorageBase, MessageStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
 from ..tools import create_web_search_tool, run_command
@@ -263,6 +270,7 @@ class BaseAgentRunner:
         allowed_provider_keys = {
             "name",
             "sdk",
+            "model_api",
             "base_url",
             "api_key",
             "model",
@@ -274,12 +282,18 @@ class BaseAgentRunner:
             raise ValueError(f"Unsupported provider key(s): {joined_keys}")
 
         provider_name = normalize_provider_name(provider_cfg.get("name"))
+        if "model_api" in provider_cfg:
+            normalize_model_api(provider_cfg.get("model_api"))
         if "sdk" in provider_cfg:
-            normalize_sdk(provider_cfg.get("sdk"))
-        if provider_name == "custom" and "sdk" not in provider_cfg:
-            raise ValueError("provider.sdk is required when provider.name is custom")
+            legacy_sdk_model_api(provider_cfg.get("sdk"))
+        if "model_api" in provider_cfg and "sdk" in provider_cfg:
+            raise ValueError("Use provider.model_api or legacy provider.sdk, not both")
+        if provider_name == "custom" and "model_api" not in provider_cfg and "sdk" not in provider_cfg:
+            raise ValueError("provider.model_api is required when provider.name is custom")
         if provider_name and provider_name != "custom" and "sdk" in provider_cfg:
             raise ValueError("provider.sdk is only supported when provider.name is custom")
+        if provider_name and provider_name != "custom" and "model_api" in provider_cfg:
+            raise ValueError("provider.model_api is only supported when provider.name is custom")
 
     def _validate_search_config(
         self,
@@ -302,18 +316,7 @@ class BaseAgentRunner:
 
     @staticmethod
     def _is_openai_provider(provider_cfg: Dict[str, Any]) -> bool:
-        sdk = provider_config_sdk(provider_cfg)
-        if sdk != SDK_OPENAI:
-            return False
-
-        provider_name = str(provider_cfg.get("name") or "").strip().lower()
-        if provider_name:
-            return provider_name == "openai"
-
-        base_url = str(provider_cfg.get("base_url") or "").strip().rstrip("/")
-        if not base_url:
-            return True
-        return base_url == "https://api.openai.com/v1"
+        return provider_is_official_openai(provider_cfg)
 
     def _load_identity(self, identity_path: Path) -> str:
         """Load config-driven agent identity instructions from identity.md."""
@@ -433,7 +436,7 @@ class BaseAgentRunner:
         return Agent(
             system_prompt=self.identity,
             model=self._get_agent_model(agent_cfg),
-            model_backend=self._get_provider_backend(agent_cfg),
+            model_api=self._get_provider_model_api(agent_cfg),
             model_max_tokens=self._get_provider_max_tokens(agent_cfg),
             client=client,
             tools=tools,
@@ -454,11 +457,11 @@ class BaseAgentRunner:
             return provider_cfg.get("model")
         return None
 
-    def _get_provider_backend(self, agent_cfg: Dict[str, Any]) -> str:
+    def _get_provider_model_api(self, agent_cfg: Dict[str, Any]) -> str:
         provider_cfg = agent_cfg.get("provider") or {}
         if isinstance(provider_cfg, dict):
-            return provider_config_sdk(provider_cfg)
-        return SDK_OPENAI
+            return provider_model_api(provider_cfg)
+        return provider_model_api({})
 
     def _get_provider_max_tokens(self, agent_cfg: Dict[str, Any]) -> int:
         provider_cfg = agent_cfg.get("provider") or {}
@@ -481,7 +484,7 @@ class BaseAgentRunner:
         if api_key:
             client_kwargs["api_key"] = api_key
 
-        if self._get_provider_backend(agent_cfg) == "anthropic":
+        if model_api_uses_anthropic_client(self._get_provider_model_api(agent_cfg)):
             return AsyncAnthropic(**client_kwargs)
 
         return self.observability.create_client(client_kwargs)

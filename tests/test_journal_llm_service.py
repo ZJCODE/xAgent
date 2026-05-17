@@ -1,10 +1,14 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from xagent.components.memory import JournalLLMService
+from xagent.core.config import ReplyType
+from xagent.core.providers import MODEL_API_OPENAI_RESPONSES
 from xagent.schemas import Message
 
 
-class JournalLLMServicePromptTests(unittest.TestCase):
+class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
     def test_diary_system_prompt_preserves_core_behavior_constraints(self):
         prompt = JournalLLMService.build_diary_system_prompt(
             journal_date="2026-03-19",
@@ -73,6 +77,32 @@ class JournalLLMServicePromptTests(unittest.TestCase):
         self.assertIn("Do not infer personality labels from a single moment", prompt)
         self.assertIn("unknown speakers, or uncertain attribution", prompt)
         self.assertIn('{"updates": []}', prompt)
+
+    async def test_call_structured_forwards_model_api(self):
+        class FakeModelClient:
+            instances = []
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                FakeModelClient.instances.append(self)
+
+            async def call(self, **kwargs):
+                return ReplyType.STRUCTURED_REPLY, SimpleNamespace(content="Diary entry.")
+
+        service = JournalLLMService(
+            client=object(),
+            model="gpt-test",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        with patch("xagent.core.handlers.model.ModelClient", FakeModelClient):
+            result = await service.format_diary_entry(
+                messages=[{"role": "user", "sender_id": "alice", "content": "hello"}],
+                journal_date="2026-05-17",
+            )
+
+        self.assertEqual(result, "Diary entry.")
+        self.assertEqual(FakeModelClient.instances[0].kwargs["model_api"], MODEL_API_OPENAI_RESPONSES)
 
 
 if __name__ == "__main__":

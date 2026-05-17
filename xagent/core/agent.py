@@ -15,6 +15,7 @@ from ..components.memory import JournalLLMService
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
 from .config import AgentConfig, MemoryMode, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
+from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_client, normalize_model_api
 from .tools import ToolExecutor, ToolManager
 from ..schemas import AgentTurnResult, Message
 from ..tools import create_write_memory_tool, create_search_memory_tool
@@ -34,7 +35,7 @@ class Agent:
         system_prompt: Optional[str] = None,
         model: Optional[str] = None,
         client: Optional[Any] = None,
-        model_backend: str = "openai",
+        model_api: str = MODEL_API_OPENAI_RESPONSES,
         model_max_tokens: int = AgentConfig.DEFAULT_MAX_TOKENS,
         tools: Optional[List] = None,
         output_type: Optional[type[BaseModel]] = None,
@@ -43,19 +44,19 @@ class Agent:
         observability: Optional[ObservabilityRuntime] = None,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
-        self.model_backend = model_backend
+        self.model_api = normalize_model_api(model_api)
         self.model_max_tokens = model_max_tokens
         self.observability = observability or NoopObservabilityRuntime()
-        self.client = client or self.observability.create_client({})
+        self.client = client
         if self.client is None:
-            if str(self.model_backend).strip().lower() == "anthropic":
+            if model_api_uses_anthropic_client(self.model_api):
                 from anthropic import AsyncAnthropic
 
                 self.client = AsyncAnthropic()
             else:
                 from openai import AsyncOpenAI
 
-                self.client = AsyncOpenAI()
+                self.client = self.observability.create_client({}) or AsyncOpenAI()
         self.output_type = output_type
         self.system_prompt = system_prompt or ""
         self._assistant_sender_id = "agent"
@@ -94,7 +95,7 @@ class Agent:
         self.llm_service = JournalLLMService(
             client=self.client,
             model=self.model,
-            backend=self.model_backend,
+            model_api=self.model_api,
             max_tokens=self.model_max_tokens,
         )
         self.memory_handler = MemoryHandler(
@@ -117,7 +118,7 @@ class Agent:
         self.model_client = ModelClient(
             client=self.client,
             model=self.model,
-            backend=self.model_backend,
+            model_api=self.model_api,
             max_tokens=self.model_max_tokens,
         )
         self.message_handler = MessageHandler(
@@ -128,6 +129,7 @@ class Agent:
             tool_manager=self.tool_manager,
             message_storage=self.message_storage,
             client=self.client,
+            model_api=self.model_api,
         )
 
     @property

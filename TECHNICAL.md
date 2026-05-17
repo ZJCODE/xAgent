@@ -78,7 +78,9 @@ channels:
     port: 8010
 ```
 
-`provider.model` 是必填项。`provider.name` 决定默认 SDK：OpenAI、DeepSeek、Qwen 使用 OpenAI SDK，MiniMax 和 Anthropic 使用 Anthropic SDK。`custom` provider 需要显式填写 `provider.sdk: openai` 或 `provider.sdk: anthropic`。`provider.base_url` 和 `provider.api_key` 会传给对应 SDK 客户端；Anthropic SDK 路径会使用 Messages API，并在工具调用后回传完整 assistant content blocks，以兼容 thinking/tool_use 要求。
+`provider.model` 是必填项。`provider.name` 决定唯一的模型 API protocol：官方 OpenAI 使用 `openai_responses`；DeepSeek 和 Qwen 使用 `openai_chat_completions`；MiniMax 和 Anthropic 使用 `anthropic_messages`。`provider.base_url` 和 `provider.api_key` 会传给该协议对应的客户端；Anthropic Messages 路径会在工具调用后回传完整 assistant content blocks，以兼容 thinking/tool_use 要求。
+
+内部只保存 `model_api` 这一个运行时分支，不再维护单独的 backend 状态。Custom provider 需要显式配置 `provider.model_api`，可选值为 `openai_responses`、`openai_chat_completions`、`anthropic_messages`。
 
 常见提供方：
 
@@ -121,7 +123,7 @@ provider:
 # Custom OpenAI-compatible
 provider:
   name: custom
-  sdk: openai
+  model_api: openai_chat_completions
   base_url: https://api.example.com/v1
   api_key: your_api_key_here
   model: your_model_here
@@ -129,7 +131,7 @@ provider:
 # Custom Anthropic-compatible
 provider:
   name: custom
-  sdk: anthropic
+  model_api: anthropic_messages
   base_url: https://api.example.com/anthropic
   api_key: your_api_key_here
   model: your_model_here
@@ -172,7 +174,7 @@ search:
 
 ### 2.3 observability
 
-`observability` 用于启用 Langfuse 对 OpenAI-compatible 模型调用的观测。默认 `xagent init` 不写这个顶层键，等价于关闭观测；只有在初始化时明确选择启用，或手动添加 `enabled: true` 时才会加载 Langfuse wrapper。
+`observability` 用于启用 Langfuse 对 OpenAI SDK 路径模型调用的观测。默认 `xagent init` 不写这个顶层键，等价于关闭观测；只有在初始化时明确选择启用，或手动添加 `enabled: true` 时才会加载 Langfuse wrapper。
 
 ```yaml
 observability:
@@ -192,7 +194,7 @@ observability:
 - `sample_rate`：可选，范围 `0.0` 到 `1.0`。
 - `debug` / `tracing_enabled`：可选，分别映射 Langfuse SDK 的调试和 tracing 开关。
 
-启用后，xAgent 会在创建 OpenAI-compatible `AsyncOpenAI` client 时使用 `langfuse.openai.AsyncOpenAI`。主对话、流式回复、工具调用循环、图片 caption、长期记忆 LLM 格式化以及 OpenAI built-in search 都会共用这个 client。Anthropic SDK 路径当前使用 Anthropic SDK 原生客户端，不经过 Langfuse OpenAI wrapper。Chat Completions 是主要覆盖路径；OpenAI Responses API search 目前按 Langfuse SDK 能力做 best-effort 捕获。
+启用后，xAgent 会在创建 OpenAI SDK `AsyncOpenAI` client 时使用 `langfuse.openai.AsyncOpenAI`。主对话、流式回复、工具调用循环、图片 caption、长期记忆 LLM 格式化以及 OpenAI built-in search 都会共用这个 client。官方 OpenAI 主对话使用 Responses API，DeepSeek/Qwen/custom OpenAI-compatible provider 使用 Chat Completions；两者都按 Langfuse SDK 当前能力做 best-effort 捕获。Anthropic SDK 路径当前使用 Anthropic SDK 原生客户端，不经过 Langfuse OpenAI wrapper。
 
 Langfuse SDK 会在后台排队发送事件。CLI 单次 chat、observe、Feishu 进程退出和 API server lifespan shutdown 都会复用 xAgent 的 flush 路径，尽量在进程结束前提交观测事件。flush 失败只会写 warning，不会阻止消息或记忆落盘。
 
@@ -223,7 +225,7 @@ output_schema:
       description: Short weather condition summary
 ```
 
-启用结构化输出后，Agent 会使用 JSON object 模式，并且内部会关闭流式文本增量。即使请求里传 `stream: true`，SSE/WebSocket 也会返回一个完整 `message`，而不是多个 `delta`。
+启用结构化输出后，Agent 会关闭流式文本增量。官方 OpenAI Responses 路径会使用 `text.format` 的 JSON schema；OpenAI-compatible Chat Completions 路径会使用 JSON object 模式；Anthropic Messages 路径会通过 schema prompt 约束输出并做 Pydantic 校验。即使请求里传 `stream: true`，SSE/WebSocket 也会返回一个完整 `message`，而不是多个 `delta`。
 
 ### 2.6 identity.md
 

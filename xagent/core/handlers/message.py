@@ -570,6 +570,7 @@ class MessageHandler:
         """Remove leading tool result messages, which are invalid without a prior assistant tool call."""
         while input_messages and (
             input_messages[0].get("type") == MessageType.FUNCTION_CALL_OUTPUT
+            or input_messages[0].get("type") == MessageType.FUNCTION_CALL_OUTPUT.value
             or input_messages[0].get("role") == RoleType.TOOL.value
         ):
             input_messages.pop(0)

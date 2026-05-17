@@ -12,6 +12,9 @@ from pydantic import BaseModel
 from ...schemas.memory import DiaryEntry, PeopleProfileUpdates, SummaryOutput
 
 
+DEFAULT_OPENAI_CHAT_MODEL_API = "openai_chat_completions"
+
+
 class JournalLLMService:
     """Format conversation snippets and summaries for the diary memory store."""
 
@@ -19,13 +22,13 @@ class JournalLLMService:
         self,
         client: Optional[Any] = None,
         model: str = "gpt-5.4-mini",
-        backend: str = "openai",
+        model_api: str = DEFAULT_OPENAI_CHAT_MODEL_API,
         max_tokens: int = 4096,
     ) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.client = client or AsyncOpenAI()
         self.model = model
-        self.backend = backend
+        self.model_api = model_api
         self.max_tokens = max_tokens
 
     async def format_diary_entry(
@@ -213,7 +216,7 @@ Diary entry already written:
         model_client = ModelClient(
             client=self.client,
             model=self.model,
-            backend=self.backend,
+            model_api=self.model_api,
             max_tokens=self.max_tokens,
         )
         reply_type, payload = await model_client.call(

@@ -4,6 +4,7 @@ import logging
 from typing import Any, Optional
 
 from ..config import AgentConfig
+from ..providers import MODEL_API_OPENAI_CHAT_COMPLETIONS, MODEL_API_OPENAI_RESPONSES, normalize_model_api
 from .manager import ToolManager
 from ...components import MessageStorageBase
 from ...utils.image_utils import extract_source, is_image_output
@@ -20,10 +21,12 @@ class ToolExecutor:
         tool_manager: ToolManager,
         message_storage: MessageStorageBase,
         client: Any,
+        model_api: str = MODEL_API_OPENAI_CHAT_COMPLETIONS,
     ):
         self.tool_manager = tool_manager
         self.message_storage = message_storage
         self.client = client
+        self.model_api = normalize_model_api(model_api)
 
     async def handle_tool_calls(
         self,
@@ -44,18 +47,22 @@ class ToolExecutor:
         if not function_calls:
             return None
 
-        assistant_message = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [self._to_chat_tool_call(tc) for tc in function_calls],
-        }
-        reasoning_content = self._tool_reasoning_content(function_calls[0])
-        if reasoning_content is not None:
-            assistant_message["reasoning_content"] = reasoning_content
-        content_blocks = self._tool_content_blocks(function_calls[0])
-        if content_blocks is not None:
-            assistant_message["content_blocks"] = content_blocks
-        input_messages.append(assistant_message)
+        is_responses_call = self._has_responses_replay_items(function_calls)
+        if is_responses_call:
+            input_messages.extend(self._responses_replay_items(function_calls))
+        else:
+            assistant_message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [self._to_chat_tool_call(tc) for tc in function_calls],
+            }
+            reasoning_content = self._tool_reasoning_content(function_calls[0])
+            if reasoning_content is not None:
+                assistant_message["reasoning_content"] = reasoning_content
+            content_blocks = self._tool_content_blocks(function_calls[0])
+            if content_blocks is not None:
+                assistant_message["content_blocks"] = content_blocks
+            input_messages.append(assistant_message)
 
         semaphore = asyncio.Semaphore(max_concurrent_tools)
 
@@ -70,7 +77,11 @@ class ToolExecutor:
         pending_descriptions = []
 
         for tool_message, image_data, description in results:
-            input_messages.append(tool_message)
+            input_messages.append(
+                self._to_responses_tool_result(tool_message)
+                if is_responses_call
+                else tool_message
+            )
             if image_data:
                 pending_images.append(image_data)
             if description:
@@ -138,6 +149,22 @@ class ToolExecutor:
             caption_prompt += f"\n\nOriginal generation prompt: \"{prompt_hint}\""
 
         try:
+            if self.model_api == MODEL_API_OPENAI_RESPONSES:
+                response = await self.client.responses.create(
+                    model=AgentConfig.IMAGE_CAPTION_MODEL,
+                    input=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": caption_prompt},
+                            {"type": "input_image", "image_url": image_data_uri},
+                        ],
+                    }],
+                    store=False,
+                )
+                caption = self._extract_responses_caption(response)
+                if caption.strip():
+                    return caption.strip()
+
             response = await self.client.chat.completions.create(
                 model=AgentConfig.IMAGE_CAPTION_MODEL,
                 messages=[{
@@ -195,6 +222,22 @@ class ToolExecutor:
         return cls._field(tool_call, "content_blocks")
 
     @classmethod
+    def _tool_response_items(cls, tool_call) -> Optional[list[dict]]:
+        return cls._field(tool_call, "response_items")
+
+    @classmethod
+    def _has_responses_replay_items(cls, tool_calls: list) -> bool:
+        return any(cls._tool_response_items(tool_call) for tool_call in tool_calls)
+
+    @classmethod
+    def _responses_replay_items(cls, tool_calls: list) -> list[dict]:
+        for tool_call in tool_calls:
+            response_items = cls._tool_response_items(tool_call)
+            if response_items:
+                return [dict(item) for item in response_items]
+        return []
+
+    @classmethod
     def _to_chat_tool_call(cls, tool_call) -> dict:
         return {
             "id": cls._tool_call_id(tool_call),
@@ -212,6 +255,29 @@ class ToolExecutor:
             "tool_call_id": call_id,
             "content": content,
         }
+
+    @staticmethod
+    def _to_responses_tool_result(tool_message: dict) -> dict:
+        return {
+            "type": "function_call_output",
+            "call_id": tool_message.get("tool_call_id") or "call_0",
+            "output": tool_message.get("content") or "",
+        }
+
+    @classmethod
+    def _extract_responses_caption(cls, response: Any) -> str:
+        output_text = cls._field(response, "output_text")
+        if isinstance(output_text, str) and output_text:
+            return output_text
+        text_parts = []
+        for output_item in cls._field(response, "output", []) or []:
+            if cls._field(output_item, "type") != "message":
+                continue
+            for content_item in cls._field(output_item, "content", []) or []:
+                text = cls._field(content_item, "text")
+                if isinstance(text, str):
+                    text_parts.append(text)
+        return "".join(text_parts)
 
     @staticmethod
     def _format_preview(text: str) -> str:

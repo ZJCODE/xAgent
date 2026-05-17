@@ -8,6 +8,7 @@ from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent
 from xagent.core.handlers.message import MessageHandler
+from xagent.core.providers import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_OPENAI_RESPONSES
 from xagent.core.tools.executor import ToolExecutor
 from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
@@ -144,10 +145,23 @@ class FakeChatCompletions:
         return self.responses.pop(0)
 
 
-class FakeOpenAIClient:
+class FakeResponses:
     def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.responses.pop(0)
+
+
+class FakeOpenAIClient:
+    def __init__(self, responses=None, response_api_responses=None):
+        responses = responses or []
         self.chat_completions = FakeChatCompletions(responses)
         self.chat = SimpleNamespace(completions=self.chat_completions)
+        self.responses_api = FakeResponses(response_api_responses or [])
+        self.responses = self.responses_api
 
 
 class FakeAnthropicMessages:
@@ -190,6 +204,10 @@ def _chat_response(content=None, tool_calls=None, reasoning_content=None):
 
 def _anthropic_response(content):
     return SimpleNamespace(content=content, stop_reason="end_turn")
+
+
+def _responses_response(output_text=None, output=None):
+    return SimpleNamespace(output_text=output_text, output=output or [])
 
 
 class StructuredAnswer(BaseModel):
@@ -244,6 +262,102 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["messages"][1], {"role": "user", "content": "hello"})
         self.assertEqual(call["tool_choice"], "auto")
 
+    async def test_call_uses_responses_api_when_selected(self):
+        client = FakeOpenAIClient(response_api_responses=[_responses_response(output_text="ok")])
+        model = ModelClient(
+            client=client,
+            model="test-model",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "hello"}],
+            tool_specs=[{
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Look up data",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }],
+            instructions=[{"role": "system", "name": "core", "content": "Core Rules"}],
+        )
+
+        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
+        self.assertEqual(payload, "ok")
+        call = client.responses_api.calls[0]
+        self.assertEqual(call["model"], "test-model")
+        self.assertEqual(call["instructions"], "Core Rules")
+        self.assertEqual(call["input"], [{"role": "user", "content": "hello"}])
+        self.assertFalse(call["store"])
+        self.assertEqual(call["tool_choice"], "auto")
+        self.assertEqual(call["include"], ["reasoning.encrypted_content"])
+        self.assertEqual(
+            call["tools"],
+            [{
+                "type": "function",
+                "name": "lookup",
+                "description": "Look up data",
+                "parameters": {"type": "object", "properties": {}},
+                "strict": False,
+            }],
+        )
+
+    async def test_responses_structured_output_uses_text_format(self):
+        client = FakeOpenAIClient(response_api_responses=[
+            _responses_response(output_text='{"answer": "ok"}')
+        ])
+        model = ModelClient(
+            client=client,
+            model="test-model",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "answer as json"}],
+            tool_specs=None,
+            instructions="Return JSON",
+            output_type=StructuredAnswer,
+        )
+
+        self.assertEqual(reply_type, ReplyType.STRUCTURED_REPLY)
+        self.assertEqual(payload.answer, "ok")
+        call = client.responses_api.calls[0]
+        self.assertEqual(call["text"]["format"]["type"], "json_schema")
+        self.assertEqual(call["text"]["format"]["name"], "StructuredAnswer")
+        self.assertFalse(call["text"]["format"]["strict"])
+        self.assertIn("JSON schema", call["instructions"])
+
+    async def test_responses_tool_call_preserves_replay_items(self):
+        response_items = [
+            {"type": "reasoning", "encrypted_content": "encrypted"},
+            {
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "lookup",
+                "arguments": '{"query": "x"}',
+            },
+        ]
+        client = FakeOpenAIClient(response_api_responses=[
+            _responses_response(output=response_items)
+        ])
+        model = ModelClient(
+            client=client,
+            model="test-model",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "lookup"}],
+            tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+        )
+
+        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
+        self.assertEqual(payload[0].call_id, "call-1")
+        self.assertEqual(payload[0].name, "lookup")
+        self.assertEqual(payload[0].arguments, '{"query": "x"}')
+        self.assertEqual(payload[0].response_items, response_items)
+
     async def test_call_uses_anthropic_messages_backend(self):
         client = FakeAnthropicClient([
             _anthropic_response([{"type": "text", "text": "ok"}])
@@ -251,7 +365,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         model = ModelClient(
             client=client,
             model="MiniMax-M2.7",
-            backend="anthropic",
+            model_api=MODEL_API_ANTHROPIC_MESSAGES,
             max_tokens=1234,
         )
 
@@ -291,7 +405,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"query": "x"}},
         ]
         client = FakeAnthropicClient([_anthropic_response(response_blocks)])
-        model = ModelClient(client=client, model="MiniMax-M2.7", backend="anthropic")
+        model = ModelClient(client=client, model="MiniMax-M2.7", model_api=MODEL_API_ANTHROPIC_MESSAGES)
 
         reply_type, payload = await model.call(
             messages=[{"role": "user", "content": "hello"}],
@@ -315,7 +429,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         client = FakeAnthropicClient([
             _anthropic_response([{"type": "text", "text": "done"}])
         ])
-        model = ModelClient(client=client, model="MiniMax-M2.7", backend="anthropic")
+        model = ModelClient(client=client, model="MiniMax-M2.7", model_api=MODEL_API_ANTHROPIC_MESSAGES)
 
         await model.call(
             messages=[
@@ -476,6 +590,36 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(collected, ["Hel", "lo"])
         self.assertEqual(stored, ["Hello"])
 
+    async def test_responses_stream_text_yields_chunks_and_stores_final_text(self):
+        events = [
+            SimpleNamespace(type="response.output_text.delta", delta="Hel"),
+            SimpleNamespace(type="response.output_text.delta", delta="lo"),
+        ]
+        client = FakeOpenAIClient(response_api_responses=[AsyncChunkStream(events)])
+        model = ModelClient(
+            client=client,
+            model="test-model",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+        stored = []
+
+        async def store_reply(text):
+            stored.append(text)
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "hello"}],
+            tool_specs=None,
+            stream=True,
+            store_reply=store_reply,
+        )
+
+        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
+        collected = []
+        async for chunk in payload:
+            collected.append(chunk)
+        self.assertEqual(collected, ["Hel", "lo"])
+        self.assertEqual(stored, ["Hello"])
+
     async def test_stream_tool_calls_accumulates_split_arguments(self):
         chunks = [
             SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
@@ -509,6 +653,51 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
                 reasoning_content="I should call the lookup tool.",
             )],
         )
+
+    async def test_responses_stream_tool_calls_accumulates_split_arguments(self):
+        events = [
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=1,
+                item=SimpleNamespace(
+                    type="function_call",
+                    id="fc_1",
+                    call_id="call-1",
+                    name="lookup",
+                    arguments="",
+                ),
+            ),
+            SimpleNamespace(
+                type="response.function_call_arguments.delta",
+                output_index=1,
+                item_id="fc_1",
+                delta='{"value"',
+            ),
+            SimpleNamespace(
+                type="response.function_call_arguments.delta",
+                output_index=1,
+                item_id="fc_1",
+                delta=': "ok"}',
+            ),
+        ]
+        client = FakeOpenAIClient(response_api_responses=[AsyncChunkStream(events)])
+        model = ModelClient(
+            client=client,
+            model="test-model",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "lookup"}],
+            tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+            stream=True,
+        )
+
+        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
+        self.assertEqual(payload[0].call_id, "call-1")
+        self.assertEqual(payload[0].name, "lookup")
+        self.assertEqual(payload[0].arguments, '{"value": "ok"}')
+        self.assertEqual(payload[0].response_items[-1]["type"], "function_call")
 
     async def test_model_call_exception_returns_error_event(self):
         class FailingChatCompletions:
@@ -914,6 +1103,64 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         self.assertEqual(messages[1]["reasoning_content"], "I need this tool result before answering.")
+
+    async def test_handle_tool_calls_appends_responses_replay_items_and_outputs(self):
+        async def lookup() -> str:
+            return "ok"
+
+        response_items = [
+            {"type": "reasoning", "encrypted_content": "encrypted"},
+            {
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "lookup",
+                "arguments": "{}",
+            },
+        ]
+        storage = InMemoryMessageStorage()
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"lookup": lookup}),
+            message_storage=storage,
+            client=None,
+        )
+        messages = [{"role": "user", "content": "run tool"}]
+
+        result = await executor.handle_tool_calls(
+            [ChatToolCall(
+                call_id="call-1",
+                name="lookup",
+                arguments="{}",
+                response_items=response_items,
+            )],
+            messages,
+            max_concurrent_tools=1,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(messages[1], response_items[0])
+        self.assertEqual(messages[2], response_items[1])
+        self.assertEqual(
+            messages[3],
+            {"type": "function_call_output", "call_id": "call-1", "output": "ok"},
+        )
+
+    async def test_caption_image_can_use_responses_api(self):
+        client = FakeOpenAIClient(response_api_responses=[
+            _responses_response(output_text="A small generated chart.")
+        ])
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(),
+            message_storage=InMemoryMessageStorage(),
+            client=client,
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        caption = await executor._caption_image("data:image/png;base64,abc", "draw a chart")
+
+        self.assertEqual(caption, "A small generated chart.")
+        call = client.responses_api.calls[0]
+        self.assertFalse(call["store"])
+        self.assertEqual(call["input"][0]["content"][1]["type"], "input_image")
 
 
 if __name__ == "__main__":

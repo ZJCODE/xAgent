@@ -7,7 +7,12 @@ from unittest.mock import patch
 import yaml
 
 from xagent.core.config import AgentConfig
-from xagent.core.providers import provider_sdk
+from xagent.core.providers import (
+    MODEL_API_ANTHROPIC_MESSAGES,
+    MODEL_API_OPENAI_CHAT_COMPLETIONS,
+    MODEL_API_OPENAI_RESPONSES,
+    provider_model_api,
+)
 from xagent.interfaces.channels import enabled_channels_from_config
 from xagent.interfaces.cli import InitSelection, collect_init_selection, init_agent_directory
 from xagent.interfaces.base import BaseAgentRunner
@@ -46,14 +51,35 @@ class AgentConfigPromptTests(unittest.TestCase):
 
 
 class ProviderConfigTests(unittest.TestCase):
-    def test_provider_name_determines_default_sdk(self):
-        self.assertEqual(provider_sdk("openai"), "openai")
-        self.assertEqual(provider_sdk("deepseek"), "openai")
-        self.assertEqual(provider_sdk("minimax"), "anthropic")
-        self.assertEqual(provider_sdk("qwen"), "openai")
-        self.assertEqual(provider_sdk("anthropic"), "anthropic")
-        self.assertEqual(provider_sdk("custom", "openai"), "openai")
-        self.assertEqual(provider_sdk("custom", "anthropic"), "anthropic")
+    def test_provider_config_determines_model_api_protocol(self):
+        self.assertEqual(
+            provider_model_api({"name": "openai"}),
+            MODEL_API_OPENAI_RESPONSES,
+        )
+        self.assertEqual(
+            provider_model_api({"name": "deepseek"}),
+            MODEL_API_OPENAI_CHAT_COMPLETIONS,
+        )
+        self.assertEqual(
+            provider_model_api({"name": "qwen"}),
+            MODEL_API_OPENAI_CHAT_COMPLETIONS,
+        )
+        self.assertEqual(
+            provider_model_api({"name": "custom", "model_api": MODEL_API_OPENAI_CHAT_COMPLETIONS}),
+            MODEL_API_OPENAI_CHAT_COMPLETIONS,
+        )
+        self.assertEqual(
+            provider_model_api({"name": "custom", "sdk": "openai"}),
+            MODEL_API_OPENAI_CHAT_COMPLETIONS,
+        )
+        self.assertEqual(
+            provider_model_api({"name": "anthropic"}),
+            MODEL_API_ANTHROPIC_MESSAGES,
+        )
+        self.assertEqual(
+            provider_model_api({"name": "minimax"}),
+            MODEL_API_ANTHROPIC_MESSAGES,
+        )
 
     def test_provider_config_builds_openai_compatible_client(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -73,6 +99,7 @@ provider:
 
             self.assertEqual(runner.agent.system_prompt, "You are a test assistant.")
             self.assertEqual(runner.agent.model, "deepseek-v4-pro")
+            self.assertEqual(runner.agent.model_api, MODEL_API_OPENAI_RESPONSES)
             self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.openai.com/v1")
 
     def test_provider_config_builds_anthropic_client(self):
@@ -96,8 +123,8 @@ search:
 
             self.assertEqual(runner.agent.model, "MiniMax-M2.7")
             self.assertNotIn("backend", runner.config["provider"])
-            self.assertEqual(runner.agent.model_backend, "anthropic")
-            self.assertEqual(runner.agent.model_client.backend, "anthropic")
+            self.assertEqual(runner.agent.model_api, MODEL_API_ANTHROPIC_MESSAGES)
+            self.assertEqual(runner.agent.model_client.model_api, MODEL_API_ANTHROPIC_MESSAGES)
             self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.minimaxi.com/anthropic")
 
     def test_provider_config_rejects_backend_key(self):
@@ -118,7 +145,7 @@ provider:
             with self.assertRaisesRegex(ValueError, r"Unsupported provider key\(s\): backend"):
                 BaseAgentRunner(config_dir=tmpdir)
 
-    def test_provider_config_requires_sdk_for_custom_provider(self):
+    def test_provider_config_requires_model_api_for_custom_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -133,17 +160,17 @@ provider:
             )
             write_identity(tmpdir)
 
-            with self.assertRaisesRegex(ValueError, "provider.sdk is required"):
+            with self.assertRaisesRegex(ValueError, "provider.model_api is required"):
                 BaseAgentRunner(config_dir=tmpdir)
 
-    def test_provider_config_uses_custom_anthropic_sdk(self):
+    def test_provider_config_uses_custom_anthropic_model_api(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
                 """
 provider:
     name: "custom"
-    sdk: "anthropic"
+    model_api: "anthropic_messages"
     model: "custom-model"
     base_url: "https://api.example.com/anthropic"
     api_key: "test-key"
@@ -156,8 +183,53 @@ search:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertEqual(runner.agent.model_backend, "anthropic")
+            self.assertEqual(runner.agent.model_api, MODEL_API_ANTHROPIC_MESSAGES)
             self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.example.com/anthropic")
+
+    def test_deepseek_runner_uses_chat_completions_protocol(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    base_url: "https://api.deepseek.com"
+    api_key: "test-key"
+search:
+    provider: "none"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertEqual(runner.agent.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
+            self.assertEqual(runner.agent.model_client.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
+
+    def test_custom_openai_runner_uses_chat_completions_protocol(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "custom"
+    model_api: "openai_chat_completions"
+    model: "custom-model"
+    base_url: "https://api.example.com/v1"
+    api_key: "test-key"
+search:
+    provider: "none"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertEqual(runner.agent.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
+            self.assertEqual(runner.agent.model_client.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
 
     def test_default_run_command_is_not_configured_in_yaml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -200,6 +272,7 @@ provider:
             self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
             self.assertEqual(config["provider"]["name"], "openai")
             self.assertNotIn("backend", config["provider"])
+            self.assertNotIn("model_api", config["provider"])
             self.assertNotIn("sdk", config["provider"])
             self.assertEqual(config["search"]["provider"], "openai")
             self.assertNotIn("enabled", config["channels"]["api"])
@@ -300,6 +373,7 @@ provider:
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
             self.assertEqual(config["provider"]["name"], "deepseek")
             self.assertNotIn("backend", config["provider"])
+            self.assertNotIn("model_api", config["provider"])
             self.assertNotIn("sdk", config["provider"])
             self.assertEqual(config["search"]["provider"], "none")
             self.assertEqual(result.identity_path.read_text(encoding="utf-8"), "# Identity\n\nYou report weather.\n")
@@ -322,11 +396,11 @@ provider:
             self.assertEqual(config["search"]["provider"], "openai")
             self.assertEqual(config["search"]["api_key"], "openai-search-key")
 
-    def test_init_writes_sdk_only_for_custom_provider(self):
+    def test_init_writes_model_api_only_for_custom_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
                 provider="custom",
-                sdk="anthropic",
+                model_api=MODEL_API_ANTHROPIC_MESSAGES,
                 base_url="https://api.example.com/anthropic",
                 api_key="secret-key",
                 model="custom-model",
@@ -337,7 +411,8 @@ provider:
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
             self.assertEqual(config["provider"]["name"], "custom")
-            self.assertEqual(config["provider"]["sdk"], "anthropic")
+            self.assertEqual(config["provider"]["model_api"], MODEL_API_ANTHROPIC_MESSAGES)
+            self.assertNotIn("sdk", config["provider"])
             self.assertNotIn("backend", config["provider"])
 
     def test_init_writes_observability_only_when_enabled(self):
@@ -385,7 +460,7 @@ provider:
         )
 
         self.assertEqual(selection.provider, "openai")
-        self.assertEqual(selection.sdk, "")
+        self.assertEqual(selection.model_api, "")
         self.assertEqual(selection.base_url, "https://api.openai.com/v1")
         self.assertEqual(selection.api_key, "openai-key")
         self.assertEqual(selection.model, "gpt-5.5")
@@ -414,7 +489,7 @@ provider:
         self.assertEqual(selection.langfuse_secret_key, "sk-lf-test")
         self.assertEqual(selection.langfuse_base_url, "https://jp.cloud.langfuse.com")
 
-    def test_collect_init_selection_skips_langfuse_prompt_for_anthropic_sdk(self):
+    def test_collect_init_selection_skips_langfuse_prompt_for_anthropic_protocol(self):
         answers = iter([
             "5",
             "",
@@ -431,10 +506,10 @@ provider:
         self.assertFalse(selection.observability_enabled)
         self.assertNotIn("Enable Langfuse observability?", stdout.getvalue())
 
-    def test_collect_init_selection_skips_langfuse_prompt_for_custom_anthropic_sdk(self):
+    def test_collect_init_selection_skips_langfuse_prompt_for_custom_anthropic_protocol(self):
         answers = iter([
             "6",
-            "2",
+            "3",
             "",
             "1",
             ".",
@@ -446,11 +521,11 @@ provider:
                 secret_input_func=lambda prompt: "custom-key",
             )
 
-        self.assertEqual(selection.sdk, "anthropic")
+        self.assertEqual(selection.model_api, MODEL_API_ANTHROPIC_MESSAGES)
         self.assertFalse(selection.observability_enabled)
         self.assertNotIn("Enable Langfuse observability?", stdout.getvalue())
 
-    def test_collect_init_selection_prompts_langfuse_for_custom_openai_sdk(self):
+    def test_collect_init_selection_prompts_langfuse_for_custom_openai_protocol(self):
         answers = iter([
             "6",
             "1",
@@ -468,7 +543,7 @@ provider:
             secret_input_func=lambda prompt: next(secrets),
         )
 
-        self.assertEqual(selection.sdk, "openai")
+        self.assertEqual(selection.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
         self.assertTrue(selection.observability_enabled)
         self.assertEqual(selection.langfuse_public_key, "pk-lf-test")
         self.assertEqual(selection.langfuse_secret_key, "sk-lf-test")
@@ -489,7 +564,7 @@ provider:
         )
 
         self.assertEqual(selection.provider, "deepseek")
-        self.assertEqual(selection.sdk, "")
+        self.assertEqual(selection.model_api, "")
         self.assertEqual(selection.base_url, "https://api.deepseek.com")
         self.assertEqual(selection.api_key, "your_api_key_here")
         self.assertEqual(selection.model, "your_model_here")
@@ -511,7 +586,7 @@ provider:
         )
 
         self.assertEqual(selection.provider, "qwen")
-        self.assertEqual(selection.sdk, "")
+        self.assertEqual(selection.model_api, "")
         self.assertEqual(selection.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1")
         self.assertEqual(selection.api_key, "qwen-key")
         self.assertEqual(selection.model, "qwen3.6-max-preview")
@@ -555,7 +630,7 @@ provider:
         self.assertEqual(selection.search_provider, "brave")
         self.assertEqual(selection.search_api_key, "brave-key")
 
-    def test_collect_init_selection_supports_minimax_provider_with_builtin_anthropic_sdk(self):
+    def test_collect_init_selection_supports_minimax_provider_with_builtin_anthropic_protocol(self):
         answers = iter([
             "3",
             "",
@@ -569,7 +644,7 @@ provider:
             secret_input_func=lambda prompt: "minimax-key",
         )
 
-        self.assertEqual(selection.sdk, "")
+        self.assertEqual(selection.model_api, "")
         self.assertEqual(selection.provider, "minimax")
         self.assertEqual(selection.base_url, "https://api.minimaxi.com/anthropic")
         self.assertEqual(selection.api_key, "minimax-key")
@@ -590,14 +665,14 @@ provider:
             secret_input_func=lambda prompt: "anthropic-key",
         )
 
-        self.assertEqual(selection.sdk, "")
+        self.assertEqual(selection.model_api, "")
         self.assertEqual(selection.provider, "anthropic")
         self.assertEqual(selection.base_url, "https://api.anthropic.com")
         self.assertEqual(selection.api_key, "anthropic-key")
         self.assertEqual(selection.model, "claude-sonnet-4-20250514")
         self.assertEqual(selection.search_provider, "duckduckgo")
 
-    def test_collect_init_selection_custom_provider_selects_sdk_before_base_url(self):
+    def test_collect_init_selection_custom_provider_selects_model_api_before_base_url(self):
         answers = iter([
             "6",
             "2",
@@ -613,8 +688,8 @@ provider:
         )
 
         self.assertEqual(selection.provider, "custom")
-        self.assertEqual(selection.sdk, "anthropic")
-        self.assertEqual(selection.base_url, "https://api.example.com/anthropic")
+        self.assertEqual(selection.model_api, MODEL_API_OPENAI_RESPONSES)
+        self.assertEqual(selection.base_url, "https://api.example.com/v1")
         self.assertEqual(selection.api_key, "custom-key")
         self.assertEqual(selection.model, "your_model_here")
         self.assertEqual(selection.search_provider, "duckduckgo")
