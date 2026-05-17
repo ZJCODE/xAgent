@@ -41,7 +41,7 @@ class ChatInput(BaseModel):
 class AgentInput(ChatInput):
     """Event request body for WebSocket chat."""
 
-    token_stream: Optional[bool] = False
+    stream: Optional[bool] = False
 
 
 class ObserveInput(BaseModel):
@@ -170,7 +170,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 max_iter=input_data.max_iter,
                 max_concurrent_tools=input_data.max_concurrent_tools,
                 image_source=input_data.image_source,
-                token_stream=bool(input_data.token_stream),
+                stream=bool(input_data.stream),
                 enable_memory=input_data.enable_memory,
                 private=input_data.private,
             )
@@ -416,9 +416,9 @@ class AgentHTTPServer(BaseAgentRunner):
                     raw_payload = await websocket.receive_json()
                     input_data = AgentInput.model_validate(raw_payload)
                     self.logger.info(
-                        "WebSocket chat request from %s, token_stream=%s",
+                        "WebSocket chat request from %s, stream=%s",
                         input_data.user_id,
-                        input_data.token_stream,
+                        input_data.stream,
                     )
                     await self._send_websocket_chat_events(websocket, input_data)
                 except WebSocketDisconnect:

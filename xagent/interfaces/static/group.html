@@ -554,7 +554,7 @@ async function sendMessage() {
   const payload = {
     user_id: seat.name.toLowerCase().replace(/\s+/g, '_'),
     user_message: text,
-    token_stream: true,
+    stream: true,
     enable_memory: false,
     private: false,
   };

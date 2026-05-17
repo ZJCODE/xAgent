@@ -557,8 +557,8 @@
           <div class="settings-actions">
             <div class="inline-switch">
               <label class="setting-toggle cursor-pointer">
-                <span class="setting-toggle-text">Token Stream</span>
-                <input id="optTokenStream" type="checkbox" checked />
+                <span class="setting-toggle-text">Stream</span>
+                <input id="optStream" type="checkbox" checked />
                 <span class="toggle-track" aria-hidden="true"></span>
               </label>
             </div>
@@ -631,7 +631,7 @@ function autoResize(textarea) {
 function saveGlobalSettings() {
   const settings = {
     userId: document.getElementById('userId').value,
-    tokenStream: document.getElementById('optTokenStream').checked,
+    stream: document.getElementById('optStream').checked,
     memory: document.getElementById('optMemory').checked,
     private: document.getElementById('optPrivate').checked,
     darkMode: document.documentElement.classList.contains('dark'),
@@ -644,7 +644,7 @@ function restoreGlobalSettings() {
   const settings = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
 
   document.getElementById('userId').value = settings.userId || 'web_user';
-  document.getElementById('optTokenStream').checked = settings.tokenStream !== false;
+  document.getElementById('optStream').checked = settings.stream !== false;
   document.getElementById('optMemory').checked = settings.memory !== false;
   document.getElementById('optPrivate').checked = !!settings.private;
   document.getElementById('optDual').checked = !!settings.dual;
@@ -724,8 +724,8 @@ function createChatPanel(panelId, containerEl, options = {}) {
         </label>
         <div class="inline-switch">
           <label class="setting-toggle cursor-pointer">
-            <span class="setting-toggle-text">Token</span>
-            <input data-pid="${panelId}_optTokenStream" type="checkbox" checked />
+            <span class="setting-toggle-text">Stream</span>
+            <input data-pid="${panelId}_optStream" type="checkbox" checked />
             <span class="toggle-track" aria-hidden="true"></span>
           </label>
         </div>
@@ -787,14 +787,14 @@ function createChatPanel(panelId, containerEl, options = {}) {
     if (showPanelSettings) {
       return {
         userId: (el('userId')?.value || '').trim() || 'web_user',
-        tokenStream: el('optTokenStream')?.checked ?? true,
+        stream: el('optStream')?.checked ?? true,
         memory: el('optMemory')?.checked ?? true,
         private: el('optPrivate')?.checked ?? false,
       };
     }
     return {
       userId: (document.getElementById('userId')?.value || '').trim() || 'web_user',
-      tokenStream: document.getElementById('optTokenStream')?.checked ?? true,
+      stream: document.getElementById('optStream')?.checked ?? true,
       memory: document.getElementById('optMemory')?.checked ?? true,
       private: document.getElementById('optPrivate')?.checked ?? false,
     };
@@ -811,8 +811,8 @@ function createChatPanel(panelId, containerEl, options = {}) {
     const s = JSON.parse(localStorage.getItem(settingsKey) || '{}');
     const userIdEl = el('userId');
     if (userIdEl) userIdEl.value = s.userId || (panelId === 'left' ? 'John' : 'Alice');
-    const streamEl = el('optTokenStream');
-    if (streamEl) streamEl.checked = s.tokenStream !== false;
+    const streamEl = el('optStream');
+    if (streamEl) streamEl.checked = s.stream !== false;
     const memoryEl = el('optMemory');
     if (memoryEl) memoryEl.checked = s.memory !== false;
     const privateEl = el('optPrivate');
@@ -1211,7 +1211,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
     const payload = {
       user_id: settings.userId,
       user_message: text,
-      token_stream: settings.tokenStream,
+      stream: settings.stream,
       enable_memory: settings.memory,
       private: settings.private,
     };
@@ -1357,7 +1357,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
 
     // Panel-level settings save
     if (showPanelSettings) {
-      ['userId', 'optTokenStream', 'optMemory', 'optPrivate'].forEach((suffix) => {
+      ['userId', 'optStream', 'optMemory', 'optPrivate'].forEach((suffix) => {
         const input = el(suffix);
         if (input) input.addEventListener('change', saveSettings);
       });
@@ -1491,7 +1491,7 @@ function updateGlobalPrivateIndicator() {
 /* ─── Global event wiring ─── */
 
 function bindGlobalEvents() {
-  ['userId', 'optTokenStream', 'optMemory', 'optPrivate'].forEach((id) => {
+  ['userId', 'optStream', 'optMemory', 'optPrivate'].forEach((id) => {
     document.getElementById(id).addEventListener('change', () => {
       saveGlobalSettings();
       updateGlobalPrivateIndicator();

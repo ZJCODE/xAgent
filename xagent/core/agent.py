@@ -212,7 +212,7 @@ class Agent:
         Args:
             stream: When True, return an async text generator for compatibility
                 with the legacy Python API. New event consumers should prefer
-                ``chat_events(token_stream=True)``.
+                ``chat_events(stream=True)``.
             private: When True, messages are stored in an isolated temporary
                 private buffer (discarded on switch back to normal mode). Memory
                 *reads* are preserved but all memory *writes* are suppressed.
@@ -229,7 +229,7 @@ class Agent:
                     max_iter=max_iter,
                     max_concurrent_tools=max_concurrent_tools,
                     image_source=image_source,
-                    token_stream=True,
+                    stream=True,
                     enable_memory=enable_memory,
                     private=private,
                 ):
@@ -256,7 +256,7 @@ class Agent:
                 max_iter=max_iter,
                 max_concurrent_tools=max_concurrent_tools,
                 image_source=image_source,
-                token_stream=False,
+                stream=False,
                 enable_memory=enable_memory,
                 private=private,
             ):
@@ -401,13 +401,13 @@ class Agent:
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
-        token_stream: bool = False,
+        stream: bool = False,
         enable_memory: bool = True,
         private: bool = False,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
-        ``token_stream`` only controls whether text is additionally exposed as
+        ``stream`` only controls whether text is additionally exposed as
         ``message_delta`` events. Message boundaries and tool progress are
         always eventized.
         """
@@ -431,7 +431,7 @@ class Agent:
                 message_id=message_id,
                 phase="final",
                 content=content,
-                token_stream=token_stream,
+                stream=stream,
             ):
                 yield event
             yield {"type": "done"}
@@ -446,7 +446,7 @@ class Agent:
             model=model_name,
             private=private,
             memory_mode=memory_mode.value,
-            stream=token_stream,
+            stream=stream,
         )
         entered_observability = False
 
@@ -500,11 +500,11 @@ class Agent:
                     messages=input_messages,
                     tool_specs=tool_specs,
                     instructions=instructions,
-                    token_stream=token_stream,
+                    stream=stream,
                 ):
                     if model_event.type in {"delta", "text"} and model_event.delta:
                         text_parts.append(model_event.delta)
-                        if token_stream:
+                        if stream:
                             if not message_started:
                                 yield ensure_live_message_started()
                             yield self._message_delta_event(
@@ -537,7 +537,7 @@ class Agent:
                                 message_id=message_id,
                                 phase="preface",
                                 content=visible_text,
-                                token_stream=token_stream,
+                                stream=stream,
                                 deltas=text_parts,
                             ):
                                 yield event
@@ -566,7 +566,7 @@ class Agent:
                             message_id=final_message_id,
                             phase="final",
                             content=image_data,
-                            token_stream=False,
+                            stream=False,
                         ):
                             yield event
                         assistant_msg = await msg_handler.store_model_reply(
@@ -593,7 +593,7 @@ class Agent:
                             message_id=message_id,
                             phase="final",
                             content=visible_text,
-                            token_stream=token_stream,
+                            stream=stream,
                             deltas=text_parts,
                         ):
                             yield event
@@ -797,11 +797,11 @@ class Agent:
         message_id: str,
         phase: str,
         content: str,
-        token_stream: bool,
+        stream: bool,
         deltas: Optional[list[str]] = None,
     ) -> list[dict]:
         events = [cls._message_start_event(message_id, phase)]
-        if token_stream:
+        if stream:
             chunks = deltas if deltas is not None else [content]
             events.extend(
                 cls._message_delta_event(message_id, phase, chunk)

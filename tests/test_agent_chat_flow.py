@@ -111,12 +111,12 @@ class CapturingStreamingModelClient(CapturingModelClient):
     def __init__(self, stream_turns):
         super().__init__(responses=[])
         self.stream_turns = list(stream_turns)
-        self.token_stream_calls = []
+        self.stream_calls = []
 
-    async def model_turn_events(self, messages, tool_specs, instructions=None, token_stream=False):
+    async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
         self.calls.append(messages)
         self.instructions_calls.append(instructions)
-        self.token_stream_calls.append(token_stream)
+        self.stream_calls.append(stream)
         for event in self.stream_turns.pop(0):
             yield event
 
@@ -125,12 +125,12 @@ class PausingStreamingModelClient(CapturingModelClient):
     def __init__(self, release_event):
         super().__init__(responses=[])
         self.release_event = release_event
-        self.token_stream_calls = []
+        self.stream_calls = []
 
-    async def model_turn_events(self, messages, tool_specs, instructions=None, token_stream=False):
+    async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
         self.calls.append(messages)
         self.instructions_calls.append(instructions)
-        self.token_stream_calls.append(token_stream)
+        self.stream_calls.append(stream)
         yield ModelStreamEvent(type="delta", delta="Hel")
         await self.release_event.wait()
         yield ModelStreamEvent(type="delta", delta="lo")
@@ -292,7 +292,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             event async for event in model.model_turn_events(
                 messages=[{"role": "user", "content": "lookup"}],
                 tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
-                token_stream=False,
+                stream=False,
             )
         ]
 
@@ -957,7 +957,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 user_id="bob",
                 history_count=10,
                 max_iter=3,
-                token_stream=True,
+                stream=True,
                 enable_memory=True,
             )
         ]
@@ -989,7 +989,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.messages[1].metadata["turn_phase"], "preface")
         self.assertEqual(storage.messages[2].metadata["turn_phase"], "final")
         self.assertEqual(memory_handler.experience_messages, [storage.messages[0], storage.messages[2]])
-        self.assertEqual(model_client.token_stream_calls, [True, True])
+        self.assertEqual(model_client.stream_calls, [True, True])
 
     async def test_chat_events_emits_delta_before_model_turn_finishes(self):
         storage = InMemoryMessageStorage()
@@ -1005,7 +1005,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             agent,
             user_message="Stream this",
             user_id="bob",
-            token_stream=True,
+            stream=True,
             enable_memory=False,
         ).__aiter__()
 
@@ -1026,7 +1026,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(remaining_events[1]["phase"], "final")
         self.assertEqual(remaining_events[1]["content"], "Hello")
         self.assertEqual(remaining_events[2], {"type": "done"})
-        self.assertEqual(model_client.token_stream_calls, [True])
+        self.assertEqual(model_client.stream_calls, [True])
 
     async def test_chat_stream_true_returns_live_text_generator(self):
         storage = InMemoryMessageStorage()
@@ -1052,10 +1052,10 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         collected = [chunk async for chunk in response]
         self.assertEqual(collected, ["Hel", "lo"])
-        self.assertEqual(model_client.token_stream_calls, [True])
+        self.assertEqual(model_client.stream_calls, [True])
         self.assertEqual(storage.messages[-1].content, "Hello")
 
-    async def test_chat_events_without_token_stream_emits_done_boundaries_only(self):
+    async def test_chat_events_without_stream_emits_done_boundaries_only(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingStreamingModelClient([
             [
@@ -1080,7 +1080,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 agent,
                 user_message="Where are we?",
                 user_id="bob",
-                token_stream=False,
+                stream=False,
                 enable_memory=True,
             )
         ]
@@ -1093,7 +1093,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 ("message_done", "final", "We are in /tmp."),
             ],
         )
-        self.assertEqual(model_client.token_stream_calls, [False, False])
+        self.assertEqual(model_client.stream_calls, [False, False])
 
     async def test_chat_wraps_turn_in_observability_context(self):
         storage = InMemoryMessageStorage()

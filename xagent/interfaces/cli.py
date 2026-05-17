@@ -71,18 +71,18 @@ class AgentCLI(BaseAgentRunner):
     async def chat_interactive(
         self,
         user_id: Optional[str] = None,
-        token_stream: Optional[bool] = None,
+        stream: Optional[bool] = None,
         memory: bool = True,
         private: bool = False,
     ):
-        if token_stream is None:
-            token_stream = not (logging.getLogger().level <= logging.INFO)
+        if stream is None:
+            stream = not (logging.getLogger().level <= logging.INFO)
 
         verbose_mode = logging.getLogger().level <= logging.INFO
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
 
         self._print_banner(
-            token_stream=token_stream,
+            stream=stream,
             memory=memory,
             private=private,
             verbose_mode=verbose_mode,
@@ -104,13 +104,13 @@ class AgentCLI(BaseAgentRunner):
                     print("🧹 ✨ Global message stream cleared.")
                     continue
 
-                if user_input.lower().startswith("token-stream "):
+                if user_input.lower().startswith("stream "):
                     stream_cmd = user_input.lower().split()
                     if len(stream_cmd) == 2 and stream_cmd[1] in {"on", "off"}:
-                        token_stream = stream_cmd[1] == "on"
-                        print(f"{'🌊' if token_stream else '📄'} ✨ Token streaming {'enabled' if token_stream else 'disabled'}.")
+                        stream = stream_cmd[1] == "on"
+                        print(f"{'🌊' if stream else '📄'} ✨ Streaming {'enabled' if stream else 'disabled'}.")
                     else:
-                        print("⚠️  Usage: token-stream on/off")
+                        print("⚠️  Usage: stream on/off")
                     continue
 
                 if user_input.lower().startswith("memory "):
@@ -154,7 +154,7 @@ class AgentCLI(BaseAgentRunner):
                     user_id=user_id,
                     enable_memory=memory,
                     private=private,
-                    token_stream=token_stream,
+                    stream=stream,
                 )
 
             except KeyboardInterrupt:
@@ -189,7 +189,7 @@ class AgentCLI(BaseAgentRunner):
         self,
         message: str,
         user_id: Optional[str] = None,
-        token_stream: bool = False,
+        stream: bool = False,
         memory: bool = True,
         private: bool = False,
     ) -> None:
@@ -197,7 +197,7 @@ class AgentCLI(BaseAgentRunner):
         await self._print_chat_events(
             user_message=message,
             user_id=user_id,
-            token_stream=token_stream,
+            stream=stream,
             enable_memory=memory,
             private=private,
         )
@@ -207,7 +207,7 @@ class AgentCLI(BaseAgentRunner):
         *,
         user_message: str,
         user_id: str,
-        token_stream: bool,
+        stream: bool,
         enable_memory: bool,
         private: bool,
     ) -> None:
@@ -216,7 +216,7 @@ class AgentCLI(BaseAgentRunner):
         async for event in self.agent.chat_events(
             user_message=user_message,
             user_id=user_id,
-            token_stream=token_stream,
+            stream=stream,
             enable_memory=enable_memory,
             private=private,
         ):
@@ -263,7 +263,7 @@ class AgentCLI(BaseAgentRunner):
 
     def _print_banner(
         self,
-        token_stream: bool,
+        stream: bool,
         memory: bool,
         private: bool,
         verbose_mode: bool,
@@ -281,7 +281,7 @@ class AgentCLI(BaseAgentRunner):
         print(
             "Status: "
             f"verbose={'on' if verbose_mode else 'off'}, "
-            f"token_stream={'on' if token_stream else 'off'}, "
+            f"stream={'on' if stream else 'off'}, "
             f"memory={'on' if memory else 'off'}, "
             f"private={'on' if private else 'off'}"
         )
@@ -292,7 +292,7 @@ class AgentCLI(BaseAgentRunner):
         print("\nChat commands:")
         print("  exit, quit, bye    Exit the chat session")
         print("  clear              Clear the agent message stream")
-        print("  token-stream on/off Toggle token delta printing")
+        print("  stream on/off      Toggle streamed delta printing")
         print("  memory on/off      Toggle memory storage mode")
         print("  private on/off     Toggle private ephemeral mode")
         print("  help               Show this help message")
@@ -949,10 +949,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use segmented event output for a single message",
     )
     chat_parser.add_argument(
-        "--token-stream",
+        "--stream",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Print message delta events as they are emitted in event mode",
+        help="Print message deltas as they are emitted in event mode",
     )
     chat_parser.add_argument(
         "--memory",
@@ -1135,7 +1135,7 @@ def handle_chat(args: argparse.Namespace) -> int:
             try:
                 await agent_cli.chat_interactive(
                     user_id=args.user_id,
-                    token_stream=args.token_stream,
+                    stream=args.stream,
                     memory=args.memory,
                     private=args.private,
                 )
@@ -1145,8 +1145,8 @@ def handle_chat(args: argparse.Namespace) -> int:
         asyncio.run(run_interactive_chat())
         return 0
 
-    event_mode = bool(args.events or args.token_stream is not None)
-    token_stream = bool(args.token_stream) if args.token_stream is not None else False
+    event_mode = bool(args.events or args.stream is not None)
+    stream = bool(args.stream) if args.stream is not None else False
 
     async def run_single_message():
         try:
@@ -1154,7 +1154,7 @@ def handle_chat(args: argparse.Namespace) -> int:
                 await agent_cli.print_single_chat_events(
                     message=args.message,
                     user_id=args.user_id,
-                    token_stream=token_stream,
+                    stream=stream,
                     memory=args.memory,
                     private=args.private,
                 )

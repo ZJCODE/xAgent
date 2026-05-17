@@ -93,7 +93,7 @@ Memory writes are buffered for efficiency, then flushed by batch size, by a stal
 
 `POST /chat` remains the final-only HTTP interface and returns `{"reply": ...}`.
 
-`/ws/chat` is the realtime event protocol. It returns JSON frames such as `message_start`, `message_delta`, `message_done`, `tool_call`, `tool_result`, `error`, and `done`; `token_stream` only controls whether text deltas are emitted.
+`/ws/chat` is the realtime event protocol. It returns JSON frames such as `message_start`, `message_delta`, `message_done`, `tool_call`, `tool_result`, `error`, and `done`; `stream` controls whether text deltas are emitted.
 
 `/ws/observe` accepts the same observe JSON over WebSocket and returns `result`, `error`, and `done` frames.
 

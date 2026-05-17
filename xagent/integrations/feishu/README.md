@@ -157,7 +157,7 @@ assistant segment (`message_done`) is sent as its own markdown message, so a
 preface such as “我去看看” can appear before tool execution and the final answer
 can arrive as a later message.
 
-Set `channels.feishu.token_stream: true` to use `FeishuChannel.stream(...)` for
+Set `channels.feishu.stream: true` to use `FeishuChannel.stream(...)` for
 the current segment. This only controls whether text deltas update the active
 Feishu card; segmented message boundaries are always enabled.
 

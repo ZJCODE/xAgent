@@ -216,7 +216,7 @@ class ModelClient:
             messages=messages,
             tool_specs=tool_specs,
             instructions=instructions,
-            token_stream=True,
+            stream=True,
         ):
             yield event
 
@@ -225,11 +225,11 @@ class ModelClient:
         messages: list,
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
-        token_stream: bool = False,
+        stream: bool = False,
     ) -> AsyncGenerator[ModelStreamEvent, None]:
         """Emit visible model text and finalized tool calls for one model turn."""
         try:
-            if not token_stream:
+            if not stream:
                 async for event in self._non_stream_turn_events(
                     messages=messages,
                     tool_specs=tool_specs,

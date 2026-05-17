@@ -64,9 +64,9 @@ class FastStreamingAgent:
         return "ok"
 
     async def chat_events(self, **kwargs):
-        token_stream = bool(kwargs.get("token_stream"))
+        stream = bool(kwargs.get("stream"))
         yield {"type": "message_start", "message_id": "m1", "phase": "final"}
-        if token_stream:
+        if stream:
             yield {"type": "message_delta", "delta": "hel", "message_id": "m1", "phase": "final"}
             yield {"type": "message_delta", "delta": "lo", "message_id": "m1", "phase": "final"}
         yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "hello"}
@@ -75,15 +75,15 @@ class FastStreamingAgent:
 
 class EventStreamingAgent(FastStreamingAgent):
     async def chat_events(self, **kwargs):
-        token_stream = bool(kwargs.get("token_stream"))
+        stream = bool(kwargs.get("stream"))
         yield {"type": "message_start", "message_id": "m1", "phase": "preface"}
-        if token_stream:
+        if stream:
             yield {"type": "message_delta", "delta": "checking", "message_id": "m1", "phase": "preface"}
         yield {"type": "message_done", "message_id": "m1", "phase": "preface", "content": "checking"}
         yield {"type": "tool_call", "call_id": "call-1", "name": "run_command"}
         yield {"type": "tool_result", "call_id": "call-1", "name": "run_command"}
         yield {"type": "message_start", "message_id": "m2", "phase": "final"}
-        if token_stream:
+        if stream:
             yield {"type": "message_delta", "delta": "done", "message_id": "m2", "phase": "final"}
         yield {"type": "message_done", "message_id": "m2", "phase": "final", "content": "done"}
         yield {"type": "done"}
@@ -261,7 +261,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
 
         self.assertTrue(agent.flushed)
 
-    def test_websocket_chat_token_stream_false_returns_done_boundaries(self):
+    def test_websocket_chat_stream_false_returns_done_boundaries(self):
         server = AgentHTTPServer(agent=FastStreamingAgent(), enable_web=False)
 
         with TestClient(server.app) as client:
@@ -269,7 +269,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
                 websocket.send_json({
                     "user_id": "alice",
                     "user_message": "hello",
-                    "token_stream": False,
+                    "stream": False,
                 })
 
                 self.assertEqual(websocket.receive_json(), {
@@ -285,15 +285,15 @@ class AgentWebSocketServerTests(unittest.TestCase):
                 })
                 self.assertEqual(websocket.receive_json(), {"type": "done"})
 
-    def test_websocket_chat_token_stream_true_emits_deltas_and_done(self):
+    def test_websocket_chat_stream_true_emits_deltas_and_done(self):
         server = AgentHTTPServer(agent=FastStreamingAgent(), enable_web=False)
 
         with TestClient(server.app) as client:
             with client.websocket_connect("/ws/chat") as websocket:
                 websocket.send_json({
                     "user_id": "alice",
-                    "user_message": "token stream please",
-                    "token_stream": True,
+                    "user_message": "stream please",
+                    "stream": True,
                 })
 
                 self.assertEqual(websocket.receive_json(), {
@@ -329,7 +329,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
                 websocket.send_json({
                     "user_id": "alice",
                     "user_message": "where are we",
-                    "token_stream": True,
+                    "stream": True,
                 })
 
                 self.assertEqual(websocket.receive_json(), {
@@ -391,8 +391,8 @@ class AgentWebSocketServerTests(unittest.TestCase):
             with client.websocket_connect("/ws/chat") as websocket:
                 websocket.send_json({
                     "user_id": "alice",
-                    "user_message": "token stream timeout",
-                    "token_stream": True,
+                    "user_message": "stream timeout",
+                    "stream": True,
                 })
 
                 self.assertEqual(websocket.receive_json(), {

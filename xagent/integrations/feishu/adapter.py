@@ -889,7 +889,7 @@ class FeishuAdapter:
         if not callable(chat_events):
             raise RuntimeError("Agent does not support chat_events().")
 
-        if self.config.token_stream and callable(getattr(self._channel, "stream", None)):
+        if self.config.stream and callable(getattr(self._channel, "stream", None)):
             await self._send_event_streaming_cards(
                 chat_id=chat_id,
                 message_id=message_id,
@@ -901,7 +901,7 @@ class FeishuAdapter:
 
         anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         sent_count = 0
-        async for event in chat_events(**chat_kwargs, token_stream=False):
+        async for event in chat_events(**chat_kwargs, stream=False):
             event_type = event.get("type")
             if event_type == "message_done":
                 content = str(event.get("content") or "").strip()
@@ -992,7 +992,7 @@ class FeishuAdapter:
             active_task = None
             active_has_delta = False
 
-        async for event in chat_events(**chat_kwargs, token_stream=True):
+        async for event in chat_events(**chat_kwargs, stream=True):
             event_type = event.get("type")
             if event_type == "message_start":
                 if active_queue is not None:

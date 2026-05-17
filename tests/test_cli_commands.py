@@ -122,11 +122,11 @@ class CLICommandTests(unittest.TestCase):
             "chat",
             "Hello",
             "--events",
-            "--token-stream",
+            "--stream",
         ])
 
         self.assertTrue(args.events)
-        self.assertTrue(args.token_stream)
+        self.assertTrue(args.stream)
 
     def test_interactive_chat_exit_flushes_with_status_message(self):
         class FakeAgent:
@@ -153,7 +153,7 @@ class CLICommandTests(unittest.TestCase):
                 config_dir=tmpdir,
                 user_id=None,
                 verbose=False,
-                token_stream=None,
+                stream=None,
                 events=False,
                 memory=True,
                 private=False,
@@ -200,7 +200,7 @@ class CLICommandTests(unittest.TestCase):
                 config_dir=tmpdir,
                 user_id="alice",
                 verbose=False,
-                token_stream=None,
+                stream=None,
                 events=False,
                 memory=True,
                 private=False,
