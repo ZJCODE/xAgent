@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from types import SimpleNamespace
 
@@ -118,6 +119,21 @@ class CapturingStreamingModelClient(CapturingModelClient):
         self.token_stream_calls.append(token_stream)
         for event in self.stream_turns.pop(0):
             yield event
+
+
+class PausingStreamingModelClient(CapturingModelClient):
+    def __init__(self, release_event):
+        super().__init__(responses=[])
+        self.release_event = release_event
+        self.token_stream_calls = []
+
+    async def model_turn_events(self, messages, tool_specs, instructions=None, token_stream=False):
+        self.calls.append(messages)
+        self.instructions_calls.append(instructions)
+        self.token_stream_calls.append(token_stream)
+        yield ModelStreamEvent(type="delta", delta="Hel")
+        await self.release_event.wait()
+        yield ModelStreamEvent(type="delta", delta="lo")
 
 
 class FakeToolExecutor:
@@ -974,6 +990,70 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.messages[2].metadata["turn_phase"], "final")
         self.assertEqual(memory_handler.experience_messages, [storage.messages[0], storage.messages[2]])
         self.assertEqual(model_client.token_stream_calls, [True, True])
+
+    async def test_chat_events_emits_delta_before_model_turn_finishes(self):
+        storage = InMemoryMessageStorage()
+        release_event = asyncio.Event()
+        model_client = PausingStreamingModelClient(release_event)
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            memory_handler=FakeMemoryHandler(),
+        )
+
+        events = Agent.chat_events(
+            agent,
+            user_message="Stream this",
+            user_id="bob",
+            token_stream=True,
+            enable_memory=False,
+        ).__aiter__()
+
+        first_event = await asyncio.wait_for(events.__anext__(), timeout=0.2)
+        second_event = await asyncio.wait_for(events.__anext__(), timeout=0.2)
+
+        self.assertEqual(first_event["type"], "message_start")
+        self.assertEqual(second_event["type"], "message_delta")
+        self.assertEqual(second_event["delta"], "Hel")
+        self.assertFalse(release_event.is_set())
+
+        release_event.set()
+        remaining_events = [event async for event in events]
+
+        self.assertEqual(remaining_events[0]["type"], "message_delta")
+        self.assertEqual(remaining_events[0]["delta"], "lo")
+        self.assertEqual(remaining_events[1]["type"], "message_done")
+        self.assertEqual(remaining_events[1]["phase"], "final")
+        self.assertEqual(remaining_events[1]["content"], "Hello")
+        self.assertEqual(remaining_events[2], {"type": "done"})
+        self.assertEqual(model_client.token_stream_calls, [True])
+
+    async def test_chat_stream_true_returns_live_text_generator(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingStreamingModelClient([
+            [
+                ModelStreamEvent(type="delta", delta="Hel"),
+                ModelStreamEvent(type="delta", delta="lo"),
+            ],
+        ])
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            memory_handler=FakeMemoryHandler(),
+        )
+
+        response = await Agent.chat(
+            agent,
+            user_message="Stream this",
+            user_id="bob",
+            stream=True,
+            enable_memory=False,
+        )
+
+        collected = [chunk async for chunk in response]
+        self.assertEqual(collected, ["Hel", "lo"])
+        self.assertEqual(model_client.token_stream_calls, [True])
+        self.assertEqual(storage.messages[-1].content, "Hello")
 
     async def test_chat_events_without_token_stream_emits_done_boundaries_only(self):
         storage = InMemoryMessageStorage()

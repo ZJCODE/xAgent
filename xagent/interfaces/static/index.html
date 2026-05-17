@@ -321,48 +321,6 @@
       color: var(--text-secondary);
     }
 
-    .inline-select {
-      min-width: 130px;
-      border: 0;
-      outline: none;
-      background: transparent;
-      color: var(--text-primary);
-      font-size: 1rem;
-      font-weight: 500;
-      letter-spacing: 0;
-    }
-
-    .inline-select option {
-      background: #ffffff;
-      color: #18181b;
-    }
-
-    .dark .inline-select option {
-      background: #18181b;
-      color: #fafafa;
-    }
-
-    .header-select {
-      min-width: 108px;
-      border: 0;
-      outline: none;
-      background: transparent;
-      color: var(--text-primary);
-      font-size: 0.875rem;
-      font-weight: 500;
-      letter-spacing: 0;
-    }
-
-    .header-select option {
-      background: #ffffff;
-      color: #18181b;
-    }
-
-    .dark .header-select option {
-      background: #18181b;
-      color: #fafafa;
-    }
-
     .inline-switch {
       display: inline-flex;
       align-items: center;
@@ -478,11 +436,6 @@
       font-size: 0.85rem;
     }
 
-    .panel-settings-bar .inline-select {
-      min-width: 92px;
-      font-size: 0.85rem;
-    }
-
     .panel-settings-bar .inline-switch {
       min-height: 34px;
       padding: 0 0.25rem 0 0.65rem;
@@ -591,13 +544,6 @@
               <span>Dual</span>
               <input id="optDual" type="checkbox" class="w-3.5 h-3.5 accent-current" />
             </label>
-            <label id="headerTransportControl" class="ghost-button text-sm px-3 py-1.5 rounded-full inline-flex items-center gap-2 hover:bg-white/80 dark:hover:bg-gray-900 transition">
-              <span>Transport</span>
-              <select id="optTransport" class="header-select">
-                <option value="http">HTTP</option>
-                <option value="websocket">WebSocket</option>
-              </select>
-            </label>
             <button id="toggleThemeBtn" class="ghost-button text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Theme</button>
           </div>
         </div>
@@ -685,7 +631,6 @@ function autoResize(textarea) {
 function saveGlobalSettings() {
   const settings = {
     userId: document.getElementById('userId').value,
-    transport: document.getElementById('optTransport').value,
     tokenStream: document.getElementById('optTokenStream').checked,
     memory: document.getElementById('optMemory').checked,
     private: document.getElementById('optPrivate').checked,
@@ -699,7 +644,6 @@ function restoreGlobalSettings() {
   const settings = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
 
   document.getElementById('userId').value = settings.userId || 'web_user';
-  document.getElementById('optTransport').value = settings.transport || 'websocket';
   document.getElementById('optTokenStream').checked = settings.tokenStream !== false;
   document.getElementById('optMemory').checked = settings.memory !== false;
   document.getElementById('optPrivate').checked = !!settings.private;
@@ -778,13 +722,6 @@ function createChatPanel(panelId, containerEl, options = {}) {
           <span class="inline-label">User</span>
           <input data-pid="${panelId}_userId" type="text" class="inline-input text-sm" value="web_user" />
         </label>
-        <label class="inline-field text-sm">
-          <span class="inline-label">Transport</span>
-          <select data-pid="${panelId}_optTransport" class="inline-select text-sm">
-            <option value="http">HTTP</option>
-            <option value="websocket">WebSocket</option>
-          </select>
-        </label>
         <div class="inline-switch">
           <label class="setting-toggle cursor-pointer">
             <span class="setting-toggle-text">Token</span>
@@ -850,7 +787,6 @@ function createChatPanel(panelId, containerEl, options = {}) {
     if (showPanelSettings) {
       return {
         userId: (el('userId')?.value || '').trim() || 'web_user',
-        transport: el('optTransport')?.value || 'websocket',
         tokenStream: el('optTokenStream')?.checked ?? true,
         memory: el('optMemory')?.checked ?? true,
         private: el('optPrivate')?.checked ?? false,
@@ -858,7 +794,6 @@ function createChatPanel(panelId, containerEl, options = {}) {
     }
     return {
       userId: (document.getElementById('userId')?.value || '').trim() || 'web_user',
-      transport: document.getElementById('optTransport')?.value || 'websocket',
       tokenStream: document.getElementById('optTokenStream')?.checked ?? true,
       memory: document.getElementById('optMemory')?.checked ?? true,
       private: document.getElementById('optPrivate')?.checked ?? false,
@@ -876,8 +811,6 @@ function createChatPanel(panelId, containerEl, options = {}) {
     const s = JSON.parse(localStorage.getItem(settingsKey) || '{}');
     const userIdEl = el('userId');
     if (userIdEl) userIdEl.value = s.userId || (panelId === 'left' ? 'John' : 'Alice');
-    const transportEl = el('optTransport');
-    if (transportEl) transportEl.value = s.transport || 'websocket';
     const streamEl = el('optTokenStream');
     if (streamEl) streamEl.checked = s.tokenStream !== false;
     const memoryEl = el('optMemory');
@@ -1132,18 +1065,6 @@ function createChatPanel(panelId, containerEl, options = {}) {
     return url.toString();
   }
 
-  async function regularChat(payload, contentEl, messageIndex) {
-    contentEl.innerHTML = '<span class="text-gray-400">Thinking...</span>';
-    const response = await fetch(`${API_BASE}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-    const result = await response.json();
-    state.messages[messageIndex].content = renderReplyPayload(contentEl, result.reply);
-  }
-
   async function websocketChat(payload, contentEl, messageIndex) {
     contentEl.classList.add('typing-cursor');
 
@@ -1290,13 +1211,10 @@ function createChatPanel(panelId, containerEl, options = {}) {
     const payload = {
       user_id: settings.userId,
       user_message: text,
+      token_stream: settings.tokenStream,
       enable_memory: settings.memory,
       private: settings.private,
     };
-
-    if (settings.transport === 'websocket') {
-      payload.token_stream = settings.tokenStream;
-    }
 
     if (currentImages.length === 1) {
       payload.image_source = currentImages[0];
@@ -1314,11 +1232,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
     const { contentEl } = appendMessageBubble(assistantMessage, true);
 
     try {
-      if (settings.transport === 'websocket') {
-        await websocketChat(payload, contentEl, messageIndex);
-      } else {
-        await regularChat(payload, contentEl, messageIndex);
-      }
+      await websocketChat(payload, contentEl, messageIndex);
     } catch (error) {
       const errText = String(error?.message || error);
       contentEl.classList.remove('typing-cursor');
@@ -1362,17 +1276,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
     };
 
     try {
-      if (settings.transport === 'websocket') {
-        await websocketObserve(payload);
-      } else {
-        const response = await fetch(`${API_BASE}/observe`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-        await response.json();
-      }
+      await websocketObserve(payload);
       saveHistory();
     } catch (error) {
       const errText = String(error?.message || error);
@@ -1453,7 +1357,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
 
     // Panel-level settings save
     if (showPanelSettings) {
-      ['userId', 'optTransport', 'optTokenStream', 'optMemory', 'optPrivate'].forEach((suffix) => {
+      ['userId', 'optTokenStream', 'optMemory', 'optPrivate'].forEach((suffix) => {
         const input = el(suffix);
         if (input) input.addEventListener('change', saveSettings);
       });
@@ -1488,7 +1392,6 @@ function mountPanels() {
   if (isDualMode()) {
     // Hide global settings bar (each panel has its own)
     document.getElementById('globalSettingsBar').style.display = 'none';
-    document.getElementById('headerTransportControl').style.display = 'none';
 
     // Widen the container for dual panels
     if (outerContainer) {
@@ -1526,7 +1429,6 @@ function mountPanels() {
   } else {
     // Show global settings bar
     document.getElementById('globalSettingsBar').style.display = '';
-    document.getElementById('headerTransportControl').style.display = '';
 
     // Restore original container width
     if (outerContainer) {
@@ -1589,7 +1491,7 @@ function updateGlobalPrivateIndicator() {
 /* ─── Global event wiring ─── */
 
 function bindGlobalEvents() {
-  ['userId', 'optTransport', 'optTokenStream', 'optMemory', 'optPrivate'].forEach((id) => {
+  ['userId', 'optTokenStream', 'optMemory', 'optPrivate'].forEach((id) => {
     document.getElementById(id).addEventListener('change', () => {
       saveGlobalSettings();
       updateGlobalPrivateIndicator();

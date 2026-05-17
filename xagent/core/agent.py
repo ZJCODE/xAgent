@@ -177,9 +177,10 @@ class Agent:
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
+        stream: bool = False,
         enable_memory: bool = True,
         private: bool = False,
-    ) -> Union[str, BaseModel]:
+    ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         return await self.chat(
             user_message=user_message,
             user_id=user_id,
@@ -188,6 +189,7 @@ class Agent:
             max_concurrent_tools=max_concurrent_tools,
             image_source=image_source,
             output_type=output_type,
+            stream=stream,
             enable_memory=enable_memory,
             private=private,
         )
@@ -201,18 +203,49 @@ class Agent:
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[Union[str, List[str]]] = None,
         output_type: Optional[type[BaseModel]] = None,
+        stream: bool = False,
         enable_memory: bool = True,
         private: bool = False,
-    ) -> Union[str, BaseModel]:
-        """Generate a final-only reply from the agent given a user message.
+    ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
+        """Generate a reply from the agent given a user message.
 
         Args:
+            stream: When True, return an async text generator for compatibility
+                with the legacy Python API. New event consumers should prefer
+                ``chat_events(token_stream=True)``.
             private: When True, messages are stored in an isolated temporary
                 private buffer (discarded on switch back to normal mode). Memory
                 *reads* are preserved but all memory *writes* are suppressed.
         """
         if output_type is None:
             output_type = self.output_type
+        if stream and output_type is None:
+            async def text_stream():
+                streamed_message_ids: set[str] = set()
+                async for event in self.chat_events(
+                    user_message=user_message,
+                    user_id=user_id,
+                    history_count=history_count,
+                    max_iter=max_iter,
+                    max_concurrent_tools=max_concurrent_tools,
+                    image_source=image_source,
+                    token_stream=True,
+                    enable_memory=enable_memory,
+                    private=private,
+                ):
+                    event_type = event.get("type")
+                    message_id = str(event.get("message_id") or "")
+                    if event_type == "message_delta":
+                        if message_id:
+                            streamed_message_ids.add(message_id)
+                        yield str(event.get("delta") or "")
+                    elif event_type == "message_done" and message_id not in streamed_message_ids:
+                        yield str(event.get("content") or "")
+                    elif event_type == "error":
+                        yield str(event.get("error") or "")
+
+            return text_stream()
+
         if output_type is None and hasattr(self.model_client, "model_turn_events"):
             final_reply = ""
             last_error = ""
@@ -453,6 +486,15 @@ class Agent:
                 message_id = self._turn_message_id(user_msg, iteration_index)
                 text_parts: list[str] = []
                 tool_calls = []
+                message_started = False
+
+                def live_phase() -> str:
+                    return "assistant"
+
+                def ensure_live_message_started() -> dict:
+                    nonlocal message_started
+                    message_started = True
+                    return self._message_start_event(message_id, live_phase())
 
                 async for model_event in self.model_client.model_turn_events(
                     messages=input_messages,
@@ -462,6 +504,14 @@ class Agent:
                 ):
                     if model_event.type in {"delta", "text"} and model_event.delta:
                         text_parts.append(model_event.delta)
+                        if token_stream:
+                            if not message_started:
+                                yield ensure_live_message_started()
+                            yield self._message_delta_event(
+                                message_id,
+                                live_phase(),
+                                model_event.delta,
+                            )
                         continue
 
                     if model_event.type == "tool_calls":
@@ -480,14 +530,17 @@ class Agent:
                 visible_text = "".join(text_parts)
                 if tool_calls:
                     if visible_text:
-                        for event in self._message_events(
-                            message_id=message_id,
-                            phase="preface",
-                            content=visible_text,
-                            token_stream=token_stream,
-                            deltas=text_parts,
-                        ):
-                            yield event
+                        if message_started:
+                            yield self._message_done_event(message_id, "preface", visible_text)
+                        else:
+                            for event in self._message_events(
+                                message_id=message_id,
+                                phase="preface",
+                                content=visible_text,
+                                token_stream=token_stream,
+                                deltas=text_parts,
+                            ):
+                                yield event
                         await msg_handler.store_model_reply(
                             visible_text,
                             self._assistant_sender_id,
@@ -533,14 +586,17 @@ class Agent:
                     continue
 
                 if visible_text:
-                    for event in self._message_events(
-                        message_id=message_id,
-                        phase="final",
-                        content=visible_text,
-                        token_stream=token_stream,
-                        deltas=text_parts,
-                    ):
-                        yield event
+                    if message_started:
+                        yield self._message_done_event(message_id, "final", visible_text)
+                    else:
+                        for event in self._message_events(
+                            message_id=message_id,
+                            phase="final",
+                            content=visible_text,
+                            token_stream=token_stream,
+                            deltas=text_parts,
+                        ):
+                            yield event
                     assistant_msg = await msg_handler.store_model_reply(
                         visible_text,
                         self._assistant_sender_id,
