@@ -147,10 +147,30 @@ class AgentHTTPServer(BaseAgentRunner):
 
     async def _chat_stream_events(self, input_data: AgentInput):
         acquired = False
+        done_sent = False
         try:
             await self._acquire_chat_slot()
             acquired = True
             deadline = time.monotonic() + self._chat_timeout
+
+            chat_events = getattr(self.agent, "chat_events", None)
+            if callable(chat_events):
+                response = chat_events(
+                    user_message=input_data.user_message,
+                    user_id=input_data.user_id,
+                    history_count=input_data.history_count,
+                    max_iter=input_data.max_iter,
+                    max_concurrent_tools=input_data.max_concurrent_tools,
+                    image_source=input_data.image_source,
+                    enable_memory=input_data.enable_memory,
+                    private=input_data.private,
+                )
+                async for event in self._iterate_before_deadline(response, deadline):
+                    if event.get("type") == "done":
+                        done_sent = True
+                    yield event
+                return
+
             response = await self._await_before_deadline(
                 self._call_agent(input_data, stream=True),
                 deadline,
@@ -172,7 +192,8 @@ class AgentHTTPServer(BaseAgentRunner):
         finally:
             if acquired:
                 self._chat_semaphore.release()
-        yield {"type": "done"}
+        if not done_sent:
+            yield {"type": "done"}
 
     async def _stream_chat_events(self, input_data: AgentInput):
         async for event in self._chat_stream_events(input_data):
@@ -278,7 +299,11 @@ class AgentHTTPServer(BaseAgentRunner):
 
     @staticmethod
     def _sse_event_payload(event: dict) -> dict:
-        return {key: value for key, value in event.items() if key != "type"}
+        event_type = event.get("type")
+        payload = {key: value for key, value in event.items() if key != "type"}
+        if event_type in {"message_start", "message_done", "tool_call", "tool_result"}:
+            payload["event"] = event_type
+        return payload
 
     @staticmethod
     def _response_payload(response):

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from xagent.components.message import MessageStorageBase
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
-from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent
+from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.providers import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_OPENAI_RESPONSES
 from xagent.core.tools.executor import ToolExecutor
@@ -104,6 +104,18 @@ class CapturingModelClient:
         self.calls.append(messages)
         self.instructions_calls.append(instructions)
         return self.responses.pop(0)
+
+
+class CapturingStreamingModelClient(CapturingModelClient):
+    def __init__(self, stream_turns):
+        super().__init__(responses=[])
+        self.stream_turns = list(stream_turns)
+
+    async def stream_turn(self, messages, tool_specs, instructions=None):
+        self.calls.append(messages)
+        self.instructions_calls.append(instructions)
+        for event in self.stream_turns.pop(0):
+            yield event
 
 
 class FakeToolExecutor:
@@ -215,7 +227,7 @@ class StructuredAnswer(BaseModel):
 
 
 class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
-    def test_non_stream_response_prioritizes_tool_calls_over_text(self):
+    def test_non_stream_response_preserves_text_on_tool_calls(self):
         raw_tool_call = SimpleNamespace(
             id="call-1",
             type="function",
@@ -226,7 +238,10 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         reply_type, payload = ModelClient._handle_non_stream(response)
 
         self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload, [ChatToolCall(call_id="call-1", name="lookup", arguments="{}")])
+        self.assertEqual(payload[0].call_id, "call-1")
+        self.assertEqual(payload[0].name, "lookup")
+        self.assertEqual(payload[0].arguments, "{}")
+        self.assertEqual(payload[0].assistant_content, "I will look that up first.")
 
     def test_non_stream_tool_calls_preserve_reasoning_content(self):
         raw_tool_call = SimpleNamespace(
@@ -654,6 +669,30 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             )],
         )
 
+    async def test_stream_text_before_tool_call_is_preserved(self):
+        chunks = [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
+                content="I will check.",
+                tool_calls=None,
+                reasoning_content=None,
+            ))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(tool_calls=[
+                SimpleNamespace(index=0, id="call-1", type="function", function=SimpleNamespace(name="lookup", arguments="{}"))
+            ], content=None, reasoning_content=None))]),
+        ]
+        client = FakeOpenAIClient([AsyncChunkStream(chunks)])
+        model = ModelClient(client=client, model="test-model")
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "lookup"}],
+            tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+            stream=True,
+        )
+
+        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
+        self.assertEqual(payload[0].call_id, "call-1")
+        self.assertEqual(payload[0].assistant_content, "I will check.")
+
     async def test_responses_stream_tool_calls_accumulates_split_arguments(self):
         events = [
             SimpleNamespace(
@@ -698,6 +737,50 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload[0].name, "lookup")
         self.assertEqual(payload[0].arguments, '{"value": "ok"}')
         self.assertEqual(payload[0].response_items[-1]["type"], "function_call")
+
+    async def test_responses_stream_text_before_tool_call_is_preserved_in_replay(self):
+        events = [
+            SimpleNamespace(type="response.output_text.delta", delta="I will check."),
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=1,
+                item=SimpleNamespace(
+                    type="function_call",
+                    id="fc_1",
+                    call_id="call-1",
+                    name="lookup",
+                    arguments="",
+                ),
+            ),
+            SimpleNamespace(
+                type="response.function_call_arguments.done",
+                output_index=1,
+                item=SimpleNamespace(
+                    type="function_call",
+                    id="fc_1",
+                    call_id="call-1",
+                    name="lookup",
+                    arguments="{}",
+                ),
+            ),
+        ]
+        client = FakeOpenAIClient(response_api_responses=[AsyncChunkStream(events)])
+        model = ModelClient(
+            client=client,
+            model="test-model",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "lookup"}],
+            tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+            stream=True,
+        )
+
+        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
+        self.assertEqual(payload[0].assistant_content, "I will check.")
+        self.assertEqual(payload[0].response_items[0]["type"], "message")
+        self.assertEqual(payload[0].response_items[0]["content"][0]["text"], "I will check.")
 
     async def test_model_call_exception_returns_error_event(self):
         class FailingChatCompletions:
@@ -797,6 +880,72 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             [message.role for message in storage.messages],
             [RoleType.USER, RoleType.ASSISTANT],
         )
+
+    async def test_chat_events_streams_preface_then_tool_then_final_reply(self):
+        storage = InMemoryMessageStorage()
+        memory_handler = FakeMemoryHandler()
+        model_client = CapturingStreamingModelClient([
+            [
+                ModelStreamEvent(type="delta", delta="I will check."),
+                ModelStreamEvent(type="tool_calls", tool_calls=[
+                    ChatToolCall(
+                        call_id="call-1",
+                        name="lookup",
+                        arguments="{}",
+                        assistant_content="I will check.",
+                    )
+                ]),
+            ],
+            [
+                ModelStreamEvent(type="delta", delta="We are in /tmp."),
+            ],
+        ])
+        tool_executor = FakeToolExecutor()
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            tool_executor=tool_executor,
+            memory_handler=memory_handler,
+        )
+
+        events = [
+            event async for event in Agent.chat_events(
+                agent,
+                user_message="Where are we?",
+                user_id="bob",
+                history_count=10,
+                max_iter=3,
+                enable_memory=True,
+            )
+        ]
+
+        self.assertEqual(
+            [event["type"] for event in events],
+            [
+                "message_start",
+                "delta",
+                "message_done",
+                "tool_call",
+                "tool_result",
+                "message_start",
+                "delta",
+                "message_done",
+                "done",
+            ],
+        )
+        self.assertEqual(events[2]["phase"], "preface")
+        self.assertEqual(events[2]["content"], "I will check.")
+        self.assertEqual(events[3]["name"], "lookup")
+        self.assertEqual(events[7]["phase"], "final")
+        self.assertEqual(events[7]["content"], "We are in /tmp.")
+        self.assertEqual([message.role for message in storage.messages], [
+            RoleType.USER,
+            RoleType.ASSISTANT,
+            RoleType.ASSISTANT,
+        ])
+        self.assertEqual(storage.messages[1].metadata["turn_phase"], "preface")
+        self.assertEqual(storage.messages[2].metadata["turn_phase"], "final")
+        self.assertEqual(memory_handler.experience_messages, [storage.messages[0], storage.messages[2]])
 
     async def test_chat_wraps_turn_in_observability_context(self):
         storage = InMemoryMessageStorage()

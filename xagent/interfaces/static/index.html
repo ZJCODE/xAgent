@@ -1054,6 +1054,77 @@ function createChatPanel(panelId, containerEl, options = {}) {
     return text;
   }
 
+  function createAssistantStreamBubble() {
+    const assistantMessage = { role: 'assistant', content: '' };
+    state.messages.push(assistantMessage);
+    const index = state.messages.length - 1;
+    const { contentEl } = appendMessageBubble(assistantMessage, true);
+    contentEl.classList.add('typing-cursor');
+    return { contentEl, index, text: '', started: false };
+  }
+
+  function createStreamRenderState(contentEl, messageIndex) {
+    contentEl.classList.add('typing-cursor');
+    return {
+      current: { contentEl, index: messageIndex, text: '', started: false },
+      fullText: '',
+    };
+  }
+
+  function ensureStreamBubble(streamState) {
+    if (!streamState.current) {
+      streamState.current = createAssistantStreamBubble();
+    }
+    return streamState.current;
+  }
+
+  function finishStreamBubble(streamState, content = null) {
+    const current = ensureStreamBubble(streamState);
+    const finalText = content == null ? current.text : String(content);
+    current.text = finalText;
+    renderMarkdown(current.contentEl, finalText);
+    current.contentEl.classList.remove('typing-cursor');
+    state.messages[current.index].content = finalText;
+    streamState.current = null;
+  }
+
+  function handleChatStreamEvent(parsed, streamState) {
+    const eventType = parsed.event || parsed.type || '';
+    if (parsed.error) throw new Error(parsed.error);
+
+    if (eventType === 'message_start') {
+      const current = ensureStreamBubble(streamState);
+      current.started = true;
+      return;
+    }
+
+    if (parsed.delta) {
+      const current = ensureStreamBubble(streamState);
+      current.started = true;
+      current.text += parsed.delta;
+      streamState.fullText += parsed.delta;
+      renderMarkdown(current.contentEl, current.text);
+      scrollToBottom();
+      return;
+    }
+
+    if (eventType === 'message_done') {
+      finishStreamBubble(streamState, parsed.content);
+      scrollToBottom();
+      return;
+    }
+
+    if (parsed.message) {
+      const current = ensureStreamBubble(streamState);
+      current.text = renderReplyPayload(current.contentEl, parsed.message);
+      streamState.fullText += current.text;
+      current.contentEl.classList.remove('typing-cursor');
+      state.messages[current.index].content = current.text;
+      streamState.current = null;
+      scrollToBottom();
+    }
+  }
+
   function webSocketUrl(path) {
     const base = API_BASE || window.location.origin;
     const url = new URL(path, base);
@@ -1085,7 +1156,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let fullText = '';
+    const streamState = createStreamRenderState(contentEl, messageIndex);
 
     while (true) {
       const { value, done } = await reader.read();
@@ -1101,17 +1172,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
         if (payloadChunk === '[DONE]') continue;
         try {
           const parsed = JSON.parse(payloadChunk);
-          if (parsed.error) throw new Error(parsed.error);
-          if (parsed.delta) {
-            fullText += parsed.delta;
-            renderMarkdown(contentEl, fullText);
-            scrollToBottom();
-            continue;
-          }
-          if (parsed.message) {
-            fullText = renderReplyPayload(contentEl, parsed.message);
-            scrollToBottom();
-          }
+          handleChatStreamEvent(parsed, streamState);
         } catch (error) {
           const errText = String(error?.message || error);
           if (!errText.includes('JSON')) throw error;
@@ -1119,8 +1180,10 @@ function createChatPanel(panelId, containerEl, options = {}) {
       }
     }
 
-    state.messages[messageIndex].content = fullText;
-    contentEl.classList.remove('typing-cursor');
+    if (streamState.current) {
+      streamState.current.contentEl.classList.remove('typing-cursor');
+      state.messages[streamState.current.index].content = streamState.current.text;
+    }
     saveHistory();
   }
 
@@ -1132,20 +1195,22 @@ function createChatPanel(panelId, containerEl, options = {}) {
 
     await new Promise((resolve, reject) => {
       const socket = new WebSocket(webSocketUrl('/ws/chat'));
-      let fullText = '';
+      const streamState = createStreamRenderState(contentEl, messageIndex);
       let settled = false;
 
       const settle = (error = null) => {
         if (settled) return;
         settled = true;
-        contentEl.classList.remove('typing-cursor');
+        if (streamState.current) {
+          streamState.current.contentEl.classList.remove('typing-cursor');
+          state.messages[streamState.current.index].content = streamState.current.text;
+        }
         if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
           socket.close(1000);
         }
         if (error) {
           reject(error);
         } else {
-          state.messages[messageIndex].content = fullText;
           saveHistory();
           resolve();
         }
@@ -1169,16 +1234,8 @@ function createChatPanel(panelId, containerEl, options = {}) {
           return;
         }
 
-        if (parsed.type === 'delta' && parsed.delta) {
-          fullText += parsed.delta;
-          renderMarkdown(contentEl, fullText);
-          scrollToBottom();
-          return;
-        }
-
-        if (parsed.type === 'message') {
-          fullText = renderReplyPayload(contentEl, parsed.message);
-          scrollToBottom();
+        if ((parsed.type === 'delta' && parsed.delta) || parsed.type === 'message_start' || parsed.type === 'message_done' || parsed.type === 'message') {
+          handleChatStreamEvent(parsed, streamState);
           return;
         }
 

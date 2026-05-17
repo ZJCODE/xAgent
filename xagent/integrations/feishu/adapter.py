@@ -905,8 +905,38 @@ class FeishuAdapter:
         chat_kwargs: dict[str, Any],
         raw_msg: Any = None,
     ) -> None:
-        agent_stream = await self.agent.chat(**chat_kwargs)
+        chat_events = getattr(self.agent, "chat_events", None)
         anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
+        if callable(chat_events):
+            sent_count = 0
+            async for event in chat_events(**{k: v for k, v in chat_kwargs.items() if k != "stream"}):
+                event_type = event.get("type")
+                if event_type == "message_done":
+                    content = str(event.get("content") or "").strip()
+                    if not content:
+                        continue
+                    sent_count += 1
+                    uuid_message_id = f"{message_id}:{sent_count}" if message_id else None
+                    await self._send_markdown(
+                        chat_id=chat_id,
+                        message_id=anchor,
+                        uuid_message_id=uuid_message_id,
+                        text=content,
+                        is_group=is_group,
+                    )
+                elif event_type == "error":
+                    sent_count += 1
+                    uuid_message_id = f"{message_id}:{sent_count}" if message_id else None
+                    await self._send_markdown(
+                        chat_id=chat_id,
+                        message_id=anchor,
+                        uuid_message_id=uuid_message_id,
+                        text=str(event.get("error") or "Agent processing error."),
+                        is_group=is_group,
+                    )
+            return
+
+        agent_stream = await self.agent.chat(**chat_kwargs)
         if not hasattr(agent_stream, "__aiter__"):
             # Agent fell back to non-stream (e.g. structured output); use the
             # plain reply path.

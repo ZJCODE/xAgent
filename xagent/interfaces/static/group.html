@@ -519,6 +519,14 @@ function appendMessage(msg, placeholder = false) {
   return bubble;
 }
 
+function createAgentStreamBubble() {
+  const msg = { role: 'assistant', content: '' };
+  state.messages.push(msg);
+  const bubble = appendMessage(msg, true);
+  bubble.classList.add('typing-cursor');
+  return { msg, bubble, text: '' };
+}
+
 async function sendMessage() {
   if (state.sending) return;
   if (state.activeSeatIndex < 0) return;
@@ -548,6 +556,7 @@ async function sendMessage() {
   state.messages.push(agentMsg);
   const bubbleEl = appendMessage(agentMsg, true);
   bubbleEl.classList.add('typing-cursor');
+  let currentAgent = { msg: agentMsg, bubble: bubbleEl, text: '' };
 
   try {
     const response = await fetch(`${API_BASE}/chat`, {
@@ -561,7 +570,6 @@ async function sendMessage() {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let fullText = '';
 
     while (true) {
       const { value, done } = await reader.read();
@@ -577,14 +585,27 @@ async function sendMessage() {
         if (chunk === '[DONE]') continue;
         try {
           const parsed = JSON.parse(chunk);
+          const eventType = parsed.event || parsed.type || '';
           if (parsed.error) throw new Error(parsed.error);
           if (parsed.delta) {
-            fullText += parsed.delta;
-            renderMarkdown(bubbleEl, fullText);
+            if (!currentAgent) currentAgent = createAgentStreamBubble();
+            currentAgent.text += parsed.delta;
+            renderMarkdown(currentAgent.bubble, currentAgent.text);
             scrollToBottom();
+          } else if (eventType === 'message_done') {
+            if (!currentAgent) currentAgent = createAgentStreamBubble();
+            currentAgent.text = String(parsed.content || currentAgent.text || '');
+            renderMarkdown(currentAgent.bubble, currentAgent.text);
+            currentAgent.bubble.classList.remove('typing-cursor');
+            currentAgent.msg.content = currentAgent.text;
+            currentAgent = null;
           } else if (parsed.message) {
-            fullText = typeof parsed.message === 'object' ? JSON.stringify(parsed.message, null, 2) : parsed.message;
-            renderMarkdown(bubbleEl, fullText);
+            if (!currentAgent) currentAgent = createAgentStreamBubble();
+            currentAgent.text = typeof parsed.message === 'object' ? JSON.stringify(parsed.message, null, 2) : parsed.message;
+            renderMarkdown(currentAgent.bubble, currentAgent.text);
+            currentAgent.bubble.classList.remove('typing-cursor');
+            currentAgent.msg.content = currentAgent.text;
+            currentAgent = null;
             scrollToBottom();
           }
         } catch (e) {
@@ -593,14 +614,18 @@ async function sendMessage() {
       }
     }
 
-    agentMsg.content = fullText;
+    if (currentAgent) {
+      currentAgent.bubble.classList.remove('typing-cursor');
+      currentAgent.msg.content = currentAgent.text;
+    }
     saveState();
   } catch (err) {
-    bubbleEl.innerHTML = `<span class="text-red-500">Error: ${escapeHtml(err.message)}</span>`;
-    agentMsg.content = `Error: ${err.message}`;
+    const target = currentAgent || { msg: agentMsg, bubble: bubbleEl };
+    target.bubble.innerHTML = `<span class="text-red-500">Error: ${escapeHtml(err.message)}</span>`;
+    target.msg.content = `Error: ${err.message}`;
     saveState();
   } finally {
-    bubbleEl.classList.remove('typing-cursor');
+    if (currentAgent) currentAgent.bubble.classList.remove('typing-cursor');
     setSending(false);
     document.getElementById('groupInput').focus();
     scrollToBottom();

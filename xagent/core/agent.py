@@ -216,6 +216,25 @@ class Agent:
         """
         if output_type is None:
             output_type = self.output_type
+        if stream and output_type is None and hasattr(self.model_client, "stream_turn"):
+            async def text_stream():
+                async for event in self.chat_events(
+                    user_message=user_message,
+                    user_id=user_id,
+                    history_count=history_count,
+                    max_iter=max_iter,
+                    max_concurrent_tools=max_concurrent_tools,
+                    image_source=image_source,
+                    enable_memory=enable_memory,
+                    private=private,
+                    ):
+                    if event.get("type") == "delta":
+                        yield event.get("delta", "")
+                    elif event.get("type") == "error":
+                        yield event.get("error", "")
+
+            return text_stream()
+
         if output_type:
             stream = False
 
@@ -338,6 +357,208 @@ class Agent:
         except Exception as exc:
             logger.exception("Agent chat error: %s", exc)
             return "Sorry, something went wrong."
+        finally:
+            if entered_observability:
+                try:
+                    turn_context.__exit__(None, None, None)
+                except Exception as exc:
+                    logger.warning("Failed to close observability context: %s", exc)
+            self._reset_memory_mode(memory_mode_token)
+
+    async def chat_events(
+        self,
+        user_message: str,
+        user_id: str = AgentConfig.DEFAULT_USER_ID,
+        history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
+        max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
+        max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+        image_source: Optional[Union[str, List[str]]] = None,
+        output_type: Optional[type[BaseModel]] = None,
+        enable_memory: bool = True,
+        private: bool = False,
+    ) -> AsyncGenerator[dict, None]:
+        """Stream an agent turn as structured user-visible and tool progress events."""
+        if output_type is None:
+            output_type = self.output_type
+        if output_type is not None:
+            response = await self.chat(
+                user_message=user_message,
+                user_id=user_id,
+                history_count=history_count,
+                max_iter=max_iter,
+                max_concurrent_tools=max_concurrent_tools,
+                image_source=image_source,
+                output_type=output_type,
+                stream=False,
+                enable_memory=enable_memory,
+                private=private,
+            )
+            content = response.model_dump_json() if hasattr(response, "model_dump_json") else str(response)
+            message_id = "structured-0"
+            yield self._message_start_event(message_id, "final")
+            yield self._delta_event(message_id, "final", content)
+            yield self._message_done_event(message_id, "final", content)
+            yield {"type": "done"}
+            return
+
+        msg_handler = self._message_handler_for_mode(private=private)
+        memory_mode = MemoryMode.from_flags(enable_memory=enable_memory, private=private)
+        memory_mode_token = self._set_memory_mode(memory_mode)
+        model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
+        turn_context = self._observability_runtime().agent_turn(
+            user_id=user_id,
+            model=model_name,
+            private=private,
+            memory_mode=memory_mode.value,
+            stream=True,
+        )
+        entered_observability = False
+
+        try:
+            turn_context.__enter__()
+            entered_observability = True
+            user_msg = await msg_handler.store_user_message(
+                user_message,
+                user_id,
+                image_source,
+            )
+
+            effective_history_count = self._effective_history_count(history_count)
+            recent_messages = await msg_handler.get_recent_messages(
+                history_count=effective_history_count,
+            )
+
+            memory_context = ""
+            if memory_mode.can_read:
+                memory_context = await self.memory_handler.get_recent_context()
+
+            excluded = self._excluded_memory_tools(memory_mode=memory_mode)
+            tool_names = [n for n in self.tool_manager._tools if n not in excluded]
+            tool_specs = self.tool_manager.cached_tool_specs
+            if excluded and tool_specs:
+                tool_specs = [s for s in tool_specs if self._tool_spec_name(s) not in excluded] or None
+
+            instructions = msg_handler.build_instruction_messages(tool_names=tool_names)
+            iteration_messages = msg_handler.build_turn_context_messages(
+                recent_messages,
+                current_user_id=user_id,
+                memory_context=memory_context,
+            )
+            input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+
+            for iteration_index in range(max_iter):
+                message_id = self._turn_message_id(user_msg, iteration_index)
+                message_started = False
+                text_parts: list[str] = []
+                tool_calls = []
+
+                async for model_event in self.model_client.stream_turn(
+                    messages=input_messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                ):
+                    if model_event.type == "delta" and model_event.delta:
+                        if not message_started:
+                            message_started = True
+                            yield self._message_start_event(message_id, "assistant")
+                        text_parts.append(model_event.delta)
+                        yield self._delta_event(message_id, "assistant", model_event.delta)
+                        continue
+
+                    if model_event.type == "tool_calls":
+                        tool_calls = model_event.tool_calls
+                        continue
+
+                    if model_event.type == "error":
+                        logger.error("Model stream returned error event: %s", model_event.error)
+                        yield {
+                            "type": "error",
+                            "error": "Sorry, I encountered an error while processing your request.",
+                        }
+                        yield {"type": "done"}
+                        return
+
+                visible_text = "".join(text_parts)
+                if tool_calls:
+                    if visible_text:
+                        yield self._message_done_event(message_id, "preface", visible_text)
+                        await msg_handler.store_model_reply(
+                            visible_text,
+                            self._assistant_sender_id,
+                            metadata={"turn_phase": "preface"},
+                        )
+
+                    for tool_call in tool_calls:
+                        yield self._tool_event("tool_call", tool_call)
+
+                    tool_result = await self.tool_executor.handle_tool_calls(
+                        tool_calls,
+                        iteration_messages,
+                        max_concurrent_tools,
+                    )
+
+                    for tool_call in tool_calls:
+                        yield self._tool_event("tool_result", tool_call)
+
+                    if tool_result is not None:
+                        image_data, description = tool_result
+                        final_message_id = self._turn_message_id(user_msg, iteration_index, suffix="image")
+                        yield self._message_start_event(final_message_id, "final")
+                        yield self._delta_event(final_message_id, "final", image_data)
+                        yield self._message_done_event(final_message_id, "final", image_data)
+                        assistant_msg = await msg_handler.store_model_reply(
+                            description,
+                            self._assistant_sender_id,
+                            metadata={"turn_phase": "final"},
+                        )
+                        self._schedule_experience_write(
+                            msg_handler=msg_handler,
+                            memory_mode=memory_mode,
+                            messages=[user_msg, assistant_msg],
+                        )
+                        yield {"type": "done"}
+                        return
+
+                    input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+                    continue
+
+                if visible_text:
+                    if not message_started:
+                        yield self._message_start_event(message_id, "final")
+                        yield self._delta_event(message_id, "final", visible_text)
+                    yield self._message_done_event(message_id, "final", visible_text)
+                    assistant_msg = await msg_handler.store_model_reply(
+                        visible_text,
+                        self._assistant_sender_id,
+                        metadata={"turn_phase": "final"},
+                    )
+                    self._schedule_experience_write(
+                        msg_handler=msg_handler,
+                        memory_mode=memory_mode,
+                        messages=[user_msg, assistant_msg],
+                    )
+                    yield {"type": "done"}
+                    return
+
+                logger.error("Model stream ended without text or tool calls")
+                yield {
+                    "type": "error",
+                    "error": "Sorry, I encountered an error while processing your request.",
+                }
+                yield {"type": "done"}
+                return
+
+            logger.error("Failed to generate response after %d attempts", max_iter)
+            yield {
+                "type": "error",
+                "error": "Sorry, I could not generate a response after multiple attempts.",
+            }
+            yield {"type": "done"}
+
+        except Exception as exc:
+            logger.exception("Agent chat stream error: %s", exc)
+            yield {"type": "error", "error": "Sorry, something went wrong."}
+            yield {"type": "done"}
         finally:
             if entered_observability:
                 try:
@@ -469,6 +690,61 @@ class Agent:
 
     def _memory_can_write(self) -> bool:
         return self._current_memory_mode().can_write
+
+    @staticmethod
+    def _turn_message_id(user_msg: Message, iteration_index: int, suffix: str = "message") -> str:
+        return f"{user_msg.timestamp:.6f}-{iteration_index}-{suffix}"
+
+    @staticmethod
+    def _message_start_event(message_id: str, phase: str) -> dict:
+        return {
+            "type": "message_start",
+            "message_id": message_id,
+            "phase": phase,
+        }
+
+    @staticmethod
+    def _delta_event(message_id: str, phase: str, delta: str) -> dict:
+        return {
+            "type": "delta",
+            "delta": delta,
+            "message_id": message_id,
+            "phase": phase,
+        }
+
+    @staticmethod
+    def _message_done_event(message_id: str, phase: str, content: str) -> dict:
+        return {
+            "type": "message_done",
+            "message_id": message_id,
+            "phase": phase,
+            "content": content,
+        }
+
+    @staticmethod
+    def _tool_event(event_type: str, tool_call: Any) -> dict:
+        if isinstance(tool_call, dict):
+            call_id = tool_call.get("call_id") or tool_call.get("id") or "call_0"
+            name = tool_call.get("name") or ""
+            function = tool_call.get("function") or {}
+            if not name and isinstance(function, dict):
+                name = function.get("name") or ""
+            return {
+                "type": event_type,
+                "call_id": call_id,
+                "name": name,
+            }
+
+        call_id = getattr(tool_call, "call_id", "") or getattr(tool_call, "id", "") or "call_0"
+        name = getattr(tool_call, "name", "") or ""
+        if not name:
+            function = getattr(tool_call, "function", None)
+            name = getattr(function, "name", "") if function is not None else ""
+        return {
+            "type": event_type,
+            "call_id": call_id,
+            "name": name,
+        }
 
     @staticmethod
     def _effective_history_count(history_count: Optional[int]) -> int:

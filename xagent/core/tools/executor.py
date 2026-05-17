@@ -51,9 +51,10 @@ class ToolExecutor:
         if is_responses_call:
             input_messages.extend(self._responses_replay_items(function_calls))
         else:
+            assistant_content = self._tool_assistant_content(function_calls[0])
             assistant_message = {
                 "role": "assistant",
-                "content": None,
+                "content": assistant_content if assistant_content else None,
                 "tool_calls": [self._to_chat_tool_call(tc) for tc in function_calls],
             }
             reasoning_content = self._tool_reasoning_content(function_calls[0])
@@ -216,6 +217,11 @@ class ToolExecutor:
     @classmethod
     def _tool_reasoning_content(cls, tool_call) -> Optional[str]:
         return cls._field(tool_call, "reasoning_content")
+
+    @classmethod
+    def _tool_assistant_content(cls, tool_call) -> Optional[str]:
+        content = cls._field(tool_call, "assistant_content")
+        return content if isinstance(content, str) and content else None
 
     @classmethod
     def _tool_content_blocks(cls, tool_call) -> Optional[list[dict]]:

@@ -1,7 +1,7 @@
 import json
 import logging
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional, Union
+from dataclasses import dataclass, field
+from typing import Any, AsyncGenerator, Awaitable, Callable, Optional, Union
 
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -25,6 +25,7 @@ class ChatToolCall:
     call_id: str
     name: str
     arguments: str
+    assistant_content: Optional[str] = None
     reasoning_content: Optional[str] = None
     content_blocks: Optional[list[dict]] = None
     response_items: Optional[list[dict]] = None
@@ -35,12 +36,14 @@ class ChatToolCall:
         cls,
         raw_tool_call: Any,
         reasoning_content: Optional[str] = None,
+        assistant_content: Optional[str] = None,
     ) -> "ChatToolCall":
         function = ModelClient._field(raw_tool_call, "function") or {}
         return cls(
             call_id=ModelClient._field(raw_tool_call, "id") or "",
             name=ModelClient._field(function, "name") or "",
             arguments=ModelClient._field(function, "arguments") or "{}",
+            assistant_content=assistant_content,
             reasoning_content=reasoning_content,
             type=ModelClient._field(raw_tool_call, "type") or "function",
         )
@@ -50,12 +53,14 @@ class ChatToolCall:
         cls,
         raw_tool_block: Any,
         content_blocks: Optional[list[dict]] = None,
+        assistant_content: Optional[str] = None,
     ) -> "ChatToolCall":
         input_value = ModelClient._field(raw_tool_block, "input") or {}
         return cls(
             call_id=ModelClient._field(raw_tool_block, "id") or "",
             name=ModelClient._field(raw_tool_block, "name") or "",
             arguments=ModelClient._json_dumps(input_value),
+            assistant_content=assistant_content,
             content_blocks=content_blocks,
             type="function",
         )
@@ -65,11 +70,13 @@ class ChatToolCall:
         cls,
         raw_tool_call: Any,
         response_items: Optional[list[dict]] = None,
+        assistant_content: Optional[str] = None,
     ) -> "ChatToolCall":
         return cls(
             call_id=ModelClient._field(raw_tool_call, "call_id") or ModelClient._field(raw_tool_call, "id") or "",
             name=ModelClient._field(raw_tool_call, "name") or "",
             arguments=ModelClient._field(raw_tool_call, "arguments") or "{}",
+            assistant_content=assistant_content,
             response_items=response_items,
             type="function",
         )
@@ -92,6 +99,16 @@ class ModelErrorEvent:
     code: str
     message: str
     details: Optional[str] = None
+
+
+@dataclass
+class ModelStreamEvent:
+    """Provider-neutral streaming event emitted by a single model response."""
+
+    type: str
+    delta: str = ""
+    tool_calls: list[ChatToolCall] = field(default_factory=list)
+    error: Optional[ModelErrorEvent] = None
 
 
 class ModelClient:
@@ -187,6 +204,64 @@ class ModelClient:
                 code="model_call_failed",
                 message="Model call failed.",
                 details=str(e),
+            )
+
+    async def stream_turn(
+        self,
+        messages: list,
+        tool_specs: Optional[list],
+        instructions: Optional[Union[str, list[dict]]] = None,
+    ) -> AsyncGenerator[ModelStreamEvent, None]:
+        """Stream visible model text and finalized tool calls for one model turn."""
+        try:
+            if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
+                response = await self.client.messages.create(
+                    **self._build_anthropic_create_params(
+                        messages=messages,
+                        tool_specs=tool_specs,
+                        instructions=instructions,
+                        output_type=None,
+                        stream=True,
+                    )
+                )
+                async for event in self._iter_anthropic_turn_events(response):
+                    yield event
+                return
+
+            if self.model_api == MODEL_API_OPENAI_RESPONSES:
+                response = await self.client.responses.create(
+                    **self._build_responses_create_params(
+                        messages=messages,
+                        tool_specs=tool_specs,
+                        instructions=instructions,
+                        output_type=None,
+                        stream=True,
+                    )
+                )
+                async for event in self._iter_responses_turn_events(response):
+                    yield event
+                return
+
+            response = await self.client.chat.completions.create(
+                **self._build_create_params(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                    output_type=None,
+                    stream=True,
+                )
+            )
+            async for event in self._iter_chat_turn_events(response):
+                yield event
+        except Exception as exc:
+            logger.exception("Model stream failed: %s", exc)
+            yield ModelStreamEvent(
+                type="error",
+                error=ModelErrorEvent(
+                    code="model_stream_failed",
+                    message="Model stream failed.",
+                    details=str(exc),
+                ),
             )
 
     def _build_create_params(
@@ -625,11 +700,12 @@ class ModelClient:
         output_type: Optional[type[BaseModel]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a non-streaming model response."""
+        text = ModelClient._extract_response_text(response)
         tool_calls = ModelClient._extract_tool_calls(response)
         if tool_calls:
+            ModelClient._set_tool_calls_assistant_content(tool_calls, text or None)
             return ReplyType.TOOL_CALL, tool_calls
 
-        text = ModelClient._extract_response_text(response)
         if output_type is not None and text:
             try:
                 return ReplyType.STRUCTURED_REPLY, output_type.model_validate_json(text)
@@ -656,11 +732,12 @@ class ModelClient:
         output_type: Optional[type[BaseModel]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a non-streaming OpenAI Responses API response."""
+        text = ModelClient._extract_responses_text(response)
         tool_calls = ModelClient._extract_responses_tool_calls(response)
         if tool_calls:
+            ModelClient._set_tool_calls_assistant_content(tool_calls, text or None)
             return ReplyType.TOOL_CALL, tool_calls
 
-        text = ModelClient._extract_responses_text(response)
         if output_type is not None and text:
             try:
                 return ReplyType.STRUCTURED_REPLY, output_type.model_validate_json(text)
@@ -687,11 +764,12 @@ class ModelClient:
         output_type: Optional[type[BaseModel]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a non-streaming Anthropic Messages response."""
+        text = ModelClient._extract_anthropic_response_text(response)
         tool_calls = ModelClient._extract_anthropic_tool_calls(response)
         if tool_calls:
+            ModelClient._set_tool_calls_assistant_content(tool_calls, text or None)
             return ReplyType.TOOL_CALL, tool_calls
 
-        text = ModelClient._extract_anthropic_response_text(response)
         if output_type is not None and text:
             try:
                 return ReplyType.STRUCTURED_REPLY, output_type.model_validate_json(text)
@@ -718,69 +796,9 @@ class ModelClient:
         store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a streaming model response."""
-        prefix_chunks = []
-        reasoning_parts: list[str] = []
-        tool_call_parts: dict[int, dict] = {}
-        stream_kind = None
-
-        async for chunk in response:
-            prefix_chunks.append(chunk)
-            reasoning_delta = self._extract_stream_reasoning_delta(chunk)
-            if reasoning_delta:
-                reasoning_parts.append(reasoning_delta)
-            self._merge_stream_tool_calls(tool_call_parts, chunk)
-            if self._chunk_has_tool_calls(chunk):
-                stream_kind = ReplyType.TOOL_CALL
-            elif self._extract_stream_text_delta(chunk):
-                stream_kind = ReplyType.SIMPLE_REPLY
-            if stream_kind is not None:
-                break
-
-        if stream_kind == ReplyType.SIMPLE_REPLY:
-            async def stream_generator():
-                text_parts: list[str] = []
-
-                for chunk in prefix_chunks:
-                    content = self._extract_stream_text_delta(chunk)
-                    if content:
-                        text_parts.append(content)
-                        yield content
-
-                async for chunk in response:
-                    content = self._extract_stream_text_delta(chunk)
-                    if content:
-                        text_parts.append(content)
-                        yield content
-
-                final_text = "".join(text_parts)
-                if final_text:
-                    if store_reply:
-                        await store_reply(final_text)
-
-            return ReplyType.SIMPLE_REPLY, stream_generator()
-
-        if stream_kind == ReplyType.TOOL_CALL:
-            async for chunk in response:
-                reasoning_delta = self._extract_stream_reasoning_delta(chunk)
-                if reasoning_delta:
-                    reasoning_parts.append(reasoning_delta)
-                self._merge_stream_tool_calls(tool_call_parts, chunk)
-
-            reasoning_content = "".join(reasoning_parts) if reasoning_parts else None
-            tool_calls = self._finalize_stream_tool_calls(tool_call_parts, reasoning_content)
-            if tool_calls:
-                return ReplyType.TOOL_CALL, tool_calls
-
-            logger.warning("Stream response ended without tool output")
-            return ReplyType.ERROR, ModelErrorEvent(
-                code="empty_tool_response",
-                message="No tool output from model response.",
-            )
-
-        logger.warning("Stream response contains no recognized output")
-        return ReplyType.ERROR, ModelErrorEvent(
-            code="empty_stream_response",
-            message="No valid output from model response.",
+        return await self._collect_legacy_stream_result(
+            self._iter_chat_turn_events(response),
+            store_reply,
         )
 
     async def _handle_responses_stream(
@@ -789,80 +807,9 @@ class ModelClient:
         store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a streaming OpenAI Responses API response."""
-        prefix_events = []
-        tool_call_parts: dict[int, dict] = {}
-        response_items: list[dict] = []
-        completed_response = None
-        stream_kind = None
-
-        async for event in response:
-            prefix_events.append(event)
-            completed_response = self._merge_responses_stream_event(
-                tool_call_parts,
-                response_items,
-                event,
-            ) or completed_response
-            if self._responses_event_starts_tool_call(event):
-                stream_kind = ReplyType.TOOL_CALL
-                break
-            if self._extract_responses_stream_text_delta(event):
-                stream_kind = ReplyType.SIMPLE_REPLY
-                break
-            if completed_response is not None:
-                break
-
-        if stream_kind == ReplyType.SIMPLE_REPLY:
-            async def stream_generator():
-                text_parts: list[str] = []
-
-                for event in prefix_events:
-                    content = self._extract_responses_stream_text_delta(event)
-                    if content:
-                        text_parts.append(content)
-                        yield content
-
-                async for event in response:
-                    content = self._extract_responses_stream_text_delta(event)
-                    if content:
-                        text_parts.append(content)
-                        yield content
-
-                final_text = "".join(text_parts)
-                if final_text and store_reply:
-                    await store_reply(final_text)
-
-            return ReplyType.SIMPLE_REPLY, stream_generator()
-
-        if stream_kind == ReplyType.TOOL_CALL:
-            async for event in response:
-                completed_response = self._merge_responses_stream_event(
-                    tool_call_parts,
-                    response_items,
-                    event,
-                ) or completed_response
-
-            if completed_response is not None:
-                reply_type, payload = self._handle_responses_non_stream(completed_response)
-                if reply_type == ReplyType.TOOL_CALL:
-                    return reply_type, payload
-
-            tool_calls = self._finalize_responses_stream_tool_calls(tool_call_parts, response_items)
-            if tool_calls:
-                return ReplyType.TOOL_CALL, tool_calls
-
-            logger.warning("Responses stream ended without tool output")
-            return ReplyType.ERROR, ModelErrorEvent(
-                code="empty_tool_response",
-                message="No tool output from model response.",
-            )
-
-        if completed_response is not None:
-            return self._handle_responses_non_stream(completed_response)
-
-        logger.warning("Responses stream contains no recognized output")
-        return ReplyType.ERROR, ModelErrorEvent(
-            code="empty_stream_response",
-            message="No valid output from model response.",
+        return await self._collect_legacy_stream_result(
+            self._iter_responses_turn_events(response),
+            store_reply,
         )
 
     async def _handle_anthropic_stream(
@@ -871,61 +818,159 @@ class ModelClient:
         store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a streaming Anthropic Messages response."""
-        prefix_events = []
-        content_blocks: dict[int, dict] = {}
-        stream_kind = None
+        return await self._collect_legacy_stream_result(
+            self._iter_anthropic_turn_events(response),
+            store_reply,
+        )
 
-        async for event in response:
-            prefix_events.append(event)
-            self._merge_anthropic_stream_event(content_blocks, event)
-            if self._anthropic_event_starts_tool_use(event):
-                stream_kind = ReplyType.TOOL_CALL
-                break
-            if self._extract_anthropic_stream_text_delta(event):
-                stream_kind = ReplyType.SIMPLE_REPLY
-                break
+    async def _collect_legacy_stream_result(
+        self,
+        events: AsyncGenerator[ModelStreamEvent, None],
+        store_reply: Optional[Callable[..., Awaitable]] = None,
+    ) -> tuple[ReplyType, object]:
+        """Collect model stream events into the legacy ReplyType contract."""
+        text_parts: list[str] = []
+        async for event in events:
+            if event.type == "delta" and event.delta:
+                text_parts.append(event.delta)
+                continue
+            if event.type == "tool_calls":
+                return ReplyType.TOOL_CALL, event.tool_calls
+            if event.type == "error":
+                return ReplyType.ERROR, event.error or ModelErrorEvent(
+                    code="model_stream_error",
+                    message="Model stream failed.",
+                )
 
-        if stream_kind == ReplyType.SIMPLE_REPLY:
+        if text_parts:
             async def stream_generator():
-                text_parts: list[str] = []
-
-                for event in prefix_events:
-                    content = self._extract_anthropic_stream_text_delta(event)
-                    if content:
-                        text_parts.append(content)
-                        yield content
-
-                async for event in response:
-                    content = self._extract_anthropic_stream_text_delta(event)
-                    if content:
-                        text_parts.append(content)
-                        yield content
-
+                for part in text_parts:
+                    yield part
                 final_text = "".join(text_parts)
                 if final_text and store_reply:
                     await store_reply(final_text)
 
             return ReplyType.SIMPLE_REPLY, stream_generator()
 
-        if stream_kind == ReplyType.TOOL_CALL:
-            async for event in response:
-                self._merge_anthropic_stream_event(content_blocks, event)
-
-            tool_calls = self._finalize_anthropic_stream_tool_calls(content_blocks)
-            if tool_calls:
-                return ReplyType.TOOL_CALL, tool_calls
-
-            logger.warning("Anthropic stream response ended without tool output")
-            return ReplyType.ERROR, ModelErrorEvent(
-                code="empty_tool_response",
-                message="No tool output from model response.",
-            )
-
-        logger.warning("Anthropic stream response contains no recognized output")
+        logger.warning("Stream response contains no recognized output")
         return ReplyType.ERROR, ModelErrorEvent(
             code="empty_stream_response",
             message="No valid output from model response.",
         )
+
+    async def _iter_chat_turn_events(self, response) -> AsyncGenerator[ModelStreamEvent, None]:
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        tool_call_parts: dict[int, dict] = {}
+
+        async for chunk in response:
+            reasoning_delta = self._extract_stream_reasoning_delta(chunk)
+            if reasoning_delta:
+                reasoning_parts.append(reasoning_delta)
+
+            self._merge_stream_tool_calls(tool_call_parts, chunk)
+
+            content = self._extract_stream_text_delta(chunk)
+            if content:
+                text_parts.append(content)
+                yield ModelStreamEvent(type="delta", delta=content)
+
+        reasoning_content = "".join(reasoning_parts) if reasoning_parts else None
+        assistant_content = "".join(text_parts) or None
+        tool_calls = self._finalize_stream_tool_calls(
+            tool_call_parts,
+            reasoning_content=reasoning_content,
+            assistant_content=assistant_content,
+        )
+        if tool_calls:
+            yield ModelStreamEvent(type="tool_calls", tool_calls=tool_calls)
+            return
+
+        if not text_parts:
+            yield ModelStreamEvent(
+                type="error",
+                error=ModelErrorEvent(
+                    code="empty_stream_response",
+                    message="No valid output from model response.",
+                ),
+            )
+
+    async def _iter_responses_turn_events(self, response) -> AsyncGenerator[ModelStreamEvent, None]:
+        text_parts: list[str] = []
+        tool_call_parts: dict[int, dict] = {}
+        response_items: list[dict] = []
+        completed_response = None
+
+        async for event in response:
+            completed_response = self._merge_responses_stream_event(
+                tool_call_parts,
+                response_items,
+                event,
+            ) or completed_response
+
+            content = self._extract_responses_stream_text_delta(event)
+            if content:
+                text_parts.append(content)
+                yield ModelStreamEvent(type="delta", delta=content)
+
+        assistant_content = "".join(text_parts) or None
+        tool_calls = self._finalize_responses_stream_tool_calls(
+            tool_call_parts,
+            response_items,
+            assistant_content=assistant_content,
+        )
+        if not tool_calls and completed_response is not None:
+            tool_calls = self._extract_responses_tool_calls(completed_response)
+            if assistant_content:
+                self._set_tool_calls_assistant_content(tool_calls, assistant_content)
+
+        if tool_calls:
+            yield ModelStreamEvent(type="tool_calls", tool_calls=tool_calls)
+            return
+
+        if not text_parts and completed_response is not None:
+            text = self._extract_responses_text(completed_response)
+            if text:
+                yield ModelStreamEvent(type="delta", delta=text)
+                return
+
+        if not text_parts:
+            yield ModelStreamEvent(
+                type="error",
+                error=ModelErrorEvent(
+                    code="empty_stream_response",
+                    message="No valid output from model response.",
+                ),
+            )
+
+    async def _iter_anthropic_turn_events(self, response) -> AsyncGenerator[ModelStreamEvent, None]:
+        text_parts: list[str] = []
+        content_blocks: dict[int, dict] = {}
+
+        async for event in response:
+            self._merge_anthropic_stream_event(content_blocks, event)
+            content = self._extract_anthropic_stream_text_delta(event)
+            if content:
+                text_parts.append(content)
+                yield ModelStreamEvent(type="delta", delta=content)
+
+        assistant_content = "".join(text_parts) or None
+        tool_calls = self._finalize_anthropic_stream_tool_calls(
+            content_blocks,
+            assistant_content=assistant_content,
+        )
+        if tool_calls:
+            yield ModelStreamEvent(type="tool_calls", tool_calls=tool_calls)
+            return
+
+        if not text_parts:
+            yield ModelStreamEvent(
+                type="error",
+                error=ModelErrorEvent(
+                    code="empty_stream_response",
+                    message="No valid output from model response.",
+                ),
+            )
 
     # ---- Static helpers ----
 
@@ -1039,6 +1084,27 @@ class ModelClient:
                 blocks.append(dict(block))
         return blocks
 
+    @classmethod
+    def _text_from_anthropic_blocks(cls, content_blocks: list[dict]) -> str:
+        text_parts = []
+        for block in content_blocks:
+            if cls._field(block, "type") != "text":
+                continue
+            text = cls._field(block, "text")
+            if text:
+                text_parts.append(str(text))
+        return "".join(text_parts)
+
+    @staticmethod
+    def _set_tool_calls_assistant_content(
+        tool_calls: list[ChatToolCall],
+        assistant_content: Optional[str],
+    ) -> None:
+        if not assistant_content:
+            return
+        for tool_call in tool_calls:
+            tool_call.assistant_content = assistant_content
+
     @staticmethod
     def _first_choice(response) -> Any:
         choices = ModelClient._field(response, "choices") or []
@@ -1053,8 +1119,13 @@ class ModelClient:
         message = ModelClient._field(choice, "message")
         raw_tool_calls = ModelClient._field(message, "tool_calls") or []
         reasoning_content = ModelClient._field(message, "reasoning_content")
+        assistant_content = ModelClient._extract_response_text(response) or None
         return [
-            ChatToolCall.from_raw(tool_call, reasoning_content=reasoning_content)
+            ChatToolCall.from_raw(
+                tool_call,
+                reasoning_content=reasoning_content,
+                assistant_content=assistant_content,
+            )
             for tool_call in raw_tool_calls
             if ModelClient._field(tool_call, "type") in (None, "function")
         ]
@@ -1128,6 +1199,7 @@ class ModelClient:
         """Return normalized function calls from a completed Responses API response."""
         raw_output = ModelClient._field(response, "output", []) or []
         response_items = ModelClient._to_plain_data(raw_output)
+        assistant_content = ModelClient._extract_responses_text(response) or None
         tool_calls = []
         for output_item in raw_output:
             if ModelClient._field(output_item, "type") != "function_call":
@@ -1135,6 +1207,7 @@ class ModelClient:
             tool_call = ChatToolCall.from_responses_item(
                 output_item,
                 response_items=response_items,
+                assistant_content=assistant_content,
             )
             if tool_call.name:
                 tool_calls.append(tool_call)
@@ -1156,6 +1229,7 @@ class ModelClient:
         """Return normalized function tool calls from an Anthropic Messages response."""
         content = ModelClient._field(response, "content") or []
         content_blocks = ModelClient._normalize_anthropic_content_blocks(content)
+        assistant_content = ModelClient._text_from_anthropic_blocks(content_blocks) or None
         tool_calls = []
         for block in content:
             if ModelClient._field(block, "type") != "tool_use":
@@ -1163,6 +1237,7 @@ class ModelClient:
             tool_call = ChatToolCall.from_anthropic_block(
                 block,
                 content_blocks=content_blocks,
+                assistant_content=assistant_content,
             )
             if tool_call.name:
                 tool_calls.append(tool_call)
@@ -1211,13 +1286,18 @@ class ModelClient:
     def _finalize_stream_tool_calls(
         tool_call_parts: dict[int, dict],
         reasoning_content: Optional[str] = None,
+        assistant_content: Optional[str] = None,
     ) -> list[ChatToolCall]:
         tool_calls = []
         for index in sorted(tool_call_parts):
             part = tool_call_parts[index]
             if not part["id"]:
                 part["id"] = f"call_{index}"
-            tool_call = ChatToolCall.from_raw(part, reasoning_content=reasoning_content)
+            tool_call = ChatToolCall.from_raw(
+                part,
+                reasoning_content=reasoning_content,
+                assistant_content=assistant_content,
+            )
             if tool_call.name:
                 tool_calls.append(tool_call)
         return tool_calls
@@ -1329,6 +1409,7 @@ class ModelClient:
         cls,
         tool_call_parts: dict[int, dict],
         response_items: list[dict],
+        assistant_content: Optional[str] = None,
     ) -> list[ChatToolCall]:
         function_items = []
         for index in sorted(tool_call_parts):
@@ -1340,13 +1421,33 @@ class ModelClient:
             function_items.append(part)
 
         replay_items = [item for item in response_items if item.get("type") != "function_call"]
+        if assistant_content and not cls._response_items_have_message_text(replay_items):
+            replay_items.append({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": assistant_content}],
+            })
         replay_items.extend(function_items)
         tool_calls = []
         for item in function_items:
-            tool_call = ChatToolCall.from_responses_item(item, response_items=replay_items)
+            tool_call = ChatToolCall.from_responses_item(
+                item,
+                response_items=replay_items,
+                assistant_content=assistant_content,
+            )
             if tool_call.name:
                 tool_calls.append(tool_call)
         return tool_calls
+
+    @classmethod
+    def _response_items_have_message_text(cls, response_items: list[dict]) -> bool:
+        for item in response_items:
+            if cls._field(item, "type") != "message":
+                continue
+            for content_item in cls._field(item, "content", []) or []:
+                if cls._field(content_item, "text"):
+                    return True
+        return False
 
     @staticmethod
     def _extract_anthropic_stream_text_delta(event) -> str:
@@ -1413,7 +1514,10 @@ class ModelClient:
             )
 
     @staticmethod
-    def _finalize_anthropic_stream_tool_calls(content_blocks: dict[int, dict]) -> list[ChatToolCall]:
+    def _finalize_anthropic_stream_tool_calls(
+        content_blocks: dict[int, dict],
+        assistant_content: Optional[str] = None,
+    ) -> list[ChatToolCall]:
         normalized_blocks = []
         raw_tool_blocks = []
         for index in sorted(content_blocks):
@@ -1423,11 +1527,15 @@ class ModelClient:
                 raw_tool_blocks.append(block)
             normalized_blocks.append(block)
 
+        if assistant_content is None:
+            assistant_content = ModelClient._text_from_anthropic_blocks(normalized_blocks) or None
+
         tool_calls = []
         for block in raw_tool_blocks:
             tool_call = ChatToolCall.from_anthropic_block(
                 block,
                 content_blocks=normalized_blocks,
+                assistant_content=assistant_content,
             )
             if tool_call.name:
                 tool_calls.append(tool_call)

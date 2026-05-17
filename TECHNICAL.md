@@ -405,6 +405,30 @@ data: {"delta":"好"}
 data: [DONE]
 ```
 
+当模型先输出可见文本、随后调用工具时，SSE 会继续保留旧的 `delta`
+帧，同时增加可选边界/进度字段。旧客户端可以继续只拼接 `delta`；新
+客户端可以按 `message_id` 和 `message_done` 把 preface 与最终回答拆成
+两条 assistant 消息：
+
+```text
+data: {"delta":"我去看看","message_id":"...","phase":"assistant"}
+
+data: {"event":"message_done","message_id":"...","phase":"preface","content":"我去看看"}
+
+data: {"event":"tool_call","call_id":"call_...","name":"run_command"}
+
+data: {"event":"tool_result","call_id":"call_...","name":"run_command"}
+
+data: {"delta":"我们在 /Users/... 目录下","message_id":"...","phase":"final"}
+
+data: {"event":"message_done","message_id":"...","phase":"final","content":"我们在 /Users/... 目录下"}
+
+data: [DONE]
+```
+
+`tool_call`/`tool_result` 默认只暴露工具名和调用 ID，不暴露完整参数或
+结果内容。普通非流式 `POST /chat` 仍只返回最终 `reply`，不返回多消息数组。
+
 也可能返回完整消息或错误：
 
 ```text
@@ -677,6 +701,22 @@ ws://127.0.0.1:8010/ws/chat
 ```json
 {"type":"delta","delta":"加入"}
 ```
+
+工具调用分段回复会额外出现结构化事件：
+
+```json
+{"type":"message_done","message_id":"...","phase":"preface","content":"我去看看"}
+```
+
+```json
+{"type":"tool_call","call_id":"call_...","name":"run_command"}
+```
+
+```json
+{"type":"tool_result","call_id":"call_...","name":"run_command"}
+```
+
+最终仍以 `{"type":"done"}` 收尾。
 
 ```json
 {"type":"done"}

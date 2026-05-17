@@ -46,8 +46,15 @@ class MessageHandler:
         await self.message_storage.add_messages(msg)
         return msg
 
-    async def store_model_reply(self, reply_text: str, sender_id: str) -> Message:
+    async def store_model_reply(
+        self,
+        reply_text: str,
+        sender_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Message:
         model_msg = Message.create(content=reply_text, role=RoleType.ASSISTANT, sender_id=sender_id)
+        if metadata:
+            model_msg.metadata.update(metadata)
         await self.message_storage.add_messages(model_msg)
         return model_msg
 

@@ -9,7 +9,7 @@ from typing import Any, List, Optional
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from ...schemas.memory import DiaryEntry, PeopleProfileUpdates, SummaryOutput
+from ...schemas.memory import PeopleProfileUpdates
 
 
 DEFAULT_OPENAI_CHAT_MODEL_API = "openai_chat_completions"
@@ -45,12 +45,11 @@ class JournalLLMService:
         user_prompt = self.build_diary_user_prompt(journal_date, transcript)
 
         try:
-            parsed = await self._call_structured(
-                output_type=DiaryEntry,
+            content = await self._call_text(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
             )
-            return self._normalize_content(parsed.content)
+            return self._normalize_content(content)
         except Exception as exception:
             self.logger.error("Error formatting diary entry: %s", exception)
             return self._fallback_entry(messages)
@@ -69,12 +68,11 @@ class JournalLLMService:
         user_prompt = self.build_summary_user_prompt(period_type, period_label, source_content)
 
         try:
-            parsed = await self._call_structured(
-                output_type=SummaryOutput,
+            content = await self._call_text(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
             )
-            return self._normalize_content(parsed.content)
+            return self._normalize_content(content)
         except Exception as exception:
             self.logger.error("Error generating %s summary: %s", period_type, exception)
             return ""
@@ -139,7 +137,7 @@ Attribution rules:
 
 Output rules:
 - This is only a diary entry; do not give advice, proposals, recommendations, next steps, or assistant-style closings.
-- Return JSON only, shaped as {{"content": "natural diary-style entry"}}."""
+- Return only the diary entry text. Do not wrap it in JSON, markdown code fences, or explanatory prose."""
 
     @staticmethod
     def build_diary_user_prompt(journal_date: str, transcript: str) -> str:
@@ -169,7 +167,7 @@ Period focus:
 Output rules:
 - This is a summary, not advice; do not give recommendations or next steps.
 - Aim for 300-800 characters for weekly, 500-1200 for monthly, 800-2000 for yearly.
-- Return JSON only, shaped as {{"content": "period summary"}}."""
+- Return only the summary text. Do not wrap it in JSON, markdown code fences, or explanatory prose."""
 
     @staticmethod
     def build_summary_user_prompt(period_type: str, period_label: str, source_content: str) -> str:
@@ -228,6 +226,29 @@ Diary entry already written:
         if getattr(reply_type, "value", None) == "structured_reply":
             return payload
         raise ValueError(f"LLM did not return structured output: {payload}")
+
+    async def _call_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> str:
+        from ...core.handlers.model import ModelClient
+
+        model_client = ModelClient(
+            client=self.client,
+            model=self.model,
+            model_api=self.model_api,
+            max_tokens=self.max_tokens,
+        )
+        reply_type, payload = await model_client.call(
+            messages=[{"role": "user", "content": user_prompt}],
+            tool_specs=None,
+            instructions=system_prompt,
+            output_type=None,
+        )
+        if getattr(reply_type, "value", None) == "simple_reply":
+            return str(payload)
+        raise ValueError(f"LLM did not return text output: {payload}")
 
     @staticmethod
     def _format_transcript(messages: List[dict]) -> str:

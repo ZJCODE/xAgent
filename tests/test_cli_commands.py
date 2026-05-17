@@ -1,4 +1,5 @@
 import argparse
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from xagent.interfaces.cli import (
     InitSelection,
     build_parser,
     handle_config,
+    handle_chat,
     handle_init,
     handle_init_feishu,
     handle_logs,
@@ -114,6 +116,93 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.user_id, "alice")
         self.assertFalse(args.memory)
         self.assertTrue(args.private)
+
+    def test_interactive_chat_exit_flushes_with_status_message(self):
+        class FakeAgent:
+            model = "gpt-test"
+            tools = {}
+
+            def __init__(self):
+                self.flush_count = 0
+
+            async def flush_memory(self):
+                self.flush_count += 1
+
+        fake_agent = FakeAgent()
+
+        def init_runner(self, config_dir=None):
+            self.agent = fake_agent
+            self.message_storage = SimpleNamespace()
+            self.config_dir = Path(config_dir)
+            self.config_path = self.config_dir / "config.yaml"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(
+                message=None,
+                config_dir=tmpdir,
+                user_id=None,
+                verbose=False,
+                stream=None,
+                memory=True,
+                private=False,
+            )
+
+            with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", init_runner):
+                with patch("builtins.input", return_value="bye"):
+                    with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                        exit_code = handle_chat(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_agent.flush_count, 1)
+        output = stdout.getvalue()
+        self.assertIn("Thank you for using xAgent CLI", output)
+        self.assertIn("正在写入退出前记忆", output)
+
+    def test_single_chat_flushes_with_status_message(self):
+        class FakeAgent:
+            model = "gpt-test"
+            tools = {}
+
+            def __init__(self):
+                self.flush_count = 0
+                self.call_kwargs = None
+
+            async def __call__(self, **kwargs):
+                self.call_kwargs = kwargs
+                return "single reply"
+
+            async def flush_memory(self):
+                self.flush_count += 1
+
+        fake_agent = FakeAgent()
+
+        def init_runner(self, config_dir=None):
+            self.agent = fake_agent
+            self.message_storage = SimpleNamespace()
+            self.config_dir = Path(config_dir)
+            self.config_path = self.config_dir / "config.yaml"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(
+                message="Hello",
+                config_dir=tmpdir,
+                user_id="alice",
+                verbose=False,
+                stream=None,
+                memory=True,
+                private=False,
+            )
+
+            with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", init_runner):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = handle_chat(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_agent.flush_count, 1)
+        self.assertEqual(fake_agent.call_kwargs["user_id"], "alice")
+        output = stdout.getvalue()
+        self.assertIn("single reply", output)
+        self.assertIn("正在写入退出前记忆", output)
 
     def test_parser_supports_web_command(self):
         args = build_parser().parse_args([

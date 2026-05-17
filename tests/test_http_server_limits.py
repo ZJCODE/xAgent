@@ -71,6 +71,19 @@ class FastStreamingAgent:
         return generator()
 
 
+class EventStreamingAgent(FastStreamingAgent):
+    async def chat_events(self, **kwargs):
+        yield {"type": "message_start", "message_id": "m1", "phase": "assistant"}
+        yield {"type": "delta", "delta": "checking", "message_id": "m1", "phase": "assistant"}
+        yield {"type": "message_done", "message_id": "m1", "phase": "preface", "content": "checking"}
+        yield {"type": "tool_call", "call_id": "call-1", "name": "run_command"}
+        yield {"type": "tool_result", "call_id": "call-1", "name": "run_command"}
+        yield {"type": "message_start", "message_id": "m2", "phase": "final"}
+        yield {"type": "delta", "delta": "done", "message_id": "m2", "phase": "final"}
+        yield {"type": "message_done", "message_id": "m2", "phase": "final", "content": "done"}
+        yield {"type": "done"}
+
+
 class FlushTrackingAgent(FastStreamingAgent):
     def __init__(self):
         super().__init__()
@@ -180,6 +193,23 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"error": "Agent chat timed out."', response.text)
         self.assertIn("data: [DONE]", response.text)
 
+    async def test_streaming_chat_sse_includes_structured_events(self):
+        agent = EventStreamingAgent()
+        server = AgentHTTPServer(agent=agent, enable_web=False)
+
+        async with await self._client(server) as client:
+            response = await client.post("/chat", json={
+                "user_id": "alice",
+                "user_message": "where are we",
+                "stream": True,
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"delta": "checking"', response.text)
+        self.assertIn('"event": "message_done"', response.text)
+        self.assertIn('"event": "tool_call"', response.text)
+        self.assertIn("data: [DONE]", response.text)
+
     async def test_observe_endpoint_returns_ingestion_result(self):
         agent = ObservingAgent()
         server = AgentHTTPServer(agent=agent, enable_web=False)
@@ -278,6 +308,49 @@ class AgentWebSocketServerTests(unittest.TestCase):
                     "type": "delta",
                     "delta": "lo",
                 })
+                self.assertEqual(websocket.receive_json(), {"type": "done"})
+
+    def test_websocket_streaming_chat_emits_structured_events(self):
+        server = AgentHTTPServer(agent=EventStreamingAgent(), enable_web=False)
+
+        with TestClient(server.app) as client:
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json({
+                    "user_id": "alice",
+                    "user_message": "where are we",
+                    "stream": True,
+                })
+
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "message_start",
+                    "message_id": "m1",
+                    "phase": "assistant",
+                })
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "delta",
+                    "delta": "checking",
+                    "message_id": "m1",
+                    "phase": "assistant",
+                })
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "message_done",
+                    "message_id": "m1",
+                    "phase": "preface",
+                    "content": "checking",
+                })
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "tool_call",
+                    "call_id": "call-1",
+                    "name": "run_command",
+                })
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "tool_result",
+                    "call_id": "call-1",
+                    "name": "run_command",
+                })
+                self.assertEqual(websocket.receive_json()["type"], "message_start")
+                self.assertEqual(websocket.receive_json()["delta"], "done")
+                self.assertEqual(websocket.receive_json()["type"], "message_done")
                 self.assertEqual(websocket.receive_json(), {"type": "done"})
 
     def test_websocket_streaming_chat_timeout_emits_error_and_done(self):

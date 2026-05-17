@@ -139,6 +139,15 @@ class AgentCLI(BaseAgentRunner):
                     print("💭 Please enter a message to chat with the agent.")
                     continue
 
+                if stream and hasattr(self.agent, "chat_events"):
+                    await self._print_chat_events(
+                        user_message=user_input,
+                        user_id=user_id,
+                        enable_memory=memory,
+                        private=private,
+                    )
+                    continue
+
                 response = await self.agent(
                     user_message=user_input,
                     user_id=user_id,
@@ -185,6 +194,66 @@ class AgentCLI(BaseAgentRunner):
             enable_memory=memory,
             private=private,
         )
+
+    async def print_single_chat_events(
+        self,
+        message: str,
+        user_id: Optional[str] = None,
+        memory: bool = True,
+        private: bool = False,
+    ) -> None:
+        user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
+        await self._print_chat_events(
+            user_message=message,
+            user_id=user_id,
+            enable_memory=memory,
+            private=private,
+        )
+
+    async def _print_chat_events(
+        self,
+        *,
+        user_message: str,
+        user_id: str,
+        enable_memory: bool,
+        private: bool,
+    ) -> None:
+        line_open = False
+        async for event in self.agent.chat_events(
+            user_message=user_message,
+            user_id=user_id,
+            enable_memory=enable_memory,
+            private=private,
+        ):
+            event_type = event.get("type")
+            if event_type == "message_start":
+                if line_open:
+                    print()
+                print("🤖 Agent: ", end="", flush=True)
+                line_open = True
+                continue
+            if event_type == "delta":
+                if not line_open:
+                    print("🤖 Agent: ", end="", flush=True)
+                    line_open = True
+                delta = event.get("delta", "")
+                if delta:
+                    print(delta, end="", flush=True)
+                continue
+            if event_type == "message_done":
+                if line_open:
+                    print()
+                    line_open = False
+                continue
+            if event_type == "error":
+                if line_open:
+                    print()
+                    line_open = False
+                print(f"❌ {event.get('error', 'Agent processing error.')}")
+                continue
+
+        if line_open:
+            print()
 
     def _print_banner(
         self,
@@ -1039,6 +1108,14 @@ def handle_init(args: argparse.Namespace) -> int:
     return 0 if result.wrote_files else 1
 
 
+async def _flush_chat_exit_memory(agent: Any) -> None:
+    flusher = getattr(agent, "flush_memory", None)
+    if flusher is None:
+        return
+    print("⏳ 正在写入退出前记忆，请稍候...")
+    await flusher()
+
+
 def handle_chat(args: argparse.Namespace) -> int:
     agent_cli = AgentCLI(config_dir=args.config_dir, verbose=args.verbose)
 
@@ -1052,7 +1129,7 @@ def handle_chat(args: argparse.Namespace) -> int:
                     private=args.private,
                 )
             finally:
-                await agent_cli.agent.flush_memory()
+                await _flush_chat_exit_memory(agent_cli.agent)
 
         asyncio.run(run_interactive_chat())
         return 0
@@ -1061,6 +1138,15 @@ def handle_chat(args: argparse.Namespace) -> int:
 
     async def run_single_message():
         try:
+            if stream and hasattr(agent_cli.agent, "chat_events"):
+                await agent_cli.print_single_chat_events(
+                    message=args.message,
+                    user_id=args.user_id,
+                    memory=args.memory,
+                    private=args.private,
+                )
+                return
+
             response = await agent_cli.chat_single(
                 message=args.message,
                 user_id=args.user_id,
@@ -1076,7 +1162,7 @@ def handle_chat(args: argparse.Namespace) -> int:
             else:
                 print(response)
         finally:
-            await agent_cli.agent.flush_memory()
+            await _flush_chat_exit_memory(agent_cli.agent)
 
     asyncio.run(run_single_message())
     return 0
