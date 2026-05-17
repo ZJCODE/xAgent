@@ -150,13 +150,16 @@ The Feishu adapter always runs normal non-private turns. It does not expose
 or forward xAgent's `private` flag, because bot chat memory should remain
 predictable across direct and group conversations.
 
-## Streaming replies
+## Segmented replies
 
-Set `channels.feishu.stream: true` in `~/.xagent/config.yaml`. The adapter uses
-`FeishuChannel.stream(...)` with markdown — Feishu renders the answer as a
-streaming card that updates token-by-token. Disabled automatically when the
-agent is configured with `output_schema` (structured output requires
-non-stream JSON).
+Feishu replies are always driven by `Agent.chat_events()`. Every completed
+assistant segment (`message_done`) is sent as its own markdown message, so a
+preface such as “我去看看” can appear before tool execution and the final answer
+can arrive as a later message.
+
+Set `channels.feishu.token_stream: true` to use `FeishuChannel.stream(...)` for
+the current segment. This only controls whether text deltas update the active
+Feishu card; segmented message boundaries are always enabled.
 
 ## Python API
 

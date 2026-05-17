@@ -467,6 +467,13 @@ function renderMarkdown(target, content) {
   target.innerHTML = md.render(content);
 }
 
+function webSocketUrl(path) {
+  const base = API_BASE || window.location.origin;
+  const url = new URL(path, base);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
+}
+
 function appendMessage(msg, placeholder = false) {
   const container = document.getElementById('chatMessages');
   const hint = document.getElementById('emptyHint');
@@ -547,7 +554,7 @@ async function sendMessage() {
   const payload = {
     user_id: seat.name.toLowerCase().replace(/\s+/g, '_'),
     user_message: text,
-    stream: true,
+    token_stream: true,
     enable_memory: false,
     private: false,
   };
@@ -559,60 +566,73 @@ async function sendMessage() {
   let currentAgent = { msg: agentMsg, bubble: bubbleEl, text: '' };
 
   try {
-    const response = await fetch(`${API_BASE}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-      body: JSON.stringify(payload),
-    });
+    await new Promise((resolve, reject) => {
+      const socket = new WebSocket(webSocketUrl('/ws/chat'));
+      let settled = false;
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data: ')) continue;
-        const chunk = trimmed.slice(6);
-        if (chunk === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(chunk);
-          const eventType = parsed.event || parsed.type || '';
-          if (parsed.error) throw new Error(parsed.error);
-          if (parsed.delta) {
-            if (!currentAgent) currentAgent = createAgentStreamBubble();
-            currentAgent.text += parsed.delta;
-            renderMarkdown(currentAgent.bubble, currentAgent.text);
-            scrollToBottom();
-          } else if (eventType === 'message_done') {
-            if (!currentAgent) currentAgent = createAgentStreamBubble();
-            currentAgent.text = String(parsed.content || currentAgent.text || '');
-            renderMarkdown(currentAgent.bubble, currentAgent.text);
-            currentAgent.bubble.classList.remove('typing-cursor');
-            currentAgent.msg.content = currentAgent.text;
-            currentAgent = null;
-          } else if (parsed.message) {
-            if (!currentAgent) currentAgent = createAgentStreamBubble();
-            currentAgent.text = typeof parsed.message === 'object' ? JSON.stringify(parsed.message, null, 2) : parsed.message;
-            renderMarkdown(currentAgent.bubble, currentAgent.text);
-            currentAgent.bubble.classList.remove('typing-cursor');
-            currentAgent.msg.content = currentAgent.text;
-            currentAgent = null;
-            scrollToBottom();
-          }
-        } catch (e) {
-          if (!String(e?.message || e).includes('JSON')) throw e;
+      const settle = (error = null) => {
+        if (settled) return;
+        settled = true;
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close(1000);
         }
-      }
-    }
+        error ? reject(error) : resolve();
+      };
+
+      socket.addEventListener('open', () => {
+        socket.send(JSON.stringify(payload));
+      });
+
+      socket.addEventListener('message', (event) => {
+        let parsed;
+        try {
+          parsed = JSON.parse(event.data);
+        } catch {
+          settle(new Error('Invalid WebSocket response.'));
+          return;
+        }
+
+        const eventType = parsed.type || '';
+        if (eventType === 'error' || parsed.error) {
+          settle(new Error(parsed.error || 'WebSocket chat failed.'));
+          return;
+        }
+        if (eventType === 'message_start') {
+          if (!currentAgent) currentAgent = createAgentStreamBubble();
+          return;
+        }
+        if (eventType === 'message_delta') {
+          if (!currentAgent) currentAgent = createAgentStreamBubble();
+          currentAgent.text += String(parsed.delta || '');
+          renderMarkdown(currentAgent.bubble, currentAgent.text);
+          scrollToBottom();
+          return;
+        }
+        if (eventType === 'message_done') {
+          if (!currentAgent) currentAgent = createAgentStreamBubble();
+          currentAgent.text = String(parsed.content || currentAgent.text || '');
+          renderMarkdown(currentAgent.bubble, currentAgent.text);
+          currentAgent.bubble.classList.remove('typing-cursor');
+          currentAgent.msg.content = currentAgent.text;
+          currentAgent = null;
+          scrollToBottom();
+          return;
+        }
+        if (eventType === 'done') {
+          settle();
+        }
+      });
+
+      socket.addEventListener('error', () => {
+        settle(new Error('WebSocket connection failed.'));
+      });
+
+      socket.addEventListener('close', () => {
+        if (!settled) {
+          settle(new Error('WebSocket connection closed before completion.'));
+        }
+      });
+    });
 
     if (currentAgent) {
       currentAgent.bubble.classList.remove('typing-cursor');

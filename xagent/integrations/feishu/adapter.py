@@ -849,32 +849,12 @@ class FeishuAdapter:
             text=chat_text,
         )
 
-        if self.config.stream and not self.agent.output_type:
-            await self._send_streaming(
-                chat_id=chat_id,
-                message_id=message_id,
-                is_group=is_group,
-                chat_kwargs={**chat_kwargs, "stream": True},
-                raw_msg=raw_msg,
-            )
-            return
-
-        result = await self.agent.chat(**chat_kwargs)
-        reply_text = self._stringify(result)
-        if not reply_text:
-            self.logger.warning(
-                "Agent returned empty Feishu reply: chat_id=%s message_id=%s",
-                chat_id,
-                message_id,
-            )
-            return
-        anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
-        await self._send_markdown(
+        await self._send_event_replies(
             chat_id=chat_id,
-            message_id=anchor,
-            uuid_message_id=message_id,
-            text=reply_text,
             is_group=is_group,
+            message_id=message_id,
+            chat_kwargs=chat_kwargs,
+            raw_msg=raw_msg,
         )
 
     def _chat_kwargs(
@@ -896,7 +876,7 @@ class FeishuAdapter:
             kwargs["max_concurrent_tools"] = self.config.max_concurrent_tools
         return kwargs
 
-    async def _send_streaming(
+    async def _send_event_replies(
         self,
         *,
         chat_id: str,
@@ -906,64 +886,144 @@ class FeishuAdapter:
         raw_msg: Any = None,
     ) -> None:
         chat_events = getattr(self.agent, "chat_events", None)
-        anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
-        if callable(chat_events):
-            sent_count = 0
-            async for event in chat_events(**{k: v for k, v in chat_kwargs.items() if k != "stream"}):
-                event_type = event.get("type")
-                if event_type == "message_done":
-                    content = str(event.get("content") or "").strip()
-                    if not content:
-                        continue
-                    sent_count += 1
-                    uuid_message_id = f"{message_id}:{sent_count}" if message_id else None
-                    await self._send_markdown(
-                        chat_id=chat_id,
-                        message_id=anchor,
-                        uuid_message_id=uuid_message_id,
-                        text=content,
-                        is_group=is_group,
-                    )
-                elif event_type == "error":
-                    sent_count += 1
-                    uuid_message_id = f"{message_id}:{sent_count}" if message_id else None
-                    await self._send_markdown(
-                        chat_id=chat_id,
-                        message_id=anchor,
-                        uuid_message_id=uuid_message_id,
-                        text=str(event.get("error") or "Agent processing error."),
-                        is_group=is_group,
-                    )
+        if not callable(chat_events):
+            raise RuntimeError("Agent does not support chat_events().")
+
+        if self.config.token_stream and callable(getattr(self._channel, "stream", None)):
+            await self._send_event_streaming_cards(
+                chat_id=chat_id,
+                message_id=message_id,
+                is_group=is_group,
+                chat_kwargs=chat_kwargs,
+                raw_msg=raw_msg,
+            )
             return
 
-        agent_stream = await self.agent.chat(**chat_kwargs)
-        if not hasattr(agent_stream, "__aiter__"):
-            # Agent fell back to non-stream (e.g. structured output); use the
-            # plain reply path.
-            reply_text = self._stringify(agent_stream)
-            if reply_text:
+        anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
+        sent_count = 0
+        async for event in chat_events(**chat_kwargs, token_stream=False):
+            event_type = event.get("type")
+            if event_type == "message_done":
+                content = str(event.get("content") or "").strip()
+                if not content:
+                    continue
+                sent_count += 1
+                uuid_message_id = self._event_message_uuid(message_id, sent_count)
                 await self._send_markdown(
                     chat_id=chat_id,
                     message_id=anchor,
-                    uuid_message_id=message_id,
-                    text=reply_text,
+                    uuid_message_id=uuid_message_id,
+                    text=content,
                     is_group=is_group,
                 )
-            return
+            elif event_type == "error":
+                sent_count += 1
+                uuid_message_id = self._event_message_uuid(message_id, sent_count)
+                await self._send_markdown(
+                    chat_id=chat_id,
+                    message_id=anchor,
+                    uuid_message_id=uuid_message_id,
+                    text=str(event.get("error") or "Agent processing error."),
+                    is_group=is_group,
+                )
 
-        async def producer(stream):
-            async for chunk in agent_stream:  # type: ignore[func-returns-value]
-                if chunk:
-                    await stream.append(chunk)
+    async def _send_event_streaming_cards(
+        self,
+        *,
+        chat_id: str,
+        message_id: Optional[str],
+        is_group: bool,
+        chat_kwargs: dict[str, Any],
+        raw_msg: Any = None,
+    ) -> None:
+        chat_events = getattr(self.agent, "chat_events", None)
+        if not callable(chat_events):
+            raise RuntimeError("Agent does not support chat_events().")
 
-        opts = self._send_opts(
-            message_id=anchor,
-            is_group=is_group,
-            uuid_message_id=message_id,
-        )
+        anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         assert self._channel is not None
-        result = await self._channel.stream(chat_id, {"markdown": producer}, opts)
-        self._log_send_result(result=result, chat_id=chat_id, message_id=anchor)
+        sent_count = 0
+        active_queue: Optional[asyncio.Queue[Optional[str]]] = None
+        active_task: Optional[asyncio.Task[Any]] = None
+        active_has_delta = False
+
+        async def start_card() -> None:
+            nonlocal active_queue, active_task, active_has_delta, sent_count
+            sent_count += 1
+            queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+            uuid_message_id = self._event_message_uuid(message_id, sent_count)
+
+            async def producer(stream):
+                while True:
+                    chunk = await queue.get()
+                    if chunk is None:
+                        break
+                    if chunk:
+                        await stream.append(chunk)
+
+            opts = self._send_opts(
+                message_id=anchor,
+                is_group=is_group,
+                uuid_message_id=uuid_message_id,
+            )
+            active_queue = queue
+            active_task = asyncio.create_task(self._channel.stream(chat_id, {"markdown": producer}, opts))
+            active_has_delta = False
+
+        async def finish_card(final_content: str = "") -> None:
+            nonlocal active_queue, active_task, active_has_delta
+            if active_queue is None or active_task is None:
+                if final_content.strip():
+                    await self._send_markdown(
+                        chat_id=chat_id,
+                        message_id=anchor,
+                        uuid_message_id=self._event_message_uuid(message_id, sent_count + 1),
+                        text=final_content,
+                        is_group=is_group,
+                    )
+                return
+
+            if final_content and not active_has_delta:
+                await active_queue.put(final_content)
+            await active_queue.put(None)
+            result = await active_task
+            self._log_send_result(result=result, chat_id=chat_id, message_id=anchor)
+            active_queue = None
+            active_task = None
+            active_has_delta = False
+
+        async for event in chat_events(**chat_kwargs, token_stream=True):
+            event_type = event.get("type")
+            if event_type == "message_start":
+                if active_queue is not None:
+                    await finish_card()
+                await start_card()
+                continue
+            if event_type == "message_delta":
+                if active_queue is None:
+                    await start_card()
+                delta = str(event.get("delta") or "")
+                if delta:
+                    await active_queue.put(delta)
+                    active_has_delta = True
+                continue
+            if event_type == "message_done":
+                content = str(event.get("content") or "")
+                await finish_card(content)
+                continue
+            if event_type == "error":
+                await finish_card()
+                sent_count += 1
+                await self._send_markdown(
+                    chat_id=chat_id,
+                    message_id=anchor,
+                    uuid_message_id=self._event_message_uuid(message_id, sent_count),
+                    text=str(event.get("error") or "Agent processing error."),
+                    is_group=is_group,
+                )
+
+        if active_queue is not None:
+            await finish_card()
 
     # ------------------------------------------------------------------
     # Outbound helpers
@@ -985,6 +1045,12 @@ class FeishuAdapter:
         if uuid:
             opts["uuid"] = uuid
         return opts or None
+
+    @staticmethod
+    def _event_message_uuid(message_id: Optional[str], count: int) -> Optional[str]:
+        if not message_id:
+            return None
+        return message_id if count <= 1 else f"{message_id}:{count}"
 
     @staticmethod
     def _message_uuid(message_id: Optional[str]) -> Optional[str]:

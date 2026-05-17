@@ -117,6 +117,17 @@ class CLICommandTests(unittest.TestCase):
         self.assertFalse(args.memory)
         self.assertTrue(args.private)
 
+    def test_parser_supports_chat_event_mode(self):
+        args = build_parser().parse_args([
+            "chat",
+            "Hello",
+            "--events",
+            "--token-stream",
+        ])
+
+        self.assertTrue(args.events)
+        self.assertTrue(args.token_stream)
+
     def test_interactive_chat_exit_flushes_with_status_message(self):
         class FakeAgent:
             model = "gpt-test"
@@ -142,7 +153,8 @@ class CLICommandTests(unittest.TestCase):
                 config_dir=tmpdir,
                 user_id=None,
                 verbose=False,
-                stream=None,
+                token_stream=None,
+                events=False,
                 memory=True,
                 private=False,
             )
@@ -188,7 +200,8 @@ class CLICommandTests(unittest.TestCase):
                 config_dir=tmpdir,
                 user_id="alice",
                 verbose=False,
-                stream=None,
+                token_stream=None,
+                events=False,
                 memory=True,
                 private=False,
             )
@@ -200,6 +213,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_agent.flush_count, 1)
         self.assertEqual(fake_agent.call_kwargs["user_id"], "alice")
+        self.assertNotIn("stream", fake_agent.call_kwargs)
         output = stdout.getvalue()
         self.assertIn("single reply", output)
         self.assertIn("正在写入退出前记忆", output)

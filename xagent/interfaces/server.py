@@ -11,9 +11,9 @@ from posthog import host
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .base import BaseAgentConfig, BaseAgentRunner
 from ..core.agent import Agent
@@ -23,18 +23,25 @@ from ..core.runtime import create_runtime_heartbeat
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
-class AgentInput(BaseModel):
-    """Request body for chat endpoint."""
+class ChatInput(BaseModel):
+    """Final-only request body for the HTTP chat endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
 
     user_id: str
     user_message: str
     image_source: Optional[Union[str, List[str]]] = None
-    stream: Optional[bool] = False
     history_count: Optional[int] = AgentConfig.DEFAULT_HISTORY_COUNT
     max_iter: Optional[int] = AgentConfig.DEFAULT_MAX_ITER
     max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
     enable_memory: Optional[bool] = True
     private: Optional[bool] = False
+
+
+class AgentInput(ChatInput):
+    """Event request body for WebSocket chat."""
+
+    token_stream: Optional[bool] = False
 
 
 class ObserveInput(BaseModel):
@@ -98,7 +105,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 detail="Too many concurrent chat requests; try again later.",
             ) from exc
 
-    async def _call_agent(self, input_data: AgentInput, stream: bool):
+    async def _call_agent(self, input_data: ChatInput):
         return await self.agent(
             user_message=input_data.user_message,
             user_id=input_data.user_id,
@@ -106,7 +113,6 @@ class AgentHTTPServer(BaseAgentRunner):
             max_iter=input_data.max_iter,
             max_concurrent_tools=input_data.max_concurrent_tools,
             image_source=input_data.image_source,
-            stream=stream,
             enable_memory=input_data.enable_memory,
             private=input_data.private,
         )
@@ -119,12 +125,12 @@ class AgentHTTPServer(BaseAgentRunner):
             metadata=input_data.metadata,
         )
 
-    async def _run_chat_with_limits(self, input_data: AgentInput, stream: bool):
+    async def _run_chat_with_limits(self, input_data: ChatInput):
         await self._acquire_chat_slot()
         try:
             deadline = time.monotonic() + self._chat_timeout
             return await self._await_before_deadline(
-                self._call_agent(input_data, stream=stream),
+                self._call_agent(input_data),
                 deadline,
             )
         except asyncio.TimeoutError as exc:
@@ -145,7 +151,7 @@ class AgentHTTPServer(BaseAgentRunner):
         finally:
             self._chat_semaphore.release()
 
-    async def _chat_stream_events(self, input_data: AgentInput):
+    async def _chat_event_stream(self, input_data: AgentInput):
         acquired = False
         done_sent = False
         try:
@@ -154,40 +160,32 @@ class AgentHTTPServer(BaseAgentRunner):
             deadline = time.monotonic() + self._chat_timeout
 
             chat_events = getattr(self.agent, "chat_events", None)
-            if callable(chat_events):
-                response = chat_events(
-                    user_message=input_data.user_message,
-                    user_id=input_data.user_id,
-                    history_count=input_data.history_count,
-                    max_iter=input_data.max_iter,
-                    max_concurrent_tools=input_data.max_concurrent_tools,
-                    image_source=input_data.image_source,
-                    enable_memory=input_data.enable_memory,
-                    private=input_data.private,
-                )
-                async for event in self._iterate_before_deadline(response, deadline):
-                    if event.get("type") == "done":
-                        done_sent = True
-                    yield event
-                return
+            if not callable(chat_events):
+                raise RuntimeError("Agent does not support chat_events().")
 
-            response = await self._await_before_deadline(
-                self._call_agent(input_data, stream=True),
-                deadline,
+            response = chat_events(
+                user_message=input_data.user_message,
+                user_id=input_data.user_id,
+                history_count=input_data.history_count,
+                max_iter=input_data.max_iter,
+                max_concurrent_tools=input_data.max_concurrent_tools,
+                image_source=input_data.image_source,
+                token_stream=bool(input_data.token_stream),
+                enable_memory=input_data.enable_memory,
+                private=input_data.private,
             )
-            if hasattr(response, "__aiter__"):
-                async for delta in self._iterate_before_deadline(response, deadline):
-                    yield {"type": "delta", "delta": delta}
-            else:
-                yield {"type": "message", "message": self._response_payload(response)}
+            async for event in self._iterate_before_deadline(response, deadline):
+                if event.get("type") == "done":
+                    done_sent = True
+                yield event
         except HTTPException as exc:
-            self.logger.warning("Streaming chat rejected for %s: %s", input_data.user_id, exc.detail)
+            self.logger.warning("WebSocket chat rejected for %s: %s", input_data.user_id, exc.detail)
             yield {"type": "error", "error": exc.detail, "status_code": exc.status_code}
         except asyncio.TimeoutError:
-            self.logger.error("Streaming chat timed out for %s", input_data.user_id)
+            self.logger.error("WebSocket chat timed out for %s", input_data.user_id)
             yield {"type": "error", "error": "Agent chat timed out.", "status_code": 504}
         except Exception as exc:
-            self.logger.error("Streaming error for %s: %s", input_data.user_id, exc)
+            self.logger.error("WebSocket chat event error for %s: %s", input_data.user_id, exc)
             yield {"type": "error", "error": str(exc)}
         finally:
             if acquired:
@@ -195,40 +193,9 @@ class AgentHTTPServer(BaseAgentRunner):
         if not done_sent:
             yield {"type": "done"}
 
-    async def _stream_chat_events(self, input_data: AgentInput):
-        async for event in self._chat_stream_events(input_data):
-            if event.get("type") == "done":
-                yield "data: [DONE]\n\n"
-                continue
-            yield self._sse(self._sse_event_payload(event))
-
     async def _send_websocket_chat_events(self, websocket: WebSocket, input_data: AgentInput) -> None:
-        if input_data.stream:
-            async for event in self._chat_stream_events(input_data):
-                await websocket.send_json(event)
-            return
-
-        try:
-            response = await self._run_chat_with_limits(input_data, stream=False)
-            await websocket.send_json({
-                "type": "message",
-                "message": self._response_payload(response),
-            })
-        except HTTPException as exc:
-            self.logger.warning("WebSocket chat rejected for %s: %s", input_data.user_id, exc.detail)
-            await websocket.send_json({
-                "type": "error",
-                "error": exc.detail,
-                "status_code": exc.status_code,
-            })
-        except Exception as exc:
-            self.logger.error("WebSocket chat error for %s: %s", input_data.user_id, exc)
-            await websocket.send_json({
-                "type": "error",
-                "error": f"Agent processing error: {str(exc)}",
-            })
-        finally:
-            await websocket.send_json({"type": "done"})
+        async for event in self._chat_event_stream(input_data):
+            await websocket.send_json(event)
 
     async def _send_websocket_observe_events(self, websocket: WebSocket, input_data: ObserveInput) -> None:
         try:
@@ -294,18 +261,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 break
 
     @staticmethod
-    def _sse(payload: dict) -> str:
-        return f"data: {json.dumps(payload)}\n\n"
-
-    @staticmethod
-    def _sse_event_payload(event: dict) -> dict:
-        event_type = event.get("type")
-        payload = {key: value for key, value in event.items() if key != "type"}
-        if event_type in {"message_start", "message_done", "tool_call", "tool_result"}:
-            payload["event"] = event_type
-        return payload
-
-    @staticmethod
     def _response_payload(response):
         if hasattr(response, "model_dump"):
             return response.model_dump()
@@ -350,7 +305,7 @@ class AgentHTTPServer(BaseAgentRunner):
     def _create_app(self) -> FastAPI:
         app = FastAPI(
             title="xAgent HTTP Agent Server",
-            description="HTTP API for xAgent continuous-stream AI",
+            description="HTTP and WebSocket API for xAgent",
             version="1.0.0",
             lifespan=self._lifespan,
         )
@@ -437,20 +392,13 @@ class AgentHTTPServer(BaseAgentRunner):
             return {"status": "healthy", "service": "xAgent HTTP Server"}
 
         @app.post("/chat")
-        async def chat(input_data: AgentInput):
+        async def chat(input_data: ChatInput):
             self.logger.info(
-                "Chat request from %s, stream=%s",
+                "Chat request from %s",
                 input_data.user_id,
-                input_data.stream,
             )
             try:
-                if input_data.stream:
-                    return StreamingResponse(
-                        self._stream_chat_events(input_data),
-                        media_type="text/event-stream",
-                    )
-
-                response = await self._run_chat_with_limits(input_data, stream=False)
+                response = await self._run_chat_with_limits(input_data)
                 return {"reply": self._response_payload(response)}
             except HTTPException:
                 raise
@@ -468,9 +416,9 @@ class AgentHTTPServer(BaseAgentRunner):
                     raw_payload = await websocket.receive_json()
                     input_data = AgentInput.model_validate(raw_payload)
                     self.logger.info(
-                        "WebSocket chat request from %s, stream=%s",
+                        "WebSocket chat request from %s, token_stream=%s",
                         input_data.user_id,
-                        input_data.stream,
+                        input_data.token_stream,
                     )
                     await self._send_websocket_chat_events(websocket, input_data)
                 except WebSocketDisconnect:

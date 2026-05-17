@@ -212,8 +212,32 @@ class ModelClient:
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
     ) -> AsyncGenerator[ModelStreamEvent, None]:
-        """Stream visible model text and finalized tool calls for one model turn."""
+        async for event in self.model_turn_events(
+            messages=messages,
+            tool_specs=tool_specs,
+            instructions=instructions,
+            token_stream=True,
+        ):
+            yield event
+
+    async def model_turn_events(
+        self,
+        messages: list,
+        tool_specs: Optional[list],
+        instructions: Optional[Union[str, list[dict]]] = None,
+        token_stream: bool = False,
+    ) -> AsyncGenerator[ModelStreamEvent, None]:
+        """Emit visible model text and finalized tool calls for one model turn."""
         try:
+            if not token_stream:
+                async for event in self._non_stream_turn_events(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                ):
+                    yield event
+                return
+
             if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
                 response = await self.client.messages.create(
                     **self._build_anthropic_create_params(
@@ -263,6 +287,49 @@ class ModelClient:
                     details=str(exc),
                 ),
             )
+
+    async def _non_stream_turn_events(
+        self,
+        messages: list,
+        tool_specs: Optional[list],
+        instructions: Optional[Union[str, list[dict]]] = None,
+    ) -> AsyncGenerator[ModelStreamEvent, None]:
+        if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
+            response = await self.client.messages.create(
+                **self._build_anthropic_create_params(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                    output_type=None,
+                    stream=False,
+                )
+            )
+            events = self._anthropic_non_stream_turn_events(response)
+        elif self.model_api == MODEL_API_OPENAI_RESPONSES:
+            response = await self.client.responses.create(
+                **self._build_responses_create_params(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                    output_type=None,
+                    stream=False,
+                )
+            )
+            events = self._responses_non_stream_turn_events(response)
+        else:
+            response = await self.client.chat.completions.create(
+                **self._build_create_params(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                    output_type=None,
+                    stream=False,
+                )
+            )
+            events = self._chat_non_stream_turn_events(response)
+
+        for event in events:
+            yield event
 
     def _build_create_params(
         self,
@@ -790,6 +857,46 @@ class ModelClient:
             message="No valid output from model response.",
         )
 
+    @classmethod
+    def _chat_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
+        text = cls._extract_response_text(response)
+        tool_calls = cls._extract_tool_calls(response)
+        return cls._completed_turn_events(text, tool_calls)
+
+    @classmethod
+    def _responses_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
+        text = cls._extract_responses_text(response)
+        tool_calls = cls._extract_responses_tool_calls(response)
+        return cls._completed_turn_events(text, tool_calls)
+
+    @classmethod
+    def _anthropic_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
+        text = cls._extract_anthropic_response_text(response)
+        tool_calls = cls._extract_anthropic_tool_calls(response)
+        return cls._completed_turn_events(text, tool_calls)
+
+    @classmethod
+    def _completed_turn_events(
+        cls,
+        text: str,
+        tool_calls: list[ChatToolCall],
+    ) -> list[ModelStreamEvent]:
+        events: list[ModelStreamEvent] = []
+        if text:
+            cls._set_tool_calls_assistant_content(tool_calls, text)
+            events.append(ModelStreamEvent(type="text", delta=text))
+        if tool_calls:
+            events.append(ModelStreamEvent(type="tool_calls", tool_calls=tool_calls))
+        if not events:
+            events.append(ModelStreamEvent(
+                type="error",
+                error=ModelErrorEvent(
+                    code="empty_model_response",
+                    message="No valid output from model response.",
+                ),
+            ))
+        return events
+
     async def _handle_stream(
         self,
         response,
@@ -831,7 +938,7 @@ class ModelClient:
         """Collect model stream events into the legacy ReplyType contract."""
         text_parts: list[str] = []
         async for event in events:
-            if event.type == "delta" and event.delta:
+            if event.type in {"delta", "text"} and event.delta:
                 text_parts.append(event.delta)
                 continue
             if event.type == "tool_calls":

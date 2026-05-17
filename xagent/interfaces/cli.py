@@ -71,18 +71,18 @@ class AgentCLI(BaseAgentRunner):
     async def chat_interactive(
         self,
         user_id: Optional[str] = None,
-        stream: Optional[bool] = None,
+        token_stream: Optional[bool] = None,
         memory: bool = True,
         private: bool = False,
     ):
-        if stream is None:
-            stream = not (logging.getLogger().level <= logging.INFO)
+        if token_stream is None:
+            token_stream = not (logging.getLogger().level <= logging.INFO)
 
         verbose_mode = logging.getLogger().level <= logging.INFO
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
 
         self._print_banner(
-            stream=stream,
+            token_stream=token_stream,
             memory=memory,
             private=private,
             verbose_mode=verbose_mode,
@@ -104,13 +104,13 @@ class AgentCLI(BaseAgentRunner):
                     print("🧹 ✨ Global message stream cleared.")
                     continue
 
-                if user_input.lower().startswith("stream "):
+                if user_input.lower().startswith("token-stream "):
                     stream_cmd = user_input.lower().split()
                     if len(stream_cmd) == 2 and stream_cmd[1] in {"on", "off"}:
-                        stream = stream_cmd[1] == "on"
-                        print(f"{'🌊' if stream else '📄'} ✨ Streaming {'enabled' if stream else 'disabled'}.")
+                        token_stream = stream_cmd[1] == "on"
+                        print(f"{'🌊' if token_stream else '📄'} ✨ Token streaming {'enabled' if token_stream else 'disabled'}.")
                     else:
-                        print("⚠️  Usage: stream on/off")
+                        print("⚠️  Usage: token-stream on/off")
                     continue
 
                 if user_input.lower().startswith("memory "):
@@ -139,31 +139,23 @@ class AgentCLI(BaseAgentRunner):
                     print("💭 Please enter a message to chat with the agent.")
                     continue
 
-                if stream and hasattr(self.agent, "chat_events"):
-                    await self._print_chat_events(
+                if not hasattr(self.agent, "chat_events"):
+                    response = await self.agent(
                         user_message=user_input,
                         user_id=user_id,
                         enable_memory=memory,
                         private=private,
                     )
+                    print("🤖 Agent: " + str(response))
                     continue
 
-                response = await self.agent(
+                await self._print_chat_events(
                     user_message=user_input,
                     user_id=user_id,
-                    stream=stream,
                     enable_memory=memory,
                     private=private,
+                    token_stream=token_stream,
                 )
-
-                if stream and hasattr(response, "__aiter__"):
-                    print("🤖 Agent: ", end="", flush=True)
-                    async for chunk in response:
-                        if chunk:
-                            print(chunk, end="", flush=True)
-                    print()
-                else:
-                    print("🤖 Agent: " + str(response))
 
             except KeyboardInterrupt:
                 print("\n\n╭─────────────────────────────────────╮")
@@ -182,7 +174,6 @@ class AgentCLI(BaseAgentRunner):
         self,
         message: str,
         user_id: Optional[str] = None,
-        stream: bool = False,
         memory: bool = True,
         private: bool = False,
     ):
@@ -190,7 +181,6 @@ class AgentCLI(BaseAgentRunner):
         return await self.agent(
             user_message=message,
             user_id=user_id,
-            stream=stream,
             enable_memory=memory,
             private=private,
         )
@@ -199,6 +189,7 @@ class AgentCLI(BaseAgentRunner):
         self,
         message: str,
         user_id: Optional[str] = None,
+        token_stream: bool = False,
         memory: bool = True,
         private: bool = False,
     ) -> None:
@@ -206,6 +197,7 @@ class AgentCLI(BaseAgentRunner):
         await self._print_chat_events(
             user_message=message,
             user_id=user_id,
+            token_stream=token_stream,
             enable_memory=memory,
             private=private,
         )
@@ -215,13 +207,16 @@ class AgentCLI(BaseAgentRunner):
         *,
         user_message: str,
         user_id: str,
+        token_stream: bool,
         enable_memory: bool,
         private: bool,
     ) -> None:
         line_open = False
+        line_has_streamed_text = False
         async for event in self.agent.chat_events(
             user_message=user_message,
             user_id=user_id,
+            token_stream=token_stream,
             enable_memory=enable_memory,
             private=private,
         ):
@@ -231,19 +226,30 @@ class AgentCLI(BaseAgentRunner):
                     print()
                 print("🤖 Agent: ", end="", flush=True)
                 line_open = True
+                line_has_streamed_text = False
                 continue
-            if event_type == "delta":
+            if event_type == "message_delta":
                 if not line_open:
                     print("🤖 Agent: ", end="", flush=True)
                     line_open = True
+                    line_has_streamed_text = False
                 delta = event.get("delta", "")
                 if delta:
                     print(delta, end="", flush=True)
+                    line_has_streamed_text = True
                 continue
             if event_type == "message_done":
+                if not line_open:
+                    print("🤖 Agent: ", end="", flush=True)
+                    line_open = True
+                if not line_has_streamed_text:
+                    content = event.get("content", "")
+                    if content:
+                        print(content, end="", flush=True)
                 if line_open:
                     print()
                     line_open = False
+                line_has_streamed_text = False
                 continue
             if event_type == "error":
                 if line_open:
@@ -257,7 +263,7 @@ class AgentCLI(BaseAgentRunner):
 
     def _print_banner(
         self,
-        stream: bool,
+        token_stream: bool,
         memory: bool,
         private: bool,
         verbose_mode: bool,
@@ -275,7 +281,7 @@ class AgentCLI(BaseAgentRunner):
         print(
             "Status: "
             f"verbose={'on' if verbose_mode else 'off'}, "
-            f"stream={'on' if stream else 'off'}, "
+            f"token_stream={'on' if token_stream else 'off'}, "
             f"memory={'on' if memory else 'off'}, "
             f"private={'on' if private else 'off'}"
         )
@@ -286,7 +292,7 @@ class AgentCLI(BaseAgentRunner):
         print("\nChat commands:")
         print("  exit, quit, bye    Exit the chat session")
         print("  clear              Clear the agent message stream")
-        print("  stream on/off      Toggle streaming response mode")
+        print("  token-stream on/off Toggle token delta printing")
         print("  memory on/off      Toggle memory storage mode")
         print("  private on/off     Toggle private ephemeral mode")
         print("  help               Show this help message")
@@ -938,10 +944,15 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.add_argument("--user-id", dest="user_id", default=None, help="Speaker identifier")
     chat_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     chat_parser.add_argument(
-        "--stream",
+        "--events",
+        action="store_true",
+        help="Use segmented event output for a single message",
+    )
+    chat_parser.add_argument(
+        "--token-stream",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Enable or disable response streaming",
+        help="Print message delta events as they are emitted in event mode",
     )
     chat_parser.add_argument(
         "--memory",
@@ -1124,7 +1135,7 @@ def handle_chat(args: argparse.Namespace) -> int:
             try:
                 await agent_cli.chat_interactive(
                     user_id=args.user_id,
-                    stream=args.stream,
+                    token_stream=args.token_stream,
                     memory=args.memory,
                     private=args.private,
                 )
@@ -1134,14 +1145,16 @@ def handle_chat(args: argparse.Namespace) -> int:
         asyncio.run(run_interactive_chat())
         return 0
 
-    stream = bool(args.stream) if args.stream is not None else False
+    event_mode = bool(args.events or args.token_stream is not None)
+    token_stream = bool(args.token_stream) if args.token_stream is not None else False
 
     async def run_single_message():
         try:
-            if stream and hasattr(agent_cli.agent, "chat_events"):
+            if event_mode and hasattr(agent_cli.agent, "chat_events"):
                 await agent_cli.print_single_chat_events(
                     message=args.message,
                     user_id=args.user_id,
+                    token_stream=token_stream,
                     memory=args.memory,
                     private=args.private,
                 )
@@ -1150,17 +1163,10 @@ def handle_chat(args: argparse.Namespace) -> int:
             response = await agent_cli.chat_single(
                 message=args.message,
                 user_id=args.user_id,
-                stream=stream,
                 memory=args.memory,
                 private=args.private,
             )
-            if stream and hasattr(response, "__aiter__"):
-                async for chunk in response:
-                    if chunk:
-                        print(chunk, end="", flush=True)
-                print()
-            else:
-                print(response)
+            print(response)
         finally:
             await _flush_chat_exit_memory(agent_cli.agent)
 

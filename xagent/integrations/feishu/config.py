@@ -46,8 +46,8 @@ class FeishuAdapterConfig:
         app_secret: Feishu app secret. Required.
         domain: ``feishu`` (default), ``lark``, or a full custom domain.
         log_level: One of ``debug``, ``info``, ``warn``, ``error``.
-        stream: Use Feishu streaming cards for replies. Requires the agent
-            output to be streamable text (no ``output_schema``).
+        token_stream: Use Feishu streaming cards to incrementally update the
+            current segmented reply message.
         enable_memory: Pass-through to the agent's long-term memory.
         history_count / max_iter / max_concurrent_tools: Per-turn knobs
             forwarded to ``agent.chat``.
@@ -65,7 +65,7 @@ class FeishuAdapterConfig:
     domain: Optional[str] = None
     log_level: str = "info"
 
-    stream: bool = False
+    token_stream: bool = False
     enable_memory: bool = True
 
     history_count: Optional[int] = None

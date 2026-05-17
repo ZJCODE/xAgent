@@ -48,8 +48,8 @@ Start xAgent and open the web page in your browser:
 xagent web
 ```
 
-The web page is best for longer conversations, streaming replies, and image input.
-Use the Transport selector to compare regular HTTP/SSE with WebSocket chat delivery. WebSocket is an API transport, not a separate channel.
+The web page is best for longer conversations, segmented replies, and image input.
+Use the Transport selector when you need to compare final-only HTTP with WebSocket event delivery. WebSocket is an API transport, not a separate channel.
 
 Run it as a managed background service instead:
 
@@ -60,7 +60,7 @@ xagent service logs api
 xagent service stop api
 ```
 
-Use `api` for HTTP JSON, SSE, WebSocket, and the built-in web page. Use `feishu` for the Feishu bot, and `all` when you want every enabled channel. Without a channel, `service start` chooses one enabled channel, preferring `api`; other service actions default to `all`.
+Use `api` for HTTP JSON, WebSocket, and the built-in web page. Use `feishu` for the Feishu bot, and `all` when you want every enabled channel. Without a channel, `service start` chooses one enabled channel, preferring `api`; other service actions default to `all`.
 
 ## Use From Feishu
 
@@ -91,9 +91,9 @@ Memory writes are buffered for efficiency, then flushed by batch size, by a stal
 
 ## API Transports
 
-`POST /chat` remains the default HTTP interface. Set `stream=true` to receive server-sent events.
+`POST /chat` remains the final-only HTTP interface and returns `{"reply": ...}`.
 
-`/ws/chat` accepts the same chat JSON over WebSocket and returns JSON frames: `delta`, `message`, `error`, and `done`.
+`/ws/chat` is the realtime event protocol. It returns JSON frames such as `message_start`, `message_delta`, `message_done`, `tool_call`, `tool_result`, `error`, and `done`; `token_stream` only controls whether text deltas are emitted.
 
 `/ws/observe` accepts the same observe JSON over WebSocket and returns `result`, `error`, and `done` frames.
 

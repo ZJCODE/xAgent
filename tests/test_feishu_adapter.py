@@ -24,6 +24,12 @@ class _FakeAgent:
         self.chat_calls.append(kwargs)
         return "agent reply"
 
+    async def chat_events(self, **kwargs):
+        self.chat_calls.append(kwargs)
+        yield {"type": "message_start", "message_id": "m1", "phase": "final"}
+        yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "agent reply"}
+        yield {"type": "done"}
+
     async def observe(self, **kwargs):
         self.observe_calls.append(kwargs)
         return SimpleNamespace(replied=False, reply=None)
@@ -43,6 +49,13 @@ class _SlowChatAgent(_FakeAgent):
         self.started.set()
         await self.release.wait()
         return "agent reply"
+
+    async def chat_events(self, **kwargs):
+        self.chat_calls.append(kwargs)
+        self.started.set()
+        await self.release.wait()
+        yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "agent reply"}
+        yield {"type": "done"}
 
 
 class _FakeChannel:
