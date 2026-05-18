@@ -204,7 +204,7 @@ Langfuse SDK 会在后台排队发送事件。CLI 单次 chat、observe、Feishu
 
 API server lifespan 和 Feishu daemon 会启动内部 heartbeat；CLI 单次/交互 chat 不启动。第一版 heartbeat 只做记忆维护：定期 flush 待写入记忆，并在每周一为上一周生成 weekly summary。summary 生成不是模型可见工具。
 
-人物档案保存在 `memory/people/`。它只追加带日期和证据片段的稳定信息；默认不会把所有人物档案注入每一轮 prompt，需要时可通过记忆搜索读取。
+长期记忆保存在 `memory/memory.sqlite3`，包含 `memory_entries`、`memory_summaries`、`people_facts` 三张表。人物事实只追加带日期和证据片段的稳定信息；默认不会把所有人物事实注入每一轮 prompt，需要时可通过 `query_memory` 读取。
 
 ### 2.5 output_schema
 
@@ -434,7 +434,7 @@ GET /health
 
 ### 4.4 POST /clear_messages
 
-清空短期消息流，不删除长期记忆 markdown。
+清空短期消息流，不删除长期记忆数据库。
 
 ```http
 POST /clear_messages
@@ -461,13 +461,13 @@ POST /clear_messages
 {
   "model": "gpt-5.4-mini",
   "workspace": "/Users/you/.xagent",
-  "memory_dir": "/Users/you/.xagent/memory",
+  "memory_db": "/Users/you/.xagent/memory/memory.sqlite3",
   "message_storage": {
     "stream": "local",
     "backend": "local",
     "path": "/Users/you/.xagent/messages/messages.sqlite3"
   },
-  "tools": ["run_command", "web_search", "write_memory", "search_memory"],
+  "tools": ["run_command", "web_search", "write_memory", "query_memory", "query_messages"],
   "identity": "# Identity\n\nYou are a helpful assistant.",
   "identity_file": "identity.md",
   "identity_path": "/Users/you/.xagent/identity.md",
@@ -497,42 +497,40 @@ POST /clear_messages
 {"identity":"# Identity\n\nYou are a practical assistant."}
 ```
 
-#### GET /api/memory/tree
+#### GET /api/memory/stats
 
-返回 `memory/` 下的 markdown 文件树：
+返回长期记忆 SQLite 统计：
 
 ```json
 {
-  "tree": [
-    {
-      "name": "daily",
-      "path": "daily",
-      "type": "dir",
-      "children": []
-    }
-  ]
+  "path": "/Users/you/.xagent/memory/memory.sqlite3",
+  "entries": 42,
+  "summaries": 3,
+  "people_facts": 8,
+  "earliest_date": "2026-05-01",
+  "latest_date": "2026-05-18"
 }
 ```
 
-#### GET /api/memory/read?path=...
+#### GET /api/memory/list
 
-读取指定记忆 markdown 文件。`path` 必须是 `memory/` 内的相对路径，只允许读取 `.md` 文件。
+分页读取指定记忆表。`table` 可为 `memory_entries`、`memory_summaries`、`people_facts`。
 
 ```http
-GET /api/memory/read?path=daily/2026/2026-05/2026-05-11.md
+GET /api/memory/list?table=memory_entries&limit=50&offset=0
 ```
 
-返回：
+#### GET /api/memory/read
 
-```json
-{
-  "path": "daily/2026/2026-05/2026-05-11.md",
-  "content": "...",
-  "modified": 1760000000.123
-}
+读取单条记忆表记录。
+
+```http
+GET /api/memory/read?table=memory_entries&row_id=1
 ```
 
 #### GET /api/memory/search
+
+在三张长期记忆表中搜索内容、summary、人物事实和证据片段。
 
 按文件名和文件内容搜索记忆。
 
@@ -736,22 +734,21 @@ ws://127.0.0.1:8010/ws/observe
 
 ### 6.2 长期记忆
 
-长期记忆是 markdown 文件：
+长期记忆存储在 SQLite：
 
 ```text
-memory/
-  daily/<year>/<year-month>/<date>.md
-  weekly/<year>/<week_start>_to_<week_end>.md
-  monthly/<year>/<year-month>.md
-  yearly/<year>.md
-  people/<person-key>.md
+~/.xagent/memory/memory.sqlite3
+
+memory_entries(id, entry_date, created_at, source, content, metadata_json)
+memory_summaries(id, period_type, period_start, period_end, generated_at, content, metadata_json)
+people_facts(id, person_key, display_name, fact, evidence, source, observed_at, created_at, metadata_json)
 ```
 
 Agent 会基于对话和观察事件异步整理长期记忆。`enable_memory` 和 `private` 会影响 `/chat` 的记忆行为：
 
 后台写入会先累积，并按内部批量阈值和短会话兜底策略写入。CLI、API server 和 Feishu channel 正常退出时也会 flush 记忆，避免短对话只停留在内存中。长驻 API/Feishu 运行时还会通过 runtime heartbeat 定期执行相同维护，并在每周一生成上一周 weekly summary。
 
-`memory/people/` 是人物档案层。只有长期记忆写入成功后，系统才会尝试从同一批消息中抽取有明确人物归属、带证据 quote 的稳定信息并追加到对应 profile。人物档案更新失败不会影响主记忆写入。
+`people_facts` 是人物事实层。只有长期记忆写入成功后，系统才会尝试从同一批消息中抽取有明确人物归属、带证据 quote 的稳定信息并追加到该表。人物事实更新失败不会影响主记忆写入。
 
 | 参数 | 读取记忆 | 写入记忆 | 写入主消息库 |
 | --- | --- | --- | --- |

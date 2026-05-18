@@ -444,7 +444,7 @@ async function loadAgentConfig() {
 
     // Key info
     document.getElementById('infoWorkspace').textContent = info.workspace || '(default)';
-    document.getElementById('infoMemory').textContent = info.memory_dir || '—';
+    document.getElementById('infoMemory').textContent = info.memory_db || '—';
 
     const storage = info.message_storage || {};
     if (storage.stream_name || storage.path) {
@@ -500,7 +500,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('clearMemoryBtn').addEventListener('click', async () => {
-    if (!confirm('Delete all memory files? This cannot be undone.')) return;
+    if (!confirm('Delete all memory rows? This cannot be undone.')) return;
     const statusEl = document.getElementById('clearStatus');
     try {
       const res = await fetch(`${API_BASE}/api/memory/clear`, { method: 'POST' });

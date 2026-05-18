@@ -273,12 +273,18 @@ class AgentHTTPServer(BaseAgentRunner):
             raise asyncio.TimeoutError
         return remaining
 
-    def _get_memory_root(self) -> Path:
-        memory = self.agent.markdown_memory
-        memory_root = getattr(memory, "root", None)
-        if memory_root is None:
-            raise HTTPException(status_code=500, detail="Memory storage path is unavailable")
-        return Path(memory_root).expanduser().resolve()
+    def _get_memory_store(self):
+        memory = getattr(self.agent, "sqlite_memory", None)
+        if memory is None:
+            raise HTTPException(status_code=500, detail="Memory storage is unavailable")
+        return memory
+
+    def _get_memory_db_path(self) -> Path:
+        memory = self._get_memory_store()
+        memory_path = getattr(memory, "path", None)
+        if memory_path is None:
+            raise HTTPException(status_code=500, detail="Memory database path is unavailable")
+        return Path(memory_path).expanduser().resolve()
 
     def _get_identity_path(self) -> Path:
         identity_path = getattr(self, "identity_path", None)
@@ -527,7 +533,7 @@ class AgentHTTPServer(BaseAgentRunner):
         @app.get("/api/agent/info", tags=["Monitoring"])
         async def agent_info():
             """Return agent metadata for monitoring pages."""
-            memory_dir = str(self._get_memory_root())
+            memory_db = str(self._get_memory_db_path())
             storage_info = self.message_storage.get_stream_info() if hasattr(self.message_storage, "get_stream_info") else {}
             identity = self._get_agent_identity()
             try:
@@ -540,7 +546,7 @@ class AgentHTTPServer(BaseAgentRunner):
             return {
                 "model": self.agent.model,
                 "workspace": str(getattr(self, "workspace", "")),
-                "memory_dir": memory_dir,
+                "memory_db": memory_db,
                 "message_storage": storage_info,
                 "tools": list(self.agent.tools.keys()),
                 "identity": identity,
@@ -585,107 +591,62 @@ class AgentHTTPServer(BaseAgentRunner):
                 "modified": identity_path.stat().st_mtime,
             }
 
-        @app.get("/api/memory/tree", tags=["Monitoring"])
-        async def memory_tree():
-            """Return the memory directory tree as JSON."""
-            memory_dir = self._get_memory_root()
-            if not memory_dir.is_dir():
-                return {"tree": []}
+        @app.get("/api/memory/stats", tags=["Monitoring"])
+        async def memory_stats():
+            """Return SQLite memory statistics."""
+            return await self._get_memory_store().get_stats()
 
-            def _scan(directory: Path, rel_root: Path) -> List[Dict[str, Any]]:
-                entries: List[Dict[str, Any]] = []
-                try:
-                    children = sorted(directory.iterdir(), key=lambda p: p.name)
-                except PermissionError:
-                    return entries
-                for child in children:
-                    rel = child.relative_to(rel_root)
-                    if child.is_dir():
-                        entries.append({
-                            "name": child.name,
-                            "path": str(rel),
-                            "type": "dir",
-                            "children": _scan(child, rel_root),
-                        })
-                    elif child.suffix == ".md":
-                        entries.append({
-                            "name": child.name,
-                            "path": str(rel),
-                            "type": "file",
-                            "modified": child.stat().st_mtime,
-                        })
-                return entries
-
-            return {"tree": _scan(memory_dir, memory_dir)}
+        @app.get("/api/memory/list", tags=["Monitoring"])
+        async def memory_list(
+            table: str = Query("memory_entries", description="Memory table name"),
+            limit: int = Query(50, ge=1, le=200, description="Maximum rows to return"),
+            offset: int = Query(0, ge=0, description="Number of rows to skip"),
+        ):
+            """List rows from a memory table."""
+            table_name = self._validate_memory_table(table)
+            sql = f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT {int(limit)} OFFSET {int(offset)}"
+            return await self._get_memory_store().query_sql(sql, max_rows=limit)
 
         @app.get("/api/memory/read", tags=["Monitoring"])
-        async def memory_read(path: str = Query(..., description="Relative path inside memory directory")):
-            """Read a specific memory markdown file."""
-            memory_dir = self._get_memory_root()
-            requested = (memory_dir / path).resolve()
-
-            # Path traversal protection
-            if not requested.is_relative_to(memory_dir):
-                raise HTTPException(status_code=403, detail="Access denied")
-            if not requested.is_file():
-                raise HTTPException(status_code=404, detail="File not found")
-            if requested.suffix != ".md":
-                raise HTTPException(status_code=403, detail="Only markdown files can be read")
-
-            content = requested.read_text(encoding="utf-8")
+        async def memory_read(
+            table: str = Query(..., description="Memory table name"),
+            row_id: int = Query(..., ge=1, description="Row id to read"),
+        ):
+            """Read one memory database row."""
+            table_name = self._validate_memory_table(table)
+            sql = f"SELECT * FROM {table_name} WHERE id = {int(row_id)} LIMIT 1"
+            result = await self._get_memory_store().query_sql(sql, max_rows=1)
+            if not result.get("rows"):
+                raise HTTPException(status_code=404, detail="Memory row not found")
             return {
-                "path": path,
-                "content": content,
-                "modified": requested.stat().st_mtime,
+                "table": table_name,
+                "row": result["rows"][0],
             }
 
         @app.get("/api/memory/search", tags=["Monitoring"])
         async def memory_search(
-            query: str = Query(..., min_length=1, description="Search text for memory file names or file content"),
+            query: str = Query(..., min_length=1, description="Search text for memory content"),
             limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
         ):
-            """Search memory files by file name and content."""
-            memory_dir = self._get_memory_root()
-            needle = query.strip().lower()
-            results: List[Dict[str, Any]] = []
-
-            for file_path in sorted(memory_dir.rglob("*.md")):
-                if len(results) >= limit:
-                    break
-
-                relative_path = str(file_path.relative_to(memory_dir))
-                file_name = file_path.name
-                match_kind: List[str] = []
-                snippet = ""
-
-                if needle in file_name.lower() or needle in relative_path.lower():
-                    match_kind.append("filename")
-
-                try:
-                    content = file_path.read_text(encoding="utf-8")
-                except OSError:
-                    continue
-
-                lower_content = content.lower()
-                content_index = lower_content.find(needle)
-                if content_index != -1:
-                    match_kind.append("content")
-                    start = max(0, content_index - 80)
-                    end = min(len(content), content_index + len(query) + 120)
-                    snippet = content[start:end].replace("\n", " ").strip()
-
-                if match_kind:
-                    results.append({
-                        "path": relative_path,
-                        "name": file_name,
-                        "matched_in": match_kind,
-                        "snippet": snippet,
-                        "modified": file_path.stat().st_mtime,
-                    })
+            """Search memory entries, summaries, and people facts."""
+            escaped = query.replace("'", "''")
+            pattern = f"%{escaped}%"
+            sql = (
+                "SELECT 'memory_entries' AS table_name, id, entry_date AS date, source, content AS snippet "
+                f"FROM memory_entries WHERE content LIKE '{pattern}' "
+                "UNION ALL "
+                "SELECT 'memory_summaries' AS table_name, id, period_start || ' to ' || period_end AS date, period_type AS source, content AS snippet "
+                f"FROM memory_summaries WHERE content LIKE '{pattern}' "
+                "UNION ALL "
+                "SELECT 'people_facts' AS table_name, id, observed_at AS date, display_name AS source, fact || ' Evidence: ' || evidence AS snippet "
+                f"FROM people_facts WHERE person_key LIKE '{pattern}' OR display_name LIKE '{pattern}' OR fact LIKE '{pattern}' OR evidence LIKE '{pattern}' "
+                f"ORDER BY date DESC LIMIT {int(limit)}"
+            )
+            result = await self._get_memory_store().query_sql(sql, max_rows=limit)
 
             return {
                 "query": query,
-                "results": results,
+                "results": result.get("rows", []),
             }
 
         @app.get("/api/messages", tags=["Monitoring"])
@@ -728,14 +689,8 @@ class AgentHTTPServer(BaseAgentRunner):
 
         @app.post("/api/memory/clear", tags=["Monitoring"])
         async def memory_clear():
-            """Delete the entire memory directory and recreate it empty."""
-            import shutil
-            memory_dir = self._get_memory_root()
-            try:
-                shutil.rmtree(memory_dir)
-            except OSError:
-                pass
-            memory_dir.mkdir(parents=True, exist_ok=True)
+            """Clear all SQLite memory rows."""
+            await self._get_memory_store().clear()
             return {"status": "ok"}
 
         @app.get("/api/messages/stats", tags=["Monitoring"])
@@ -752,6 +707,14 @@ class AgentHTTPServer(BaseAgentRunner):
                 if newest:
                     result["latest_timestamp"] = newest[0].timestamp
             return result
+
+    @staticmethod
+    def _validate_memory_table(table: str) -> str:
+        table_name = str(table or "").strip()
+        allowed = {"memory_entries", "memory_summaries", "people_facts"}
+        if table_name not in allowed:
+            raise HTTPException(status_code=400, detail="Unsupported memory table")
+        return table_name
 
     def run(self, host: str = None, port: int = None, open_browser: bool = False) -> None:
         host = host if host is not None else BaseAgentConfig.DEFAULT_HOST

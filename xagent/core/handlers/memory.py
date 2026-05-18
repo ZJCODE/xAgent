@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import logging
 import time
 from datetime import date, timedelta
@@ -12,17 +13,13 @@ from ..config import AgentConfig
 from ...schemas import Message, MessageType
 
 if TYPE_CHECKING:
-    from ...components.memory import JournalLLMService, MarkdownMemory
+    from ...components.memory import JournalLLMService, SQLiteMemory
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryHandler:
-    """Manages diary context injection and background diary persistence.
-
-    Replaces the old ``MemoryManager`` with a simple markdown-file-backed
-    implementation.  No SQLite, no FTS — just files + shell commands.
-    """
+    """Manages memory context injection and background memory persistence."""
 
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
     MESSAGE_THRESHOLD = AgentConfig.MEMORY_MESSAGE_THRESHOLD
@@ -31,7 +28,7 @@ class MemoryHandler:
 
     def __init__(
         self,
-        memory: MarkdownMemory,
+        memory: SQLiteMemory,
         llm_service: JournalLLMService,
         *,
         recent_days: Optional[int] = None,
@@ -62,13 +59,13 @@ class MemoryHandler:
     # ------------------------------------------------------------------
 
     async def get_recent_context(self, days: int | None = None) -> str:
-        """Read the last *days* daily files and return them as a single string.
+        """Read the last *days* memory entries and return them as a single string.
 
         This is injected verbatim into the system prompt so the model always
-        has recent diary context without needing a tool call.
+        has recent memory context without needing a tool call.
         """
         days = days or self.recent_days
-        entries = await self.memory.read_recent_dailies(days=days)
+        entries = await self.memory.read_recent_entries(days=days)
         if not entries:
             return ""
 
@@ -202,7 +199,7 @@ class MemoryHandler:
                 journal_date=today_str,
             )
             if content.strip():
-                await self.memory.append_daily(content)
+                await self.memory.add_entry(content, source="auto_diary")
                 await self._update_people_profiles(messages, content, today_str)
                 logger.debug("Background diary write: %d msgs → %d chars", len(messages), len(content))
         except Exception as exc:
@@ -215,7 +212,7 @@ class MemoryHandler:
         journal_date: str,
     ) -> None:
         extractor = getattr(self.llm_service, "extract_people_profile_updates", None)
-        writer = getattr(self.memory, "append_people_profile", None)
+        writer = getattr(self.memory, "add_people_facts", None)
         if extractor is None or writer is None:
             return
 
@@ -237,7 +234,7 @@ class MemoryHandler:
                     person_key=person_key,
                     facts=[update_data],
                     display_name=str(update_data.get("display_name") or person_key).strip(),
-                    target_date=date.fromisoformat(journal_date),
+                    observed_at=date.fromisoformat(journal_date),
                 )
         except Exception as exc:
             logger.warning("People profile update skipped: %s", exc)
@@ -261,14 +258,24 @@ class MemoryHandler:
             last_month, last_year = 12, today.year - 1
         else:
             last_month, last_year = today.month - 1, today.year
-        mp = self.memory.monthly_path(last_year, last_month)
-        if not mp.exists():
+        first = date(last_year, last_month, 1)
+        last = date(last_year, last_month, calendar.monthrange(last_year, last_month)[1])
+        if not await self.memory.summary_exists(
+            period_type="monthly",
+            period_start=first,
+            period_end=last,
+        ):
             await self._generate_monthly(last_year, last_month)
 
         # Yearly: check last year
         last_year_val = today.year - 1
-        yp = self.memory.yearly_path(last_year_val)
-        if not yp.exists():
+        year_start = date(last_year_val, 1, 1)
+        year_end = date(last_year_val, 12, 31)
+        if not await self.memory.summary_exists(
+            period_type="yearly",
+            period_start=year_start,
+            period_end=year_end,
+        ):
             await self._generate_yearly(last_year_val)
 
     async def generate_previous_weekly_summary_if_missing(
@@ -282,8 +289,11 @@ class MemoryHandler:
         if week_end >= current_day:
             return False
 
-        weekly_path = self.memory.weekly_path(week_start, week_end)
-        if weekly_path.exists():
+        if await self.memory.summary_exists(
+            period_type="weekly",
+            period_start=week_start,
+            period_end=week_end,
+        ):
             return False
 
         return await self._generate_weekly(week_start, week_end)
@@ -298,7 +308,12 @@ class MemoryHandler:
         label = f"{week_start.isoformat()} to {week_end.isoformat()}"
         summary = await self.llm_service.generate_summary(source, "weekly", label)
         if summary:
-            await self.memory.write_summary(self.memory.weekly_path(week_start, week_end), summary)
+            await self.memory.upsert_summary(
+                period_type="weekly",
+                period_start=week_start,
+                period_end=week_end,
+                content=summary,
+            )
             logger.info("Generated weekly summary: %s", label)
             return True
         return False
@@ -316,22 +331,38 @@ class MemoryHandler:
         label = f"{year}-{month:02d}"
         summary = await self.llm_service.generate_summary(source, "monthly", label)
         if summary:
-            await self.memory.write_summary(self.memory.monthly_path(year, month), summary)
+            await self.memory.upsert_summary(
+                period_type="monthly",
+                period_start=first,
+                period_end=last,
+                content=summary,
+            )
             logger.info("Generated monthly summary: %s", label)
 
     async def _generate_yearly(self, year: int) -> None:
-        parts: list[str] = []
-        for m in range(1, 13):
-            text = await self.memory.read_file(self.memory.monthly_path(year, m))
-            if text.strip():
-                parts.append(f"# {year}-{m:02d}\n\n{text}")
-        source = "\n\n".join(parts)
+        year_start = date(year, 1, 1)
+        year_end = date(year, 12, 31)
+        source = await self.memory.read_summaries(
+            period_type="monthly",
+            period_start=year_start,
+            period_end=year_end,
+        )
+        if not source.strip():
+            source = await self.memory.search_date_range(
+                start=year_start.isoformat(),
+                end=year_end.isoformat(),
+            )
         if not source.strip():
             return
         label = str(year)
         summary = await self.llm_service.generate_summary(source, "yearly", label)
         if summary:
-            await self.memory.write_summary(self.memory.yearly_path(year), summary)
+            await self.memory.upsert_summary(
+                period_type="yearly",
+                period_start=year_start,
+                period_end=year_end,
+                content=summary,
+            )
             logger.info("Generated yearly summary: %s", label)
 
     # ------------------------------------------------------------------

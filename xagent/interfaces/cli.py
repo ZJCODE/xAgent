@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional, Sequence, Tuple
 
 import yaml
 
+from ..components import SQLiteMemory
 from ..core.providers import (
     KNOWN_PROVIDERS,
     MODEL_API_ANTHROPIC_MESSAGES,
@@ -1036,23 +1037,32 @@ def build_parser() -> argparse.ArgumentParser:
         _add_dir_argument(identity_cmd)
         identity_cmd.set_defaults(handler=handle_identity)
 
-    memory_parser = inspect_sub.add_parser("memory", help="Inspect or clear long-term memory files")
+    memory_parser = inspect_sub.add_parser("memory", help="Inspect or clear long-term memory database")
     memory_sub = memory_parser.add_subparsers(dest="memory_command", metavar="<subcommand>")
     memory_sub.required = True
-    for command_name in ("stats", "list", "clear"):
-        memory_cmd = memory_sub.add_parser(command_name, help=f"{command_name} memory")
-        _add_dir_argument(memory_cmd)
-        memory_cmd.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "people", "all"))
-        memory_cmd.add_argument("--yes", action="store_true", help="Confirm destructive operations")
-        memory_cmd.set_defaults(handler=handle_memory)
-    memory_show = memory_sub.add_parser("show", help="Show a memory markdown file by relative path")
+    memory_tables = ("memory_entries", "memory_summaries", "people_facts")
+    memory_stats = memory_sub.add_parser("stats", help="Show memory database statistics")
+    _add_dir_argument(memory_stats)
+    memory_stats.set_defaults(handler=handle_memory)
+    memory_clear = memory_sub.add_parser("clear", help="Clear all memory database rows")
+    _add_dir_argument(memory_clear)
+    memory_clear.add_argument("--yes", action="store_true", help="Confirm destructive operations")
+    memory_clear.set_defaults(handler=handle_memory)
+    memory_list = memory_sub.add_parser("list", help="List rows from a memory table")
+    _add_dir_argument(memory_list)
+    memory_list.add_argument("--table", default="memory_entries", choices=memory_tables)
+    memory_list.add_argument("--limit", type=int, default=20, help="Maximum rows")
+    memory_list.add_argument("--offset", type=int, default=0, help="Rows to skip")
+    memory_list.set_defaults(handler=handle_memory)
+    memory_show = memory_sub.add_parser("show", help="Show one memory database row")
     _add_dir_argument(memory_show)
-    memory_show.add_argument("path", help="Relative path inside memory/")
+    memory_show.add_argument("table", choices=memory_tables)
+    memory_show.add_argument("row_id", type=int)
     memory_show.set_defaults(handler=handle_memory)
-    memory_search = memory_sub.add_parser("search", help="Search memory markdown files")
+    memory_search = memory_sub.add_parser("search", help="Search memory database rows")
     _add_dir_argument(memory_search)
     memory_search.add_argument("query", help="Search query")
-    memory_search.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "people", "all"))
+    memory_search.add_argument("--limit", type=int, default=20, help="Maximum rows")
     memory_search.set_defaults(handler=handle_memory)
 
     messages_parser = inspect_sub.add_parser("messages", help="Inspect or clear the message stream")
@@ -1725,73 +1735,89 @@ def _memory_root(args: argparse.Namespace) -> Path:
     return _runtime_dir(args) / BaseAgentConfig.MEMORY_DIRNAME
 
 
-def _memory_scope_root(args: argparse.Namespace) -> Path:
-    scope = getattr(args, "scope", "all")
-    root = _memory_root(args)
-    return root if scope == "all" else root / scope
+def _memory_db_path(args: argparse.Namespace) -> Path:
+    return _memory_root(args) / BaseAgentConfig.MEMORY_DB_FILENAME
 
 
-def _safe_memory_path(args: argparse.Namespace, relative_path: str) -> Optional[Path]:
-    root = _memory_root(args).resolve()
-    requested = (root / relative_path).resolve()
-    if not requested.is_relative_to(root):
-        return None
-    return requested
+def _validate_memory_table(table: str) -> str:
+    table_name = str(table or "").strip()
+    allowed = {"memory_entries", "memory_summaries", "people_facts"}
+    if table_name not in allowed:
+        raise ValueError(f"Unsupported memory table: {table_name}")
+    return table_name
 
 
 def handle_memory(args: argparse.Namespace) -> int:
-    root = _memory_root(args)
-    scope_root = _memory_scope_root(args)
+    memory = SQLiteMemory(path=str(_memory_db_path(args)))
 
     if args.memory_command == "stats":
-        files = sorted(scope_root.rglob("*.md")) if scope_root.exists() else []
-        total_bytes = sum(path.stat().st_size for path in files if path.is_file())
-        print(f"Memory root: {root}")
-        print(f"Scope: {getattr(args, 'scope', 'all')}")
-        print(f"Files: {len(files)}")
-        print(f"Bytes: {total_bytes}")
-        return 0
+        async def _stats() -> int:
+            print(json.dumps(await memory.get_stats(), indent=2, sort_keys=True))
+            return 0
+
+        return asyncio.run(_stats())
 
     if args.memory_command == "list":
-        files = sorted(path for path in scope_root.rglob("*.md") if path.is_file()) if scope_root.exists() else []
-        for path in files:
-            print(path.relative_to(root))
-        return 0
+        table_name = _validate_memory_table(args.table)
+        limit = max(1, min(int(args.limit), 200))
+        offset = max(0, int(args.offset))
+        sql = f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT {limit} OFFSET {offset}"
+
+        async def _list() -> int:
+            print(json.dumps(await memory.query_sql(sql, max_rows=limit), indent=2, sort_keys=True))
+            return 0
+
+        return asyncio.run(_list())
 
     if args.memory_command == "show":
-        path = _safe_memory_path(args, args.path)
-        if path is None:
-            print("Access denied: memory path escapes memory root")
-            return 1
-        if not path.is_file() or path.suffix != ".md":
-            print(f"Memory file not found: {path}")
-            return 1
-        print(path.read_text(encoding="utf-8", errors="replace"), end="")
-        return 0
+        table_name = _validate_memory_table(args.table)
+        sql = f"SELECT * FROM {table_name} WHERE id = {int(args.row_id)} LIMIT 1"
+
+        async def _show() -> int:
+            result = await memory.query_sql(sql, max_rows=1)
+            rows = result.get("rows", [])
+            if not rows:
+                print("Memory row not found")
+                return 1
+            print(json.dumps(rows[0], indent=2, sort_keys=True))
+            return 0
+
+        return asyncio.run(_show())
 
     if args.memory_command == "search":
-        if not scope_root.exists():
+        escaped = args.query.replace("'", "''")
+        pattern = f"%{escaped}%"
+        limit = max(1, min(int(args.limit), 200))
+        sql = (
+            "SELECT 'memory_entries' AS table_name, id, entry_date AS date, source, content AS snippet "
+            f"FROM memory_entries WHERE content LIKE '{pattern}' "
+            "UNION ALL "
+            "SELECT 'memory_summaries' AS table_name, id, period_start || ' to ' || period_end AS date, period_type AS source, content AS snippet "
+            f"FROM memory_summaries WHERE content LIKE '{pattern}' "
+            "UNION ALL "
+            "SELECT 'people_facts' AS table_name, id, observed_at AS date, display_name AS source, fact || ' Evidence: ' || evidence AS snippet "
+            f"FROM people_facts WHERE person_key LIKE '{pattern}' OR display_name LIKE '{pattern}' OR fact LIKE '{pattern}' OR evidence LIKE '{pattern}' "
+            f"ORDER BY date DESC LIMIT {limit}"
+        )
+
+        async def _search() -> int:
+            result = await memory.query_sql(sql, max_rows=limit)
+            print(json.dumps(result.get("rows", []), indent=2, sort_keys=True))
             return 0
-        needle = args.query.casefold()
-        for path in sorted(scope_root.rglob("*.md")):
-            if not path.is_file():
-                continue
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            for line_number, line in enumerate(lines, 1):
-                if needle in line.casefold():
-                    print(f"{path.relative_to(root)}:{line_number}:{line}")
-        return 0
+
+        return asyncio.run(_search())
 
     if args.memory_command == "clear":
         if not getattr(args, "yes", False):
             print("Refusing to clear memory without --yes")
             return 1
-        target = scope_root
-        if target.exists():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
-        print(f"Cleared memory scope: {getattr(args, 'scope', 'all')}")
-        return 0
+
+        async def _clear() -> int:
+            await memory.clear()
+            print("Cleared memory database")
+            return 0
+
+        return asyncio.run(_clear())
 
     print(f"Unknown memory command: {args.memory_command}")
     return 1

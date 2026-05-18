@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..sqlite_query import execute_readonly_query
 from .base import MessageBatch, MessageStorageBase
 from ...schemas import Message, MessageType
 
@@ -19,7 +21,18 @@ class MessageStorageLocalConfig:
     DEFAULT_MESSAGE_COUNT = 100
     CONNECT_TIMEOUT = 5.0
     TABLE_NAME = "messages"
-    CURRENT_COLUMNS = {"id", "timestamp", "message_json"}
+    CURRENT_COLUMNS = {
+        "id",
+        "timestamp",
+        "role",
+        "type",
+        "sender_id",
+        "content",
+        "metadata_json",
+        "tool_call_json",
+        "multimodal_json",
+        "message_json",
+    }
 
 
 class MessageStorageLocal(MessageStorageBase):
@@ -69,6 +82,13 @@ class MessageStorageLocal(MessageStorageBase):
             CREATE TABLE IF NOT EXISTS {MessageStorageLocalConfig.TABLE_NAME} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
+                role TEXT NOT NULL,
+                type TEXT NOT NULL,
+                sender_id TEXT,
+                content TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{{}}',
+                tool_call_json TEXT,
+                multimodal_json TEXT,
                 message_json TEXT NOT NULL
             )
             """
@@ -80,6 +100,24 @@ class MessageStorageLocal(MessageStorageBase):
             f"""
             CREATE INDEX IF NOT EXISTS idx_{MessageStorageLocalConfig.TABLE_NAME}_id
             ON {MessageStorageLocalConfig.TABLE_NAME} (id)
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_{MessageStorageLocalConfig.TABLE_NAME}_timestamp
+            ON {MessageStorageLocalConfig.TABLE_NAME} (timestamp)
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_{MessageStorageLocalConfig.TABLE_NAME}_role_type
+            ON {MessageStorageLocalConfig.TABLE_NAME} (role, type)
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_{MessageStorageLocalConfig.TABLE_NAME}_sender
+            ON {MessageStorageLocalConfig.TABLE_NAME} (sender_id)
             """
         )
 
@@ -94,12 +132,15 @@ class MessageStorageLocal(MessageStorageBase):
         await asyncio.to_thread(self._add_messages_sync, normalized_messages)
 
     def _add_messages_sync(self, messages: List[Message]) -> None:
-        rows = [(message.timestamp, message.model_dump_json()) for message in messages]
+        rows = [self._message_row(message) for message in messages]
         with self._connect() as connection:
             connection.executemany(
                 f"""
-                INSERT INTO {MessageStorageLocalConfig.TABLE_NAME} (timestamp, message_json)
-                VALUES (?, ?)
+                INSERT INTO {MessageStorageLocalConfig.TABLE_NAME} (
+                    timestamp, role, type, sender_id, content, metadata_json,
+                    tool_call_json, multimodal_json, message_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -195,6 +236,32 @@ class MessageStorageLocal(MessageStorageBase):
             "backend": "local",
             "path": str(self.path),
         }
+
+    async def query_sql(self, sql: str, max_rows: int = 50) -> dict:
+        """Run one safe read-only SQL query against the messages database."""
+        return await asyncio.to_thread(
+            execute_readonly_query,
+            self.path,
+            sql,
+            max_rows=max_rows,
+        )
+
+    @staticmethod
+    def _message_row(message: Message) -> tuple:
+        payload = message.model_dump(mode="json")
+        return (
+            message.timestamp,
+            message.role.value if hasattr(message.role, "value") else str(message.role),
+            message.type.value if hasattr(message.type, "value") else str(message.type),
+            message.sender_id,
+            message.content,
+            json.dumps(payload.get("metadata") or {}, ensure_ascii=False, sort_keys=True, default=str),
+            json.dumps(payload.get("tool_call"), ensure_ascii=False, sort_keys=True, default=str)
+            if payload.get("tool_call") is not None else None,
+            json.dumps(payload.get("multimodal"), ensure_ascii=False, sort_keys=True, default=str)
+            if payload.get("multimodal") is not None else None,
+            message.model_dump_json(),
+        )
 
     def __repr__(self) -> str:
         return f"MessageStorageLocal(path='{self.path}')"

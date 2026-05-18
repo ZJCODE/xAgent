@@ -18,5 +18,5 @@ objects for the current agent stream.
 Long-term memory. The memory package stores and formats durable memory entries,
 runtime-maintained summaries, and quote-backed people profiles.
 
-- `memory/markdown_memory.py`: markdown file layout, reads, writes, listing, and search.
+- `memory/sqlite_memory.py`: SQLite storage for memory entries, summaries, people facts, and read-only SQL querying.
 - `memory/journal_service.py`: LLM formatting for memory entries, summaries, and people profile updates.

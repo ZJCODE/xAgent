@@ -329,7 +329,7 @@ provider:
     def test_init_force_keeps_runtime_data_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = init_agent_directory(tmpdir)
-            memory_marker = result.memory_dir / "daily.md"
+            memory_marker = result.memory_dir / "memory.sqlite3"
             messages_marker = result.messages_dir / "messages.sqlite3"
             memory_marker.write_text("memory", encoding="utf-8")
             messages_marker.write_text("messages", encoding="utf-8")
@@ -342,7 +342,7 @@ provider:
     def test_init_force_can_clear_runtime_data(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = init_agent_directory(tmpdir)
-            memory_marker = result.memory_dir / "daily.md"
+            memory_marker = result.memory_dir / "memory.sqlite3"
             messages_marker = result.messages_dir / "messages.sqlite3"
             memory_marker.write_text("memory", encoding="utf-8")
             messages_marker.write_text("messages", encoding="utf-8")

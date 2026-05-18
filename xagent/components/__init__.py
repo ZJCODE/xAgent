@@ -1,12 +1,12 @@
 """Infrastructure components used by the agent runtime."""
 
-from .memory.markdown_memory import MarkdownMemory, MemoryScope
+from .memory import SQLiteMemory, SQLiteMemoryConfig
 from .message import MessageStorageBase, MessageStorageLocal, MessageStoragePrivateTemp
 
 __all__ = [
-    "MemoryScope",
     "MessageStorageBase",
     "MessageStorageLocal",
     "MessageStoragePrivateTemp",
-    "MarkdownMemory",
+    "SQLiteMemory",
+    "SQLiteMemoryConfig",
 ]

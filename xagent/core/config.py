@@ -21,6 +21,7 @@ class AgentConfig:
     DEFAULT_MODEL = "gpt-5.4-mini"
     DEFAULT_WORKSPACE = "~/.xagent"
     MEMORY_DIRNAME = "memory"
+    MEMORY_DB_FILENAME = "memory.sqlite3"
     MESSAGE_DIRNAME = "messages"
     MESSAGE_DB_FILENAME = "messages.sqlite3"
     MEMORY_RECENT_DAYS = 3
@@ -79,12 +80,19 @@ class AgentConfig:
             "- Write concise natural memory notes. Skip trivial small talk and temporary details.\n"
             "- Do not invent or overgeneralize; keep attribution clear when multiple people are involved.\n"
         ),
-        "search_memory": (
-            "\n**Memory Search:**\n"
-            "- Use `search_memory` only when older context is needed. Do not call it every turn.\n"
+        "query_memory": (
+            "\n**Memory SQL Query:**\n"
+            "- Use `query_memory` for ordinary recall when older durable memory is needed.\n"
             "- Prefer recent memory context already provided in the transcript when sufficient.\n"
-            "- Good triggers: user asks what you remember, refers to an earlier plan, or asks to recall a past discussion.\n"
-            "- Search by keyword, date, or date range. Keep retrieved facts tied to the correct speaker and date.\n"
+            "- Good triggers: user asks what you remember, refers to an earlier plan, or asks to recall a past preference or decision.\n"
+            "- Write a focused read-only SELECT query. Keep retrieved facts tied to the correct speaker, date, and source.\n"
+        ),
+        "query_messages": (
+            "\n**Deep Message SQL Query:**\n"
+            "- Use `query_messages` only for deep recall of the full persisted message history.\n"
+            "- Good triggers: the user explicitly asks you to carefully remember, look back in detail, or re-check older conversation history.\n"
+            "- Do not use this for ordinary recall; recent messages are already in context and durable memory should be queried with `query_memory` first.\n"
+            "- Write a focused read-only SELECT query and avoid exposing irrelevant private or sensitive details.\n"
         ),
         "run_command": (
             "\n**Shell Command Execution:**\n"
@@ -107,7 +115,8 @@ class AgentConfig:
     TOOL_POLICY_ORDER = (
         "run_command",
         "write_memory",
-        "search_memory",
+        "query_memory",
+        "query_messages",
         "web_search",
     )
 

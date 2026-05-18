@@ -23,11 +23,11 @@ class IdentityAgent:
     model = "test-model"
     tools = {}
 
-    def __init__(self, identity: str, memory_root: Path):
+    def __init__(self, identity: str, memory_db: Path):
         self.system_prompt = identity
         self.message_handler = SimpleNamespace(system_prompt=identity)
         self.message_storage = FakeMessageStorage()
-        self.markdown_memory = SimpleNamespace(root=str(memory_root))
+        self.sqlite_memory = SimpleNamespace(path=str(memory_db))
 
     @property
     def identity(self) -> str:
@@ -46,11 +46,12 @@ class AgentIdentityApiTests(unittest.IsolatedAsyncioTestCase):
     def _server(self, root: Path, identity: str) -> AgentHTTPServer:
         memory_root = root / "memory"
         memory_root.mkdir()
+        memory_db = memory_root / "memory.sqlite3"
         identity_path = root / "identity.md"
         identity_path.write_text(f"{identity}\n", encoding="utf-8")
 
         server = AgentHTTPServer(
-            agent=IdentityAgent(identity=identity, memory_root=memory_root),
+            agent=IdentityAgent(identity=identity, memory_db=memory_db),
             enable_web=False,
         )
         server.workspace = root
@@ -71,6 +72,7 @@ class AgentIdentityApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["system_prompt"], payload["identity"])
             self.assertEqual(payload["identity_file"], "identity.md")
             self.assertEqual(payload["identity_path"], str((root / "identity.md").resolve()))
+            self.assertEqual(payload["memory_db"], str((root / "memory" / "memory.sqlite3").resolve()))
             self.assertTrue(payload["identity_editable"])
 
     async def test_update_identity_saves_file_and_runtime_agent(self):

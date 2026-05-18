@@ -6,10 +6,10 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 from pydantic import BaseModel
 
 from ..components import (
-    MarkdownMemory,
     MessageStorageBase,
     MessageStorageLocal,
     MessageStoragePrivateTemp,
+    SQLiteMemory,
 )
 from ..components.memory import JournalLLMService
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
@@ -18,7 +18,7 @@ from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_client, normalize_model_api
 from .tools import ToolExecutor, ToolManager
 from ..schemas import AgentTurnResult, Message
-from ..tools import create_write_memory_tool, create_search_memory_tool
+from ..tools import create_query_memory_tool, create_query_messages_tool, create_write_memory_tool
 
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class Agent:
     """AI agent runtime for a continuous agent-level message stream."""
 
-    _MEMORY_TOOL_NAMES = {"write_memory", "search_memory"}
+    _MEMORY_TOOL_NAMES = {"write_memory", "query_memory", "query_messages"}
     _MEMORY_WRITE_TOOL_NAMES = {"write_memory"}
 
     def __init__(
@@ -83,15 +83,14 @@ class Agent:
                 path=str(self._message_storage_path(default_workspace))
             )
 
-        # Markdown-based memory system
         if workspace_path is not None:
-            memory_dir = str(self._memory_dir(workspace_path))
+            memory_path = str(self._memory_db_path(workspace_path))
         else:
             default_workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
             default_workspace.mkdir(parents=True, exist_ok=True)
-            memory_dir = str(self._memory_dir(default_workspace))
+            memory_path = str(self._memory_db_path(default_workspace))
 
-        self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
+        self.sqlite_memory = SQLiteMemory(path=memory_path)
         self.llm_service = JournalLLMService(
             client=self.client,
             model=self.model,
@@ -99,18 +98,22 @@ class Agent:
             max_tokens=self.model_max_tokens,
         )
         self.memory_handler = MemoryHandler(
-            memory=self.markdown_memory,
+            memory=self.sqlite_memory,
             llm_service=self.llm_service,
         )
 
         bound_tools = list(tools or [])
         bound_tools.extend([
             create_write_memory_tool(
-                memory=self.markdown_memory,
+                memory=self.sqlite_memory,
                 is_enabled=self._memory_can_write,
             ),
-            create_search_memory_tool(
-                memory=self.markdown_memory,
+            create_query_memory_tool(
+                memory=self.sqlite_memory,
+                is_enabled=self._memory_can_read,
+            ),
+            create_query_messages_tool(
+                message_storage=self.message_storage,
                 is_enabled=self._memory_can_read,
             ),
         ])
@@ -156,6 +159,10 @@ class Agent:
     @classmethod
     def _memory_dir(cls, workspace: Path) -> Path:
         return workspace / AgentConfig.MEMORY_DIRNAME
+
+    @classmethod
+    def _memory_db_path(cls, workspace: Path) -> Path:
+        return cls._memory_dir(workspace) / AgentConfig.MEMORY_DB_FILENAME
 
     async def flush_memory(self) -> None:
         flusher = getattr(self.memory_handler, "flush_pending", None)

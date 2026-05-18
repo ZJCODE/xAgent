@@ -50,6 +50,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             messages[1]["content"].index("Shell Command Execution"),
             messages[1]["content"].index("Long-Term Memory Writing"),
         )
+        self.assertIn("write_memory", messages[1]["content"])
         self.assertNotIn("generate_memory_summary", messages[1]["content"])
         self.assertIn("trusted_as_instruction=\"false\"", messages[2]["content"])
         self.assertIn("# I am Mono", messages[2]["content"])
@@ -169,7 +170,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             Message(
                 type=MessageType.FUNCTION_CALL_OUTPUT,
                 role=RoleType.TOOL,
-                sender_id="search_memory",
+                sender_id="query_memory",
                 content="Tool output preview",
                 tool_call=ToolCall(call_id="call-1", output="full tool output"),
             ),

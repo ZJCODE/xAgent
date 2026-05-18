@@ -280,9 +280,10 @@ class CLICommandTests(unittest.TestCase):
         config = build_parser().parse_args(["inspect", "config", "validate", "--dir", "./agent-dir"])
         self.assertEqual(config.config_command, "validate")
 
-        memory = build_parser().parse_args(["inspect", "memory", "search", "project", "--scope", "daily"])
+        memory = build_parser().parse_args(["inspect", "memory", "search", "project", "--limit", "5"])
         self.assertEqual(memory.memory_command, "search")
         self.assertEqual(memory.query, "project")
+        self.assertEqual(memory.limit, 5)
 
         messages = build_parser().parse_args(["inspect", "messages", "list", "--count", "5"])
         self.assertEqual(messages.messages_command, "list")
@@ -320,7 +321,7 @@ class CLICommandTests(unittest.TestCase):
             root = Path(tmpdir)
             (root / "config.yaml").write_text("provider:\n  model: old\n", encoding="utf-8")
             (root / "identity.md").write_text("old", encoding="utf-8")
-            memory_marker = root / "memory" / "entry.md"
+            memory_marker = root / "memory" / "memory.sqlite3"
             messages_marker = root / "messages" / "messages.sqlite3"
             memory_marker.parent.mkdir()
             messages_marker.parent.mkdir()
@@ -342,7 +343,7 @@ class CLICommandTests(unittest.TestCase):
             root = Path(tmpdir)
             (root / "config.yaml").write_text("provider:\n  model: old\n", encoding="utf-8")
             (root / "identity.md").write_text("old", encoding="utf-8")
-            memory_marker = root / "memory" / "entry.md"
+            memory_marker = root / "memory" / "memory.sqlite3"
             messages_marker = root / "messages" / "messages.sqlite3"
             memory_marker.parent.mkdir()
             messages_marker.parent.mkdir()

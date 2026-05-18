@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>xAgent Memory</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
   <script>
     tailwind.config = {
       darkMode: 'class',
@@ -183,7 +182,7 @@
         <!-- Agent info bar -->
         <div id="agentInfo" class="mt-3 text-xs text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-4 gap-y-1"></div>
         <div class="mt-3 flex flex-col sm:flex-row gap-2">
-          <input id="searchInput" type="text" class="search-input" placeholder="Search by file name or memory content" />
+          <input id="searchInput" type="text" class="search-input" placeholder="Search memory database content" />
           <button id="searchBtn" class="ghost-button px-4 py-2 rounded-2xl text-sm">Search</button>
           <button id="clearSearchBtn" class="ghost-button px-4 py-2 rounded-2xl text-sm">Clear</button>
         </div>
@@ -194,9 +193,9 @@
         <!-- Tree sidebar -->
         <aside id="treeSidebar" class="w-64 shrink-0 border-r border-black/5 dark:border-white/10 overflow-y-auto p-3">
           <div id="searchResults" class="hidden space-y-2 mb-3"></div>
-          <div class="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-2 px-2">Files</div>
+          <div class="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-2 px-2">Tables</div>
           <div id="treeContainer"></div>
-          <div id="treeEmpty" class="hidden text-sm text-gray-400 dark:text-gray-500 text-center py-8">No memory files found</div>
+          <div id="treeEmpty" class="hidden text-sm text-gray-400 dark:text-gray-500 text-center py-8">No memory rows found</div>
         </aside>
         <!-- Content viewer -->
         <main class="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
@@ -205,7 +204,7 @@
               <svg class="mx-auto w-12 h-12 mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
               </svg>
-              <p>Select a file from the tree to view its content</p>
+              <p>Select a table or row to view memory data</p>
             </div>
           </div>
           <div id="contentViewer" class="hidden">
@@ -222,7 +221,6 @@
 
 <script>
 (function() {
-  const md = window.markdownit({ html: false, linkify: true, typographer: true });
   const THEME_KEY = 'xagent_theme';
   const searchResultsEl = document.getElementById('searchResults');
   const searchInputEl = document.getElementById('searchInput');
@@ -248,89 +246,91 @@
       document.getElementById('agentInfo').innerHTML =
         `<span>Agent: <strong>${esc(data.name)}</strong></span>` +
         `<span>Model: <strong>${esc(data.model)}</strong></span>` +
-        `<span>Memory: <strong>${esc(data.memory_dir)}</strong></span>`;
+        `<span>Memory DB: <strong>${esc(data.memory_db)}</strong></span>`;
     } catch {}
   }
 
-  // ── Tree ──
-  let selectedPath = null;
+  // ── Tables ──
+  let selectedTable = 'memory_entries';
+  let selectedRow = null;
 
   async function loadTree() {
     try {
-      const res = await fetch('/api/memory/tree');
+      const res = await fetch('/api/memory/stats');
       const data = await res.json();
       const container = document.getElementById('treeContainer');
       const empty = document.getElementById('treeEmpty');
-      if (!data.tree || data.tree.length === 0) {
-        container.innerHTML = '';
-        empty.classList.remove('hidden');
-        return;
-      }
       empty.classList.add('hidden');
-      container.innerHTML = '';
-      container.appendChild(buildTree(data.tree));
+      container.innerHTML = [
+        tableItem('memory_entries', data.entries || 0),
+        tableItem('memory_summaries', data.summaries || 0),
+        tableItem('people_facts', data.people_facts || 0),
+      ].join('');
+      container.querySelectorAll('.tree-item').forEach(item => {
+        item.addEventListener('click', () => loadTable(item.dataset.table, item));
+      });
+      loadTable(selectedTable);
     } catch (e) {
-      document.getElementById('treeContainer').innerHTML = `<div class="text-sm text-red-500 p-2">Failed to load tree</div>`;
+      document.getElementById('treeContainer').innerHTML = `<div class="text-sm text-red-500 p-2">Failed to load memory database</div>`;
     }
   }
 
-  function buildTree(nodes) {
-    const frag = document.createDocumentFragment();
-    for (const node of nodes) {
-      if (node.type === 'dir') {
-        const wrapper = document.createElement('div');
-        const label = document.createElement('div');
-        label.className = 'tree-item';
-        label.innerHTML = `<span class="toggle-arrow text-gray-400 text-xs">▶</span><span>📁 ${esc(node.name)}</span>`;
-        const children = document.createElement('div');
-        children.className = 'tree-children hidden';
-        if (node.children && node.children.length > 0) {
-          children.appendChild(buildTree(node.children));
-        }
-        label.addEventListener('click', () => {
-          children.classList.toggle('hidden');
-          const arrow = label.querySelector('.toggle-arrow');
-          arrow.textContent = children.classList.contains('hidden') ? '▶' : '▼';
-        });
-        wrapper.appendChild(label);
-        wrapper.appendChild(children);
-        frag.appendChild(wrapper);
-      } else {
-        const item = document.createElement('div');
-        item.className = 'tree-item';
-        item.dataset.path = node.path;
-        item.innerHTML = `<span>📄 ${esc(node.name)}</span>`;
-        item.addEventListener('click', () => selectFile(node.path, item));
-        frag.appendChild(item);
-      }
-    }
-    return frag;
+  function tableItem(table, count) {
+    return `<div class="tree-item" data-table="${esc(table)}"><span>▦ ${esc(table)}</span><span class="ml-auto text-xs text-gray-400">${count}</span></div>`;
   }
 
-  async function selectFile(path, el) {
-    // Deselect previous
+  async function loadTable(table, el) {
     document.querySelectorAll('.tree-item.selected').forEach(e => e.classList.remove('selected'));
-    if (el) {
-      el.classList.add('selected');
-    }
-    selectedPath = path;
+    if (el) el.classList.add('selected');
+    selectedTable = table;
+    selectedRow = null;
 
     document.getElementById('contentPlaceholder').classList.add('hidden');
     document.getElementById('contentViewer').classList.remove('hidden');
-    document.getElementById('contentTitle').textContent = path;
+    document.getElementById('contentTitle').textContent = table;
     document.getElementById('contentBody').innerHTML = '<div class="text-gray-400 text-sm py-4">Loading…</div>';
     document.getElementById('contentMeta').textContent = '';
 
     try {
-      const res = await fetch(`/api/memory/read?path=${encodeURIComponent(path)}`);
+      const res = await fetch(`/api/memory/list?table=${encodeURIComponent(table)}&limit=50`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      document.getElementById('contentBody').innerHTML = md.render(data.content || '_(empty file)_');
-      if (data.modified) {
-        document.getElementById('contentMeta').textContent = 'Modified: ' + new Date(data.modified * 1000).toLocaleString();
-      }
+      const rows = data.rows || [];
+      document.getElementById('contentBody').innerHTML = rows.length ? rows.map(row => rowCard(table, row)).join('') : '<div class="text-gray-400 text-sm">No rows</div>';
+      document.getElementById('contentMeta').textContent = `${rows.length} rows`;
+      document.querySelectorAll('[data-row-id]').forEach(item => {
+        item.addEventListener('click', () => selectRow(item.dataset.table, item.dataset.rowId));
+      });
     } catch (e) {
-      document.getElementById('contentBody').innerHTML = `<div class="text-red-500 text-sm">Failed to load file: ${esc(e.message)}</div>`;
+      document.getElementById('contentBody').innerHTML = `<div class="text-red-500 text-sm">Failed to load rows: ${esc(e.message)}</div>`;
+    }
+  }
+
+  function rowCard(table, row) {
+    const title = row.entry_date || row.period_start || row.observed_at || row.id;
+    const body = row.content || row.fact || row.snippet || '';
+    return `
+      <div class="search-result mb-2" data-table="${esc(table)}" data-row-id="${esc(String(row.id))}">
+        <div class="text-xs text-gray-400 dark:text-gray-500">${esc(table)} #${esc(String(row.id))}</div>
+        <div class="text-sm font-medium mt-1">${esc(String(title))}</div>
+        <div class="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-5">${esc(String(body)).slice(0, 500)}</div>
+      </div>
+    `;
+  }
+
+  async function selectRow(table, rowId) {
+    selectedTable = table;
+    selectedRow = rowId;
+    document.getElementById('contentTitle').textContent = `${table} #${rowId}`;
+    document.getElementById('contentBody').innerHTML = '<div class="text-gray-400 text-sm py-4">Loading…</div>';
+    try {
+      const res = await fetch(`/api/memory/read?table=${encodeURIComponent(table)}&row_id=${encodeURIComponent(rowId)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      document.getElementById('contentBody').innerHTML = `<pre class="text-xs whitespace-pre-wrap">${esc(JSON.stringify(data.row || {}, null, 2))}</pre>`;
+      document.getElementById('contentMeta').textContent = 'Row detail';
+    } catch (e) {
+      document.getElementById('contentBody').innerHTML = `<div class="text-red-500 text-sm">Failed to load row: ${esc(e.message)}</div>`;
     }
   }
 
@@ -363,17 +363,16 @@
     }
 
     searchResultsEl.innerHTML = results.map(result => `
-      <div class="search-result" data-path="${esc(result.path)}">
-        <div class="text-xs text-gray-400 dark:text-gray-500">${esc(result.matched_in.join(', '))}</div>
-        <div class="text-sm font-medium mt-1">${esc(result.path)}</div>
+      <div class="search-result" data-table="${esc(result.table_name)}" data-row-id="${esc(String(result.id))}">
+        <div class="text-xs text-gray-400 dark:text-gray-500">${esc(result.table_name)} #${esc(String(result.id))}</div>
+        <div class="text-sm font-medium mt-1">${esc(result.date || '')}</div>
         ${result.snippet ? `<div class="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-5">${esc(result.snippet)}</div>` : ''}
       </div>
     `).join('');
 
     searchResultsEl.querySelectorAll('.search-result').forEach(item => {
       item.addEventListener('click', () => {
-        const path = item.dataset.path;
-        selectFile(path, null);
+        selectRow(item.dataset.table, item.dataset.rowId);
       });
     });
   }
@@ -388,10 +387,8 @@
   document.getElementById('refreshBtn').addEventListener('click', () => {
     loadTree();
     loadAgentInfo();
-    // Reload current file if one is selected
-    if (selectedPath) {
-      const el = document.querySelector(`.tree-item[data-path="${CSS.escape(selectedPath)}"]`);
-      if (el) selectFile(selectedPath, el);
+    if (selectedRow) {
+      selectRow(selectedTable, selectedRow);
     }
   });
   document.getElementById('searchBtn').addEventListener('click', runSearch);

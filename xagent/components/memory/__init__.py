@@ -1,10 +1,10 @@
-"""Long-term diary memory storage and formatting services."""
+"""Long-term memory storage and formatting services."""
 
 from .journal_service import JournalLLMService
-from .markdown_memory import MarkdownMemory, MemoryScope
+from .sqlite_memory import SQLiteMemory, SQLiteMemoryConfig
 
 __all__ = [
     "JournalLLMService",
-    "MarkdownMemory",
-    "MemoryScope",
+    "SQLiteMemory",
+    "SQLiteMemoryConfig",
 ]

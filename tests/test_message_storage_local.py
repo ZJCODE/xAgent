@@ -41,3 +41,27 @@ class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(messages[0].metadata["source"], "camera")
             self.assertEqual(messages[0].metadata["event_type"], "presence")
             self.assertEqual(messages[0].metadata["memory_policy"], "always")
+
+    async def test_structured_columns_are_queryable(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "messages.sqlite3"
+            storage = MessageStorageLocal(path=str(db_path))
+            await storage.add_messages(
+                Message.create("project detail", role=RoleType.USER, sender_id="alice")
+            )
+
+            result = await storage.query_sql(
+                "SELECT role, type, sender_id, content FROM messages WHERE content LIKE '%project%'"
+            )
+
+            self.assertEqual(result["rows"][0]["role"], "user")
+            self.assertEqual(result["rows"][0]["type"], "message")
+            self.assertEqual(result["rows"][0]["sender_id"], "alice")
+
+    async def test_readonly_query_rejects_writes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "messages.sqlite3"
+            storage = MessageStorageLocal(path=str(db_path))
+
+            with self.assertRaisesRegex(ValueError, "Only SELECT or WITH"):
+                await storage.query_sql("DELETE FROM messages")

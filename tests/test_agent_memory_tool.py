@@ -1,14 +1,17 @@
-"""Tests for memory tool factories (write_memory, search_memory)."""
+"""Tests for memory tool factories."""
 
-import asyncio
 import tempfile
 import unittest
 from datetime import date
+from pathlib import Path
 
-from xagent.components.memory import MarkdownMemory
+from xagent.components.memory import SQLiteMemory
+from xagent.components.message import MessageStorageLocal
+from xagent.schemas import Message, RoleType
 from xagent.tools.memory_tool import (
+    create_query_memory_tool,
+    create_query_messages_tool,
     create_write_memory_tool,
-    create_search_memory_tool,
 )
 
 
@@ -20,7 +23,8 @@ class _FakeLLMService:
 class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.memory = MarkdownMemory(self._tmpdir.name)
+        self.memory = SQLiteMemory(str(Path(self._tmpdir.name) / "memory.sqlite3"))
+        self.messages = MessageStorageLocal(str(Path(self._tmpdir.name) / "messages.sqlite3"))
         self._enabled = True
 
     def tearDown(self):
@@ -36,8 +40,9 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["message"], "Memory recorded.")
         self.assertNotIn("file", result)
 
-        text = await self.memory.read_file(self.memory.daily_path(date.today()))
-        self.assertIn("test memory note", text)
+        result = await self.memory.query_sql("SELECT content, source FROM memory_entries")
+        self.assertIn("test memory note", result["rows"][0]["content"])
+        self.assertEqual(result["rows"][0]["source"], "tool")
 
     async def test_write_memory_disabled(self):
         self._enabled = False
@@ -50,24 +55,39 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         result = await tool("   ")
         self.assertEqual(result["status"], "skipped")
 
-    async def test_search_memory_keyword(self):
-        await self.memory.append_daily("Meeting with Alice about project X")
-        tool = create_search_memory_tool(self.memory, self._is_enabled)
-        result = await tool(query="Alice")
-        self.assertIn("Alice", result["results"])
+    async def test_query_memory_sql(self):
+        await self.memory.add_entry("Meeting with Alice about project X", target_date=date.today())
+        tool = create_query_memory_tool(self.memory, self._is_enabled)
+        result = await tool(sql="SELECT content FROM memory_entries WHERE content LIKE '%Alice%'")
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("Alice", result["rows"][0]["content"])
 
-    async def test_search_memory_disabled(self):
+    async def test_query_memory_disabled(self):
         self._enabled = False
-        tool = create_search_memory_tool(self.memory, self._is_enabled)
-        result = await tool(query="anything")
+        tool = create_query_memory_tool(self.memory, self._is_enabled)
+        result = await tool(sql="SELECT * FROM memory_entries")
         self.assertFalse(result["enabled"])
 
-    async def test_search_memory_date_range(self):
-        today = date.today()
-        await self.memory.append_daily("Entry for today", target_date=today)
-        tool = create_search_memory_tool(self.memory, self._is_enabled)
-        result = await tool(date=today.isoformat())
-        self.assertIn("Entry for today", result["results"])
+    async def test_query_memory_rejects_write_sql(self):
+        tool = create_query_memory_tool(self.memory, self._is_enabled)
+        result = await tool(sql="DELETE FROM memory_entries")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Only SELECT or WITH", result["message"])
+
+    async def test_query_messages_sql(self):
+        await self.messages.add_messages(
+            Message.create("Older project detail", role=RoleType.USER, sender_id="Alice")
+        )
+        tool = create_query_messages_tool(self.messages, self._is_enabled)
+        result = await tool(sql="SELECT sender_id, content FROM messages WHERE content LIKE '%project%'")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["rows"][0]["sender_id"], "Alice")
+
+    async def test_query_messages_rejects_multi_statement(self):
+        tool = create_query_messages_tool(self.messages, self._is_enabled)
+        result = await tool(sql="SELECT * FROM messages; SELECT * FROM messages")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Only one SQL statement", result["message"])
 
 
 if __name__ == "__main__":

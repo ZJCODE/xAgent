@@ -304,17 +304,19 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(memory_handler.get_recent_context_called)
 
-    async def test_private_mode_filters_write_tools_keeps_search(self):
-        """Private mode should remove write memory tools but keep search_memory."""
+    async def test_private_mode_filters_write_tools_keeps_query_tools(self):
+        """Private mode should remove write memory tools but keep read-only query tools."""
         main_storage = MessageStoragePrivateTemp()
         tools = {
             "write_memory": lambda: None,
-            "search_memory": lambda: None,
+            "query_memory": lambda: None,
+            "query_messages": lambda: None,
             "custom_tool": lambda: None,
         }
         tool_specs = [
             {"type": "function", "function": {"name": "write_memory"}},
-            {"type": "function", "function": {"name": "search_memory"}},
+            {"type": "function", "function": {"name": "query_memory"}},
+            {"type": "function", "function": {"name": "query_messages"}},
             {"type": "function", "function": {"name": "custom_tool"}},
         ]
 
@@ -346,7 +348,8 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
         )
 
         spec_names = {s["function"]["name"] for s in model_client.received_tool_specs}
-        self.assertIn("search_memory", spec_names)
+        self.assertIn("query_memory", spec_names)
+        self.assertIn("query_messages", spec_names)
         self.assertIn("custom_tool", spec_names)
         self.assertNotIn("write_memory", spec_names)
 
@@ -355,12 +358,14 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
         main_storage = MessageStoragePrivateTemp()
         tools = {
             "write_memory": lambda: None,
-            "search_memory": lambda: None,
+            "query_memory": lambda: None,
+            "query_messages": lambda: None,
             "custom_tool": lambda: None,
         }
         tool_specs = [
             {"type": "function", "function": {"name": "write_memory"}},
-            {"type": "function", "function": {"name": "search_memory"}},
+            {"type": "function", "function": {"name": "query_memory"}},
+            {"type": "function", "function": {"name": "query_messages"}},
             {"type": "function", "function": {"name": "custom_tool"}},
         ]
 
