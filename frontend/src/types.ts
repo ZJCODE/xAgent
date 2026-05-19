@@ -32,6 +32,8 @@ export interface ChatEvent {
   delta?: string;
   content?: string;
   message?: unknown;
+  message_id?: string;
+  phase?: string;
   error?: string;
   status_code?: number;
 }

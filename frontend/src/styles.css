@@ -171,9 +171,24 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 0.7rem;
   border-bottom: 1px solid var(--border-soft);
   padding: 0.7rem 1rem;
+}
+
+.panel-settings-left,
+.panel-settings-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.panel-settings-right {
+  margin-left: auto;
+  justify-content: flex-end;
 }
 
 .panel-label {
@@ -904,6 +919,10 @@ textarea {
 
   .search-control {
     grid-template-columns: minmax(0, 1fr) auto auto auto;
+    width: 100%;
+  }
+
+  .panel-settings-right {
     width: 100%;
   }
 

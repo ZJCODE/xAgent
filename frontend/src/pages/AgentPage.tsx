@@ -22,7 +22,6 @@ export function AgentPage() {
   const [identity, setIdentity] = useState<AgentIdentity | null>(null);
   const [editorValue, setEditorValue] = useState("");
   const [saving, setSaving] = useState(false);
-  const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
   const dirty = useMemo(() => editorValue !== (identity?.identity || ""), [editorValue, identity]);
@@ -38,7 +37,6 @@ export function AgentPage() {
       setInfo(agentInfo);
       setIdentity(identityData);
       setEditorValue(identityData?.identity || agentInfo.identity || "");
-      setStatus("Loaded");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -60,7 +58,6 @@ export function AgentPage() {
       const updated = await updateAgentIdentity(value);
       setIdentity(updated);
       setEditorValue(updated.identity);
-      setStatus("Saved");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -71,13 +68,11 @@ export function AgentPage() {
   const runClearMemory = async () => {
     if (!window.confirm("Clear all memory files?")) return;
     await clearMemory();
-    setStatus("Memory cleared");
   };
 
   const runClearMessages = async () => {
     if (!window.confirm("Clear all messages?")) return;
     await clearMessages();
-    setStatus("Messages cleared");
     await load();
   };
 
@@ -86,7 +81,6 @@ export function AgentPage() {
       <section className="console-toolbar">
         <div>
           <h2>Agent</h2>
-          <p>{info?.model || "Runtime configuration"}</p>
         </div>
         <button type="button" className="ghost-button icon-text-button" onClick={load}>
           <RefreshCw size={15} />
@@ -94,7 +88,6 @@ export function AgentPage() {
         </button>
       </section>
       {error ? <div className="error-strip">{error}</div> : null}
-      {status ? <div className="success-strip">{status}</div> : null}
 
       <div className="agent-grid">
         <section className="info-panel">

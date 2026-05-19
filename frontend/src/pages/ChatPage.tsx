@@ -67,32 +67,36 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
   return (
     <section className="chat-panel">
       <div className="panel-settings-bar">
-        <label className="inline-field">
-          <span className="inline-label">User</span>
-          <input
-            value={panel.settings.userId}
-            onChange={(event) => updateSettings(panel.id, { userId: event.target.value })}
-            className="inline-input"
-          />
-        </label>
-        <label className="setting-toggle">
-          <span>Stream</span>
-          <input
-            type="checkbox"
-            checked={panel.settings.stream}
-            onChange={(event) => updateSettings(panel.id, { stream: event.target.checked })}
-          />
-          <span className="toggle-track" />
-        </label>
-        <label className="setting-toggle">
-          <span>Memory</span>
-          <input
-            type="checkbox"
-            checked={panel.settings.memory}
-            onChange={(event) => updateSettings(panel.id, { memory: event.target.checked })}
-          />
-          <span className="toggle-track" />
-        </label>
+        <div className="panel-settings-left">
+          <label className="inline-field">
+            <span className="inline-label">User</span>
+            <input
+              value={panel.settings.userId}
+              onChange={(event) => updateSettings(panel.id, { userId: event.target.value })}
+              className="inline-input"
+            />
+          </label>
+        </div>
+        <div className="panel-settings-right">
+          <label className="setting-toggle">
+            <span>Stream</span>
+            <input
+              type="checkbox"
+              checked={panel.settings.stream}
+              onChange={(event) => updateSettings(panel.id, { stream: event.target.checked })}
+            />
+            <span className="toggle-track" />
+          </label>
+          <label className="setting-toggle">
+            <span>Memory</span>
+            <input
+              type="checkbox"
+              checked={panel.settings.memory}
+              onChange={(event) => updateSettings(panel.id, { memory: event.target.checked })}
+            />
+            <span className="toggle-track" />
+          </label>
+        </div>
       </div>
 
       <div ref={scrollRef} className="fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4">

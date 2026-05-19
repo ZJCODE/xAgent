@@ -157,7 +157,35 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const socket = new WebSocket(webSocketUrl("/ws/chat"));
       socketsRef.current[socketKey] = socket;
       let settled = false;
-      let text = "";
+      const textByMessageId = new Map<string, string>();
+      const localMessageIds = new Set<string>([assistantId]);
+      const remoteToLocalMessageId = new Map<string, string>();
+      let claimedPlaceholder = false;
+
+      const ensureAssistantMessage = (event: ChatEvent): string => {
+        const remoteMessageId = event.message_id;
+        if (remoteMessageId) {
+          const existingLocalId = remoteToLocalMessageId.get(remoteMessageId);
+          if (existingLocalId) return existingLocalId;
+
+          const localId = claimedPlaceholder ? makeId("assistant") : assistantId;
+          claimedPlaceholder = true;
+          remoteToLocalMessageId.set(remoteMessageId, localId);
+          localMessageIds.add(localId);
+
+          if (localId !== assistantId) {
+            patchPanel(panelId, (panel) => ({
+              ...panel,
+              messages: [...panel.messages, { id: localId, role: "assistant", content: "", pending: true }],
+            }));
+          }
+
+          return localId;
+        }
+
+        claimedPlaceholder = true;
+        return assistantId;
+      };
 
       const finish = (error?: Error) => {
         if (settled) return;
@@ -170,12 +198,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           ...panel,
           sending: false,
           messages: panel.messages.map((message) =>
-            message.id === assistantId
+            localMessageIds.has(message.id) && message.pending
               ? {
                   ...message,
                   pending: false,
                   error: Boolean(error),
-                  content: error ? `Error: ${error.message}` : message.content,
+                  content: error && !message.content ? `Error: ${error.message}` : message.content,
                 }
               : message,
           ),
@@ -202,34 +230,48 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        if (parsed.type === "message_start") {
+          const localId = ensureAssistantMessage(parsed);
+          if (!textByMessageId.has(localId)) {
+            textByMessageId.set(localId, "");
+          }
+          return;
+        }
+
         if (parsed.type === "message_delta" && parsed.delta) {
-          text += parsed.delta;
+          const localId = ensureAssistantMessage(parsed);
+          const nextText = `${textByMessageId.get(localId) || ""}${parsed.delta}`;
+          textByMessageId.set(localId, nextText);
           patchPanel(panelId, (panel) => ({
             ...panel,
             messages: panel.messages.map((message) =>
-              message.id === assistantId ? { ...message, content: text } : message,
+              message.id === localId ? { ...message, content: nextText } : message,
             ),
           }));
           return;
         }
 
         if (parsed.type === "message_done") {
-          text = parsed.content == null ? text : String(parsed.content);
+          const localId = ensureAssistantMessage(parsed);
+          const nextText = parsed.content == null ? (textByMessageId.get(localId) || "") : String(parsed.content);
+          textByMessageId.set(localId, nextText);
           patchPanel(panelId, (panel) => ({
             ...panel,
             messages: panel.messages.map((message) =>
-              message.id === assistantId ? { ...message, content: text, pending: false } : message,
+              message.id === localId ? { ...message, content: nextText, pending: false } : message,
             ),
           }));
           return;
         }
 
         if (parsed.message != null) {
-          text = typeof parsed.message === "string" ? parsed.message : JSON.stringify(parsed.message, null, 2);
+          const localId = ensureAssistantMessage(parsed);
+          const nextText = typeof parsed.message === "string" ? parsed.message : JSON.stringify(parsed.message, null, 2);
+          textByMessageId.set(localId, nextText);
           patchPanel(panelId, (panel) => ({
             ...panel,
             messages: panel.messages.map((message) =>
-              message.id === assistantId ? { ...message, content: text, pending: false } : message,
+              message.id === localId ? { ...message, content: nextText, pending: false } : message,
             ),
           }));
           return;
