@@ -23,7 +23,6 @@ requires-python = ">=3.10"
 dependencies = [
     # Core frameworks
     "fastapi>=0.116.1",
-    "python-multipart>=0.0.20",
     "pydantic>=2.11.7",
     "uvicorn>=0.35.0",
     
