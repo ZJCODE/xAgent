@@ -634,7 +634,10 @@ class AgentHTTPServer(BaseAgentRunner):
             except HTTPException:
                 identity_path_value = ""
                 identity_editable = False
+            provider_cfg = self.config.get("provider") if isinstance(self.config, dict) else {}
+            provider_name = provider_cfg.get("name") if isinstance(provider_cfg, dict) else None
             return {
+                "provider": provider_name or "",
                 "model": self.agent.model,
                 "workspace": str(getattr(self, "workspace", "")),
                 "workspace_dir": str(self._get_workspace_root()),

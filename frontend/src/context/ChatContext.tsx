@@ -16,10 +16,7 @@ const HISTORY_KEY = "xagent_chat_history";
 type PanelId = ChatPanelState["id"];
 
 interface ChatContextValue {
-  dualMode: boolean;
-  setDualMode: (value: boolean) => void;
-  panels: Record<PanelId, ChatPanelState>;
-  activePanels: ChatPanelState[];
+  panel: ChatPanelState;
   status: "idle" | "sending";
   updateSettings: (panelId: PanelId, settings: Partial<ChatSettings>) => void;
   addImages: (panelId: PanelId, files: FileList | File[]) => void;
@@ -33,8 +30,9 @@ interface ChatContextValue {
 const ChatContext = createContext<ChatContextValue | null>(null);
 
 function defaultSettings(panelId: PanelId): ChatSettings {
+  void panelId;
   return {
-    userId: panelId === "left" ? "John" : panelId === "right" ? "Alice" : "web_user",
+    userId: "web_user",
     stream: true,
     memory: true,
   };
@@ -49,24 +47,12 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-function settingsKey(panelId: PanelId): string {
-  return `${GLOBAL_SETTINGS_KEY}_${panelId}`;
-}
-
 function historyKey(panelId: PanelId): string {
   return `${HISTORY_KEY}_${panelId}`;
 }
 
 function createPanel(panelId: PanelId): ChatPanelState {
-  const global = readJson<Partial<ChatSettings> & { dual?: boolean }>(GLOBAL_SETTINGS_KEY, {});
-  const savedSettings =
-    panelId === "single"
-      ? {
-          userId: global.userId,
-          stream: global.stream,
-          memory: global.memory,
-        }
-      : readJson<Partial<ChatSettings>>(settingsKey(panelId), {});
+  const savedSettings = readJson<Partial<ChatSettings>>(GLOBAL_SETTINGS_KEY, {});
   const history = readJson<ChatMessage[]>(historyKey(panelId), []);
   return {
     id: panelId,
@@ -86,20 +72,15 @@ function webSocketUrl(path: string): string {
   return url.toString();
 }
 
-function persistSettings(panel: ChatPanelState, dualMode: boolean) {
-  if (panel.id === "single") {
-    localStorage.setItem(
-      GLOBAL_SETTINGS_KEY,
-      JSON.stringify({
-        userId: panel.settings.userId,
-        stream: panel.settings.stream,
-        memory: panel.settings.memory,
-        dual: dualMode,
-      }),
-    );
-    return;
-  }
-  localStorage.setItem(settingsKey(panel.id), JSON.stringify(panel.settings));
+function persistSettings(panel: ChatPanelState) {
+  localStorage.setItem(
+    GLOBAL_SETTINGS_KEY,
+    JSON.stringify({
+      userId: panel.settings.userId,
+      stream: panel.settings.stream,
+      memory: panel.settings.memory,
+    }),
+  );
 }
 
 function persistHistory(panel: ChatPanelState) {
@@ -117,42 +98,31 @@ function persistHistory(panel: ChatPanelState) {
 }
 
 export function ChatProvider({ children }: { children: ReactNode }) {
-  const global = readJson<{ dual?: boolean }>(GLOBAL_SETTINGS_KEY, {});
-  const [dualMode, setDualModeState] = useState(Boolean(global.dual));
-  const [panels, setPanels] = useState<Record<PanelId, ChatPanelState>>({
-    single: createPanel("single"),
-    left: createPanel("left"),
-    right: createPanel("right"),
-  });
+  const [panel, setPanel] = useState<ChatPanelState>(() => createPanel("single"));
   const socketsRef = useRef<Record<string, WebSocket>>({});
 
-  const setDualMode = useCallback((value: boolean) => {
-    setDualModeState(value);
-    const current = readJson<Record<string, unknown>>(GLOBAL_SETTINGS_KEY, {});
-    localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify({ ...current, dual: value }));
-  }, []);
-
   const patchPanel = useCallback((panelId: PanelId, updater: (panel: ChatPanelState) => ChatPanelState) => {
-    setPanels((current) => {
-      const updatedPanel = updater(current[panelId]);
-      const next = { ...current, [panelId]: updatedPanel };
+    void panelId;
+    setPanel((current) => {
+      const updatedPanel = updater(current);
       persistHistory(updatedPanel);
-      return next;
+      return updatedPanel;
     });
   }, []);
 
   const updateSettings = useCallback(
     (panelId: PanelId, settings: Partial<ChatSettings>) => {
-      setPanels((current) => {
+      void panelId;
+      setPanel((current) => {
         const updatedPanel = {
-          ...current[panelId],
-          settings: { ...current[panelId].settings, ...settings },
+          ...current,
+          settings: { ...current.settings, ...settings },
         };
-        persistSettings(updatedPanel, dualMode);
-        return { ...current, [panelId]: updatedPanel };
+        persistSettings(updatedPanel);
+        return updatedPanel;
       });
     },
-    [dualMode],
+    [],
   );
 
   const addImages = useCallback((panelId: PanelId, files: FileList | File[]) => {
@@ -278,9 +248,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const sendMessage = useCallback(
     async (panelId: PanelId, rawText: string) => {
       const text = rawText.trim();
-      if (!text || panels[panelId].sending) return;
-      const panel = panels[panelId];
-      const images = [...panel.pendingImages];
+      if (!text || panel.sending) return;
+      const currentPanel = panel;
+      const images = [...currentPanel.pendingImages];
       const userMessage: ChatMessage = {
         id: makeId("user"),
         role: "user",
@@ -309,17 +279,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       };
       if (images.length === 1) payload.image_source = images[0];
       if (images.length > 1) payload.image_source = images;
-      persistSettings(panel, dualMode);
+      persistSettings(currentPanel);
 
       await runSocket(panelId, payload, assistantMessage.id).catch(() => undefined);
     },
-    [dualMode, panels, patchPanel, runSocket],
+    [panel, patchPanel, runSocket],
   );
 
   const sendObservation = useCallback(
     async (panelId: PanelId, rawText: string) => {
       const text = rawText.trim();
-      if (!text || panels[panelId].sending) return;
+      if (!text || panel.sending) return;
       const observationMessage: ChatMessage = {
         id: makeId("observation"),
         role: "observation",
@@ -373,7 +343,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         patchPanel(panelId, (panel) => ({ ...panel, sending: false }));
       }
     },
-    [panels, patchPanel],
+    [panel.sending, patchPanel],
   );
 
   const clearPanel = useCallback(
@@ -385,21 +355,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const clearVisiblePanels = useCallback(() => {
-    (dualMode ? (["left", "right"] as PanelId[]) : (["single"] as PanelId[])).forEach(clearPanel);
-  }, [clearPanel, dualMode]);
+    clearPanel("single");
+  }, [clearPanel]);
 
-  const activePanels = useMemo(
-    () => (dualMode ? [panels.left, panels.right] : [panels.single]),
-    [dualMode, panels],
-  );
-  const status: "idle" | "sending" = activePanels.some((panel) => panel.sending) ? "sending" : "idle";
+  const status: "idle" | "sending" = panel.sending ? "sending" : "idle";
 
   const value = useMemo(
     () => ({
-      dualMode,
-      setDualMode,
-      panels,
-      activePanels,
+      panel,
       status,
       updateSettings,
       addImages,
@@ -410,10 +373,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       clearVisiblePanels,
     }),
     [
-      dualMode,
-      setDualMode,
-      panels,
-      activePanels,
+      panel,
       status,
       updateSettings,
       addImages,

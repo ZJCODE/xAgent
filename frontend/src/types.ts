@@ -19,7 +19,7 @@ export interface ChatSettings {
 }
 
 export interface ChatPanelState {
-  id: "single" | "left" | "right";
+  id: "single";
   messages: ChatMessage[];
   pendingImages: string[];
   settings: ChatSettings;
@@ -37,6 +37,7 @@ export interface ChatEvent {
 }
 
 export interface AgentInfo {
+  provider?: string;
   model: string;
   workspace: string;
   workspace_dir: string;

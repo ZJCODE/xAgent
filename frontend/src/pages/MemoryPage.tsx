@@ -61,7 +61,7 @@ export function MemoryPage() {
           <h2>Memory</h2>
           <p>{info?.memory_dir || "Time-scoped markdown memory"}</p>
         </div>
-        <div className="toolbar-actions">
+        <div className="search-control">
           <input
             className="search-input"
             placeholder="Search memory"

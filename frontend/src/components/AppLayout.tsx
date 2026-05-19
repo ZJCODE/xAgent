@@ -1,4 +1,4 @@
-import { Activity, Bot, Database, Files, MessageSquareText, Moon, Settings, Wifi, WifiOff } from "lucide-react";
+import { Activity, Bot, Database, Files, MessageSquareText, Moon, Wifi, WifiOff } from "lucide-react";
 import type { ReactNode } from "react";
 import { useChat } from "../context/ChatContext";
 import { classNames } from "../lib/format";
@@ -29,12 +29,12 @@ export function AppLayout({
   onToggleTheme,
   children,
 }: AppLayoutProps) {
-  const { dualMode, setDualMode, clearVisiblePanels } = useChat();
+  const { clearVisiblePanels } = useChat();
 
   return (
     <div className="relative h-full overflow-hidden bg-app text-zinc-950 dark:text-zinc-50">
       <div className="hero-grid fixed inset-0 pointer-events-none opacity-70" />
-      <div className="relative h-full max-w-[1600px] mx-auto px-3 sm:px-5 py-4 sm:py-6 flex flex-col">
+      <div className="relative h-full max-w-7xl mx-auto px-3 sm:px-5 py-4 sm:py-6 flex flex-col">
         <section className="panel-surface flex-1 min-h-0 rounded-[28px] overflow-hidden flex flex-col">
           <header className="border-b border-black/5 dark:border-white/10 px-4 sm:px-6 py-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -65,30 +65,13 @@ export function AppLayout({
                   {chatStatus === "sending" ? "Chat running" : "Chat idle"}
                 </span>
                 {route === "/" && (
-                  <>
-                    <label className="ghost-button status-pill cursor-pointer">
-                      <span>Dual</span>
-                      <input
-                        type="checkbox"
-                        className="h-3.5 w-3.5 accent-current"
-                        checked={dualMode}
-                        onChange={(event) => setDualMode(event.target.checked)}
-                      />
-                    </label>
-                    <button type="button" className="ghost-button icon-text-button" onClick={clearVisiblePanels}>
-                      Clear Chat
-                    </button>
-                  </>
+                  <button type="button" className="ghost-button icon-text-button" onClick={clearVisiblePanels}>
+                    Clear Chat
+                  </button>
                 )}
                 <button type="button" className="ghost-button icon-button" onClick={onToggleTheme} title="Toggle theme">
                   <Moon size={16} />
                 </button>
-                {route !== "/" && (
-                  <span className="ghost-button status-pill text-zinc-500 dark:text-zinc-400">
-                    <Settings size={14} />
-                    Console
-                  </span>
-                )}
               </div>
             </div>
           </header>

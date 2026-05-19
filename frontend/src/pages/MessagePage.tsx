@@ -1,16 +1,34 @@
 import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Markdown } from "../components/Markdown";
-import { getMessages } from "../lib/api";
-import { formatTimestamp } from "../lib/format";
+import { getAgentInfo, getMessages } from "../lib/api";
+import { classNames, formatTimestamp } from "../lib/format";
 import type { MessageItem } from "../types";
 
 const PAGE_SIZE = 50;
 
+function storageDirectory(path: unknown): string {
+  if (typeof path !== "string" || !path.trim()) return "";
+  const normalized = path.trim();
+  const slashIndex = normalized.lastIndexOf("/");
+  if (slashIndex === -1) return normalized;
+  if (slashIndex === normalized.length - 1) return normalized;
+  return `${normalized.slice(0, slashIndex + 1)}`;
+}
+
+function roleClass(role: string): string {
+  const normalized = role.toLowerCase();
+  if (normalized.includes("user")) return "role-user";
+  if (normalized.includes("assistant")) return "role-assistant";
+  if (normalized.includes("system")) return "role-system";
+  if (normalized.includes("tool")) return "role-tool";
+  return "role-observation";
+}
+
 export function MessagePage() {
   const [messages, setMessages] = useState<MessageItem[]>([]);
+  const [storagePath, setStoragePath] = useState("");
   const [offset, setOffset] = useState(0);
-  const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -20,11 +38,14 @@ export function MessagePage() {
     setError("");
     try {
       const nextOffset = append ? offset : 0;
-      const data = await getMessages(PAGE_SIZE, nextOffset);
+      const [data, info] = await Promise.all([
+        getMessages(PAGE_SIZE, nextOffset),
+        append ? Promise.resolve(null) : getAgentInfo().catch(() => null),
+      ]);
       setMessages((current) => (append ? [...current, ...data.messages] : data.messages));
       setOffset(nextOffset + data.count);
-      setTotal(data.total);
       setHasMore(data.has_more);
+      setStoragePath(storageDirectory(info?.message_storage?.path));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -41,7 +62,7 @@ export function MessagePage() {
       <section className="console-toolbar">
         <div>
           <h2>Messages</h2>
-          <p>{total ? `${total} stored events` : "Short-term message stream"}</p>
+          <p>{storagePath || "Message storage"}</p>
         </div>
         <div className="toolbar-actions">
           <button type="button" className="ghost-button icon-text-button" onClick={() => void load(false)}>
@@ -54,12 +75,12 @@ export function MessagePage() {
       <div className="message-stream">
         {messages.length ? (
           messages.map((message, index) => (
-            <article key={`${message.timestamp}-${index}`} className="message-row">
+            <article key={`${message.timestamp}-${index}`} className={classNames("message-row", roleClass(message.role))}>
               <div className="message-row-meta">
-                <span>{message.role}</span>
-                <span>{message.type}</span>
-                <span>{message.sender_id}</span>
-                <span>{formatTimestamp(message.timestamp)}</span>
+                <span className={classNames("meta-chip", roleClass(message.role))}>{message.role}</span>
+                <span className="meta-chip">{message.type}</span>
+                {message.sender_id ? <span className="meta-chip">{message.sender_id}</span> : null}
+                <span className="meta-chip">{formatTimestamp(message.timestamp)}</span>
               </div>
               <Markdown content={message.content || ""} />
               {message.tool_call ? (

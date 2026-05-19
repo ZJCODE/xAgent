@@ -67,9 +67,6 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
   return (
     <section className="chat-panel">
       <div className="panel-settings-bar">
-        <span className={classNames("panel-label", panel.id === "left" && "panel-label-left", panel.id === "right" && "panel-label-right")}>
-          {panel.id === "single" ? "Chat" : panel.id === "left" ? "Left" : "Right"}
-        </span>
         <label className="inline-field">
           <span className="inline-label">User</span>
           <input
@@ -184,13 +181,11 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
 }
 
 export function ChatPage() {
-  const { dualMode, activePanels } = useChat();
+  const { panel } = useChat();
 
   return (
-    <div className={classNames("h-full min-h-0", dualMode ? "dual-chat-grid" : "single-chat-grid")}>
-      {activePanels.map((panel) => (
-        <ChatPanel key={panel.id} panel={panel} />
-      ))}
+    <div className="h-full min-h-0 single-chat-grid">
+      <ChatPanel panel={panel} />
     </div>
   );
 }

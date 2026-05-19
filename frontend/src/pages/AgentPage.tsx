@@ -5,16 +5,21 @@ import {
   clearMessages,
   getAgentIdentity,
   getAgentInfo,
-  getMessagesStats,
   updateAgentIdentity,
 } from "../lib/api";
-import { formatTimestamp } from "../lib/format";
-import type { AgentIdentity, AgentInfo, MessagesStats } from "../types";
+import type { AgentIdentity, AgentInfo } from "../types";
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value : "";
+}
+
+function RuntimeValue({ value, fallback = "Unavailable" }: { value?: unknown; fallback?: string }) {
+  return <span className="data-chip path-chip">{stringValue(value) || fallback}</span>;
+}
 
 export function AgentPage() {
   const [info, setInfo] = useState<AgentInfo | null>(null);
   const [identity, setIdentity] = useState<AgentIdentity | null>(null);
-  const [stats, setStats] = useState<MessagesStats | null>(null);
   const [editorValue, setEditorValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
@@ -26,14 +31,12 @@ export function AgentPage() {
   const load = async () => {
     setError("");
     try {
-      const [agentInfo, identityData, messageStats] = await Promise.all([
+      const [agentInfo, identityData] = await Promise.all([
         getAgentInfo(),
         getAgentIdentity().catch(() => null),
-        getMessagesStats().catch(() => null),
       ]);
       setInfo(agentInfo);
       setIdentity(identityData);
-      setStats(messageStats);
       setEditorValue(identityData?.identity || agentInfo.identity || "");
       setStatus("Loaded");
     } catch (err) {
@@ -97,19 +100,18 @@ export function AgentPage() {
         <section className="info-panel">
           <h3>Runtime</h3>
           <dl>
-            <dt>Workspace</dt>
-            <dd>{info?.workspace_dir}</dd>
-            <dt>Memory</dt>
-            <dd>{info?.memory_dir}</dd>
-            <dt>Identity</dt>
-            <dd>{info?.identity_path || "Unavailable"}</dd>
-            <dt>Messages</dt>
-            <dd>
-              {stats?.total ?? 0} total
-              {stats?.latest_timestamp ? `, latest ${formatTimestamp(stats.latest_timestamp)}` : ""}
+            <dt>Provider</dt>
+            <dd className="chip-list">
+              <RuntimeValue value={info?.provider} />
+            </dd>
+            <dt>Model</dt>
+            <dd className="chip-list">
+              <RuntimeValue value={info?.model} />
             </dd>
             <dt>Tools</dt>
-            <dd>{info?.tools?.join(", ") || "None"}</dd>
+            <dd className="chip-list">
+              {info?.tools?.length ? info.tools.map((tool) => <span key={tool} className="data-chip">{tool}</span>) : "None"}
+            </dd>
           </dl>
         </section>
 

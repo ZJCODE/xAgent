@@ -63,7 +63,7 @@ export function WorkspacePage() {
           <h2>Workspace</h2>
           <p>{info?.workspace_dir || "Agent workspace files"}</p>
         </div>
-        <div className="toolbar-actions">
+        <div className="search-control">
           <input
             className="search-input"
             placeholder="Search workspace"
