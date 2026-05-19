@@ -448,40 +448,31 @@ class AgentHTTPServer(BaseAgentRunner):
 
     def _add_web_ui(self, app: FastAPI) -> None:
         if _STATIC_DIR.is_dir():
-            @app.get("/", include_in_schema=False)
-            async def serve_index():
+            async def serve_spa_index():
                 index = _STATIC_DIR / "index.html"
                 if index.exists():
                     return FileResponse(str(index), media_type="text/html")
                 raise HTTPException(status_code=404, detail="Web UI not found")
 
+            @app.get("/", include_in_schema=False)
+            async def serve_index():
+                return await serve_spa_index()
+
             @app.get("/memory", include_in_schema=False)
             async def serve_memory():
-                page = _STATIC_DIR / "memory.html"
-                if page.exists():
-                    return FileResponse(str(page), media_type="text/html")
-                raise HTTPException(status_code=404, detail="Memory page not found")
+                return await serve_spa_index()
 
             @app.get("/workspace", include_in_schema=False)
             async def serve_workspace():
-                page = _STATIC_DIR / "workspace.html"
-                if page.exists():
-                    return FileResponse(str(page), media_type="text/html")
-                raise HTTPException(status_code=404, detail="Workspace page not found")
+                return await serve_spa_index()
 
             @app.get("/message", include_in_schema=False)
             async def serve_message():
-                page = _STATIC_DIR / "message.html"
-                if page.exists():
-                    return FileResponse(str(page), media_type="text/html")
-                raise HTTPException(status_code=404, detail="Message page not found")
+                return await serve_spa_index()
 
             @app.get("/agent", include_in_schema=False)
             async def serve_agent():
-                page = _STATIC_DIR / "agent.html"
-                if page.exists():
-                    return FileResponse(str(page), media_type="text/html")
-                raise HTTPException(status_code=404, detail="Agent page not found")
+                return await serve_spa_index()
 
             app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
             self.logger.info("Web UI available at /")

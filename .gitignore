@@ -28,6 +28,14 @@ env/
 .vscode/
 # macOS
 .DS_Store
+
+# Frontend
+frontend/node_modules/
+frontend/.vite/
+frontend/dist/
+frontend/.turbo/
+frontend/.cache/
+frontend/*.tsbuildinfo
 # Test and coverage
 htmlcov/
 .coverage
