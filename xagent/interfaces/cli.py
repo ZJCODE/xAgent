@@ -73,7 +73,6 @@ class AgentCLI(BaseAgentRunner):
         user_id: Optional[str] = None,
         stream: Optional[bool] = None,
         memory: bool = True,
-        private: bool = False,
     ):
         if stream is None:
             stream = not (logging.getLogger().level <= logging.INFO)
@@ -84,7 +83,6 @@ class AgentCLI(BaseAgentRunner):
         self._print_banner(
             stream=stream,
             memory=memory,
-            private=private,
             verbose_mode=verbose_mode,
         )
 
@@ -122,15 +120,6 @@ class AgentCLI(BaseAgentRunner):
                         print("⚠️  Usage: memory on/off")
                     continue
 
-                if user_input.lower().startswith("private "):
-                    private_cmd = user_input.lower().split()
-                    if len(private_cmd) == 2 and private_cmd[1] in {"on", "off"}:
-                        private = private_cmd[1] == "on"
-                        print(f"{'🔒' if private else '🔓'} ✨ Private mode {'enabled' if private else 'disabled'}.")
-                    else:
-                        print("⚠️  Usage: private on/off")
-                    continue
-
                 if user_input.lower() == "help":
                     self._show_help()
                     continue
@@ -144,7 +133,6 @@ class AgentCLI(BaseAgentRunner):
                         user_message=user_input,
                         user_id=user_id,
                         enable_memory=memory,
-                        private=private,
                     )
                     print("🤖 Agent: " + str(response))
                     continue
@@ -153,7 +141,6 @@ class AgentCLI(BaseAgentRunner):
                     user_message=user_input,
                     user_id=user_id,
                     enable_memory=memory,
-                    private=private,
                     stream=stream,
                 )
 
@@ -175,14 +162,12 @@ class AgentCLI(BaseAgentRunner):
         message: str,
         user_id: Optional[str] = None,
         memory: bool = True,
-        private: bool = False,
     ):
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
         return await self.agent(
             user_message=message,
             user_id=user_id,
             enable_memory=memory,
-            private=private,
         )
 
     async def print_single_chat_events(
@@ -191,7 +176,6 @@ class AgentCLI(BaseAgentRunner):
         user_id: Optional[str] = None,
         stream: bool = False,
         memory: bool = True,
-        private: bool = False,
     ) -> None:
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
         await self._print_chat_events(
@@ -199,7 +183,6 @@ class AgentCLI(BaseAgentRunner):
             user_id=user_id,
             stream=stream,
             enable_memory=memory,
-            private=private,
         )
 
     async def _print_chat_events(
@@ -209,7 +192,6 @@ class AgentCLI(BaseAgentRunner):
         user_id: str,
         stream: bool,
         enable_memory: bool,
-        private: bool,
     ) -> None:
         line_open = False
         line_has_streamed_text = False
@@ -218,7 +200,6 @@ class AgentCLI(BaseAgentRunner):
             user_id=user_id,
             stream=stream,
             enable_memory=enable_memory,
-            private=private,
         ):
             event_type = event.get("type")
             if event_type == "message_start":
@@ -265,7 +246,6 @@ class AgentCLI(BaseAgentRunner):
         self,
         stream: bool,
         memory: bool,
-        private: bool,
         verbose_mode: bool,
     ) -> None:
         config_msg = (
@@ -282,8 +262,7 @@ class AgentCLI(BaseAgentRunner):
             "Status: "
             f"verbose={'on' if verbose_mode else 'off'}, "
             f"stream={'on' if stream else 'off'}, "
-            f"memory={'on' if memory else 'off'}, "
-            f"private={'on' if private else 'off'}"
+            f"memory={'on' if memory else 'off'}"
         )
         print("")
         print("Type a message to chat. Type 'help' for chat commands or 'exit' to quit.")
@@ -294,7 +273,6 @@ class AgentCLI(BaseAgentRunner):
         print("  clear              Clear the agent message stream")
         print("  stream on/off      Toggle streamed delta printing")
         print("  memory on/off      Toggle memory storage mode")
-        print("  private on/off     Toggle private ephemeral mode")
         print("  help               Show this help message")
 
         print("\nBuilt-in tools:")
@@ -960,7 +938,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Enable or disable memory tools",
     )
-    chat_parser.add_argument("--private", action="store_true", help="Use ephemeral private mode")
     chat_parser.set_defaults(handler=handle_chat)
 
     web_parser = subparsers.add_parser("web", help="Open the built-in web UI")
@@ -1137,7 +1114,6 @@ def handle_chat(args: argparse.Namespace) -> int:
                     user_id=args.user_id,
                     stream=args.stream,
                     memory=args.memory,
-                    private=args.private,
                 )
             finally:
                 await _flush_chat_exit_memory(agent_cli.agent)
@@ -1156,7 +1132,6 @@ def handle_chat(args: argparse.Namespace) -> int:
                     user_id=args.user_id,
                     stream=stream,
                     memory=args.memory,
-                    private=args.private,
                 )
                 return
 
@@ -1164,7 +1139,6 @@ def handle_chat(args: argparse.Namespace) -> int:
                 message=args.message,
                 user_id=args.user_id,
                 memory=args.memory,
-                private=args.private,
             )
             print(response)
         finally:

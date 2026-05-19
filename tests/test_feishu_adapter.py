@@ -193,7 +193,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertNotIn("access_key=abc", message)
         self.assertNotIn("ticket=def", message)
 
-    def test_direct_chat_reply_does_not_quote_source_message_or_use_private(self):
+    def test_direct_chat_reply_does_not_quote_source_message_or_forward_legacy_flags(self):
         agent = _FakeAgent()
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
         adapter._channel = _FakeChannel()

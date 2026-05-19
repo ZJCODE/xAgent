@@ -35,7 +35,6 @@ class ChatInput(BaseModel):
     max_iter: Optional[int] = AgentConfig.DEFAULT_MAX_ITER
     max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
     enable_memory: Optional[bool] = True
-    private: Optional[bool] = False
 
 
 class AgentInput(ChatInput):
@@ -114,7 +113,6 @@ class AgentHTTPServer(BaseAgentRunner):
             max_concurrent_tools=input_data.max_concurrent_tools,
             image_source=input_data.image_source,
             enable_memory=input_data.enable_memory,
-            private=input_data.private,
         )
 
     async def _call_observe(self, input_data: ObserveInput):
@@ -172,7 +170,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 image_source=input_data.image_source,
                 stream=bool(input_data.stream),
                 enable_memory=input_data.enable_memory,
-                private=input_data.private,
             )
             async for event in self._iterate_before_deadline(response, deadline):
                 if event.get("type") == "done":

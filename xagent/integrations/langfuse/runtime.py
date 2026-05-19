@@ -27,7 +27,6 @@ class ObservabilityRuntime(Protocol):
         *,
         user_id: str,
         model: str,
-        private: bool,
         memory_mode: str,
         stream: bool,
     ) -> ContextManager[None]:
@@ -53,7 +52,6 @@ class NoopObservabilityRuntime:
         *,
         user_id: str,
         model: str,
-        private: bool,
         memory_mode: str,
         stream: bool,
     ):
@@ -86,7 +84,6 @@ class LangfuseObservabilityRuntime:
         *,
         user_id: str,
         model: str,
-        private: bool,
         memory_mode: str,
         stream: bool,
     ):
@@ -106,8 +103,6 @@ class LangfuseObservabilityRuntime:
                         f"memory:{memory_mode}",
                         "stream" if stream else "non-stream",
                     ]
-                    if private:
-                        tags.append("private")
                     stack.enter_context(
                         propagate_attributes(
                             user_id=user_id,

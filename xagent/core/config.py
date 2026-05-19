@@ -221,20 +221,17 @@ class MemoryMode(Enum):
     """Per-turn memory access policy."""
 
     FULL = "full"
-    READ_ONLY = "read_only"
     DISABLED = "disabled"
 
     @classmethod
-    def from_flags(cls, enable_memory: bool, private: bool) -> "MemoryMode":
+    def from_flags(cls, enable_memory: bool) -> "MemoryMode":
         if not enable_memory:
             return cls.DISABLED
-        if private:
-            return cls.READ_ONLY
         return cls.FULL
 
     @property
     def can_read(self) -> bool:
-        return self in {self.FULL, self.READ_ONLY}
+        return self == self.FULL
 
     @property
     def can_write(self) -> bool:

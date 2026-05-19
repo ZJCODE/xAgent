@@ -107,7 +107,6 @@ class CLICommandTests(unittest.TestCase):
             "--user-id",
             "alice",
             "--no-memory",
-            "--private",
         ])
 
         self.assertEqual(args.command, "chat")
@@ -115,7 +114,6 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.config_dir, "./agent-dir")
         self.assertEqual(args.user_id, "alice")
         self.assertFalse(args.memory)
-        self.assertTrue(args.private)
 
     def test_parser_supports_chat_event_mode(self):
         args = build_parser().parse_args([
@@ -156,7 +154,6 @@ class CLICommandTests(unittest.TestCase):
                 stream=None,
                 events=False,
                 memory=True,
-                private=False,
             )
 
             with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", init_runner):
@@ -203,7 +200,6 @@ class CLICommandTests(unittest.TestCase):
                 stream=None,
                 events=False,
                 memory=True,
-                private=False,
             )
 
             with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", init_runner):

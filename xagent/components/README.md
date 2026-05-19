@@ -11,7 +11,6 @@ objects for the current agent stream.
 
 - `message/base.py`: storage interface and shared input validation.
 - `message/local.py`: SQLite-backed persistent message history.
-- `message/private_temp.py`: temporary private-mode message history.
 
 ## Memory
 

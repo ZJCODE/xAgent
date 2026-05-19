@@ -571,14 +571,6 @@
               </label>
             </div>
 
-            <div class="inline-switch">
-              <label class="setting-toggle cursor-pointer">
-                <span class="setting-toggle-text">Private</span>
-                <input id="optPrivate" type="checkbox" />
-                <span class="toggle-track" aria-hidden="true"></span>
-              </label>
-            </div>
-
             <div class="inline-switch" style="padding-left: 1rem; padding-right: 1rem;">
               <button id="clearChatBtn" class="setting-toggle-text hover:opacity-70 transition-opacity cursor-pointer" title="Clear chat history">
                 Clear Chat
@@ -633,7 +625,6 @@ function saveGlobalSettings() {
     userId: document.getElementById('userId').value,
     stream: document.getElementById('optStream').checked,
     memory: document.getElementById('optMemory').checked,
-    private: document.getElementById('optPrivate').checked,
     darkMode: document.documentElement.classList.contains('dark'),
     dual: document.getElementById('optDual').checked,
   };
@@ -646,7 +637,6 @@ function restoreGlobalSettings() {
   document.getElementById('userId').value = settings.userId || 'web_user';
   document.getElementById('optStream').checked = settings.stream !== false;
   document.getElementById('optMemory').checked = settings.memory !== false;
-  document.getElementById('optPrivate').checked = !!settings.private;
   document.getElementById('optDual').checked = !!settings.dual;
 
   const shouldDark = settings.darkMode || (!('darkMode' in settings) && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -656,9 +646,6 @@ function restoreGlobalSettings() {
 function toggleTheme() {
   document.documentElement.classList.toggle('dark');
   saveGlobalSettings();
-  // Update private banners in all panels
-  panels.forEach(p => p.updatePrivateIndicator());
-  updateGlobalPrivateIndicator();
 }
 
 async function checkHealth() {
@@ -736,13 +723,6 @@ function createChatPanel(panelId, containerEl, options = {}) {
             <span class="toggle-track" aria-hidden="true"></span>
           </label>
         </div>
-        <div class="inline-switch">
-          <label class="setting-toggle cursor-pointer">
-            <span class="setting-toggle-text">Private</span>
-            <input data-pid="${panelId}_optPrivate" type="checkbox" />
-            <span class="toggle-track" aria-hidden="true"></span>
-          </label>
-        </div>
         <button data-pid="${panelId}_clearBtn" class="panel-clear-btn" title="Clear chat">Clear</button>
       </div>` : '';
 
@@ -789,14 +769,12 @@ function createChatPanel(panelId, containerEl, options = {}) {
         userId: (el('userId')?.value || '').trim() || 'web_user',
         stream: el('optStream')?.checked ?? true,
         memory: el('optMemory')?.checked ?? true,
-        private: el('optPrivate')?.checked ?? false,
       };
     }
     return {
       userId: (document.getElementById('userId')?.value || '').trim() || 'web_user',
       stream: document.getElementById('optStream')?.checked ?? true,
       memory: document.getElementById('optMemory')?.checked ?? true,
-      private: document.getElementById('optPrivate')?.checked ?? false,
     };
   }
 
@@ -815,8 +793,6 @@ function createChatPanel(panelId, containerEl, options = {}) {
     if (streamEl) streamEl.checked = s.stream !== false;
     const memoryEl = el('optMemory');
     if (memoryEl) memoryEl.checked = s.memory !== false;
-    const privateEl = el('optPrivate');
-    if (privateEl) privateEl.checked = !!s.private;
   }
 
   /* ── History ── */
@@ -1213,7 +1189,6 @@ function createChatPanel(panelId, containerEl, options = {}) {
       user_message: text,
       stream: settings.stream,
       enable_memory: settings.memory,
-      private: settings.private,
     };
 
     if (currentImages.length === 1) {
@@ -1300,10 +1275,6 @@ function createChatPanel(panelId, containerEl, options = {}) {
     if (container) container.innerHTML = welcomeHTML(panelId);
   }
 
-  function updatePrivateIndicator() {
-    // No-op for dual panels (too compact); only used in single mode via global
-  }
-
   /* ── Event binding ── */
 
   function bindEvents() {
@@ -1357,7 +1328,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
 
     // Panel-level settings save
     if (showPanelSettings) {
-      ['userId', 'optStream', 'optMemory', 'optPrivate'].forEach((suffix) => {
+      ['userId', 'optStream', 'optMemory'].forEach((suffix) => {
         const input = el(suffix);
         if (input) input.addEventListener('change', saveSettings);
       });
@@ -1372,7 +1343,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
   bindEvents();
   scrollToBottom();
 
-  return { state, focusInput, scrollToBottom, clearChat, updatePrivateIndicator, panelId };
+  return { state, focusInput, scrollToBottom, clearChat, panelId };
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -1450,51 +1421,12 @@ function mountPanels() {
   }
 }
 
-/* ─── Global private banner (single mode only) ─── */
-
-function updateGlobalPrivateIndicator() {
-  if (isDualMode()) {
-    const existing = document.getElementById('privateBanner');
-    if (existing) existing.remove();
-    return;
-  }
-
-  const isPrivate = document.getElementById('optPrivate').checked;
-  const header = document.querySelector('section.panel-surface > header');
-  const existing = document.getElementById('privateBanner');
-
-  if (isPrivate && !existing) {
-    const banner = document.createElement('div');
-    banner.id = 'privateBanner';
-    banner.className = 'flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium tracking-wide';
-    banner.style.cssText = 'background: rgba(139, 92, 246, 0.10); color: #7c3aed; border-bottom: 1px solid rgba(139, 92, 246, 0.15);';
-    banner.innerHTML = `
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-      </svg>
-      <span>Private Mode — messages are ephemeral and memory writes are disabled</span>
-    `;
-    header.after(banner);
-  } else if (!isPrivate && existing) {
-    existing.remove();
-  }
-
-  const b = document.getElementById('privateBanner');
-  if (b) {
-    const dark = document.documentElement.classList.contains('dark');
-    b.style.background = dark ? 'rgba(139, 92, 246, 0.12)' : 'rgba(139, 92, 246, 0.08)';
-    b.style.color = dark ? '#a78bfa' : '#7c3aed';
-    b.style.borderBottom = dark ? '1px solid rgba(139, 92, 246, 0.18)' : '1px solid rgba(139, 92, 246, 0.12)';
-  }
-}
-
 /* ─── Global event wiring ─── */
 
 function bindGlobalEvents() {
-  ['userId', 'optStream', 'optMemory', 'optPrivate'].forEach((id) => {
+  ['userId', 'optStream', 'optMemory'].forEach((id) => {
     document.getElementById(id).addEventListener('change', () => {
       saveGlobalSettings();
-      updateGlobalPrivateIndicator();
     });
   });
 
@@ -1512,7 +1444,6 @@ function bindGlobalEvents() {
   document.getElementById('optDual').addEventListener('change', () => {
     saveGlobalSettings();
     mountPanels();
-    updateGlobalPrivateIndicator();
   });
 }
 
@@ -1522,7 +1453,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   restoreGlobalSettings();
   bindGlobalEvents();
   mountPanels();
-  updateGlobalPrivateIndicator();
   await checkHealth();
 });
 </script>

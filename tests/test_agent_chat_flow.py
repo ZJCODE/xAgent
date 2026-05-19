@@ -873,7 +873,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.output_type = None
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent"
-        agent._private_handler = None
         agent.observability = observability or NoopObservabilityRuntime()
         agent.tool_manager = FakeToolManager(tools=tools)
         agent.model_client = model_client
@@ -1111,7 +1110,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             agent,
             user_message="trace this",
             user_id="alice",
-            private=True,
         )
 
         self.assertEqual(result, "Traced answer")
@@ -1119,8 +1117,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(observability.exited)
         self.assertEqual(observability.turn_kwargs["user_id"], "alice")
         self.assertEqual(observability.turn_kwargs["model"], AgentConfig.DEFAULT_MODEL)
-        self.assertTrue(observability.turn_kwargs["private"])
-        self.assertEqual(observability.turn_kwargs["memory_mode"], "read_only")
+        self.assertEqual(observability.turn_kwargs["memory_mode"], "full")
         self.assertFalse(observability.turn_kwargs["stream"])
 
     async def test_flush_memory_flushes_observability(self):

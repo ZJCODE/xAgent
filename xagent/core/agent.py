@@ -9,7 +9,6 @@ from ..components import (
     MarkdownMemory,
     MessageStorageBase,
     MessageStorageLocal,
-    MessageStoragePrivateTemp,
 )
 from ..components.memory import JournalLLMService
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
@@ -28,7 +27,6 @@ class Agent:
     """AI agent runtime for a continuous agent-level message stream."""
 
     _MEMORY_TOOL_NAMES = {"write_memory", "search_memory"}
-    _MEMORY_WRITE_TOOL_NAMES = {"write_memory"}
 
     def __init__(
         self,
@@ -64,7 +62,6 @@ class Agent:
             f"xagent_memory_mode_{id(self)}",
             default=MemoryMode.FULL,
         )
-        self._private_handler: Optional[MessageHandler] = None
 
         workspace_path: Optional[Path] = None
         if workspace is not None:
@@ -179,7 +176,6 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         enable_memory: bool = True,
-        private: bool = False,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         return await self.chat(
             user_message=user_message,
@@ -191,7 +187,6 @@ class Agent:
             output_type=output_type,
             stream=stream,
             enable_memory=enable_memory,
-            private=private,
         )
 
     async def chat(
@@ -205,7 +200,6 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         enable_memory: bool = True,
-        private: bool = False,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message.
 
@@ -213,9 +207,6 @@ class Agent:
             stream: When True, return an async text generator for compatibility
                 with the legacy Python API. New event consumers should prefer
                 ``chat_events(stream=True)``.
-            private: When True, messages are stored in an isolated temporary
-                private buffer (discarded on switch back to normal mode). Memory
-                *reads* are preserved but all memory *writes* are suppressed.
         """
         if output_type is None:
             output_type = self.output_type
@@ -231,7 +222,6 @@ class Agent:
                     image_source=image_source,
                     stream=True,
                     enable_memory=enable_memory,
-                    private=private,
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or "")
@@ -258,7 +248,6 @@ class Agent:
                 image_source=image_source,
                 stream=False,
                 enable_memory=enable_memory,
-                private=private,
             ):
                 if event.get("type") == "message_done" and event.get("phase") == "final":
                     final_reply = str(event.get("content") or "")
@@ -266,14 +255,13 @@ class Agent:
                     last_error = str(event.get("error") or "")
             return final_reply or last_error
 
-        msg_handler = self._message_handler_for_mode(private=private)
-        memory_mode = MemoryMode.from_flags(enable_memory=enable_memory, private=private)
+        msg_handler = self.message_handler
+        memory_mode = MemoryMode.from_flags(enable_memory=enable_memory)
         memory_mode_token = self._set_memory_mode(memory_mode)
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         turn_context = self._observability_runtime().agent_turn(
             user_id=user_id,
             model=model_name,
-            private=private,
             memory_mode=memory_mode.value,
             stream=False,
         )
@@ -403,7 +391,6 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         enable_memory: bool = True,
-        private: bool = False,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -423,7 +410,6 @@ class Agent:
                 image_source=image_source,
                 output_type=output_type,
                 enable_memory=enable_memory,
-                private=private,
             )
             content = response.model_dump_json() if hasattr(response, "model_dump_json") else str(response)
             message_id = "structured-0"
@@ -437,14 +423,13 @@ class Agent:
             yield {"type": "done"}
             return
 
-        msg_handler = self._message_handler_for_mode(private=private)
-        memory_mode = MemoryMode.from_flags(enable_memory=enable_memory, private=private)
+        msg_handler = self.message_handler
+        memory_mode = MemoryMode.from_flags(enable_memory=enable_memory)
         memory_mode_token = self._set_memory_mode(memory_mode)
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         turn_context = self._observability_runtime().agent_turn(
             user_id=user_id,
             model=model_name,
-            private=private,
             memory_mode=memory_mode.value,
             stream=stream,
         )
@@ -666,17 +651,6 @@ class Agent:
             source=event_metadata.get("source"),
         )
 
-    def _message_handler_for_mode(self, private: bool) -> MessageHandler:
-        """Return the storage handler for normal or private mode."""
-        if private and self._private_handler is None:
-            self._private_handler = MessageHandler(
-                message_storage=MessageStoragePrivateTemp(),
-                system_prompt=self.system_prompt,
-            )
-        elif not private and self._private_handler is not None:
-            self._private_handler = None
-        return self._private_handler or self.message_handler
-
     def _observability_runtime(self) -> ObservabilityRuntime:
         observability = getattr(self, "observability", None)
         if observability is None:
@@ -725,15 +699,12 @@ class Agent:
     def _excluded_memory_tools(
         self,
         enable_memory: bool = True,
-        private: bool = False,
         memory_mode: Optional[MemoryMode] = None,
     ) -> set:
         """Return the set of memory tool names to exclude from this call."""
-        mode = memory_mode or MemoryMode.from_flags(enable_memory=enable_memory, private=private)
+        mode = memory_mode or MemoryMode.from_flags(enable_memory=enable_memory)
         if mode == MemoryMode.DISABLED:
             return self._MEMORY_TOOL_NAMES
-        if mode == MemoryMode.READ_ONLY:
-            return self._MEMORY_WRITE_TOOL_NAMES
         return set()
 
     def _get_memory_mode_var(self) -> ContextVar[MemoryMode]:

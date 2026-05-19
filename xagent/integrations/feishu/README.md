@@ -147,9 +147,8 @@ collapsing multiple senders into the same anonymous label. Feishu mention
 placeholders such as `@_user_1` are replaced from message mention metadata when
 names are available.
 
-The Feishu adapter always runs normal non-private turns. It does not expose
-or forward xAgent's `private` flag, because bot chat memory should remain
-predictable across direct and group conversations.
+The Feishu adapter always uses the standard chat flow so memory behavior
+remains predictable across direct and group conversations.
 
 ## Segmented replies
 
