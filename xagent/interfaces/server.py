@@ -476,13 +476,6 @@ class AgentHTTPServer(BaseAgentRunner):
                     return FileResponse(str(page), media_type="text/html")
                 raise HTTPException(status_code=404, detail="Message page not found")
 
-            @app.get("/group", include_in_schema=False)
-            async def serve_group():
-                page = _STATIC_DIR / "group.html"
-                if page.exists():
-                    return FileResponse(str(page), media_type="text/html")
-                raise HTTPException(status_code=404, detail="Group page not found")
-
             @app.get("/agent", include_in_schema=False)
             async def serve_agent():
                 page = _STATIC_DIR / "agent.html"
