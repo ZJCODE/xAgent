@@ -3,7 +3,6 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -19,6 +18,13 @@ from .base import BaseAgentConfig, BaseAgentRunner
 from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..core.runtime import create_runtime_heartbeat
+from ..core.time import (
+    format_in_timezone,
+    format_utc,
+    resolve_timezone,
+    timezone_name,
+    utc_offset_text,
+)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -36,6 +42,7 @@ class ChatInput(BaseModel):
     max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
     enable_memory: Optional[bool] = True
     private: Optional[bool] = False
+    timezone: Optional[str] = None
 
 
 class AgentInput(ChatInput):
@@ -57,6 +64,28 @@ class IdentityInput(BaseModel):
     """Request body for updating identity.md."""
 
     identity: str
+
+
+class MemoryCorrectInput(BaseModel):
+    correction: str
+    reason: str = "manual correction"
+    query: Optional[str] = None
+
+
+class MemoryForgetInput(BaseModel):
+    mode: str = "archive"
+    reason: str = "forget requested"
+
+
+class MemoryExportInput(BaseModel):
+    output_dir: Optional[str] = None
+
+
+class MemoryQueryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sql: str
+    max_rows: int = 50
 
 
 class AgentHTTPServer(BaseAgentRunner):
@@ -115,6 +144,7 @@ class AgentHTTPServer(BaseAgentRunner):
             image_source=input_data.image_source,
             enable_memory=input_data.enable_memory,
             private=input_data.private,
+            timezone=input_data.timezone,
         )
 
     async def _call_observe(self, input_data: ObserveInput):
@@ -173,6 +203,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 stream=bool(input_data.stream),
                 enable_memory=input_data.enable_memory,
                 private=input_data.private,
+                timezone=input_data.timezone,
             )
             async for event in self._iterate_before_deadline(response, deadline):
                 if event.get("type") == "done":
@@ -274,7 +305,7 @@ class AgentHTTPServer(BaseAgentRunner):
         return remaining
 
     def _get_memory_store(self):
-        memory = getattr(self.agent, "sqlite_memory", None)
+        memory = getattr(self.agent, "memory_store", None)
         if memory is None:
             raise HTTPException(status_code=500, detail="Memory storage is unavailable")
         return memory
@@ -307,6 +338,226 @@ class AgentHTTPServer(BaseAgentRunner):
             if message_handler is not None:
                 message_handler.system_prompt = identity
         self.identity = identity
+
+    def _resolve_request_timezone(self, request_timezone: Optional[str] = None):
+        return resolve_timezone(self.config if isinstance(self.config, dict) else None, request_timezone)
+
+    def _message_payload(self, msg, request_timezone: Optional[str] = None) -> Dict[str, Any]:
+        active_timezone = self._resolve_request_timezone(request_timezone)
+        timestamp = float(msg.timestamp)
+        item = {
+            "role": msg.role.value if hasattr(msg.role, "value") else str(msg.role),
+            "type": msg.type.value if hasattr(msg.type, "value") else str(msg.type),
+            "content": msg.content,
+            "sender_id": msg.sender_id,
+            "timestamp": timestamp,
+            "timestamp_utc": format_utc(timestamp),
+            "timestamp_local": format_in_timezone(timestamp, active_timezone),
+            "timezone": timezone_name(active_timezone),
+            "utc_offset": utc_offset_text(timestamp, active_timezone),
+            "metadata": msg.metadata,
+        }
+        if msg.tool_call:
+            item["tool_call"] = {
+                "name": msg.tool_call.name,
+                "arguments": msg.tool_call.arguments,
+                "output": msg.tool_call.output,
+            }
+        return item
+
+    @staticmethod
+    def _decode_memory_json(value: Any, default: Any):
+        if value is None:
+            return default
+        if isinstance(value, (dict, list)):
+            return value
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return default
+
+    async def _build_memory_dashboard(self, preview_limit: int = 60) -> Dict[str, Any]:
+        store = self._get_memory_store()
+        normalized_limit = max(8, min(int(preview_limit or 0), 200))
+
+        (
+            stats,
+            memory_statuses,
+            memory_kinds,
+            subject_types,
+            memory_sensitivities,
+            event_roles,
+            event_types,
+            policy_count,
+            memory_result,
+            event_result,
+            people_result,
+            summary_result,
+            revision_result,
+            evidence_result,
+            policy_result,
+        ) = await asyncio.gather(
+            store.get_stats(),
+            store.query_sql(
+                "SELECT status AS label, COUNT(*) AS count FROM memory_items "
+                "GROUP BY status ORDER BY count DESC, status ASC",
+                max_rows=20,
+            ),
+            store.query_sql(
+                "SELECT kind AS label, COUNT(*) AS count FROM memory_items "
+                "GROUP BY kind ORDER BY count DESC, kind ASC",
+                max_rows=20,
+            ),
+            store.query_sql(
+                "SELECT subject_type AS label, COUNT(*) AS count FROM memory_items "
+                "GROUP BY subject_type ORDER BY count DESC, subject_type ASC",
+                max_rows=20,
+            ),
+            store.query_sql(
+                "SELECT sensitivity AS label, COUNT(*) AS count FROM memory_items "
+                "GROUP BY sensitivity ORDER BY count DESC, sensitivity ASC",
+                max_rows=20,
+            ),
+            store.query_sql(
+                "SELECT role AS label, COUNT(*) AS count FROM events "
+                "GROUP BY role ORDER BY count DESC, role ASC",
+                max_rows=20,
+            ),
+            store.query_sql(
+                "SELECT event_type AS label, COUNT(*) AS count FROM events "
+                "GROUP BY event_type ORDER BY count DESC, event_type ASC",
+                max_rows=20,
+            ),
+            store.query_sql("SELECT COUNT(*) AS count FROM retention_policies", max_rows=1),
+            store.list_memory_items(limit=normalized_limit),
+            store.get_events(limit=normalized_limit),
+            store.query_sql(
+                "SELECT person_key, display_name, aliases_json, relationship, notes, created_at, updated_at "
+                f"FROM people ORDER BY updated_at DESC, person_key ASC LIMIT {normalized_limit}",
+                max_rows=normalized_limit,
+            ),
+            store.query_sql(
+                "SELECT id, summary_type, scope_type, scope_key, period_start, period_end, "
+                "content, source_memory_ids_json, created_at "
+                f"FROM memory_summaries ORDER BY created_at DESC, id DESC LIMIT {normalized_limit}",
+                max_rows=normalized_limit,
+            ),
+            store.query_sql(
+                "SELECT id, memory_id, revision_type, old_content, new_content, reason, actor, created_at "
+                f"FROM memory_revisions ORDER BY created_at DESC, id DESC LIMIT {normalized_limit}",
+                max_rows=normalized_limit,
+            ),
+            store.query_sql(
+                "SELECT id, memory_id, event_id, quote, relation, confidence, extractor_model, created_at "
+                f"FROM memory_evidence ORDER BY created_at DESC, id DESC LIMIT {normalized_limit}",
+                max_rows=normalized_limit,
+            ),
+            store.query_sql(
+                "SELECT id, scope_type, scope_key, policy, ttl_days, created_at "
+                f"FROM retention_policies ORDER BY created_at DESC, id DESC LIMIT {normalized_limit}",
+                max_rows=normalized_limit,
+            ),
+        )
+
+        policy_total_rows = policy_count.get("rows", []) if isinstance(policy_count, dict) else []
+        retention_policy_total = int(policy_total_rows[0].get("count", 0)) if policy_total_rows else 0
+        stats = dict(stats)
+        stats["retention_policies"] = retention_policy_total
+
+        people_items = []
+        for row in people_result.get("rows", []):
+            people_items.append(
+                {
+                    "person_key": row.get("person_key"),
+                    "display_name": row.get("display_name"),
+                    "aliases": self._decode_memory_json(row.get("aliases_json"), []),
+                    "relationship": row.get("relationship"),
+                    "notes": row.get("notes"),
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                }
+            )
+
+        summary_items = []
+        for row in summary_result.get("rows", []):
+            summary_items.append(
+                {
+                    "summary_id": row.get("id"),
+                    "summary_type": row.get("summary_type"),
+                    "scope_type": row.get("scope_type"),
+                    "scope_key": row.get("scope_key"),
+                    "period_start": row.get("period_start"),
+                    "period_end": row.get("period_end"),
+                    "content": row.get("content"),
+                    "source_memory_ids": self._decode_memory_json(row.get("source_memory_ids_json"), []),
+                    "created_at": row.get("created_at"),
+                }
+            )
+
+        memory_items = memory_result.get("items", []) if isinstance(memory_result, dict) else []
+        event_items = event_result.get("events", []) if isinstance(event_result, dict) else []
+        revision_items = revision_result.get("rows", []) if isinstance(revision_result, dict) else []
+        evidence_items = evidence_result.get("rows", []) if isinstance(evidence_result, dict) else []
+        policy_items = policy_result.get("rows", []) if isinstance(policy_result, dict) else []
+
+        return {
+            "status": "ok",
+            "generated_at": time.time(),
+            "preview_limit": normalized_limit,
+            "stats": stats,
+            "breakdowns": {
+                "memory_status": memory_statuses.get("rows", []),
+                "memory_kind": memory_kinds.get("rows", []),
+                "subject_type": subject_types.get("rows", []),
+                "memory_sensitivity": memory_sensitivities.get("rows", []),
+                "event_role": event_roles.get("rows", []),
+                "event_type": event_types.get("rows", []),
+            },
+            "collections": {
+                "memories": {
+                    "items": memory_items,
+                    "count": len(memory_items),
+                    "total": int(stats.get("memory_items", 0)),
+                    "truncated": int(stats.get("memory_items", 0)) > len(memory_items),
+                },
+                "events": {
+                    "items": event_items,
+                    "count": len(event_items),
+                    "total": int(stats.get("events", 0)),
+                    "truncated": int(stats.get("events", 0)) > len(event_items),
+                },
+                "people": {
+                    "items": people_items,
+                    "count": len(people_items),
+                    "total": int(stats.get("people", 0)),
+                    "truncated": int(stats.get("people", 0)) > len(people_items),
+                },
+                "summaries": {
+                    "items": summary_items,
+                    "count": len(summary_items),
+                    "total": int(stats.get("summaries", 0)),
+                    "truncated": int(stats.get("summaries", 0)) > len(summary_items),
+                },
+                "revisions": {
+                    "items": revision_items,
+                    "count": len(revision_items),
+                    "total": int(stats.get("revisions", 0)),
+                    "truncated": int(stats.get("revisions", 0)) > len(revision_items),
+                },
+                "evidence": {
+                    "items": evidence_items,
+                    "count": len(evidence_items),
+                    "total": int(stats.get("evidence", 0)),
+                    "truncated": int(stats.get("evidence", 0)) > len(evidence_items),
+                },
+                "policies": {
+                    "items": policy_items,
+                    "count": len(policy_items),
+                    "total": retention_policy_total,
+                    "truncated": retention_policy_total > len(policy_items),
+                },
+            },
+        }
 
     def _create_app(self) -> FastAPI:
         app = FastAPI(
@@ -596,63 +847,134 @@ class AgentHTTPServer(BaseAgentRunner):
             """Return SQLite memory statistics."""
             return await self._get_memory_store().get_stats()
 
-        @app.get("/api/memory/list", tags=["Monitoring"])
-        async def memory_list(
-            table: str = Query("memory_entries", description="Memory table name"),
-            limit: int = Query(50, ge=1, le=200, description="Maximum rows to return"),
-            offset: int = Query(0, ge=0, description="Number of rows to skip"),
+        @app.get("/api/memory/dashboard", tags=["Monitoring"])
+        async def memory_dashboard(
+            preview_limit: int = Query(72, ge=8, le=200, description="Rows to preview per collection"),
         ):
-            """List rows from a memory table."""
-            table_name = self._validate_memory_table(table)
-            sql = f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT {int(limit)} OFFSET {int(offset)}"
-            return await self._get_memory_store().query_sql(sql, max_rows=limit)
+            """Return a wide read-only snapshot of the unified memory schema."""
+            return await self._build_memory_dashboard(preview_limit=preview_limit)
 
-        @app.get("/api/memory/read", tags=["Monitoring"])
-        async def memory_read(
-            table: str = Query(..., description="Memory table name"),
-            row_id: int = Query(..., ge=1, description="Row id to read"),
+        @app.get("/api/memory/recall", tags=["Monitoring"])
+        async def memory_recall(
+            query: str = Query("", description="Recall cue"),
+            subject_type: Optional[str] = Query(None, description="Subject type filter"),
+            subject_key: Optional[str] = Query(None, description="Subject key filter"),
+            time_range: Optional[str] = Query(None, description="Optional date/time range"),
+            kinds: Optional[str] = Query(None, description="Comma-separated memory kinds"),
+            include_evidence: bool = Query(False, description="Include evidence rows"),
+            max_items: int = Query(8, ge=1, le=100, description="Maximum memory items"),
         ):
-            """Read one memory database row."""
-            table_name = self._validate_memory_table(table)
-            sql = f"SELECT * FROM {table_name} WHERE id = {int(row_id)} LIMIT 1"
-            result = await self._get_memory_store().query_sql(sql, max_rows=1)
-            if not result.get("rows"):
-                raise HTTPException(status_code=404, detail="Memory row not found")
-            return {
-                "table": table_name,
-                "row": result["rows"][0],
-            }
+            """Recall active structured memory items."""
+            return await self._get_memory_store().recall_memory(
+                query=query,
+                subject_type=subject_type,
+                subject_key=subject_key,
+                time_range=time_range,
+                kinds=kinds,
+                include_evidence=include_evidence,
+                max_items=max_items,
+            )
 
         @app.get("/api/memory/search", tags=["Monitoring"])
-        async def memory_search(
-            query: str = Query(..., min_length=1, description="Search text for memory content"),
+        async def memory_search_alias(
+            query: str = Query(..., min_length=1, description="Recall cue"),
             limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
         ):
-            """Search memory entries, summaries, and people facts."""
-            escaped = query.replace("'", "''")
-            pattern = f"%{escaped}%"
-            sql = (
-                "SELECT 'memory_entries' AS table_name, id, entry_date AS date, source, content AS snippet "
-                f"FROM memory_entries WHERE content LIKE '{pattern}' "
-                "UNION ALL "
-                "SELECT 'memory_summaries' AS table_name, id, period_start || ' to ' || period_end AS date, period_type AS source, content AS snippet "
-                f"FROM memory_summaries WHERE content LIKE '{pattern}' "
-                "UNION ALL "
-                "SELECT 'people_facts' AS table_name, id, observed_at AS date, display_name AS source, fact || ' Evidence: ' || evidence AS snippet "
-                f"FROM people_facts WHERE person_key LIKE '{pattern}' OR display_name LIKE '{pattern}' OR fact LIKE '{pattern}' OR evidence LIKE '{pattern}' "
-                f"ORDER BY date DESC LIMIT {int(limit)}"
-            )
-            result = await self._get_memory_store().query_sql(sql, max_rows=limit)
+            """Compatibility alias for memory recall."""
+            return await self._get_memory_store().recall_memory(query=query, max_items=limit)
 
-            return {
-                "query": query,
-                "results": result.get("rows", []),
-            }
+        @app.get("/api/memory/items", tags=["Monitoring"])
+        async def memory_items(
+            status: Optional[str] = Query(None, description="Memory status"),
+            kind: Optional[str] = Query(None, description="Memory kind"),
+            subject_type: Optional[str] = Query(None, description="Subject type"),
+            limit: int = Query(50, ge=1, le=200, description="Maximum rows"),
+            offset: int = Query(0, ge=0, description="Rows to skip"),
+        ):
+            """List structured memory items."""
+            return await self._get_memory_store().list_memory_items(
+                status=status,
+                kind=kind,
+                subject_type=subject_type,
+                limit=limit,
+                offset=offset,
+            )
+
+        @app.get("/api/memory/items/{memory_id}", tags=["Monitoring"])
+        async def memory_item(memory_id: int):
+            """Read one structured memory item with evidence."""
+            item = await self._get_memory_store().get_memory_item(memory_id, include_evidence=True)
+            if item is None:
+                raise HTTPException(status_code=404, detail="Memory item not found")
+            return item
+
+        @app.post("/api/memory/items/{memory_id}/correct", tags=["Monitoring"])
+        async def memory_item_correct(memory_id: int, input_data: MemoryCorrectInput):
+            """Correct one memory item and record a revision."""
+            return await self._get_memory_store().correct_memory(
+                memory_id=memory_id,
+                query=input_data.query,
+                correction=input_data.correction,
+                reason=input_data.reason,
+                actor="http",
+            )
+
+        @app.post("/api/memory/items/{memory_id}/forget", tags=["Monitoring"])
+        async def memory_item_forget(memory_id: int, input_data: MemoryForgetInput):
+            """Archive or delete one memory item."""
+            return await self._get_memory_store().forget_memory(
+                memory_id=memory_id,
+                mode=input_data.mode,
+                reason=input_data.reason,
+                actor="http",
+            )
+
+        @app.get("/api/memory/events", tags=["Monitoring"])
+        async def memory_events(
+            limit: int = Query(50, ge=1, le=500, description="Maximum events"),
+            offset: int = Query(0, ge=0, description="Events to skip"),
+            speaker_id: Optional[str] = Query(None, description="Speaker filter"),
+            conversation_id: Optional[str] = Query(None, description="Conversation filter"),
+        ):
+            """List raw experience events."""
+            return await self._get_memory_store().get_events(
+                limit=limit,
+                offset=offset,
+                speaker_id=speaker_id,
+                conversation_id=conversation_id,
+            )
+
+        @app.get("/api/memory/events/{event_id}", tags=["Monitoring"])
+        async def memory_event(event_id: int):
+            """Read one raw experience event."""
+            event = await self._get_memory_store().get_event(event_id)
+            if event is None:
+                raise HTTPException(status_code=404, detail="Memory event not found")
+            return event
+
+        @app.post("/api/memory/export", tags=["Monitoring"])
+        async def memory_export(input_data: MemoryExportInput):
+            """Export memory to Markdown and JSONL."""
+            workspace = getattr(self, "workspace", Path.cwd())
+            output_dir = input_data.output_dir or str(workspace / "exports" / "memory")
+            return await self._get_memory_store().export_memory(output_dir)
+
+        @app.post("/api/memory/query", tags=["Monitoring"])
+        async def memory_query(input_data: MemoryQueryInput):
+            """Execute one safe read-only SQL query against the memory database."""
+            try:
+                return await self._get_memory_store().query_sql(
+                    input_data.sql,
+                    max_rows=input_data.max_rows,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         @app.get("/api/messages", tags=["Monitoring"])
         async def get_messages(
             count: int = Query(50, ge=1, le=500, description="Number of messages to retrieve"),
             offset: int = Query(0, ge=0, description="Number of recent messages to skip"),
+            timezone: Optional[str] = Query(None, description="IANA timezone for formatted timestamps"),
         ):
             """Paginated message retrieval for the monitoring page.
 
@@ -661,23 +983,7 @@ class AgentHTTPServer(BaseAgentRunner):
             """
             total = await self.message_storage.get_message_count()
             messages = await self.message_storage.get_messages(count=count, offset=offset)
-            items = []
-            for msg in messages:
-                item = {
-                    "role": msg.role.value if hasattr(msg.role, "value") else str(msg.role),
-                    "type": msg.type.value if hasattr(msg.type, "value") else str(msg.type),
-                    "content": msg.content,
-                    "sender_id": msg.sender_id,
-                    "timestamp": msg.timestamp,
-                    "metadata": msg.metadata,
-                }
-                if msg.tool_call:
-                    item["tool_call"] = {
-                        "name": msg.tool_call.name,
-                        "arguments": msg.tool_call.arguments,
-                        "output": msg.tool_call.output,
-                    }
-                items.append(item)
+            items = [self._message_payload(msg, request_timezone=timezone) for msg in messages]
             items.reverse()
             return {
                 "messages": items,
@@ -694,27 +1000,32 @@ class AgentHTTPServer(BaseAgentRunner):
             return {"status": "ok"}
 
         @app.get("/api/messages/stats", tags=["Monitoring"])
-        async def messages_stats():
+        async def messages_stats(
+            timezone: Optional[str] = Query(None, description="IANA timezone for formatted timestamps"),
+        ):
             """Return message storage statistics."""
+            active_timezone = self._resolve_request_timezone(timezone)
             total = await self.message_storage.get_message_count()
             storage_info = self.message_storage.get_stream_info() if hasattr(self.message_storage, "get_stream_info") else {}
-            result: Dict[str, Any] = {"total": total, "storage": storage_info}
+            result: Dict[str, Any] = {
+                "total": total,
+                "storage": storage_info,
+                "timezone": timezone_name(active_timezone),
+            }
             if total > 0:
                 oldest = await self.message_storage.get_messages(count=1, offset=total - 1)
                 newest = await self.message_storage.get_messages(count=1, offset=0)
                 if oldest:
-                    result["earliest_timestamp"] = oldest[0].timestamp
+                    timestamp = float(oldest[0].timestamp)
+                    result["earliest_timestamp"] = timestamp
+                    result["earliest_timestamp_utc"] = format_utc(timestamp)
+                    result["earliest_timestamp_local"] = format_in_timezone(timestamp, active_timezone)
                 if newest:
-                    result["latest_timestamp"] = newest[0].timestamp
+                    timestamp = float(newest[0].timestamp)
+                    result["latest_timestamp"] = timestamp
+                    result["latest_timestamp_utc"] = format_utc(timestamp)
+                    result["latest_timestamp_local"] = format_in_timezone(timestamp, active_timezone)
             return result
-
-    @staticmethod
-    def _validate_memory_table(table: str) -> str:
-        table_name = str(table or "").strip()
-        allowed = {"memory_entries", "memory_summaries", "people_facts"}
-        if table_name not in allowed:
-            raise HTTPException(status_code=400, detail="Unsupported memory table")
-        return table_name
 
     def run(self, host: str = None, port: int = None, open_browser: bool = False) -> None:
         host = host if host is not None else BaseAgentConfig.DEFAULT_HOST

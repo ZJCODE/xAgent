@@ -1,93 +1,96 @@
-"""Tests for memory tool factories."""
+"""Tests for high-level memory tools."""
 
 import tempfile
 import unittest
-from datetime import date
 from pathlib import Path
 
-from xagent.components.memory import SQLiteMemory
-from xagent.components.message import MessageStorageLocal
-from xagent.schemas import Message, RoleType
-from xagent.tools.memory_tool import (
-    create_query_memory_tool,
-    create_query_messages_tool,
-    create_write_memory_tool,
+from xagent.components.memory import ExperienceMemoryStore
+from xagent.tools import (
+    create_correct_memory_tool,
+    create_forget_memory_tool,
+    create_recall_memory_tool,
+    create_remember_tool,
+    create_search_history_tool,
 )
-
-
-class _FakeLLMService:
-    async def generate_summary(self, source_content, period_type, period_label):
-        return f"[Summary: {period_type} {period_label}]"
+from xagent.schemas import Message, RoleType
 
 
 class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.memory = SQLiteMemory(str(Path(self._tmpdir.name) / "memory.sqlite3"))
-        self.messages = MessageStorageLocal(str(Path(self._tmpdir.name) / "messages.sqlite3"))
-        self._enabled = True
+        self.memory = ExperienceMemoryStore(str(Path(self._tmpdir.name) / "xagent_memory.sqlite3"))
+        self.enabled = True
 
     def tearDown(self):
         self._tmpdir.cleanup()
 
     def _is_enabled(self):
-        return self._enabled
+        return self.enabled
 
-    async def test_write_memory_records_entry(self):
-        tool = create_write_memory_tool(self.memory, self._is_enabled)
-        result = await tool("This is a test memory note")
+    async def test_remember_records_memory_item(self):
+        tool = create_remember_tool(self.memory, self._is_enabled)
+
+        result = await tool(
+            content="Alice prefers concise implementation plans.",
+            kind="preference",
+            subject_type="person",
+            subject_key="Alice",
+        )
+
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["message"], "Memory recorded.")
-        self.assertNotIn("file", result)
+        recalled = await self.memory.recall_memory("concise plans")
+        self.assertEqual(recalled["items"][0]["subject"]["key"], "Alice")
 
-        result = await self.memory.query_sql("SELECT content, source FROM memory_entries")
-        self.assertIn("test memory note", result["rows"][0]["content"])
-        self.assertEqual(result["rows"][0]["source"], "tool")
+    async def test_recall_memory_disabled(self):
+        self.enabled = False
+        tool = create_recall_memory_tool(self.memory, self._is_enabled)
 
-    async def test_write_memory_disabled(self):
-        self._enabled = False
-        tool = create_write_memory_tool(self.memory, self._is_enabled)
-        result = await tool("Should not be written")
+        result = await tool(query="Alice")
+
         self.assertEqual(result["status"], "disabled")
-
-    async def test_write_memory_empty_content(self):
-        tool = create_write_memory_tool(self.memory, self._is_enabled)
-        result = await tool("   ")
-        self.assertEqual(result["status"], "skipped")
-
-    async def test_query_memory_sql(self):
-        await self.memory.add_entry("Meeting with Alice about project X", target_date=date.today())
-        tool = create_query_memory_tool(self.memory, self._is_enabled)
-        result = await tool(sql="SELECT content FROM memory_entries WHERE content LIKE '%Alice%'")
-        self.assertEqual(result["status"], "ok")
-        self.assertIn("Alice", result["rows"][0]["content"])
-
-    async def test_query_memory_disabled(self):
-        self._enabled = False
-        tool = create_query_memory_tool(self.memory, self._is_enabled)
-        result = await tool(sql="SELECT * FROM memory_entries")
         self.assertFalse(result["enabled"])
 
-    async def test_query_memory_rejects_write_sql(self):
-        tool = create_query_memory_tool(self.memory, self._is_enabled)
-        result = await tool(sql="DELETE FROM memory_entries")
-        self.assertEqual(result["status"], "error")
-        self.assertIn("Only SELECT or WITH", result["message"])
+    async def test_recall_memory_tool(self):
+        await self.memory.remember(
+            "Alice prefers concise implementation plans.",
+            kind="preference",
+            subject_type="person",
+            subject_key="Alice",
+        )
+        tool = create_recall_memory_tool(self.memory, self._is_enabled)
 
-    async def test_query_messages_sql(self):
-        await self.messages.add_messages(
+        result = await tool(query="concise", include_evidence=True)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["items"][0]["kind"], "preference")
+
+    async def test_search_history_tool(self):
+        await self.memory.add_messages(
             Message.create("Older project detail", role=RoleType.USER, sender_id="Alice")
         )
-        tool = create_query_messages_tool(self.messages, self._is_enabled)
-        result = await tool(sql="SELECT sender_id, content FROM messages WHERE content LIKE '%project%'")
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["rows"][0]["sender_id"], "Alice")
+        tool = create_search_history_tool(self.memory, self._is_enabled)
 
-    async def test_query_messages_rejects_multi_statement(self):
-        tool = create_query_messages_tool(self.messages, self._is_enabled)
-        result = await tool(sql="SELECT * FROM messages; SELECT * FROM messages")
-        self.assertEqual(result["status"], "error")
-        self.assertIn("Only one SQL statement", result["message"])
+        result = await tool(query="project detail")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["events"][0]["speaker_id"], "Alice")
+
+    async def test_correct_and_forget_tools(self):
+        memory_id = await self.memory.remember(
+            "The app uses Flask.",
+            kind="project_state",
+            subject_type="project",
+            subject_key="xAgent",
+        )
+        correct = create_correct_memory_tool(self.memory, self._is_enabled)
+        forget = create_forget_memory_tool(self.memory, self._is_enabled)
+
+        corrected = await correct(memory_id=memory_id, correction="The app uses FastAPI.", reason="user corrected it")
+        forgotten = await forget(memory_id=memory_id, mode="archive", reason="user asked")
+
+        self.assertEqual(corrected["status"], "ok")
+        self.assertEqual(forgotten["status"], "ok")
+        self.assertEqual((await self.memory.recall_memory("FastAPI"))["items"], [])
 
 
 if __name__ == "__main__":

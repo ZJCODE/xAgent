@@ -13,6 +13,28 @@ class SummaryOutput(BaseModel):
     content: str = Field(default="", description="Summary text")
 
 
+class MemoryFact(BaseModel):
+    """One durable fact extracted from experience with explicit attribution."""
+
+    kind: str = Field(default="", description="Memory kind such as preference, commitment, or person_fact")
+    subject_type: str = Field(default="", description="Subject type such as self, person, project, topic, room, or system")
+    subject_key: str = Field(default="", description="Stable subject identifier")
+    title: str = Field(default="", description="Short UI-friendly title for the fact")
+    content: str = Field(default="", description="Durable fact content")
+    evidence: str = Field(default="", description="Short direct quote or exact source phrase")
+    source: str = Field(default="", description="Short provenance note")
+    confidence: float = Field(default=0.85, description="Confidence score from 0.0 to 1.0")
+    salience: float = Field(default=0.7, description="Importance score from 0.0 to 1.0")
+    display_name: str = Field(default="", description="Optional display name when the subject is a person")
+
+
+class MemorySynthesis(BaseModel):
+    """Unified extraction result for one experience batch."""
+
+    experience_summary: str = Field(default="", description="First-person episodic summary of the batch")
+    facts: list[MemoryFact] = Field(default_factory=list, description="Durable attributed facts worth storing")
+
+
 class PeopleProfileFact(BaseModel):
     """A quote-backed stable fact about one person."""
 

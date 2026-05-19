@@ -1065,6 +1065,10 @@ function createChatPanel(panelId, containerEl, options = {}) {
     return url.toString();
   }
 
+  function browserTimezone() {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  }
+
   async function websocketChat(payload, contentEl, messageIndex) {
     contentEl.classList.add('typing-cursor');
 
@@ -1214,6 +1218,7 @@ function createChatPanel(panelId, containerEl, options = {}) {
       stream: settings.stream,
       enable_memory: settings.memory,
       private: settings.private,
+      timezone: browserTimezone(),
     };
 
     if (currentImages.length === 1) {

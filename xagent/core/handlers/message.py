@@ -1,9 +1,9 @@
 import logging
-import time
-from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
+from ..time import current_time_text, format_in_timezone, resolve_timezone
 from ...components import MessageStorageBase
 from ...schemas import Message, RoleType, MessageType
 from ...utils.image_utils import extract_image_urls_from_text
@@ -27,6 +27,7 @@ class MessageHandler:
         user_message: str,
         user_id: str,
         image_source: Optional[Union[str, List[str]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Message:
         """Store a user message, auto-detecting embedded image URLs."""
         detected = extract_image_urls_from_text(user_message)
@@ -43,6 +44,8 @@ class MessageHandler:
             image_source=image_source,
             sender_id=user_id,
         )
+        if metadata:
+            msg.metadata.update(metadata)
         await self.message_storage.add_messages(msg)
         return msg
 
@@ -118,6 +121,7 @@ class MessageHandler:
         max_message_chars: int = AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
+        timezone: ZoneInfo | None = None,
     ) -> dict:
         """Collapse recent conversation history into one user transcript message.
 
@@ -127,6 +131,7 @@ class MessageHandler:
                     - Recent experience in chronological order
         """
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
+        active_timezone = timezone or resolve_timezone()
         observation_messages = (
             MessageHandler.filter_context_events(messages)
             if context_events is None
@@ -154,7 +159,7 @@ class MessageHandler:
         # --- Runtime context ---
         transcript_lines.append(AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip())
         transcript_lines.append(f"- Current speaker: {current_user_id}")
-        transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
+        transcript_lines.append(f"- Current time: {current_time_text(active_timezone)}")
         transcript_lines.append("")
 
         # --- Recent memory (conditional) ---
@@ -183,7 +188,12 @@ class MessageHandler:
 
         for entry_type, msg, content in experience_entries:
             transcript_lines.extend(
-                MessageHandler._format_experience_entry(entry_type, msg, content)
+                MessageHandler._format_experience_entry(
+                    entry_type,
+                    msg,
+                    content,
+                    timezone=active_timezone,
+                )
             )
             transcript_lines.append("")
 
@@ -219,9 +229,11 @@ class MessageHandler:
         max_message_chars: int = AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
+        timezone: ZoneInfo | None = None,
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
+        active_timezone = timezone or resolve_timezone()
         observation_messages = (
             MessageHandler.filter_context_events(messages)
             if context_events is None
@@ -262,6 +274,7 @@ class MessageHandler:
                 experience_entries=experience_entries,
                 omitted_messages=omitted_count,
                 omitted_observations=omitted_observation_count,
+                timezone=active_timezone,
             ),
         })
 
@@ -270,7 +283,7 @@ class MessageHandler:
             current_time=(
                 current_time
                 or current_date
-                or datetime.now().strftime("%Y-%m-%d %H:%M")
+                or current_time_text(active_timezone)
             ),
         )
         current_task_message = {
@@ -296,7 +309,9 @@ class MessageHandler:
         experience_entries: List[tuple[str, Message, str]],
         omitted_messages: int,
         omitted_observations: int,
+        timezone: ZoneInfo | None = None,
     ) -> str:
+        active_timezone = timezone or resolve_timezone()
         lines: list[str] = []
         if omitted_messages or omitted_observations:
             lines.append(
@@ -308,7 +323,14 @@ class MessageHandler:
             lines.append("")
 
         for entry_type, msg, content in experience_entries:
-            lines.extend(MessageHandler._format_experience_entry(entry_type, msg, content))
+            lines.extend(
+                MessageHandler._format_experience_entry(
+                    entry_type,
+                    msg,
+                    content,
+                    timezone=active_timezone,
+                )
+            )
             lines.append("")
 
         experience_text = "\n".join(lines).strip() or "[No recent experience]"
@@ -359,12 +381,13 @@ class MessageHandler:
         entry_type: str,
         message: Message,
         content: str,
+        timezone: ZoneInfo | None = None,
     ) -> List[str]:
         if entry_type == "observation":
-            return [MessageHandler._format_context_event_header(message), content]
+            return [MessageHandler._format_context_event_header(message, timezone=timezone), content]
 
         lines = [
-            MessageHandler._format_transcript_message_header(message),
+            MessageHandler._format_transcript_message_header(message, timezone=timezone),
             content,
         ]
         image_count = MessageHandler._count_message_images(message)
@@ -398,18 +421,19 @@ class MessageHandler:
         ], omitted_count
 
     @staticmethod
-    def _format_context_event_header(message: Message) -> str:
-        return f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
+    def _format_context_event_header(message: Message, timezone: ZoneInfo | None = None) -> str:
+        return f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message, timezone=timezone)}]"
 
     @staticmethod
-    def _format_transcript_message_header(message: Message) -> str:
+    def _format_transcript_message_header(message: Message, timezone: ZoneInfo | None = None) -> str:
         speaker = MessageHandler._format_transcript_speaker(message)
-        timestamp = MessageHandler._format_transcript_timestamp(message)
+        timestamp = MessageHandler._format_transcript_timestamp(message, timezone=timezone)
         return f"[speaker={speaker}][timestamp={timestamp}]"
 
     @staticmethod
-    def _format_transcript_timestamp(message: Message) -> str:
-        return datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d %H:%M:%S")
+    def _format_transcript_timestamp(message: Message, timezone: ZoneInfo | None = None) -> str:
+        active_timezone = timezone or resolve_timezone()
+        return format_in_timezone(message.timestamp, active_timezone)
 
     @staticmethod
     def _budget_transcript_entries(

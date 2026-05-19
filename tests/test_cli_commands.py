@@ -321,10 +321,9 @@ class CLICommandTests(unittest.TestCase):
             root = Path(tmpdir)
             (root / "config.yaml").write_text("provider:\n  model: old\n", encoding="utf-8")
             (root / "identity.md").write_text("old", encoding="utf-8")
-            memory_marker = root / "memory" / "memory.sqlite3"
-            messages_marker = root / "messages" / "messages.sqlite3"
+            memory_marker = root / "memory" / "xagent_memory.sqlite3"
+            messages_marker = root / "memory" / "messages.marker"
             memory_marker.parent.mkdir()
-            messages_marker.parent.mkdir()
             memory_marker.write_text("keep-memory", encoding="utf-8")
             messages_marker.write_text("keep-messages", encoding="utf-8")
             args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
@@ -343,10 +342,9 @@ class CLICommandTests(unittest.TestCase):
             root = Path(tmpdir)
             (root / "config.yaml").write_text("provider:\n  model: old\n", encoding="utf-8")
             (root / "identity.md").write_text("old", encoding="utf-8")
-            memory_marker = root / "memory" / "memory.sqlite3"
-            messages_marker = root / "messages" / "messages.sqlite3"
+            memory_marker = root / "memory" / "xagent_memory.sqlite3"
+            messages_marker = root / "memory" / "messages.marker"
             memory_marker.parent.mkdir()
-            messages_marker.parent.mkdir()
             memory_marker.write_text("clear-memory", encoding="utf-8")
             messages_marker.write_text("clear-messages", encoding="utf-8")
             args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
@@ -358,7 +356,7 @@ class CLICommandTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             prompt.assert_called_once()
             self.assertTrue((root / "memory").is_dir())
-            self.assertTrue((root / "messages").is_dir())
+            self.assertFalse((root / "messages").exists())
             self.assertFalse(memory_marker.exists())
             self.assertFalse(messages_marker.exists())
 

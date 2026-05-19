@@ -16,7 +16,7 @@ from typing import Any, Callable, Optional, Sequence, Tuple
 
 import yaml
 
-from ..components import SQLiteMemory
+from ..components import ExperienceMemoryStore
 from ..core.providers import (
     KNOWN_PROVIDERS,
     MODEL_API_ANTHROPIC_MESSAGES,
@@ -448,6 +448,9 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
                 "port": BaseAgentConfig.DEFAULT_PORT,
             }
         },
+        "runtime": {
+            "timezone": "Asia/Shanghai",
+        },
     }
     search_config = {"provider": selection.search_provider or "none"}
     if search_config["provider"] == "openai" and selection.provider != PROVIDER_OPENAI:
@@ -743,7 +746,7 @@ def init_agent_directory(
     config_path = resolved_dir / BaseAgentConfig.CONFIG_FILENAME
     identity_path = resolved_dir / BaseAgentConfig.IDENTITY_FILENAME
     memory_dir = resolved_dir / BaseAgentConfig.MEMORY_DIRNAME
-    messages_dir = resolved_dir / BaseAgentConfig.MESSAGE_DIRNAME
+    messages_dir = memory_dir
     managed_paths = (config_path, identity_path)
     conflicts = tuple(path for path in managed_paths if path.exists())
 
@@ -765,9 +768,7 @@ def init_agent_directory(
 
     if clear_runtime_data:
         _clear_runtime_directory(memory_dir)
-        _clear_runtime_directory(messages_dir)
     memory_dir.mkdir(parents=True, exist_ok=True)
-    messages_dir.mkdir(parents=True, exist_ok=True)
 
     selection = selection or _default_init_selection()
     config_path.write_text(_config_yaml(selection, schema=schema), encoding="utf-8")
@@ -779,7 +780,7 @@ def init_agent_directory(
     print(f"Config: {config_path}")
     print(f"Identity: {identity_path}")
     print(f"Memory: {memory_dir}")
-    print(f"Messages: {messages_dir}")
+    print(f"Memory DB: {memory_dir / BaseAgentConfig.MEMORY_DB_FILENAME}")
     return InitResult(
         config_path=config_path,
         identity_path=identity_path,
@@ -1037,29 +1038,70 @@ def build_parser() -> argparse.ArgumentParser:
         _add_dir_argument(identity_cmd)
         identity_cmd.set_defaults(handler=handle_identity)
 
-    memory_parser = inspect_sub.add_parser("memory", help="Inspect or clear long-term memory database")
+    memory_parser = inspect_sub.add_parser("memory", help="Inspect, recall, correct, forget, or export memory")
     memory_sub = memory_parser.add_subparsers(dest="memory_command", metavar="<subcommand>")
     memory_sub.required = True
-    memory_tables = ("memory_entries", "memory_summaries", "people_facts")
     memory_stats = memory_sub.add_parser("stats", help="Show memory database statistics")
     _add_dir_argument(memory_stats)
     memory_stats.set_defaults(handler=handle_memory)
-    memory_clear = memory_sub.add_parser("clear", help="Clear all memory database rows")
+    memory_clear = memory_sub.add_parser("clear", help="Clear all memory events and memory rows")
     _add_dir_argument(memory_clear)
     memory_clear.add_argument("--yes", action="store_true", help="Confirm destructive operations")
     memory_clear.set_defaults(handler=handle_memory)
-    memory_list = memory_sub.add_parser("list", help="List rows from a memory table")
+    memory_recall = memory_sub.add_parser("recall", help="Recall active memory items")
+    _add_dir_argument(memory_recall)
+    memory_recall.add_argument("query", nargs="?", default="", help="Recall query")
+    memory_recall.add_argument("--subject-type")
+    memory_recall.add_argument("--subject-key")
+    memory_recall.add_argument("--kinds", help="Comma-separated memory kinds")
+    memory_recall.add_argument("--limit", type=int, default=8)
+    memory_recall.add_argument("--evidence", action="store_true", help="Include evidence")
+    memory_recall.set_defaults(handler=handle_memory)
+    memory_list = memory_sub.add_parser("list", help="List memory items")
     _add_dir_argument(memory_list)
-    memory_list.add_argument("--table", default="memory_entries", choices=memory_tables)
+    memory_list.add_argument("--status")
+    memory_list.add_argument("--kind")
+    memory_list.add_argument("--subject-type")
     memory_list.add_argument("--limit", type=int, default=20, help="Maximum rows")
     memory_list.add_argument("--offset", type=int, default=0, help="Rows to skip")
     memory_list.set_defaults(handler=handle_memory)
-    memory_show = memory_sub.add_parser("show", help="Show one memory database row")
+    memory_show = memory_sub.add_parser("show", help="Show one memory item")
     _add_dir_argument(memory_show)
-    memory_show.add_argument("table", choices=memory_tables)
-    memory_show.add_argument("row_id", type=int)
+    memory_show.add_argument("memory_id", type=int)
     memory_show.set_defaults(handler=handle_memory)
-    memory_search = memory_sub.add_parser("search", help="Search memory database rows")
+    memory_events = memory_sub.add_parser("events", help="List raw experience events")
+    _add_dir_argument(memory_events)
+    memory_events.add_argument("--limit", type=int, default=50)
+    memory_events.add_argument("--offset", type=int, default=0)
+    memory_events.add_argument("--speaker-id")
+    memory_events.add_argument("--conversation-id")
+    memory_events.set_defaults(handler=handle_memory)
+    memory_history = memory_sub.add_parser("history", help="Search raw experience events")
+    _add_dir_argument(memory_history)
+    memory_history.add_argument("query", help="History search query")
+    memory_history.add_argument("--limit", type=int, default=20)
+    memory_history.add_argument("--speaker-id")
+    memory_history.add_argument("--conversation-id")
+    memory_history.set_defaults(handler=handle_memory)
+    memory_correct = memory_sub.add_parser("correct", help="Correct a memory item")
+    _add_dir_argument(memory_correct)
+    memory_correct.add_argument("correction")
+    memory_correct.add_argument("--memory-id", type=int)
+    memory_correct.add_argument("--query")
+    memory_correct.add_argument("--reason", default="manual correction")
+    memory_correct.set_defaults(handler=handle_memory)
+    memory_forget = memory_sub.add_parser("forget", help="Archive or delete a memory item")
+    _add_dir_argument(memory_forget)
+    memory_forget.add_argument("--memory-id", type=int)
+    memory_forget.add_argument("--query")
+    memory_forget.add_argument("--mode", choices=("archive", "delete"), default="archive")
+    memory_forget.add_argument("--reason", default="manual forget")
+    memory_forget.set_defaults(handler=handle_memory)
+    memory_export = memory_sub.add_parser("export", help="Export memory as Markdown and JSONL")
+    _add_dir_argument(memory_export)
+    memory_export.add_argument("--output", default=None, help="Export directory")
+    memory_export.set_defaults(handler=handle_memory)
+    memory_search = memory_sub.add_parser("search", help="Alias for recall")
     _add_dir_argument(memory_search)
     memory_search.add_argument("query", help="Search query")
     memory_search.add_argument("--limit", type=int, default=20, help="Maximum rows")
@@ -1739,16 +1781,8 @@ def _memory_db_path(args: argparse.Namespace) -> Path:
     return _memory_root(args) / BaseAgentConfig.MEMORY_DB_FILENAME
 
 
-def _validate_memory_table(table: str) -> str:
-    table_name = str(table or "").strip()
-    allowed = {"memory_entries", "memory_summaries", "people_facts"}
-    if table_name not in allowed:
-        raise ValueError(f"Unsupported memory table: {table_name}")
-    return table_name
-
-
 def handle_memory(args: argparse.Namespace) -> int:
-    memory = SQLiteMemory(path=str(_memory_db_path(args)))
+    memory = ExperienceMemoryStore(path=str(_memory_db_path(args)))
 
     if args.memory_command == "stats":
         async def _stats() -> int:
@@ -1757,55 +1791,137 @@ def handle_memory(args: argparse.Namespace) -> int:
 
         return asyncio.run(_stats())
 
-    if args.memory_command == "list":
-        table_name = _validate_memory_table(args.table)
-        limit = max(1, min(int(args.limit), 200))
-        offset = max(0, int(args.offset))
-        sql = f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT {limit} OFFSET {offset}"
+    if args.memory_command in {"recall", "search"}:
+        async def _recall() -> int:
+            print(json.dumps(
+                await memory.recall_memory(
+                    query=getattr(args, "query", ""),
+                    subject_type=getattr(args, "subject_type", None),
+                    subject_key=getattr(args, "subject_key", None),
+                    kinds=getattr(args, "kinds", None),
+                    include_evidence=getattr(args, "evidence", False),
+                    max_items=getattr(args, "limit", 8),
+                ),
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            ))
+            return 0
 
+        return asyncio.run(_recall())
+
+    if args.memory_command == "list":
         async def _list() -> int:
-            print(json.dumps(await memory.query_sql(sql, max_rows=limit), indent=2, sort_keys=True))
+            print(json.dumps(
+                await memory.list_memory_items(
+                    status=getattr(args, "status", None),
+                    kind=getattr(args, "kind", None),
+                    subject_type=getattr(args, "subject_type", None),
+                    limit=getattr(args, "limit", 20),
+                    offset=getattr(args, "offset", 0),
+                ),
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            ))
             return 0
 
         return asyncio.run(_list())
 
     if args.memory_command == "show":
-        table_name = _validate_memory_table(args.table)
-        sql = f"SELECT * FROM {table_name} WHERE id = {int(args.row_id)} LIMIT 1"
-
         async def _show() -> int:
-            result = await memory.query_sql(sql, max_rows=1)
-            rows = result.get("rows", [])
-            if not rows:
-                print("Memory row not found")
+            item = await memory.get_memory_item(args.memory_id, include_evidence=True)
+            if item is None:
+                print("Memory item not found")
                 return 1
-            print(json.dumps(rows[0], indent=2, sort_keys=True))
+            print(json.dumps(item, indent=2, sort_keys=True, ensure_ascii=False))
             return 0
 
         return asyncio.run(_show())
 
-    if args.memory_command == "search":
-        escaped = args.query.replace("'", "''")
-        pattern = f"%{escaped}%"
-        limit = max(1, min(int(args.limit), 200))
-        sql = (
-            "SELECT 'memory_entries' AS table_name, id, entry_date AS date, source, content AS snippet "
-            f"FROM memory_entries WHERE content LIKE '{pattern}' "
-            "UNION ALL "
-            "SELECT 'memory_summaries' AS table_name, id, period_start || ' to ' || period_end AS date, period_type AS source, content AS snippet "
-            f"FROM memory_summaries WHERE content LIKE '{pattern}' "
-            "UNION ALL "
-            "SELECT 'people_facts' AS table_name, id, observed_at AS date, display_name AS source, fact || ' Evidence: ' || evidence AS snippet "
-            f"FROM people_facts WHERE person_key LIKE '{pattern}' OR display_name LIKE '{pattern}' OR fact LIKE '{pattern}' OR evidence LIKE '{pattern}' "
-            f"ORDER BY date DESC LIMIT {limit}"
-        )
-
-        async def _search() -> int:
-            result = await memory.query_sql(sql, max_rows=limit)
-            print(json.dumps(result.get("rows", []), indent=2, sort_keys=True))
+    if args.memory_command == "events":
+        async def _events() -> int:
+            print(json.dumps(
+                await memory.get_events(
+                    limit=getattr(args, "limit", 50),
+                    offset=getattr(args, "offset", 0),
+                    speaker_id=getattr(args, "speaker_id", None),
+                    conversation_id=getattr(args, "conversation_id", None),
+                ),
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            ))
             return 0
 
-        return asyncio.run(_search())
+        return asyncio.run(_events())
+
+    if args.memory_command == "history":
+        async def _history() -> int:
+            print(json.dumps(
+                await memory.search_history(
+                    query=args.query,
+                    speaker_id=getattr(args, "speaker_id", None),
+                    conversation_id=getattr(args, "conversation_id", None),
+                    max_events=getattr(args, "limit", 20),
+                ),
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            ))
+            return 0
+
+        return asyncio.run(_history())
+
+    if args.memory_command == "correct":
+        async def _correct() -> int:
+            print(json.dumps(
+                await memory.correct_memory(
+                    memory_id=getattr(args, "memory_id", None),
+                    query=getattr(args, "query", None),
+                    correction=args.correction,
+                    reason=args.reason,
+                    actor="cli",
+                ),
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            ))
+            return 0
+
+        return asyncio.run(_correct())
+
+    if args.memory_command == "forget":
+        async def _forget() -> int:
+            print(json.dumps(
+                await memory.forget_memory(
+                    memory_id=getattr(args, "memory_id", None),
+                    query=getattr(args, "query", None),
+                    mode=getattr(args, "mode", "archive"),
+                    reason=getattr(args, "reason", "manual forget"),
+                    actor="cli",
+                ),
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            ))
+            return 0
+
+        return asyncio.run(_forget())
+
+    if args.memory_command == "export":
+        output = getattr(args, "output", None) or str(_runtime_dir(args) / "exports" / "memory")
+
+        async def _export() -> int:
+            print(json.dumps(
+                await memory.export_memory(output),
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            ))
+            return 0
+
+        return asyncio.run(_export())
 
     if args.memory_command == "clear":
         if not getattr(args, "yes", False):

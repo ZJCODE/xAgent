@@ -40,7 +40,7 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("[room context]", AgentConfig.BASE_AGENT_PROMPT)
         self.assertIn("room_name: ...", AgentConfig.BASE_AGENT_PROMPT)
         self.assertIn("room_id: ...", AgentConfig.BASE_AGENT_PROMPT)
-        self.assertIn("Name YYYY-MM-DD HH:mm: text", AgentConfig.BASE_AGENT_PROMPT)
+        self.assertIn("Name YYYY-MM-DD HH:mm:ss Timezone (UTC+Offset): text", AgentConfig.BASE_AGENT_PROMPT)
         self.assertIn("[/room context]", AgentConfig.BASE_AGENT_PROMPT)
 
     def test_memory_defaults_are_internal_balanced_values(self):
@@ -256,7 +256,7 @@ provider:
             self.assertEqual(result.config_path, Path(tmpdir).resolve() / "config.yaml")
             self.assertEqual(result.identity_path, Path(tmpdir).resolve() / "identity.md")
             self.assertEqual(result.memory_dir, Path(tmpdir).resolve() / "memory")
-            self.assertEqual(result.messages_dir, Path(tmpdir).resolve() / "messages")
+            self.assertEqual(result.messages_dir, result.memory_dir)
             self.assertTrue(result.config_path.is_file())
             self.assertTrue(result.identity_path.is_file())
             self.assertTrue(result.memory_dir.is_dir())
@@ -280,12 +280,12 @@ provider:
             self.assertEqual(config["channels"]["api"]["host"], "127.0.0.1")
             self.assertEqual(config["channels"]["api"]["port"], 8010)
             self.assertEqual(enabled_channels_from_config(config), ["api"])
-            self.assertNotIn("runtime", config)
+            self.assertEqual(config["runtime"]["timezone"], "Asia/Shanghai")
             self.assertNotIn("memory", config)
             self.assertNotIn("observability", config)
             self.assertNotIn("system_prompt:", config_text)
             self.assertNotIn("output_schema:", config_text)
-            self.assertNotIn("runtime:", config_text)
+            self.assertIn("runtime:", config_text)
             self.assertNotIn("memory:", config_text)
             self.assertNotIn("workspace:", config_text)
             self.assertNotIn("server:", config_text)
@@ -329,8 +329,8 @@ provider:
     def test_init_force_keeps_runtime_data_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = init_agent_directory(tmpdir)
-            memory_marker = result.memory_dir / "memory.sqlite3"
-            messages_marker = result.messages_dir / "messages.sqlite3"
+            memory_marker = result.memory_dir / "xagent_memory.sqlite3"
+            messages_marker = result.messages_dir / "messages.marker"
             memory_marker.write_text("memory", encoding="utf-8")
             messages_marker.write_text("messages", encoding="utf-8")
 
@@ -342,8 +342,8 @@ provider:
     def test_init_force_can_clear_runtime_data(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = init_agent_directory(tmpdir)
-            memory_marker = result.memory_dir / "memory.sqlite3"
-            messages_marker = result.messages_dir / "messages.sqlite3"
+            memory_marker = result.memory_dir / "xagent_memory.sqlite3"
+            messages_marker = result.messages_dir / "messages.marker"
             memory_marker.write_text("memory", encoding="utf-8")
             messages_marker.write_text("messages", encoding="utf-8")
 
@@ -892,6 +892,7 @@ channels:
 runtime:
     heartbeat_enabled: false
     heartbeat_interval_seconds: 12
+    timezone: Asia/Shanghai
 """,
                 encoding="utf-8",
             )
@@ -901,8 +902,27 @@ runtime:
 
             self.assertFalse(runner.config["runtime"]["heartbeat_enabled"])
             self.assertEqual(runner.config["runtime"]["heartbeat_interval_seconds"], 12)
+            self.assertEqual(runner.config["runtime"]["timezone"], "Asia/Shanghai")
             self.assertNotIn("enabled", runner.config["channels"]["api"])
             self.assertEqual(enabled_channels_from_config(runner.config), ["api"])
+
+    def test_config_rejects_invalid_runtime_timezone(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+runtime:
+    timezone: Not/AZone
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "runtime.timezone"):
+                BaseAgentRunner(config_dir=tmpdir)
 
     def test_config_rejects_memory_section_as_unsupported(self):
         with tempfile.TemporaryDirectory() as tmpdir:

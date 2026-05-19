@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, create_model
 # Local imports
 from ..core.agent import Agent
 from ..core.config import AgentConfig
+from ..core.time import resolve_timezone, validate_timezone_name
 from ..core.providers import (
     legacy_sdk_model_api,
     model_api_uses_anthropic_client,
@@ -164,6 +165,7 @@ class BaseAgentRunner:
                 "default_channel",
                 "heartbeat_enabled",
                 "heartbeat_interval_seconds",
+                "timezone",
             }
             unsupported_runtime_keys = sorted(set(runtime_cfg) - allowed_runtime_keys)
             if unsupported_runtime_keys:
@@ -180,6 +182,11 @@ class BaseAgentRunner:
                     runtime_cfg["heartbeat_interval_seconds"],
                     "runtime.heartbeat_interval_seconds",
                 )
+            if "timezone" in runtime_cfg:
+                try:
+                    runtime_cfg["timezone"] = validate_timezone_name(runtime_cfg["timezone"])
+                except ValueError as exc:
+                    raise ValueError("runtime.timezone must be a valid IANA timezone") from exc
 
         self._validate_observability_config(config.get("observability"))
 
@@ -445,6 +452,7 @@ class BaseAgentRunner:
             message_storage=self.message_storage,
             workspace=str(self.workspace),
             observability=self.observability,
+            timezone=resolve_timezone(agent_cfg),
         )
 
     def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:

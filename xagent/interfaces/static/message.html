@@ -343,7 +343,7 @@
       allMessages = [];
     }
     try {
-      const res = await fetch(`/api/messages?count=${PAGE_SIZE}&offset=${currentOffset}`);
+      const res = await fetch(`/api/messages?count=${PAGE_SIZE}&offset=${currentOffset}&timezone=${encodeURIComponent(browserTimezone())}`);
       const data = await res.json();
       hasMore = data.has_more;
 
@@ -374,7 +374,7 @@
       const badgeClass = `badge-${m.role.toLowerCase()}`;
       const typeLabel = typeof m.type === 'string' ? m.type.trim() : '';
       const showType = typeLabel && typeLabel.toLowerCase() !== 'message';
-      const ts = m.timestamp ? fmtTime(m.timestamp) : '';
+      const ts = m.timestamp_local || (m.timestamp ? fmtTime(m.timestamp) : '');
       const senderLabel = formatSenderLabel(m.sender_id);
       const sender = senderLabel ? esc(senderLabel) : '';
 
@@ -426,6 +426,9 @@
   // ── Helpers ──
   function fmtTime(ts) {
     return new Date(ts * 1000).toLocaleString();
+  }
+  function browserTimezone() {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
   }
   function formatSenderLabel(senderId) {
     if (typeof senderId !== 'string') {

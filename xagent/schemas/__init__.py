@@ -6,7 +6,7 @@ from .message import (
 	RoleType,
 	ToolCall,
 )
-from .memory import DiaryEntry, SummaryOutput
+from .memory import DiaryEntry, MemoryFact, MemorySynthesis, SummaryOutput
 
 __all__ = [
 	"AgentTurnResult",
@@ -16,5 +16,7 @@ __all__ = [
 	"RoleType",
 	"MessageType",
 	"DiaryEntry",
+	"MemoryFact",
+	"MemorySynthesis",
 	"SummaryOutput",
 ]

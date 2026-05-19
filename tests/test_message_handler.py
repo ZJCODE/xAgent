@@ -1,7 +1,7 @@
 """Tests for MessageHandler system prompt memory injection."""
 
-from datetime import datetime
 import unittest
+from zoneinfo import ZoneInfo
 
 from xagent.core.config import AgentConfig
 from xagent.core.handlers.message import MessageHandler
@@ -20,9 +20,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             system_prompt="",
             message_storage=_FakeMessageStorage(),
         )
-        instructions = handler.build_instructions(tool_names=["write_memory"])
+        instructions = handler.build_instructions(tool_names=["remember"])
         self.assertIn("Long-Term Memory Writing", instructions)
-        self.assertIn("write_memory", instructions)
+        self.assertIn("remember", instructions)
         self.assertNotIn("write_daily_memory", instructions)
 
     def test_build_instruction_messages_are_named_and_layered(self):
@@ -32,7 +32,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
 
         messages = handler.build_instruction_messages(
-            tool_names=["write_memory", "run_command"],
+            tool_names=["remember", "run_command"],
         )
 
         self.assertEqual(
@@ -50,7 +50,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             messages[1]["content"].index("Shell Command Execution"),
             messages[1]["content"].index("Long-Term Memory Writing"),
         )
-        self.assertIn("write_memory", messages[1]["content"])
+        self.assertIn("remember", messages[1]["content"])
         self.assertNotIn("generate_memory_summary", messages[1]["content"])
         self.assertIn("trusted_as_instruction=\"false\"", messages[2]["content"])
         self.assertIn("# I am Mono", messages[2]["content"])
@@ -157,7 +157,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         transcript = handler.build_recent_transcript_message(messages, current_user_id="alice")
         content = transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"]
         self.assertIn("Current speaker: alice", content)
-        self.assertIn("Date:", content)
+        self.assertIn("Current time:", content)
 
     def test_build_recent_transcript_message_collapses_messages(self):
         handler = MessageHandler(
@@ -170,7 +170,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             Message(
                 type=MessageType.FUNCTION_CALL_OUTPUT,
                 role=RoleType.TOOL,
-                sender_id="query_memory",
+                sender_id="recall_memory",
                 content="Tool output preview",
                 tool_call=ToolCall(call_id="call-1", output="full tool output"),
             ),
@@ -234,10 +234,11 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         transcript = MessageHandler.build_recent_transcript_message(
             [bob, observation, alice],
             current_user_id="alice",
+            timezone=ZoneInfo("UTC"),
         )["content"]
-        alice_timestamp = datetime.fromtimestamp(alice.timestamp).strftime("%Y-%m-%d %H:%M:%S")
-        observation_timestamp = datetime.fromtimestamp(observation.timestamp).strftime("%Y-%m-%d %H:%M:%S")
-        bob_timestamp = datetime.fromtimestamp(bob.timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        alice_timestamp = "1970-01-01 00:00:01 UTC (+00:00)"
+        observation_timestamp = "1970-01-01 00:00:02 UTC (+00:00)"
+        bob_timestamp = "1970-01-01 00:00:03 UTC (+00:00)"
 
         self.assertIn("Recent Experience", transcript)
         self.assertNotIn("Recent Observations", transcript)
@@ -255,6 +256,18 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             transcript.index(f"[speaker=bob][timestamp={bob_timestamp}]"),
         )
         self.assertIn("what alice most recently said", transcript)
+
+    def test_transcript_timestamp_uses_explicit_timezone(self):
+        message = Message.create("你是谁", role=RoleType.USER, sender_id="小张")
+        message.timestamp = 1779093994.0
+
+        transcript = MessageHandler.build_recent_transcript_message(
+            [message],
+            current_user_id="小张",
+            timezone=ZoneInfo("Asia/Shanghai"),
+        )["content"]
+
+        self.assertIn("2026-05-18 16:46:34 Asia/Shanghai (+08:00)", transcript)
 
 
 if __name__ == "__main__":

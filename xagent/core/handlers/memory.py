@@ -10,10 +10,11 @@ from datetime import date, timedelta
 from typing import TYPE_CHECKING, List, Optional
 
 from ..config import AgentConfig
+from ...components.memory import MemoryKind, SubjectType
 from ...schemas import Message, MessageType
 
 if TYPE_CHECKING:
-    from ...components.memory import JournalLLMService, SQLiteMemory
+    from ...components.memory import ExperienceMemoryStore, JournalLLMService
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class MemoryHandler:
 
     def __init__(
         self,
-        memory: SQLiteMemory,
+        memory: ExperienceMemoryStore,
         llm_service: JournalLLMService,
         *,
         recent_days: Optional[int] = None,
@@ -59,20 +60,53 @@ class MemoryHandler:
     # ------------------------------------------------------------------
 
     async def get_recent_context(self, days: int | None = None) -> str:
-        """Read the last *days* memory entries and return them as a single string.
+        """Return a compact brief of durable facts plus recent episodic memory.
 
-        This is injected verbatim into the system prompt so the model always
-        has recent memory context without needing a tool call.
+        The prompt layer should receive reusable memory, not database-shaped rows.
         """
-        days = days or self.recent_days
-        entries = await self.memory.read_recent_entries(days=days)
-        if not entries:
+        active_days = self._positive_int(days, self.recent_days)
+        today = date.today()
+        recent_start = today - timedelta(days=max(active_days - 1, 0))
+
+        durable_result, recent_result = await asyncio.gather(
+            self.memory.recall_memory(
+                query="",
+                max_items=6,
+                kinds=[
+                    MemoryKind.PREFERENCE,
+                    MemoryKind.COMMITMENT,
+                    MemoryKind.PROJECT_STATE,
+                    MemoryKind.PERSON_FACT,
+                    MemoryKind.SEMANTIC_FACT,
+                    MemoryKind.PROCEDURE,
+                ],
+            ),
+            self.memory.recall_memory(
+                query="",
+                max_items=4,
+                time_range=(recent_start, today),
+                kinds=[MemoryKind.EPISODIC, MemoryKind.SUMMARY],
+            ),
+        )
+
+        durable_items = durable_result.get("items", [])
+        recent_items = recent_result.get("items", [])
+        if not durable_items and not recent_items:
             return ""
 
         sections: list[str] = []
-        for date_str, content in entries:
-            sections.append(f"[{date_str}]\n{content.strip()}")
-        return "\n\n".join(sections)
+        if durable_items:
+            sections.append("Durable facts:")
+            for item in durable_items:
+                sections.append(self._render_memory_brief_line(item))
+        if recent_items:
+            if sections:
+                sections.append("")
+            sections.append(f"Recent episodes ({active_days}d):")
+            for item in recent_items:
+                sections.append(self._render_memory_brief_line(item, include_time=True))
+
+        return "\n".join(sections).strip()
 
     # ------------------------------------------------------------------
     # Background diary write
@@ -149,6 +183,8 @@ class MemoryHandler:
             "sender_id": message.sender_id,
             "content": message.content,
             "metadata": metadata,
+            "event_id": metadata.get("event_id"),
+            "timestamp": message.timestamp,
         }
 
     @staticmethod
@@ -191,30 +227,157 @@ class MemoryHandler:
         task.add_done_callback(self._on_task_done)
 
     async def _do_diary_write(self, messages: List[dict]) -> None:
-        """LLM-format messages and append to today's daily file."""
+        """Synthesize experience and store one episodic summary plus durable facts."""
         today_str = date.today().isoformat()
         try:
-            content = await self.llm_service.format_diary_entry(
-                messages=messages,
-                journal_date=today_str,
-            )
-            if content.strip():
-                await self.memory.add_entry(content, source="auto_diary")
-                await self._update_people_profiles(messages, content, today_str)
-                logger.debug("Background diary write: %d msgs → %d chars", len(messages), len(content))
+            synthesis = await self._synthesize_memory(messages, today_str)
+            event_ids = [
+                int(message["event_id"])
+                for message in messages
+                if message.get("event_id")
+            ]
+
+            if synthesis["experience_summary"].strip():
+                await self.memory.remember(
+                    content=synthesis["experience_summary"],
+                    kind=MemoryKind.EPISODIC,
+                    subject_type=SubjectType.SELF,
+                    subject_key="self",
+                    title=f"Experience on {today_str}",
+                    salience=0.55,
+                    confidence=0.75,
+                    observed_at=date.fromisoformat(today_str),
+                    metadata={"source": synthesis["source"], "journal_date": today_str},
+                    evidence_event_ids=event_ids,
+                    evidence_note=synthesis["experience_summary"][:500],
+                    extractor_model=getattr(self.llm_service, "model", None),
+                )
+
+            for fact in synthesis["facts"]:
+                await self._remember_fact_update(
+                    fact,
+                    messages=messages,
+                    journal_date=today_str,
+                )
+
+            if synthesis["experience_summary"].strip() or synthesis["facts"]:
+                logger.debug(
+                    "Background memory synthesis: %d msgs -> %d chars, %d facts",
+                    len(messages),
+                    len(synthesis["experience_summary"]),
+                    len(synthesis["facts"]),
+                )
         except Exception as exc:
             logger.error("Background diary write failed: %s", exc)
+
+    async def _synthesize_memory(self, messages: List[dict], journal_date: str) -> dict:
+        synthesizer = getattr(self.llm_service, "synthesize_memory", None)
+        if synthesizer is None:
+            content = await self.llm_service.format_diary_entry(
+                messages=messages,
+                journal_date=journal_date,
+            )
+            facts = await self._extract_legacy_people_facts(messages, content, journal_date)
+            return {
+                "experience_summary": content,
+                "facts": facts,
+                "source": "auto_diary",
+            }
+
+        synthesis = await synthesizer(messages=messages, journal_date=journal_date)
+        if isinstance(synthesis, dict):
+            experience_summary = synthesis.get("experience_summary") or ""
+            raw_facts = synthesis.get("facts", []) or []
+        else:
+            experience_summary = getattr(synthesis, "experience_summary", "") or ""
+            raw_facts = getattr(synthesis, "facts", []) or []
+        facts: list[dict] = []
+        for fact in raw_facts:
+            if hasattr(fact, "model_dump"):
+                facts.append(fact.model_dump())
+            elif isinstance(fact, dict):
+                facts.append(dict(fact))
+        return {
+            "experience_summary": str(experience_summary).strip(),
+            "facts": facts,
+            "source": "memory_synthesis",
+        }
+
+    async def _extract_legacy_people_facts(
+        self,
+        messages: List[dict],
+        diary_entry: str,
+        journal_date: str,
+    ) -> list[dict]:
+        return await self._update_people_profiles(
+            messages,
+            diary_entry,
+            journal_date,
+            persist=False,
+        )
+
+    async def _remember_fact_update(
+        self,
+        fact: dict,
+        *,
+        messages: List[dict],
+        journal_date: str,
+    ) -> None:
+        kind = str(fact.get("kind") or "").strip()
+        subject_type = str(fact.get("subject_type") or "").strip()
+        subject_key = str(fact.get("subject_key") or "").strip()
+        content = str(fact.get("content") or "").strip()
+        evidence = str(fact.get("evidence") or "").strip()
+        if (
+            kind not in MemoryKind.VALUES
+            or subject_type not in SubjectType.VALUES
+            or not subject_key
+            or not content
+            or not evidence
+        ):
+            return
+
+        event_ids = [
+            int(message["event_id"])
+            for message in messages
+            if message.get("event_id")
+            and (
+                subject_type != SubjectType.PERSON
+                or str(message.get("sender_id") or "") == subject_key
+            )
+        ]
+        title = str(fact.get("title") or "").strip() or self._default_fact_title(subject_key, content)
+        metadata = {"source": fact.get("source") or "memory_synthesis"}
+        display_name = str(fact.get("display_name") or "").strip()
+        if display_name:
+            metadata["display_name"] = display_name
+
+        await self.memory.remember(
+            content=content,
+            kind=kind,
+            subject_type=subject_type,
+            subject_key=subject_key,
+            title=title,
+            salience=self._clamp_score(fact.get("salience"), default=0.7),
+            confidence=self._clamp_score(fact.get("confidence"), default=0.85),
+            observed_at=date.fromisoformat(journal_date),
+            metadata=metadata,
+            evidence_event_ids=event_ids,
+            evidence_note=evidence,
+            extractor_model=getattr(self.llm_service, "model", None),
+        )
 
     async def _update_people_profiles(
         self,
         messages: List[dict],
         diary_entry: str,
         journal_date: str,
-    ) -> None:
+        *,
+        persist: bool = True,
+    ) -> list[dict]:
         extractor = getattr(self.llm_service, "extract_people_profile_updates", None)
-        writer = getattr(self.memory, "add_people_facts", None)
-        if extractor is None or writer is None:
-            return
+        if extractor is None:
+            return []
 
         try:
             profile_updates = await extractor(
@@ -223,6 +386,7 @@ class MemoryHandler:
                 journal_date=journal_date,
             )
             updates = getattr(profile_updates, "updates", []) or []
+            collected: list[dict] = []
             for update in updates:
                 update_data = update.model_dump() if hasattr(update, "model_dump") else dict(update)
                 person_key = str(update_data.get("person_key") or "").strip()
@@ -230,14 +394,47 @@ class MemoryHandler:
                 evidence = str(update_data.get("evidence") or "").strip()
                 if not person_key or not fact or not evidence:
                     continue
-                await writer(
-                    person_key=person_key,
-                    facts=[update_data],
-                    display_name=str(update_data.get("display_name") or person_key).strip(),
+                fact_payload = {
+                    "kind": MemoryKind.PERSON_FACT,
+                    "subject_type": SubjectType.PERSON,
+                    "subject_key": person_key,
+                    "title": f"{str(update_data.get('display_name') or person_key).strip()}: {fact[:80]}",
+                    "content": fact,
+                    "evidence": evidence,
+                    "source": update_data.get("source") or "people_profile_extractor",
+                    "display_name": update_data.get("display_name") or person_key,
+                    "salience": 0.7,
+                    "confidence": 0.85,
+                }
+                collected.append(fact_payload)
+                if not persist:
+                    continue
+                event_ids = [
+                    int(message["event_id"])
+                    for message in messages
+                    if message.get("event_id") and str(message.get("sender_id") or "") == person_key
+                ]
+                await self.memory.remember(
+                    content=fact,
+                    kind=MemoryKind.PERSON_FACT,
+                    subject_type=SubjectType.PERSON,
+                    subject_key=person_key,
+                    title=f"{str(update_data.get('display_name') or person_key).strip()}: {fact[:80]}",
+                    salience=0.7,
+                    confidence=0.85,
                     observed_at=date.fromisoformat(journal_date),
+                    metadata={
+                        "source": update_data.get("source") or "people_profile_extractor",
+                        "display_name": update_data.get("display_name") or person_key,
+                    },
+                    evidence_event_ids=event_ids,
+                    evidence_note=evidence,
+                    extractor_model=getattr(self.llm_service, "model", None),
                 )
+            return collected
         except Exception as exc:
             logger.warning("People profile update skipped: %s", exc)
+            return []
 
     # ------------------------------------------------------------------
     # Summary auto-generation
@@ -260,22 +457,14 @@ class MemoryHandler:
             last_month, last_year = today.month - 1, today.year
         first = date(last_year, last_month, 1)
         last = date(last_year, last_month, calendar.monthrange(last_year, last_month)[1])
-        if not await self.memory.summary_exists(
-            period_type="monthly",
-            period_start=first,
-            period_end=last,
-        ):
+        if not await self._summary_exists("monthly", first, last):
             await self._generate_monthly(last_year, last_month)
 
         # Yearly: check last year
         last_year_val = today.year - 1
         year_start = date(last_year_val, 1, 1)
         year_end = date(last_year_val, 12, 31)
-        if not await self.memory.summary_exists(
-            period_type="yearly",
-            period_start=year_start,
-            period_end=year_end,
-        ):
+        if not await self._summary_exists("yearly", year_start, year_end):
             await self._generate_yearly(last_year_val)
 
     async def generate_previous_weekly_summary_if_missing(
@@ -289,31 +478,19 @@ class MemoryHandler:
         if week_end >= current_day:
             return False
 
-        if await self.memory.summary_exists(
-            period_type="weekly",
-            period_start=week_start,
-            period_end=week_end,
-        ):
+        if await self._summary_exists("weekly", week_start, week_end):
             return False
 
         return await self._generate_weekly(week_start, week_end)
 
     async def _generate_weekly(self, week_start: date, week_end: date) -> bool:
-        source = await self.memory.search_date_range(
-            start=week_start.isoformat(),
-            end=week_end.isoformat(),
-        )
+        source = await self._memory_source_for_range(week_start, week_end)
         if not source.strip():
             return False
         label = f"{week_start.isoformat()} to {week_end.isoformat()}"
         summary = await self.llm_service.generate_summary(source, "weekly", label)
         if summary:
-            await self.memory.upsert_summary(
-                period_type="weekly",
-                period_start=week_start,
-                period_end=week_end,
-                content=summary,
-            )
+            await self._write_summary("weekly", week_start, week_end, summary)
             logger.info("Generated weekly summary: %s", label)
             return True
         return False
@@ -322,48 +499,59 @@ class MemoryHandler:
         import calendar
         first = date(year, month, 1)
         last = date(year, month, calendar.monthrange(year, month)[1])
-        source = await self.memory.search_date_range(
-            start=first.isoformat(),
-            end=last.isoformat(),
-        )
+        source = await self._memory_source_for_range(first, last)
         if not source.strip():
             return
         label = f"{year}-{month:02d}"
         summary = await self.llm_service.generate_summary(source, "monthly", label)
         if summary:
-            await self.memory.upsert_summary(
-                period_type="monthly",
-                period_start=first,
-                period_end=last,
-                content=summary,
-            )
+            await self._write_summary("monthly", first, last, summary)
             logger.info("Generated monthly summary: %s", label)
 
     async def _generate_yearly(self, year: int) -> None:
         year_start = date(year, 1, 1)
         year_end = date(year, 12, 31)
-        source = await self.memory.read_summaries(
-            period_type="monthly",
-            period_start=year_start,
-            period_end=year_end,
-        )
-        if not source.strip():
-            source = await self.memory.search_date_range(
-                start=year_start.isoformat(),
-                end=year_end.isoformat(),
-            )
+        source = await self._memory_source_for_range(year_start, year_end)
         if not source.strip():
             return
         label = str(year)
         summary = await self.llm_service.generate_summary(source, "yearly", label)
         if summary:
-            await self.memory.upsert_summary(
-                period_type="yearly",
-                period_start=year_start,
-                period_end=year_end,
-                content=summary,
-            )
+            await self._write_summary("yearly", year_start, year_end, summary)
             logger.info("Generated yearly summary: %s", label)
+
+    async def _summary_exists(self, summary_type: str, period_start: date, period_end: date) -> bool:
+        return await self.memory.summary_exists(
+            summary_type=summary_type,
+            period_start=period_start,
+            period_end=period_end,
+            scope_type=SubjectType.SELF,
+            scope_key="self",
+        )
+
+    async def _memory_source_for_range(self, period_start: date, period_end: date) -> str:
+        result = await self.memory.recall_memory(
+            query="",
+            time_range=(period_start, period_end),
+            kinds=[MemoryKind.EPISODIC, MemoryKind.SEMANTIC_FACT, MemoryKind.PREFERENCE, MemoryKind.COMMITMENT],
+            max_items=200,
+        )
+        parts = [
+            f"# {item.get('kind')} {item.get('observed_at')}\n\n{item.get('content')}"
+            for item in result.get("items", [])
+            if str(item.get("content") or "").strip()
+        ]
+        return "\n\n".join(parts)
+
+    async def _write_summary(self, summary_type: str, period_start: date, period_end: date, content: str) -> None:
+        await self.memory.add_summary(
+            summary_type=summary_type,
+            scope_type=SubjectType.SELF,
+            scope_key="self",
+            period_start=period_start,
+            period_end=period_end,
+            content=content,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -430,6 +618,32 @@ class MemoryHandler:
         except (TypeError, ValueError):
             return default
         return parsed if parsed > 0 else default
+
+    @staticmethod
+    def _render_memory_brief_line(item: dict, *, include_time: bool = False) -> str:
+        subject = item.get("subject", {}) or {}
+        subject_type = subject.get("type") or "subject"
+        subject_key = subject.get("key") or "unknown"
+        parts = [f"[{item.get('kind') or 'memory'}]", f"[{subject_type}:{subject_key}]"]
+        if include_time:
+            observed_at = item.get("observed_at")
+            if observed_at:
+                parts.append(f"[{str(observed_at)[:10]}]")
+        content = " ".join(str(item.get("content") or "").strip().split())
+        return f"- {''.join(parts)} {content}".strip()
+
+    @staticmethod
+    def _default_fact_title(subject_key: str, content: str) -> str:
+        snippet = " ".join(content.strip().split())[:80]
+        return f"{subject_key}: {snippet}" if subject_key else snippet
+
+    @staticmethod
+    def _clamp_score(value: object, *, default: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            parsed = float(default)
+        return min(1.0, max(0.0, parsed))
 
     @staticmethod
     def _positive_float(value: Optional[float], default: float) -> float:

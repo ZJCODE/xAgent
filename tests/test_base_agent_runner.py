@@ -56,7 +56,7 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
 
             self.assertEqual(
                 runner.message_storage.path,
-                str(resolved_tmpdir / "messages" / "messages.sqlite3"),
+                str(resolved_tmpdir / "memory" / "xagent_memory.sqlite3"),
             )
             self.assertFalse(hasattr(runner, "memory_storage"))
 

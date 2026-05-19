@@ -10,7 +10,7 @@ from xagent.interfaces.server import AgentHTTPServer
 
 class FakeMessageStorage:
     def get_stream_info(self):
-        return {"path": "messages.sqlite3"}
+        return {"path": "xagent_memory.sqlite3"}
 
     async def get_message_count(self):
         return 0
@@ -27,7 +27,7 @@ class IdentityAgent:
         self.system_prompt = identity
         self.message_handler = SimpleNamespace(system_prompt=identity)
         self.message_storage = FakeMessageStorage()
-        self.sqlite_memory = SimpleNamespace(path=str(memory_db))
+        self.memory_store = SimpleNamespace(path=str(memory_db))
 
     @property
     def identity(self) -> str:
@@ -46,7 +46,7 @@ class AgentIdentityApiTests(unittest.IsolatedAsyncioTestCase):
     def _server(self, root: Path, identity: str) -> AgentHTTPServer:
         memory_root = root / "memory"
         memory_root.mkdir()
-        memory_db = memory_root / "memory.sqlite3"
+        memory_db = memory_root / "xagent_memory.sqlite3"
         identity_path = root / "identity.md"
         identity_path.write_text(f"{identity}\n", encoding="utf-8")
 
@@ -72,7 +72,7 @@ class AgentIdentityApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["system_prompt"], payload["identity"])
             self.assertEqual(payload["identity_file"], "identity.md")
             self.assertEqual(payload["identity_path"], str((root / "identity.md").resolve()))
-            self.assertEqual(payload["memory_db"], str((root / "memory" / "memory.sqlite3").resolve()))
+            self.assertEqual(payload["memory_db"], str((root / "memory" / "xagent_memory.sqlite3").resolve()))
             self.assertTrue(payload["identity_editable"])
 
     async def test_update_identity_saves_file_and_runtime_agent(self):

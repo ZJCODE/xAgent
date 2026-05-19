@@ -9,7 +9,7 @@ from xagent.schemas import Message, MessageType, RoleType
 class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
     async def test_clear_messages_resets_stream(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "messages.sqlite3"
+            db_path = Path(tmpdir) / "xagent_memory.sqlite3"
             storage = MessageStorageLocal(path=str(db_path))
             await storage.add_messages([
                 Message.create("first", role=RoleType.USER, sender_id="alice"),
@@ -22,7 +22,7 @@ class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_context_event_roundtrips_with_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "messages.sqlite3"
+            db_path = Path(tmpdir) / "xagent_memory.sqlite3"
             storage = MessageStorageLocal(path=str(db_path))
             event = Message.create_context_event(
                 "看到有人靠近",
@@ -44,24 +44,24 @@ class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_structured_columns_are_queryable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "messages.sqlite3"
+            db_path = Path(tmpdir) / "xagent_memory.sqlite3"
             storage = MessageStorageLocal(path=str(db_path))
             await storage.add_messages(
                 Message.create("project detail", role=RoleType.USER, sender_id="alice")
             )
 
             result = await storage.query_sql(
-                "SELECT role, type, sender_id, content FROM messages WHERE content LIKE '%project%'"
+                "SELECT role, event_type, speaker_id, content FROM events WHERE content LIKE '%project%'"
             )
 
             self.assertEqual(result["rows"][0]["role"], "user")
-            self.assertEqual(result["rows"][0]["type"], "message")
-            self.assertEqual(result["rows"][0]["sender_id"], "alice")
+            self.assertEqual(result["rows"][0]["event_type"], "message")
+            self.assertEqual(result["rows"][0]["speaker_id"], "alice")
 
     async def test_readonly_query_rejects_writes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "messages.sqlite3"
+            db_path = Path(tmpdir) / "xagent_memory.sqlite3"
             storage = MessageStorageLocal(path=str(db_path))
 
             with self.assertRaisesRegex(ValueError, "Only SELECT or WITH"):
-                await storage.query_sql("DELETE FROM messages")
+                await storage.query_sql("DELETE FROM events")

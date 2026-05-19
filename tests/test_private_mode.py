@@ -308,15 +308,19 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
         """Private mode should remove write memory tools but keep read-only query tools."""
         main_storage = MessageStoragePrivateTemp()
         tools = {
-            "write_memory": lambda: None,
-            "query_memory": lambda: None,
-            "query_messages": lambda: None,
+            "remember": lambda: None,
+            "recall_memory": lambda: None,
+            "search_history": lambda: None,
+            "correct_memory": lambda: None,
+            "forget_memory": lambda: None,
             "custom_tool": lambda: None,
         }
         tool_specs = [
-            {"type": "function", "function": {"name": "write_memory"}},
-            {"type": "function", "function": {"name": "query_memory"}},
-            {"type": "function", "function": {"name": "query_messages"}},
+            {"type": "function", "function": {"name": "remember"}},
+            {"type": "function", "function": {"name": "recall_memory"}},
+            {"type": "function", "function": {"name": "search_history"}},
+            {"type": "function", "function": {"name": "correct_memory"}},
+            {"type": "function", "function": {"name": "forget_memory"}},
             {"type": "function", "function": {"name": "custom_tool"}},
         ]
 
@@ -348,24 +352,30 @@ class AgentPrivateModeTests(unittest.IsolatedAsyncioTestCase):
         )
 
         spec_names = {s["function"]["name"] for s in model_client.received_tool_specs}
-        self.assertIn("query_memory", spec_names)
-        self.assertIn("query_messages", spec_names)
+        self.assertIn("recall_memory", spec_names)
+        self.assertIn("search_history", spec_names)
         self.assertIn("custom_tool", spec_names)
-        self.assertNotIn("write_memory", spec_names)
+        self.assertNotIn("remember", spec_names)
+        self.assertNotIn("correct_memory", spec_names)
+        self.assertNotIn("forget_memory", spec_names)
 
     async def test_memory_disabled_filters_all_memory_tools(self):
         """Disabling memory should remove read and write memory tools."""
         main_storage = MessageStoragePrivateTemp()
         tools = {
-            "write_memory": lambda: None,
-            "query_memory": lambda: None,
-            "query_messages": lambda: None,
+            "remember": lambda: None,
+            "recall_memory": lambda: None,
+            "search_history": lambda: None,
+            "correct_memory": lambda: None,
+            "forget_memory": lambda: None,
             "custom_tool": lambda: None,
         }
         tool_specs = [
-            {"type": "function", "function": {"name": "write_memory"}},
-            {"type": "function", "function": {"name": "query_memory"}},
-            {"type": "function", "function": {"name": "query_messages"}},
+            {"type": "function", "function": {"name": "remember"}},
+            {"type": "function", "function": {"name": "recall_memory"}},
+            {"type": "function", "function": {"name": "search_history"}},
+            {"type": "function", "function": {"name": "correct_memory"}},
+            {"type": "function", "function": {"name": "forget_memory"}},
             {"type": "function", "function": {"name": "custom_tool"}},
         ]
 

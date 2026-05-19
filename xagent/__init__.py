@@ -15,9 +15,9 @@ __all__ = [
     "Message",
 
     # Database
+    "ExperienceMemoryStore",
     "MessageStorageBase",
     "MessageStorageLocal",
-    "SQLiteMemory",
     
     # Utilities
     "function_tool",
@@ -37,8 +37,8 @@ _EXPORTS = {
     "function_tool": (".utils", "function_tool"),
     "run_command": (".tools", "run_command"),
     "MessageStorageBase": (".components", "MessageStorageBase"),
+    "ExperienceMemoryStore": (".components", "ExperienceMemoryStore"),
     "MessageStorageLocal": (".components", "MessageStorageLocal"),
-    "SQLiteMemory": (".components", "SQLiteMemory"),
 }
 
 

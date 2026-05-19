@@ -74,9 +74,7 @@
       border: 1px solid var(--border-soft);
       backdrop-filter: blur(14px);
     }
-    .dark .ghost-button {
-      background: rgba(24, 24, 27, 0.72);
-    }
+    .dark .ghost-button { background: rgba(24, 24, 27, 0.72); }
     .nav-link {
       padding: 0.35rem 0.85rem;
       border-radius: 9999px;
@@ -84,84 +82,136 @@
       font-weight: 500;
       color: var(--text-secondary);
       transition: all 0.2s ease;
+      text-decoration: none;
     }
     .nav-link:hover { color: var(--text-primary); background: rgba(24, 24, 27, 0.05); }
     .dark .nav-link:hover { background: rgba(255, 255, 255, 0.06); }
-    .nav-link.active {
-      color: var(--text-primary);
-      background: rgba(24, 24, 27, 0.08);
-    }
+    .nav-link.active { color: var(--text-primary); background: rgba(24, 24, 27, 0.08); }
     .dark .nav-link.active { background: rgba(255, 255, 255, 0.1); }
-    .search-input {
+    .metric-card {
+      border-radius: 1.25rem;
+      padding: 1rem 1.1rem;
+      background: rgba(255, 255, 255, 0.62);
+      border: 1px solid var(--border-soft);
+      box-shadow: var(--shadow-card);
+    }
+    .dark .metric-card { background: rgba(24, 24, 27, 0.52); }
+    .metric-label {
+      font-size: 0.68rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      margin-bottom: 0.35rem;
+    }
+    .metric-value {
+      font-size: 1.65rem;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .collection-button {
       width: 100%;
-      padding: 0.8rem 1rem;
       border-radius: 1rem;
+      padding: 0.8rem 0.9rem;
+      border: 1px solid var(--border-soft);
+      background: rgba(255, 255, 255, 0.42);
+      transition: all 0.18s ease;
+      text-align: left;
+    }
+    .dark .collection-button { background: rgba(255, 255, 255, 0.04); }
+    .collection-button:hover, .collection-button.active {
+      transform: translateY(-1px);
+      border-color: var(--border-strong);
+      background: rgba(24, 24, 27, 0.06);
+    }
+    .dark .collection-button:hover, .dark .collection-button.active {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .record-card {
+      border-radius: 1.2rem;
+      padding: 1rem 1.1rem;
       border: 1px solid var(--border-soft);
       background: rgba(255, 255, 255, 0.68);
+      box-shadow: var(--shadow-card);
+      transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+    .dark .record-card { background: rgba(24, 24, 27, 0.5); }
+    .record-card:hover, .record-card.active {
+      transform: translateY(-1px);
+      border-color: var(--border-strong);
+    }
+    .record-card.active { background: rgba(24, 24, 27, 0.06); }
+    .dark .record-card.active { background: rgba(255, 255, 255, 0.08); }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.18rem 0.55rem;
+      border-radius: 9999px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: rgba(24, 24, 27, 0.08);
       color: var(--text-primary);
     }
-    .dark .search-input {
-      background: rgba(24, 24, 27, 0.72);
+    .dark .badge { background: rgba(255, 255, 255, 0.12); }
+    .badge-green { background: rgba(5, 150, 105, 0.12); color: #047857; }
+    .dark .badge-green { background: rgba(16, 185, 129, 0.18); color: #d1fae5; }
+    .badge-blue { background: rgba(37, 99, 235, 0.1); color: #1d4ed8; }
+    .dark .badge-blue { background: rgba(59, 130, 246, 0.18); color: #dbeafe; }
+    .detail-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
     }
-    .search-result {
-      padding: 0.75rem;
-      border-radius: 0.9rem;
+    .detail-table th,
+    .detail-table td {
+      padding: 0.72rem 0;
+      border-bottom: 1px solid var(--border-soft);
+      vertical-align: top;
+    }
+    .detail-table th {
+      width: 8.5rem;
+      padding-right: 1rem;
+      text-align: left;
+      color: var(--text-secondary);
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .sql-input {
+      width: 100%;
+      min-height: 9rem;
+      resize: vertical;
+      border-radius: 1rem;
       border: 1px solid var(--border-soft);
-      cursor: pointer;
-      transition: background 0.15s ease;
+      background: rgba(255, 255, 255, 0.54);
+      color: var(--text-primary);
+      outline: none;
+      padding: 0.9rem 1rem;
+      font: 0.82rem/1.6 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     }
-    .search-result:hover {
-      background: rgba(24, 24, 27, 0.05);
+    .dark .sql-input { background: rgba(255, 255, 255, 0.04); }
+    .sql-input:focus {
+      border-color: rgba(59, 130, 246, 0.45);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
     }
-    .dark .search-result:hover {
-      background: rgba(255, 255, 255, 0.06);
+    .code-text {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      line-height: 1.55;
+      word-break: break-word;
     }
-    .tree-item {
-      cursor: pointer;
-      padding: 0.4rem 0.65rem;
-      border-radius: 0.75rem;
-      font-size: 0.85rem;
-      transition: background 0.15s;
-      display: flex;
-      align-items: center;
-      gap: 0.45rem;
-    }
-    .tree-item:hover { background: rgba(24, 24, 27, 0.05); }
-    .dark .tree-item:hover { background: rgba(255, 255, 255, 0.06); }
-    .tree-item.selected { background: rgba(24, 24, 27, 0.1); font-weight: 600; }
-    .dark .tree-item.selected { background: rgba(255, 255, 255, 0.12); }
-    .tree-children { padding-left: 1rem; }
-    .md-content p { margin: 0.5em 0; }
-    .md-content pre {
-      background: #111827; color: #f3f4f6;
-      padding: 0.9em 1em; border-radius: 1rem;
-      overflow-x: auto; margin: 0.75em 0;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-    }
-    .md-content :not(pre) > code {
-      background: rgba(24, 24, 27, 0.08);
-      padding: 0.15em 0.4em; border-radius: 0.45rem;
-    }
-    .dark .md-content :not(pre) > code { background: rgba(255, 255, 255, 0.1); }
-    .md-content ul, .md-content ol { padding-left: 1.25rem; margin: 0.5em 0; }
-    .md-content ul { list-style: disc; }
-    .md-content ol { list-style: decimal; }
-    .md-content a { text-decoration: underline; color: #2563eb; }
-    .dark .md-content a { color: #60a5fa; }
-    .md-content h2 { font-size: 1.15rem; font-weight: 700; margin: 1.2em 0 0.4em; }
-    .md-content h3 { font-size: 1rem; font-weight: 600; margin: 1em 0 0.3em; }
-    .md-content hr { border: none; border-top: 1px solid var(--border-soft); margin: 1.2em 0; }
-    .md-content img { max-width: 100%; border-radius: 0.9rem; margin: 0.65em 0; }
   </style>
 </head>
 <body class="h-full text-gray-900 dark:text-gray-100">
   <div class="hero-grid fixed inset-0 pointer-events-none opacity-70"></div>
-  <div class="relative h-full max-w-6xl mx-auto px-3 sm:px-5 py-4 sm:py-6 flex flex-col gap-4">
-    <section class="panel-surface flex-1 min-h-0 rounded-[32px] overflow-hidden flex flex-col">
-      <!-- Header -->
+  <div class="relative min-h-full max-w-7xl mx-auto px-3 sm:px-5 py-4 sm:py-6 flex flex-col gap-4">
+    <section class="panel-surface rounded-[32px] overflow-hidden">
       <header class="px-4 sm:px-6 py-4 sm:py-5 border-b border-black/5 dark:border-white/10">
-        <div class="flex items-center justify-between gap-3">
-          <div class="flex items-center gap-4">
+        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div class="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 min-w-0">
             <h1 class="text-xl sm:text-2xl font-semibold tracking-[-0.03em]">xAgent Memory</h1>
             <nav class="flex flex-wrap items-center gap-1">
               <a href="/" class="nav-link">Chat</a>
@@ -172,243 +222,562 @@
             </nav>
           </div>
           <div class="flex items-center gap-2">
-            <button id="refreshBtn" class="ghost-button text-xs sm:text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition inline-flex items-center gap-1.5">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M4 9a9 9 0 0115.4-5.4M20 15a9 9 0 01-15.4 5.4"/></svg>
-              Refresh
-            </button>
+            <button id="refreshBtn" class="ghost-button text-xs sm:text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Refresh</button>
             <button id="toggleThemeBtn" class="ghost-button text-sm px-3 py-1.5 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Theme</button>
           </div>
         </div>
-        <!-- Agent info bar -->
         <div id="agentInfo" class="mt-3 text-xs text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-4 gap-y-1"></div>
-        <div class="mt-3 flex flex-col sm:flex-row gap-2">
-          <input id="searchInput" type="text" class="search-input" placeholder="Search memory database content" />
-          <button id="searchBtn" class="ghost-button px-4 py-2 rounded-2xl text-sm">Search</button>
-          <button id="clearSearchBtn" class="ghost-button px-4 py-2 rounded-2xl text-sm">Clear</button>
-        </div>
       </header>
 
-      <!-- Body: Tree + Content -->
-      <div class="flex-1 min-h-0 flex overflow-hidden">
-        <!-- Tree sidebar -->
-        <aside id="treeSidebar" class="w-64 shrink-0 border-r border-black/5 dark:border-white/10 overflow-y-auto p-3">
-          <div id="searchResults" class="hidden space-y-2 mb-3"></div>
-          <div class="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-2 px-2">Tables</div>
-          <div id="treeContainer"></div>
-          <div id="treeEmpty" class="hidden text-sm text-gray-400 dark:text-gray-500 text-center py-8">No memory rows found</div>
-        </aside>
-        <!-- Content viewer -->
-        <main class="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
-          <div id="contentPlaceholder" class="h-full flex items-center justify-center text-gray-400 dark:text-gray-500 text-sm">
-            <div class="text-center">
-              <svg class="mx-auto w-12 h-12 mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
-              </svg>
-              <p>Select a table or row to view memory data</p>
+      <main class="px-3 sm:px-6 py-4 sm:py-6 space-y-4">
+        <section id="statsGrid" class="grid grid-cols-2 lg:grid-cols-5 gap-3"></section>
+
+        <section class="grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)_340px] gap-4 items-start">
+          <aside class="panel-muted rounded-[24px] p-3 sm:p-4 space-y-4">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-sm font-semibold">Collections</h2>
+              <span id="previewLimit" class="text-xs text-gray-500 dark:text-gray-400"></span>
             </div>
-          </div>
-          <div id="contentViewer" class="hidden">
-            <div class="flex items-center justify-between mb-4">
-              <h2 id="contentTitle" class="text-lg font-semibold tracking-tight"></h2>
-              <span id="contentMeta" class="text-xs text-gray-400 dark:text-gray-500"></span>
+            <div id="collectionNav" class="space-y-2"></div>
+            <div id="breakdowns" class="space-y-3 pt-2"></div>
+          </aside>
+
+          <section class="min-w-0 space-y-3">
+            <div class="panel-muted rounded-[24px] p-3 sm:p-4">
+              <div class="flex flex-col md:flex-row md:items-center gap-3">
+                <div class="flex-1 min-w-0">
+                  <label class="sr-only" for="searchInput">Search records</label>
+                  <input id="searchInput" class="w-full rounded-2xl border border-black/10 dark:border-white/10 bg-white/60 dark:bg-white/[0.04] px-4 py-2.5 text-sm outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/40" placeholder="Search current collection" />
+                </div>
+                <label class="sr-only" for="sortSelect">Sort records</label>
+                <select id="sortSelect" class="rounded-2xl border border-black/10 dark:border-white/10 bg-white/60 dark:bg-white/[0.04] px-3 py-2.5 text-sm outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/40">
+                  <option value="newest">Newest</option>
+                  <option value="oldest">Oldest</option>
+                  <option value="salience">Salience</option>
+                  <option value="confidence">Confidence</option>
+                </select>
+              </div>
             </div>
-            <article id="contentBody" class="md-content leading-relaxed"></article>
+            <div class="flex items-center justify-between gap-3 px-1">
+              <div>
+                <h2 id="collectionTitle" class="text-lg font-semibold tracking-[-0.02em]">Memories</h2>
+                <p id="collectionMeta" class="text-xs text-gray-500 dark:text-gray-400 mt-1"></p>
+              </div>
+              <span id="collectionCount" class="badge badge-blue"></span>
+            </div>
+            <div id="recordList" class="space-y-3"></div>
+            <div id="emptyState" class="hidden panel-muted rounded-[24px] p-10 text-center text-sm text-gray-500 dark:text-gray-400">No records</div>
+          </section>
+
+          <aside class="panel-muted rounded-[24px] p-4 lg:sticky lg:top-6 min-w-0">
+            <div class="flex items-center justify-between gap-3 mb-3">
+              <h2 class="text-sm font-semibold">Inspector</h2>
+              <span id="selectedBadge" class="badge"></span>
+            </div>
+            <div id="inspector" class="text-sm text-gray-600 dark:text-gray-300"></div>
+          </aside>
+        </section>
+
+        <section class="panel-muted rounded-[24px] overflow-hidden">
+          <button id="toggleSqlBtn" class="w-full px-4 sm:px-5 py-4 flex items-center justify-between gap-3 text-left hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition">
+            <span class="font-semibold">SQL Lab</span>
+            <span id="sqlToggleText" class="text-xs text-gray-500 dark:text-gray-400">Open</span>
+          </button>
+          <div id="sqlPanel" class="hidden border-t border-black/5 dark:border-white/10 p-4 sm:p-5 space-y-4">
+            <textarea id="sqlInput" class="sql-input" spellcheck="false">SELECT kind, subject_type, subject_key, title, updated_at FROM memory_items ORDER BY updated_at DESC LIMIT 20</textarea>
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div id="sqlFeedback" class="text-xs text-gray-500 dark:text-gray-400"></div>
+              <div class="flex items-center gap-2">
+                <label for="maxRowsInput" class="text-xs text-gray-500 dark:text-gray-400">Rows</label>
+                <input id="maxRowsInput" type="number" min="1" max="200" value="50" class="w-20 rounded-xl border border-black/10 dark:border-white/10 bg-white/60 dark:bg-white/[0.04] px-3 py-2 text-sm outline-none" />
+                <button id="runSqlBtn" class="ghost-button text-sm px-4 py-2 rounded-full hover:bg-white/80 dark:hover:bg-gray-900 transition">Run</button>
+              </div>
+            </div>
+            <div id="sqlResult" class="overflow-x-auto"></div>
           </div>
-        </main>
-      </div>
+        </section>
+      </main>
     </section>
   </div>
 
 <script>
 (function() {
   const THEME_KEY = 'xagent_theme';
-  const searchResultsEl = document.getElementById('searchResults');
-  const searchInputEl = document.getElementById('searchInput');
+  const COLLECTIONS = [
+    { key: 'memories', label: 'Memories', description: 'Durable items' },
+    { key: 'events', label: 'Events', description: 'Raw timeline' },
+    { key: 'people', label: 'People', description: 'Subjects' },
+    { key: 'summaries', label: 'Summaries', description: 'Rollups' },
+    { key: 'evidence', label: 'Evidence', description: 'Grounding' },
+    { key: 'revisions', label: 'Revisions', description: 'Lifecycle' },
+    { key: 'policies', label: 'Policies', description: 'Retention' }
+  ];
+  const state = {
+    dashboard: null,
+    agentInfoHtml: '',
+    activeCollection: 'memories',
+    selectedIndex: 0,
+    query: '',
+    sort: 'newest',
+    sqlOpen: false
+  };
 
-  // ── Theme ──
+  const els = {
+    agentInfo: document.getElementById('agentInfo'),
+    refreshBtn: document.getElementById('refreshBtn'),
+    toggleThemeBtn: document.getElementById('toggleThemeBtn'),
+    statsGrid: document.getElementById('statsGrid'),
+    previewLimit: document.getElementById('previewLimit'),
+    collectionNav: document.getElementById('collectionNav'),
+    breakdowns: document.getElementById('breakdowns'),
+    searchInput: document.getElementById('searchInput'),
+    sortSelect: document.getElementById('sortSelect'),
+    collectionTitle: document.getElementById('collectionTitle'),
+    collectionMeta: document.getElementById('collectionMeta'),
+    collectionCount: document.getElementById('collectionCount'),
+    recordList: document.getElementById('recordList'),
+    emptyState: document.getElementById('emptyState'),
+    inspector: document.getElementById('inspector'),
+    selectedBadge: document.getElementById('selectedBadge'),
+    toggleSqlBtn: document.getElementById('toggleSqlBtn'),
+    sqlToggleText: document.getElementById('sqlToggleText'),
+    sqlPanel: document.getElementById('sqlPanel'),
+    sqlInput: document.getElementById('sqlInput'),
+    maxRowsInput: document.getElementById('maxRowsInput'),
+    runSqlBtn: document.getElementById('runSqlBtn'),
+    sqlFeedback: document.getElementById('sqlFeedback'),
+    sqlResult: document.getElementById('sqlResult')
+  };
+
   function initTheme() {
     const saved = localStorage.getItem(THEME_KEY);
     if (saved === 'dark' || (!saved && matchMedia('(prefers-color-scheme: dark)').matches)) {
       document.documentElement.classList.add('dark');
     }
   }
-  initTheme();
-  document.getElementById('toggleThemeBtn').addEventListener('click', () => {
-    document.documentElement.classList.toggle('dark');
-    localStorage.setItem(THEME_KEY, document.documentElement.classList.contains('dark') ? 'dark' : 'light');
-  });
 
-  // ── Agent info ──
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function compact(value, length = 220) {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (text.length <= length) return text;
+    return text.slice(0, Math.max(0, length - 1)).trimEnd() + '...';
+  }
+
+  function formatNumber(value) {
+    return Number(value || 0).toLocaleString();
+  }
+
+  function formatTime(value) {
+    if (value === null || value === undefined || value === '') return '';
+    let dateValue;
+    if (typeof value === 'number') {
+      dateValue = new Date(value < 1000000000000 ? value * 1000 : value);
+    } else if (/^\d+(\.\d+)?$/.test(String(value))) {
+      const parsed = Number(value);
+      dateValue = new Date(parsed < 1000000000000 ? parsed * 1000 : parsed);
+    } else {
+      dateValue = new Date(value);
+    }
+    if (Number.isNaN(dateValue.getTime())) return String(value);
+    return dateValue.toLocaleString();
+  }
+
+  function rawTime(value) {
+    if (value === null || value === undefined || value === '') return 0;
+    if (typeof value === 'number') return value < 1000000000000 ? value * 1000 : value;
+    if (/^\d+(\.\d+)?$/.test(String(value))) {
+      const parsed = Number(value);
+      return parsed < 1000000000000 ? parsed * 1000 : parsed;
+    }
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  function collection() {
+    return state.dashboard?.collections?.[state.activeCollection] || { items: [], total: 0, count: 0 };
+  }
+
+  function collectionInfo(key = state.activeCollection) {
+    return COLLECTIONS.find((item) => item.key === key) || COLLECTIONS[0];
+  }
+
+  function itemTime(item) {
+    return rawTime(item.updated_at || item.created_at || item.observed_at || item.timestamp_utc || item.period_end || item.period_start);
+  }
+
+  function searchable(item) {
+    return JSON.stringify(item || {}).toLowerCase();
+  }
+
+  function visibleItems() {
+    const query = state.query.trim().toLowerCase();
+    let items = [...collection().items];
+    if (query) items = items.filter((item) => searchable(item).includes(query));
+    items.sort((a, b) => {
+      if (state.sort === 'oldest') return itemTime(a) - itemTime(b);
+      if (state.sort === 'salience') return Number(b.salience || 0) - Number(a.salience || 0);
+      if (state.sort === 'confidence') return Number(b.confidence || 0) - Number(a.confidence || 0);
+      return itemTime(b) - itemTime(a);
+    });
+    return items;
+  }
+
   async function loadAgentInfo() {
     try {
       const res = await fetch('/api/agent/info');
       const data = await res.json();
-      document.getElementById('agentInfo').innerHTML =
-        `<span>Agent: <strong>${esc(data.name)}</strong></span>` +
-        `<span>Model: <strong>${esc(data.model)}</strong></span>` +
-        `<span>Memory DB: <strong>${esc(data.memory_db)}</strong></span>`;
-    } catch {}
-  }
-
-  // ── Tables ──
-  let selectedTable = 'memory_entries';
-  let selectedRow = null;
-
-  async function loadTree() {
-    try {
-      const res = await fetch('/api/memory/stats');
-      const data = await res.json();
-      const container = document.getElementById('treeContainer');
-      const empty = document.getElementById('treeEmpty');
-      empty.classList.add('hidden');
-      container.innerHTML = [
-        tableItem('memory_entries', data.entries || 0),
-        tableItem('memory_summaries', data.summaries || 0),
-        tableItem('people_facts', data.people_facts || 0),
-      ].join('');
-      container.querySelectorAll('.tree-item').forEach(item => {
-        item.addEventListener('click', () => loadTable(item.dataset.table, item));
-      });
-      loadTable(selectedTable);
-    } catch (e) {
-      document.getElementById('treeContainer').innerHTML = `<div class="text-sm text-red-500 p-2">Failed to load memory database</div>`;
+      state.agentInfoHtml = [
+        ['Model', data.model],
+        ['Workspace', data.workspace],
+        ['Memory DB', data.memory_db]
+      ].filter(([, value]) => value).map(([label, value]) => (
+        `<span>${label}: <strong>${escapeHtml(value)}</strong></span>`
+      )).join('');
+      els.agentInfo.innerHTML = state.agentInfoHtml;
+    } catch (error) {
+      state.agentInfoHtml = '';
+      els.agentInfo.textContent = '';
     }
   }
 
-  function tableItem(table, count) {
-    return `<div class="tree-item" data-table="${esc(table)}"><span>▦ ${esc(table)}</span><span class="ml-auto text-xs text-gray-400">${count}</span></div>`;
-  }
-
-  async function loadTable(table, el) {
-    document.querySelectorAll('.tree-item.selected').forEach(e => e.classList.remove('selected'));
-    if (el) el.classList.add('selected');
-    selectedTable = table;
-    selectedRow = null;
-
-    document.getElementById('contentPlaceholder').classList.add('hidden');
-    document.getElementById('contentViewer').classList.remove('hidden');
-    document.getElementById('contentTitle').textContent = table;
-    document.getElementById('contentBody').innerHTML = '<div class="text-gray-400 text-sm py-4">Loading…</div>';
-    document.getElementById('contentMeta').textContent = '';
-
+  async function loadDashboard() {
+    els.refreshBtn.disabled = true;
+    els.refreshBtn.textContent = 'Refreshing';
     try {
-      const res = await fetch(`/api/memory/list?table=${encodeURIComponent(table)}&limit=50`);
+      const res = await fetch('/api/memory/dashboard?preview_limit=120');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const rows = data.rows || [];
-      document.getElementById('contentBody').innerHTML = rows.length ? rows.map(row => rowCard(table, row)).join('') : '<div class="text-gray-400 text-sm">No rows</div>';
-      document.getElementById('contentMeta').textContent = `${rows.length} rows`;
-      document.querySelectorAll('[data-row-id]').forEach(item => {
-        item.addEventListener('click', () => selectRow(item.dataset.table, item.dataset.rowId));
-      });
-    } catch (e) {
-      document.getElementById('contentBody').innerHTML = `<div class="text-red-500 text-sm">Failed to load rows: ${esc(e.message)}</div>`;
+      state.dashboard = await res.json();
+      state.selectedIndex = 0;
+      renderAll();
+    } catch (error) {
+      els.recordList.innerHTML = `<div class="panel-muted rounded-[24px] p-8 text-sm text-red-600 dark:text-red-300">${escapeHtml(error.message || error)}</div>`;
+    } finally {
+      els.refreshBtn.disabled = false;
+      els.refreshBtn.textContent = 'Refresh';
     }
   }
 
-  function rowCard(table, row) {
-    const title = row.entry_date || row.period_start || row.observed_at || row.id;
-    const body = row.content || row.fact || row.snippet || '';
-    return `
-      <div class="search-result mb-2" data-table="${esc(table)}" data-row-id="${esc(String(row.id))}">
-        <div class="text-xs text-gray-400 dark:text-gray-500">${esc(table)} #${esc(String(row.id))}</div>
-        <div class="text-sm font-medium mt-1">${esc(String(title))}</div>
-        <div class="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-5">${esc(String(body)).slice(0, 500)}</div>
-      </div>
-    `;
-  }
-
-  async function selectRow(table, rowId) {
-    selectedTable = table;
-    selectedRow = rowId;
-    document.getElementById('contentTitle').textContent = `${table} #${rowId}`;
-    document.getElementById('contentBody').innerHTML = '<div class="text-gray-400 text-sm py-4">Loading…</div>';
-    try {
-      const res = await fetch(`/api/memory/read?table=${encodeURIComponent(table)}&row_id=${encodeURIComponent(rowId)}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      document.getElementById('contentBody').innerHTML = `<pre class="text-xs whitespace-pre-wrap">${esc(JSON.stringify(data.row || {}, null, 2))}</pre>`;
-      document.getElementById('contentMeta').textContent = 'Row detail';
-    } catch (e) {
-      document.getElementById('contentBody').innerHTML = `<div class="text-red-500 text-sm">Failed to load row: ${esc(e.message)}</div>`;
-    }
-  }
-
-  async function runSearch() {
-    const query = searchInputEl.value.trim();
-    if (!query) {
-      clearSearchResults();
-      return;
-    }
-
-    searchResultsEl.classList.remove('hidden');
-    searchResultsEl.innerHTML = '<div class="text-sm text-gray-400 px-1">Searching…</div>';
-
-    try {
-      const res = await fetch(`/api/memory/search?query=${encodeURIComponent(query)}`);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const data = await res.json();
-      renderSearchResults(data.results || []);
-    } catch (e) {
-      searchResultsEl.innerHTML = `<div class="text-sm text-red-500 px-1">Search failed: ${esc(e.message)}</div>`;
-    }
-  }
-
-  function renderSearchResults(results) {
-    if (results.length === 0) {
-      searchResultsEl.innerHTML = '<div class="text-sm text-gray-400 px-1">No results found</div>';
-      return;
-    }
-
-    searchResultsEl.innerHTML = results.map(result => `
-      <div class="search-result" data-table="${esc(result.table_name)}" data-row-id="${esc(String(result.id))}">
-        <div class="text-xs text-gray-400 dark:text-gray-500">${esc(result.table_name)} #${esc(String(result.id))}</div>
-        <div class="text-sm font-medium mt-1">${esc(result.date || '')}</div>
-        ${result.snippet ? `<div class="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-5">${esc(result.snippet)}</div>` : ''}
-      </div>
+  function renderStats() {
+    const stats = state.dashboard?.stats || {};
+    const generatedAt = state.dashboard?.generated_at ? formatTime(state.dashboard.generated_at) : '';
+    const metrics = [
+      ['Active', stats.active_memory_items],
+      ['Memories', stats.memory_items],
+      ['Events', stats.events],
+      ['Evidence', stats.evidence],
+      ['Summaries', stats.summaries]
+    ];
+    els.statsGrid.innerHTML = metrics.map(([label, value]) => `
+      <article class="metric-card">
+        <div class="metric-label">${escapeHtml(label)}</div>
+        <div class="metric-value">${formatNumber(value)}</div>
+      </article>
     `).join('');
+    els.previewLimit.textContent = state.dashboard?.preview_limit ? `Limit ${state.dashboard.preview_limit}` : '';
+    if (generatedAt) {
+      els.agentInfo.innerHTML = `${state.agentInfoHtml}<span>Snapshot: <strong>${escapeHtml(generatedAt)}</strong></span>`;
+    }
+  }
 
-    searchResultsEl.querySelectorAll('.search-result').forEach(item => {
-      item.addEventListener('click', () => {
-        selectRow(item.dataset.table, item.dataset.rowId);
+  function renderCollections() {
+    els.collectionNav.innerHTML = COLLECTIONS.map((info) => {
+      const data = state.dashboard?.collections?.[info.key] || {};
+      const active = info.key === state.activeCollection ? 'active' : '';
+      return `
+        <button class="collection-button ${active}" data-collection="${info.key}">
+          <div class="flex items-center justify-between gap-3">
+            <span class="font-semibold text-sm">${escapeHtml(info.label)}</span>
+            <span class="badge">${formatNumber(data.total ?? data.count ?? 0)}</span>
+          </div>
+          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">${escapeHtml(info.description)}</div>
+        </button>
+      `;
+    }).join('');
+    els.collectionNav.querySelectorAll('[data-collection]').forEach((button) => {
+      button.addEventListener('click', () => {
+        state.activeCollection = button.dataset.collection;
+        state.selectedIndex = 0;
+        renderAll();
       });
     });
   }
 
-  function clearSearchResults() {
-    searchInputEl.value = '';
-    searchResultsEl.innerHTML = '';
-    searchResultsEl.classList.add('hidden');
+  function renderBreakdowns() {
+    const breakdowns = state.dashboard?.breakdowns || {};
+    const groups = [
+      ['Kinds', breakdowns.memory_kind],
+      ['Subjects', breakdowns.subject_type],
+      ['Event roles', breakdowns.event_role]
+    ].filter(([, rows]) => Array.isArray(rows) && rows.length);
+    els.breakdowns.innerHTML = groups.map(([label, rows]) => {
+      const max = Math.max(...rows.map((row) => Number(row.count || 0)), 1);
+      return `
+        <section>
+          <h3 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-[0.14em] mb-2">${escapeHtml(label)}</h3>
+          <div class="space-y-2">
+            ${rows.slice(0, 6).map((row) => {
+              const width = Math.max(4, (Number(row.count || 0) / max) * 100);
+              return `
+                <div>
+                  <div class="flex justify-between gap-2 text-xs mb-1"><span>${escapeHtml(row.label || 'unknown')}</span><span>${formatNumber(row.count)}</span></div>
+                  <div class="h-1.5 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden"><div class="h-full rounded-full bg-zinc-900 dark:bg-zinc-100" style="width:${width}%"></div></div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </section>
+      `;
+    }).join('');
   }
 
-  // ── Refresh ──
-  document.getElementById('refreshBtn').addEventListener('click', () => {
-    loadTree();
-    loadAgentInfo();
-    if (selectedRow) {
-      selectRow(selectedTable, selectedRow);
+  function summarize(item) {
+    const key = state.activeCollection;
+    if (key === 'memories') {
+      const subject = item.subject || {};
+      return {
+        id: item.memory_id,
+        title: item.title || compact(item.content, 80) || `Memory ${item.memory_id}`,
+        meta: `${item.kind || 'memory'} | ${subject.type || 'subject'}:${subject.key || 'unknown'} | ${item.status || 'active'}`,
+        body: item.content,
+        badges: [item.sensitivity, item.salience ? `salience ${Number(item.salience).toFixed(2)}` : '']
+      };
     }
-  });
-  document.getElementById('searchBtn').addEventListener('click', runSearch);
-  document.getElementById('clearSearchBtn').addEventListener('click', clearSearchResults);
-  searchInputEl.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      runSearch();
+    if (key === 'events') {
+      return {
+        id: item.event_id,
+        title: `${item.role || 'event'}${item.speaker_id ? ` from ${item.speaker_id}` : ''}`,
+        meta: `${item.event_type || 'message'} | ${formatTime(item.timestamp_utc)}`,
+        body: item.content,
+        badges: [item.channel, item.sensitivity]
+      };
     }
-  });
-
-  function esc(s) {
-    const d = document.createElement('div');
-    d.textContent = s || '';
-    return d.innerHTML;
+    if (key === 'people') {
+      return {
+        id: item.person_key,
+        title: item.display_name || item.person_key || 'Person',
+        meta: `${item.relationship || 'profile'} | updated ${formatTime(item.updated_at) || 'unknown'}`,
+        body: item.notes || (item.aliases || []).join(', '),
+        badges: [item.person_key]
+      };
+    }
+    if (key === 'summaries') {
+      return {
+        id: item.summary_id,
+        title: `${item.summary_type || 'summary'} ${item.period_start || ''}`.trim(),
+        meta: `${item.scope_type || 'scope'}:${item.scope_key || 'self'} | ${item.period_start || ''} to ${item.period_end || ''}`,
+        body: item.content,
+        badges: [item.summary_type]
+      };
+    }
+    if (key === 'evidence') {
+      return {
+        id: item.id,
+        title: item.quote ? compact(item.quote, 86) : `Evidence ${item.id}`,
+        meta: `memory ${item.memory_id || '-'} | event ${item.event_id || '-'} | ${item.relation || 'supports'}`,
+        body: item.quote,
+        badges: [item.confidence ? `confidence ${Number(item.confidence).toFixed(2)}` : '']
+      };
+    }
+    if (key === 'revisions') {
+      return {
+        id: item.id,
+        title: `${item.revision_type || 'revision'} for memory ${item.memory_id || '-'}`,
+        meta: `${item.actor || 'actor'} | ${formatTime(item.created_at)}`,
+        body: item.new_content || item.old_content || item.reason,
+        badges: [item.revision_type]
+      };
+    }
+    return {
+      id: item.id,
+      title: `${item.policy || 'policy'} for ${item.scope_type || 'scope'}:${item.scope_key || '-'}`,
+      meta: `ttl ${item.ttl_days || '-'} days | ${formatTime(item.created_at)}`,
+      body: JSON.stringify(item),
+      badges: [item.policy]
+    };
   }
 
-  // ── Init ──
-  loadAgentInfo();
-  loadTree();
+  function renderRecords() {
+    const info = collectionInfo();
+    const data = collection();
+    const items = visibleItems();
+    if (state.selectedIndex >= items.length) state.selectedIndex = 0;
+    els.collectionTitle.textContent = info.label;
+    els.collectionMeta.textContent = `${formatNumber(data.count || 0)} loaded${data.truncated ? ` of ${formatNumber(data.total || 0)}` : ''}`;
+    els.collectionCount.textContent = formatNumber(items.length);
+    els.emptyState.classList.toggle('hidden', items.length > 0);
+    els.recordList.innerHTML = items.map((item, index) => {
+      const summary = summarize(item);
+      const active = index === state.selectedIndex ? 'active' : '';
+      const badges = (summary.badges || []).filter(Boolean).slice(0, 3);
+      return `
+        <button class="record-card ${active} w-full text-left" data-index="${index}">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <h3 class="font-semibold text-sm sm:text-base tracking-[-0.01em] truncate">${escapeHtml(summary.title)}</h3>
+              <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">${escapeHtml(summary.meta)}</div>
+            </div>
+            <span class="badge badge-green shrink-0">${escapeHtml(String(summary.id ?? '-'))}</span>
+          </div>
+          ${summary.body ? `<p class="mt-3 text-sm leading-6 text-gray-600 dark:text-gray-300">${escapeHtml(compact(summary.body, 260))}</p>` : ''}
+          ${badges.length ? `<div class="mt-3 flex flex-wrap gap-1.5">${badges.map((badge) => `<span class="badge">${escapeHtml(badge)}</span>`).join('')}</div>` : ''}
+        </button>
+      `;
+    }).join('');
+    els.recordList.querySelectorAll('[data-index]').forEach((button) => {
+      button.addEventListener('click', () => {
+        state.selectedIndex = Number(button.dataset.index || 0);
+        renderRecords();
+        renderInspector();
+      });
+    });
+    renderInspector();
+  }
+
+  function renderValue(value) {
+    if (value === null || value === undefined || value === '') return '<span class="text-gray-400 dark:text-gray-500">empty</span>';
+    if (Array.isArray(value) || typeof value === 'object') {
+      return `<pre class="code-text whitespace-pre-wrap">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+    }
+    if (String(value).length > 140) {
+      return `<div class="leading-6 whitespace-pre-wrap">${escapeHtml(value)}</div>`;
+    }
+    return `<span>${escapeHtml(value)}</span>`;
+  }
+
+  function priorityFields(item) {
+    const key = state.activeCollection;
+    const fields = {
+      memories: ['memory_id', 'kind', 'subject', 'title', 'content', 'status', 'salience', 'confidence', 'sensitivity', 'observed_at', 'updated_at', 'metadata'],
+      events: ['event_id', 'timestamp_utc', 'role', 'speaker_id', 'event_type', 'channel', 'conversation_id', 'content', 'privacy_scope', 'sensitivity', 'metadata'],
+      people: ['person_key', 'display_name', 'aliases', 'relationship', 'notes', 'created_at', 'updated_at'],
+      summaries: ['summary_id', 'summary_type', 'scope_type', 'scope_key', 'period_start', 'period_end', 'content', 'source_memory_ids', 'created_at'],
+      evidence: ['id', 'memory_id', 'event_id', 'quote', 'relation', 'confidence', 'extractor_model', 'created_at'],
+      revisions: ['id', 'memory_id', 'revision_type', 'old_content', 'new_content', 'reason', 'actor', 'created_at'],
+      policies: ['id', 'scope_type', 'scope_key', 'policy', 'ttl_days', 'created_at']
+    };
+    return fields[key] || Object.keys(item || {});
+  }
+
+  function renderInspector() {
+    const items = visibleItems();
+    const item = items[state.selectedIndex];
+    els.selectedBadge.textContent = collectionInfo().label;
+    if (!item) {
+      els.inspector.innerHTML = '<div class="text-gray-500 dark:text-gray-400">No selection</div>';
+      return;
+    }
+    const fields = priorityFields(item).filter((field) => Object.prototype.hasOwnProperty.call(item, field));
+    els.inspector.innerHTML = `
+      <table class="detail-table">
+        <tbody>
+          ${fields.map((field) => `
+            <tr>
+              <th>${escapeHtml(field.replace(/_/g, ' '))}</th>
+              <td>${renderValue(field.includes('_at') || field === 'timestamp_utc' ? formatTime(item[field]) || item[field] : item[field])}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      <details class="mt-4">
+        <summary class="cursor-pointer text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-[0.14em]">Raw JSON</summary>
+        <pre class="code-text mt-3 rounded-2xl border border-black/10 dark:border-white/10 bg-white/50 dark:bg-white/[0.04] p-3 whitespace-pre-wrap overflow-x-auto">${escapeHtml(JSON.stringify(item, null, 2))}</pre>
+      </details>
+    `;
+  }
+
+  function renderAll() {
+    renderStats();
+    renderCollections();
+    renderBreakdowns();
+    renderRecords();
+  }
+
+  async function runSql() {
+    const sql = els.sqlInput.value.trim();
+    const maxRows = Math.max(1, Math.min(200, Number(els.maxRowsInput.value || 50)));
+    if (!sql) return;
+    els.runSqlBtn.disabled = true;
+    els.runSqlBtn.textContent = 'Running';
+    els.sqlFeedback.textContent = '';
+    try {
+      const res = await fetch('/api/memory/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql, max_rows: maxRows })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      renderSqlResult(data);
+      els.sqlFeedback.textContent = `${formatNumber(data.row_count || 0)} rows`;
+    } catch (error) {
+      els.sqlFeedback.textContent = error.message || String(error);
+      els.sqlResult.innerHTML = '';
+    } finally {
+      els.runSqlBtn.disabled = false;
+      els.runSqlBtn.textContent = 'Run';
+    }
+  }
+
+  function renderSqlResult(data) {
+    const rows = data.rows || [];
+    const columns = data.columns || (rows[0] ? Object.keys(rows[0]) : []);
+    if (!rows.length) {
+      els.sqlResult.innerHTML = '<div class="text-sm text-gray-500 dark:text-gray-400">No rows</div>';
+      return;
+    }
+    els.sqlResult.innerHTML = `
+      <table class="min-w-full text-sm border-separate border-spacing-0 overflow-hidden rounded-2xl">
+        <thead>
+          <tr>
+            ${columns.map((column) => `<th class="text-left px-3 py-2 bg-black/[0.04] dark:bg-white/[0.06] border-b border-black/10 dark:border-white/10 font-semibold">${escapeHtml(column)}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              ${columns.map((column) => `<td class="px-3 py-2 align-top border-b border-black/5 dark:border-white/10 code-text">${renderValue(row[column])}</td>`).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  initTheme();
+  els.toggleThemeBtn.addEventListener('click', () => {
+    document.documentElement.classList.toggle('dark');
+    localStorage.setItem(THEME_KEY, document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+  });
+  els.refreshBtn.addEventListener('click', loadDashboard);
+  els.searchInput.addEventListener('input', (event) => {
+    state.query = event.target.value;
+    state.selectedIndex = 0;
+    renderRecords();
+  });
+  els.sortSelect.addEventListener('change', (event) => {
+    state.sort = event.target.value;
+    state.selectedIndex = 0;
+    renderRecords();
+  });
+  els.toggleSqlBtn.addEventListener('click', () => {
+    state.sqlOpen = !state.sqlOpen;
+    els.sqlPanel.classList.toggle('hidden', !state.sqlOpen);
+    els.sqlToggleText.textContent = state.sqlOpen ? 'Close' : 'Open';
+  });
+  els.runSqlBtn.addEventListener('click', runSql);
+  els.sqlInput.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') runSql();
+  });
+
+  loadAgentInfo().then(loadDashboard);
 })();
 </script>
 </body>

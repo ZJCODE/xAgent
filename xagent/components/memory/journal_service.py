@@ -9,14 +9,14 @@ from typing import Any, List, Optional
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from ...schemas.memory import PeopleProfileUpdates
+from ...schemas.memory import MemorySynthesis, PeopleProfileUpdates
 
 
 DEFAULT_OPENAI_CHAT_MODEL_API = "openai_chat_completions"
 
 
 class JournalLLMService:
-    """Format conversation snippets and summaries for the diary memory store."""
+    """Synthesize experience into episodic summaries, durable facts, and rollups."""
 
     def __init__(
         self,
@@ -53,6 +53,37 @@ class JournalLLMService:
         except Exception as exception:
             self.logger.error("Error formatting diary entry: %s", exception)
             return self._fallback_entry(messages)
+
+    async def synthesize_memory(
+        self,
+        messages: List[dict],
+        journal_date: str,
+    ) -> MemorySynthesis:
+        """Extract one episodic summary plus durable attributed facts in a single pass."""
+        if not messages:
+            return MemorySynthesis()
+
+        transcript = self._format_transcript(messages)
+        if not transcript.strip():
+            return MemorySynthesis()
+
+        system_prompt = self.build_memory_synthesis_system_prompt(journal_date)
+        user_prompt = self.build_memory_synthesis_user_prompt(
+            journal_date=journal_date,
+            transcript=transcript,
+        )
+
+        try:
+            parsed = await self._call_structured(
+                output_type=MemorySynthesis,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+            parsed.experience_summary = self._normalize_content(parsed.experience_summary)
+            return parsed
+        except Exception as exception:
+            self.logger.error("Error synthesizing memory batch: %s", exception)
+            return MemorySynthesis(experience_summary=self._fallback_entry(messages))
 
     async def generate_summary(
         self,
@@ -143,6 +174,62 @@ Output rules:
     def build_diary_user_prompt(journal_date: str, transcript: str) -> str:
         return f"""For {journal_date}, write a diary entry based on this conversation transcript:
 
+{transcript}"""
+
+    @staticmethod
+    def build_memory_synthesis_system_prompt(journal_date: str) -> str:
+        return f"""You synthesize one experience batch into elegant long-term memory.
+
+TARGET DATE: {journal_date}
+
+First principles:
+- Keep memory minimal and reusable.
+- Separate fleeting experience from durable facts.
+- Preserve attribution exactly; never merge different people or sources.
+- Keep the original language of the source. Do not translate.
+
+Return one JSON object with this shape:
+{{
+    "experience_summary": "first-person summary",
+    "facts": [
+        {{
+            "kind": "preference|commitment|project_state|person_fact|semantic_fact|procedure",
+            "subject_type": "self|person|project|topic|room|system",
+            "subject_key": "stable subject id",
+            "title": "short title",
+            "content": "durable fact",
+            "evidence": "short direct quote or exact source phrase",
+            "source": "brief provenance note",
+            "confidence": 0.0,
+            "salience": 0.0,
+            "display_name": "optional human-readable name"
+        }}
+    ]
+}}
+
+Requirements for experience_summary:
+- Write from my first-person perspective.
+- Summarize what mattered; do not replay the transcript line by line.
+- Treat speakers named "agent", "assistant", or "AI" as me.
+- For ambient context, use forms such as "I noticed..." or "I overheard...".
+- If nothing in the batch is worth retaining, experience_summary may be empty.
+
+Requirements for facts:
+- facts are only durable, reusable claims worth remembering later.
+- Allowed kinds: preference, commitment, project_state, person_fact, semantic_fact, procedure.
+- Each fact must belong to exactly one subject.
+- evidence is required for every fact and must be a short direct quote or exact source phrase.
+- Do not store one-off chatter, speculative personality labels, or uncertain guesses.
+- If no durable facts are present, return an empty facts array.
+- Keep confidence and salience conservative and within 0.0 to 1.0.
+
+Return JSON only."""
+
+    @staticmethod
+    def build_memory_synthesis_user_prompt(journal_date: str, transcript: str) -> str:
+        return f"""For {journal_date}, synthesize memory from this transcript.
+
+Transcript:
 {transcript}"""
 
     @staticmethod

@@ -21,9 +21,9 @@ class AgentConfig:
     DEFAULT_MODEL = "gpt-5.4-mini"
     DEFAULT_WORKSPACE = "~/.xagent"
     MEMORY_DIRNAME = "memory"
-    MEMORY_DB_FILENAME = "memory.sqlite3"
-    MESSAGE_DIRNAME = "messages"
-    MESSAGE_DB_FILENAME = "messages.sqlite3"
+    MEMORY_DB_FILENAME = "xagent_memory.sqlite3"
+    MESSAGE_DIRNAME = "memory"
+    MESSAGE_DB_FILENAME = "xagent_memory.sqlite3"
     MEMORY_RECENT_DAYS = 3
     MEMORY_MESSAGE_THRESHOLD = 12
     MEMORY_MIN_INTERVAL_SECONDS = 300
@@ -73,26 +73,36 @@ class AgentConfig:
 
     # Tool-specific instruction segments (injected when the tool is active)
     TOOL_SYSTEM_PROMPTS = {
-        "write_memory": (
+        "remember": (
             "\n**Long-Term Memory Writing:**\n"
-            "- Use `write_memory` only for durable facts: stable preferences, decisions, commitments, personal details, or notable context.\n"
-            "- Good triggers: the user asks to remember something, a meaningful decision is made, or a stable preference becomes clear.\n"
-            "- Write concise natural memory notes. Skip trivial small talk and temporary details.\n"
-            "- Do not invent or overgeneralize; keep attribution clear when multiple people are involved.\n"
+            "- Use `remember` only for durable, reusable facts: stable preferences, commitments, project state, person facts, procedures, or semantic facts.\n"
+            "- Good triggers: the user asks you to remember something, a meaningful decision is made, or a stable fact becomes explicit.\n"
+            "- Choose one concrete memory kind and one subject. Keep content concise, factual, quote-grounded when possible, and attributed when multiple people are involved.\n"
+            "- Do not store one-off chatter, temporary phrasing, guesses, private secrets, or broad personality labels inferred from a single moment.\n"
         ),
-        "query_memory": (
-            "\n**Memory SQL Query:**\n"
-            "- Use `query_memory` for ordinary recall when older durable memory is needed.\n"
-            "- Prefer recent memory context already provided in the transcript when sufficient.\n"
-            "- Good triggers: user asks what you remember, refers to an earlier plan, or asks to recall a past preference or decision.\n"
-            "- Write a focused read-only SELECT query. Keep retrieved facts tied to the correct speaker, date, and source.\n"
+        "recall_memory": (
+            "\n**Memory Recall:**\n"
+            "- Use `recall_memory` for ordinary recall of durable memory and summaries.\n"
+            "- Prefer the recent memory brief already in the prompt when it is sufficient.\n"
+            "- Good triggers: user asks what you remember, refers to an earlier plan, or asks to recall a past preference, decision, or project state.\n"
+            "- Keep retrieved facts tied to the correct speaker, subject, date, and evidence.\n"
         ),
-        "query_messages": (
-            "\n**Deep Message SQL Query:**\n"
-            "- Use `query_messages` only for deep recall of the full persisted message history.\n"
-            "- Good triggers: the user explicitly asks you to carefully remember, look back in detail, or re-check older conversation history.\n"
-            "- Do not use this for ordinary recall; recent messages are already in context and durable memory should be queried with `query_memory` first.\n"
-            "- Write a focused read-only SELECT query and avoid exposing irrelevant private or sensitive details.\n"
+        "search_history": (
+            "\n**Deep History Search:**\n"
+            "- Use `search_history` only for raw persisted events: exact wording, audit trails, old chat review, or cases where `recall_memory` is insufficient.\n"
+            "- Good triggers: the user explicitly asks you to look back in detail, verify what was said, or find a specific older exchange.\n"
+            "- Do not use this for ordinary recall; recent messages are already in context and durable memory should be queried with `recall_memory` first.\n"
+            "- Avoid exposing irrelevant private or sensitive details.\n"
+        ),
+        "correct_memory": (
+            "\n**Memory Correction:**\n"
+            "- Use `correct_memory` when the user says a remembered fact is wrong, outdated, or gives a clearer replacement.\n"
+            "- Preserve the correction reason; do not silently rewrite old memory without a revision.\n"
+        ),
+        "forget_memory": (
+            "\n**Memory Forgetting:**\n"
+            "- Use `forget_memory` when the user asks you to forget, remove, hide, or delete a remembered fact.\n"
+            "- Prefer archive unless the user explicitly asks for deletion.\n"
         ),
         "run_command": (
             "\n**Shell Command Execution:**\n"
@@ -114,9 +124,11 @@ class AgentConfig:
 
     TOOL_POLICY_ORDER = (
         "run_command",
-        "write_memory",
-        "query_memory",
-        "query_messages",
+        "remember",
+        "recall_memory",
+        "search_history",
+        "correct_memory",
+        "forget_memory",
         "web_search",
     )
 
@@ -160,7 +172,7 @@ class AgentConfig:
         "- `[speaker=Name][timestamp=Time]` followed by text means that Name said that text at that time.\n"
         "- First-person words in a speaker entry, such as 'I', 'me', 'my', or '我', refer to that entry's speaker.\n"
         "- `[speaker=you][timestamp=Time]` means your own previous reply at that time, not something another participant said.\n"
-        "- `[room context]` may include `room_name: ...` and `room_id: ...`, followed by lines like `Name YYYY-MM-DD HH:mm: text`, ending with `[/room context]`. Those lines are recent messages from the same room.\n"
+        "- `[room context]` may include `room_name: ...` and `room_id: ...`, followed by lines like `Name YYYY-MM-DD HH:mm:ss Timezone (UTC+Offset): text`, ending with `[/room context]`. Those lines are recent messages from the same room.\n"
         "- Inside room context, `you YYYY-MM-DD HH:mm: text` means your own previous reply in that room. Use `room_name` and `room_id` only to keep room conversations separate.\n"
         "- `[ambient context][timestamp=Time]` followed by text means nearby situational context observed or provided at that time.\n"
         "- Ambient context is usable awareness of the shared situation, but it is not a participant message and should not be attributed to any speaker.\n"

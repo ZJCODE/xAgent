@@ -7,6 +7,7 @@ from ..config import AgentConfig
 from ..providers import MODEL_API_OPENAI_CHAT_COMPLETIONS, MODEL_API_OPENAI_RESPONSES, normalize_model_api
 from .manager import ToolManager
 from ...components import MessageStorageBase
+from ...schemas import Message, MessageType, RoleType, ToolCall
 from ...utils.image_utils import extract_source, is_image_output
 
 
@@ -141,7 +142,36 @@ class ToolExecutor:
             )
 
         logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
+        await self._store_tool_events(
+            call_id=call_id,
+            name=name or "",
+            arguments=raw_arguments or "{}",
+            output=model_output,
+        )
         return self._tool_result_message(call_id, model_output), image_data, model_output if image_data else None
+
+    async def _store_tool_events(self, *, call_id: str, name: str, arguments: str, output: str) -> None:
+        """Persist tool call and output as raw experience events when supported."""
+        try:
+            call_message = Message(
+                role=RoleType.ASSISTANT,
+                type=MessageType.FUNCTION_CALL,
+                sender_id="agent",
+                content=f"Tool call: {name}",
+                tool_call=ToolCall(call_id=call_id, name=name, arguments=arguments),
+                metadata={"source": "tool_executor"},
+            )
+            output_message = Message(
+                role=RoleType.TOOL,
+                type=MessageType.FUNCTION_CALL_OUTPUT,
+                sender_id=name,
+                content=output,
+                tool_call=ToolCall(call_id=call_id, name=name, output=output),
+                metadata={"source": "tool_executor"},
+            )
+            await self.message_storage.add_messages([call_message, output_message])
+        except Exception as exc:
+            logger.debug("Skipping tool event persistence: %s", exc)
 
     async def _caption_image(self, image_data_uri: str, prompt_hint: str = "") -> str:
         """Use a vision model to generate a detailed description of an image."""

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from ...core.formatters import (
@@ -461,6 +461,6 @@ def _build_room_context_entries(
 
 def _feishu_timestamp_to_datetime(create_time_ms: int) -> datetime:
     if create_time_ms <= 0:
-        return datetime.fromtimestamp(0)
+        return datetime.fromtimestamp(0, timezone.utc)
     seconds = create_time_ms / 1000 if create_time_ms > 10_000_000_000 else create_time_ms
-    return datetime.fromtimestamp(seconds)
+    return datetime.fromtimestamp(seconds, timezone.utc)

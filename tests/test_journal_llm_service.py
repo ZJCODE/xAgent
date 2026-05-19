@@ -5,6 +5,7 @@ from xagent.components.memory import JournalLLMService
 from xagent.core.config import ReplyType
 from xagent.core.providers import MODEL_API_OPENAI_RESPONSES
 from xagent.schemas import Message
+from xagent.schemas.memory import MemoryFact, MemorySynthesis
 
 
 class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
@@ -79,6 +80,16 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("unknown speakers, or uncertain attribution", prompt)
         self.assertIn('{"updates": []}', prompt)
 
+    def test_memory_synthesis_prompt_separates_experience_and_facts(self):
+        prompt = JournalLLMService.build_memory_synthesis_system_prompt("2026-05-18")
+
+        self.assertIn("Separate fleeting experience from durable facts", prompt)
+        self.assertIn("experience_summary", prompt)
+        self.assertIn("facts", prompt)
+        self.assertIn("evidence is required", prompt)
+        self.assertIn("Do not store one-off chatter", prompt)
+        self.assertIn("Return JSON only", prompt)
+
     async def test_format_diary_entry_uses_plain_text_and_forwards_model_api(self):
         class FakeModelClient:
             instances = []
@@ -136,6 +147,46 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "Weekly summary.")
         self.assertIsNone(FakeModelClient.instances[0].calls[0]["output_type"])
+
+    async def test_synthesize_memory_uses_structured_output(self):
+        class FakeModelClient:
+            instances = []
+
+            def __init__(self, **kwargs):
+                self.calls = []
+                FakeModelClient.instances.append(self)
+
+            async def call(self, **kwargs):
+                self.calls.append(kwargs)
+                return ReplyType.STRUCTURED_REPLY, MemorySynthesis(
+                    experience_summary="I discussed memory design.",
+                    facts=[
+                        MemoryFact(
+                            kind="preference",
+                            subject_type="self",
+                            subject_key="self",
+                            title="Memory preference",
+                            content="I prefer elegant memory tools.",
+                            evidence="一定要优雅",
+                        )
+                    ],
+                )
+
+        service = JournalLLMService(
+            client=object(),
+            model="gpt-test",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        with patch("xagent.core.handlers.model.ModelClient", FakeModelClient):
+            result = await service.synthesize_memory(
+                messages=[{"role": "user", "sender_id": "Z", "content": "一定要优雅"}],
+                journal_date="2026-05-18",
+            )
+
+        self.assertEqual(result.experience_summary, "I discussed memory design.")
+        self.assertEqual(result.facts[0].content, "I prefer elegant memory tools.")
+        self.assertIs(FakeModelClient.instances[0].calls[0]["output_type"], MemorySynthesis)
 
 
 if __name__ == "__main__":

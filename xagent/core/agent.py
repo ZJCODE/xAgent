@@ -6,19 +6,26 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 from pydantic import BaseModel
 
 from ..components import (
+    ExperienceMemoryStore,
     MessageStorageBase,
     MessageStorageLocal,
     MessageStoragePrivateTemp,
-    SQLiteMemory,
 )
 from ..components.memory import JournalLLMService
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
 from .config import AgentConfig, MemoryMode, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_client, normalize_model_api
+from .time import resolve_timezone
 from .tools import ToolExecutor, ToolManager
 from ..schemas import AgentTurnResult, Message
-from ..tools import create_query_memory_tool, create_query_messages_tool, create_write_memory_tool
+from ..tools import (
+    create_correct_memory_tool,
+    create_forget_memory_tool,
+    create_recall_memory_tool,
+    create_remember_tool,
+    create_search_history_tool,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -27,8 +34,8 @@ logger = logging.getLogger(__name__)
 class Agent:
     """AI agent runtime for a continuous agent-level message stream."""
 
-    _MEMORY_TOOL_NAMES = {"write_memory", "query_memory", "query_messages"}
-    _MEMORY_WRITE_TOOL_NAMES = {"write_memory"}
+    _MEMORY_TOOL_NAMES = {"remember", "recall_memory", "search_history", "correct_memory", "forget_memory"}
+    _MEMORY_WRITE_TOOL_NAMES = {"remember", "correct_memory", "forget_memory"}
 
     def __init__(
         self,
@@ -42,11 +49,17 @@ class Agent:
         message_storage: Optional[MessageStorageBase] = None,
         workspace: Optional[str] = None,
         observability: Optional[ObservabilityRuntime] = None,
+        timezone: Optional[Any] = None,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.model_api = normalize_model_api(model_api)
         self.model_max_tokens = model_max_tokens
         self.observability = observability or NoopObservabilityRuntime()
+        self.timezone = timezone if hasattr(timezone, "utcoffset") else resolve_timezone(request_timezone=timezone)
+        self._timezone_var: ContextVar[Any] = ContextVar(
+            f"xagent_timezone_{id(self)}",
+            default=self.timezone,
+        )
         self.client = client
         if self.client is None:
             if model_api_uses_anthropic_client(self.model_api):
@@ -90,7 +103,10 @@ class Agent:
             default_workspace.mkdir(parents=True, exist_ok=True)
             memory_path = str(self._memory_db_path(default_workspace))
 
-        self.sqlite_memory = SQLiteMemory(path=memory_path)
+        if isinstance(self.message_storage, ExperienceMemoryStore):
+            self.memory_store = self.message_storage
+        else:
+            self.memory_store = ExperienceMemoryStore(path=memory_path)
         self.llm_service = JournalLLMService(
             client=self.client,
             model=self.model,
@@ -98,23 +114,31 @@ class Agent:
             max_tokens=self.model_max_tokens,
         )
         self.memory_handler = MemoryHandler(
-            memory=self.sqlite_memory,
+            memory=self.memory_store,
             llm_service=self.llm_service,
         )
 
         bound_tools = list(tools or [])
         bound_tools.extend([
-            create_write_memory_tool(
-                memory=self.sqlite_memory,
+            create_remember_tool(
+                memory=self.memory_store,
                 is_enabled=self._memory_can_write,
             ),
-            create_query_memory_tool(
-                memory=self.sqlite_memory,
+            create_recall_memory_tool(
+                memory=self.memory_store,
                 is_enabled=self._memory_can_read,
             ),
-            create_query_messages_tool(
-                message_storage=self.message_storage,
+            create_search_history_tool(
+                memory=self.memory_store,
                 is_enabled=self._memory_can_read,
+            ),
+            create_correct_memory_tool(
+                memory=self.memory_store,
+                is_enabled=self._memory_can_write,
+            ),
+            create_forget_memory_tool(
+                memory=self.memory_store,
+                is_enabled=self._memory_can_write,
             ),
         ])
         self.tool_manager = ToolManager(tools=bound_tools)
@@ -187,6 +211,7 @@ class Agent:
         stream: bool = False,
         enable_memory: bool = True,
         private: bool = False,
+        timezone: Optional[str] = None,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         return await self.chat(
             user_message=user_message,
@@ -199,6 +224,7 @@ class Agent:
             stream=stream,
             enable_memory=enable_memory,
             private=private,
+            timezone=timezone,
         )
 
     async def chat(
@@ -213,6 +239,7 @@ class Agent:
         stream: bool = False,
         enable_memory: bool = True,
         private: bool = False,
+        timezone: Optional[str] = None,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message.
 
@@ -239,6 +266,7 @@ class Agent:
                     stream=True,
                     enable_memory=enable_memory,
                     private=private,
+                    timezone=timezone,
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or "")
@@ -276,6 +304,7 @@ class Agent:
         msg_handler = self._message_handler_for_mode(private=private)
         memory_mode = MemoryMode.from_flags(enable_memory=enable_memory, private=private)
         memory_mode_token = self._set_memory_mode(memory_mode)
+        timezone_token = self._set_turn_timezone(timezone)
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         turn_context = self._observability_runtime().agent_turn(
             user_id=user_id,
@@ -293,6 +322,7 @@ class Agent:
                 user_message,
                 user_id,
                 image_source,
+                metadata=self._timezone_metadata(timezone),
             )
 
             effective_history_count = self._effective_history_count(history_count)
@@ -315,6 +345,7 @@ class Agent:
                 recent_messages,
                 current_user_id=user_id,
                 memory_context=memory_context,
+                timezone=self._resolve_turn_timezone(timezone),
             )
             input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 
@@ -337,6 +368,7 @@ class Agent:
                     assistant_msg = await msg_handler.store_model_reply(
                         str(response),
                         self._assistant_sender_id,
+                        metadata=self._timezone_metadata(timezone),
                     )
                     self._schedule_experience_write(
                         msg_handler=msg_handler,
@@ -349,6 +381,7 @@ class Agent:
                     assistant_msg = await msg_handler.store_model_reply(
                         response.model_dump_json(),
                         self._assistant_sender_id,
+                        metadata=self._timezone_metadata(timezone),
                     )
                     self._schedule_experience_write(
                         msg_handler=msg_handler,
@@ -368,6 +401,7 @@ class Agent:
                         assistant_msg = await msg_handler.store_model_reply(
                             description,
                             self._assistant_sender_id,
+                            metadata=self._timezone_metadata(timezone),
                         )
                         self._schedule_experience_write(
                             msg_handler=msg_handler,
@@ -398,6 +432,7 @@ class Agent:
                 except Exception as exc:
                     logger.warning("Failed to close observability context: %s", exc)
             self._reset_memory_mode(memory_mode_token)
+            self._reset_turn_timezone(timezone_token)
 
     async def chat_events(
         self,
@@ -411,6 +446,7 @@ class Agent:
         stream: bool = False,
         enable_memory: bool = True,
         private: bool = False,
+        timezone: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -431,6 +467,7 @@ class Agent:
                 output_type=output_type,
                 enable_memory=enable_memory,
                 private=private,
+                timezone=timezone,
             )
             content = response.model_dump_json() if hasattr(response, "model_dump_json") else str(response)
             message_id = "structured-0"
@@ -447,6 +484,7 @@ class Agent:
         msg_handler = self._message_handler_for_mode(private=private)
         memory_mode = MemoryMode.from_flags(enable_memory=enable_memory, private=private)
         memory_mode_token = self._set_memory_mode(memory_mode)
+        timezone_token = self._set_turn_timezone(timezone)
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         turn_context = self._observability_runtime().agent_turn(
             user_id=user_id,
@@ -464,6 +502,7 @@ class Agent:
                 user_message,
                 user_id,
                 image_source,
+                metadata=self._timezone_metadata(timezone),
             )
 
             effective_history_count = self._effective_history_count(history_count)
@@ -486,6 +525,7 @@ class Agent:
                 recent_messages,
                 current_user_id=user_id,
                 memory_context=memory_context,
+                timezone=self._resolve_turn_timezone(timezone),
             )
             input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 
@@ -551,7 +591,7 @@ class Agent:
                         await msg_handler.store_model_reply(
                             visible_text,
                             self._assistant_sender_id,
-                            metadata={"turn_phase": "preface"},
+                            metadata=self._timezone_metadata(timezone) | {"turn_phase": "preface"},
                         )
 
                     for tool_call in tool_calls:
@@ -579,7 +619,7 @@ class Agent:
                         assistant_msg = await msg_handler.store_model_reply(
                             description,
                             self._assistant_sender_id,
-                            metadata={"turn_phase": "final"},
+                            metadata=self._timezone_metadata(timezone) | {"turn_phase": "final"},
                         )
                         self._schedule_experience_write(
                             msg_handler=msg_handler,
@@ -607,7 +647,7 @@ class Agent:
                     assistant_msg = await msg_handler.store_model_reply(
                         visible_text,
                         self._assistant_sender_id,
-                        metadata={"turn_phase": "final"},
+                        metadata=self._timezone_metadata(timezone) | {"turn_phase": "final"},
                     )
                     self._schedule_experience_write(
                         msg_handler=msg_handler,
@@ -643,6 +683,7 @@ class Agent:
                 except Exception as exc:
                     logger.warning("Failed to close observability context: %s", exc)
             self._reset_memory_mode(memory_mode_token)
+            self._reset_turn_timezone(timezone_token)
 
     async def observe(
         self,
@@ -673,6 +714,38 @@ class Agent:
             source=event_metadata.get("source"),
         )
 
+    def _resolve_turn_timezone(self, request_timezone: Optional[str] = None):
+        default_timezone = getattr(self, "timezone", resolve_timezone())
+        return resolve_timezone(
+            {"runtime": {"timezone": getattr(default_timezone, "key", None)}},
+            request_timezone=request_timezone,
+        )
+
+    def _set_turn_timezone(self, request_timezone: Optional[str] = None) -> Token:
+        return self._get_timezone_var().set(self._resolve_turn_timezone(request_timezone))
+
+    def _reset_turn_timezone(self, token: Token) -> None:
+        self._get_timezone_var().reset(token)
+
+    def _current_timezone(self):
+        return self._get_timezone_var().get()
+
+    def _get_timezone_var(self) -> ContextVar[Any]:
+        timezone_var = getattr(self, "_timezone_var", None)
+        if timezone_var is None:
+            timezone_var = ContextVar(
+                f"xagent_timezone_{id(self)}",
+                default=getattr(self, "timezone", resolve_timezone()),
+            )
+            self._timezone_var = timezone_var
+        return timezone_var
+
+    def _timezone_metadata(self, request_timezone: Optional[str] = None) -> Dict[str, str]:
+        timezone = self._resolve_turn_timezone(request_timezone) if request_timezone else self._current_timezone()
+        return {
+            "timezone": getattr(timezone, "key", str(timezone)),
+        }
+
     def _message_handler_for_mode(self, private: bool) -> MessageHandler:
         """Return the storage handler for normal or private mode."""
         if private and self._private_handler is None:
@@ -701,6 +774,7 @@ class Agent:
         assistant_msg = await msg_handler.store_model_reply(
             reply_text,
             self._assistant_sender_id,
+            metadata=self._timezone_metadata(),
         )
         self._schedule_experience_write(
             msg_handler=msg_handler,

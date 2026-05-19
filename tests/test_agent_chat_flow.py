@@ -1204,7 +1204,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             messages,
             current_user_id="alice",
             max_messages=2,
-            max_total_chars=200,
+            max_total_chars=400,
             max_message_chars=10,
         )["content"]
 
@@ -1312,7 +1312,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
-    async def test_execute_single_does_not_persist_tool_messages(self):
+    async def test_execute_single_persists_tool_events(self):
         async def lookup(value: str) -> dict:
             return {"value": value}
 
@@ -1332,7 +1332,9 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_message["content"], '{"value": "ok"}')
         self.assertIsNone(image_data)
         self.assertIsNone(description)
-        self.assertEqual(storage.messages, [])
+        self.assertEqual(len(storage.messages), 2)
+        self.assertEqual(storage.messages[0].type, MessageType.FUNCTION_CALL)
+        self.assertEqual(storage.messages[1].type, MessageType.FUNCTION_CALL_OUTPUT)
 
     async def test_handle_tool_calls_appends_standard_assistant_and_tool_messages(self):
         async def first() -> str:

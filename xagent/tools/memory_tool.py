@@ -1,160 +1,229 @@
-"""Dedicated tools for long-term memory access."""
+"""High-level long-term memory tools."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
+from xagent.components.memory import MemoryKind, SubjectType
 from xagent.utils.tool_decorator import function_tool
 
 if TYPE_CHECKING:
-    from xagent.components.memory import SQLiteMemory
-    from xagent.components.message import MessageStorageBase
+    from xagent.components.memory import ExperienceMemoryStore
 
 
-def create_write_memory_tool(
-    memory: SQLiteMemory,
-    is_enabled,
-):
-    """Create a tool that records long-term useful memory."""
+MEMORY_KIND_DESCRIPTION = (
+    "One of: episodic, semantic_fact, preference, commitment, "
+    "project_state, person_fact, procedure, summary."
+)
+SUBJECT_TYPE_DESCRIPTION = "One of: self, person, project, topic, room, system."
+
+
+def create_remember_tool(memory: "ExperienceMemoryStore", is_enabled):
+    """Create a high-level tool for writing durable memory."""
 
     @function_tool(
-        name="write_memory",
+        name="remember",
         description=(
-            "Record long-term useful memory from the conversation. "
-            "Use this for stable preferences, important facts, decisions, commitments, "
-            "or notable context that should help future interactions. "
-            "Keep entries concise, factual, and clearly attributed when needed."
+            "Record exactly one durable, reusable long-term fact. Use only when "
+            "the user asks you to remember something or when a stable preference, "
+            "commitment, project state, person fact, or procedure is explicit."
         ),
         param_descriptions={
-            "content": "The memory note to record. Keep it concise, useful, and grounded in the conversation.",
+            "content": "Concise factual memory content with clear attribution. Do not store one-off chatter.",
+            "kind": f"Choose the narrowest durable kind. {MEMORY_KIND_DESCRIPTION}",
+            "subject_type": SUBJECT_TYPE_DESCRIPTION,
+            "subject_key": "Stable subject identifier, such as a person id/name, project name, topic, room id, or self.",
+            "salience": "Importance from 0.0 to 1.0. Default 0.7.",
+            "confidence": "Confidence from 0.0 to 1.0. Default 0.85.",
+            "valid_until": "Optional expiry as Unix timestamp or ISO date/time.",
+            "evidence_note": "Short quote or exact source phrase grounding this memory when available.",
+            "sensitivity": "normal, private, sensitive, or secret. Default normal.",
         },
     )
-    async def write_memory(content: str) -> dict:
-        """Record a long-term memory note."""
+    async def remember(
+        content: str,
+        kind: str = MemoryKind.SEMANTIC_FACT,
+        subject_type: str = SubjectType.SELF,
+        subject_key: str = "self",
+        salience: float = 0.7,
+        confidence: float = 0.85,
+        valid_until: Optional[str] = None,
+        evidence_note: Optional[str] = None,
+        sensitivity: str = "normal",
+    ) -> dict:
         if not is_enabled():
             return {"status": "disabled", "message": "Memory writing is disabled for this turn."}
-
-        content = content.strip()
+        content = str(content or "").strip()
         if not content:
-            return {"status": "skipped", "message": "Empty content, nothing written."}
+            return {"status": "skipped", "message": "Empty memory content."}
+        memory_id = await memory.remember(
+            content=content,
+            kind=kind,
+            subject_type=subject_type,
+            subject_key=subject_key,
+            salience=salience,
+            confidence=confidence,
+            valid_until=valid_until,
+            evidence_note=evidence_note,
+            sensitivity=sensitivity,
+            metadata={"source": "tool"},
+        )
+        return {"status": "ok", "memory_id": memory_id}
 
-        await memory.add_entry(content, source="tool")
-        return {"status": "ok", "message": "Memory recorded."}
-
-    return write_memory
-
-
-MEMORY_SQL_SCHEMA = """
-Memory database schema:
-- memory_entries(id INTEGER, entry_date TEXT YYYY-MM-DD, created_at REAL unix timestamp,
-  source TEXT such as 'tool' or 'auto_diary', content TEXT, metadata_json TEXT)
-- memory_summaries(id INTEGER, period_type TEXT: weekly/monthly/yearly,
-  period_start TEXT YYYY-MM-DD, period_end TEXT YYYY-MM-DD, generated_at REAL,
-  content TEXT, metadata_json TEXT)
-- people_facts(id INTEGER, person_key TEXT, display_name TEXT, fact TEXT,
-  evidence TEXT, source TEXT, observed_at TEXT YYYY-MM-DD, created_at REAL,
-  metadata_json TEXT)
-Recommended queries:
-- Recent memory: SELECT entry_date, source, content FROM memory_entries ORDER BY entry_date DESC, id DESC LIMIT 20
-- Topic recall: SELECT entry_date, source, content FROM memory_entries WHERE content LIKE '%keyword%' ORDER BY entry_date DESC LIMIT 20
-- Person recall: SELECT display_name, fact, evidence, observed_at FROM people_facts WHERE person_key LIKE '%name%' OR display_name LIKE '%name%' ORDER BY observed_at DESC LIMIT 20
-"""
+    return remember
 
 
-MESSAGES_SQL_SCHEMA = """
-Messages database schema:
-- messages(id INTEGER, timestamp REAL unix timestamp, role TEXT, type TEXT,
-  sender_id TEXT, content TEXT, metadata_json TEXT, tool_call_json TEXT,
-  multimodal_json TEXT, message_json TEXT)
-Message meaning:
-- role is user/assistant/system/tool/environment.
-- type is message/context_event/function_call/function_call_output.
-- sender_id identifies the speaker when available; assistant replies usually use sender_id='agent'.
-- message_json is the full persisted Message object for exact reconstruction.
-Recommended queries:
-- Recent older messages: SELECT datetime(timestamp, 'unixepoch') AS time, role, sender_id, content FROM messages ORDER BY id DESC LIMIT 50
-- User/topic recall: SELECT datetime(timestamp, 'unixepoch') AS time, sender_id, content FROM messages WHERE content LIKE '%keyword%' ORDER BY id DESC LIMIT 50
-"""
-
-
-def create_query_memory_tool(
-    memory: SQLiteMemory,
-    is_enabled,
-):
-    """Create a tool for read-only SQL querying of long-term memory."""
+def create_recall_memory_tool(memory: "ExperienceMemoryStore", is_enabled):
+    """Create a high-level ordinary recall tool."""
 
     @function_tool(
-        name="query_memory",
+        name="recall_memory",
         description=(
-            "Run a read-only SQL SELECT query against long-term memory for normal recall. "
-            "Use this for past preferences, plans, durable facts, summaries, and people facts "
-            "that are not already available in recent memory context. "
-            "Only SELECT or WITH queries are allowed. "
-            + MEMORY_SQL_SCHEMA
+            "Recall durable memory and summaries. Use for prior preferences, "
+            "commitments, project state, reusable facts, procedures, and person "
+            "facts when the prompt brief is not enough."
         ),
         param_descriptions={
-            "sql": "Single read-only SELECT/WITH SQL statement against the memory database.",
-            "max_rows": "Maximum rows to return. Default: 50; hard limit: 200.",
+            "query": "Natural language recall cue for durable memory, not raw transcript search.",
+            "subject_type": f"Optional subject filter. {SUBJECT_TYPE_DESCRIPTION}",
+            "subject_key": "Optional stable subject identifier.",
+            "time_range": "Optional time range: 'YYYY-MM-DD to YYYY-MM-DD', Unix range, or empty.",
+            "kinds": f"Optional comma-separated kind filter. {MEMORY_KIND_DESCRIPTION}",
+            "include_evidence": "Whether to include evidence quote/event ids. Default false.",
+            "max_items": "Maximum memory items to return. Default 8.",
         },
     )
-    async def query_memory(
-        sql: str,
-        max_rows: int = 50,
+    async def recall_memory(
+        query: str,
+        subject_type: Optional[str] = None,
+        subject_key: Optional[str] = None,
+        time_range: Optional[str] = None,
+        kinds: Optional[str] = None,
+        include_evidence: bool = False,
+        max_items: int = 8,
     ) -> dict:
-        """Query long-term memory with safe read-only SQL."""
         if not is_enabled():
             return {"status": "disabled", "enabled": False, "message": "Memory reading is disabled for this turn."}
-        try:
-            result = await memory.query_sql(sql, max_rows=max_rows)
-            result["enabled"] = True
-            return result
-        except Exception as exception:
-            return {"status": "error", "enabled": True, "message": str(exception)}
+        result = await memory.recall_memory(
+            query=query,
+            subject_type=subject_type,
+            subject_key=subject_key,
+            time_range=time_range,
+            kinds=kinds,
+            include_evidence=include_evidence,
+            max_items=max_items,
+        )
+        result["enabled"] = True
+        return result
 
-    return query_memory
+    return recall_memory
 
 
-def create_query_messages_tool(
-    message_storage: "MessageStorageBase",
-    is_enabled,
-):
-    """Create a tool for deep read-only SQL querying of persisted messages."""
+def create_search_history_tool(memory: "ExperienceMemoryStore", is_enabled):
+    """Create a deep raw event search tool."""
 
     @function_tool(
-        name="query_messages",
+        name="search_history",
         description=(
-            "Run a read-only SQL SELECT query against the full persisted message history. "
-            "This is a deep recall tool. Use it only when the user explicitly asks you to "
-            "carefully remember, review older conversation history in detail, or when "
-            "`query_memory` is insufficient. Recent messages are already in context, so do "
-            "not call this for ordinary recall. Only SELECT or WITH queries are allowed. "
-            + MESSAGES_SQL_SCHEMA
+            "Search raw event history for exact older conversation details. Use "
+            "after ordinary recall is insufficient, or when the user asks for exact "
+            "wording, audit trails, or old chat review."
         ),
         param_descriptions={
-            "sql": "Single read-only SELECT/WITH SQL statement against the messages database.",
-            "max_rows": "Maximum rows to return. Default: 50; hard limit: 200.",
+            "query": "Natural language or keyword text to match against raw events.",
+            "time_range": "Optional time range: 'YYYY-MM-DD to YYYY-MM-DD', Unix range, or empty.",
+            "conversation_id": "Optional conversation id filter.",
+            "speaker_id": "Optional speaker id filter.",
+            "max_events": "Maximum raw events to return. Default 20.",
         },
     )
-    async def query_messages(
-        sql: str,
-        max_rows: int = 50,
+    async def search_history(
+        query: str,
+        time_range: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        speaker_id: Optional[str] = None,
+        max_events: int = 20,
     ) -> dict:
-        """Query persisted message history with safe read-only SQL."""
         if not is_enabled():
             return {"status": "disabled", "enabled": False, "message": "Memory reading is disabled for this turn."}
+        result = await memory.search_history(
+            query=query,
+            time_range=time_range,
+            conversation_id=conversation_id,
+            speaker_id=speaker_id,
+            max_events=max_events,
+        )
+        result["enabled"] = True
+        return result
 
-        query_sql = getattr(message_storage, "query_sql", None)
-        if query_sql is None:
-            return {
-                "status": "unsupported",
-                "enabled": True,
-                "message": "The active message storage does not support SQL queries.",
-            }
-        try:
-            result = await query_sql(sql, max_rows=max_rows)
-            result["enabled"] = True
-            return result
-        except Exception as exception:
-            return {"status": "error", "enabled": True, "message": str(exception)}
+    return search_history
 
-    return query_messages
+
+def create_correct_memory_tool(memory: "ExperienceMemoryStore", is_enabled):
+    """Create a correction tool that preserves revision history."""
+
+    @function_tool(
+        name="correct_memory",
+        description=(
+            "Correct an existing memory when the user says it is wrong, outdated, "
+            "or gives a clearer replacement. The store preserves revision history."
+        ),
+        param_descriptions={
+            "correction": "Correct replacement memory content.",
+            "reason": "Why this correction is being made.",
+            "memory_id": "Optional exact memory id.",
+            "query": "Optional lookup cue when memory_id is unknown.",
+        },
+    )
+    async def correct_memory(
+        correction: str,
+        reason: str,
+        memory_id: Optional[int] = None,
+        query: Optional[str] = None,
+    ) -> dict:
+        if not is_enabled():
+            return {"status": "disabled", "message": "Memory correction is disabled for this turn."}
+        return await memory.correct_memory(
+            memory_id=memory_id,
+            query=query,
+            correction=correction,
+            reason=reason,
+            actor="tool",
+        )
+
+    return correct_memory
+
+
+def create_forget_memory_tool(memory: "ExperienceMemoryStore", is_enabled):
+    """Create a forget/delete memory tool."""
+
+    @function_tool(
+        name="forget_memory",
+        description=(
+            "Archive or delete an existing memory when the user asks you to forget, "
+            "remove, hide, or delete it. Archive by default unless deletion is explicit."
+        ),
+        param_descriptions={
+            "memory_id": "Optional exact memory id.",
+            "query": "Optional lookup cue when memory_id is unknown.",
+            "mode": "archive or delete. Default archive.",
+            "reason": "Why this memory should be forgotten.",
+        },
+    )
+    async def forget_memory(
+        memory_id: Optional[int] = None,
+        query: Optional[str] = None,
+        mode: str = "archive",
+        reason: str = "forget requested",
+    ) -> dict:
+        if not is_enabled():
+            return {"status": "disabled", "message": "Memory forgetting is disabled for this turn."}
+        return await memory.forget_memory(
+            memory_id=memory_id,
+            query=query,
+            mode=mode,
+            reason=reason,
+            actor="tool",
+        )
+
+    return forget_memory

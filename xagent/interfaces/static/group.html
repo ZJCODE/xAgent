@@ -474,6 +474,10 @@ function webSocketUrl(path) {
   return url.toString();
 }
 
+function browserTimezone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+}
+
 function appendMessage(msg, placeholder = false) {
   const container = document.getElementById('chatMessages');
   const hint = document.getElementById('emptyHint');
@@ -557,6 +561,7 @@ async function sendMessage() {
     stream: true,
     enable_memory: false,
     private: false,
+    timezone: browserTimezone(),
   };
 
   const agentMsg = { role: 'assistant', content: '' };

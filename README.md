@@ -87,7 +87,7 @@ xagent observe "Bob mentioned the demo may move to 3pm" --source feishu --event-
 
 Long-term memory is built from the agent's experience stream, not only direct chats. Meaningful observations can be consolidated alongside conversations; preserve attribution in the observation text or metadata so overheard speech is not confused with a direct request from the current user.
 
-Memory writes are buffered for efficiency, then flushed by batch size, by a stale-message fallback, runtime heartbeat in long-lived API/Feishu processes, and normal CLI/server shutdown. Recent memory context is managed automatically and defaults to the last 3 days. Long-term memory is stored in `memory/memory.sqlite3` with tables for memory entries, summaries, and quote-backed people facts.
+Memory writes are buffered for efficiency, then flushed by batch size, by a stale-message fallback, runtime heartbeat in long-lived API/Feishu processes, and normal CLI/server shutdown. Recent memory context is managed automatically. Raw events, structured memories, evidence, revisions, people, summaries, and retention policies live in one canonical SQLite database at `memory/xagent_memory.sqlite3`.
 
 ## API Transports
 
