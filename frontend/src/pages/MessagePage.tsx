@@ -1,9 +1,9 @@
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Search, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Markdown } from "../components/Markdown";
-import { getAgentInfo, getMessages } from "../lib/api";
+import { getAgentInfo, getMessages, searchMessages } from "../lib/api";
 import { classNames, formatTimestamp } from "../lib/format";
-import type { MessageItem } from "../types";
+import type { MessageItem, MessageSearchResult } from "../types";
 
 const PAGE_SIZE = 50;
 
@@ -25,11 +25,18 @@ function roleClass(role: string): string {
   return "role-observation";
 }
 
+function isSearchResult(message: MessageItem | MessageSearchResult): message is MessageSearchResult {
+  return Array.isArray((message as MessageSearchResult).matched_in);
+}
+
 export function MessagePage() {
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [storagePath, setStoragePath] = useState("");
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<MessageSearchResult[]>([]);
+  const [searchActive, setSearchActive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -57,30 +64,91 @@ export function MessagePage() {
     void load(false);
   }, []);
 
+  const runSearch = async () => {
+    const text = query.trim();
+    if (!text) return;
+
+    setLoading(true);
+    setError("");
+    setSearchActive(true);
+    try {
+      const data = await searchMessages(text);
+      setResults(data.results || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const activeMessages: Array<MessageItem | MessageSearchResult> = searchActive ? results : messages;
+
   return (
     <div className="console-page">
       <section className="console-toolbar">
-        <div>
+        <div className="min-w-0">
           <h2>Messages</h2>
           <p>{storagePath || "Message storage"}</p>
         </div>
-        <div className="toolbar-actions">
-          <button type="button" className="ghost-button icon-text-button" onClick={() => void load(false)}>
+        <div className="search-control">
+          <input
+            className="search-input"
+            placeholder="Search messages"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void runSearch();
+            }}
+          />
+          <button type="button" className="ghost-button icon-text-button" onClick={runSearch}>
+            <Search size={15} />
+            Search
+          </button>
+          <button
+            type="button"
+            className="ghost-button icon-button"
+            onClick={() => {
+              setQuery("");
+              setResults([]);
+              setSearchActive(false);
+            }}
+            title="Clear search"
+          >
+            <X size={16} />
+          </button>
+          <button
+            type="button"
+            className="ghost-button icon-button"
+            onClick={() => {
+              if (searchActive && query.trim()) {
+                void runSearch();
+                return;
+              }
+              void load(false);
+            }}
+            title="Refresh"
+          >
             <RefreshCw size={15} />
-            Refresh
           </button>
         </div>
       </section>
       {error ? <div className="error-strip">{error}</div> : null}
       <div className="message-stream">
-        {messages.length ? (
-          messages.map((message, index) => (
+        {activeMessages.length ? (
+          activeMessages.map((message, index) => (
             <article key={`${message.timestamp}-${index}`} className={classNames("message-row", roleClass(message.role))}>
               <div className="message-row-meta">
                 <span className={classNames("meta-chip", roleClass(message.role))}>{message.role}</span>
                 <span className="meta-chip">{message.type}</span>
                 {message.sender_id ? <span className="meta-chip">{message.sender_id}</span> : null}
                 <span className="meta-chip">{formatTimestamp(message.timestamp)}</span>
+                {isSearchResult(message)
+                  ? message.matched_in.map((match) => (
+                      <span key={`${message.timestamp}-${match}`} className="meta-chip">
+                        {match}
+                      </span>
+                    ))
+                  : null}
               </div>
               <Markdown content={message.content || ""} />
               {message.tool_call ? (
@@ -89,9 +157,9 @@ export function MessagePage() {
             </article>
           ))
         ) : (
-          <div className="empty-state">{loading ? "Loading..." : "No messages found"}</div>
+          <div className="empty-state">{loading ? "Loading..." : searchActive ? "No matching messages" : "No messages found"}</div>
         )}
-        {hasMore ? (
+        {!searchActive && hasMore ? (
           <button type="button" className="ghost-button icon-text-button mx-auto" onClick={() => void load(true)} disabled={loading}>
             Load more
           </button>

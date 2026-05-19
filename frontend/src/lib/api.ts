@@ -3,6 +3,7 @@ import type {
   AgentInfo,
   FileReadResult,
   FileNode,
+  MessageSearchResponse,
   MessagesResponse,
   MessagesStats,
   SearchResult,
@@ -72,6 +73,10 @@ export async function searchWorkspace(query: string): Promise<{ query: string; r
 
 export async function getMessages(count: number, offset: number): Promise<MessagesResponse> {
   return requestJson(`/api/messages?count=${count}&offset=${offset}`);
+}
+
+export async function searchMessages(query: string): Promise<MessageSearchResponse> {
+  return requestJson(`/api/messages/search?query=${encodeURIComponent(query)}`);
 }
 
 export async function getMessagesStats(): Promise<MessagesStats> {

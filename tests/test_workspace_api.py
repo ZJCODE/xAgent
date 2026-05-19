@@ -6,14 +6,25 @@ from types import SimpleNamespace
 import httpx
 
 from xagent.interfaces.server import AgentHTTPServer
+from xagent.schemas import Message, MessageType, RoleType, ToolCall
 
 
 class FakeMessageStorage:
+    def __init__(self, messages=None):
+        self._messages = list(messages or [])
+
     def get_stream_info(self):
         return {"path": "messages.sqlite3"}
 
     async def get_message_count(self):
-        return 0
+        return len(self._messages)
+
+    async def get_messages(self, count: int = 50, offset: int = 0):
+        end = len(self._messages) - offset
+        if end <= 0:
+            return []
+        start = max(0, end - count)
+        return list(self._messages[start:end])
 
     async def clear_messages(self):
         return None
@@ -23,8 +34,8 @@ class WorkspaceAgent:
     model = "test-model"
     tools = {"run_command": object()}
 
-    def __init__(self, memory_root: Path, workspace_dir: Path):
-        self.message_storage = FakeMessageStorage()
+    def __init__(self, memory_root: Path, workspace_dir: Path, messages=None):
+        self.message_storage = FakeMessageStorage(messages=messages)
         self.markdown_memory = SimpleNamespace(root=str(memory_root))
         self.workspace_dir = workspace_dir
         self.system_prompt = "Test agent"
@@ -36,12 +47,15 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
         return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
     def _server(self, root: Path) -> AgentHTTPServer:
+        return self._server_with_messages(root)
+
+    def _server_with_messages(self, root: Path, messages=None) -> AgentHTTPServer:
         memory_root = root / "memory"
         workspace_dir = root / "workspace"
         memory_root.mkdir()
         workspace_dir.mkdir()
         server = AgentHTTPServer(
-            agent=WorkspaceAgent(memory_root=memory_root, workspace_dir=workspace_dir),
+            agent=WorkspaceAgent(memory_root=memory_root, workspace_dir=workspace_dir, messages=messages),
             enable_web=False,
         )
         server.workspace = root
@@ -142,6 +156,39 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("people", tree_names)
             self.assertEqual(len(daily_search_response.json()["results"]), 1)
             self.assertEqual(people_search_response.json()["results"], [])
+
+    async def test_message_search_matches_message_content_and_tool_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            messages = [
+                Message.create("content marker from alice", role=RoleType.USER, sender_id="alice"),
+                Message(
+                    type=MessageType.FUNCTION_CALL_OUTPUT,
+                    role=RoleType.TOOL,
+                    sender_id="search_workspace",
+                    content="Tool output preview",
+                    tool_call=ToolCall(
+                        call_id="call-1",
+                        name="search_workspace",
+                        output="tool marker",
+                    ),
+                ),
+            ]
+            server = self._server_with_messages(root, messages=messages)
+
+            async with await self._client(server) as client:
+                response = await client.get("/api/messages/search", params={"query": "marker"})
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["query"], "marker")
+            self.assertEqual(len(payload["results"]), 2)
+            self.assertEqual(payload["results"][0]["type"], "function_call_output")
+            self.assertIn("tool", payload["results"][0]["matched_in"])
+            self.assertIn("tool marker", payload["results"][0]["snippet"])
+            self.assertEqual(payload["results"][1]["sender_id"], "alice")
+            self.assertIn("content", payload["results"][1]["matched_in"])
+            self.assertIn("content marker from alice", payload["results"][1]["snippet"])
 
 
 if __name__ == "__main__":

@@ -94,6 +94,11 @@ export interface MessageItem {
   };
 }
 
+export interface MessageSearchResult extends MessageItem {
+  matched_in: string[];
+  snippet?: string;
+}
+
 export interface MessagesResponse {
   messages: MessageItem[];
   total: number;
@@ -107,4 +112,9 @@ export interface MessagesStats {
   storage?: Record<string, unknown>;
   earliest_timestamp?: number;
   latest_timestamp?: number;
+}
+
+export interface MessageSearchResponse {
+  query: string;
+  results: MessageSearchResult[];
 }

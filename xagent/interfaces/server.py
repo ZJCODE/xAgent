@@ -21,6 +21,7 @@ from .base import BaseAgentConfig, BaseAgentRunner
 from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..core.runtime import create_runtime_heartbeat
+from ..schemas import Message
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _WORKSPACE_TEXT_READ_LIMIT = 1_000_000
@@ -385,6 +386,91 @@ class AgentHTTPServer(BaseAgentRunner):
             return path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
             raise HTTPException(status_code=415, detail="File is not UTF-8 text") from exc
+
+    @staticmethod
+    def _message_item(message: Message) -> Dict[str, Any]:
+        item = {
+            "role": message.role.value if hasattr(message.role, "value") else str(message.role),
+            "type": message.type.value if hasattr(message.type, "value") else str(message.type),
+            "content": message.content,
+            "sender_id": message.sender_id,
+            "timestamp": message.timestamp,
+            "metadata": message.metadata,
+        }
+        if message.tool_call:
+            item["tool_call"] = {
+                "name": message.tool_call.name,
+                "arguments": message.tool_call.arguments,
+                "output": message.tool_call.output,
+            }
+        return item
+
+    @staticmethod
+    def _message_search_fields(message: Message) -> List[tuple[str, str]]:
+        role = message.role.value if hasattr(message.role, "value") else str(message.role)
+        message_type = message.type.value if hasattr(message.type, "value") else str(message.type)
+        fields: List[tuple[str, str]] = [
+            ("content", message.content or ""),
+            ("sender", message.sender_id or ""),
+            ("role", role),
+            ("type", message_type),
+        ]
+
+        if message.tool_call:
+            tool_parts = [
+                str(message.tool_call.name or ""),
+                str(message.tool_call.arguments or ""),
+                str(message.tool_call.output or ""),
+            ]
+            tool_text = " ".join(part for part in tool_parts if part)
+            if tool_text:
+                fields.append(("tool", tool_text))
+
+        if message.metadata:
+            metadata_text = json.dumps(message.metadata, ensure_ascii=False, sort_keys=True, default=str)
+            fields.append(("metadata", metadata_text))
+
+        return fields
+
+    @staticmethod
+    def _build_search_snippet(text: str, query: str) -> str:
+        if not text:
+            return ""
+
+        normalized_query = query.strip().lower()
+        lower_text = text.lower()
+        match_index = lower_text.find(normalized_query)
+        if match_index == -1:
+            return text[:200].replace("\n", " ").strip()
+
+        start = max(0, match_index - 80)
+        end = min(len(text), match_index + len(query) + 120)
+        return text[start:end].replace("\n", " ").strip()
+
+    def _message_search_result(self, message: Message, query: str) -> Optional[Dict[str, Any]]:
+        normalized_query = query.strip().lower()
+        if not normalized_query:
+            return None
+
+        matched_in: List[str] = []
+        snippet = ""
+        for field, text in self._message_search_fields(message):
+            if not text:
+                continue
+            if normalized_query not in text.lower():
+                continue
+            matched_in.append(field)
+            if not snippet:
+                snippet = self._build_search_snippet(text, query)
+
+        if not matched_in:
+            return None
+
+        return {
+            **self._message_item(message),
+            "matched_in": matched_in,
+            "snippet": snippet,
+        }
 
     def _get_identity_path(self) -> Path:
         identity_path = getattr(self, "identity_path", None)
@@ -954,23 +1040,7 @@ class AgentHTTPServer(BaseAgentRunner):
             """
             total = await self.message_storage.get_message_count()
             messages = await self.message_storage.get_messages(count=count, offset=offset)
-            items = []
-            for msg in messages:
-                item = {
-                    "role": msg.role.value if hasattr(msg.role, "value") else str(msg.role),
-                    "type": msg.type.value if hasattr(msg.type, "value") else str(msg.type),
-                    "content": msg.content,
-                    "sender_id": msg.sender_id,
-                    "timestamp": msg.timestamp,
-                    "metadata": msg.metadata,
-                }
-                if msg.tool_call:
-                    item["tool_call"] = {
-                        "name": msg.tool_call.name,
-                        "arguments": msg.tool_call.arguments,
-                        "output": msg.tool_call.output,
-                    }
-                items.append(item)
+            items = [self._message_item(msg) for msg in messages]
             items.reverse()
             return {
                 "messages": items,
@@ -979,6 +1049,28 @@ class AgentHTTPServer(BaseAgentRunner):
                 "offset": offset,
                 "has_more": offset + count < total,
             }
+
+        @app.get("/api/messages/search", tags=["Monitoring"])
+        async def search_messages(
+            query: str = Query(..., min_length=1, description="Search text for message content and metadata"),
+            limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
+        ):
+            """Search stored messages in newest-first order."""
+            total = await self.message_storage.get_message_count()
+            if total <= 0 or not hasattr(self.message_storage, "get_messages"):
+                return {"query": query, "results": []}
+
+            messages = await self.message_storage.get_messages(count=total, offset=0)
+            results: List[Dict[str, Any]] = []
+            for message in reversed(messages):
+                match = self._message_search_result(message, query)
+                if match is None:
+                    continue
+                results.append(match)
+                if len(results) >= limit:
+                    break
+
+            return {"query": query, "results": results}
 
         @app.post("/api/memory/clear", tags=["Monitoring"])
         async def memory_clear():
