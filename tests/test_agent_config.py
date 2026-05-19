@@ -1,4 +1,5 @@
 import io
+import asyncio
 import unittest
 import tempfile
 from pathlib import Path
@@ -247,6 +248,9 @@ provider:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertIn("run_command", runner.agent.tools)
+            result = asyncio.run(runner.agent.tools["run_command"]("pwd"))
+            self.assertEqual(result["return_code"], 0)
+            self.assertEqual(Path(result["stdout"].strip()).resolve(), Path(tmpdir).resolve() / "workspace")
 
     def test_init_creates_config_and_identity_in_selected_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -257,10 +261,13 @@ provider:
             self.assertEqual(result.identity_path, Path(tmpdir).resolve() / "identity.md")
             self.assertEqual(result.memory_dir, Path(tmpdir).resolve() / "memory")
             self.assertEqual(result.messages_dir, Path(tmpdir).resolve() / "messages")
+            self.assertEqual(result.workspace_dir, Path(tmpdir).resolve() / "workspace")
             self.assertTrue(result.config_path.is_file())
             self.assertTrue(result.identity_path.is_file())
             self.assertTrue(result.memory_dir.is_dir())
             self.assertTrue(result.messages_dir.is_dir())
+            self.assertTrue(result.workspace_dir.is_dir())
+            self.assertFalse((result.memory_dir / "people").exists())
             self.assertFalse((Path(tmpdir) / "my_toolkit").exists())
 
             config_text = result.config_path.read_text(encoding="utf-8")
@@ -331,28 +338,35 @@ provider:
             result = init_agent_directory(tmpdir)
             memory_marker = result.memory_dir / "daily.md"
             messages_marker = result.messages_dir / "messages.sqlite3"
+            workspace_marker = result.workspace_dir / "notes.md"
             memory_marker.write_text("memory", encoding="utf-8")
             messages_marker.write_text("messages", encoding="utf-8")
+            workspace_marker.write_text("workspace", encoding="utf-8")
 
             init_agent_directory(tmpdir, force=True)
 
             self.assertEqual(memory_marker.read_text(encoding="utf-8"), "memory")
             self.assertEqual(messages_marker.read_text(encoding="utf-8"), "messages")
+            self.assertEqual(workspace_marker.read_text(encoding="utf-8"), "workspace")
 
     def test_init_force_can_clear_runtime_data(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = init_agent_directory(tmpdir)
             memory_marker = result.memory_dir / "daily.md"
             messages_marker = result.messages_dir / "messages.sqlite3"
+            workspace_marker = result.workspace_dir / "notes.md"
             memory_marker.write_text("memory", encoding="utf-8")
             messages_marker.write_text("messages", encoding="utf-8")
+            workspace_marker.write_text("workspace", encoding="utf-8")
 
             cleared = init_agent_directory(tmpdir, force=True, clear_runtime_data=True)
 
             self.assertTrue(cleared.memory_dir.is_dir())
             self.assertTrue(cleared.messages_dir.is_dir())
+            self.assertTrue(cleared.workspace_dir.is_dir())
             self.assertFalse(memory_marker.exists())
             self.assertFalse(messages_marker.exists())
+            self.assertEqual(workspace_marker.read_text(encoding="utf-8"), "workspace")
 
     def test_init_uses_selected_provider_model_key_and_identity(self):
         with tempfile.TemporaryDirectory() as tmpdir:

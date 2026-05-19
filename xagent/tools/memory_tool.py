@@ -61,7 +61,7 @@ def create_search_memory_tool(
         param_descriptions={
             "query": "Keyword to search for. Leave empty when only searching by date.",
             "date": "A single date (YYYY-MM-DD) or date range (YYYY-MM-DD to YYYY-MM-DD) to read.",
-            "scope": "Which memory area to search: daily, weekly, monthly, yearly, people, or all. Default: all.",
+            "scope": "Which time-memory area to search: daily, weekly, monthly, yearly, or all. Default: all.",
             "context_lines": "Number of context lines around each keyword match. Default: 3.",
         },
     )

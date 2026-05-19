@@ -85,6 +85,30 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Current time: 2026-05-14 09:30", context_messages[2]["content"])
         self.assertIn("what Joy most recently said", context_messages[2]["content"])
 
+    def test_build_turn_context_messages_can_include_workspace_context(self):
+        messages = [
+            Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
+        ]
+        workspace_context = AgentConfig.build_workspace_context("/tmp/xagent/workspace")
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="Joy",
+            workspace_context=workspace_context,
+            current_time="2026-05-14 09:30",
+        )
+
+        self.assertEqual(
+            [message["name"] for message in context_messages],
+            [
+                AgentConfig.WORKSPACE_CONTEXT_NAME,
+                AgentConfig.RECENT_EXPERIENCE_NAME,
+                AgentConfig.CURRENT_TASK_NAME,
+            ],
+        )
+        self.assertIn("/tmp/xagent/workspace", context_messages[0]["content"])
+        self.assertIn("self-managed work area", context_messages[0]["content"])
+
     def test_turn_context_messages_attach_latest_user_images_to_current_task(self):
         image_url = "https://example.com/screenshot.png"
         messages = [

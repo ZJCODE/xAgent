@@ -67,6 +67,12 @@ class Agent:
         if workspace is not None:
             workspace_path = Path(workspace).expanduser().resolve()
 
+        runtime_root = workspace_path or Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        self.workspace = runtime_root
+        self.workspace_dir = self._workspace_dir(runtime_root)
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+
         if message_storage is not None:
             self.message_storage = message_storage
         elif workspace_path is not None:
@@ -74,19 +80,15 @@ class Agent:
                 path=str(self._message_storage_path(workspace_path))
             )
         else:
-            default_workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
-            default_workspace.mkdir(parents=True, exist_ok=True)
             self.message_storage = MessageStorageLocal(
-                path=str(self._message_storage_path(default_workspace))
+                path=str(self._message_storage_path(runtime_root))
             )
 
         # Markdown-based memory system
         if workspace_path is not None:
             memory_dir = str(self._memory_dir(workspace_path))
         else:
-            default_workspace = Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
-            default_workspace.mkdir(parents=True, exist_ok=True)
-            memory_dir = str(self._memory_dir(default_workspace))
+            memory_dir = str(self._memory_dir(runtime_root))
 
         self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
         self.llm_service = JournalLLMService(
@@ -153,6 +155,15 @@ class Agent:
     @classmethod
     def _memory_dir(cls, workspace: Path) -> Path:
         return workspace / AgentConfig.MEMORY_DIRNAME
+
+    @classmethod
+    def _workspace_dir(cls, workspace: Path) -> Path:
+        return workspace / AgentConfig.WORKSPACE_DIRNAME
+
+    def _workspace_context(self, tool_names: List[str]) -> str:
+        if "run_command" not in tool_names:
+            return ""
+        return AgentConfig.build_workspace_context(str(self.workspace_dir))
 
     async def flush_memory(self) -> None:
         flusher = getattr(self.memory_handler, "flush_pending", None)
@@ -290,12 +301,14 @@ class Agent:
             tool_specs = self.tool_manager.cached_tool_specs
             if excluded and tool_specs:
                 tool_specs = [s for s in tool_specs if self._tool_spec_name(s) not in excluded] or None
+            workspace_context = self._workspace_context(tool_names)
 
             instructions = msg_handler.build_instruction_messages(tool_names=tool_names)
             iteration_messages = msg_handler.build_turn_context_messages(
                 recent_messages,
                 current_user_id=user_id,
                 memory_context=memory_context,
+                workspace_context=workspace_context,
             )
             input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 
@@ -458,12 +471,14 @@ class Agent:
             tool_specs = self.tool_manager.cached_tool_specs
             if excluded and tool_specs:
                 tool_specs = [s for s in tool_specs if self._tool_spec_name(s) not in excluded] or None
+            workspace_context = self._workspace_context(tool_names)
 
             instructions = msg_handler.build_instruction_messages(tool_names=tool_names)
             iteration_messages = msg_handler.build_turn_context_messages(
                 recent_messages,
                 current_user_id=user_id,
                 memory_context=memory_context,
+                workspace_context=workspace_context,
             )
             input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 

@@ -203,44 +203,9 @@ class MemoryHandler:
             )
             if content.strip():
                 await self.memory.append_daily(content)
-                await self._update_people_profiles(messages, content, today_str)
                 logger.debug("Background diary write: %d msgs → %d chars", len(messages), len(content))
         except Exception as exc:
             logger.error("Background diary write failed: %s", exc)
-
-    async def _update_people_profiles(
-        self,
-        messages: List[dict],
-        diary_entry: str,
-        journal_date: str,
-    ) -> None:
-        extractor = getattr(self.llm_service, "extract_people_profile_updates", None)
-        writer = getattr(self.memory, "append_people_profile", None)
-        if extractor is None or writer is None:
-            return
-
-        try:
-            profile_updates = await extractor(
-                messages=messages,
-                diary_entry=diary_entry,
-                journal_date=journal_date,
-            )
-            updates = getattr(profile_updates, "updates", []) or []
-            for update in updates:
-                update_data = update.model_dump() if hasattr(update, "model_dump") else dict(update)
-                person_key = str(update_data.get("person_key") or "").strip()
-                fact = str(update_data.get("fact") or "").strip()
-                evidence = str(update_data.get("evidence") or "").strip()
-                if not person_key or not fact or not evidence:
-                    continue
-                await writer(
-                    person_key=person_key,
-                    facts=[update_data],
-                    display_name=str(update_data.get("display_name") or person_key).strip(),
-                    target_date=date.fromisoformat(journal_date),
-                )
-        except Exception as exc:
-            logger.warning("People profile update skipped: %s", exc)
 
     # ------------------------------------------------------------------
     # Summary auto-generation

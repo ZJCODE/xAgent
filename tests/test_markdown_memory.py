@@ -105,52 +105,23 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_directory_structure_created(self):
         root = Path(self.memory_dir)
-        for sub in ("daily", "weekly", "monthly", "yearly", "people"):
+        for sub in ("daily", "weekly", "monthly", "yearly"):
             self.assertTrue((root / sub).is_dir())
+        self.assertFalse((root / "people").exists())
 
-    async def test_append_people_profile_creates_quote_backed_file(self):
-        path = await self.memory.append_people_profile(
-            "Alice",
-            [{
-                "fact": "Alice prefers concise implementation plans.",
-                "evidence": "I prefer concise implementation plans.",
-                "source": "direct message",
-            }],
-            display_name="Alice",
-        )
+    async def test_all_scope_excludes_legacy_people_directory(self):
+        legacy_people = Path(self.memory_dir) / "people"
+        legacy_people.mkdir()
+        (legacy_people / "alice.md").write_text("legacy profile marker", encoding="utf-8")
+        await self.memory.append_daily("time memory marker")
 
-        self.assertIsNotNone(path)
-        text = await self.memory.read_file(self.memory.people_path("Alice"))
-        self.assertIn("# Alice", text)
-        self.assertIn("Person key: `Alice`", text)
-        self.assertIn("Alice prefers concise implementation plans.", text)
-        self.assertIn("Evidence: I prefer concise implementation plans.", text)
+        all_results = await self.memory.search_keyword("legacy profile marker", scope="all")
+        invalid_people_scope_results = await self.memory.search_keyword("legacy profile marker", scope="people")
+        files = await self.memory.list_files("all")
 
-    async def test_append_people_profile_skips_duplicate_fact(self):
-        fact = {
-            "fact": "Alice prefers concise implementation plans.",
-            "evidence": "I prefer concise implementation plans.",
-        }
-
-        await self.memory.append_people_profile("Alice", [fact], display_name="Alice")
-        await self.memory.append_people_profile("Alice", [fact], display_name="Alice")
-
-        text = await self.memory.read_file(self.memory.people_path("Alice"))
-        self.assertEqual(text.count("Alice prefers concise implementation plans."), 1)
-
-    async def test_search_keyword_supports_people_scope(self):
-        await self.memory.append_people_profile(
-            "Alice",
-            [{
-                "fact": "Alice is working on xAgent memory.",
-                "evidence": "xAgent memory",
-            }],
-            display_name="Alice",
-        )
-
-        result = await self.memory.search_keyword("xAgent memory", scope="people")
-
-        self.assertIn("xAgent memory", result)
+        self.assertEqual(all_results.strip(), "")
+        self.assertEqual(invalid_people_scope_results.strip(), "")
+        self.assertTrue(all("/people/" not in item for item in files))
 
     async def test_regular_file_io_does_not_spawn_subprocesses(self):
         d = date.today()

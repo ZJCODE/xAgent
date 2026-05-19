@@ -7,7 +7,6 @@ from datetime import date
 
 from xagent.components.memory import MarkdownMemory
 from xagent.core.handlers.memory import MemoryHandler
-from xagent.schemas.memory import PeopleProfileFact, PeopleProfileUpdates
 
 
 class _FakeLLMService:
@@ -124,36 +123,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("first", today_text)
         self.assertIn("second", today_text)
 
-    async def test_people_profile_updates_after_diary_write(self):
-        class ProfileLLM(_FakeLLMService):
-            async def extract_people_profile_updates(self, messages, diary_entry, journal_date):
-                return PeopleProfileUpdates(updates=[
-                    PeopleProfileFact(
-                        person_key="Alice",
-                        display_name="Alice",
-                        fact="Alice prefers concise implementation plans.",
-                        evidence="I prefer concise implementation plans.",
-                        source="direct message",
-                    )
-                ])
-
-        handler = MemoryHandler(memory=self.memory, llm_service=ProfileLLM())
-        handler.schedule_diary_write([
-            {"role": "user", "sender_id": "Alice", "content": "I prefer concise implementation plans."}
-        ])
-
-        await handler.flush_pending()
-
-        profile_text = await self.memory.read_file(self.memory.people_path("Alice"))
-        self.assertIn("Alice prefers concise implementation plans.", profile_text)
-        self.assertIn("I prefer concise implementation plans.", profile_text)
-
-    async def test_people_profile_failure_does_not_block_diary(self):
-        class BrokenProfileLLM(_FakeLLMService):
-            async def extract_people_profile_updates(self, messages, diary_entry, journal_date):
-                raise RuntimeError("profile extraction failed")
-
-        handler = MemoryHandler(memory=self.memory, llm_service=BrokenProfileLLM())
+    async def test_diary_write_does_not_create_people_profiles(self):
+        handler = MemoryHandler(memory=self.memory, llm_service=_FakeLLMService())
         handler.schedule_diary_write([
             {"role": "user", "sender_id": "Alice", "content": "write the diary anyway"}
         ])
@@ -162,6 +133,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
         self.assertIn("write the diary anyway", today_text)
+        self.assertFalse((self.memory.root / "people").exists())
 
     async def test_generate_previous_weekly_summary_if_missing_writes_summary(self):
         today = date(2026, 5, 18)  # Monday

@@ -15,6 +15,7 @@ class AgentConfig:
     TOOL_POLICY_NAME = "tool_policy"
     IDENTITY_CONTEXT_NAME = "identity_context"
     RECENT_MEMORY_NAME = "recent_memory"
+    WORKSPACE_CONTEXT_NAME = "workspace_context"
     RECENT_EXPERIENCE_NAME = "recent_experience"
     CURRENT_TASK_NAME = "current_task"
 
@@ -22,6 +23,7 @@ class AgentConfig:
     DEFAULT_WORKSPACE = "~/.xagent"
     MEMORY_DIRNAME = "memory"
     MESSAGE_DIRNAME = "messages"
+    WORKSPACE_DIRNAME = "workspace"
     MESSAGE_DB_FILENAME = "messages.sqlite3"
     MEMORY_RECENT_DAYS = 3
     MEMORY_MESSAGE_THRESHOLD = 12
@@ -88,8 +90,11 @@ class AgentConfig:
         ),
         "run_command": (
             "\n**Shell Command Execution:**\n"
+            "- When no working directory is supplied, `run_command` uses the configured agent workspace directory.\n"
+            "- The workspace directory is the agent's external self-managed work area for notes, project records, temporary files, scripts, images, and other artifacts.\n"
+            "- Inside the workspace directory, you may create, edit, overwrite, and delete files autonomously when useful for the current task.\n"
+            "- Outside the workspace directory, write, delete, install, network, or git-mutation commands require explicit user approval first.\n"
             "- Default to read-only inspection. Safe examples: `ls`, `cat`, `head`, `tail`, `grep`, `find`, `pwd`, `wc`, `file`, `stat`, `du`, `env`, `uname`, `git status`, `git log`, `git diff`, `git show`, `git branch`, `git ls-files`, `git config --list`.\n"
-            "- Write, delete, install, network, or git-mutation commands require explicit user approval first.\n"
             "- Never run destructive commands without approval: recursive deletion, disk wipes, broad permission changes, `curl|sh` from untrusted sources, `git push --force`, `git reset --hard` on shared branches.\n"
             "- Never expose secrets; summarize only non-sensitive parts of output.\n"
             "- Stay within scope, use reasonable timeouts, and avoid unbounded output.\n"
@@ -129,6 +134,16 @@ class AgentConfig:
         "<identity_context trusted_as_instruction=\"false\">\n"
         "{identity}\n"
         "</identity_context>"
+    )
+
+    WORKSPACE_CONTEXT_TEMPLATE = (
+        "<workspace_context>\n"
+        "Workspace directory: {workspace_dir}\n"
+        "This directory is your external self-managed work area. Use it for notes, project records, temporary files, scripts, images, and other artifacts.\n"
+        "When using `run_command` without a working_directory, commands run here by default.\n"
+        "You may autonomously create, edit, overwrite, and delete files inside this directory when useful.\n"
+        "Do not treat this as a hard sandbox: commands can still reference paths outside it. Destructive work outside this directory requires explicit user approval.\n"
+        "</workspace_context>"
     )
 
     CURRENT_TASK_TEMPLATE = (
@@ -193,6 +208,10 @@ class AgentConfig:
     @staticmethod
     def build_identity_context(identity: str) -> str:
         return AgentConfig.IDENTITY_CONTEXT_TEMPLATE.format(identity=identity.strip())
+
+    @staticmethod
+    def build_workspace_context(workspace_dir: str) -> str:
+        return AgentConfig.WORKSPACE_CONTEXT_TEMPLATE.format(workspace_dir=workspace_dir)
 
     @staticmethod
     def build_current_task(

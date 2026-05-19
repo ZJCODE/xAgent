@@ -35,7 +35,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("first-person perspective", prompt)
         self.assertIn("keep the source language and do not translate", prompt)
         self.assertIn("Preserve speaker attribution", prompt)
-        self.assertIn("Do not flatten multiple people into one profile", prompt)
+        self.assertIn("Do not flatten multiple people into one undifferentiated narrative", prompt)
         self.assertIn("Keep each person's preferences, plans, commitments, and experiences attached to that person", prompt)
         self.assertIn('generic labels such as "User A", "User B", "用户A", or "用户B"', prompt)
         self.assertIn("If attribution is uncertain, keep the uncertainty visible", prompt)
@@ -68,16 +68,6 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("[observation ", transcript)
         self.assertIn("Bob 说活动可能要提前开始。", transcript)
         self.assertIsNone(event.sender_id)
-
-    def test_people_profile_prompt_requires_quotes_and_stable_facts(self):
-        prompt = JournalLLMService.build_people_profile_system_prompt("2026-05-14")
-
-        self.assertIn("stable, reusable facts", prompt)
-        self.assertIn("person_key must be the exact speaker label", prompt)
-        self.assertIn("evidence is required", prompt)
-        self.assertIn("Do not infer personality labels from a single moment", prompt)
-        self.assertIn("unknown speakers, or uncertain attribution", prompt)
-        self.assertIn('{"updates": []}', prompt)
 
     async def test_format_diary_entry_uses_plain_text_and_forwards_model_api(self):
         class FakeModelClient:

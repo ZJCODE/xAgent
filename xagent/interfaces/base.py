@@ -20,7 +20,7 @@ from ..core.providers import (
 )
 from ..components import MessageStorageBase, MessageStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
-from ..tools import create_web_search_tool, run_command
+from ..tools import create_web_search_tool, create_workspace_run_command_tool
 from ..tools.search_tool import (
     SEARCH_PROVIDER_OPENAI,
     is_placeholder_api_key,
@@ -35,6 +35,7 @@ class BaseAgentConfig:
     DEFAULT_CONFIG_DIR = AgentConfig.DEFAULT_WORKSPACE
     MEMORY_DIRNAME = AgentConfig.MEMORY_DIRNAME
     MESSAGE_DIRNAME = AgentConfig.MESSAGE_DIRNAME
+    WORKSPACE_DIRNAME = AgentConfig.WORKSPACE_DIRNAME
     MESSAGE_DB_FILENAME = AgentConfig.MESSAGE_DB_FILENAME
     CONFIG_FILENAME = "config.yaml"
     IDENTITY_FILENAME = "identity.md"
@@ -85,6 +86,8 @@ class BaseAgentRunner:
         
         # Local runtime data lives beside config.yaml.
         self.workspace = self.config_dir
+        self.workspace_dir = self.workspace / BaseAgentConfig.WORKSPACE_DIRNAME
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.observability = self._initialize_observability(self.config)
 
         # Initialize components in dependency order
@@ -537,7 +540,11 @@ class BaseAgentRunner:
         if "capabilities" in agent_cfg or "tools" in agent_cfg:
             self.logger.warning("Configured tools are ignored; run_command is built in by default.")
 
-        tools = [run_command]
+        tools = [
+            create_workspace_run_command_tool(
+                default_working_directory=str(self.workspace_dir),
+            )
+        ]
         search_client = self._initialize_search_client(agent_cfg, model_client=client)
         search_tool = create_web_search_tool(
             agent_cfg.get("search"),

@@ -211,6 +211,7 @@ class MessageHandler:
         messages: List[Message],
         current_user_id: str,
         memory_context: str = "",
+        workspace_context: str = "",
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
         current_date: Optional[str] = None,
@@ -253,6 +254,13 @@ class MessageHandler:
                     AgentConfig.RECENT_MEMORY_NAME,
                     memory_context,
                 ),
+            })
+
+        if workspace_context.strip():
+            context_messages.append({
+                "role": RoleType.USER.value,
+                "name": AgentConfig.WORKSPACE_CONTEXT_NAME,
+                "content": workspace_context.strip(),
             })
 
         context_messages.append({

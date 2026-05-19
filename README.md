@@ -87,7 +87,9 @@ xagent observe "Bob mentioned the demo may move to 3pm" --source feishu --event-
 
 Long-term memory is built from the agent's experience stream, not only direct chats. Meaningful observations can be consolidated alongside conversations; preserve attribution in the observation text or metadata so overheard speech is not confused with a direct request from the current user.
 
-Memory writes are buffered for efficiency, then flushed by batch size, by a stale-message fallback, runtime heartbeat in long-lived API/Feishu processes, and normal CLI/server shutdown. Recent memory context is managed automatically and defaults to the last 3 days. When memory entries contain quote-backed stable information about a person, xAgent can also append that evidence to `memory/people/` profiles.
+Memory writes are buffered for efficiency, then flushed by batch size, by a stale-message fallback, runtime heartbeat in long-lived API/Feishu processes, and normal CLI/server shutdown. Recent memory context is managed automatically and defaults to the last 3 days. Long-term memory is time-based and stored as daily, weekly, monthly, and yearly markdown files.
+
+The runtime also creates a `workspace/` directory beside `memory/` and `messages/`. This is the agent's external working area for notes, project records, temporary files, scripts, images, and other artifacts. In standard xAgent runtimes, the built-in `run_command` tool defaults to this directory when no working directory is supplied. The web console includes a Workspace page for browsing, editing, searching, uploading, previewing, and deleting workspace files.
 
 ## API Transports
 

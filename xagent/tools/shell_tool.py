@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import logging
 from typing import Optional
 
@@ -34,11 +35,44 @@ def _truncate(text: str, max_size: int) -> str:
             "(e.g. 'ls -la /path', 'cat file.txt', 'git status'). "
             "Avoid broad destructive patterns like 'rm -rf /' or 'chmod -R 777 /'."
         ),
-        "working_directory": "Optional working directory for the command. Defaults to the current process directory.",
+        "working_directory": "Optional working directory for the command. In standard xAgent runtimes, defaults to the agent workspace directory.",
         "timeout": "Maximum execution time in seconds (1-300). Defaults to 30.",
     },
 )
 async def run_command(
+    command: str,
+    working_directory: Optional[str] = None,
+    timeout: int = 30,
+) -> dict:
+    """Execute a shell command and return stdout, stderr, and return code."""
+    return await _run_shell_command(
+        command=command,
+        working_directory=working_directory,
+        timeout=timeout,
+    )
+
+
+def create_workspace_run_command_tool(default_working_directory: str):
+    """Create a run_command tool whose default cwd is the agent workspace."""
+
+    @functools.wraps(run_command)
+    async def workspace_run_command(
+        command: str,
+        working_directory: Optional[str] = None,
+        timeout: int = 30,
+    ) -> dict:
+        return await _run_shell_command(
+            command=command,
+            working_directory=working_directory or default_working_directory,
+            timeout=timeout,
+        )
+
+    workspace_run_command.tool_spec = run_command.tool_spec
+    workspace_run_command.__name__ = run_command.__name__
+    return workspace_run_command
+
+
+async def _run_shell_command(
     command: str,
     working_directory: Optional[str] = None,
     timeout: int = 30,

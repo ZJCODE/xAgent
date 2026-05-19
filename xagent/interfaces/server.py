@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import mimetypes
+import shutil
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -9,7 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from posthog import host
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +23,8 @@ from ..core.config import AgentConfig
 from ..core.runtime import create_runtime_heartbeat
 
 _STATIC_DIR = Path(__file__).parent / "static"
+_WORKSPACE_TEXT_READ_LIMIT = 1_000_000
+_WORKSPACE_SEARCH_TEXT_LIMIT = 2_000_000
 
 
 class ChatInput(BaseModel):
@@ -56,6 +60,16 @@ class IdentityInput(BaseModel):
     """Request body for updating identity.md."""
 
     identity: str
+
+
+class WorkspaceWriteInput(BaseModel):
+    """Request body for writing a text file in workspace/."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    content: str
+    create_parents: bool = True
 
 
 class AgentHTTPServer(BaseAgentRunner):
@@ -277,6 +291,101 @@ class AgentHTTPServer(BaseAgentRunner):
             raise HTTPException(status_code=500, detail="Memory storage path is unavailable")
         return Path(memory_root).expanduser().resolve()
 
+    def _get_workspace_root(self) -> Path:
+        workspace_dir = getattr(self, "workspace_dir", None)
+        if workspace_dir is None:
+            workspace_dir = getattr(self.agent, "workspace_dir", None)
+        if workspace_dir is None:
+            runtime_root = getattr(self, "workspace", None)
+            if runtime_root is not None:
+                workspace_dir = Path(runtime_root) / BaseAgentConfig.WORKSPACE_DIRNAME
+        if workspace_dir is None:
+            memory_root = self._get_memory_root()
+            workspace_dir = memory_root.parent / BaseAgentConfig.WORKSPACE_DIRNAME
+        root = Path(workspace_dir).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _resolve_workspace_path(self, relative_path: str = "") -> Path:
+        workspace_root = self._get_workspace_root()
+        requested = (workspace_root / (relative_path or "")).expanduser().resolve()
+        if not requested.is_relative_to(workspace_root):
+            raise HTTPException(status_code=403, detail="Access denied")
+        return requested
+
+    @staticmethod
+    def _memory_scope_roots(memory_dir: Path) -> List[Path]:
+        return [memory_dir / scope for scope in ("daily", "weekly", "monthly", "yearly")]
+
+    @staticmethod
+    def _safe_child(path: Path, root: Path) -> Optional[Path]:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return None
+        if not resolved.is_relative_to(root):
+            return None
+        return resolved
+
+    def _workspace_metadata(self, path: Path, root: Optional[Path] = None) -> Dict[str, Any]:
+        workspace_root = root or self._get_workspace_root()
+        resolved = path.resolve()
+        stat = resolved.stat()
+        is_dir = resolved.is_dir()
+        mime_type, _ = mimetypes.guess_type(resolved.name)
+        return {
+            "name": resolved.name,
+            "path": str(resolved.relative_to(workspace_root)),
+            "type": "dir" if is_dir else "file",
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+            "mime_type": mime_type or "application/octet-stream",
+            "binary": False if is_dir else self._is_binary_file(resolved),
+        }
+
+    def _scan_workspace_tree(self, directory: Path, root: Path) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        try:
+            children = sorted(directory.iterdir(), key=lambda path: (not path.is_dir(), path.name.lower()))
+        except (OSError, PermissionError):
+            return entries
+
+        for child in children:
+            resolved = self._safe_child(child, root)
+            if resolved is None:
+                continue
+            try:
+                item = self._workspace_metadata(resolved, root)
+            except OSError:
+                continue
+            if item["type"] == "dir" and not child.is_symlink():
+                item["children"] = self._scan_workspace_tree(resolved, root)
+            entries.append(item)
+        return entries
+
+    @staticmethod
+    def _is_binary_file(path: Path) -> bool:
+        try:
+            chunk = path.read_bytes()[:4096]
+        except OSError:
+            return True
+        if b"\0" in chunk:
+            return True
+        try:
+            chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            return True
+        return False
+
+    @staticmethod
+    def _read_text_file(path: Path, limit: int) -> str:
+        if path.stat().st_size > limit:
+            raise HTTPException(status_code=413, detail="File is too large to read as text")
+        try:
+            return path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=415, detail="File is not UTF-8 text") from exc
+
     def _get_identity_path(self) -> Path:
         identity_path = getattr(self, "identity_path", None)
         if identity_path is None:
@@ -352,6 +461,13 @@ class AgentHTTPServer(BaseAgentRunner):
                 if page.exists():
                     return FileResponse(str(page), media_type="text/html")
                 raise HTTPException(status_code=404, detail="Memory page not found")
+
+            @app.get("/workspace", include_in_schema=False)
+            async def serve_workspace():
+                page = _STATIC_DIR / "workspace.html"
+                if page.exists():
+                    return FileResponse(str(page), media_type="text/html")
+                raise HTTPException(status_code=404, detail="Workspace page not found")
 
             @app.get("/message", include_in_schema=False)
             async def serve_message():
@@ -537,6 +653,7 @@ class AgentHTTPServer(BaseAgentRunner):
             return {
                 "model": self.agent.model,
                 "workspace": str(getattr(self, "workspace", "")),
+                "workspace_dir": str(self._get_workspace_root()),
                 "memory_dir": memory_dir,
                 "message_storage": storage_info,
                 "tools": list(self.agent.tools.keys()),
@@ -613,7 +730,16 @@ class AgentHTTPServer(BaseAgentRunner):
                         })
                 return entries
 
-            return {"tree": _scan(memory_dir, memory_dir)}
+            tree: List[Dict[str, Any]] = []
+            for scope_root in self._memory_scope_roots(memory_dir):
+                if scope_root.is_dir():
+                    tree.append({
+                        "name": scope_root.name,
+                        "path": scope_root.name,
+                        "type": "dir",
+                        "children": _scan(scope_root, memory_dir),
+                    })
+            return {"tree": tree}
 
         @app.get("/api/memory/read", tags=["Monitoring"])
         async def memory_read(path: str = Query(..., description="Relative path inside memory directory")):
@@ -646,7 +772,12 @@ class AgentHTTPServer(BaseAgentRunner):
             needle = query.strip().lower()
             results: List[Dict[str, Any]] = []
 
-            for file_path in sorted(memory_dir.rglob("*.md")):
+            memory_files: List[Path] = []
+            for scope_root in self._memory_scope_roots(memory_dir):
+                if scope_root.is_dir():
+                    memory_files.extend(sorted(scope_root.rglob("*.md")))
+
+            for file_path in memory_files:
                 if len(results) >= limit:
                     break
 
@@ -684,6 +815,145 @@ class AgentHTTPServer(BaseAgentRunner):
                 "query": query,
                 "results": results,
             }
+
+        @app.get("/api/workspace/tree", tags=["Monitoring"])
+        async def workspace_tree():
+            """Return the workspace directory tree as JSON."""
+            workspace_root = self._get_workspace_root()
+            return {
+                "root": str(workspace_root),
+                "tree": self._scan_workspace_tree(workspace_root, workspace_root),
+            }
+
+        @app.get("/api/workspace/read", tags=["Monitoring"])
+        async def workspace_read(path: str = Query(..., description="Relative path inside workspace directory")):
+            """Read a workspace file as UTF-8 text or return binary metadata."""
+            workspace_root = self._get_workspace_root()
+            requested = self._resolve_workspace_path(path)
+            if not requested.is_file():
+                raise HTTPException(status_code=404, detail="File not found")
+
+            metadata = self._workspace_metadata(requested, workspace_root)
+            if metadata["binary"]:
+                return {**metadata, "content": "", "text": False, "blob_url": f"/api/workspace/blob?path={path}"}
+            content = self._read_text_file(requested, _WORKSPACE_TEXT_READ_LIMIT)
+            return {**metadata, "content": content, "text": True, "blob_url": f"/api/workspace/blob?path={path}"}
+
+        @app.get("/api/workspace/blob", tags=["Monitoring"])
+        async def workspace_blob(path: str = Query(..., description="Relative path inside workspace directory")):
+            """Serve a workspace file as a binary response."""
+            requested = self._resolve_workspace_path(path)
+            if not requested.is_file():
+                raise HTTPException(status_code=404, detail="File not found")
+            mime_type, _ = mimetypes.guess_type(requested.name)
+            return FileResponse(str(requested), media_type=mime_type or "application/octet-stream", filename=requested.name)
+
+        @app.get("/api/workspace/search", tags=["Monitoring"])
+        async def workspace_search(
+            query: str = Query(..., min_length=1, description="Search text for workspace file names or file content"),
+            limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
+        ):
+            """Search workspace files by path/name and text content."""
+            workspace_root = self._get_workspace_root()
+            needle = query.strip().lower()
+            results: List[Dict[str, Any]] = []
+
+            for file_path in sorted(workspace_root.rglob("*")):
+                if len(results) >= limit:
+                    break
+                resolved = self._safe_child(file_path, workspace_root)
+                if resolved is None or not resolved.is_file():
+                    continue
+                relative_path = str(resolved.relative_to(workspace_root))
+                match_kind: List[str] = []
+                snippet = ""
+
+                if needle in resolved.name.lower() or needle in relative_path.lower():
+                    match_kind.append("filename")
+
+                is_binary = self._is_binary_file(resolved)
+                if not is_binary and resolved.stat().st_size <= _WORKSPACE_SEARCH_TEXT_LIMIT:
+                    try:
+                        content = resolved.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        content = ""
+                    lower_content = content.lower()
+                    content_index = lower_content.find(needle)
+                    if content_index != -1:
+                        match_kind.append("content")
+                        start = max(0, content_index - 80)
+                        end = min(len(content), content_index + len(query) + 120)
+                        snippet = content[start:end].replace("\n", " ").strip()
+
+                if match_kind:
+                    metadata = self._workspace_metadata(resolved, workspace_root)
+                    results.append({
+                        **metadata,
+                        "matched_in": match_kind,
+                        "snippet": snippet,
+                    })
+
+            return {"query": query, "results": results}
+
+        @app.put("/api/workspace/write", tags=["Monitoring"])
+        async def workspace_write(input_data: WorkspaceWriteInput):
+            """Write a UTF-8 text file in workspace/."""
+            workspace_root = self._get_workspace_root()
+            requested = self._resolve_workspace_path(input_data.path)
+            if requested.exists() and requested.is_dir():
+                raise HTTPException(status_code=400, detail="Path is a directory")
+            if input_data.create_parents:
+                requested.parent.mkdir(parents=True, exist_ok=True)
+            elif not requested.parent.is_dir():
+                raise HTTPException(status_code=404, detail="Parent directory not found")
+            requested.write_text(input_data.content, encoding="utf-8")
+            return {"status": "ok", **self._workspace_metadata(requested, workspace_root)}
+
+        @app.delete("/api/workspace/delete", tags=["Monitoring"])
+        async def workspace_delete(
+            path: str = Query(..., description="Relative path inside workspace directory"),
+            recursive: bool = Query(False, description="Allow deleting non-empty directories"),
+        ):
+            """Delete a workspace file or directory."""
+            workspace_root = self._get_workspace_root()
+            requested = self._resolve_workspace_path(path)
+            if requested == workspace_root:
+                raise HTTPException(status_code=400, detail="Cannot delete workspace root")
+            if not requested.exists():
+                raise HTTPException(status_code=404, detail="Path not found")
+            metadata = self._workspace_metadata(requested, workspace_root)
+            if requested.is_dir():
+                if recursive:
+                    shutil.rmtree(requested)
+                else:
+                    requested.rmdir()
+            else:
+                requested.unlink()
+            return {"status": "ok", "deleted": metadata}
+
+        @app.post("/api/workspace/upload", tags=["Monitoring"])
+        async def workspace_upload(
+            file: UploadFile = File(...),
+            path: str = Form("", description="Optional relative target path or directory inside workspace"),
+        ):
+            """Upload a file into workspace/."""
+            workspace_root = self._get_workspace_root()
+            raw_target = path.strip()
+            target_is_directory = raw_target.endswith("/")
+            target_relative = raw_target.strip("/")
+            filename = Path(file.filename or "upload.bin").name
+            if not target_relative:
+                requested = self._resolve_workspace_path(filename)
+            else:
+                target = self._resolve_workspace_path(target_relative)
+                requested = target / filename if target_is_directory or target.is_dir() else target
+                requested = requested.resolve()
+                if not requested.is_relative_to(workspace_root):
+                    raise HTTPException(status_code=403, detail="Access denied")
+            requested.parent.mkdir(parents=True, exist_ok=True)
+            content = await file.read()
+            requested.write_bytes(content)
+            return {"status": "ok", **self._workspace_metadata(requested, workspace_root)}
 
         @app.get("/api/messages", tags=["Monitoring"])
         async def get_messages(

@@ -39,9 +39,9 @@ xagent web --dir ~/.xagent --host 127.0.0.1 --port 8010
     weekly/
     monthly/
     yearly/
-    people/
   messages/
     messages.sqlite3
+  workspace/
   run/
     api.pid
     feishu.pid
@@ -204,9 +204,15 @@ Langfuse SDK 会在后台排队发送事件。CLI 单次 chat、observe、Feishu
 
 API server lifespan 和 Feishu daemon 会启动内部 heartbeat；CLI 单次/交互 chat 不启动。第一版 heartbeat 只做记忆维护：定期 flush 待写入记忆，并在每周一为上一周生成 weekly summary。summary 生成不是模型可见工具。
 
-人物档案保存在 `memory/people/`。它只追加带日期和证据片段的稳定信息；默认不会把所有人物档案注入每一轮 prompt，需要时可通过记忆搜索读取。
+长期记忆是纯时间维度存储，当前只包含 `daily/`、`weekly/`、`monthly/` 和 `yearly/`。旧版本可能遗留的 `memory/people/` 文件不会被自动删除，但当前记忆 API 和搜索不会再创建、列出或检索它们。
 
-### 2.5 output_schema
+### 2.5 workspace
+
+`workspace/` 是和 `memory/`、`messages/` 同级的外置工作区。它不是自动注入 prompt 的长期记忆，而是 Agent 可自主管理的文件系统空间，可用于项目记录、临时状态、markdown 笔记、脚本、图片和其他产物。
+
+标准 runner 会把 `run_command` 的默认工作目录绑定到 `workspace/`。如果工具调用显式传入 `working_directory`，则按该参数执行。当前版本采用策略边界而不是硬沙箱：Agent 可以在 `workspace/` 内自主创建、覆盖和删除文件；对 `workspace/` 外的写入、删除、安装、网络或 git mutation 操作仍应先获得用户明确确认。
+
+### 2.6 output_schema
 
 `output_schema` 用于把模型回复约束为 Pydantic 结构。支持字段类型：`str`、`int`、`float`、`bool`、`list`、`dict`；`list` 可以通过 `items` 指定元素类型。
 
@@ -459,6 +465,7 @@ POST /clear_messages
 {
   "model": "gpt-5.4-mini",
   "workspace": "/Users/you/.xagent",
+  "workspace_dir": "/Users/you/.xagent/workspace",
   "memory_dir": "/Users/you/.xagent/memory",
   "message_storage": {
     "stream": "local",
@@ -497,7 +504,7 @@ POST /clear_messages
 
 #### GET /api/memory/tree
 
-返回 `memory/` 下的 markdown 文件树：
+返回当前时间维度记忆的 markdown 文件树。只包含 `daily/`、`weekly/`、`monthly/` 和 `yearly/`：
 
 ```json
 {
@@ -532,7 +539,7 @@ GET /api/memory/read?path=daily/2026/2026-05/2026-05-11.md
 
 #### GET /api/memory/search
 
-按文件名和文件内容搜索记忆。
+按文件名和文件内容搜索当前时间维度记忆。
 
 ```http
 GET /api/memory/search?query=会议&limit=50
@@ -547,6 +554,50 @@ GET /api/memory/search?query=会议&limit=50
 ```json
 {"status":"ok"}
 ```
+
+#### GET /api/workspace/tree
+
+返回 `workspace/` 下的完整文件树，包含目录、文本文件、图片和其他二进制文件的元数据。
+
+```http
+GET /api/workspace/tree
+```
+
+#### GET /api/workspace/read?path=...
+
+读取 `workspace/` 内的相对路径。UTF-8 文本文件会返回 `content`；二进制文件返回元数据和 `blob_url`。路径穿越和指向 workspace 外部的 symlink 会被拒绝。
+
+```http
+GET /api/workspace/read?path=notes/today.md
+```
+
+#### GET /api/workspace/blob?path=...
+
+以文件响应形式返回 workspace 文件，用于图片预览或二进制下载。
+
+#### GET /api/workspace/search
+
+按文件名、相对路径和 UTF-8 文本内容搜索 workspace。大文件和二进制文件只参与文件名/路径匹配。
+
+```http
+GET /api/workspace/search?query=project&limit=50
+```
+
+#### PUT /api/workspace/write
+
+写入 UTF-8 文本文件，可自动创建父目录。
+
+```json
+{"path":"notes/today.md","content":"# Today\n\n...","create_parents":true}
+```
+
+#### DELETE /api/workspace/delete?path=...&recursive=true
+
+删除 workspace 内的文件或目录。不能删除 workspace 根目录；非空目录需要 `recursive=true`。
+
+#### POST /api/workspace/upload
+
+使用 multipart form 上传文件。字段：`file` 为上传文件，`path` 可选；`path` 可以是目标文件路径，也可以用尾部 `/` 表示目标目录。
 
 #### GET /api/messages
 
@@ -741,14 +792,13 @@ memory/
   weekly/<year>/<week_start>_to_<week_end>.md
   monthly/<year>/<year-month>.md
   yearly/<year>.md
-  people/<person-key>.md
 ```
 
 Agent 会基于对话和观察事件异步整理长期记忆。`enable_memory` 会影响 `/chat` 的记忆行为：
 
 后台写入会先累积，并按内部批量阈值和短会话兜底策略写入。CLI、API server 和 Feishu channel 正常退出时也会 flush 记忆，避免短对话只停留在内存中。长驻 API/Feishu 运行时还会通过 runtime heartbeat 定期执行相同维护，并在每周一生成上一周 weekly summary。
 
-`memory/people/` 是人物档案层。只有长期记忆写入成功后，系统才会尝试从同一批消息中抽取有明确人物归属、带证据 quote 的稳定信息并追加到对应 profile。人物档案更新失败不会影响主记忆写入。
+当前长期记忆只保留时间维度。人物、项目或其他主题可以从时间日记和汇总中检索得到；需要外置项目记录或临时状态时，应写入 `workspace/`。
 
 | 参数 | 读取记忆 | 写入记忆 | 写入主消息库 |
 | --- | --- | --- | --- |

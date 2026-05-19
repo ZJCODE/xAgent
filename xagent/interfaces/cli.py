@@ -291,6 +291,7 @@ class InitResult:
     identity_path: Path
     memory_dir: Path
     messages_dir: Path
+    workspace_dir: Path
     wrote_files: bool
     conflicts: Tuple[Path, ...]
 
@@ -721,6 +722,7 @@ def init_agent_directory(
     identity_path = resolved_dir / BaseAgentConfig.IDENTITY_FILENAME
     memory_dir = resolved_dir / BaseAgentConfig.MEMORY_DIRNAME
     messages_dir = resolved_dir / BaseAgentConfig.MESSAGE_DIRNAME
+    workspace_dir = resolved_dir / BaseAgentConfig.WORKSPACE_DIRNAME
     managed_paths = (config_path, identity_path)
     conflicts = tuple(path for path in managed_paths if path.exists())
 
@@ -736,6 +738,7 @@ def init_agent_directory(
             identity_path=identity_path,
             memory_dir=memory_dir,
             messages_dir=messages_dir,
+            workspace_dir=workspace_dir,
             wrote_files=False,
             conflicts=conflicts,
         )
@@ -745,6 +748,7 @@ def init_agent_directory(
         _clear_runtime_directory(messages_dir)
     memory_dir.mkdir(parents=True, exist_ok=True)
     messages_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
 
     selection = selection or _default_init_selection()
     config_path.write_text(_config_yaml(selection, schema=schema), encoding="utf-8")
@@ -757,11 +761,13 @@ def init_agent_directory(
     print(f"Identity: {identity_path}")
     print(f"Memory: {memory_dir}")
     print(f"Messages: {messages_dir}")
+    print(f"Workspace: {workspace_dir}")
     return InitResult(
         config_path=config_path,
         identity_path=identity_path,
         memory_dir=memory_dir,
         messages_dir=messages_dir,
+        workspace_dir=workspace_dir,
         wrote_files=True,
         conflicts=(),
     )
@@ -1019,7 +1025,7 @@ def build_parser() -> argparse.ArgumentParser:
     for command_name in ("stats", "list", "clear"):
         memory_cmd = memory_sub.add_parser(command_name, help=f"{command_name} memory")
         _add_dir_argument(memory_cmd)
-        memory_cmd.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "people", "all"))
+        memory_cmd.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
         memory_cmd.add_argument("--yes", action="store_true", help="Confirm destructive operations")
         memory_cmd.set_defaults(handler=handle_memory)
     memory_show = memory_sub.add_parser("show", help="Show a memory markdown file by relative path")
@@ -1029,7 +1035,7 @@ def build_parser() -> argparse.ArgumentParser:
     memory_search = memory_sub.add_parser("search", help="Search memory markdown files")
     _add_dir_argument(memory_search)
     memory_search.add_argument("query", help="Search query")
-    memory_search.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "people", "all"))
+    memory_search.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
     memory_search.set_defaults(handler=handle_memory)
 
     messages_parser = inspect_sub.add_parser("messages", help="Inspect or clear the message stream")
