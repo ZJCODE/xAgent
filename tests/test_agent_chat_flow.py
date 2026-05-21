@@ -554,13 +554,58 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             call["messages"],
             [
-                {"role": "system", "content": "Core Rules"},
-                {"role": "system", "content": "<tool_policy>Policy</tool_policy>"},
+                {"role": "system", "content": "Core Rules\n\n<tool_policy>Policy</tool_policy>"},
                 {"role": "user", "content": "<current_task>Task</current_task>"},
             ],
         )
         self.assertEqual(instruction_messages[0]["name"], AgentConfig.CORE_INTERACTION_RULES_NAME)
         self.assertEqual(user_messages[0]["name"], AgentConfig.CURRENT_TASK_NAME)
+
+    async def test_call_coalesces_system_layers_for_multimodal_chat_messages(self):
+        client = FakeOpenAIClient([_chat_response(content="ok")])
+        model = ModelClient(client=client, model="test-model")
+
+        reply_type, payload = await model.call(
+            messages=[{
+                "role": "user",
+                "name": AgentConfig.CURRENT_TASK_NAME,
+                "content": [
+                    {"type": "text", "text": "Inspect this image"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/chart.png"}},
+                ],
+            }],
+            tool_specs=None,
+            instructions=[
+                {
+                    "role": "system",
+                    "name": AgentConfig.CORE_INTERACTION_RULES_NAME,
+                    "content": "Core Rules",
+                },
+                {
+                    "role": "system",
+                    "name": AgentConfig.TOOL_POLICY_NAME,
+                    "content": "<tool_policy>Policy</tool_policy>",
+                },
+            ],
+        )
+
+        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
+        self.assertEqual(payload, "ok")
+        call = client.chat_completions.calls[0]
+        self.assertEqual(
+            call["messages"],
+            [
+                {"role": "system", "content": "Core Rules\n\n<tool_policy>Policy</tool_policy>"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Inspect this image"},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/chart.png"}},
+                    ],
+                },
+            ],
+        )
+        self.assertTrue(all("name" not in message for message in call["messages"]))
 
     async def test_call_strips_structured_output_message_name(self):
         client = FakeOpenAIClient([_chat_response(content='{"answer": "ok"}')])
@@ -585,7 +630,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.answer, "ok")
         call = client.chat_completions.calls[0]
         self.assertTrue(all("name" not in message for message in call["messages"]))
-        self.assertIn("JSON schema", call["messages"][1]["content"])
+        self.assertIn("JSON schema", call["messages"][0]["content"])
 
     def test_strip_message_names_preserves_tool_call_function_names(self):
         messages = [{

@@ -51,12 +51,27 @@ function historyKey(panelId: PanelId): string {
   return `${HISTORY_KEY}_${panelId}`;
 }
 
+function normalizeHistoryMessage(message: ChatMessage): ChatMessage {
+  const rawImages = Array.isArray(message.images) ? message.images : [];
+  const persistedImages = rawImages.filter((image) => image && image !== "[image]");
+  const placeholderCount = rawImages.length - persistedImages.length;
+  const imageCount = message.imageCount ?? persistedImages.length + placeholderCount;
+
+  return {
+    ...message,
+    images: persistedImages,
+    imageCount: imageCount || undefined,
+  };
+}
+
 function createPanel(panelId: PanelId): ChatPanelState {
   const savedSettings = readJson<Partial<ChatSettings>>(GLOBAL_SETTINGS_KEY, {});
   const history = readJson<ChatMessage[]>(historyKey(panelId), []);
   return {
     id: panelId,
-    messages: Array.isArray(history) ? history.filter((message) => !message.pending) : [],
+    messages: Array.isArray(history)
+      ? history.filter((message) => !message.pending).map(normalizeHistoryMessage)
+      : [],
     pendingImages: [],
     settings: {
       ...defaultSettings(panelId),
@@ -88,7 +103,8 @@ function persistHistory(panel: ChatPanelState) {
     .filter((message) => !message.pending)
     .map((message) => ({
       ...message,
-      images: (message.images || []).map(() => "[image]"),
+      images: [],
+      imageCount: message.images?.length || message.imageCount,
     }));
   try {
     localStorage.setItem(historyKey(panel.id), JSON.stringify(slim));
@@ -298,6 +314,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         role: "user",
         content: text,
         images,
+        imageCount: images.length || undefined,
       };
       const assistantMessage: ChatMessage = {
         id: makeId("assistant"),

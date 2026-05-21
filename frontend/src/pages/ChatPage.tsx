@@ -8,6 +8,7 @@ import type { ChatPanelState } from "../types";
 function ChatBubble({ message }: { message: ChatPanelState["messages"][number] }) {
   const isUser = message.role === "user";
   const isObservation = message.role === "observation";
+  const persistedImageCount = isUser && !message.images?.length ? message.imageCount || 0 : 0;
   return (
     <div className={classNames("flex", isUser && "justify-end")}>
       <div
@@ -29,6 +30,11 @@ function ChatBubble({ message }: { message: ChatPanelState["messages"][number] }
             {message.images.map((src, index) => (
               <img key={`${message.id}-${index}`} src={src} alt="" className="h-20 rounded-lg border border-white/30 object-cover" />
             ))}
+          </div>
+        ) : null}
+        {persistedImageCount ? (
+          <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+            Attached {persistedImageCount} {persistedImageCount === 1 ? "image" : "images"}
           </div>
         ) : null}
       </div>

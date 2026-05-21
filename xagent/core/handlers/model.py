@@ -538,6 +538,7 @@ class ModelClient:
                     "content": structured_content,
                 })
             chat_messages.extend(messages)
+            chat_messages = ModelClient._coalesce_leading_system_messages(chat_messages)
             return ModelClient._strip_message_names(
                 chat_messages,
                 strip_provider_extras=strip_provider_extras,
@@ -547,10 +548,41 @@ class ModelClient:
         if system_content:
             chat_messages.append({"role": "system", "content": system_content})
         chat_messages.extend(messages)
+        chat_messages = ModelClient._coalesce_leading_system_messages(chat_messages)
         return ModelClient._strip_message_names(
             chat_messages,
             strip_provider_extras=strip_provider_extras,
         )
+
+    @classmethod
+    def _coalesce_leading_system_messages(cls, messages: list) -> list:
+        """Merge consecutive leading system messages into one provider-safe message."""
+        index = 0
+        system_parts: list[str] = []
+
+        while index < len(messages):
+            message = messages[index]
+            if not isinstance(message, dict):
+                break
+            role = str(message.get("role") or "").strip()
+            if role != "system":
+                break
+            content_text = cls._content_to_text(message.get("content"))
+            if content_text:
+                system_parts.append(content_text)
+            index += 1
+
+        if index <= 1:
+            return messages
+
+        coalesced: list = []
+        if system_parts:
+            coalesced.append({
+                "role": "system",
+                "content": "\n\n".join(system_parts),
+            })
+        coalesced.extend(messages[index:])
+        return coalesced
 
     @staticmethod
     def _strip_message_names(messages: list, *, strip_provider_extras: bool = True) -> list:

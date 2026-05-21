@@ -8,6 +8,7 @@ export interface ChatMessage {
   content: string;
   meta?: string;
   images?: string[];
+  imageCount?: number;
   pending?: boolean;
   error?: boolean;
 }
