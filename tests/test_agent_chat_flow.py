@@ -967,6 +967,27 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             [RoleType.USER, RoleType.ASSISTANT],
         )
 
+    async def test_chat_rejects_image_input_for_non_vision_provider(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "should not be called")])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+        agent.supports_vision = False
+
+        result = await Agent.chat(
+            agent,
+            user_message="Please inspect this image",
+            user_id="alice",
+            image_source="data:image/png;base64,AAAA",
+            enable_memory=False,
+        )
+
+        self.assertIn("does not support image input", result)
+        self.assertEqual(model_client.calls, [])
+        stored_messages = await storage.get_messages(10)
+        self.assertEqual(len(stored_messages), 2)
+        self.assertIsNone(stored_messages[0].multimodal)
+        self.assertIn("does not support image input", stored_messages[1].content)
+
     async def test_chat_events_streams_preface_then_tool_then_final_reply(self):
         storage = InMemoryMessageStorage()
         memory_handler = FakeMemoryHandler()

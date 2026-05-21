@@ -306,8 +306,11 @@ class InitSelection:
     model: str
     identity: str
     model_api: str = ""
+    supports_vision: bool = False
     search_provider: str = "none"
     search_api_key: str = ""
+    image_generation_provider: str = "none"
+    image_generation_api_key: str = ""
     observability_enabled: bool = False
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
@@ -323,6 +326,7 @@ CUSTOM_OPENAI_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_AP
 CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_API_ANTHROPIC_MESSAGES)
 API_KEY_PLACEHOLDER = "your_api_key_here"
 OPENAI_SEARCH_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
+OPENAI_IMAGE_GENERATION_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
 BRAVE_SEARCH_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 MODEL_PLACEHOLDER = "your_model_here"
 LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
@@ -375,6 +379,10 @@ NON_OPENAI_SEARCH_PROVIDERS = (
     "brave",
     "none",
 )
+NON_OPENAI_IMAGE_GENERATION_PROVIDERS = (
+    "none",
+    "openai",
+)
 
 
 def _default_init_selection() -> InitSelection:
@@ -385,6 +393,7 @@ def _default_init_selection() -> InitSelection:
         model="gpt-5.4-mini",
         identity=_default_identity_markdown(),
         search_provider="openai",
+        image_generation_provider="openai",
     )
 
 
@@ -417,6 +426,7 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
     }
     if selection.provider == PROVIDER_CUSTOM:
         provider_config["model_api"] = selection.model_api or MODEL_API_OPENAI_CHAT_COMPLETIONS
+        provider_config["supports_vision"] = selection.supports_vision
 
     config = {
         "provider": provider_config,
@@ -437,6 +447,14 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
         if selection.search_api_key:
             search_config["api_key"] = selection.search_api_key
     config["search"] = search_config
+    image_generation_config = {"provider": selection.image_generation_provider or "none"}
+    if image_generation_config["provider"] == "openai" and selection.provider != PROVIDER_OPENAI:
+        image_generation_config["api_key"] = (
+            selection.image_generation_api_key or OPENAI_IMAGE_GENERATION_API_KEY_PLACEHOLDER
+        )
+    elif image_generation_config["provider"] == "openai" and selection.image_generation_api_key:
+        image_generation_config["api_key"] = selection.image_generation_api_key
+    config["image_generation"] = image_generation_config
     if selection.observability_enabled:
         config["observability"] = {
             "enabled": True,
@@ -542,6 +560,21 @@ def _select_search_provider(
     )
 
 
+def _select_image_generation_provider(
+    provider: str,
+    *,
+    input_func: Callable[[str], str] = input,
+) -> str:
+    if provider == PROVIDER_OPENAI:
+        return "openai"
+    return _select_option(
+        "Image generation provider",
+        NON_OPENAI_IMAGE_GENERATION_PROVIDERS,
+        default_index=0,
+        input_func=input_func,
+    )
+
+
 def _select_custom_model_api(
     *,
     input_func: Callable[[str], str] = input,
@@ -585,6 +618,7 @@ def collect_init_selection(
         input_func=input_func,
     )
     model_api = ""
+    supports_vision = False
 
     if provider == PROVIDER_OPENAI:
         selected_model = _select_option(
@@ -639,13 +673,18 @@ def collect_init_selection(
             default=default_base_url,
             input_func=input_func,
         )
+        supports_vision = _prompt_yes_no(
+            "Does this custom provider support image URL input?",
+            default=False,
+            input_func=input_func,
+        )
 
     model = MODEL_PLACEHOLDER if selected_model == "Decide later" else selected_model
     api_key = secret_input_func("API key (leave blank to fill in later): ").strip()
     if not api_key:
         api_key = API_KEY_PLACEHOLDER
 
-    search_provider = _select_search_provider(provider, input_func=input_func)
+    search_provider = "openai" if provider == PROVIDER_OPENAI else _select_search_provider(provider, input_func=input_func)
     search_api_key = ""
     if search_provider == "openai" and provider != PROVIDER_OPENAI:
         search_api_key = secret_input_func(
@@ -657,6 +696,15 @@ def collect_init_selection(
         search_api_key = secret_input_func("Brave Search API key (leave blank to fill in later): ").strip()
         if not search_api_key:
             search_api_key = BRAVE_SEARCH_API_KEY_PLACEHOLDER
+
+    image_generation_provider = _select_image_generation_provider(provider, input_func=input_func)
+    image_generation_api_key = ""
+    if image_generation_provider == "openai" and provider != PROVIDER_OPENAI:
+        image_generation_api_key = secret_input_func(
+            "OpenAI API key for image generation (leave blank to fill in later): "
+        ).strip()
+        if not image_generation_api_key:
+            image_generation_api_key = OPENAI_IMAGE_GENERATION_API_KEY_PLACEHOLDER
 
     provider_api_cfg = {"name": provider}
     if model_api:
@@ -694,12 +742,15 @@ def collect_init_selection(
     return InitSelection(
         provider=provider,
         model_api=model_api,
+        supports_vision=supports_vision,
         base_url=base_url,
         api_key=api_key,
         model=model,
         identity=identity,
         search_provider=search_provider,
         search_api_key=search_api_key,
+        image_generation_provider=image_generation_provider,
+        image_generation_api_key=image_generation_api_key,
         observability_enabled=observability_enabled,
         langfuse_public_key=langfuse_public_key,
         langfuse_secret_key=langfuse_secret_key,

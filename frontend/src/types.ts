@@ -27,6 +27,12 @@ export interface ChatPanelState {
   sending: boolean;
 }
 
+export interface AgentCapabilities {
+  vision: boolean;
+  web_search: boolean;
+  image_generation: boolean;
+}
+
 export interface ChatEvent {
   type?: string;
   event?: string;
@@ -47,6 +53,7 @@ export interface AgentInfo {
   memory_dir: string;
   message_storage: Record<string, unknown>;
   tools: string[];
+  capabilities?: Partial<AgentCapabilities>;
   identity?: string;
   identity_file?: string;
   identity_path?: string;

@@ -722,6 +722,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 identity_editable = False
             provider_cfg = self.config.get("provider") if isinstance(self.config, dict) else {}
             provider_name = provider_cfg.get("name") if isinstance(provider_cfg, dict) else None
+            tool_names = list(self.agent.tools.keys())
             return {
                 "provider": provider_name or "",
                 "model": self.agent.model,
@@ -729,7 +730,12 @@ class AgentHTTPServer(BaseAgentRunner):
                 "workspace_dir": str(self._get_workspace_root()),
                 "memory_dir": memory_dir,
                 "message_storage": storage_info,
-                "tools": list(self.agent.tools.keys()),
+                "tools": tool_names,
+                "capabilities": {
+                    "vision": bool(getattr(self.agent, "supports_vision", True)),
+                    "web_search": "web_search" in tool_names,
+                    "image_generation": "generate_image" in tool_names,
+                },
                 "identity": identity,
                 "identity_file": BaseAgentConfig.IDENTITY_FILENAME,
                 "identity_path": identity_path_value,

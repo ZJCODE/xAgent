@@ -17,10 +17,15 @@ from ..core.providers import (
     normalize_model_api,
     provider_is_official_openai,
     provider_model_api,
+    provider_supports_vision,
 )
 from ..components import MessageStorageBase, MessageStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
-from ..tools import create_web_search_tool, create_workspace_run_command_tool
+from ..tools import create_image_generation_tool, create_web_search_tool, create_workspace_run_command_tool
+from ..tools.image_generation_tool import (
+    IMAGE_GENERATION_PROVIDER_OPENAI,
+    normalize_image_generation_provider,
+)
 from ..tools.search_tool import (
     SEARCH_PROVIDER_OPENAI,
     is_placeholder_api_key,
@@ -138,6 +143,7 @@ class BaseAgentRunner:
         allowed_config_keys = {
             "provider",
             "search",
+            "image_generation",
             "output_schema",
             "channels",
             "runtime",
@@ -197,6 +203,7 @@ class BaseAgentRunner:
             self._validate_positive_int(provider_cfg["max_tokens"], "provider.max_tokens")
 
         self._validate_search_config(config.get("search"), provider_cfg)
+        self._validate_image_generation_config(config.get("image_generation"), provider_cfg)
         
         return config
 
@@ -278,6 +285,7 @@ class BaseAgentRunner:
             "api_key",
             "model",
             "max_tokens",
+            "supports_vision",
         }
         unsupported_provider_keys = sorted(set(provider_cfg) - allowed_provider_keys)
         if unsupported_provider_keys:
@@ -297,6 +305,11 @@ class BaseAgentRunner:
             raise ValueError("provider.sdk is only supported when provider.name is custom")
         if provider_name and provider_name != "custom" and "model_api" in provider_cfg:
             raise ValueError("provider.model_api is only supported when provider.name is custom")
+        if "supports_vision" in provider_cfg:
+            if provider_name != "custom":
+                raise ValueError("provider.supports_vision is only supported when provider.name is custom")
+            if not isinstance(provider_cfg["supports_vision"], bool):
+                raise ValueError("provider.supports_vision must be a boolean")
 
     def _validate_search_config(
         self,
@@ -316,6 +329,44 @@ class BaseAgentRunner:
                 raise ValueError(
                     "search.provider 'openai' requires search.api_key when provider is not OpenAI"
                 )
+
+    def _validate_image_generation_config(
+        self,
+        image_generation_cfg: Optional[Dict[str, Any]],
+        provider_cfg: Dict[str, Any],
+    ) -> None:
+        """Validate optional image generation configuration."""
+        if image_generation_cfg is None:
+            return
+        if not isinstance(image_generation_cfg, dict):
+            raise ValueError("image_generation must be a dictionary")
+
+        allowed_image_generation_keys = {
+            "provider",
+            "api_key",
+            "model",
+            "size",
+            "quality",
+            "output_format",
+            "background",
+            "output_compression",
+        }
+        unsupported_keys = sorted(set(image_generation_cfg) - allowed_image_generation_keys)
+        if unsupported_keys:
+            joined_keys = ", ".join(unsupported_keys)
+            raise ValueError(f"Unsupported image_generation key(s): {joined_keys}")
+
+        image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
+        if image_generation_provider == IMAGE_GENERATION_PROVIDER_OPENAI and not self._is_openai_provider(provider_cfg):
+            api_key = str(image_generation_cfg.get("api_key") or "").strip()
+            if is_placeholder_api_key(api_key):
+                raise ValueError(
+                    "image_generation.provider 'openai' requires image_generation.api_key when provider is not OpenAI"
+                )
+        if "output_compression" in image_generation_cfg:
+            value = image_generation_cfg["output_compression"]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 100:
+                raise ValueError("image_generation.output_compression must be an integer from 0 to 100")
 
     @staticmethod
     def _is_openai_provider(provider_cfg: Dict[str, Any]) -> bool:
@@ -447,6 +498,7 @@ class BaseAgentRunner:
             message_storage=self.message_storage,
             workspace=str(self.workspace),
             observability=self.observability,
+            supports_vision=self._provider_supports_vision(agent_cfg),
         )
 
     def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:
@@ -508,14 +560,51 @@ class BaseAgentRunner:
             return model_client
 
         provider_cfg = agent_cfg.get("provider") or {}
+        return self._initialize_openai_feature_client(search_cfg, provider_cfg, model_client=model_client)
+
+    def _initialize_image_generation_client(
+        self,
+        agent_cfg: Dict[str, Any],
+        *,
+        model_client: Optional[Any],
+    ) -> Optional[Any]:
+        """Build the client used by OpenAI image generation."""
+        image_generation_cfg = agent_cfg.get("image_generation") or {}
+        if not isinstance(image_generation_cfg, dict):
+            return model_client
+
+        image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
+        if image_generation_provider != IMAGE_GENERATION_PROVIDER_OPENAI:
+            return model_client
+
+        provider_cfg = agent_cfg.get("provider") or {}
+        return self._initialize_openai_feature_client(
+            image_generation_cfg,
+            provider_cfg,
+            model_client=model_client,
+        )
+
+    def _initialize_openai_feature_client(
+        self,
+        feature_cfg: Dict[str, Any],
+        provider_cfg: Any,
+        *,
+        model_client: Optional[Any],
+    ) -> Optional[Any]:
         is_openai_provider = isinstance(provider_cfg, dict) and self._is_openai_provider(provider_cfg)
-        search_api_key = str(search_cfg.get("api_key") or "").strip()
-        if search_api_key and not is_placeholder_api_key(search_api_key):
-            return self.observability.create_client({"api_key": search_api_key})
+        api_key = str(feature_cfg.get("api_key") or "").strip()
+        if api_key and not is_placeholder_api_key(api_key):
+            return self.observability.create_client({"api_key": api_key})
 
         if is_openai_provider:
             return model_client
         return None
+
+    def _provider_supports_vision(self, agent_cfg: Dict[str, Any]) -> bool:
+        provider_cfg = agent_cfg.get("provider") or {}
+        if isinstance(provider_cfg, dict):
+            return provider_supports_vision(provider_cfg)
+        return provider_supports_vision({})
 
     def _get_search_model(self, agent_cfg: Dict[str, Any]) -> Optional[str]:
         search_cfg = agent_cfg.get("search") or {}
@@ -553,6 +642,14 @@ class BaseAgentRunner:
         )
         if search_tool is not None:
             tools.append(search_tool)
+        image_generation_client = self._initialize_image_generation_client(agent_cfg, model_client=client)
+        image_generation_tool = create_image_generation_tool(
+            agent_cfg.get("image_generation"),
+            client=image_generation_client,
+            workspace_dir=str(self.workspace_dir),
+        )
+        if image_generation_tool is not None:
+            tools.append(image_generation_tool)
         return tools
     
     def _get_output_type(self, agent_cfg: Dict[str, Any]) -> Optional[Type[BaseModel]]:

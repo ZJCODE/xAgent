@@ -43,11 +43,12 @@ function ChatBubble({ message }: { message: ChatPanelState["messages"][number] }
 }
 
 function ChatPanel({ panel }: { panel: ChatPanelState }) {
-  const { updateSettings, addImages, removeImage, sendMessage, sendObservation } = useChat();
+  const { updateSettings, addImages, removeImage, sendMessage, sendObservation, capabilities } = useChat();
   const [messageText, setMessageText] = useState("");
   const [observeText, setObserveText] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const canUploadImages = capabilities.vision;
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -154,9 +155,11 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
         <button
           type="button"
           className="icon-button"
-          onClick={() => fileInputRef.current?.click()}
-          title="Upload image"
-          disabled={panel.sending}
+          onClick={() => {
+            if (canUploadImages) fileInputRef.current?.click();
+          }}
+          title={canUploadImages ? "Upload image" : "Image input is not available for this provider"}
+          disabled={panel.sending || !canUploadImages}
         >
           <ImagePlus size={18} />
         </button>
@@ -166,8 +169,9 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
           className="hidden"
           accept="image/jpeg,image/png"
           multiple
+          disabled={!canUploadImages}
           onChange={(event) => {
-            if (event.target.files) addImages(panel.id, event.target.files);
+            if (canUploadImages && event.target.files) addImages(panel.id, event.target.files);
             event.currentTarget.value = "";
           }}
         />

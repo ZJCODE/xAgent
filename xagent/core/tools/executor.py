@@ -8,6 +8,11 @@ from ..providers import MODEL_API_OPENAI_CHAT_COMPLETIONS, MODEL_API_OPENAI_RESP
 from .manager import ToolManager
 from ...components import MessageStorageBase
 from ...utils.image_utils import extract_source, is_image_output
+from ...tools.image_generation_tool import (
+    generated_image_description,
+    generated_image_markdown,
+    is_generated_image_result,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -125,6 +130,14 @@ class ToolExecutor:
         except Exception as e:
             logger.error("Tool call error: %s", e)
             result = f"Tool error: {e}"
+
+        if is_generated_image_result(result):
+            result_str = json.dumps(result, ensure_ascii=False)
+            image_data = generated_image_markdown(result)
+            model_output = generated_image_description(name, result)
+            stored_output = f"{image_data}\n\n{model_output}"
+            logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
+            return self._tool_result_message(call_id, model_output), image_data, stored_output
 
         result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
 

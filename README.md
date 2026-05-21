@@ -18,9 +18,11 @@ Run the first-time setup:
 xagent init
 ```
 
-Follow the prompts to choose your provider, model, API key, search provider, and optional identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. For a custom provider, `xagent init` asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
+Follow the prompts to choose your provider, model, API key, optional tools, and identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. For a custom provider, `xagent init` asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
 
-Search is optional. Any provider can use OpenAI built-in web search, DuckDuckGo, Brave Search, or no search. OpenAI built-in search reuses the main API key when the main provider is OpenAI; non-OpenAI providers must set an OpenAI key in `search.api_key`. Brave Search requires a Brave Search API key in `search.api_key` or `BRAVE_SEARCH_API_KEY`.
+OpenAI runtimes include OpenAI built-in web search and OpenAI image generation by default. Other providers can choose DuckDuckGo, OpenAI search, Brave Search, or no search during init. OpenAI built-in search reuses the main API key when the main provider is OpenAI; non-OpenAI providers must set an OpenAI key in `search.api_key`. Brave Search requires a Brave Search API key in `search.api_key` or `BRAVE_SEARCH_API_KEY`.
+
+Image input is supported by OpenAI and Qwen by default, with the known provider list kept in `VISION_CAPABLE_PROVIDERS`. Other built-in providers reject image input clearly instead of sending unsupported image payloads to the model. Custom providers can opt in with `provider.supports_vision: true` during `xagent init` or in `config.yaml` when their API accepts image URL content. Image generation is a separate optional tool: OpenAI providers get it by default, and other providers can enable OpenAI image generation with `image_generation.api_key`. Generated files are saved under `workspace/temp/images` and rendered in the web chat through the workspace blob endpoint.
 
 Langfuse observability is included for teams that need LLM tracing, latency, usage, and error monitoring. It is disabled by default; `xagent init` can write an `observability` block only when you choose to enable it.
 

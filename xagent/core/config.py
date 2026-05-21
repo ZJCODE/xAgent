@@ -107,6 +107,13 @@ class AgentConfig:
             "- Ground factual claims in returned source URLs. Never invent citations or cite URLs that were not returned.\n"
             "- If search fails or returns no useful results, say that plainly and answer only from reliable context.\n"
         ),
+        "generate_image": (
+            "\n**Image Generation:**\n"
+            "- Use `generate_image` when the user asks to create, draw, render, or generate a visual image.\n"
+            "- Write a clear prompt with subject, composition, visual style, colors, text requirements, and constraints.\n"
+            "- Do not claim the image was generated unless the tool returns a successful image result.\n"
+            "- If generation fails, explain the failure briefly and offer a simpler prompt or settings.\n"
+        ),
     }
 
     TOOL_POLICY_ORDER = (
@@ -114,6 +121,7 @@ class AgentConfig:
         "write_memory",
         "search_memory",
         "web_search",
+        "generate_image",
     )
 
     DEFAULT_SYSTEM_PROMPT = (

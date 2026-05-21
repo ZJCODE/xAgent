@@ -12,6 +12,10 @@ from xagent.core.providers import (
     MODEL_API_ANTHROPIC_MESSAGES,
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
     MODEL_API_OPENAI_RESPONSES,
+    PROVIDER_CUSTOM,
+    PROVIDER_QWEN,
+    VISION_CAPABLE_PROVIDERS,
+    provider_supports_vision,
     provider_model_api,
 )
 from xagent.interfaces.channels import enabled_channels_from_config
@@ -82,6 +86,16 @@ class ProviderConfigTests(unittest.TestCase):
             MODEL_API_ANTHROPIC_MESSAGES,
         )
 
+    def test_provider_capability_detects_vision_providers(self):
+        self.assertEqual(VISION_CAPABLE_PROVIDERS, frozenset({"openai", PROVIDER_QWEN}))
+        self.assertTrue(provider_supports_vision({"name": "openai"}))
+        self.assertTrue(provider_supports_vision({"name": PROVIDER_QWEN}))
+        self.assertTrue(provider_supports_vision({"name": PROVIDER_CUSTOM, "supports_vision": True}))
+        self.assertFalse(provider_supports_vision({"name": PROVIDER_CUSTOM}))
+        self.assertFalse(provider_supports_vision({"name": PROVIDER_CUSTOM, "supports_vision": False}))
+        self.assertFalse(provider_supports_vision({"name": "deepseek"}))
+        self.assertFalse(provider_supports_vision({"name": "anthropic"}))
+
     def test_provider_config_builds_openai_compatible_client(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -102,6 +116,66 @@ provider:
             self.assertEqual(runner.agent.model, "deepseek-v4-pro")
             self.assertEqual(runner.agent.model_api, MODEL_API_OPENAI_RESPONSES)
             self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.openai.com/v1")
+
+    def test_custom_provider_config_can_enable_vision(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "custom"
+    model_api: "openai_chat_completions"
+    base_url: "https://api.example.com/v1"
+    api_key: "test-key"
+    model: "custom-vision-model"
+    supports_vision: true
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertTrue(runner.agent.supports_vision)
+
+    def test_custom_provider_config_rejects_non_boolean_vision_support(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "custom"
+    model_api: "openai_chat_completions"
+    base_url: "https://api.example.com/v1"
+    api_key: "test-key"
+    model: "custom-vision-model"
+    supports_vision: "yes"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "provider.supports_vision must be a boolean"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_known_provider_config_rejects_manual_vision_override(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    base_url: "https://api.deepseek.com"
+    api_key: "test-key"
+    model: "deepseek-v4-pro"
+    supports_vision: true
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "provider.supports_vision is only supported"):
+                BaseAgentRunner(config_dir=tmpdir)
 
     def test_provider_config_builds_anthropic_client(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -282,6 +356,7 @@ provider:
             self.assertNotIn("model_api", config["provider"])
             self.assertNotIn("sdk", config["provider"])
             self.assertEqual(config["search"]["provider"], "openai")
+            self.assertEqual(config["image_generation"]["provider"], "openai")
             self.assertNotIn("enabled", config["channels"]["api"])
             self.assertNotIn("web_ui", config["channels"]["api"])
             self.assertEqual(config["channels"]["api"]["host"], "127.0.0.1")
@@ -390,6 +465,7 @@ provider:
             self.assertNotIn("model_api", config["provider"])
             self.assertNotIn("sdk", config["provider"])
             self.assertEqual(config["search"]["provider"], "none")
+            self.assertEqual(config["image_generation"]["provider"], "none")
             self.assertEqual(result.identity_path.read_text(encoding="utf-8"), "# Identity\n\nYou report weather.\n")
 
     def test_init_writes_openai_search_key_for_non_openai_provider(self):
@@ -410,6 +486,24 @@ provider:
             self.assertEqual(config["search"]["provider"], "openai")
             self.assertEqual(config["search"]["api_key"], "openai-search-key")
 
+    def test_init_writes_openai_image_generation_key_for_non_openai_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="deepseek",
+                base_url="https://api.deepseek.com",
+                api_key="deepseek-key",
+                model="deepseek-v4-pro",
+                identity="# Identity\n\nYou draw with OpenAI.\n",
+                image_generation_provider="openai",
+                image_generation_api_key="openai-image-key",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["image_generation"]["provider"], "openai")
+            self.assertEqual(config["image_generation"]["api_key"], "openai-image-key")
+
     def test_init_writes_model_api_only_for_custom_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
@@ -426,8 +520,26 @@ provider:
 
             self.assertEqual(config["provider"]["name"], "custom")
             self.assertEqual(config["provider"]["model_api"], MODEL_API_ANTHROPIC_MESSAGES)
+            self.assertFalse(config["provider"]["supports_vision"])
             self.assertNotIn("sdk", config["provider"])
             self.assertNotIn("backend", config["provider"])
+
+    def test_init_writes_custom_provider_vision_support(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="custom",
+                model_api=MODEL_API_OPENAI_CHAT_COMPLETIONS,
+                supports_vision=True,
+                base_url="https://api.example.com/v1",
+                api_key="secret-key",
+                model="custom-model",
+                identity="# Identity\n\nYou use a custom vision provider.\n",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertTrue(config["provider"]["supports_vision"])
 
     def test_init_writes_observability_only_when_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -462,7 +574,6 @@ provider:
         answers = iter([
             "1",
             "4",
-            "1",
             "",
             "You investigate codebases.",
             ".",
@@ -479,13 +590,13 @@ provider:
         self.assertEqual(selection.api_key, "openai-key")
         self.assertEqual(selection.model, "gpt-5.5")
         self.assertEqual(selection.search_provider, "openai")
+        self.assertEqual(selection.image_generation_provider, "openai")
         self.assertEqual(selection.identity, "# Identity\n\nYou investigate codebases.\n")
 
     def test_collect_init_selection_supports_langfuse_observability(self):
         answers = iter([
             "1",
             "",
-            "4",
             "y",
             "pk-lf-test",
             "https://jp.cloud.langfuse.com",
@@ -508,6 +619,7 @@ provider:
             "5",
             "",
             "1",
+            "",
             ".",
         ])
 
@@ -525,7 +637,9 @@ provider:
             "6",
             "3",
             "",
+            "",
             "1",
+            "",
             ".",
         ])
 
@@ -544,7 +658,9 @@ provider:
             "6",
             "1",
             "",
+            "",
             "1",
+            "",
             "y",
             "pk-lf-test",
             "",
@@ -569,6 +685,7 @@ provider:
             "3",
             "4",
             "",
+            "",
             ".",
         ])
 
@@ -583,6 +700,7 @@ provider:
         self.assertEqual(selection.api_key, "your_api_key_here")
         self.assertEqual(selection.model, "your_model_here")
         self.assertEqual(selection.search_provider, "none")
+        self.assertEqual(selection.image_generation_provider, "none")
         self.assertIn("Describe this agent's role", selection.identity)
 
     def test_collect_init_selection_supports_qwen_models(self):
@@ -590,6 +708,7 @@ provider:
             "4",
             "3",
             "1",
+            "",
             "",
             ".",
         ])
@@ -605,12 +724,14 @@ provider:
         self.assertEqual(selection.api_key, "qwen-key")
         self.assertEqual(selection.model, "qwen3.6-max-preview")
         self.assertEqual(selection.search_provider, "duckduckgo")
+        self.assertEqual(selection.image_generation_provider, "none")
 
     def test_collect_init_selection_supports_openai_search_for_non_openai_provider(self):
         answers = iter([
             "2",
             "1",
             "2",
+            "",
             "",
             ".",
         ])
@@ -627,20 +748,21 @@ provider:
 
     def test_collect_init_selection_supports_brave_search_api_key(self):
         answers = iter([
-            "1",
+            "2",
             "",
             "3",
             "",
+            "",
             ".",
         ])
-        secrets = iter(["openai-key", "brave-key"])
+        secrets = iter(["deepseek-key", "brave-key"])
 
         selection = collect_init_selection(
             input_func=lambda prompt: next(answers),
             secret_input_func=lambda prompt: next(secrets),
         )
 
-        self.assertEqual(selection.provider, "openai")
+        self.assertEqual(selection.provider, "deepseek")
         self.assertEqual(selection.search_provider, "brave")
         self.assertEqual(selection.search_api_key, "brave-key")
 
@@ -649,6 +771,7 @@ provider:
             "3",
             "",
             "1",
+            "",
             "",
             ".",
         ])
@@ -671,6 +794,7 @@ provider:
             "",
             "1",
             "",
+            "",
             ".",
         ])
 
@@ -691,7 +815,9 @@ provider:
             "6",
             "2",
             "",
+            "y",
             "1",
+            "",
             "",
             ".",
         ])
@@ -706,6 +832,7 @@ provider:
         self.assertEqual(selection.base_url, "https://api.example.com/v1")
         self.assertEqual(selection.api_key, "custom-key")
         self.assertEqual(selection.model, "your_model_here")
+        self.assertTrue(selection.supports_vision)
         self.assertEqual(selection.search_provider, "duckduckgo")
 
     def test_collect_init_selection_non_openai_includes_openai_search(self):
@@ -713,6 +840,7 @@ provider:
             "2",
             "1",
             "1",
+            "",
             "",
             ".",
         ])
@@ -723,13 +851,12 @@ provider:
                 secret_input_func=lambda prompt: "deepseek-key",
             )
 
-        search_output = stdout.getvalue().split("Search provider", 1)[1].split("Enter the agent identity", 1)[0]
+        search_output = stdout.getvalue().split("Search provider", 1)[1].split("Image generation provider", 1)[0]
         self.assertEqual(selection.search_provider, "duckduckgo")
         self.assertIn("openai", search_output)
 
     def test_collect_init_selection_does_not_label_defaults(self):
         answers = iter([
-            "",
             "",
             "",
             "",
@@ -745,6 +872,7 @@ provider:
         self.assertEqual(selection.provider, "openai")
         self.assertEqual(selection.model, "gpt-5.4-mini")
         self.assertEqual(selection.search_provider, "openai")
+        self.assertEqual(selection.image_generation_provider, "openai")
         self.assertIn("Describe this agent's role", selection.identity)
         self.assertNotIn("(default)", stdout.getvalue())
 
@@ -837,6 +965,79 @@ search:
             self.assertEqual(search_provider.model, AgentConfig.DEFAULT_MODEL)
             self.assertEqual(
                 str(search_provider.client.base_url).rstrip("/"),
+                "https://api.openai.com/v1",
+            )
+
+    def test_config_loads_openai_image_generation_tool(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "openai"
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+image_generation:
+    provider: "openai"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertIn("generate_image", runner.agent.tools)
+            self.assertTrue(runner.agent.supports_vision)
+
+    def test_config_rejects_openai_image_generation_for_non_openai_provider_without_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    api_key: "test-key"
+image_generation:
+    provider: "openai"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "requires image_generation.api_key"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_accepts_openai_image_generation_for_non_openai_provider_with_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    base_url: "https://api.deepseek.com"
+    api_key: "deepseek-key"
+image_generation:
+    provider: "openai"
+    api_key: "openai-image-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            image_tool = runner.agent.tools["generate_image"]
+            image_provider = next(
+                cell.cell_contents
+                for cell in image_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
+            )
+
+            self.assertIn("generate_image", runner.agent.tools)
+            self.assertFalse(runner.agent.supports_vision)
+            self.assertEqual(
+                str(image_provider.client.base_url).rstrip("/"),
                 "https://api.openai.com/v1",
             )
 

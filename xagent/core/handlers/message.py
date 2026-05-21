@@ -118,6 +118,7 @@ class MessageHandler:
         max_message_chars: int = AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
+        include_images: bool = True,
     ) -> dict:
         """Collapse recent conversation history into one user transcript message.
 
@@ -195,7 +196,7 @@ class MessageHandler:
         # print(transcript_text)
         # print("=== End transcript message content ===")
 
-        latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id)
+        latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id) if include_images else []
         if not latest_images:
             return {"role": RoleType.USER.value, "content": transcript_text}
 
@@ -220,6 +221,7 @@ class MessageHandler:
         max_message_chars: int = AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
+        include_images: bool = True,
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -287,7 +289,7 @@ class MessageHandler:
             "content": current_task_text,
         }
 
-        latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id)
+        latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id) if include_images else []
         if latest_images:
             content = [{"type": "text", "text": current_task_text}]
             content.extend(

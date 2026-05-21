@@ -172,7 +172,61 @@ search:
 
 当搜索开启时，Agent 会加载 `web_search` 工具；无论搜索是否开启，`run_command` 工具都会作为内置工具加载。
 
-### 2.3 observability
+### 2.3 image input and generation
+
+图片输入默认只对 `openai` 和 `qwen` provider 开启。这个列表集中在 `xagent/core/providers.py` 的 `VISION_CAPABLE_PROVIDERS`，后续新增内置视觉 provider 时只需要扩展这个集合。其他内置 provider 收到 `image_source` 或消息中的图片 URL 时，会在 Agent 层返回不支持图片输入的提示，不会把 `image_url` / `input_image` payload 发送给模型。第一版按 provider 判断，不做 per-model vision capability 推断。
+
+自定义 provider 可以显式声明是否支持图片 URL 理解：
+
+```yaml
+provider:
+  name: custom
+  model_api: openai_chat_completions
+  base_url: https://api.example.com/v1
+  api_key: YOUR_API_KEY
+  model: custom-vision-model
+  supports_vision: true
+```
+
+`provider.supports_vision` 只对 `provider.name: custom` 生效，默认是 `false`。`xagent init` 选择 custom provider 时会询问该 provider 是否支持 image URL input；已知 provider 的能力由代码中的集中集合控制，避免配置漂移。
+
+`image_generation.provider` 支持：
+
+- `openai`：加载 `generate_image` 工具，调用 OpenAI Image API 生成图片。主 provider 是 OpenAI 时复用主 API key；非 OpenAI provider 必须配置 `image_generation.api_key`。
+- `none`：关闭图像生成工具。
+
+OpenAI provider 通过 `xagent init` 初始化时会默认写入：
+
+```yaml
+search:
+  provider: openai
+
+image_generation:
+  provider: openai
+```
+
+非 OpenAI provider 使用 OpenAI 图像生成示例：
+
+```yaml
+provider:
+  name: deepseek
+  base_url: https://api.deepseek.com
+  api_key: YOUR_DEEPSEEK_API_KEY
+  model: deepseek-v4-pro
+
+image_generation:
+  provider: openai
+  api_key: YOUR_OPENAI_API_KEY
+  model: gpt-image-1
+  size: 1024x1024
+  quality: auto
+  output_format: png
+  background: auto
+```
+
+`generate_image` 第一版只支持 text-to-image，不包含图片编辑、mask、参考图、多图批量或 partial image streaming。生成文件会写入 `workspace/temp/images/`，工具返回的 Markdown 图片链接使用 `/api/workspace/blob?path=...`，因此 Web chat 和 Workspace 页面都能展示生成结果。
+
+### 2.4 observability
 
 `observability` 用于启用 Langfuse 对 OpenAI SDK 路径模型调用的观测。默认 `xagent init` 不写这个顶层键，等价于关闭观测；只有在初始化时明确选择启用，或手动添加 `enabled: true` 时才会加载 Langfuse wrapper。
 
@@ -198,7 +252,7 @@ observability:
 
 Langfuse SDK 会在后台排队发送事件。CLI 单次 chat、observe、Feishu 进程退出和 API server lifespan shutdown 都会复用 xAgent 的 flush 路径，尽量在进程结束前提交观测事件。flush 失败只会写 warning，不会阻止消息或记忆落盘。
 
-### 2.4 memory
+### 2.5 memory
 
 长期记忆默认自动管理，不需要在 `config.yaml` 中配置。每轮对话会自动注入最近 3 天的长期记忆上下文；后台写入会按内部批量策略、短会话兜底、长驻进程内部 heartbeat 和正常退出 flush 进行，避免普通用户理解或维护写入调度参数。
 
@@ -206,7 +260,7 @@ API server lifespan 和 Feishu daemon 会启动内部 heartbeat；CLI 单次/交
 
 长期记忆是纯时间维度存储，当前只包含 `daily/`、`weekly/`、`monthly/` 和 `yearly/`。旧版本可能遗留的 `memory/people/` 文件不会被自动删除，但当前记忆 API 和搜索不会再创建、列出或检索它们。
 
-### 2.5 workspace
+### 2.6 workspace
 
 `workspace/` 是和 `memory/`、`messages/` 同级的外置工作区。它不是自动注入 prompt 的长期记忆，而是 Agent 可自主管理的文件系统空间，可用于项目记录、临时状态、markdown 笔记、脚本、图片和其他产物。
 

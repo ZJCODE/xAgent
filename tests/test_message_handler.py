@@ -238,6 +238,48 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             "https://example.com/screenshot.png",
         )
 
+    def test_build_recent_transcript_message_can_omit_images(self):
+        handler = MessageHandler(
+            system_prompt="You are a helpful assistant.",
+            message_storage=_FakeMessageStorage(),
+        )
+        messages = [
+            Message.create(
+                "Please inspect this image",
+                role=RoleType.USER,
+                sender_id="bob",
+                image_source="https://example.com/screenshot.png",
+            ),
+        ]
+
+        transcript_message = handler.build_recent_transcript_message(
+            messages,
+            current_user_id="bob",
+            include_images=False,
+        )
+
+        self.assertEqual(transcript_message["role"], "user")
+        self.assertIsInstance(transcript_message["content"], str)
+        self.assertIn("[Attached image: 1]", transcript_message["content"])
+
+    def test_build_turn_context_messages_can_omit_current_task_images(self):
+        messages = [
+            Message.create(
+                "Please inspect this image",
+                role=RoleType.USER,
+                sender_id="bob",
+                image_source="https://example.com/screenshot.png",
+            ),
+        ]
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="bob",
+            include_images=False,
+        )
+
+        self.assertIsInstance(context_messages[-1]["content"], str)
+
     def test_observations_are_interleaved_in_recent_experience(self):
         alice = Message.create("Hi", role=RoleType.USER, sender_id="alice")
         alice.timestamp = 1.0

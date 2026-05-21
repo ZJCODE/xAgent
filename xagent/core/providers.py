@@ -46,6 +46,11 @@ PROVIDER_BASE_URLS = {
     PROVIDER_ANTHROPIC: "https://api.anthropic.com",
 }
 
+VISION_CAPABLE_PROVIDERS = frozenset({
+    PROVIDER_OPENAI,
+    PROVIDER_QWEN,
+})
+
 CUSTOM_BASE_URLS = {
     MODEL_API_OPENAI_RESPONSES: "https://api.example.com/v1",
     MODEL_API_OPENAI_CHAT_COMPLETIONS: "https://api.example.com/v1",
@@ -99,6 +104,17 @@ def provider_is_official_openai(provider_cfg: dict[str, Any]) -> bool:
     if not base_url:
         return True
     return base_url == PROVIDER_BASE_URLS[PROVIDER_OPENAI].rstrip("/")
+
+
+def provider_supports_vision(provider_cfg: dict[str, Any]) -> bool:
+    provider = normalize_provider_name(provider_cfg.get("name"))
+    if provider == PROVIDER_CUSTOM:
+        return provider_cfg.get("supports_vision") is True
+    if provider in VISION_CAPABLE_PROVIDERS:
+        return True
+    if provider:
+        return False
+    return provider_is_official_openai(provider_cfg)
 
 
 def provider_model_api(provider_cfg: dict[str, Any]) -> str:

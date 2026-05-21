@@ -2,22 +2,30 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import type { ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
+import { getAgentInfo } from "../lib/api";
+import type { AgentCapabilities, ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
 import { makeId } from "../lib/format";
 
 const GLOBAL_SETTINGS_KEY = "xagent_web_settings";
 const HISTORY_KEY = "xagent_chat_history";
+const DEFAULT_CAPABILITIES: AgentCapabilities = {
+  vision: true,
+  web_search: false,
+  image_generation: false,
+};
 
 type PanelId = ChatPanelState["id"];
 
 interface ChatContextValue {
   panel: ChatPanelState;
   status: "idle" | "sending";
+  capabilities: AgentCapabilities;
   updateSettings: (panelId: PanelId, settings: Partial<ChatSettings>) => void;
   addImages: (panelId: PanelId, files: FileList | File[]) => void;
   removeImage: (panelId: PanelId, index: number) => void;
@@ -115,6 +123,7 @@ function persistHistory(panel: ChatPanelState) {
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [panel, setPanel] = useState<ChatPanelState>(() => createPanel("single"));
+  const [capabilities, setCapabilities] = useState<AgentCapabilities>(DEFAULT_CAPABILITIES);
   const socketsRef = useRef<Record<string, WebSocket>>({});
 
   const patchPanel = useCallback((panelId: PanelId, updater: (panel: ChatPanelState) => ChatPanelState) => {
@@ -124,6 +133,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       persistHistory(updatedPanel);
       return updatedPanel;
     });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAgentInfo()
+      .then((info) => {
+        if (cancelled) return;
+        setCapabilities({
+          ...DEFAULT_CAPABILITIES,
+          ...(info.capabilities || {}),
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const updateSettings = useCallback(
@@ -142,6 +167,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const addImages = useCallback((panelId: PanelId, files: FileList | File[]) => {
+    if (!capabilities.vision) return;
     Array.from(files).forEach((file) => {
       if (!file.type.match(/^image\/(png|jpeg)$/)) return;
       const reader = new FileReader();
@@ -155,7 +181,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       };
       reader.readAsDataURL(file);
     });
-  }, [patchPanel]);
+  }, [capabilities.vision, patchPanel]);
 
   const removeImage = useCallback(
     (panelId: PanelId, index: number) => {
@@ -308,7 +334,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const text = rawText.trim();
       if (!text || panel.sending) return;
       const currentPanel = panel;
-      const images = [...currentPanel.pendingImages];
+      const images = capabilities.vision ? [...currentPanel.pendingImages] : [];
       const userMessage: ChatMessage = {
         id: makeId("user"),
         role: "user",
@@ -342,7 +368,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       await runSocket(panelId, payload, assistantMessage.id).catch(() => undefined);
     },
-    [panel, patchPanel, runSocket],
+    [capabilities.vision, panel, patchPanel, runSocket],
   );
 
   const sendObservation = useCallback(
@@ -423,6 +449,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     () => ({
       panel,
       status,
+      capabilities,
       updateSettings,
       addImages,
       removeImage,
@@ -434,6 +461,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [
       panel,
       status,
+      capabilities,
       updateSettings,
       addImages,
       removeImage,
