@@ -18,6 +18,7 @@ from ..core.providers import (
     provider_is_official_openai,
     provider_model_api,
     provider_supports_vision,
+    PROVIDER_MINIMAX,
 )
 from ..components import MessageStorageBase, MessageStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
@@ -25,6 +26,7 @@ from ..tools import create_image_generation_tool, create_web_search_tool, create
 from ..tools.image_generation_tool import (
     IMAGE_GENERATION_PROVIDER_OPENAI,
     normalize_image_generation_provider,
+    IMAGE_GENERATION_PROVIDER_MINIMAX,
 )
 from ..tools.search_tool import (
     SEARCH_PROVIDER_OPENAI,
@@ -344,12 +346,26 @@ class BaseAgentRunner:
         allowed_image_generation_keys = {
             "provider",
             "api_key",
+            "base_url",
+            "endpoint",
             "model",
             "size",
             "quality",
             "output_format",
             "background",
             "output_compression",
+            "moderation",
+            "aspect_ratio",
+            "width",
+            "height",
+            "n",
+            "seed",
+            "prompt_optimizer",
+            "aigc_watermark",
+            "reference_image_url",
+            "reference_image_urls",
+            "subject_reference",
+            "style",
         }
         unsupported_keys = sorted(set(image_generation_cfg) - allowed_image_generation_keys)
         if unsupported_keys:
@@ -363,14 +379,43 @@ class BaseAgentRunner:
                 raise ValueError(
                     "image_generation.provider 'openai' requires image_generation.api_key when provider is not OpenAI"
                 )
+        if image_generation_provider == IMAGE_GENERATION_PROVIDER_MINIMAX and not self._is_minimax_provider(provider_cfg):
+            api_key = str(image_generation_cfg.get("api_key") or "").strip()
+            if is_placeholder_api_key(api_key):
+                raise ValueError(
+                    "image_generation.provider 'minimax' requires image_generation.api_key when provider is not MiniMax"
+                )
         if "output_compression" in image_generation_cfg:
             value = image_generation_cfg["output_compression"]
             if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 100:
                 raise ValueError("image_generation.output_compression must be an integer from 0 to 100")
+        if "n" in image_generation_cfg:
+            value = image_generation_cfg["n"]
+            max_images = 9 if image_generation_provider == IMAGE_GENERATION_PROVIDER_MINIMAX else 10
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > max_images:
+                raise ValueError(f"image_generation.n must be an integer from 1 to {max_images}")
+        for key in ("width", "height"):
+            if key in image_generation_cfg:
+                value = image_generation_cfg[key]
+                if isinstance(value, bool) or not isinstance(value, int) or value < 512 or value > 2048 or value % 8 != 0:
+                    raise ValueError(f"image_generation.{key} must be an integer from 512 to 2048 and a multiple of 8")
+        for key in ("prompt_optimizer", "aigc_watermark"):
+            if key in image_generation_cfg and not isinstance(image_generation_cfg[key], bool):
+                raise ValueError(f"image_generation.{key} must be a boolean")
+        if "reference_image_urls" in image_generation_cfg and not isinstance(image_generation_cfg["reference_image_urls"], list):
+            raise ValueError("image_generation.reference_image_urls must be a list")
+        if "subject_reference" in image_generation_cfg and not isinstance(image_generation_cfg["subject_reference"], list):
+            raise ValueError("image_generation.subject_reference must be a list")
+        if "style" in image_generation_cfg and not isinstance(image_generation_cfg["style"], dict):
+            raise ValueError("image_generation.style must be a dictionary")
 
     @staticmethod
     def _is_openai_provider(provider_cfg: Dict[str, Any]) -> bool:
         return provider_is_official_openai(provider_cfg)
+
+    @staticmethod
+    def _is_minimax_provider(provider_cfg: Dict[str, Any]) -> bool:
+        return normalize_provider_name(provider_cfg.get("name")) == PROVIDER_MINIMAX
 
     def _load_identity(self, identity_path: Path) -> str:
         """Load config-driven agent identity instructions from identity.md."""
@@ -643,14 +688,40 @@ class BaseAgentRunner:
         if search_tool is not None:
             tools.append(search_tool)
         image_generation_client = self._initialize_image_generation_client(agent_cfg, model_client=client)
+        image_generation_config = self._image_generation_config_for_tools(agent_cfg)
         image_generation_tool = create_image_generation_tool(
-            agent_cfg.get("image_generation"),
+            image_generation_config,
             client=image_generation_client,
             workspace_dir=str(self.workspace_dir),
         )
         if image_generation_tool is not None:
             tools.append(image_generation_tool)
         return tools
+
+    def _image_generation_config_for_tools(self, agent_cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        image_generation_cfg = agent_cfg.get("image_generation")
+        if not isinstance(image_generation_cfg, dict):
+            return image_generation_cfg
+
+        image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
+        if image_generation_provider != IMAGE_GENERATION_PROVIDER_MINIMAX:
+            return image_generation_cfg
+
+        configured_key = str(image_generation_cfg.get("api_key") or "").strip()
+        if configured_key and not is_placeholder_api_key(configured_key):
+            return image_generation_cfg
+
+        provider_cfg = agent_cfg.get("provider") or {}
+        if not isinstance(provider_cfg, dict) or not self._is_minimax_provider(provider_cfg):
+            return image_generation_cfg
+
+        provider_key = str(provider_cfg.get("api_key") or "").strip()
+        if is_placeholder_api_key(provider_key):
+            return image_generation_cfg
+
+        merged_config = dict(image_generation_cfg)
+        merged_config["api_key"] = provider_key
+        return merged_config
     
     def _get_output_type(self, agent_cfg: Dict[str, Any]) -> Optional[Type[BaseModel]]:
         """Get output type from configuration schema."""

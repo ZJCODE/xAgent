@@ -504,6 +504,21 @@ provider:
             self.assertEqual(config["image_generation"]["provider"], "openai")
             self.assertEqual(config["image_generation"]["api_key"], "openai-image-key")
 
+    def test_init_writes_minimax_image_generation_for_minimax_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="minimax",
+                base_url="https://api.minimaxi.com/anthropic",
+                api_key="minimax-key",
+                model="MiniMax-M2.7",
+                identity="# Identity\n\nYou draw with MiniMax.\n",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["image_generation"], {"provider": "minimax"})
+
     def test_init_writes_model_api_only_for_custom_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
@@ -787,6 +802,7 @@ provider:
         self.assertEqual(selection.api_key, "minimax-key")
         self.assertEqual(selection.model, "MiniMax-M2.7")
         self.assertEqual(selection.search_provider, "duckduckgo")
+        self.assertEqual(selection.image_generation_provider, "minimax")
 
     def test_collect_init_selection_supports_anthropic_provider(self):
         answers = iter([
@@ -989,6 +1005,36 @@ image_generation:
             self.assertIn("generate_image", runner.agent.tools)
             self.assertTrue(runner.agent.supports_vision)
 
+    def test_config_loads_minimax_image_generation_tool_with_main_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "minimax"
+    base_url: "https://api.minimaxi.com/anthropic"
+    model: "MiniMax-M2.7"
+    api_key: "minimax-key"
+image_generation:
+    provider: "minimax"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            image_tool = runner.agent.tools["generate_image"]
+            image_provider = next(
+                cell.cell_contents
+                for cell in image_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
+            )
+
+            self.assertIn("generate_image", runner.agent.tools)
+            self.assertFalse(runner.agent.supports_vision)
+            self.assertEqual(image_provider.provider, "minimax")
+            self.assertEqual(image_provider.config["api_key"], "minimax-key")
+
     def test_config_rejects_openai_image_generation_for_non_openai_provider_without_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1006,6 +1052,25 @@ image_generation:
             write_identity(tmpdir)
 
             with self.assertRaisesRegex(ValueError, "requires image_generation.api_key"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_minimax_image_generation_for_non_minimax_provider_without_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    api_key: "test-key"
+image_generation:
+    provider: "minimax"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "provider 'minimax' requires image_generation.api_key"):
                 BaseAgentRunner(config_dir=tmpdir)
 
     def test_config_accepts_openai_image_generation_for_non_openai_provider_with_key(self):

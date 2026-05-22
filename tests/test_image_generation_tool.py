@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from xagent.tools.image_generation_tool import (
     create_image_generation_tool,
@@ -25,9 +26,38 @@ class FakeOpenAIClient:
         self.images = FakeImages(response)
 
 
+class FakeHTTPResponse:
+    def __init__(self, payload):
+        self.payload = payload
+        self.text = ""
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
+class FakeAsyncHTTPClient:
+    def __init__(self, response_payload):
+        self.response_payload = response_payload
+        self.calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+    async def post(self, url, headers, json):
+        self.calls.append({"url": url, "headers": headers, "json": json})
+        return FakeHTTPResponse(self.response_payload)
+
+
 class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
     def test_normalize_image_generation_provider_aliases(self):
         self.assertEqual(normalize_image_generation_provider("openai_images"), "openai")
+        self.assertEqual(normalize_image_generation_provider("minimax_images"), "minimax")
         self.assertEqual(normalize_image_generation_provider("disabled"), "none")
         self.assertEqual(normalize_image_generation_provider("off"), "none")
 
@@ -76,6 +106,95 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["model"], "gpt-image-test")
         self.assertEqual(call["prompt"], "Draw a crisp product icon")
         self.assertEqual(call["output_format"], "png")
+
+    async def test_openai_image_generation_uses_latest_defaults_and_options(self):
+        image_bytes = b"fake image bytes"
+        response = SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    b64_json=base64.b64encode(image_bytes).decode("ascii"),
+                    revised_prompt="",
+                )
+            ]
+        )
+        client = FakeOpenAIClient(response)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = create_image_generation_tool(
+                {"provider": "openai"},
+                client=client,
+                workspace_dir=tmpdir,
+            )
+
+            result = await tool(
+                prompt="Draw a fast draft",
+                output_format="jpeg",
+                output_compression=45,
+                moderation="low",
+                n=2,
+            )
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["model"], "gpt-image-2")
+            self.assertEqual(result["size"], "auto")
+            self.assertEqual(result["quality"], "auto")
+            self.assertEqual(result["output_format"], "jpeg")
+
+        call = client.images.calls[0]
+        self.assertEqual(call["model"], "gpt-image-2")
+        self.assertEqual(call["size"], "auto")
+        self.assertEqual(call["quality"], "auto")
+        self.assertEqual(call["output_format"], "jpeg")
+        self.assertEqual(call["output_compression"], 45)
+        self.assertEqual(call["moderation"], "low")
+        self.assertEqual(call["n"], 2)
+
+    async def test_minimax_image_generation_writes_workspace_file(self):
+        image_bytes = b"fake minimax image bytes"
+        response_payload = {
+            "data": {"image_base64": [base64.b64encode(image_bytes).decode("ascii")]},
+            "base_resp": {"status_code": 0, "status_msg": "success"},
+        }
+        http_client = FakeAsyncHTTPClient(response_payload)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = create_image_generation_tool(
+                {"provider": "minimax", "api_key": "minimax-key"},
+                workspace_dir=tmpdir,
+            )
+
+            with patch("xagent.tools.image_generation_tool.httpx.AsyncClient", return_value=http_client):
+                result = await tool(
+                    prompt="女孩在图书馆的窗户前，看向远方",
+                    aspect_ratio="16:9",
+                    reference_image_urls=["https://example.com/reference.jpg"],
+                    n=2,
+                    prompt_optimizer=True,
+                )
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["provider"], "minimax")
+            self.assertEqual(result["model"], "image-01")
+            self.assertEqual(result["aspect_ratio"], "16:9")
+            self.assertTrue(result["image"]["path"].startswith("temp/images/"))
+            self.assertIn(result["image"]["blob_url"], result["image"]["markdown"])
+
+            written = Path(tmpdir) / result["image"]["path"]
+            self.assertEqual(written.read_bytes(), image_bytes)
+
+        call = http_client.calls[0]
+        self.assertEqual(call["url"], "https://api.minimaxi.com/v1/image_generation")
+        self.assertEqual(call["headers"]["Authorization"], "Bearer minimax-key")
+        self.assertEqual(call["json"]["model"], "image-01")
+        self.assertEqual(call["json"]["prompt"], "女孩在图书馆的窗户前，看向远方")
+        self.assertEqual(call["json"]["response_format"], "base64")
+        self.assertEqual(call["json"]["aspect_ratio"], "16:9")
+        self.assertEqual(call["json"]["n"], 2)
+        self.assertTrue(call["json"]["prompt_optimizer"])
+        self.assertEqual(
+            call["json"]["subject_reference"],
+            [{"type": "character", "image_file": "https://example.com/reference.jpg"}],
+        )
 
 
 if __name__ == "__main__":

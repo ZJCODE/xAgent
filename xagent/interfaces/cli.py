@@ -327,6 +327,7 @@ CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL
 API_KEY_PLACEHOLDER = "your_api_key_here"
 OPENAI_SEARCH_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
 OPENAI_IMAGE_GENERATION_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
+MINIMAX_IMAGE_GENERATION_API_KEY_PLACEHOLDER = "your_minimax_api_key_here"
 BRAVE_SEARCH_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 MODEL_PLACEHOLDER = "your_model_here"
 LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
@@ -382,6 +383,7 @@ NON_OPENAI_SEARCH_PROVIDERS = (
 NON_OPENAI_IMAGE_GENERATION_PROVIDERS = (
     "none",
     "openai",
+    "minimax",
 )
 
 
@@ -447,12 +449,21 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
         if selection.search_api_key:
             search_config["api_key"] = selection.search_api_key
     config["search"] = search_config
-    image_generation_config = {"provider": selection.image_generation_provider or "none"}
+    selected_image_generation_provider = selection.image_generation_provider or "none"
+    if selection.provider == PROVIDER_MINIMAX and selected_image_generation_provider == "none":
+        selected_image_generation_provider = "minimax"
+    image_generation_config = {"provider": selected_image_generation_provider}
     if image_generation_config["provider"] == "openai" and selection.provider != PROVIDER_OPENAI:
         image_generation_config["api_key"] = (
             selection.image_generation_api_key or OPENAI_IMAGE_GENERATION_API_KEY_PLACEHOLDER
         )
     elif image_generation_config["provider"] == "openai" and selection.image_generation_api_key:
+        image_generation_config["api_key"] = selection.image_generation_api_key
+    elif image_generation_config["provider"] == "minimax" and selection.provider != PROVIDER_MINIMAX:
+        image_generation_config["api_key"] = (
+            selection.image_generation_api_key or MINIMAX_IMAGE_GENERATION_API_KEY_PLACEHOLDER
+        )
+    elif image_generation_config["provider"] == "minimax" and selection.image_generation_api_key:
         image_generation_config["api_key"] = selection.image_generation_api_key
     config["image_generation"] = image_generation_config
     if selection.observability_enabled:
@@ -567,6 +578,8 @@ def _select_image_generation_provider(
 ) -> str:
     if provider == PROVIDER_OPENAI:
         return "openai"
+    if provider == PROVIDER_MINIMAX:
+        return "minimax"
     return _select_option(
         "Image generation provider",
         NON_OPENAI_IMAGE_GENERATION_PROVIDERS,
@@ -705,6 +718,12 @@ def collect_init_selection(
         ).strip()
         if not image_generation_api_key:
             image_generation_api_key = OPENAI_IMAGE_GENERATION_API_KEY_PLACEHOLDER
+    elif image_generation_provider == "minimax" and provider != PROVIDER_MINIMAX:
+        image_generation_api_key = secret_input_func(
+            "MiniMax API key for image generation (leave blank to fill in later): "
+        ).strip()
+        if not image_generation_api_key:
+            image_generation_api_key = MINIMAX_IMAGE_GENERATION_API_KEY_PLACEHOLDER
 
     provider_api_cfg = {"name": provider}
     if model_api:

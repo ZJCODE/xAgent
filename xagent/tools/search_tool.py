@@ -39,6 +39,8 @@ PLACEHOLDER_API_KEYS = {
     "your_api_key_here",
     "your_openai_api_key",
     "your_openai_api_key_here",
+    "your_minimax_api_key",
+    "your_minimax_api_key_here",
     "your_brave_search_api_key",
 }
 

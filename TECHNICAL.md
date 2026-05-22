@@ -192,7 +192,8 @@ provider:
 
 `image_generation.provider` 支持：
 
-- `openai`：加载 `generate_image` 工具，调用 OpenAI Image API 生成图片。主 provider 是 OpenAI 时复用主 API key；非 OpenAI provider 必须配置 `image_generation.api_key`。
+- `openai`：加载 `generate_image` 工具，调用 OpenAI Image API 生成图片。默认模型为 `gpt-image-2`，默认 `size: auto`、`quality: auto`、`output_format: png`、`background: auto`。主 provider 是 OpenAI 时复用主 API key；非 OpenAI provider 必须配置 `image_generation.api_key`。
+- `minimax`：加载 `generate_image` 工具，调用 MiniMax `POST /v1/image_generation`。主 provider 是 MiniMax 时复用主 API key；非 MiniMax provider 必须配置 `image_generation.api_key`。支持 MiniMax 文生图与通过 `reference_image_url` / `reference_image_urls` 传入主体参考图。
 - `none`：关闭图像生成工具。
 
 OpenAI provider 通过 `xagent init` 初始化时会默认写入：
@@ -203,6 +204,13 @@ search:
 
 image_generation:
   provider: openai
+```
+
+MiniMax provider 通过 `xagent init` 初始化时会默认写入：
+
+```yaml
+image_generation:
+  provider: minimax
 ```
 
 非 OpenAI provider 使用 OpenAI 图像生成示例：
@@ -217,14 +225,32 @@ provider:
 image_generation:
   provider: openai
   api_key: YOUR_OPENAI_API_KEY
-  model: gpt-image-1
-  size: 1024x1024
+  model: gpt-image-2
+  size: auto
   quality: auto
   output_format: png
   background: auto
 ```
 
-`generate_image` 第一版只支持 text-to-image，不包含图片编辑、mask、参考图、多图批量或 partial image streaming。生成文件会写入 `workspace/temp/images/`，工具返回的 Markdown 图片链接使用 `/api/workspace/blob?path=...`，因此 Web chat 和 Workspace 页面都能展示生成结果。
+非 MiniMax provider 使用 MiniMax 图像生成示例：
+
+```yaml
+provider:
+  name: deepseek
+  base_url: https://api.deepseek.com
+  api_key: YOUR_DEEPSEEK_API_KEY
+  model: deepseek-v4-pro
+
+image_generation:
+  provider: minimax
+  api_key: YOUR_MINIMAX_API_KEY
+  model: image-01
+  aspect_ratio: 16:9
+  n: 1
+  prompt_optimizer: true
+```
+
+`generate_image` 支持 text-to-image；MiniMax 还支持用 `reference_image_url` 或 `reference_image_urls` 生成主体参考图工作流。OpenAI 当前走 Image API 的生成端点，不包含 mask 编辑、Responses API 多轮编辑或 partial image streaming。生成文件会写入 `workspace/temp/images/`，工具返回的 Markdown 图片链接使用 `/api/workspace/blob?path=...`，因此 Web chat 和 Workspace 页面都能展示生成结果。
 
 ### 2.4 observability
 
