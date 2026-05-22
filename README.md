@@ -93,6 +93,8 @@ Memory writes are buffered for efficiency, then flushed by batch size, by a stal
 
 The runtime also creates a `workspace/` directory beside `memory/` and `messages/`. This is the agent's external working area for notes, project records, temporary files, scripts, images, and other artifacts. In standard xAgent runtimes, the built-in `run_command` tool defaults to this directory when no working directory is supplied. The web console includes a Workspace page for browsing, editing, searching, uploading, previewing, and deleting workspace files, plus a Maintenance action to clear workspace contents.
 
+Agent Skills live in the sibling `skills/` directory. Each skill is a folder with a required `SKILL.md` file containing YAML frontmatter (`name` and `description`) followed by markdown instructions. Optional `references/`, `scripts/`, and `assets/` files can be bundled with the skill. xAgent uses progressive loading: enabled skill names and descriptions are always exposed to the model as Available Skills; when a description matches the task, the model calls the built-in `read_skill` loader to read `SKILL.md`; referenced files are read only when needed. Skill scripts are not auto-registered as tools; if a skill asks the agent to run a script, it goes through the existing `run_command` policy. The web console includes a Skills page for viewing, creating, searching, enabling, disabling, and deleting skills.
+
 ## API Transports
 
 `POST /chat` remains the final-only HTTP interface and returns `{"reply": ...}`.

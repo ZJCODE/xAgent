@@ -292,6 +292,7 @@ class InitResult:
     memory_dir: Path
     messages_dir: Path
     workspace_dir: Path
+    skills_dir: Path
     wrote_files: bool
     conflicts: Tuple[Path, ...]
 
@@ -847,6 +848,7 @@ def init_agent_directory(
     memory_dir = resolved_dir / BaseAgentConfig.MEMORY_DIRNAME
     messages_dir = resolved_dir / BaseAgentConfig.MESSAGE_DIRNAME
     workspace_dir = resolved_dir / BaseAgentConfig.WORKSPACE_DIRNAME
+    skills_dir = resolved_dir / BaseAgentConfig.SKILLS_DIRNAME
     managed_paths = (config_path, identity_path)
     conflicts = tuple(path for path in managed_paths if path.exists())
 
@@ -863,6 +865,7 @@ def init_agent_directory(
             memory_dir=memory_dir,
             messages_dir=messages_dir,
             workspace_dir=workspace_dir,
+            skills_dir=skills_dir,
             wrote_files=False,
             conflicts=conflicts,
         )
@@ -874,6 +877,7 @@ def init_agent_directory(
     memory_dir.mkdir(parents=True, exist_ok=True)
     messages_dir.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
+    skills_dir.mkdir(parents=True, exist_ok=True)
 
     selection = selection or _default_init_selection()
     config_path.write_text(_config_yaml(selection, schema=schema), encoding="utf-8")
@@ -887,12 +891,14 @@ def init_agent_directory(
     print(f"Memory: {memory_dir}")
     print(f"Messages: {messages_dir}")
     print(f"Workspace: {workspace_dir}")
+    print(f"Skills: {skills_dir}")
     return InitResult(
         config_path=config_path,
         identity_path=identity_path,
         memory_dir=memory_dir,
         messages_dir=messages_dir,
         workspace_dir=workspace_dir,
+        skills_dir=skills_dir,
         wrote_files=True,
         conflicts=(),
     )

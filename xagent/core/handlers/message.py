@@ -725,6 +725,7 @@ class MessageHandler:
     def build_instructions(
         self,
         tool_names: Optional[List[str]] = None,
+        skills_catalog: str = "",
     ) -> str:
         """Build the static instructions string for the model.
 
@@ -733,7 +734,7 @@ class MessageHandler:
           2. Tool Instructions — per-tool safety / usage rules
           3. User System Prompt — developer-supplied customisation
         """
-        instruction_messages = self.build_instruction_messages(tool_names=tool_names)
+        instruction_messages = self.build_instruction_messages(tool_names=tool_names, skills_catalog=skills_catalog)
         instructions = "\n\n".join(
             message["content"] for message in instruction_messages if message.get("content")
         )
@@ -750,6 +751,7 @@ class MessageHandler:
     def build_instruction_messages(
         self,
         tool_names: Optional[List[str]] = None,
+        skills_catalog: str = "",
     ) -> list[dict]:
         """Build static named system layers for the model input."""
         messages = [{
@@ -764,6 +766,13 @@ class MessageHandler:
                 "role": RoleType.SYSTEM.value,
                 "name": AgentConfig.TOOL_POLICY_NAME,
                 "content": tool_policy,
+            })
+
+        if skills_catalog.strip():
+            messages.append({
+                "role": RoleType.SYSTEM.value,
+                "name": AgentConfig.SKILLS_CATALOG_NAME,
+                "content": skills_catalog.strip(),
             })
 
         if self.system_prompt.strip():

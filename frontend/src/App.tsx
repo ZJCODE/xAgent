@@ -7,10 +7,11 @@ import { AgentPage } from "./pages/AgentPage";
 import { ChatPage } from "./pages/ChatPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { MessagePage } from "./pages/MessagePage";
+import { SkillsPage } from "./pages/SkillsPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import { AppLayout } from "./components/AppLayout";
 
-const routeSet = new Set<RoutePath>(["/", "/memory", "/message", "/workspace", "/agent"]);
+const routeSet = new Set<RoutePath>(["/", "/memory", "/message", "/workspace", "/skills", "/agent"]);
 
 function normalizeRoute(pathname: string): RoutePath {
   return routeSet.has(pathname as RoutePath) ? (pathname as RoutePath) : "/";
@@ -56,6 +57,8 @@ function RoutedApp() {
         return <MessagePage />;
       case "/workspace":
         return <WorkspacePage />;
+      case "/skills":
+        return <SkillsPage />;
       case "/agent":
         return <AgentPage />;
       case "/":

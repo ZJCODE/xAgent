@@ -16,6 +16,7 @@ class AgentConfig:
     IDENTITY_CONTEXT_NAME = "identity_context"
     RECENT_MEMORY_NAME = "recent_memory"
     WORKSPACE_CONTEXT_NAME = "workspace_context"
+    SKILLS_CATALOG_NAME = "skills_catalog"
     RECENT_EXPERIENCE_NAME = "recent_experience"
     CURRENT_TASK_NAME = "current_task"
 
@@ -24,6 +25,7 @@ class AgentConfig:
     MEMORY_DIRNAME = "memory"
     MESSAGE_DIRNAME = "messages"
     WORKSPACE_DIRNAME = "workspace"
+    SKILLS_DIRNAME = "skills"
     MESSAGE_DB_FILENAME = "messages.sqlite3"
     MEMORY_RECENT_DAYS = 3
     MEMORY_MESSAGE_THRESHOLD = 12
@@ -68,6 +70,7 @@ class AgentConfig:
     MAX_COMMAND_TIMEOUT = 300  # hard upper bound for timeout parameter
     MAX_COMMAND_OUTPUT_SIZE = 51200  # 50 KB per stream
     MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled instructions (chars)
+    MAX_SKILLS_CATALOG_CHARS = 8000
     SEARCH_HTTP_TIMEOUT = 15.0
     DEFAULT_SEARCH_RESULTS = 5
     MAX_SEARCH_RESULTS = 20
@@ -114,6 +117,15 @@ class AgentConfig:
             "- Do not claim the image was generated unless the tool returns a successful image result.\n"
             "- If generation fails, explain the failure briefly and offer a simpler prompt or settings.\n"
         ),
+        "read_skill": (
+            "\n**Agent Skills Loading:**\n"
+            "- The Available Skills system layer lists enabled skills by name and frontmatter description. Use that layer for discovery; do not call a tool just to list skills.\n"
+            "- When a skill description matches the current task, call `read_skill(skill_name)` to load `SKILL.md` before applying the skill.\n"
+            "- `read_skill(skill_name)` returns the main instructions plus a lightweight file list for that selected skill package.\n"
+            "- Read additional referenced files with `read_skill(skill_name, file_path=...)` only when the loaded instructions point to them or the task needs them.\n"
+            "- Use forward-slash relative paths inside skill packages.\n"
+            "- Skill scripts are not function tools; execute scripts only through `run_command` and follow shell safety policy.\n"
+        ),
     }
 
     TOOL_POLICY_ORDER = (
@@ -122,6 +134,7 @@ class AgentConfig:
         "search_memory",
         "web_search",
         "generate_image",
+        "read_skill",
     )
 
     DEFAULT_SYSTEM_PROMPT = (

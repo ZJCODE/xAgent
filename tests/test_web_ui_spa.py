@@ -36,6 +36,7 @@ class WebUISpaTests(unittest.IsolatedAsyncioTestCase):
                 await client.get("/memory"),
                 await client.get("/message"),
                 await client.get("/workspace"),
+                await client.get("/skills"),
                 await client.get("/agent"),
             ]
 

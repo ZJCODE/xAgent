@@ -1,4 +1,4 @@
-export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/agent";
+export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/agent";
 
 export type ChatRole = "user" | "assistant" | "observation";
 
@@ -64,6 +64,7 @@ export interface AgentInfo {
   model: string;
   workspace: string;
   workspace_dir: string;
+  skills_dir?: string;
   memory_dir: string;
   message_storage: Record<string, unknown>;
   tools: string[];
@@ -147,4 +148,71 @@ export interface MessagesStats {
 export interface MessageSearchResponse {
   query: string;
   results: MessageSearchResult[];
+}
+
+export interface SkillValidationIssue {
+  path: string;
+  code: string;
+  message: string;
+}
+
+export interface SkillMetadata {
+  name: string;
+  description: string;
+  path: string;
+  skill_file: string;
+  enabled: boolean;
+  valid: boolean;
+  modified?: number;
+  license?: string;
+  compatibility?: string;
+  metadata?: Record<string, unknown>;
+  allowed_tools?: string;
+  errors: SkillValidationIssue[];
+}
+
+export interface SkillsValidationResult {
+  valid: boolean;
+  skills: Array<{
+    name: string;
+    path: string;
+    valid: boolean;
+    errors: SkillValidationIssue[];
+  }>;
+}
+
+export interface SkillsInfo {
+  root: string;
+  count: number;
+  enabled_count: number;
+  disabled_count: number;
+  invalid_count: number;
+  skills: SkillMetadata[];
+  validation: SkillsValidationResult;
+}
+
+export interface SkillsTreeResponse {
+  root: string;
+  tree: FileNode[];
+  skills: SkillMetadata[];
+}
+
+export interface SkillCreateInput {
+  name: string;
+  description: string;
+  body?: string;
+  license?: string;
+  compatibility?: string;
+  metadata?: Record<string, unknown>;
+  allowed_tools?: string;
+}
+
+export interface SkillCreateResponse {
+  status: string;
+  skill: SkillMetadata;
+}
+
+export interface SkillStateResponse {
+  status: string;
+  skill: SkillMetadata;
 }

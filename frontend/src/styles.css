@@ -501,6 +501,16 @@ textarea {
   gap: 0.5rem;
 }
 
+.console-toolbar-actions {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 .search-control {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto auto auto;
@@ -516,6 +526,14 @@ textarea {
 
 .dark .search-control {
   background: rgba(24, 24, 27, 0.62);
+}
+
+.console-toolbar-actions .search-control {
+  flex: 1 1 min(100%, 620px);
+}
+
+.console-toolbar-actions .skills-search-control {
+  flex: 0 1 auto;
 }
 
 .search-control .ghost-button {
@@ -558,6 +576,20 @@ textarea {
 }
 
 @media (max-width: 760px) {
+  .console-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .console-toolbar-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .console-toolbar-actions > .ghost-button {
+    width: fit-content;
+  }
+
   .browser-layout {
     grid-template-columns: 1fr;
   }
@@ -717,6 +749,85 @@ textarea {
   border-radius: 18px;
   border: 1px solid var(--border-soft);
   object-fit: contain;
+}
+
+.skill-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.skill-summary,
+.skill-form-panel {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.42);
+  padding: 0.9rem;
+}
+
+.dark .skill-summary,
+.dark .skill-form-panel {
+  background: rgba(24, 24, 27, 0.58);
+}
+
+.skill-summary h4 {
+  font-weight: 700;
+}
+
+.skill-summary p {
+  margin: 0.25rem 0 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.skill-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+
+.skill-form-panel {
+  display: block;
+}
+
+.skill-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.form-field {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.form-field input,
+.form-field textarea {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--text-primary);
+  padding: 0.7rem 0.8rem;
+  outline: 0;
+}
+
+.dark .form-field input,
+.dark .form-field textarea {
+  background: rgba(24, 24, 27, 0.62);
+}
+
+.form-field textarea {
+  min-height: 220px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.84rem;
+  line-height: 1.55;
 }
 
 .message-stream {

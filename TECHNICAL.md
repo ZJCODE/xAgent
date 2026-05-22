@@ -42,6 +42,12 @@ xagent web --dir ~/.xagent --host 127.0.0.1 --port 8010
   messages/
     messages.sqlite3
   workspace/
+  skills/
+    .xagent-skills.json
+    code-review/
+      SKILL.md
+      references/
+      scripts/
   run/
     api.pid
     feishu.pid
@@ -60,7 +66,7 @@ xagent web --dir ~/.xagent --host 127.0.0.1 --port 8010
 - `channels`：可选，API/Feishu 等可托管运行入口配置。
 - `observability`：可选，Langfuse 观测与 tracing 配置。
 
-出现其他顶层键会在启动时失败，例如 `agent`、`system_prompt`、`server`、`workspace` 都不是当前支持的配置项。
+出现其他顶层键会在启动时失败，例如 `agent`、`system_prompt`、`server`、`workspace`、`skills` 都不是当前支持的配置项。Skills 是目录资源，存放在运行目录的 `skills/` 下，不写入 `config.yaml`。
 
 最小示例：
 
@@ -259,7 +265,55 @@ API server lifespan 和 Feishu daemon 会启动内部 heartbeat；CLI 单次/交
 
 标准 runner 会把 `run_command` 的默认工作目录绑定到 `workspace/`。如果工具调用显式传入 `working_directory`，则按该参数执行。当前版本采用策略边界而不是硬沙箱：Agent 可以在 `workspace/` 内自主创建、覆盖和删除文件；对 `workspace/` 外的写入、删除、安装、网络或 git mutation 操作仍应先获得用户明确确认。
 
-### 2.6 output_schema
+### 2.7 skills
+
+`skills/` 是和 `memory/`、`messages/`、`workspace/` 同级的 Agent Skills 目录。第一版只扫描当前 `--dir` 下的 `skills/`，不扫描项目级 `.agents/skills` 或用户全局目录。
+
+每个 skill 是一个目录，至少包含 `SKILL.md`：
+
+```text
+skills/
+  code-review/
+    SKILL.md
+    references/
+      checklist.md
+    scripts/
+      validate.py
+    assets/
+```
+
+`SKILL.md` 必须以 YAML frontmatter 开头：
+
+```markdown
+---
+name: code-review
+description: Reviews code changes for correctness. Use when reviewing diffs or PRs.
+---
+
+# Code Review
+
+## Instructions
+
+...
+```
+
+`name` 只能包含小写字母、数字和单个连字符，最长 64 个字符，并且必须和父目录名一致。`description` 必填，最长 1024 个字符，应同时说明 skill 做什么以及何时使用。可选字段包括 `license`、`compatibility`、`metadata` 和实验性的 `allowed-tools`。
+
+xAgent 使用三层渐进式加载：
+
+| Level | 加载时机 | 内容 | 入口 |
+| --- | --- | --- | --- |
+| Level 1: Metadata | 每轮 system prompt | 启用 skill 的 `name`、`description` 和 `SKILL.md` 路径 | `Available Skills` 系统层 |
+| Level 2: Instructions | skill 描述匹配当前任务时 | `SKILL.md` 正文，也就是主要流程和最佳实践 | `read_skill(skill_name)` |
+| Level 3: Resources/code | 只有被引用且任务需要时 | references、templates、schemas、examples、scripts 等 bundle 文件 | `read_skill(skill_name, file_path=...)` 或 `run_command` |
+
+`description` 是 discovery metadata：它告诉模型 skill 做什么、什么时候使用；它不是完整操作说明。模型不需要调用工具来列出 skills，因为 `Available Skills` 已经在 system prompt 中暴露。模型侧只注册一个 Skills 加载工具：`read_skill`。默认调用会读取 `SKILL.md`，并返回当前 skill 包内的轻量文件清单；之后只能按需读取同一 skill 目录内的引用文件。`SKILL.md` 正文和 references 不会默认塞进 system prompt。启用/禁用状态写入 `skills/.xagent-skills.json`，不会修改 skill 自身文件，也不会写入 `config.yaml`。
+
+Skill 中的 `scripts/` 是普通文件资源，不会自动注册为 function tool。若 skill 指示运行脚本，Agent 必须通过 `run_command` 执行，并继承 workspace 外操作的现有安全策略。
+
+Web UI 的 Skills 页面支持查看文件树、搜索、创建 `SKILL.md`、启用/禁用和删除 skill。第一版新增只提供表单创建单个 `SKILL.md`；zip/folder 导入和完整多文件编辑可后续扩展。
+
+### 2.8 output_schema
 
 `output_schema` 用于把模型回复约束为 Pydantic 结构。支持字段类型：`str`、`int`、`float`、`bool`、`list`、`dict`；`list` 可以通过 `items` 指定元素类型。
 
@@ -280,7 +334,7 @@ output_schema:
 
 启用结构化输出后，Agent 会关闭 token 级文本增量。官方 OpenAI Responses 路径会使用 `text.format` 的 JSON schema；OpenAI-compatible Chat Completions 路径会使用 JSON object 模式；Anthropic Messages 路径会通过 schema prompt 约束输出并做 Pydantic 校验。HTTP `/chat` 始终只返回最终 `reply`；WebSocket `/ws/chat` 仍返回事件边界，但结构化结果会作为完整 `message_done` 输出。
 
-### 2.6 identity.md
+### 2.9 identity.md
 
 `identity.md` 是必填文件，内容不能为空。它定义 Agent 的身份、语气和行为边界。服务启动时会读取该文件；也可以通过 HTTP 接口热更新：
 
@@ -291,7 +345,7 @@ Content-Type: application/json
 {"identity":"# Identity\n\nYou are a helpful assistant."}
 ```
 
-### 2.7 channels
+### 2.10 channels
 
 `channels.api` 控制 API channel 的监听地址和端口。API channel 始终暴露 HTTP JSON、WebSocket 和内置静态页面；`--open` 只控制启动后是否打开浏览器，不改变服务能力。
 
@@ -653,6 +707,79 @@ GET /api/workspace/search?query=project&limit=50
 #### POST /api/workspace/upload
 
 使用 multipart form 上传文件。字段：`file` 为上传文件，`path` 可选；`path` 可以是目标文件路径，也可以用尾部 `/` 表示目标目录。
+
+#### GET /api/skills/info
+
+返回 skills 根目录、启用/禁用/无效计数、已发现 skill 元数据和整体验证结果。
+
+```http
+GET /api/skills/info
+```
+
+#### GET /api/skills/tree
+
+返回 `skills/` 下的安全文件树，并附带每个已发现 skill 的 metadata。`skills/.xagent-skills.json` 不会出现在树中。
+
+```http
+GET /api/skills/tree
+```
+
+#### GET /api/skills/read?path=...
+
+读取 `skills/` 内的相对路径。UTF-8 文本文件返回 `content`；二进制文件只返回元数据。路径穿越和指向 skills 外部的 symlink 会被拒绝。
+
+```http
+GET /api/skills/read?path=code-review/SKILL.md
+```
+
+#### GET /api/skills/search
+
+按文件名、相对路径和 UTF-8 文本内容搜索 skills。大文件和二进制文件只参与文件名/路径匹配。
+
+```http
+GET /api/skills/search?query=review&limit=50
+```
+
+#### POST /api/skills/create
+
+创建新的 skill 目录和 `SKILL.md`。`name`、`description` 必填；`body` 可选。
+
+```json
+{
+  "name": "code-review",
+  "description": "Reviews code changes for correctness. Use when reviewing diffs or PRs.",
+  "body": "# Code Review\n\n## Instructions\n..."
+}
+```
+
+#### PUT /api/skills/write
+
+写入 `skills/` 内的 UTF-8 文本文件，可自动创建父目录。保留的 `.xagent-skills.json` 状态文件不能通过该接口直接写入。
+
+```json
+{"path":"code-review/references/checklist.md","content":"# Checklist\n","create_parents":true}
+```
+
+#### DELETE /api/skills/delete?path=...&recursive=true
+
+删除 skills 内的文件或目录。删除整个 skill 目录时使用 `recursive=true`。Web UI 会在删除前做确认；外部控制台应自行做权限控制。
+
+#### PUT /api/skills/state
+
+启用或禁用一个有效 skill，状态写入 `skills/.xagent-skills.json`。
+
+```json
+{"name":"code-review","enabled":false}
+```
+
+#### GET /api/skills/validate
+
+验证一个 skill 或所有 skill 的 `SKILL.md` frontmatter。
+
+```http
+GET /api/skills/validate
+GET /api/skills/validate?name=code-review
+```
 
 #### GET /api/messages
 

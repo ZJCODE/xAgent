@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .base import BaseAgentConfig, BaseAgentRunner
+from ..components.skills import SkillsStorageLocal
 from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..core.runtime import create_runtime_heartbeat
@@ -99,6 +100,39 @@ class WorkspaceWriteInput(BaseModel):
     create_parents: bool = True
 
 
+class SkillCreateInput(BaseModel):
+    """Request body for creating a new Agent Skill package."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str
+    body: str = ""
+    license: Optional[str] = None
+    compatibility: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    allowed_tools: Optional[str] = None
+
+
+class SkillWriteInput(BaseModel):
+    """Request body for writing a text file in skills/."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    content: str
+    create_parents: bool = True
+
+
+class SkillStateInput(BaseModel):
+    """Request body for enabling or disabling a skill."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    enabled: bool
+
+
 class AgentHTTPServer(BaseAgentRunner):
     """HTTP server for xAgent."""
 
@@ -120,6 +154,7 @@ class AgentHTTPServer(BaseAgentRunner):
             self.agent = agent
             self.config = {}
             self.message_storage = self.agent.message_storage
+            self.skills_storage = getattr(self.agent, "skills_storage", None)
         else:
             super().__init__(config_dir=config_dir)
 
@@ -361,6 +396,45 @@ class AgentHTTPServer(BaseAgentRunner):
         root = Path(workspace_dir).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
         return root
+
+    def _get_skills_root(self) -> Path:
+        skills_storage = getattr(self, "skills_storage", None)
+        if skills_storage is not None:
+            root = getattr(skills_storage, "root", None)
+            if root is not None:
+                return Path(root).expanduser().resolve()
+        runtime_root = getattr(self, "workspace", None)
+        if runtime_root is not None:
+            skills_root = Path(runtime_root) / BaseAgentConfig.SKILLS_DIRNAME
+        else:
+            memory_root = self._get_memory_root()
+            skills_root = memory_root.parent / BaseAgentConfig.SKILLS_DIRNAME
+        root = Path(skills_root).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _get_skills_storage(self) -> SkillsStorageLocal:
+        skills_storage = getattr(self, "skills_storage", None)
+        if isinstance(skills_storage, SkillsStorageLocal):
+            return skills_storage
+        storage = SkillsStorageLocal(self._get_skills_root())
+        self.skills_storage = storage
+        if not hasattr(self.agent, "skills_storage"):
+            try:
+                self.agent.skills_storage = storage
+            except Exception:
+                pass
+        return storage
+
+    @staticmethod
+    def _raise_skills_http_error(exc: Exception) -> None:
+        if isinstance(exc, PermissionError):
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        if isinstance(exc, FileNotFoundError):
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=f"Skills error: {str(exc)}") from exc
 
     def _resolve_workspace_path(self, relative_path: str = "") -> Path:
         workspace_root = self._get_workspace_root()
@@ -659,6 +733,10 @@ class AgentHTTPServer(BaseAgentRunner):
             async def serve_agent():
                 return await serve_spa_index()
 
+            @app.get("/skills", include_in_schema=False)
+            async def serve_skills():
+                return await serve_spa_index()
+
             app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
             self.logger.info("Web UI available at /")
         else:
@@ -830,11 +908,13 @@ class AgentHTTPServer(BaseAgentRunner):
                     image_generation_provider = str(image_generation_cfg.get("provider") or "none")
             tool_names = list(self.agent.tools.keys())
             supports_vision = bool(getattr(self.agent, "supports_vision", True))
+            skills_root = self._get_skills_root()
             return {
                 "provider": provider_name or "",
                 "model": self.agent.model,
                 "workspace": str(getattr(self, "workspace", "")),
                 "workspace_dir": str(self._get_workspace_root()),
+                "skills_dir": str(skills_root),
                 "memory_dir": memory_dir,
                 "message_storage": storage_info,
                 "tools": tool_names,
@@ -1185,6 +1265,105 @@ class AgentHTTPServer(BaseAgentRunner):
                     raise HTTPException(status_code=415, detail=f"Unsupported image MIME type; allowed: {allowed}")
             requested.write_bytes(content)
             return {"status": "ok", **self._workspace_metadata(requested, workspace_root)}
+
+        @app.get("/api/skills/info", tags=["Monitoring"])
+        async def skills_info():
+            """Return skills root metadata and validation summary."""
+            try:
+                return self._get_skills_storage().info()
+            except Exception as exc:
+                self._raise_skills_http_error(exc)
+
+        @app.get("/api/skills/tree", tags=["Monitoring"])
+        async def skills_tree():
+            """Return the skills directory tree as JSON."""
+            storage = self._get_skills_storage()
+            return {
+                "root": str(storage.root),
+                "tree": storage.tree(),
+                "skills": [skill.to_dict() for skill in storage.list_skills(include_disabled=True, include_invalid=True)],
+            }
+
+        @app.get("/api/skills/read", tags=["Monitoring"])
+        async def skills_read(path: str = Query(..., description="Relative path inside skills directory")):
+            """Read a skills file as UTF-8 text or return binary metadata."""
+            try:
+                return self._get_skills_storage().read_file(path)
+            except Exception as exc:
+                self._raise_skills_http_error(exc)
+
+        @app.get("/api/skills/search", tags=["Monitoring"])
+        async def skills_search(
+            query: str = Query(..., min_length=1, description="Search text for skill file names or file content"),
+            limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
+        ):
+            """Search skill packages by path/name and text content."""
+            try:
+                return self._get_skills_storage().search(query, limit=limit)
+            except Exception as exc:
+                self._raise_skills_http_error(exc)
+
+        @app.post("/api/skills/create", tags=["Monitoring"])
+        async def skills_create(input_data: SkillCreateInput):
+            """Create a new skill directory with SKILL.md."""
+            try:
+                skill = self._get_skills_storage().create_skill(
+                    name=input_data.name.strip(),
+                    description=input_data.description.strip(),
+                    body=input_data.body,
+                    license=input_data.license,
+                    compatibility=input_data.compatibility,
+                    metadata=input_data.metadata,
+                    allowed_tools=input_data.allowed_tools,
+                )
+                return {"status": "ok", "skill": skill.to_dict()}
+            except Exception as exc:
+                self._raise_skills_http_error(exc)
+
+        @app.put("/api/skills/write", tags=["Monitoring"])
+        async def skills_write(input_data: SkillWriteInput):
+            """Write a UTF-8 text file in skills/."""
+            try:
+                result = self._get_skills_storage().write_file(
+                    input_data.path,
+                    input_data.content,
+                    create_parents=input_data.create_parents,
+                )
+                return {"status": "ok", **result}
+            except Exception as exc:
+                self._raise_skills_http_error(exc)
+
+        @app.delete("/api/skills/delete", tags=["Monitoring"])
+        async def skills_delete(
+            path: str = Query(..., description="Relative path inside skills directory"),
+            recursive: bool = Query(False, description="Allow deleting directories recursively"),
+        ):
+            """Delete a skills file or directory."""
+            try:
+                deleted = self._get_skills_storage().delete_path(path, recursive=recursive)
+                return {"status": "ok", "deleted": deleted}
+            except Exception as exc:
+                self._raise_skills_http_error(exc)
+
+        @app.put("/api/skills/state", tags=["Monitoring"])
+        async def skills_state(input_data: SkillStateInput):
+            """Enable or disable one valid skill."""
+            try:
+                skill = self._get_skills_storage().set_enabled(input_data.name, input_data.enabled)
+                return {"status": "ok", "skill": skill.to_dict()}
+            except Exception as exc:
+                self._raise_skills_http_error(exc)
+
+        @app.get("/api/skills/validate", tags=["Monitoring"])
+        async def skills_validate(name: Optional[str] = Query(None, description="Optional skill name to validate")):
+            """Validate one skill or all discovered skills."""
+            try:
+                storage = self._get_skills_storage()
+                if name:
+                    return storage.validate_skill(name)
+                return storage.validate_all()
+            except Exception as exc:
+                self._raise_skills_http_error(exc)
 
         @app.get("/api/messages", tags=["Monitoring"])
         async def get_messages(

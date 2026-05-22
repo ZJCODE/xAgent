@@ -7,6 +7,11 @@ import type {
   MessagesResponse,
   MessagesStats,
   SearchResult,
+  SkillCreateInput,
+  SkillCreateResponse,
+  SkillStateResponse,
+  SkillsInfo,
+  SkillsTreeResponse,
   WorkspaceUploadResult,
 } from "../types";
 
@@ -83,6 +88,44 @@ export async function uploadWorkspaceFile(file: File, path: string): Promise<Wor
   return requestJson("/api/workspace/upload", {
     method: "POST",
     body: formData,
+  });
+}
+
+export async function getSkillsInfo(): Promise<SkillsInfo> {
+  return requestJson("/api/skills/info");
+}
+
+export async function getSkillsTree(): Promise<SkillsTreeResponse> {
+  return requestJson("/api/skills/tree");
+}
+
+export async function readSkillFile(path: string): Promise<FileReadResult> {
+  return requestJson(`/api/skills/read?path=${encodeURIComponent(path)}`);
+}
+
+export async function searchSkills(query: string): Promise<{ query: string; results: SearchResult[] }> {
+  return requestJson(`/api/skills/search?query=${encodeURIComponent(query)}`);
+}
+
+export async function createSkill(input: SkillCreateInput): Promise<SkillCreateResponse> {
+  return requestJson("/api/skills/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateSkillState(name: string, enabled: boolean): Promise<SkillStateResponse> {
+  return requestJson("/api/skills/state", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, enabled }),
+  });
+}
+
+export async function deleteSkillPath(path: string, recursive = false): Promise<{ status: string; deleted: FileNode }> {
+  return requestJson(`/api/skills/delete?path=${encodeURIComponent(path)}&recursive=${recursive ? "true" : "false"}`, {
+    method: "DELETE",
   });
 }
 

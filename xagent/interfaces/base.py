@@ -22,8 +22,14 @@ from ..core.providers import (
     PROVIDER_QWEN,
 )
 from ..components import MessageStorageBase, MessageStorageLocal
+from ..components.skills import SkillsStorageBase, SkillsStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
-from ..tools import create_image_generation_tool, create_web_search_tool, create_workspace_run_command_tool
+from ..tools import (
+    create_image_generation_tool,
+    create_read_skill_tool,
+    create_web_search_tool,
+    create_workspace_run_command_tool,
+)
 from ..tools.image_generation_tool import (
     IMAGE_GENERATION_PROVIDER_NONE,
     IMAGE_GENERATION_PROVIDER_OPENAI,
@@ -46,6 +52,7 @@ class BaseAgentConfig:
     MEMORY_DIRNAME = AgentConfig.MEMORY_DIRNAME
     MESSAGE_DIRNAME = AgentConfig.MESSAGE_DIRNAME
     WORKSPACE_DIRNAME = AgentConfig.WORKSPACE_DIRNAME
+    SKILLS_DIRNAME = AgentConfig.SKILLS_DIRNAME
     MESSAGE_DB_FILENAME = AgentConfig.MESSAGE_DB_FILENAME
     CONFIG_FILENAME = "config.yaml"
     IDENTITY_FILENAME = "identity.md"
@@ -98,10 +105,13 @@ class BaseAgentRunner:
         self.workspace = self.config_dir
         self.workspace_dir = self.workspace / BaseAgentConfig.WORKSPACE_DIRNAME
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        self.skills_dir = self.workspace / BaseAgentConfig.SKILLS_DIRNAME
+        self.skills_dir.mkdir(parents=True, exist_ok=True)
         self.observability = self._initialize_observability(self.config)
 
         # Initialize components in dependency order
         self.message_storage = self._initialize_message_storage()
+        self.skills_storage = self._initialize_skills_storage()
         self.agent = self._initialize_agent()
         
     def _resolve_config_dir(self, config_dir: Optional[str]) -> Path:
@@ -604,6 +614,7 @@ class BaseAgentRunner:
             output_type=output_type,
             message_storage=self.message_storage,
             workspace=str(self.workspace),
+            skills_storage=self.skills_storage,
             observability=self.observability,
             supports_vision=self._provider_supports_vision(agent_cfg),
         )
@@ -758,6 +769,8 @@ class BaseAgentRunner:
         )
         if image_generation_tool is not None:
             tools.append(image_generation_tool)
+        if getattr(self, "skills_storage", None) is not None:
+            tools.append(create_read_skill_tool(self.skills_storage))
         return tools
 
     def _image_generation_config_for_tools(self, agent_cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -816,3 +829,6 @@ class BaseAgentRunner:
 
     def _create_message_storage(self) -> MessageStorageBase:
         return MessageStorageLocal(path=str(self._get_message_storage_path()))
+
+    def _initialize_skills_storage(self) -> SkillsStorageBase:
+        return SkillsStorageLocal(self.skills_dir)

@@ -94,6 +94,41 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("trusted_as_instruction=\"false\"", messages[2]["content"])
         self.assertIn("# I am Mono", messages[2]["content"])
 
+    def test_build_instruction_messages_include_skills_catalog_layer(self):
+        handler = MessageHandler(
+            system_prompt="# I am Mono\n\nKeep a warm voice.",
+            message_storage=_FakeMessageStorage(),
+        )
+        catalog = (
+            "Available Skills\n"
+            "<available_skills>\n"
+            "- name: code-review\n"
+            "  description: Reviews code changes. Use when reviewing diffs.\n"
+            "  skill_file: skills/code-review/SKILL.md\n"
+            "</available_skills>"
+        )
+
+        messages = handler.build_instruction_messages(
+            tool_names=["read_skill"],
+            skills_catalog=catalog,
+        )
+
+        self.assertEqual(
+            [message["name"] for message in messages],
+            [
+                AgentConfig.CORE_INTERACTION_RULES_NAME,
+                AgentConfig.TOOL_POLICY_NAME,
+                AgentConfig.SKILLS_CATALOG_NAME,
+                AgentConfig.IDENTITY_CONTEXT_NAME,
+            ],
+        )
+        self.assertIn("Agent Skills Loading", messages[1]["content"])
+        self.assertIn("Available Skills", messages[1]["content"])
+        self.assertIn("code-review", messages[2]["content"])
+        self.assertIn("Reviews code changes", messages[2]["content"])
+        self.assertNotIn("# Code Review", messages[2]["content"])
+        self.assertIn("# I am Mono", messages[3]["content"])
+
     def test_build_turn_context_messages_match_prompt_layers(self):
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="Joy"),

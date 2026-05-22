@@ -9,6 +9,7 @@ from ..components import (
     MarkdownMemory,
     MessageStorageBase,
     MessageStorageLocal,
+    SkillsStorageBase,
 )
 from ..components.memory import JournalLLMService
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
@@ -40,6 +41,7 @@ class Agent:
         output_type: Optional[type[BaseModel]] = None,
         message_storage: Optional[MessageStorageBase] = None,
         workspace: Optional[str] = None,
+        skills_storage: Optional[SkillsStorageBase] = None,
         observability: Optional[ObservabilityRuntime] = None,
         supports_vision: bool = True,
     ):
@@ -75,6 +77,7 @@ class Agent:
         self.workspace = runtime_root
         self.workspace_dir = self._workspace_dir(runtime_root)
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        self.skills_storage = skills_storage
 
         if message_storage is not None:
             self.message_storage = message_storage
@@ -165,6 +168,12 @@ class Agent:
     @classmethod
     def _workspace_dir(cls, workspace: Path) -> Path:
         return workspace / AgentConfig.WORKSPACE_DIRNAME
+
+    def _skills_catalog_context(self) -> str:
+        skills_storage = getattr(self, "skills_storage", None)
+        if skills_storage is None:
+            return ""
+        return skills_storage.catalog_text(max_chars=AgentConfig.MAX_SKILLS_CATALOG_CHARS)
 
     def _workspace_context(self, tool_names: List[str]) -> str:
         if "run_command" not in tool_names:
@@ -330,8 +339,9 @@ class Agent:
             if excluded and tool_specs:
                 tool_specs = [s for s in tool_specs if self._tool_spec_name(s) not in excluded] or None
             workspace_context = self._workspace_context(tool_names)
+            skills_catalog = self._skills_catalog_context()
 
-            instructions = msg_handler.build_instruction_messages(tool_names=tool_names)
+            instructions = msg_handler.build_instruction_messages(tool_names=tool_names, skills_catalog=skills_catalog)
             iteration_messages = msg_handler.build_turn_context_messages(
                 recent_messages,
                 current_user_id=user_id,
@@ -538,8 +548,9 @@ class Agent:
             if excluded and tool_specs:
                 tool_specs = [s for s in tool_specs if self._tool_spec_name(s) not in excluded] or None
             workspace_context = self._workspace_context(tool_names)
+            skills_catalog = self._skills_catalog_context()
 
-            instructions = msg_handler.build_instruction_messages(tool_names=tool_names)
+            instructions = msg_handler.build_instruction_messages(tool_names=tool_names, skills_catalog=skills_catalog)
             iteration_messages = msg_handler.build_turn_context_messages(
                 recent_messages,
                 current_user_id=user_id,
