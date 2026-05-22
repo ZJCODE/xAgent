@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   clearMemory,
   clearMessages,
+  clearWorkspace,
   getAgentIdentity,
   getAgentInfo,
   updateAgentIdentity,
@@ -74,6 +75,11 @@ export function AgentPage() {
     if (!window.confirm("Clear all messages?")) return;
     await clearMessages();
     await load();
+  };
+
+  const runClearWorkspace = async () => {
+    if (!window.confirm("Clear all workspace files?")) return;
+    await clearWorkspace();
   };
 
   return (
@@ -148,6 +154,10 @@ export function AgentPage() {
             <button type="button" className="danger-button" onClick={runClearMessages}>
               <Trash2 size={15} />
               Clear Messages
+            </button>
+            <button type="button" className="danger-button" onClick={runClearWorkspace}>
+              <Trash2 size={15} />
+              Clear Workspace
             </button>
           </div>
         </section>

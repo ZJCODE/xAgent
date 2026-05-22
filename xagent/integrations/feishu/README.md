@@ -23,6 +23,7 @@ official SDK already provides:
 - WebSocket transport with auto-reconnect
 - Inbound message normalization (`content_text`, `mentioned_bot`, `chat_type`, …)
 - Outbound text / markdown / card sending
+- Outbound image / file upload and sending
 - Streaming card replies (LLM-style token output)
 - Mention policy and retries
 
@@ -41,6 +42,7 @@ Configure your Feishu bot
 3. Add extra permissions:
     * im:message.group_msg (for group chats)
     * im:message.group_at_msg.include_bot:readonly (for group @mentions from users and bots)
+    * im:resource:readonly (for downloading images sent to the bot)
     * contact:user.base:readonly (for user display names)
     * admin:app.info:readonly (for other bot or agent display names)
 4. Copy your App ID and App Secret.
@@ -102,7 +104,7 @@ The adapter behaves like a real human teammate:
 | Direct chat (`p2p`) | `agent.chat` | Always reply, sent as a fresh message (no quoting). |
 | Group / topic, bot @mentioned | `agent.chat` | Pulls recent Feishu history first, then replies. Anchored to the source message via `reply_to`; never as a Feishu topic/thread reply. |
 | Group / topic, not @mentioned | ignored | The bot does not listen or speak unless explicitly addressed. |
-| Non-text content | ignored (Phase 1) | Image/file routing is on the roadmap. |
+| Image content | `agent.chat` when the provider supports vision | Feishu image resources are downloaded and passed as `image_source`. If the configured model provider does not support image input, the adapter replies that it cannot understand image content. |
 
 > **Permission check.** The bot can reply to group @mentions with
 > `im:message.group_at_msg`; use
@@ -150,6 +152,29 @@ names are available.
 The Feishu adapter always uses the standard chat flow so memory behavior
 remains predictable across direct and group conversations.
 
+## Images and files
+
+Incoming Feishu image messages are downloaded through the official message
+resource API and saved under `workspace/temp/images/feishu`. The user message is
+recorded with the same markdown shape used by generated images, for example
+`![Feishu image](/api/workspace/blob?path=temp/images/feishu/input.png)`, so the
+Web UI Messages page can render the upload directly and later assistant replies
+can reuse the same workspace blob reference. At the model boundary the adapter
+passes provider-ready image data as `image_source`; the persisted user-facing
+reference remains the workspace blob URL, not a machine-specific absolute path.
+OpenAI and Qwen support vision by default; custom providers can opt in with
+`provider.supports_vision: true`. Providers without vision support do not call
+the model for image content and instead reply with a short unsupported-image
+message that includes the saved workspace blob reference when available.
+
+When xAgent returns workspace blob markdown such as
+`![Generated image](/api/workspace/blob?path=temp/images/result.png)`, the
+adapter resolves the file under `workspace/`, uploads it through
+`FeishuChannel.send`, and sends it back as a native Feishu image. Markdown links
+to other workspace blob files are sent back as Feishu files. Any surrounding text
+is sent as markdown first, then attachments are sent as separate messages with
+deterministic UUID suffixes.
+
 ## Segmented replies
 
 Feishu replies are always driven by `Agent.chat_events()`. Every completed
@@ -187,7 +212,6 @@ asyncio.run(adapter.run())
 
 ## Roadmap
 
-- Phase 2: forward image / file resources from Feishu into `agent.chat`.
 - Phase 3: card-based interactive prompts and richer mention metadata.
 - Channel-abstraction layer to support Slack / Discord / WeCom with the same
   routing core.

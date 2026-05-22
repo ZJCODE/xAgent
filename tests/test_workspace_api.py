@@ -88,6 +88,26 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(delete_response.status_code, 200)
             self.assertEqual(missing_response.status_code, 404)
 
+    async def test_workspace_clear_deletes_contents_but_keeps_root_and_external_symlink_target(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            server = self._server(root)
+            (server.workspace_dir / "notes").mkdir()
+            (server.workspace_dir / "notes" / "today.md").write_text("keep?", encoding="utf-8")
+            outside = root / "outside.txt"
+            outside.write_text("outside", encoding="utf-8")
+            (server.workspace_dir / "outside-link.txt").symlink_to(outside)
+
+            async with await self._client(server) as client:
+                response = await client.post("/api/workspace/clear")
+                tree_response = await client.get("/api/workspace/tree")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(server.workspace_dir.is_dir())
+            self.assertEqual(tree_response.json()["tree"], [])
+            self.assertTrue(outside.exists())
+            self.assertEqual(outside.read_text(encoding="utf-8"), "outside")
+
     async def test_workspace_upload_and_blob_serves_binary_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             server = self._server(Path(tmpdir))

@@ -47,6 +47,10 @@ export async function clearMessages(): Promise<{ status: string; message: string
   return requestJson("/clear_messages", { method: "POST" });
 }
 
+export async function clearWorkspace(): Promise<{ status: string; message: string; deleted: number }> {
+  return requestJson("/api/workspace/clear", { method: "POST" });
+}
+
 export async function getMemoryTree(): Promise<{ tree: FileNode[] }> {
   return requestJson("/api/memory/tree");
 }

@@ -335,6 +335,7 @@ class Agent:
             input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 
             for _ in range(max_iter):
+                logger.debug("Agent iteration with input messages: %s", input_messages)
                 reply_type, response = await self.model_client.call(
                     messages=input_messages,
                     tool_specs=tool_specs,

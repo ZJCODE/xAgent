@@ -176,6 +176,8 @@ search:
 
 图片输入默认只对 `openai` 和 `qwen` provider 开启。这个列表集中在 `xagent/core/providers.py` 的 `VISION_CAPABLE_PROVIDERS`，后续新增内置视觉 provider 时只需要扩展这个集合。其他内置 provider 收到 `image_source` 或消息中的图片 URL 时，会在 Agent 层返回不支持图片输入的提示，不会把 `image_url` / `input_image` payload 发送给模型。第一版按 provider 判断，不做 per-model vision capability 推断。
 
+为了控制多轮视觉成本，xAgent 只会复用当前说话人最近一次带图消息中的图片，并且最多继续附带到后续 2 个同一说话人的 user turn；超过这个窗口后，图片仍保存在消息与 workspace 中，但不会继续自动发送给模型，除非用户再次上传或显式提供新的图片输入。
+
 自定义 provider 可以显式声明是否支持图片 URL 理解：
 
 ```yaml
@@ -663,6 +665,14 @@ GET /api/workspace/read?path=notes/today.md
 GET /api/workspace/search?query=project&limit=50
 ```
 
+#### POST /api/workspace/clear
+
+清空 `workspace/` 内的所有内容，但保留 workspace 根目录。该接口会删除 workspace 内的 symlink 本身，不会跟随指向 workspace 外部的 symlink 目标。
+
+```json
+{"status":"ok","message":"Workspace cleared","deleted":3}
+```
+
 #### PUT /api/workspace/write
 
 写入 UTF-8 文本文件，可自动创建父目录。
@@ -943,6 +953,10 @@ Feishu Event/Webhook
 外部实时入口应使用 `/ws/chat` 或进程内 `Agent.chat_events()`。`stream` 只控制是否把文本拆成 `message_delta`；分段边界、工具调用和最终 `done` 始终存在。
 
 飞书适配器也走 `Agent.chat_events()`：每个 `message_done` 默认发送一条 markdown 消息；`channels.feishu.stream: true` 时使用 Feishu streaming card 增量更新当前段。
+
+如果飞书消息包含图片，内置 Feishu adapter 会通过官方 message resource API 下载图片并保存到 `workspace/temp/images/feishu/`。持久化的用户消息使用和生成图一致的 Markdown 引用，例如 `![Feishu image](/api/workspace/blob?path=temp/images/feishu/input.png)`，因此 Web UI Messages 页面可以直接渲染，后续回复也可以继续引用同一个 workspace blob。模型调用边界仍通过 `image_source` 传入 provider 可接受的图片数据；对用户和消息历史暴露的是 workspace blob URL，而不是机器相关的绝对路径。当当前 provider 不支持 vision 时，不调用模型，直接回复无法理解图片内容，并在可用时附上已保存的 workspace blob 引用。Agent 返回的 workspace blob 图片 Markdown 会被解析为本地 workspace 文件，并通过 `FeishuChannel.send({"image": ...})` 上传后作为飞书图片发送；非图片 workspace blob 链接会作为飞书文件发送。
+
+这套复用窗口对飞书与 Web UI 一致：图片上传当轮正常带入模型，之后最多再自动复用 2 轮同一用户追问，避免把同一张图在长链路中无限重复发送。
 
 ### 7.4 多用户与记忆边界
 

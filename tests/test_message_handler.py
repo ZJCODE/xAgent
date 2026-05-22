@@ -133,6 +133,89 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertEqual(current_task["content"][1]["type"], "image_url")
         self.assertEqual(current_task["content"][1]["image_url"]["url"], image_url)
 
+    def test_turn_context_messages_reuse_latest_user_image_for_followup(self):
+        image_url = "data:image/png;base64,AAAA"
+        messages = [
+            Message.create(
+                "Please inspect this image\n\n![Feishu image](/api/workspace/blob?path=temp/images/feishu/inbound.png)",
+                role=RoleType.USER,
+                sender_id="Joy",
+                image_source=image_url,
+            ),
+            Message.create("It looks like a chart.", role=RoleType.ASSISTANT, sender_id="agent"),
+            Message.create("What does the label say?", role=RoleType.USER, sender_id="Joy"),
+        ]
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="Joy",
+            current_time="2026-05-14 09:30",
+        )
+        current_task = context_messages[-1]
+
+        self.assertIsInstance(current_task["content"], list)
+        self.assertEqual(current_task["content"][1]["type"], "image_url")
+        self.assertEqual(current_task["content"][1]["image_url"]["url"], image_url)
+
+    def test_turn_context_messages_keep_reusing_image_through_second_followup(self):
+        image_url = "data:image/png;base64,AAAA"
+        messages = [
+            Message.create("Please inspect this image", role=RoleType.USER, sender_id="Joy", image_source=image_url),
+            Message.create("It looks like a chart.", role=RoleType.ASSISTANT, sender_id="agent"),
+            Message.create("What does the label say?", role=RoleType.USER, sender_id="Joy"),
+            Message.create("The label is small.", role=RoleType.ASSISTANT, sender_id="agent"),
+            Message.create("Zoom in on the lower right.", role=RoleType.USER, sender_id="Joy"),
+        ]
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="Joy",
+            current_time="2026-05-14 09:30",
+        )
+
+        current_task = context_messages[-1]
+        self.assertIsInstance(current_task["content"], list)
+        self.assertEqual(current_task["content"][1]["image_url"]["url"], image_url)
+
+    def test_turn_context_messages_stop_reusing_image_after_third_followup(self):
+        image_url = "data:image/png;base64,AAAA"
+        messages = [
+            Message.create("Please inspect this image", role=RoleType.USER, sender_id="Joy", image_source=image_url),
+            Message.create("It looks like a chart.", role=RoleType.ASSISTANT, sender_id="agent"),
+            Message.create("What does the label say?", role=RoleType.USER, sender_id="Joy"),
+            Message.create("The label is small.", role=RoleType.ASSISTANT, sender_id="agent"),
+            Message.create("Zoom in on the lower right.", role=RoleType.USER, sender_id="Joy"),
+            Message.create("The icon is blue.", role=RoleType.ASSISTANT, sender_id="agent"),
+            Message.create("And what about the title?", role=RoleType.USER, sender_id="Joy"),
+        ]
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="Joy",
+            current_time="2026-05-14 09:30",
+        )
+
+        self.assertIsInstance(context_messages[-1]["content"], str)
+
+    def test_recent_transcript_message_stops_reusing_image_after_third_followup(self):
+        image_url = "data:image/png;base64,AAAA"
+        messages = [
+            Message.create("Please inspect this image", role=RoleType.USER, sender_id="bob", image_source=image_url),
+            Message.create("It looks like a chart.", role=RoleType.ASSISTANT, sender_id="agent"),
+            Message.create("What does the label say?", role=RoleType.USER, sender_id="bob"),
+            Message.create("The label is small.", role=RoleType.ASSISTANT, sender_id="agent"),
+            Message.create("Zoom in on the lower right.", role=RoleType.USER, sender_id="bob"),
+            Message.create("The icon is blue.", role=RoleType.ASSISTANT, sender_id="agent"),
+            Message.create("And what about the title?", role=RoleType.USER, sender_id="bob"),
+        ]
+
+        transcript_message = MessageHandler.build_recent_transcript_message(
+            messages,
+            current_user_id="bob",
+        )
+
+        self.assertIsInstance(transcript_message["content"], str)
+
     def test_transcript_includes_memory_context(self):
         """memory_context is injected into the transcript message under 'Recent Memory'."""
         handler = MessageHandler(

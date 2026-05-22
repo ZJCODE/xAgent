@@ -487,10 +487,15 @@ class MessageHandler:
 
     @staticmethod
     def _latest_user_images(messages: List[Message], current_user_id: str) -> List[str]:
+        followup_turns = 0
         for msg in reversed(messages):
             if msg.role != RoleType.USER or msg.sender_id != current_user_id:
                 continue
             if not msg.multimodal or not msg.multimodal.image:
+                followup_turns += 1
+                continue
+
+            if followup_turns > AgentConfig.IMAGE_REUSE_MAX_FOLLOWUP_TURNS:
                 return []
 
             images = msg.multimodal.image

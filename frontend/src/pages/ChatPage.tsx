@@ -152,29 +152,30 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
       </form>
 
       <form onSubmit={submitMessage} className="composer-row">
-        <button
-          type="button"
-          className="icon-button"
-          onClick={() => {
-            if (canUploadImages) fileInputRef.current?.click();
-          }}
-          title={canUploadImages ? "Upload image" : "Image input is not available for this provider"}
-          disabled={panel.sending || !canUploadImages}
-        >
-          <ImagePlus size={18} />
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          accept="image/jpeg,image/png"
-          multiple
-          disabled={!canUploadImages}
-          onChange={(event) => {
-            if (canUploadImages && event.target.files) addImages(panel.id, event.target.files);
-            event.currentTarget.value = "";
-          }}
-        />
+        {canUploadImages ? (
+          <>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => fileInputRef.current?.click()}
+              title="Upload image"
+              disabled={panel.sending}
+            >
+              <ImagePlus size={18} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept="image/jpeg,image/png"
+              multiple
+              onChange={(event) => {
+                if (event.target.files) addImages(panel.id, event.target.files);
+                event.currentTarget.value = "";
+              }}
+            />
+          </>
+        ) : null}
         <textarea
           rows={1}
           placeholder="Message xAgent..."

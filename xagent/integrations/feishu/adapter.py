@@ -24,14 +24,19 @@ streaming cards are delegated to ``FeishuChannel``.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import inspect
 import json
 import logging
+import mimetypes
 import re
 import threading
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, Union
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from pydantic import BaseModel
 
@@ -63,6 +68,34 @@ class _FeishuLogRedactionFilter(logging.Filter):
 
 
 _LOG_REDACTION_FILTER = _FeishuLogRedactionFilter()
+
+_FEISHU_UNSUPPORTED_IMAGE_MESSAGE = "当前配置的模型不支持图片理解，无法理解图片内容。"
+_FEISHU_IMAGE_PLACEHOLDER = "The user sent an image."
+_FEISHU_INBOUND_IMAGE_OUTPUT_DIR = "temp/images/feishu"
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+_MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+@dataclass(frozen=True)
+class _FeishuOutboundAttachment:
+    kind: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class _FeishuImageResource:
+    data: bytes
+    mime_type: str
+    file_name: str
+
+
+@dataclass(frozen=True)
+class _FeishuInboundImageAsset:
+    image_source: str
+    path: str = ""
+    blob_url: str = ""
+    markdown: str = ""
 
 
 class FeishuAdapter:
@@ -355,9 +388,12 @@ class FeishuAdapter:
         text: str,
     ) -> None:
         if chat_type == "p2p":
-            if not text:
+            image_assets = await self._download_message_image_assets(msg, message_id=message_id)
+            if not text and not image_assets:
                 self.logger.debug("Skipping non-text direct message")
                 return
+            if not text:
+                text = _FEISHU_IMAGE_PLACEHOLDER
             sender_name = await self._resolve_sender_name(
                 sender_id,
                 fallback=sender_fallback_name,
@@ -373,12 +409,16 @@ class FeishuAdapter:
                 text=text,
                 is_group=False,
                 raw_msg=msg,
+                image_assets=image_assets,
             )
             return
 
         if chat_type in {"group", "topic"}:
             if self._is_bot_mentioned(msg):
-                if not text:
+                image_assets = await self._download_message_image_assets(msg, message_id=message_id)
+                if not text and image_assets:
+                    text = _FEISHU_IMAGE_PLACEHOLDER
+                elif not text:
                     text = "The user mentioned you without adding any text."
                 self.logger.info(
                     "Feishu @mention routed to chat: chat_type=%s chat_id=%s message_id=%s sender_id=%s",
@@ -402,6 +442,7 @@ class FeishuAdapter:
                     text=text,
                     is_group=True,
                     raw_msg=msg,
+                    image_assets=image_assets,
                 )
                 return
             self.logger.debug(
@@ -431,6 +472,297 @@ class FeishuAdapter:
             value = FeishuAdapter._raw_field(content, field_name)
             if isinstance(value, str) and value.strip():
                 return replace_mentions(value.strip(), mentions, show_mention_ids=show_mention_ids)
+        return ""
+
+    async def _download_message_image_assets(
+        self,
+        msg: Any,
+        *,
+        message_id: Optional[str],
+    ) -> list[_FeishuInboundImageAsset]:
+        if not message_id:
+            return []
+        resources = self._message_image_resources(msg)
+        if not resources:
+            return []
+
+        client = getattr(self._channel, "client", None)
+        im_v1 = getattr(getattr(getattr(client, "im", None), "v1", None), "message_resource", None)
+        if im_v1 is None:
+            self.logger.info("Feishu image resource download skipped: message_resource API is unavailable")
+            return []
+
+        try:
+            from lark_oapi.api.im.v1 import GetMessageResourceRequest  # type: ignore
+        except ImportError:  # pragma: no cover - import guard
+            return []
+
+        image_assets: list[_FeishuInboundImageAsset] = []
+        for resource_type, file_key, file_name in resources:
+            request = (
+                GetMessageResourceRequest.builder()
+                .message_id(message_id)
+                .file_key(file_key)
+                .type(resource_type)
+                .build()
+            )
+            try:
+                response = await self._call_feishu_resource_get(im_v1, request)
+            except Exception as exc:
+                self.logger.info(
+                    "Feishu image resource download failed: message_id=%s file_key=%s error=%s",
+                    message_id,
+                    file_key,
+                    exc,
+                )
+                continue
+
+            if not self._feishu_response_success(response):
+                self.logger.info(
+                    "Feishu image resource download rejected: message_id=%s file_key=%s code=%s msg=%s",
+                    message_id,
+                    file_key,
+                    getattr(response, "code", None),
+                    getattr(response, "msg", None),
+                )
+                continue
+
+            image_resource = self._feishu_resource_to_image(response, fallback_name=file_name or file_key)
+            if image_resource is None:
+                continue
+            asset = self._save_feishu_inbound_image(
+                image_resource,
+                message_id=message_id,
+                resource_type=resource_type,
+                file_key=file_key,
+            )
+            if asset is not None:
+                image_assets.append(asset)
+                self.logger.debug(
+                    "Feishu image resource saved: message_id=%s file_key=%s path=%s",
+                    message_id,
+                    file_key,
+                    asset.path,
+                )
+                continue
+            image_data = self._image_resource_to_data_uri(image_resource)
+            if image_data:
+                image_assets.append(_FeishuInboundImageAsset(image_source=image_data))
+        return image_assets
+
+    @staticmethod
+    async def _call_feishu_resource_get(resource_api: Any, request: Any) -> Any:
+        getter = getattr(resource_api, "aget", None)
+        if callable(getter):
+            response = getter(request)
+            return await response if inspect.isawaitable(response) else response
+        getter = getattr(resource_api, "get", None)
+        if not callable(getter):
+            raise RuntimeError("message_resource.get is unavailable")
+        return await asyncio.to_thread(getter, request)
+
+    @classmethod
+    def _message_image_resources(cls, msg: Any) -> list[tuple[str, str, str]]:
+        payloads: list[Any] = []
+        message = cls._message_object(msg) or msg
+        for source in (
+            cls._message_field(msg, "content"),
+            cls._raw_field(cls._raw_field(message, "body"), "content"),
+            cls._message_field(msg, "image_key"),
+            cls._message_field(msg, "file_key"),
+        ):
+            payload = cls._parse_message_payload(source)
+            if payload not in (None, ""):
+                payloads.append(payload)
+
+        resources: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for payload in payloads:
+            for resource_type, file_key, file_name in cls._extract_image_resource_items(payload):
+                key = (resource_type, file_key)
+                if key in seen:
+                    continue
+                seen.add(key)
+                resources.append((resource_type, file_key, file_name))
+        return resources
+
+    @classmethod
+    def _parse_message_payload(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return ""
+            try:
+                return json.loads(stripped)
+            except (TypeError, ValueError):
+                return stripped
+        return value
+
+    @classmethod
+    def _extract_image_resource_items(cls, value: Any) -> list[tuple[str, str, str]]:
+        items: list[tuple[str, str, str]] = []
+
+        def visit(node: Any) -> None:
+            if isinstance(node, str):
+                if node.startswith("img_"):
+                    items.append(("image", node, ""))
+                return
+            if isinstance(node, dict):
+                image_key = node.get("image_key") or node.get("imageKey")
+                if isinstance(image_key, str) and image_key.strip():
+                    items.append(("image", image_key.strip(), cls._resource_file_name(node)))
+                file_key = node.get("file_key") or node.get("fileKey")
+                if isinstance(file_key, str) and file_key.strip():
+                    file_name = cls._resource_file_name(node)
+                    if cls._looks_like_image_file(file_name):
+                        items.append(("file", file_key.strip(), file_name))
+                for child in node.values():
+                    visit(child)
+                return
+            if isinstance(node, (list, tuple)):
+                for child in node:
+                    visit(child)
+                return
+            attrs = getattr(node, "__dict__", None)
+            if isinstance(attrs, dict):
+                visit(attrs)
+
+        visit(value)
+        return items
+
+    @staticmethod
+    def _resource_file_name(payload: dict[str, Any]) -> str:
+        value = payload.get("file_name") or payload.get("fileName") or payload.get("name") or ""
+        return value.strip() if isinstance(value, str) else ""
+
+    @staticmethod
+    def _looks_like_image_file(file_name: str) -> bool:
+        if not file_name:
+            return False
+        mime_type, _ = mimetypes.guess_type(file_name)
+        return bool(mime_type and mime_type.startswith("image/"))
+
+    @staticmethod
+    def _feishu_response_success(response: Any) -> bool:
+        success = getattr(response, "success", None)
+        if callable(success):
+            return bool(success())
+        return getattr(response, "code", None) in (0, "0")
+
+    @classmethod
+    def _feishu_resource_to_image(cls, response: Any, *, fallback_name: str) -> Optional[_FeishuImageResource]:
+        file_obj = getattr(response, "file", None)
+        if file_obj is None:
+            return None
+        try:
+            if hasattr(file_obj, "getvalue"):
+                data = file_obj.getvalue()
+            else:
+                data = file_obj.read()
+        except Exception:
+            return None
+        if not data:
+            return None
+
+        file_name = str(getattr(response, "file_name", None) or fallback_name or "")
+        detected_mime_type = cls._detect_image_mime(data)
+        mime_type = detected_mime_type or cls._response_content_type(response)
+        if not mime_type or not mime_type.startswith("image/"):
+            mime_type, _ = mimetypes.guess_type(file_name)
+        if not mime_type:
+            return None
+        return _FeishuImageResource(data=data, mime_type=mime_type, file_name=file_name)
+
+    def _save_feishu_inbound_image(
+        self,
+        image: _FeishuImageResource,
+        *,
+        message_id: str,
+        resource_type: str,
+        file_key: str,
+    ) -> Optional[_FeishuInboundImageAsset]:
+        workspace_root = self._agent_workspace_root()
+        if workspace_root is None:
+            return None
+        output_dir = workspace_root / _FEISHU_INBOUND_IMAGE_OUTPUT_DIR
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        stem = self._safe_filename_part(Path(image.file_name).stem or file_key or resource_type)
+        resource_hash = hashlib.sha1(f"{message_id}:{resource_type}:{file_key}".encode("utf-8")).hexdigest()[:12]
+        content_hash = hashlib.sha256(image.data).hexdigest()[:12]
+        extension = self._image_extension(image.mime_type, image.file_name)
+        output_path = (output_dir / f"{stem}-{resource_hash}-{content_hash}.{extension}").resolve()
+        if not output_path.is_relative_to(workspace_root):
+            return None
+        if not output_path.exists():
+            output_path.write_bytes(image.data)
+        relative_path = output_path.relative_to(workspace_root).as_posix()
+        blob_url = f"/api/workspace/blob?path={quote(relative_path)}"
+        return _FeishuInboundImageAsset(
+            image_source=self._image_resource_to_data_uri(image),
+            path=relative_path,
+            blob_url=blob_url,
+            markdown=f"![Feishu image]({blob_url})",
+        )
+
+    def _agent_workspace_root(self) -> Optional[Path]:
+        workspace_dir = getattr(self.agent, "workspace_dir", None)
+        if workspace_dir is None:
+            return None
+        return Path(workspace_dir).expanduser().resolve()
+
+    @staticmethod
+    def _safe_filename_part(value: str) -> str:
+        safe_value = _SAFE_FILENAME_RE.sub("-", value.strip()).strip(".-_")
+        return (safe_value[:48] or "feishu-image")
+
+    @staticmethod
+    def _image_extension(mime_type: str, file_name: str = "") -> str:
+        extension = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/gif": "gif",
+            "image/webp": "webp",
+            "image/bmp": "bmp",
+            "image/tiff": "tiff",
+            "image/svg+xml": "svg",
+        }.get(mime_type.lower())
+        if extension:
+            return extension
+        guessed_from_name = Path(file_name).suffix.lower().lstrip(".")
+        if guessed_from_name in {"png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "svg"}:
+            return "jpg" if guessed_from_name == "jpeg" else guessed_from_name
+        return "png"
+
+    @staticmethod
+    def _image_resource_to_data_uri(image: _FeishuImageResource) -> str:
+        encoded = base64.b64encode(image.data).decode("ascii")
+        return f"data:{image.mime_type};base64,{encoded}"
+
+    @classmethod
+    def _feishu_resource_to_data_uri(cls, response: Any, *, fallback_name: str) -> str:
+        image = cls._feishu_resource_to_image(response, fallback_name=fallback_name)
+        return cls._image_resource_to_data_uri(image) if image is not None else ""
+
+    @staticmethod
+    def _response_content_type(response: Any) -> str:
+        raw = getattr(response, "raw", None)
+        headers = getattr(raw, "headers", None) or {}
+        if not isinstance(headers, dict):
+            return ""
+        content_type = headers.get("content-type") or headers.get("Content-Type") or ""
+        return str(content_type).split(";", 1)[0].strip().lower()
+
+    @staticmethod
+    def _detect_image_mime(data: bytes) -> str:
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if data.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if data.startswith((b"GIF87a", b"GIF89a")):
+            return "image/gif"
+        if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            return "image/webp"
         return ""
 
     @staticmethod
@@ -832,8 +1164,22 @@ class FeishuAdapter:
         text: str,
         is_group: bool,
         raw_msg: Any = None,
+        image_assets: Optional[list[_FeishuInboundImageAsset]] = None,
     ) -> None:
-        chat_text = text
+        image_assets = image_assets or []
+        image_sources = self._image_sources_for_model(image_assets)
+        if image_assets and not getattr(self.agent, "supports_vision", True):
+            anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
+            await self._send_markdown(
+                chat_id=chat_id,
+                message_id=anchor,
+                uuid_message_id=self._event_message_uuid(message_id, 1),
+                text=self._unsupported_image_message(image_assets),
+                is_group=is_group,
+            )
+            return
+
+        chat_text = self._append_image_markdown_context(text, image_assets)
         if is_group:
             chat_text = await self._chat_text_with_group_history(
                 chat_id=chat_id,
@@ -841,12 +1187,13 @@ class FeishuAdapter:
                 raw_msg=raw_msg,
                 sender_id=sender_id,
                 sender_name=sender_name,
-                text=text,
+                text=chat_text,
             )
 
         chat_kwargs = self._chat_kwargs(
             user_id=user_id,
             text=chat_text,
+            image_sources=image_sources,
         )
 
         await self._send_event_replies(
@@ -862,12 +1209,15 @@ class FeishuAdapter:
         *,
         user_id: str,
         text: str,
+        image_sources: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "user_message": text,
             "user_id": user_id,
             "enable_memory": self.config.enable_memory,
         }
+        if image_sources:
+            kwargs["image_source"] = image_sources[0] if len(image_sources) == 1 else image_sources
         if self.config.history_count is not None:
             kwargs["history_count"] = self.config.history_count
         if self.config.max_iter is not None:
@@ -875,6 +1225,52 @@ class FeishuAdapter:
         if self.config.max_concurrent_tools is not None:
             kwargs["max_concurrent_tools"] = self.config.max_concurrent_tools
         return kwargs
+
+    @staticmethod
+    def _image_sources_for_model(image_assets: list[_FeishuInboundImageAsset]) -> list[str]:
+        return [asset.image_source for asset in image_assets if asset.image_source]
+
+    @staticmethod
+    def _append_image_markdown_context(text: str, image_assets: list[_FeishuInboundImageAsset]) -> str:
+        text = FeishuAdapter._strip_redundant_feishu_image_markdown(text) if image_assets else text
+        markdowns = [asset.markdown for asset in image_assets if asset.markdown]
+        if not markdowns:
+            return text
+        stripped_text = text.strip()
+        if not stripped_text:
+            return "\n\n".join(markdowns)
+        return f"{stripped_text}\n\n" + "\n\n".join(markdowns)
+
+    @staticmethod
+    def _strip_redundant_feishu_image_markdown(text: str) -> str:
+        def replace(match: re.Match[str]) -> str:
+            source = (match.group(1) or "").strip()
+            if FeishuAdapter._is_redundant_feishu_image_source(source):
+                return ""
+            return match.group(0)
+
+        cleaned = _MARKDOWN_IMAGE_RE.sub(replace, text or "")
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    @staticmethod
+    def _is_redundant_feishu_image_source(source: str) -> bool:
+        if not source:
+            return False
+        parsed = urlparse(source)
+        if parsed.scheme in {"http", "https", "data", "blob"}:
+            return False
+        if source.startswith("/api/workspace/blob?") or source.startswith("/"):
+            return False
+        return source.startswith("img_")
+
+    @staticmethod
+    def _unsupported_image_message(image_assets: list[_FeishuInboundImageAsset]) -> str:
+        blob_urls = [asset.blob_url for asset in image_assets if asset.blob_url]
+        if not blob_urls:
+            return _FEISHU_UNSUPPORTED_IMAGE_MESSAGE
+        path_lines = "\n".join(f"- {blob_url}" for blob_url in blob_urls)
+        return f"{_FEISHU_UNSUPPORTED_IMAGE_MESSAGE}\n\n图片已保存到 workspace：\n{path_lines}"
 
     async def _send_event_replies(
         self,
@@ -972,32 +1368,48 @@ class FeishuAdapter:
 
         async def finish_card(final_content: str = "") -> None:
             nonlocal active_queue, active_task, active_has_delta
+            cleaned_content, attachments = self._split_outbound_attachments(final_content)
             if active_queue is None or active_task is None:
-                if final_content.strip():
+                if cleaned_content.strip():
                     await self._send_markdown(
                         chat_id=chat_id,
                         message_id=anchor,
                         uuid_message_id=self._event_message_uuid(message_id, sent_count + 1),
-                        text=final_content,
+                        text=cleaned_content,
+                        is_group=is_group,
+                    )
+                if attachments:
+                    await self._send_outbound_attachments(
+                        chat_id=chat_id,
+                        message_id=anchor,
+                        uuid_message_id=self._event_message_uuid(message_id, sent_count + 1),
+                        attachments=attachments,
                         is_group=is_group,
                     )
                 return
 
-            if final_content and not active_has_delta:
-                await active_queue.put(final_content)
+            if cleaned_content and not active_has_delta:
+                await active_queue.put(cleaned_content)
             await active_queue.put(None)
             result = await active_task
             self._log_send_result(result=result, chat_id=chat_id, message_id=anchor)
             active_queue = None
             active_task = None
             active_has_delta = False
+            if attachments:
+                await self._send_outbound_attachments(
+                    chat_id=chat_id,
+                    message_id=anchor,
+                    uuid_message_id=self._event_message_uuid(message_id, sent_count),
+                    attachments=attachments,
+                    is_group=is_group,
+                )
 
         async for event in chat_events(**chat_kwargs, stream=True):
             event_type = event.get("type")
             if event_type == "message_start":
                 if active_queue is not None:
                     await finish_card()
-                await start_card()
                 continue
             if event_type == "message_delta":
                 if active_queue is None:
@@ -1106,18 +1518,140 @@ class FeishuAdapter:
         uuid_message_id: Optional[str] = None,
     ) -> None:
         assert self._channel is not None
+        text, attachments = self._split_outbound_attachments(text)
         try:
-            await send_message(
-                self._channel,
-                chat_id=chat_id,
-                payload={"markdown": text},
-                reply_to=message_id if (is_group and message_id) else None,
-                uuid=self._message_uuid(uuid_message_id or message_id),
-                logger=self.logger,
-                message_id=message_id,
-            )
+            if text.strip():
+                await send_message(
+                    self._channel,
+                    chat_id=chat_id,
+                    payload={"markdown": text},
+                    reply_to=message_id if (is_group and message_id) else None,
+                    uuid=self._message_uuid(uuid_message_id or message_id),
+                    logger=self.logger,
+                    message_id=message_id,
+                )
+            if attachments:
+                await self._send_outbound_attachments(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    uuid_message_id=uuid_message_id or message_id,
+                    attachments=attachments,
+                    is_group=is_group,
+                )
         except Exception:
             self.logger.exception("Failed to send Feishu message to %s", chat_id)
+
+    async def _send_outbound_attachments(
+        self,
+        *,
+        chat_id: str,
+        message_id: Optional[str],
+        uuid_message_id: Optional[str],
+        attachments: list[_FeishuOutboundAttachment],
+        is_group: bool,
+    ) -> None:
+        assert self._channel is not None
+        for index, attachment in enumerate(attachments, start=1):
+            payload: dict[str, Any]
+            if attachment.kind == "image":
+                payload = {"image": {"source": str(attachment.path)}}
+            else:
+                payload = {"file": {"source": str(attachment.path), "file_name": attachment.path.name}}
+            try:
+                await send_message(
+                    self._channel,
+                    chat_id=chat_id,
+                    payload=payload,
+                    reply_to=message_id if (is_group and message_id) else None,
+                    uuid=self._message_uuid(f"{uuid_message_id or message_id}:media:{index}"),
+                    logger=self.logger,
+                    message_id=message_id,
+                )
+            except Exception:
+                self.logger.exception(
+                    "Failed to send Feishu %s attachment to %s: %s",
+                    attachment.kind,
+                    chat_id,
+                    attachment.path,
+                )
+
+    def _split_outbound_attachments(self, text: str) -> tuple[str, list[_FeishuOutboundAttachment]]:
+        if not isinstance(text, str) or not text:
+            return "", []
+        attachments: list[_FeishuOutboundAttachment] = []
+        spans: list[tuple[int, int]] = []
+        seen_paths: set[Path] = set()
+
+        def add_attachment(match: re.Match[str]) -> None:
+            source = match.group(1).strip()
+            path = self._resolve_outbound_workspace_path(source)
+            if path is None or path in seen_paths:
+                return
+            kind = "image" if self._is_outbound_image(path) else "file"
+            attachments.append(_FeishuOutboundAttachment(kind=kind, path=path))
+            spans.append(match.span())
+            seen_paths.add(path)
+
+        for match in _MARKDOWN_IMAGE_RE.finditer(text):
+            add_attachment(match)
+        for match in _MARKDOWN_LINK_RE.finditer(text):
+            add_attachment(match)
+
+        if not spans:
+            return text, []
+        return self._remove_spans(text, spans), attachments
+
+    def _resolve_outbound_workspace_path(self, source: str) -> Optional[Path]:
+        workspace_dir = getattr(self.agent, "workspace_dir", None)
+        if workspace_dir is None:
+            return None
+        workspace_root = Path(workspace_dir).expanduser().resolve()
+        source = source.strip().strip("<>")
+        if not source:
+            return None
+
+        relative_path = self._workspace_blob_relative_path(source)
+        if relative_path:
+            candidate = (workspace_root / relative_path).resolve()
+        else:
+            parsed = urlparse(source)
+            if parsed.scheme and parsed.scheme != "file":
+                return None
+            raw_path = unquote(parsed.path if parsed.scheme == "file" else source)
+            candidate_path = Path(raw_path).expanduser()
+            candidate = candidate_path.resolve() if candidate_path.is_absolute() else (workspace_root / raw_path).resolve()
+
+        if not candidate.is_relative_to(workspace_root) or not candidate.is_file():
+            return None
+        return candidate
+
+    @staticmethod
+    def _workspace_blob_relative_path(source: str) -> str:
+        parsed = urlparse(source)
+        if parsed.path != "/api/workspace/blob":
+            return ""
+        values = parse_qs(parsed.query).get("path") or []
+        return unquote(values[0]).strip("/") if values else ""
+
+    @staticmethod
+    def _is_outbound_image(path: Path) -> bool:
+        mime_type, _ = mimetypes.guess_type(path.name)
+        return bool(mime_type and mime_type.startswith("image/"))
+
+    @staticmethod
+    def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
+        pieces: list[str] = []
+        last_index = 0
+        for start, end in sorted(spans):
+            if start < last_index:
+                continue
+            pieces.append(text[last_index:start])
+            last_index = end
+        pieces.append(text[last_index:])
+        cleaned = "".join(pieces)
+        cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
 
     def _log_send_result(self, *, result: Any, chat_id: str, message_id: Optional[str]) -> None:
         if getattr(result, "success", True):

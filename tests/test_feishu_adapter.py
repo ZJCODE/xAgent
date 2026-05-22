@@ -1,6 +1,9 @@
 import asyncio
+import io
 import logging
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 try:
@@ -14,6 +17,7 @@ from xagent.integrations.feishu.config import FeishuAdapterConfig
 
 class _FakeAgent:
     output_type = None
+    supports_vision = True
 
     def __init__(self):
         self.chat_calls = []
@@ -67,6 +71,22 @@ class _FakeChannel:
     async def send(self, chat_id, message, opts=None):
         self.sent.append((chat_id, message, opts))
         return SimpleNamespace(success=True, message_id="om_reply", error=None, raw=None)
+
+
+class _FakeMessageResourceApi:
+    def __init__(self, data=b"\x89PNG\r\n\x1a\nimage", file_name="tiny.png"):
+        self.data = data
+        self.file_name = file_name
+        self.requests = []
+
+    async def aget(self, request):
+        self.requests.append(request)
+        return SimpleNamespace(
+            code=0,
+            file=io.BytesIO(self.data),
+            file_name=self.file_name,
+            raw=SimpleNamespace(headers={"content-type": "image/png"}),
+        )
 
 
 class _FakeUserResolver:
@@ -229,6 +249,122 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(agent.chat_calls[0]["user_id"], "Alice")
         self.assertNotIn("ou_57abefd441c9b068703fa7b18543047e", repr(agent.chat_calls[0]))
+
+    def test_direct_image_message_downloads_resource_for_vision_chat(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            resource_api = _FakeMessageResourceApi()
+            client = SimpleNamespace(im=SimpleNamespace(v1=SimpleNamespace(message_resource=resource_api)))
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel(client=client)
+            msg = SimpleNamespace(
+                chat_type="p2p",
+                chat_id="oc_dm",
+                message_id="om_image",
+                sender_id="ou_user",
+                message_type="image",
+                content='{"image_key":"img_test"}',
+            )
+
+            asyncio.run(adapter._dispatch(msg))
+
+            saved_images = list((workspace_dir / "temp" / "images" / "feishu").glob("*.png"))
+            self.assertEqual(resource_api.requests[0].message_id, "om_image")
+            self.assertEqual(resource_api.requests[0].file_key, "img_test")
+            self.assertEqual(resource_api.requests[0].type, "image")
+            self.assertEqual(len(saved_images), 1)
+            self.assertEqual(saved_images[0].read_bytes(), resource_api.data)
+            self.assertTrue(agent.chat_calls[0]["image_source"].startswith("data:image/png;base64,"))
+            self.assertIn("![Feishu image](/api/workspace/blob?path=temp/images/feishu/", agent.chat_calls[0]["user_message"])
+            self.assertNotIn(str(workspace_dir), agent.chat_calls[0]["user_message"])
+
+    def test_direct_image_message_strips_redundant_inline_feishu_markdown(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            resource_api = _FakeMessageResourceApi()
+            client = SimpleNamespace(im=SimpleNamespace(v1=SimpleNamespace(message_resource=resource_api)))
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel(client=client)
+            msg = SimpleNamespace(
+                chat_type="p2p",
+                chat_id="oc_dm",
+                message_id="om_image_markdown",
+                sender_id="ou_user",
+                message_type="image",
+                content='{"image_key":"img_test"}',
+                content_text="![image](img_test)",
+            )
+
+            asyncio.run(adapter._dispatch(msg))
+
+            user_message = agent.chat_calls[0]["user_message"]
+            self.assertNotIn("![image](img_test)", user_message)
+            self.assertEqual(user_message.count("![Feishu image](/api/workspace/blob?path=temp/images/feishu/"), 1)
+
+    def test_direct_image_message_replies_when_provider_lacks_vision(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            agent.supports_vision = False
+            resource_api = _FakeMessageResourceApi()
+            client = SimpleNamespace(im=SimpleNamespace(v1=SimpleNamespace(message_resource=resource_api)))
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel(client=client)
+            msg = SimpleNamespace(
+                chat_type="p2p",
+                chat_id="oc_dm",
+                message_id="om_image_no_vision",
+                sender_id="ou_user",
+                message_type="image",
+                content='{"image_key":"img_test"}',
+            )
+
+            asyncio.run(adapter._dispatch(msg))
+
+            saved_images = list((workspace_dir / "temp" / "images" / "feishu").glob("*.png"))
+            self.assertEqual(agent.chat_calls, [])
+            self.assertEqual(len(saved_images), 1)
+            self.assertEqual(saved_images[0].read_bytes(), resource_api.data)
+            self.assertIn("不支持图片理解", adapter._channel.sent[0][1]["markdown"])
+            self.assertIn("/api/workspace/blob?path=temp/images/feishu/", adapter._channel.sent[0][1]["markdown"])
+            self.assertNotIn(str(workspace_dir), adapter._channel.sent[0][1]["markdown"])
+            self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_image_no_vision"})
+
+    def test_group_image_mention_keeps_workspace_blob_markdown_in_room_context(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            resource_api = _FakeMessageResourceApi()
+            client = SimpleNamespace(im=SimpleNamespace(v1=SimpleNamespace(message_resource=resource_api)))
+            adapter = FeishuAdapter(
+                agent=agent,
+                config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_history_count=0),
+            )
+            adapter._channel = _FakeChannel(bot_open_id="ou_bot", client=client)
+            msg = SimpleNamespace(
+                chat_type="group",
+                chat_id="oc_group",
+                message_id="om_group_image",
+                sender_id="ou_user",
+                message_type="image",
+                content='{"image_key":"img_test"}',
+                mentioned_bot=True,
+                mentions=[SimpleNamespace(open_id="ou_bot")],
+            )
+
+            asyncio.run(adapter._dispatch(msg))
+
+            user_message = agent.chat_calls[0]["user_message"]
+            self.assertIn("[room context]", user_message)
+            self.assertIn("![Feishu image](/api/workspace/blob?path=temp/images/feishu/", user_message)
+            self.assertTrue(agent.chat_calls[0]["image_source"].startswith("data:image/png;base64,"))
+            self.assertNotIn(str(workspace_dir), user_message)
 
     def test_direct_chat_passes_explicit_sender_id_type_to_resolver(self):
         agent = _FakeAgent()
@@ -526,6 +662,30 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertIsNotNone(uuid)
         self.assertLessEqual(len(uuid), 50)
         self.assertNotEqual(uuid, long_id)
+
+    def test_markdown_workspace_blob_is_sent_as_feishu_image(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir)
+            image_path = workspace_dir / "temp" / "images" / "result.png"
+            image_path.parent.mkdir(parents=True)
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel()
+
+            asyncio.run(adapter._send_markdown(
+                chat_id="oc_dm",
+                message_id="om_user",
+                uuid_message_id="om_user",
+                text="![Generated image](/api/workspace/blob?path=temp%2Fimages%2Fresult.png)",
+                is_group=False,
+            ))
+
+        self.assertEqual(len(adapter._channel.sent), 1)
+        sent_payload = adapter._channel.sent[0][1]
+        self.assertEqual(sent_payload["image"]["source"], str(image_path.resolve()))
+        self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user:media:1"})
 
     def test_message_text_falls_back_to_content_text_for_sdk_batches(self):
         msg = SimpleNamespace(content_text="", content=SimpleNamespace(text="merged text"))

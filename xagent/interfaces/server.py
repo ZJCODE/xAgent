@@ -974,6 +974,32 @@ class AgentHTTPServer(BaseAgentRunner):
 
             return {"query": query, "results": results}
 
+        @app.post("/api/workspace/clear", tags=["Monitoring"])
+        async def workspace_clear():
+            """Delete all files and directories inside workspace/ without deleting the root."""
+            workspace_root = self._get_workspace_root()
+            deleted_count = 0
+            try:
+                for child in workspace_root.iterdir():
+                    if child.is_symlink() or child.is_file():
+                        child.unlink()
+                    elif child.is_dir():
+                        resolved = self._safe_child(child, workspace_root)
+                        if resolved is None:
+                            continue
+                        shutil.rmtree(resolved)
+                    else:
+                        child.unlink(missing_ok=True)
+                    deleted_count += 1
+            except Exception as exc:
+                self.logger.error("Failed to clear workspace: %s", exc)
+                raise HTTPException(status_code=500, detail=f"Failed to clear workspace: {str(exc)}")
+            return {
+                "status": "ok",
+                "message": "Workspace cleared",
+                "deleted": deleted_count,
+            }
+
         @app.put("/api/workspace/write", tags=["Monitoring"])
         async def workspace_write(input_data: WorkspaceWriteInput):
             """Write a UTF-8 text file in workspace/."""
