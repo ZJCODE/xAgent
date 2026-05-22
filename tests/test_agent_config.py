@@ -441,7 +441,7 @@ provider:
             self.assertTrue(cleared.workspace_dir.is_dir())
             self.assertFalse(memory_marker.exists())
             self.assertFalse(messages_marker.exists())
-            self.assertEqual(workspace_marker.read_text(encoding="utf-8"), "workspace")
+            self.assertFalse(workspace_marker.exists())
 
     def test_init_uses_selected_provider_model_key_and_identity(self):
         with tempfile.TemporaryDirectory() as tmpdir:

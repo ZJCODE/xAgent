@@ -318,10 +318,13 @@ class CLICommandTests(unittest.TestCase):
             (root / "identity.md").write_text("old", encoding="utf-8")
             memory_marker = root / "memory" / "entry.md"
             messages_marker = root / "messages" / "messages.sqlite3"
+            workspace_marker = root / "workspace" / "notes.md"
             memory_marker.parent.mkdir()
             messages_marker.parent.mkdir()
+            workspace_marker.parent.mkdir()
             memory_marker.write_text("keep-memory", encoding="utf-8")
             messages_marker.write_text("keep-messages", encoding="utf-8")
+            workspace_marker.write_text("keep-workspace", encoding="utf-8")
             args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
 
             with patch("xagent.interfaces.cli._prompt_yes_no", return_value=False) as prompt:
@@ -329,9 +332,13 @@ class CLICommandTests(unittest.TestCase):
                     exit_code = handle_init(args)
 
             self.assertEqual(exit_code, 0)
-            prompt.assert_called_once()
+            prompt.assert_called_once_with(
+                "Clear existing memory/, messages/, and workspace/ data as part of init --force?",
+                default=False,
+            )
             self.assertEqual(memory_marker.read_text(encoding="utf-8"), "keep-memory")
             self.assertEqual(messages_marker.read_text(encoding="utf-8"), "keep-messages")
+            self.assertEqual(workspace_marker.read_text(encoding="utf-8"), "keep-workspace")
 
     def test_init_force_can_clear_runtime_dirs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -340,10 +347,13 @@ class CLICommandTests(unittest.TestCase):
             (root / "identity.md").write_text("old", encoding="utf-8")
             memory_marker = root / "memory" / "entry.md"
             messages_marker = root / "messages" / "messages.sqlite3"
+            workspace_marker = root / "workspace" / "notes.md"
             memory_marker.parent.mkdir()
             messages_marker.parent.mkdir()
+            workspace_marker.parent.mkdir()
             memory_marker.write_text("clear-memory", encoding="utf-8")
             messages_marker.write_text("clear-messages", encoding="utf-8")
+            workspace_marker.write_text("clear-workspace", encoding="utf-8")
             args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
 
             with patch("xagent.interfaces.cli._prompt_yes_no", return_value=True) as prompt:
@@ -351,11 +361,16 @@ class CLICommandTests(unittest.TestCase):
                     exit_code = handle_init(args)
 
             self.assertEqual(exit_code, 0)
-            prompt.assert_called_once()
+            prompt.assert_called_once_with(
+                "Clear existing memory/, messages/, and workspace/ data as part of init --force?",
+                default=False,
+            )
             self.assertTrue((root / "memory").is_dir())
             self.assertTrue((root / "messages").is_dir())
+            self.assertTrue((root / "workspace").is_dir())
             self.assertFalse(memory_marker.exists())
             self.assertFalse(messages_marker.exists())
+            self.assertFalse(workspace_marker.exists())
 
     def test_init_feishu_updates_unified_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:

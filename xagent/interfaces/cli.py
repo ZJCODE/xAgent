@@ -850,6 +850,7 @@ def init_agent_directory(
     if clear_runtime_data:
         _clear_runtime_directory(memory_dir)
         _clear_runtime_directory(messages_dir)
+        _clear_runtime_directory(workspace_dir)
     memory_dir.mkdir(parents=True, exist_ok=True)
     messages_dir.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -1191,7 +1192,7 @@ def handle_init(args: argparse.Namespace) -> int:
     clear_runtime_data = False
     if args.force:
         clear_runtime_data = _prompt_yes_no(
-            "Clear existing memory/ and messages/ data as part of init --force?",
+            "Clear existing memory/, messages/, and workspace/ data as part of init --force?",
             default=False,
         )
 

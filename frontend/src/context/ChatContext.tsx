@@ -63,17 +63,12 @@ function historyKey(panelId: PanelId): string {
   return `${HISTORY_KEY}_${panelId}`;
 }
 
-function normalizeHistoryMessage(message: ChatMessage): ChatMessage {
-  const rawImages = Array.isArray(message.images) ? message.images : [];
-  const persistedImages = rawImages.filter((image) => image && image !== "[image]");
-  const placeholderCount = rawImages.length - persistedImages.length;
-  const imageCount = message.imageCount ?? persistedImages.length + placeholderCount;
-
-  return {
-    ...message,
-    images: persistedImages,
-    imageCount: imageCount || undefined,
-  };
+function clearPersistedHistory(panelId: PanelId) {
+  try {
+    localStorage.removeItem(historyKey(panelId));
+  } catch {
+    // Browser storage is best-effort; stale chat history should not block the UI.
+  }
 }
 
 function canUseVision(capabilities: AgentCapabilities): boolean {
@@ -87,12 +82,9 @@ function safeUploadName(file: File): string {
 
 function createPanel(panelId: PanelId): ChatPanelState {
   const savedSettings = readJson<Partial<ChatSettings>>(GLOBAL_SETTINGS_KEY, {});
-  const history = readJson<ChatMessage[]>(historyKey(panelId), []);
   return {
     id: panelId,
-    messages: Array.isArray(history)
-      ? history.filter((message) => !message.pending).map(normalizeHistoryMessage)
-      : [],
+    messages: [],
     pendingImages: [],
     settings: {
       ...defaultSettings(panelId),
@@ -119,21 +111,6 @@ function persistSettings(panel: ChatPanelState) {
   );
 }
 
-function persistHistory(panel: ChatPanelState) {
-  const slim = panel.messages
-    .filter((message) => !message.pending)
-    .map((message) => ({
-      ...message,
-      images: message.images || [],
-      imageCount: message.images?.length || message.imageCount,
-    }));
-  try {
-    localStorage.setItem(historyKey(panel.id), JSON.stringify(slim));
-  } catch {
-    // Browser storage is best-effort; the server-side message stream remains canonical.
-  }
-}
-
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [panel, setPanel] = useState<ChatPanelState>(() => createPanel("single"));
   const [capabilities, setCapabilities] = useState<AgentCapabilities>(DEFAULT_CAPABILITIES);
@@ -141,11 +118,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const patchPanel = useCallback((panelId: PanelId, updater: (panel: ChatPanelState) => ChatPanelState) => {
     void panelId;
-    setPanel((current) => {
-      const updatedPanel = updater(current);
-      persistHistory(updatedPanel);
-      return updatedPanel;
-    });
+    setPanel((current) => updater(current));
+  }, []);
+
+  useEffect(() => {
+    clearPersistedHistory("single");
   }, []);
 
   useEffect(() => {
@@ -454,7 +431,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const clearPanel = useCallback(
     (panelId: PanelId) => {
       patchPanel(panelId, (panel) => ({ ...panel, messages: [], pendingImages: [] }));
-      localStorage.removeItem(historyKey(panelId));
+      clearPersistedHistory(panelId);
     },
     [patchPanel],
   );
