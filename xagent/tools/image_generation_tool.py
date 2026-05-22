@@ -23,10 +23,12 @@ logger = logging.getLogger(__name__)
 
 IMAGE_GENERATION_PROVIDER_OPENAI = "openai"
 IMAGE_GENERATION_PROVIDER_MINIMAX = "minimax"
+IMAGE_GENERATION_PROVIDER_QWEN = "qwen"
 IMAGE_GENERATION_PROVIDER_NONE = "none"
 SUPPORTED_IMAGE_GENERATION_PROVIDERS = {
     IMAGE_GENERATION_PROVIDER_OPENAI,
     IMAGE_GENERATION_PROVIDER_MINIMAX,
+    IMAGE_GENERATION_PROVIDER_QWEN,
     IMAGE_GENERATION_PROVIDER_NONE,
 }
 
@@ -37,10 +39,15 @@ DEFAULT_IMAGE_GENERATION_FORMAT = "png"
 DEFAULT_IMAGE_GENERATION_BACKGROUND = "auto"
 DEFAULT_MINIMAX_IMAGE_GENERATION_MODEL = "image-01"
 DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO = "1:1"
+DEFAULT_QWEN_IMAGE_GENERATION_MODEL = "qwen-image-2.0-pro"
+DEFAULT_QWEN_IMAGE_GENERATION_SIZE = "2048*2048"
 IMAGE_GENERATION_OUTPUT_DIR = "temp/images"
 MINIMAX_IMAGE_GENERATION_ENDPOINT = "https://api.minimaxi.com/v1/image_generation"
 MINIMAX_IMAGE_GENERATION_TIMEOUT = 180.0
+QWEN_IMAGE_GENERATION_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+QWEN_IMAGE_GENERATION_TIMEOUT = 300.0
 MINIMAX_API_KEY_ENV_VARS = ("MINIMAX_API_KEY", "MINIMAX_API_TOKEN")
+QWEN_API_KEY_ENV_VARS = ("DASHSCOPE_API_KEY", "DASHSCOPE_API_TOKEN", "QWEN_API_KEY", "QWEN_API_TOKEN")
 MINIMAX_IMAGE_GENERATION_ASPECT_RATIOS = {
     "1:1",
     "16:9",
@@ -58,6 +65,10 @@ PLACEHOLDER_API_KEYS = {
     "your_openai_api_key_here",
     "your_minimax_api_key",
     "your_minimax_api_key_here",
+    "your_qwen_api_key",
+    "your_qwen_api_key_here",
+    "your_dashscope_api_key",
+    "your_dashscope_api_key_here",
 }
 
 
@@ -83,6 +94,9 @@ class ConfiguredImageGenerationProvider:
         reference_image_urls: Optional[list[str]] = None,
         n: Optional[int] = None,
         seed: Optional[int] = None,
+        negative_prompt: Optional[str] = None,
+        prompt_extend: Optional[bool] = None,
+        watermark: Optional[bool] = None,
         prompt_optimizer: Optional[bool] = None,
         aigc_watermark: Optional[bool] = None,
         moderation: Optional[str] = None,
@@ -96,6 +110,9 @@ class ConfiguredImageGenerationProvider:
                 "reference_image_url": reference_image_url,
                 "reference_image_urls": reference_image_urls,
                 "seed": seed,
+                "negative_prompt": negative_prompt,
+                "prompt_extend": prompt_extend,
+                "watermark": watermark,
                 "prompt_optimizer": prompt_optimizer,
                 "aigc_watermark": aigc_watermark,
             }
@@ -122,6 +139,9 @@ class ConfiguredImageGenerationProvider:
                 "background": background,
                 "output_compression": output_compression,
                 "moderation": moderation,
+                "negative_prompt": negative_prompt,
+                "prompt_extend": prompt_extend,
+                "watermark": watermark,
             }
             unsupported_names = [name for name, value in unsupported.items() if value not in (None, "", [])]
             if unsupported_names:
@@ -139,6 +159,32 @@ class ConfiguredImageGenerationProvider:
                 seed=seed,
                 prompt_optimizer=prompt_optimizer,
                 aigc_watermark=aigc_watermark,
+            )
+        if self.provider == IMAGE_GENERATION_PROVIDER_QWEN:
+            unsupported = {
+                "quality": quality,
+                "output_format": output_format,
+                "background": background,
+                "output_compression": output_compression,
+                "aspect_ratio": aspect_ratio,
+                "reference_image_url": reference_image_url,
+                "reference_image_urls": reference_image_urls,
+                "moderation": moderation,
+            }
+            unsupported_names = [name for name, value in unsupported.items() if value not in (None, "", [])]
+            if unsupported_names:
+                return _error_response(
+                    self.provider,
+                    f"Qwen image generation does not support parameter(s): {', '.join(unsupported_names)}",
+                )
+            return await self._generate_qwen(
+                prompt=prompt,
+                size=size,
+                n=n,
+                seed=seed,
+                negative_prompt=negative_prompt,
+                prompt_extend=prompt_extend if prompt_extend is not None else prompt_optimizer,
+                watermark=watermark if watermark is not None else aigc_watermark,
             )
         return _error_response(self.provider, "image generation is disabled")
 
@@ -390,6 +436,124 @@ class ConfiguredImageGenerationProvider:
             },
         )
 
+    async def _generate_qwen(
+        self,
+        *,
+        prompt: str,
+        size: Optional[str],
+        n: Optional[int],
+        seed: Optional[int],
+        negative_prompt: Optional[str],
+        prompt_extend: Optional[bool],
+        watermark: Optional[bool],
+    ) -> dict:
+        api_key = _get_qwen_api_key(self.config)
+        if not api_key:
+            return _error_response(
+                self.provider,
+                "Qwen image generation requires image_generation.api_key, provider.api_key, or DASHSCOPE_API_KEY",
+            )
+
+        model = str(self.config.get("model") or DEFAULT_QWEN_IMAGE_GENERATION_MODEL).strip()
+        try:
+            normalized_size = _normalize_qwen_size(size or self.config.get("size") or DEFAULT_QWEN_IMAGE_GENERATION_SIZE)
+            normalized_count = _normalize_qwen_count(n if n is not None else self.config.get("n"), model=model)
+            normalized_seed = _normalize_qwen_seed(seed if seed is not None else self.config.get("seed"))
+            normalized_prompt_extend = _normalize_optional_bool(
+                prompt_extend if prompt_extend is not None else self.config.get("prompt_extend")
+            )
+            normalized_watermark = _normalize_optional_bool(
+                watermark if watermark is not None else self.config.get("watermark")
+            )
+        except ValueError as exception:
+            return _error_response(self.provider, str(exception))
+
+        parameters: dict[str, Any] = {"size": normalized_size}
+        if normalized_count is not None:
+            parameters["n"] = normalized_count
+        if normalized_seed is not None:
+            parameters["seed"] = normalized_seed
+        if normalized_prompt_extend is not None:
+            parameters["prompt_extend"] = normalized_prompt_extend
+        if normalized_watermark is not None:
+            parameters["watermark"] = normalized_watermark
+        configured_negative_prompt = _clean_optional(
+            negative_prompt if negative_prompt is not None else self.config.get("negative_prompt")
+        )
+        if configured_negative_prompt:
+            parameters["negative_prompt"] = configured_negative_prompt
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"text": prompt}],
+                    }
+                ]
+            },
+            "parameters": parameters,
+        }
+        endpoint = _qwen_image_generation_endpoint(self.config)
+
+        try:
+            async with httpx.AsyncClient(timeout=QWEN_IMAGE_GENERATION_TIMEOUT) as http_client:
+                response = await http_client.post(
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                response.raise_for_status()
+                response_json = response.json()
+
+                code = str(_field(response_json, "code") or "").strip()
+                if code:
+                    message = str(_field(response_json, "message", "Qwen image generation failed") or "")
+                    return _error_response(self.provider, f"{code}: {message}" if message else code)
+
+                image_urls = _extract_qwen_image_urls(response_json)
+                if not image_urls:
+                    return _error_response(self.provider, "Qwen response did not contain image URLs")
+
+                saved_images: list[dict] = []
+                for image_url in image_urls:
+                    image_response = await http_client.get(image_url)
+                    image_response.raise_for_status()
+                    image_bytes = bytes(image_response.content)
+                    image_format = _detect_image_format(image_bytes, fallback="png")
+                    saved_images.append(self._save_image_file(image_bytes, image_format))
+        except httpx.HTTPStatusError as exception:
+            response_text = exception.response.text[:300] if exception.response is not None else str(exception)
+            logger.warning("Qwen image generation failed: %s", response_text)
+            return _error_response(self.provider, response_text)
+        except Exception as exception:
+            logger.warning("Qwen image generation failed: %s", exception)
+            return _error_response(self.provider, str(exception))
+
+        return _generated_image_response(
+            provider=self.provider,
+            prompt=prompt,
+            revised_prompt=_extract_qwen_revised_prompt(response_json),
+            model=model,
+            size=normalized_size,
+            quality=None,
+            background=None,
+            output_format=saved_images[0]["format"],
+            images=saved_images,
+            extra={
+                "n": parameters.get("n"),
+                "seed": parameters.get("seed"),
+                "negative_prompt": parameters.get("negative_prompt"),
+                "prompt_extend": parameters.get("prompt_extend"),
+                "watermark": parameters.get("watermark"),
+                "request_id": _field(response_json, "request_id"),
+            },
+        )
+
     def _save_image_file(self, image_bytes: bytes, image_format: str) -> dict:
         output_path = self._write_image_file(image_bytes, image_format)
         relative_path = output_path.relative_to(self.workspace_dir).as_posix()
@@ -448,7 +612,10 @@ def create_image_generation_tool(
             "reference_image_url": "Optional MiniMax reference image URL for image-to-image subject consistency.",
             "reference_image_urls": "Optional MiniMax reference image URLs for image-to-image subject consistency.",
             "n": "Optional number of images to generate.",
-            "seed": "Optional MiniMax seed for more reproducible outputs.",
+            "seed": "Optional MiniMax or Qwen seed for more reproducible outputs.",
+            "negative_prompt": "Optional Qwen negative prompt describing content to avoid.",
+            "prompt_extend": "Optional Qwen prompt rewriting toggle.",
+            "watermark": "Optional Qwen watermark toggle.",
             "prompt_optimizer": "Optional MiniMax prompt optimizer toggle.",
             "aigc_watermark": "Optional MiniMax AIGC watermark toggle.",
             "moderation": "Optional OpenAI moderation strictness such as auto or low.",
@@ -466,6 +633,9 @@ def create_image_generation_tool(
         reference_image_urls: Optional[list[str]] = None,
         n: Optional[int] = None,
         seed: Optional[int] = None,
+        negative_prompt: Optional[str] = None,
+        prompt_extend: Optional[bool] = None,
+        watermark: Optional[bool] = None,
         prompt_optimizer: Optional[bool] = None,
         aigc_watermark: Optional[bool] = None,
         moderation: Optional[str] = None,
@@ -482,6 +652,9 @@ def create_image_generation_tool(
             reference_image_urls=reference_image_urls,
             n=n,
             seed=seed,
+            negative_prompt=negative_prompt,
+            prompt_extend=prompt_extend,
+            watermark=watermark,
             prompt_optimizer=prompt_optimizer,
             aigc_watermark=aigc_watermark,
             moderation=moderation,
@@ -504,6 +677,10 @@ def normalize_image_generation_provider(provider: Any) -> str:
         "minimax_images": IMAGE_GENERATION_PROVIDER_MINIMAX,
         "mini_max": IMAGE_GENERATION_PROVIDER_MINIMAX,
         "minimax": IMAGE_GENERATION_PROVIDER_MINIMAX,
+        "qwen_image_generation": IMAGE_GENERATION_PROVIDER_QWEN,
+        "qwen_images": IMAGE_GENERATION_PROVIDER_QWEN,
+        "dashscope": IMAGE_GENERATION_PROVIDER_QWEN,
+        "qwen": IMAGE_GENERATION_PROVIDER_QWEN,
     }
     normalized = aliases.get(normalized, normalized)
     if normalized not in SUPPORTED_IMAGE_GENERATION_PROVIDERS:
@@ -619,6 +796,34 @@ def _extract_minimax_base64_images(response: Any) -> list[str]:
             if image_base64:
                 images.append(str(image_base64))
     return images
+
+
+def _extract_qwen_image_urls(response: Any) -> list[str]:
+    output = _field(response, "output", {}) or {}
+    image_urls: list[str] = []
+
+    for choice in _field(output, "choices", []) or []:
+        message = _field(choice, "message", {}) or {}
+        for item in _field(message, "content", []) or []:
+            image_url = _field(item, "image") or _field(item, "url")
+            if image_url:
+                image_urls.append(str(image_url))
+
+    for item in _field(output, "results", []) or []:
+        image_url = _field(item, "url") or _field(item, "image")
+        if image_url:
+            image_urls.append(str(image_url))
+
+    return image_urls
+
+
+def _extract_qwen_revised_prompt(response: Any) -> str:
+    output = _field(response, "output", {}) or {}
+    for item in _field(output, "results", []) or []:
+        actual_prompt = _field(item, "actual_prompt")
+        if actual_prompt:
+            return str(actual_prompt)
+    return ""
 
 
 def _error_response(provider: str, message: str) -> dict:
@@ -778,6 +983,44 @@ def _normalize_minimax_dimension(value: Any) -> Optional[int]:
     return dimension
 
 
+def _normalize_qwen_size(value: Any) -> str:
+    normalized = str(value or DEFAULT_QWEN_IMAGE_GENERATION_SIZE).strip().lower()
+    if normalized == "auto":
+        return DEFAULT_QWEN_IMAGE_GENERATION_SIZE
+    normalized = normalized.replace("x", "*")
+    if "*" not in normalized:
+        raise ValueError("Qwen size must be auto or WIDTH*HEIGHT")
+    width_text, height_text = normalized.split("*", 1)
+    try:
+        width = int(width_text.strip())
+        height = int(height_text.strip())
+    except ValueError:
+        raise ValueError("Qwen size must be auto or WIDTH*HEIGHT")
+    if width <= 0 or height <= 0:
+        raise ValueError("Qwen size width and height must be positive")
+    total_pixels = width * height
+    if total_pixels < 512 * 512 or total_pixels > 2048 * 2048:
+        raise ValueError("Qwen size total pixels must be between 512*512 and 2048*2048")
+    return f"{width}*{height}"
+
+
+def _normalize_qwen_count(value: Any, *, model: str) -> Optional[int]:
+    max_count = 6 if _is_qwen_2_model(model) else 1
+    count = _normalize_count(value, max_count=max_count)
+    if count is not None and max_count == 1 and count != 1:
+        raise ValueError("n must be 1 for qwen-image, qwen-image-plus, and qwen-image-max models")
+    return count
+
+
+def _normalize_qwen_seed(value: Any) -> Optional[int]:
+    seed = _normalize_int(value)
+    if seed is None:
+        return None
+    if seed < 0 or seed > 2147483647:
+        raise ValueError("seed must be an integer from 0 to 2147483647")
+    return seed
+
+
 def _normalize_reference_image_urls(*values: Any) -> list[str]:
     urls: list[str] = []
     for value in values:
@@ -807,6 +1050,17 @@ def _get_minimax_api_key(config: dict) -> str:
     return ""
 
 
+def _get_qwen_api_key(config: dict) -> str:
+    configured_key = str(config.get("api_key") or "").strip()
+    if configured_key and not _is_placeholder_api_key(configured_key):
+        return configured_key
+    for env_name in QWEN_API_KEY_ENV_VARS:
+        env_value = os.getenv(env_name, "").strip()
+        if env_value:
+            return env_value
+    return ""
+
+
 def _is_placeholder_api_key(api_key: str) -> bool:
     normalized = api_key.strip().lower()
     return not normalized or normalized in PLACEHOLDER_API_KEYS
@@ -823,8 +1077,26 @@ def _minimax_image_generation_endpoint(config: dict) -> str:
     return f"{configured_endpoint}/v1/image_generation"
 
 
+def _qwen_image_generation_endpoint(config: dict) -> str:
+    configured_endpoint = str(config.get("endpoint") or config.get("base_url") or "").strip().rstrip("/")
+    if not configured_endpoint:
+        return QWEN_IMAGE_GENERATION_ENDPOINT
+    if configured_endpoint.endswith("/services/aigc/multimodal-generation/generation"):
+        return configured_endpoint
+    if configured_endpoint.endswith("/compatible-mode/v1"):
+        root = configured_endpoint[: -len("/compatible-mode/v1")]
+        return f"{root}/api/v1/services/aigc/multimodal-generation/generation"
+    if configured_endpoint.endswith("/api/v1"):
+        return f"{configured_endpoint}/services/aigc/multimodal-generation/generation"
+    return f"{configured_endpoint}/api/v1/services/aigc/multimodal-generation/generation"
+
+
 def _is_gpt_image_2(model: str) -> bool:
     return model.strip().lower() == "gpt-image-2"
+
+
+def _is_qwen_2_model(model: str) -> bool:
+    return model.strip().lower().startswith("qwen-image-2.0")
 
 
 def _detect_image_format(image_bytes: bytes, *, fallback: str) -> str:

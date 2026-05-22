@@ -41,6 +41,10 @@ PLACEHOLDER_API_KEYS = {
     "your_openai_api_key_here",
     "your_minimax_api_key",
     "your_minimax_api_key_here",
+    "your_qwen_api_key",
+    "your_qwen_api_key_here",
+    "your_dashscope_api_key",
+    "your_dashscope_api_key_here",
     "your_brave_search_api_key",
 }
 

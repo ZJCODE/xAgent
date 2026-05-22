@@ -328,6 +328,7 @@ API_KEY_PLACEHOLDER = "your_api_key_here"
 OPENAI_SEARCH_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
 OPENAI_IMAGE_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
 MINIMAX_IMAGE_API_KEY_PLACEHOLDER = "your_minimax_api_key_here"
+QWEN_IMAGE_API_KEY_PLACEHOLDER = "your_qwen_api_key_here"
 BRAVE_SEARCH_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 MODEL_PLACEHOLDER = "your_model_here"
 LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
@@ -400,6 +401,8 @@ def _native_image_generation_provider(provider: str) -> str:
         return "openai"
     if provider == PROVIDER_MINIMAX:
         return "minimax"
+    if provider == PROVIDER_QWEN:
+        return "qwen"
     return "none"
 
 
@@ -408,6 +411,8 @@ def _image_generation_api_key_placeholder(provider: str) -> str:
         return OPENAI_IMAGE_API_KEY_PLACEHOLDER
     if provider == "minimax":
         return MINIMAX_IMAGE_API_KEY_PLACEHOLDER
+    if provider == "qwen":
+        return QWEN_IMAGE_API_KEY_PLACEHOLDER
     return API_KEY_PLACEHOLDER
 
 
@@ -482,6 +487,10 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
     elif selected_image_generation_provider == "minimax" and selection.provider != PROVIDER_MINIMAX:
         image_generation_config["api_key"] = (
             selection.image_generation_api_key.strip() or MINIMAX_IMAGE_API_KEY_PLACEHOLDER
+        )
+    elif selected_image_generation_provider == "qwen" and selection.provider != PROVIDER_QWEN:
+        image_generation_config["api_key"] = (
+            selection.image_generation_api_key.strip() or QWEN_IMAGE_API_KEY_PLACEHOLDER
         )
     config["image_generation"] = image_generation_config
     if selection.observability_enabled:
@@ -598,6 +607,8 @@ def _select_image_generation_provider(
         return _native_image_generation_provider(provider)
     if provider == PROVIDER_MINIMAX:
         return _native_image_generation_provider(provider)
+    if provider == PROVIDER_QWEN:
+        return _native_image_generation_provider(provider)
     return _select_option(
         "Image generation provider",
         NON_OPENAI_IMAGE_GENERATION_PROVIDERS,
@@ -618,6 +629,10 @@ def _prompt_image_generation_api_key(
     elif image_generation_provider == "minimax":
         api_key = secret_input_func(
             "MiniMax API key for image generation (leave blank to fill in later): "
+        ).strip()
+    elif image_generation_provider == "qwen":
+        api_key = secret_input_func(
+            "Qwen API key for image generation (leave blank to fill in later): "
         ).strip()
     else:
         return ""
@@ -754,6 +769,11 @@ def collect_init_selection(
             secret_input_func=secret_input_func,
         )
     elif image_generation_provider == "minimax" and provider != PROVIDER_MINIMAX:
+        image_generation_api_key = _prompt_image_generation_api_key(
+            image_generation_provider,
+            secret_input_func=secret_input_func,
+        )
+    elif image_generation_provider == "qwen" and provider != PROVIDER_QWEN:
         image_generation_api_key = _prompt_image_generation_api_key(
             image_generation_provider,
             secret_input_func=secret_input_func,

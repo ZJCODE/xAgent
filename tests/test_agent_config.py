@@ -542,6 +542,22 @@ provider:
 
             self.assertEqual(config["image_generation"], {"provider": "minimax"})
 
+    def test_init_writes_qwen_image_generation_for_qwen_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="qwen",
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                api_key="qwen-key",
+                model="qwen3.6-plus",
+                identity="# Identity\n\nYou draw with Qwen.\n",
+                image_generation_provider="qwen",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["image_generation"], {"provider": "qwen"})
+
     def test_init_writes_model_api_only_for_custom_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
@@ -751,14 +767,14 @@ provider:
             "1",
             "",
             "",
-            "",
             ".",
         ])
 
-        selection = collect_init_selection(
-            input_func=lambda prompt: next(answers),
-            secret_input_func=lambda prompt: "qwen-key",
-        )
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            selection = collect_init_selection(
+                input_func=lambda prompt: next(answers),
+                secret_input_func=lambda prompt: "qwen-key",
+            )
 
         self.assertEqual(selection.provider, "qwen")
         self.assertEqual(selection.model_api, "")
@@ -766,7 +782,8 @@ provider:
         self.assertEqual(selection.api_key, "qwen-key")
         self.assertEqual(selection.model, "qwen3.6-max-preview")
         self.assertEqual(selection.search_provider, "duckduckgo")
-        self.assertEqual(selection.image_generation_provider, "none")
+        self.assertEqual(selection.image_generation_provider, "qwen")
+        self.assertNotIn("Image generation provider", stdout.getvalue())
 
     def test_collect_init_selection_supports_openai_search_for_non_openai_provider(self):
         answers = iter([
@@ -1093,6 +1110,37 @@ image_generation:
             self.assertEqual(image_provider.provider, "minimax")
             self.assertEqual(image_provider.config["api_key"], "minimax-key")
 
+    def test_config_loads_qwen_image_generation_tool_with_main_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "qwen"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model: "qwen3.6-plus"
+    api_key: "qwen-key"
+image_generation:
+    provider: "qwen"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            image_tool = runner.agent.tools["generate_image"]
+            image_provider = next(
+                cell.cell_contents
+                for cell in image_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
+            )
+
+            self.assertIn("generate_image", runner.agent.tools)
+            self.assertTrue(runner.agent.supports_vision)
+            self.assertEqual(image_provider.provider, "qwen")
+            self.assertEqual(image_provider.config["api_key"], "qwen-key")
+            self.assertEqual(image_provider.config["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
+
     def test_config_rejects_openai_image_generation_for_non_openai_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1129,6 +1177,25 @@ image_generation:
             write_identity(tmpdir)
 
             with self.assertRaisesRegex(ValueError, "requires image_generation.api_key when provider is not MiniMax"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_qwen_image_generation_for_non_qwen_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    api_key: "test-key"
+image_generation:
+    provider: "qwen"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "requires image_generation.api_key when provider is not Qwen"):
                 BaseAgentRunner(config_dir=tmpdir)
 
     def test_config_accepts_openai_image_generation_for_non_openai_provider_with_key(self):
@@ -1188,6 +1255,35 @@ image_generation:
 
             self.assertEqual(image_provider.provider, "minimax")
             self.assertEqual(image_provider.config["api_key"], "minimax-image-key")
+
+    def test_config_accepts_qwen_image_generation_for_non_qwen_provider_with_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    base_url: "https://api.deepseek.com"
+    api_key: "deepseek-key"
+image_generation:
+    provider: "qwen"
+    api_key: "qwen-image-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            image_tool = runner.agent.tools["generate_image"]
+            image_provider = next(
+                cell.cell_contents
+                for cell in image_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
+            )
+
+            self.assertEqual(image_provider.provider, "qwen")
+            self.assertEqual(image_provider.config["api_key"], "qwen-image-key")
 
     def test_config_rejects_name_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -27,8 +27,9 @@ class FakeOpenAIClient:
 
 
 class FakeHTTPResponse:
-    def __init__(self, payload):
+    def __init__(self, payload=None, content: bytes = b""):
         self.payload = payload
+        self.content = content
         self.text = ""
 
     def raise_for_status(self):
@@ -39,8 +40,9 @@ class FakeHTTPResponse:
 
 
 class FakeAsyncHTTPClient:
-    def __init__(self, response_payload):
+    def __init__(self, response_payload, image_bytes: bytes = b""):
         self.response_payload = response_payload
+        self.image_bytes = image_bytes
         self.calls = []
 
     async def __aenter__(self):
@@ -53,11 +55,16 @@ class FakeAsyncHTTPClient:
         self.calls.append({"url": url, "headers": headers, "json": json})
         return FakeHTTPResponse(self.response_payload)
 
+    async def get(self, url):
+        self.calls.append({"url": url})
+        return FakeHTTPResponse(content=self.image_bytes)
+
 
 class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
     def test_normalize_image_generation_provider_aliases(self):
         self.assertEqual(normalize_image_generation_provider("openai_images"), "openai")
         self.assertEqual(normalize_image_generation_provider("minimax_images"), "minimax")
+        self.assertEqual(normalize_image_generation_provider("qwen_images"), "qwen")
         self.assertEqual(normalize_image_generation_provider("disabled"), "none")
         self.assertEqual(normalize_image_generation_provider("off"), "none")
 
@@ -195,6 +202,84 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
             call["json"]["subject_reference"],
             [{"type": "character", "image_file": "https://example.com/reference.jpg"}],
         )
+
+    async def test_qwen_image_generation_writes_workspace_file(self):
+        image_bytes = b"\x89PNG\r\n\x1a\nfake qwen image bytes"
+        response_payload = {
+            "request_id": "qwen-request-id",
+            "output": {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"image": "https://dashscope-result.example.com/image.png"}],
+                        },
+                    }
+                ]
+            },
+            "usage": {"width": 2048, "height": 2048, "image_count": 1},
+        }
+        http_client = FakeAsyncHTTPClient(response_payload, image_bytes=image_bytes)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = create_image_generation_tool(
+                {
+                    "provider": "qwen",
+                    "api_key": "qwen-key",
+                    "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                },
+                workspace_dir=tmpdir,
+            )
+
+            with patch("xagent.tools.image_generation_tool.httpx.AsyncClient", return_value=http_client):
+                result = await tool(
+                    prompt="Draw a bilingual poster with clean Chinese text",
+                    size="2048*2048",
+                    n=2,
+                    negative_prompt="文字模糊，扭曲",
+                    prompt_extend=True,
+                    watermark=False,
+                    seed=123,
+                )
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["provider"], "qwen")
+            self.assertEqual(result["model"], "qwen-image-2.0-pro")
+            self.assertEqual(result["size"], "2048*2048")
+            self.assertEqual(result["output_format"], "png")
+            self.assertEqual(result["request_id"], "qwen-request-id")
+            self.assertTrue(result["prompt_extend"])
+            self.assertFalse(result["watermark"])
+            self.assertEqual(result["negative_prompt"], "文字模糊，扭曲")
+            self.assertTrue(result["image"]["path"].startswith("temp/images/"))
+
+            written = Path(tmpdir) / result["image"]["path"]
+            self.assertEqual(written.read_bytes(), image_bytes)
+
+        post_call = http_client.calls[0]
+        self.assertEqual(
+            post_call["url"],
+            "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+        )
+        self.assertEqual(post_call["headers"]["Authorization"], "Bearer qwen-key")
+        self.assertEqual(post_call["json"]["model"], "qwen-image-2.0-pro")
+        self.assertEqual(
+            post_call["json"]["input"]["messages"][0]["content"][0]["text"],
+            "Draw a bilingual poster with clean Chinese text",
+        )
+        self.assertEqual(
+            post_call["json"]["parameters"],
+            {
+                "size": "2048*2048",
+                "n": 2,
+                "seed": 123,
+                "prompt_extend": True,
+                "watermark": False,
+                "negative_prompt": "文字模糊，扭曲",
+            },
+        )
+        self.assertEqual(http_client.calls[1]["url"], "https://dashscope-result.example.com/image.png")
 
     async def test_openai_image_generation_rejects_unsupported_reference_params(self):
         with tempfile.TemporaryDirectory() as tmpdir:
