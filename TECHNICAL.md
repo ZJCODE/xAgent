@@ -174,9 +174,9 @@ search:
 
 ### 2.3 image input and generation
 
-图片输入默认只对 `openai` 和 `qwen` provider 开启。这个列表集中在 `xagent/core/providers.py` 的 `VISION_CAPABLE_PROVIDERS`，后续新增内置视觉 provider 时只需要扩展这个集合。其他内置 provider 收到 `image_source` 或消息中的图片 URL 时，会在 Agent 层返回不支持图片输入的提示，不会把 `image_url` / `input_image` payload 发送给模型。第一版按 provider 判断，不做 per-model vision capability 推断。
+图片输入默认只对 `openai` 和 `qwen` provider 开启。这个列表集中在 `xagent/core/providers.py` 的 `VISION_CAPABLE_PROVIDERS`，后续新增内置视觉 provider 时只需要扩展这个集合。其他内置 provider 收到 `image_source` 或消息中的图片 URL 时，会在 Agent 层返回不支持图片输入的提示，不会把 `image_url` / `input_image` payload 发送给模型。`provider.supports_vision` 可以对任意 provider 显式覆盖默认能力，用于所选模型与 provider 默认能力不一致的场景。
 
-为了控制多轮视觉成本，xAgent 只会复用当前说话人最近一次带图消息中的图片，并且最多继续附带到后续 2 个同一说话人的 user turn；超过这个窗口后，图片仍保存在消息与 workspace 中，但不会继续自动发送给模型，除非用户再次上传或显式提供新的图片输入。
+为了控制多轮视觉成本并保持上下文边界清晰，xAgent 只会把当前 user turn 显式携带的图片发送给模型。图片仍会保存在消息元数据与 workspace 中用于历史预览，但后续纯文本追问不会自动复用旧图片，除非用户再次上传或在当前消息中显式引用图片。
 
 自定义 provider 可以显式声明是否支持图片 URL 理解：
 
@@ -190,15 +190,15 @@ provider:
   supports_vision: true
 ```
 
-`provider.supports_vision` 只对 `provider.name: custom` 生效，默认是 `false`。`xagent init` 选择 custom provider 时会询问该 provider 是否支持 image URL input；已知 provider 的能力由代码中的集中集合控制，避免配置漂移。
+`provider.supports_vision` 默认不写入；不写时使用内置 provider 默认能力。`xagent init` 选择 custom provider 时会询问该 provider 是否支持 image URL input；已知 provider 也可以手动写入该字段来覆盖默认值。
 
 `image_generation.provider` 支持：
 
-- `openai`：加载 `generate_image` 工具，调用 OpenAI Image API 生成图片。默认模型为 `gpt-image-2`，默认 `size: auto`、`quality: auto`、`output_format: png`、`background: auto`。主 provider 是 OpenAI 时复用主 API key；非 OpenAI provider 必须配置 `image_generation.api_key`。
-- `minimax`：加载 `generate_image` 工具，调用 MiniMax `POST /v1/image_generation`。主 provider 是 MiniMax 时复用主 API key；非 MiniMax provider 必须配置 `image_generation.api_key`。支持 MiniMax 文生图与通过 `reference_image_url` / `reference_image_urls` 传入主体参考图。
+- `openai`：加载 `generate_image` 工具，调用 OpenAI Image API 生成图片。默认模型为 `gpt-image-2`，默认 `size: auto`、`quality: auto`、`output_format: png`、`background: auto`。主 provider 是 OpenAI 时复用主 API key。
+- `minimax`：加载 `generate_image` 工具，调用 MiniMax `POST /v1/image_generation`。主 provider 是 MiniMax 时复用主 API key。支持 MiniMax 文生图与通过 `reference_image_url` / `reference_image_urls` 传入主体参考图。
 - `none`：关闭图像生成工具。
 
-OpenAI provider 通过 `xagent init` 初始化时会默认写入：
+OpenAI provider 通过 `xagent init` 初始化时默认推荐写入，也可以选择 `none` 关闭：
 
 ```yaml
 search:
@@ -208,51 +208,16 @@ image_generation:
   provider: openai
 ```
 
-MiniMax provider 通过 `xagent init` 初始化时会默认写入：
+MiniMax provider 通过 `xagent init` 初始化时默认推荐写入，也可以选择 `none` 关闭：
 
 ```yaml
 image_generation:
   provider: minimax
 ```
 
-非 OpenAI provider 使用 OpenAI 图像生成示例：
+非 OpenAI/MiniMax provider 默认写入 `image_generation.provider: none`。手动配置跨 provider 图像生成会在启动时被拒绝。
 
-```yaml
-provider:
-  name: deepseek
-  base_url: https://api.deepseek.com
-  api_key: YOUR_DEEPSEEK_API_KEY
-  model: deepseek-v4-pro
-
-image_generation:
-  provider: openai
-  api_key: YOUR_OPENAI_API_KEY
-  model: gpt-image-2
-  size: auto
-  quality: auto
-  output_format: png
-  background: auto
-```
-
-非 MiniMax provider 使用 MiniMax 图像生成示例：
-
-```yaml
-provider:
-  name: deepseek
-  base_url: https://api.deepseek.com
-  api_key: YOUR_DEEPSEEK_API_KEY
-  model: deepseek-v4-pro
-
-image_generation:
-  provider: minimax
-  api_key: YOUR_MINIMAX_API_KEY
-  model: image-01
-  aspect_ratio: 16:9
-  n: 1
-  prompt_optimizer: true
-```
-
-`generate_image` 支持 text-to-image；MiniMax 还支持用 `reference_image_url` 或 `reference_image_urls` 生成主体参考图工作流。OpenAI 当前走 Image API 的生成端点，不包含 mask 编辑、Responses API 多轮编辑或 partial image streaming。生成文件会写入 `workspace/temp/images/`，工具返回的 Markdown 图片链接使用 `/api/workspace/blob?path=...`，因此 Web chat 和 Workspace 页面都能展示生成结果。
+`generate_image` 支持 text-to-image；MiniMax 还支持用 `reference_image_url` 或 `reference_image_urls` 生成主体参考图工作流。OpenAI 当前走 Image API 的生成端点，不包含 mask 编辑、Responses API 多轮编辑或 partial image streaming。图像生成配置只允许 provider-native：OpenAI 主 provider 可选 OpenAI 图像生成，MiniMax 主 provider 可选 MiniMax 图像生成，其他 provider 使用 `none`。生成文件会写入 `workspace/temp/images/`，工具返回的 Markdown 图片链接使用 URL 编码的 `/api/workspace/blob?path=...`，因此 Web chat、Messages 页面和 Workspace 页面都能展示生成结果。OpenAI/MiniMax 不支持的参数会返回明确错误，不再静默忽略。
 
 ### 2.4 observability
 
@@ -926,7 +891,7 @@ Feishu Event/Webhook
 
 - `user_id`：优先使用稳定用户 ID，如 `union_id` 或内部账号 ID。
 - `user_message`：飞书消息纯文本内容；如果是富文本，需要适配服务先转换为可读文本。
-- `image_source`：如果消息里有图片，适配服务应先拿到临时下载 URL，或下载后转成 data URI 再传给 xAgent。
+- `image_source`：如果消息里有图片，适配服务应优先传 `/api/workspace/blob?path=...`、公网 URL 或 data URI。xAgent 会把 data URI 和本地文件归一化保存到 workspace，并在模型调用边界按需转成 provider 可接受的图片输入。
 
 ### 7.2 群聊中未 @ 机器人
 
@@ -954,9 +919,9 @@ Feishu Event/Webhook
 
 飞书适配器也走 `Agent.chat_events()`：每个 `message_done` 默认发送一条 markdown 消息；`channels.feishu.stream: true` 时使用 Feishu streaming card 增量更新当前段。
 
-如果飞书消息包含图片，内置 Feishu adapter 会通过官方 message resource API 下载图片并保存到 `workspace/temp/images/feishu/`。持久化的用户消息使用和生成图一致的 Markdown 引用，例如 `![Feishu image](/api/workspace/blob?path=temp/images/feishu/input.png)`，因此 Web UI Messages 页面可以直接渲染，后续回复也可以继续引用同一个 workspace blob。模型调用边界仍通过 `image_source` 传入 provider 可接受的图片数据；对用户和消息历史暴露的是 workspace blob URL，而不是机器相关的绝对路径。当当前 provider 不支持 vision 时，不调用模型，直接回复无法理解图片内容，并在可用时附上已保存的 workspace blob 引用。Agent 返回的 workspace blob 图片 Markdown 会被解析为本地 workspace 文件，并通过 `FeishuChannel.send({"image": ...})` 上传后作为飞书图片发送；非图片 workspace blob 链接会作为飞书文件发送。
+如果飞书消息包含图片，内置 Feishu adapter 会通过官方 message resource API 下载图片并保存到 `workspace/temp/images/feishu/`。持久化的用户消息使用和生成图一致的 Markdown 引用，例如 `![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2Finput.png)`，因此 Web UI Messages 页面可以直接渲染，用户后续也可以在当前消息中显式引用同一个 workspace blob。模型调用边界只会为当前 user turn 从 workspace 读取图片并转成 provider 可接受的图片输入；对用户和消息历史暴露的是 workspace blob URL，而不是机器相关的绝对路径。当当前 provider 不支持 vision 时，不调用模型，直接回复无法理解图片内容，并在可用时附上已保存的 workspace blob 引用。Agent 返回的 workspace blob 图片 Markdown 会被解析为本地 workspace 文件，并通过 `FeishuChannel.send({"image": ...})` 上传后作为飞书图片发送；非图片 workspace blob 链接会作为飞书文件发送。
 
-这套复用窗口对飞书与 Web UI 一致：图片上传当轮正常带入模型，之后最多再自动复用 2 轮同一用户追问，避免把同一张图在长链路中无限重复发送。
+飞书与 Web UI 使用同一条边界：图片上传或显式引用的当轮正常带入模型，后续纯文本消息不会自动复用旧图片。
 
 ### 7.4 多用户与记忆边界
 
@@ -1027,7 +992,7 @@ ws.addEventListener("message", (event) => {
 - 外部适配服务负责平台签名校验，例如飞书的 challenge、timestamp、nonce、signature。
 - 为每个平台用户生成稳定 `user_id`。
 - 群聊、传感器、通知类事件优先用 `/observe`；直接提问才用 `/chat`。
-- 图片应传公网可访问 URL、临时下载 URL 或 data URI；本地文件路径只对 xAgent 服务进程所在机器有效。
+- 图片应优先传 workspace blob URL、公网可访问 URL、临时下载 URL 或 data URI；本地文件路径只对 xAgent 服务进程所在机器有效。
 - 根据业务设置 `--max-concurrent-chats`、`--queue-timeout`、`--chat-timeout`。
 - 对 `POST /api/memory/clear`、`POST /clear_messages`、`PUT /api/agent/identity` 做额外权限控制。
 - 对飞书等平台回复做长度截断、频率控制和失败重试。

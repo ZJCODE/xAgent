@@ -4,7 +4,14 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from ..utils.image_utils import file_to_data_uri, classify_source, infer_format, ImageSourceType
+from ..utils.image_utils import (
+    MAX_IMAGES_PER_MESSAGE,
+    classify_source,
+    extract_source,
+    file_to_data_uri,
+    infer_format,
+    ImageSourceType,
+)
 
 class ToolCall(BaseModel):
     """Represents a tool/function call within a message."""
@@ -111,26 +118,27 @@ class Message(BaseModel):
         """
         multimodal = None
         if image_source:
-            # Handle single image or list of images
             sources = image_source if isinstance(image_source, list) else [image_source]
-            image_contents = []
+            if len(sources) > MAX_IMAGES_PER_MESSAGE:
+                raise ValueError(f"At most {MAX_IMAGES_PER_MESSAGE} images are allowed per message")
+            image_contents: List[ImageContent] = []
+            seen_images: set[str] = set()
             
             for source in sources:
-                source_type = classify_source(source)
-                if source_type == ImageSourceType.FILE:
-                    processed_source = file_to_data_uri(source)
-                    if not processed_source:
-                        raise ValueError(f"Failed to convert image to data URI: {source}")
-                else:
-                    # URL or data URI — usable directly by the model API
-                    processed_source = source
-
-                fmt = infer_format(processed_source)
-                image_contents.append(ImageContent(format=fmt, source=processed_source))
+                raw_source = extract_source(str(source or "")).strip()
+                if not raw_source or raw_source in seen_images:
+                    continue
+                seen_images.add(raw_source)
+                source_type = classify_source(raw_source)
+                processed_source = file_to_data_uri(raw_source) if source_type == ImageSourceType.FILE else raw_source
+                if not processed_source:
+                    raise ValueError(f"Failed to convert image to data URI: {raw_source}")
+                image_contents.append(ImageContent(format=infer_format(processed_source), source=processed_source))
             
             # Use single ImageContent if only one image, otherwise use list
-            image_content = image_contents[0] if len(image_contents) == 1 else image_contents
-            multimodal = MultiModalContent(image=image_content)
+            if image_contents:
+                image_content = image_contents[0] if len(image_contents) == 1 else image_contents
+                multimodal = MultiModalContent(image=image_content)
 
         return cls(
             role=role,

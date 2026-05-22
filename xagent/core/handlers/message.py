@@ -1,12 +1,27 @@
 import logging
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
 from ...components import MessageStorageBase
 from ...schemas import Message, RoleType, MessageType
-from ...utils.image_utils import extract_image_urls_from_text
+from ...utils.image_utils import (
+    MAX_IMAGES_PER_MESSAGE,
+    ImageSourceType,
+    bytes_to_data_uri,
+    classify_source,
+    data_uri_to_bytes,
+    extract_image_urls_from_text,
+    extract_source,
+    infer_format,
+    read_image_file_bytes,
+    resolve_workspace_blob_path,
+    save_image_bytes_to_workspace,
+    workspace_blob_relative_path,
+    workspace_blob_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +33,11 @@ class MessageHandler:
         self,
         message_storage: MessageStorageBase,
         system_prompt: str = "",
+        workspace_dir: Optional[Union[str, Path]] = None,
     ):
         self.message_storage = message_storage
         self.system_prompt = system_prompt
+        self.workspace_dir = Path(workspace_dir).expanduser().resolve() if workspace_dir is not None else None
 
     async def store_user_message(
         self,
@@ -29,20 +46,17 @@ class MessageHandler:
         image_source: Optional[Union[str, List[str]]] = None,
     ) -> Message:
         """Store a user message, auto-detecting embedded image URLs."""
-        detected = extract_image_urls_from_text(user_message)
-        if detected:
-            existing = []
-            if image_source:
-                existing = image_source if isinstance(image_source, list) else [image_source]
-            merged = list(dict.fromkeys(existing + detected))
-            image_source = merged
+        image_sources = self._merge_image_sources(user_message, image_source)
+        normalized_sources, image_metadata = self._prepare_message_images(image_sources)
 
         msg = Message.create(
             content=user_message,
             role=RoleType.USER,
-            image_source=image_source,
+            image_source=normalized_sources or None,
             sender_id=user_id,
         )
+        if image_metadata:
+            msg.metadata["images"] = image_metadata
         await self.message_storage.add_messages(msg)
         return msg
 
@@ -52,9 +66,17 @@ class MessageHandler:
         sender_id: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Message:
-        model_msg = Message.create(content=reply_text, role=RoleType.ASSISTANT, sender_id=sender_id)
+        image_source = extract_image_urls_from_text(reply_text)
+        model_msg = Message.create(
+            content=reply_text,
+            role=RoleType.ASSISTANT,
+            sender_id=sender_id,
+        )
         if metadata:
             model_msg.metadata.update(metadata)
+        image_metadata = self._preview_image_metadata(image_source)
+        if image_metadata and "images" not in model_msg.metadata:
+            model_msg.metadata["images"] = image_metadata
         await self.message_storage.add_messages(model_msg)
         return model_msg
 
@@ -119,6 +141,7 @@ class MessageHandler:
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
         include_images: bool = True,
+        workspace_dir: Optional[Union[str, Path]] = None,
     ) -> dict:
         """Collapse recent conversation history into one user transcript message.
 
@@ -196,16 +219,7 @@ class MessageHandler:
         # print(transcript_text)
         # print("=== End transcript message content ===")
 
-        latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id) if include_images else []
-        if not latest_images:
-            return {"role": RoleType.USER.value, "content": transcript_text}
-
-        content = [{"type": "text", "text": transcript_text}]
-        content.extend(
-            {"type": "image_url", "image_url": {"url": image_source}}
-            for image_source in latest_images
-        )
-        return {"role": RoleType.USER.value, "content": content}
+        return {"role": RoleType.USER.value, "content": transcript_text}
 
     @staticmethod
     def build_turn_context_messages(
@@ -222,6 +236,8 @@ class MessageHandler:
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
         include_images: bool = True,
+        workspace_dir: Optional[Union[str, Path]] = None,
+        current_message: Optional[Message] = None,
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -289,12 +305,22 @@ class MessageHandler:
             "content": current_task_text,
         }
 
-        latest_images = MessageHandler._latest_user_images(budgeted_messages, current_user_id) if include_images else []
-        if latest_images:
+        current_images: List[str] = []
+        if include_images:
+            image_message = current_message or MessageHandler._latest_current_user_message(
+                conversation_messages,
+                current_user_id,
+            )
+            current_images = MessageHandler._current_message_images(
+                image_message,
+                current_user_id,
+                workspace_dir=workspace_dir,
+            )
+        if current_images:
             content = [{"type": "text", "text": current_task_text}]
             content.extend(
                 {"type": "image_url", "image_url": {"url": image_source}}
-                for image_source in latest_images
+                for image_source in current_images
             )
             current_task_message["content"] = content
 
@@ -474,6 +500,9 @@ class MessageHandler:
 
     @staticmethod
     def _count_message_images(message: Message) -> int:
+        metadata_images = message.metadata.get("images") if isinstance(message.metadata, dict) else None
+        if isinstance(metadata_images, list):
+            return len(metadata_images)
         if not message.multimodal or not message.multimodal.image:
             return 0
         images = message.multimodal.image
@@ -486,22 +515,212 @@ class MessageHandler:
         return message.sender_id or message.role.value
 
     @staticmethod
-    def _latest_user_images(messages: List[Message], current_user_id: str) -> List[str]:
-        followup_turns = 0
-        for msg in reversed(messages):
-            if msg.role != RoleType.USER or msg.sender_id != current_user_id:
-                continue
-            if not msg.multimodal or not msg.multimodal.image:
-                followup_turns += 1
-                continue
+    def _latest_current_user_message(
+        messages: List[Message],
+        current_user_id: str,
+    ) -> Optional[Message]:
+        if not messages:
+            return None
+        message = messages[-1]
+        if message.role == RoleType.USER and message.sender_id == current_user_id:
+            return message
+        return None
 
-            if followup_turns > AgentConfig.IMAGE_REUSE_MAX_FOLLOWUP_TURNS:
-                return []
+    @staticmethod
+    def _current_message_images(
+        message: Optional[Message],
+        current_user_id: str,
+        *,
+        workspace_dir: Optional[Union[str, Path]] = None,
+    ) -> List[str]:
+        if message is None or message.role != RoleType.USER or message.sender_id != current_user_id:
+            return []
+        if not message.multimodal or not message.multimodal.image:
+            return []
+        images = message.multimodal.image
+        image_items = images if isinstance(images, list) else [images]
+        return [
+            image_source
+            for image in image_items
+            if (image_source := MessageHandler._model_image_source(image, workspace_dir=workspace_dir))
+        ]
 
-            images = msg.multimodal.image
-            image_items = images if isinstance(images, list) else [images]
-            return [image.source for image in image_items if image.source]
-        return []
+    @staticmethod
+    def _model_image_source(image: Any, *, workspace_dir: Optional[Union[str, Path]] = None) -> str:
+        source = extract_source(str(getattr(image, "source", None) or image or "")).strip()
+        if not source:
+            return ""
+
+        source_type = classify_source(source)
+        if source_type == ImageSourceType.URL:
+            return source
+        if source_type == ImageSourceType.DATA_URI:
+            image_bytes, mime_type = data_uri_to_bytes(source)
+            return bytes_to_data_uri(image_bytes, mime_type)
+
+        if source_type == ImageSourceType.WORKSPACE_BLOB:
+            if workspace_dir is None:
+                raise ValueError("Workspace image blob input requires a configured workspace directory")
+            image_path = resolve_workspace_blob_path(source, workspace_dir)
+            if image_path is None:
+                raise ValueError("Invalid workspace image blob URL")
+        else:
+            image_path = MessageHandler._resolve_local_image_path(source, workspace_dir=workspace_dir)
+
+        image_bytes, mime_type = read_image_file_bytes(image_path, allowed_mime_types=None)
+        return bytes_to_data_uri(image_bytes, mime_type)
+
+    def _merge_image_sources(
+        self,
+        user_message: str,
+        image_source: Optional[Union[str, List[str]]],
+    ) -> List[str]:
+        sources: List[str] = []
+        if image_source:
+            sources.extend(image_source if isinstance(image_source, list) else [image_source])
+        sources.extend(extract_image_urls_from_text(user_message))
+
+        merged: List[str] = []
+        seen: set[str] = set()
+        for source in sources:
+            normalized = extract_source(str(source or "")).strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                merged.append(normalized)
+        return merged
+
+    def _prepare_message_images(self, image_sources: List[str]) -> tuple[List[str], List[Dict[str, Any]]]:
+        if not image_sources:
+            return [], []
+        if len(image_sources) > MAX_IMAGES_PER_MESSAGE:
+            raise ValueError(f"At most {MAX_IMAGES_PER_MESSAGE} images are allowed per message")
+
+        normalized_sources: List[str] = []
+        image_metadata: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for source in image_sources:
+            normalized_source, metadata = self._normalize_message_image_source(source)
+            if normalized_source in seen:
+                continue
+            seen.add(normalized_source)
+            normalized_sources.append(normalized_source)
+            image_metadata.append(metadata)
+        return normalized_sources, image_metadata
+
+    def _preview_image_metadata(self, image_sources: List[str]) -> List[Dict[str, Any]]:
+        metadata_items: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for source in image_sources[:MAX_IMAGES_PER_MESSAGE]:
+            try:
+                normalized_source, metadata = self._normalize_message_image_source(source)
+            except ValueError as exc:
+                logger.warning("Skipping invalid image preview metadata: %s", exc)
+                continue
+            if normalized_source in seen:
+                continue
+            seen.add(normalized_source)
+            metadata_items.append(metadata)
+        return metadata_items
+
+    def _normalize_message_image_source(self, source: str) -> tuple[str, Dict[str, Any]]:
+        raw_source = extract_source(str(source or "")).strip()
+        if not raw_source:
+            raise ValueError("Image source cannot be empty")
+
+        source_type = classify_source(raw_source)
+        if source_type == ImageSourceType.URL:
+            return raw_source, self._clean_image_metadata({
+                "external_url": raw_source,
+                "mime_type": self._mime_type_from_source(raw_source),
+            })
+
+        if source_type == ImageSourceType.DATA_URI:
+            image_bytes, mime_type = data_uri_to_bytes(raw_source)
+            if self.workspace_dir is not None:
+                metadata = save_image_bytes_to_workspace(image_bytes, mime_type, self.workspace_dir)
+                return str(metadata["blob_url"]), self._clean_image_metadata(metadata)
+            return bytes_to_data_uri(image_bytes, mime_type), self._clean_image_metadata({
+                "mime_type": mime_type,
+                "size_bytes": len(image_bytes),
+            })
+
+        if source_type == ImageSourceType.WORKSPACE_BLOB:
+            relative_path = workspace_blob_relative_path(raw_source)
+            if not relative_path:
+                raise ValueError("Invalid workspace image blob URL")
+            metadata: Dict[str, Any] = {
+                "workspace_path": relative_path,
+                "blob_url": workspace_blob_url(relative_path),
+                "mime_type": self._mime_type_from_source(relative_path),
+            }
+            if self.workspace_dir is not None:
+                image_path = resolve_workspace_blob_path(raw_source, self.workspace_dir)
+                if image_path is None:
+                    raise ValueError("Invalid workspace image blob URL")
+                image_bytes, mime_type = read_image_file_bytes(image_path, allowed_mime_types=None)
+                metadata.update({
+                    "mime_type": mime_type,
+                    "size_bytes": len(image_bytes),
+                    "original_name": image_path.name,
+                })
+            return str(metadata["blob_url"]), self._clean_image_metadata(metadata)
+
+        image_path = self._resolve_local_image_path(raw_source, workspace_dir=self.workspace_dir)
+        image_bytes, mime_type = read_image_file_bytes(image_path)
+        if self.workspace_dir is not None:
+            root = self.workspace_dir
+            resolved_path = image_path.resolve()
+            if resolved_path.is_relative_to(root):
+                relative_path = resolved_path.relative_to(root).as_posix()
+                metadata = {
+                    "workspace_path": relative_path,
+                    "blob_url": workspace_blob_url(relative_path),
+                    "mime_type": mime_type,
+                    "size_bytes": len(image_bytes),
+                    "original_name": resolved_path.name,
+                }
+                return str(metadata["blob_url"]), self._clean_image_metadata(metadata)
+            metadata = save_image_bytes_to_workspace(
+                image_bytes,
+                mime_type,
+                self.workspace_dir,
+                original_name=image_path.name,
+            )
+            return str(metadata["blob_url"]), self._clean_image_metadata(metadata)
+        return bytes_to_data_uri(image_bytes, mime_type), self._clean_image_metadata({
+            "mime_type": mime_type,
+            "size_bytes": len(image_bytes),
+            "original_name": image_path.name,
+        })
+
+    @staticmethod
+    def _resolve_local_image_path(
+        source: str,
+        *,
+        workspace_dir: Optional[Union[str, Path]] = None,
+    ) -> Path:
+        raw_path = Path(source).expanduser()
+        if workspace_dir is not None and not raw_path.is_absolute():
+            root = Path(workspace_dir).expanduser().resolve()
+            workspace_path = (root / source).resolve()
+            if workspace_path.is_relative_to(root) and workspace_path.exists():
+                return workspace_path
+        return raw_path.resolve()
+
+    @staticmethod
+    def _clean_image_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+        return {key: value for key, value in metadata.items() if value not in (None, "")}
+
+    @staticmethod
+    def _mime_type_from_source(source: str) -> str:
+        image_format = infer_format(source)
+        if image_format == "jpeg":
+            return "image/jpeg"
+        if image_format == "webp":
+            return "image/webp"
+        if image_format == "gif":
+            return "image/gif"
+        return "image/png"
 
     def build_instructions(
         self,

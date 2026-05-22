@@ -29,6 +29,12 @@ function isSearchResult(message: MessageItem | MessageSearchResult): message is 
   return Array.isArray((message as MessageSearchResult).matched_in);
 }
 
+function messageImageUrls(message: MessageItem | MessageSearchResult): string[] {
+  return (message.images || [])
+    .map((image) => image.blob_url || image.external_url || "")
+    .filter((url) => url && !(message.content || "").includes(url));
+}
+
 export function MessagePage() {
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [storagePath, setStoragePath] = useState("");
@@ -135,27 +141,42 @@ export function MessagePage() {
       {error ? <div className="error-strip">{error}</div> : null}
       <div className="message-stream">
         {activeMessages.length ? (
-          activeMessages.map((message, index) => (
-            <article key={`${message.timestamp}-${index}`} className={classNames("message-row", roleClass(message.role))}>
-              <div className="message-row-meta">
-                <span className={classNames("meta-chip", roleClass(message.role))}>{message.role}</span>
-                <span className="meta-chip">{message.type}</span>
-                {message.sender_id ? <span className="meta-chip">{message.sender_id}</span> : null}
-                <span className="meta-chip">{formatTimestamp(message.timestamp)}</span>
-                {isSearchResult(message)
-                  ? message.matched_in.map((match) => (
-                      <span key={`${message.timestamp}-${match}`} className="meta-chip">
-                        {match}
-                      </span>
-                    ))
-                  : null}
-              </div>
-              <Markdown content={message.content || ""} />
-              {message.tool_call ? (
-                <pre>{JSON.stringify(message.tool_call, null, 2)}</pre>
-              ) : null}
-            </article>
-          ))
+          activeMessages.map((message, index) => {
+            const imageUrls = messageImageUrls(message);
+            return (
+              <article key={`${message.timestamp}-${index}`} className={classNames("message-row", roleClass(message.role))}>
+                <div className="message-row-meta">
+                  <span className={classNames("meta-chip", roleClass(message.role))}>{message.role}</span>
+                  <span className="meta-chip">{message.type}</span>
+                  {message.sender_id ? <span className="meta-chip">{message.sender_id}</span> : null}
+                  <span className="meta-chip">{formatTimestamp(message.timestamp)}</span>
+                  {isSearchResult(message)
+                    ? message.matched_in.map((match) => (
+                        <span key={`${message.timestamp}-${match}`} className="meta-chip">
+                          {match}
+                        </span>
+                      ))
+                    : null}
+                </div>
+                <Markdown content={message.content || ""} />
+                {imageUrls.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {imageUrls.map((url, imageIndex) => (
+                      <img
+                        key={`${message.timestamp}-${imageIndex}-${url}`}
+                        src={url}
+                        alt=""
+                        className="h-24 max-w-[180px] rounded-lg border border-black/10 object-cover dark:border-white/15"
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                {message.tool_call ? (
+                  <pre>{JSON.stringify(message.tool_call, null, 2)}</pre>
+                ) : null}
+              </article>
+            );
+          })
         ) : (
           <div className="empty-state">{loading ? "Loading..." : searchActive ? "No matching messages" : "No messages found"}</div>
         )}

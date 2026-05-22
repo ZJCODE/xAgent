@@ -326,8 +326,8 @@ CUSTOM_OPENAI_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_AP
 CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_API_ANTHROPIC_MESSAGES)
 API_KEY_PLACEHOLDER = "your_api_key_here"
 OPENAI_SEARCH_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
-OPENAI_IMAGE_GENERATION_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
-MINIMAX_IMAGE_GENERATION_API_KEY_PLACEHOLDER = "your_minimax_api_key_here"
+OPENAI_IMAGE_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
+MINIMAX_IMAGE_API_KEY_PLACEHOLDER = "your_minimax_api_key_here"
 BRAVE_SEARCH_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 MODEL_PLACEHOLDER = "your_model_here"
 LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
@@ -385,6 +385,30 @@ NON_OPENAI_IMAGE_GENERATION_PROVIDERS = (
     "openai",
     "minimax",
 )
+OPENAI_IMAGE_GENERATION_PROVIDERS = (
+    "openai",
+    "none",
+)
+MINIMAX_IMAGE_GENERATION_PROVIDERS = (
+    "minimax",
+    "none",
+)
+
+
+def _native_image_generation_provider(provider: str) -> str:
+    if provider == PROVIDER_OPENAI:
+        return "openai"
+    if provider == PROVIDER_MINIMAX:
+        return "minimax"
+    return "none"
+
+
+def _image_generation_api_key_placeholder(provider: str) -> str:
+    if provider == "openai":
+        return OPENAI_IMAGE_API_KEY_PLACEHOLDER
+    if provider == "minimax":
+        return MINIMAX_IMAGE_API_KEY_PLACEHOLDER
+    return API_KEY_PLACEHOLDER
 
 
 def _default_init_selection() -> InitSelection:
@@ -395,7 +419,7 @@ def _default_init_selection() -> InitSelection:
         model="gpt-5.4-mini",
         identity=_default_identity_markdown(),
         search_provider="openai",
-        image_generation_provider="openai",
+        image_generation_provider=_native_image_generation_provider(PROVIDER_OPENAI),
     )
 
 
@@ -450,21 +474,15 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
             search_config["api_key"] = selection.search_api_key
     config["search"] = search_config
     selected_image_generation_provider = selection.image_generation_provider or "none"
-    if selection.provider == PROVIDER_MINIMAX and selected_image_generation_provider == "none":
-        selected_image_generation_provider = "minimax"
     image_generation_config = {"provider": selected_image_generation_provider}
-    if image_generation_config["provider"] == "openai" and selection.provider != PROVIDER_OPENAI:
+    if selected_image_generation_provider == "openai" and selection.provider != PROVIDER_OPENAI:
         image_generation_config["api_key"] = (
-            selection.image_generation_api_key or OPENAI_IMAGE_GENERATION_API_KEY_PLACEHOLDER
+            selection.image_generation_api_key.strip() or OPENAI_IMAGE_API_KEY_PLACEHOLDER
         )
-    elif image_generation_config["provider"] == "openai" and selection.image_generation_api_key:
-        image_generation_config["api_key"] = selection.image_generation_api_key
-    elif image_generation_config["provider"] == "minimax" and selection.provider != PROVIDER_MINIMAX:
+    elif selected_image_generation_provider == "minimax" and selection.provider != PROVIDER_MINIMAX:
         image_generation_config["api_key"] = (
-            selection.image_generation_api_key or MINIMAX_IMAGE_GENERATION_API_KEY_PLACEHOLDER
+            selection.image_generation_api_key.strip() or MINIMAX_IMAGE_API_KEY_PLACEHOLDER
         )
-    elif image_generation_config["provider"] == "minimax" and selection.image_generation_api_key:
-        image_generation_config["api_key"] = selection.image_generation_api_key
     config["image_generation"] = image_generation_config
     if selection.observability_enabled:
         config["observability"] = {
@@ -577,15 +595,33 @@ def _select_image_generation_provider(
     input_func: Callable[[str], str] = input,
 ) -> str:
     if provider == PROVIDER_OPENAI:
-        return "openai"
+        return _native_image_generation_provider(provider)
     if provider == PROVIDER_MINIMAX:
-        return "minimax"
+        return _native_image_generation_provider(provider)
     return _select_option(
         "Image generation provider",
         NON_OPENAI_IMAGE_GENERATION_PROVIDERS,
         default_index=0,
         input_func=input_func,
     )
+
+
+def _prompt_image_generation_api_key(
+    image_generation_provider: str,
+    *,
+    secret_input_func: Callable[[str], str] = getpass.getpass,
+) -> str:
+    if image_generation_provider == "openai":
+        api_key = secret_input_func(
+            "OpenAI API key for image generation (leave blank to fill in later): "
+        ).strip()
+    elif image_generation_provider == "minimax":
+        api_key = secret_input_func(
+            "MiniMax API key for image generation (leave blank to fill in later): "
+        ).strip()
+    else:
+        return ""
+    return api_key or _image_generation_api_key_placeholder(image_generation_provider)
 
 
 def _select_custom_model_api(
@@ -713,17 +749,15 @@ def collect_init_selection(
     image_generation_provider = _select_image_generation_provider(provider, input_func=input_func)
     image_generation_api_key = ""
     if image_generation_provider == "openai" and provider != PROVIDER_OPENAI:
-        image_generation_api_key = secret_input_func(
-            "OpenAI API key for image generation (leave blank to fill in later): "
-        ).strip()
-        if not image_generation_api_key:
-            image_generation_api_key = OPENAI_IMAGE_GENERATION_API_KEY_PLACEHOLDER
+        image_generation_api_key = _prompt_image_generation_api_key(
+            image_generation_provider,
+            secret_input_func=secret_input_func,
+        )
     elif image_generation_provider == "minimax" and provider != PROVIDER_MINIMAX:
-        image_generation_api_key = secret_input_func(
-            "MiniMax API key for image generation (leave blank to fill in later): "
-        ).strip()
-        if not image_generation_api_key:
-            image_generation_api_key = MINIMAX_IMAGE_GENERATION_API_KEY_PLACEHOLDER
+        image_generation_api_key = _prompt_image_generation_api_key(
+            image_generation_provider,
+            secret_input_func=secret_input_func,
+        )
 
     provider_api_cfg = {"name": provider}
     if model_api:

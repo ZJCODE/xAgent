@@ -22,10 +22,35 @@ from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..core.runtime import create_runtime_heartbeat
 from ..schemas import Message
+from ..tools.image_generation_tool import normalize_image_generation_provider
+from ..utils.image_utils import (
+    MAX_IMAGE_BYTES,
+    MAX_IMAGES_PER_MESSAGE,
+    SUPPORTED_UPLOAD_IMAGE_MIME_TYPES,
+    data_uri_to_bytes,
+    detect_image_mime,
+    workspace_blob_relative_path,
+    workspace_blob_url,
+)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _WORKSPACE_TEXT_READ_LIMIT = 1_000_000
 _WORKSPACE_SEARCH_TEXT_LIMIT = 2_000_000
+
+
+class ChatImageInput(BaseModel):
+    """Optional image metadata accepted by API clients."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    workspace_path: Optional[str] = None
+    external_url: Optional[str] = None
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    blob_url: Optional[str] = None
+    original_name: Optional[str] = None
 
 
 class ChatInput(BaseModel):
@@ -36,6 +61,7 @@ class ChatInput(BaseModel):
     user_id: str
     user_message: str
     image_source: Optional[Union[str, List[str]]] = None
+    images: Optional[List[ChatImageInput]] = None
     history_count: Optional[int] = AgentConfig.DEFAULT_HISTORY_COUNT
     max_iter: Optional[int] = AgentConfig.DEFAULT_MAX_ITER
     max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
@@ -120,13 +146,14 @@ class AgentHTTPServer(BaseAgentRunner):
             ) from exc
 
     async def _call_agent(self, input_data: ChatInput):
+        image_sources = self._input_image_sources(input_data)
         return await self.agent(
             user_message=input_data.user_message,
             user_id=input_data.user_id,
             history_count=input_data.history_count,
             max_iter=input_data.max_iter,
             max_concurrent_tools=input_data.max_concurrent_tools,
-            image_source=input_data.image_source,
+            image_source=image_sources,
             enable_memory=input_data.enable_memory,
         )
 
@@ -182,7 +209,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 history_count=input_data.history_count,
                 max_iter=input_data.max_iter,
                 max_concurrent_tools=input_data.max_concurrent_tools,
-                image_source=input_data.image_source,
+                image_source=self._input_image_sources(input_data),
                 stream=bool(input_data.stream),
                 enable_memory=input_data.enable_memory,
             )
@@ -277,6 +304,34 @@ class AgentHTTPServer(BaseAgentRunner):
         if hasattr(response, "model_dump"):
             return response.model_dump()
         return str(response)
+
+    @staticmethod
+    def _input_image_sources(input_data: ChatInput) -> Optional[Union[str, List[str]]]:
+        sources: List[str] = []
+        raw_source = input_data.image_source
+        if raw_source:
+            if isinstance(raw_source, list):
+                sources.extend(str(item) for item in raw_source if str(item or "").strip())
+            else:
+                sources.append(str(raw_source))
+        for image in input_data.images or []:
+            source = image.blob_url or image.external_url or image.workspace_path or ""
+            if source:
+                sources.append(source)
+        if not sources:
+            return None
+        if len(sources) > MAX_IMAGES_PER_MESSAGE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"At most {MAX_IMAGES_PER_MESSAGE} images are allowed per message",
+            )
+        for source in sources:
+            if str(source).startswith("data:image/"):
+                try:
+                    data_uri_to_bytes(source)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return sources[0] if len(sources) == 1 else sources
 
     @staticmethod
     def _remaining_time(deadline: float) -> float:
@@ -389,6 +444,7 @@ class AgentHTTPServer(BaseAgentRunner):
 
     @staticmethod
     def _message_item(message: Message) -> Dict[str, Any]:
+        images = AgentHTTPServer._message_images(message)
         item = {
             "role": message.role.value if hasattr(message.role, "value") else str(message.role),
             "type": message.type.value if hasattr(message.type, "value") else str(message.type),
@@ -396,6 +452,8 @@ class AgentHTTPServer(BaseAgentRunner):
             "sender_id": message.sender_id,
             "timestamp": message.timestamp,
             "metadata": message.metadata,
+            "images": images,
+            "image_count": len(images),
         }
         if message.tool_call:
             item["tool_call"] = {
@@ -404,6 +462,47 @@ class AgentHTTPServer(BaseAgentRunner):
                 "output": message.tool_call.output,
             }
         return item
+
+    @staticmethod
+    def _message_images(message: Message) -> List[Dict[str, Any]]:
+        metadata_images = message.metadata.get("images") if isinstance(message.metadata, dict) else None
+        if isinstance(metadata_images, list):
+            return [
+                {key: value for key, value in dict(image).items() if value not in (None, "")}
+                for image in metadata_images
+                if isinstance(image, dict)
+            ]
+        if not message.multimodal or not message.multimodal.image:
+            return []
+
+        images = message.multimodal.image if isinstance(message.multimodal.image, list) else [message.multimodal.image]
+        result: List[Dict[str, Any]] = []
+        for image in images:
+            source = str(getattr(image, "source", "") or "")
+            if not source:
+                continue
+            item: Dict[str, Any] = {"mime_type": AgentHTTPServer._image_mime_type(source, getattr(image, "format", ""))}
+            relative_path = workspace_blob_relative_path(source)
+            if relative_path:
+                item["workspace_path"] = relative_path
+                item["blob_url"] = workspace_blob_url(relative_path)
+            elif source.startswith(("http://", "https://")):
+                item["external_url"] = source
+            result.append({key: value for key, value in item.items() if value not in (None, "")})
+        return result
+
+    @staticmethod
+    def _image_mime_type(source: str, image_format: str = "") -> str:
+        if source.startswith("data:image/"):
+            return source.split(";", 1)[0].removeprefix("data:").lower()
+        normalized_format = str(image_format or "").strip().lower()
+        if normalized_format == "jpeg":
+            return "image/jpeg"
+        if normalized_format == "webp":
+            return "image/webp"
+        if normalized_format == "gif":
+            return "image/gif"
+        return "image/png"
 
     @staticmethod
     def _message_search_fields(message: Message) -> List[tuple[str, str]]:
@@ -722,7 +821,15 @@ class AgentHTTPServer(BaseAgentRunner):
                 identity_editable = False
             provider_cfg = self.config.get("provider") if isinstance(self.config, dict) else {}
             provider_name = provider_cfg.get("name") if isinstance(provider_cfg, dict) else None
+            image_generation_cfg = self.config.get("image_generation") if isinstance(self.config, dict) else {}
+            image_generation_provider = "none"
+            if isinstance(image_generation_cfg, dict):
+                try:
+                    image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
+                except ValueError:
+                    image_generation_provider = str(image_generation_cfg.get("provider") or "none")
             tool_names = list(self.agent.tools.keys())
+            supports_vision = bool(getattr(self.agent, "supports_vision", True))
             return {
                 "provider": provider_name or "",
                 "model": self.agent.model,
@@ -732,9 +839,12 @@ class AgentHTTPServer(BaseAgentRunner):
                 "message_storage": storage_info,
                 "tools": tool_names,
                 "capabilities": {
-                    "vision": bool(getattr(self.agent, "supports_vision", True)),
+                    "vision": supports_vision,
+                    "vision_input": supports_vision,
                     "web_search": "web_search" in tool_names,
                     "image_generation": "generate_image" in tool_names,
+                    "image_generation_provider": image_generation_provider if "generate_image" in tool_names else "none",
+                    "image_editing": False,
                 },
                 "identity": identity,
                 "identity_file": BaseAgentConfig.IDENTITY_FILENAME,
@@ -914,9 +1024,9 @@ class AgentHTTPServer(BaseAgentRunner):
 
             metadata = self._workspace_metadata(requested, workspace_root)
             if metadata["binary"]:
-                return {**metadata, "content": "", "text": False, "blob_url": f"/api/workspace/blob?path={path}"}
+                return {**metadata, "content": "", "text": False, "blob_url": workspace_blob_url(path)}
             content = self._read_text_file(requested, _WORKSPACE_TEXT_READ_LIMIT)
-            return {**metadata, "content": content, "text": True, "blob_url": f"/api/workspace/blob?path={path}"}
+            return {**metadata, "content": content, "text": True, "blob_url": workspace_blob_url(path)}
 
         @app.get("/api/workspace/blob", tags=["Monitoring"])
         async def workspace_blob(path: str = Query(..., description="Relative path inside workspace directory")):
@@ -1057,6 +1167,22 @@ class AgentHTTPServer(BaseAgentRunner):
                     raise HTTPException(status_code=403, detail="Access denied")
             requested.parent.mkdir(parents=True, exist_ok=True)
             content = await file.read()
+            content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+            detected_mime_type = detect_image_mime(content)
+            guessed_mime_type, _ = mimetypes.guess_type(filename)
+            looks_like_image = bool(
+                detected_mime_type
+                or content_type.startswith("image/")
+                or (guessed_mime_type and guessed_mime_type.startswith("image/"))
+            )
+            if looks_like_image:
+                if not detected_mime_type:
+                    raise HTTPException(status_code=415, detail="Uploaded image data is not a supported PNG, JPEG, or WebP file")
+                if len(content) > MAX_IMAGE_BYTES:
+                    raise HTTPException(status_code=413, detail="Image upload exceeds 10MB")
+                if detected_mime_type not in SUPPORTED_UPLOAD_IMAGE_MIME_TYPES:
+                    allowed = ", ".join(sorted(SUPPORTED_UPLOAD_IMAGE_MIME_TYPES))
+                    raise HTTPException(status_code=415, detail=f"Unsupported image MIME type; allowed: {allowed}")
             requested.write_bytes(content)
             return {"status": "ok", **self._workspace_metadata(requested, workspace_root)}
 

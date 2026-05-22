@@ -210,6 +210,30 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("content", payload["results"][1]["matched_in"])
             self.assertIn("content marker from alice", payload["results"][1]["snippet"])
 
+    async def test_messages_api_returns_image_preview_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            message = Message.create(
+                "inspect this",
+                role=RoleType.USER,
+                sender_id="alice",
+                image_source="/api/workspace/blob?path=temp%2Fimages%2Fweb%2Finput.png",
+            )
+            message.metadata["images"] = [{
+                "workspace_path": "temp/images/web/input.png",
+                "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fweb%2Finput.png",
+                "mime_type": "image/png",
+            }]
+            server = self._server_with_messages(root, messages=[message])
+
+            async with await self._client(server) as client:
+                response = await client.get("/api/messages")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["messages"][0]["image_count"], 1)
+            self.assertEqual(payload["messages"][0]["images"][0]["workspace_path"], "temp/images/web/input.png")
+
 
 if __name__ == "__main__":
     unittest.main()

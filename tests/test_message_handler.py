@@ -1,11 +1,15 @@
 """Tests for MessageHandler system prompt memory injection."""
 
+import base64
 from datetime import datetime
+from pathlib import Path
+import tempfile
 import unittest
 
 from xagent.core.config import AgentConfig
 from xagent.core.handlers.message import MessageHandler
 from xagent.schemas import Message, MessageType, RoleType, ToolCall
+from xagent.utils.image_utils import data_uri_to_bytes, extract_image_urls_from_text
 
 
 class _FakeMessageStorage:
@@ -13,6 +17,42 @@ class _FakeMessageStorage:
 
 
 class MessageHandlerMemoryContextTests(unittest.TestCase):
+    def test_handler_persists_data_uri_as_metadata_and_blob_source(self):
+        image_bytes = b"\x89PNG\r\n\x1a\npng"
+        image_source = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            handler = MessageHandler(
+                message_storage=_FakeMessageStorage(),
+                workspace_dir=tmpdir,
+            )
+            normalized_sources, image_metadata = handler._prepare_message_images([image_source])
+            msg = Message.create(
+                "inspect this",
+                role=RoleType.USER,
+                sender_id="Joy",
+                image_source=normalized_sources,
+            )
+            msg.metadata["images"] = image_metadata
+
+            image = msg.multimodal.image
+            self.assertFalse(isinstance(image, list))
+            self.assertTrue(image.source.startswith("/api/workspace/blob?path=temp%2Fimages%2Finbound%2F"))
+            self.assertEqual(len(msg.metadata["images"]), 1)
+            asset = msg.metadata["images"][0]
+            self.assertTrue(asset["workspace_path"].startswith("temp/images/inbound/"))
+            self.assertIn("/api/workspace/blob?path=temp%2Fimages%2Finbound%2F", asset["blob_url"])
+            self.assertEqual((Path(tmpdir) / asset["workspace_path"]).read_bytes(), image_bytes)
+
+            current_images = MessageHandler._current_message_images(msg, "Joy", workspace_dir=tmpdir)
+            self.assertEqual(data_uri_to_bytes(current_images[0])[0], image_bytes)
+
+    def test_workspace_blob_markdown_is_detected_as_image_input(self):
+        blob_url = "/api/workspace/blob?path=temp%2Fimages%2Fresult.png"
+
+        detected = extract_image_urls_from_text(f"please inspect ![Generated image]({blob_url})")
+
+        self.assertEqual(detected, [blob_url])
     
     def test_build_instructions_includes_tool_prompts(self):
         """build_instructions includes tool-specific segments for active tools."""
@@ -109,7 +149,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("/tmp/xagent/workspace", context_messages[0]["content"])
         self.assertIn("self-managed work area", context_messages[0]["content"])
 
-    def test_turn_context_messages_attach_latest_user_images_to_current_task(self):
+    def test_turn_context_messages_attach_current_user_images_to_current_task(self):
         image_url = "https://example.com/screenshot.png"
         messages = [
             Message.create(
@@ -124,6 +164,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             messages,
             current_user_id="Joy",
             current_time="2026-05-14 09:30",
+            current_message=messages[-1],
         )
         current_task = context_messages[-1]
 
@@ -133,7 +174,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertEqual(current_task["content"][1]["type"], "image_url")
         self.assertEqual(current_task["content"][1]["image_url"]["url"], image_url)
 
-    def test_turn_context_messages_reuse_latest_user_image_for_followup(self):
+    def test_turn_context_messages_do_not_reuse_previous_user_image_for_followup(self):
         image_url = "data:image/png;base64,AAAA"
         messages = [
             Message.create(
@@ -153,11 +194,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         current_task = context_messages[-1]
 
-        self.assertIsInstance(current_task["content"], list)
-        self.assertEqual(current_task["content"][1]["type"], "image_url")
-        self.assertEqual(current_task["content"][1]["image_url"]["url"], image_url)
+        self.assertIsInstance(current_task["content"], str)
 
-    def test_turn_context_messages_keep_reusing_image_through_second_followup(self):
+    def test_turn_context_messages_do_not_reuse_image_through_second_followup(self):
         image_url = "data:image/png;base64,AAAA"
         messages = [
             Message.create("Please inspect this image", role=RoleType.USER, sender_id="Joy", image_source=image_url),
@@ -174,8 +213,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
 
         current_task = context_messages[-1]
-        self.assertIsInstance(current_task["content"], list)
-        self.assertEqual(current_task["content"][1]["image_url"]["url"], image_url)
+        self.assertIsInstance(current_task["content"], str)
 
     def test_turn_context_messages_stop_reusing_image_after_third_followup(self):
         image_url = "data:image/png;base64,AAAA"
@@ -295,7 +333,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("what bob most recently said", transcript_message["content"])
         self.assertIn("outcome bob needs now", transcript_message["content"])
 
-    def test_build_recent_transcript_message_keeps_latest_user_images(self):
+    def test_build_recent_transcript_message_records_images_without_attaching_them(self):
         handler = MessageHandler(
             system_prompt="You are a helpful assistant.",
             message_storage=_FakeMessageStorage(),
@@ -313,13 +351,8 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         transcript_message = handler.build_recent_transcript_message(messages, current_user_id="bob")
 
         self.assertEqual(transcript_message["role"], "user")
-        self.assertIsInstance(transcript_message["content"], list)
-        self.assertEqual(transcript_message["content"][0]["type"], "text")
-        self.assertEqual(transcript_message["content"][1]["type"], "image_url")
-        self.assertEqual(
-            transcript_message["content"][1]["image_url"]["url"],
-            "https://example.com/screenshot.png",
-        )
+        self.assertIsInstance(transcript_message["content"], str)
+        self.assertIn("[Attached image: 1]", transcript_message["content"])
 
     def test_build_recent_transcript_message_can_omit_images(self):
         handler = MessageHandler(

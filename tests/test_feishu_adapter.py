@@ -276,8 +276,8 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertEqual(resource_api.requests[0].type, "image")
             self.assertEqual(len(saved_images), 1)
             self.assertEqual(saved_images[0].read_bytes(), resource_api.data)
-            self.assertTrue(agent.chat_calls[0]["image_source"].startswith("data:image/png;base64,"))
-            self.assertIn("![Feishu image](/api/workspace/blob?path=temp/images/feishu/", agent.chat_calls[0]["user_message"])
+            self.assertTrue(agent.chat_calls[0]["image_source"].startswith("/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F"))
+            self.assertIn("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", agent.chat_calls[0]["user_message"])
             self.assertNotIn(str(workspace_dir), agent.chat_calls[0]["user_message"])
 
     def test_direct_image_message_strips_redundant_inline_feishu_markdown(self):
@@ -303,7 +303,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
             user_message = agent.chat_calls[0]["user_message"]
             self.assertNotIn("![image](img_test)", user_message)
-            self.assertEqual(user_message.count("![Feishu image](/api/workspace/blob?path=temp/images/feishu/"), 1)
+            self.assertEqual(user_message.count("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F"), 1)
 
     def test_direct_image_message_replies_when_provider_lacks_vision(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -331,7 +331,7 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertEqual(len(saved_images), 1)
             self.assertEqual(saved_images[0].read_bytes(), resource_api.data)
             self.assertIn("不支持图片理解", adapter._channel.sent[0][1]["markdown"])
-            self.assertIn("/api/workspace/blob?path=temp/images/feishu/", adapter._channel.sent[0][1]["markdown"])
+            self.assertIn("/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", adapter._channel.sent[0][1]["markdown"])
             self.assertNotIn(str(workspace_dir), adapter._channel.sent[0][1]["markdown"])
             self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_image_no_vision"})
 
@@ -362,8 +362,8 @@ class FeishuAdapterTests(unittest.TestCase):
 
             user_message = agent.chat_calls[0]["user_message"]
             self.assertIn("[room context]", user_message)
-            self.assertIn("![Feishu image](/api/workspace/blob?path=temp/images/feishu/", user_message)
-            self.assertTrue(agent.chat_calls[0]["image_source"].startswith("data:image/png;base64,"))
+            self.assertIn("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", user_message)
+            self.assertTrue(agent.chat_calls[0]["image_source"].startswith("/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F"))
             self.assertNotIn(str(workspace_dir), user_message)
 
     def test_direct_chat_passes_explicit_sender_id_type_to_resolver(self):

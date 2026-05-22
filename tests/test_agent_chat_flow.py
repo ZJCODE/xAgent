@@ -1276,7 +1276,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("message-2", transcript)
         self.assertIn("[Content truncated: 20 chars omitted]", transcript)
 
-    async def test_transcript_budget_preserves_latest_user_images(self):
+    async def test_transcript_budget_records_images_without_attaching_them(self):
         image_url = "https://example.com/chart.png"
         messages = [
             Message.create("older", role=RoleType.USER, sender_id="alice"),
@@ -1291,8 +1291,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             max_message_chars=100,
         )
 
-        self.assertIsInstance(model_message["content"], list)
-        self.assertEqual(model_message["content"][1]["image_url"]["url"], image_url)
+        self.assertIsInstance(model_message["content"], str)
+        self.assertIn("[Attached image: 1]", model_message["content"])
 
     async def test_observe_ingests_event_without_calling_model(self):
         storage = InMemoryMessageStorage()

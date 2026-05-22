@@ -48,7 +48,7 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
   const [observeText, setObserveText] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const canUploadImages = capabilities.vision;
+  const canUploadImages = capabilities.vision_input ?? capabilities.vision;
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -58,7 +58,7 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
   const submitMessage = (event?: FormEvent) => {
     event?.preventDefault();
     const text = messageText.trim();
-    if (!text) return;
+    if (!text && !panel.pendingImages.length) return;
     setMessageText("");
     void sendMessage(panel.id, text);
   };
@@ -152,30 +152,6 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
       </form>
 
       <form onSubmit={submitMessage} className="composer-row">
-        {canUploadImages ? (
-          <>
-            <button
-              type="button"
-              className="icon-button"
-              onClick={() => fileInputRef.current?.click()}
-              title="Upload image"
-              disabled={panel.sending}
-            >
-              <ImagePlus size={18} />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              accept="image/jpeg,image/png"
-              multiple
-              onChange={(event) => {
-                if (event.target.files) addImages(panel.id, event.target.files);
-                event.currentTarget.value = "";
-              }}
-            />
-          </>
-        ) : null}
         <textarea
           rows={1}
           placeholder="Message xAgent..."
@@ -186,10 +162,36 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
             if (event.key === "Enter" && !event.shiftKey) submitMessage(event);
           }}
         />
-        <button type="submit" className="send-button" disabled={panel.sending || !messageText.trim()}>
-          <Send size={16} />
-          Send
-        </button>
+        <div className="composer-actions">
+          {canUploadImages ? (
+            <>
+              <button
+                type="button"
+                className="icon-button composer-upload-button"
+                onClick={() => fileInputRef.current?.click()}
+                title="Upload image"
+                disabled={panel.sending}
+              >
+                <ImagePlus size={18} />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                onChange={(event) => {
+                  if (event.target.files) addImages(panel.id, event.target.files);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </>
+          ) : null}
+          <button type="submit" className="send-button" disabled={panel.sending || (!messageText.trim() && !panel.pendingImages.length)}>
+            <Send size={16} />
+            Send
+          </button>
+        </div>
       </form>
     </section>
   );

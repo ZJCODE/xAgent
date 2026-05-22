@@ -107,9 +107,11 @@ def provider_is_official_openai(provider_cfg: dict[str, Any]) -> bool:
 
 
 def provider_supports_vision(provider_cfg: dict[str, Any]) -> bool:
+    if "supports_vision" in provider_cfg:
+        return provider_cfg.get("supports_vision") is True
     provider = normalize_provider_name(provider_cfg.get("name"))
     if provider == PROVIDER_CUSTOM:
-        return provider_cfg.get("supports_vision") is True
+        return False
     if provider in VISION_CAPABLE_PROVIDERS:
         return True
     if provider:

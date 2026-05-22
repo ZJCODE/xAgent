@@ -7,6 +7,7 @@ import type {
   MessagesResponse,
   MessagesStats,
   SearchResult,
+  WorkspaceUploadResult,
 } from "../types";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -73,6 +74,16 @@ export async function readWorkspaceFile(path: string): Promise<FileReadResult> {
 
 export async function searchWorkspace(query: string): Promise<{ query: string; results: SearchResult[] }> {
   return requestJson(`/api/workspace/search?query=${encodeURIComponent(query)}`);
+}
+
+export async function uploadWorkspaceFile(file: File, path: string): Promise<WorkspaceUploadResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("path", path);
+  return requestJson("/api/workspace/upload", {
+    method: "POST",
+    body: formData,
+  });
 }
 
 export async function getMessages(count: number, offset: number): Promise<MessagesResponse> {

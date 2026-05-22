@@ -1,8 +1,9 @@
 import unittest
 
 import httpx
+from fastapi import HTTPException
 
-from xagent.interfaces.server import AgentHTTPServer
+from xagent.interfaces.server import AgentHTTPServer, ChatInput
 
 
 class FakeMessageStorage:
@@ -44,6 +45,18 @@ class WebUISpaTests(unittest.IsolatedAsyncioTestCase):
         for response in routes:
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.text, index.text)
+
+    async def test_chat_input_rejects_too_many_images(self):
+        input_data = ChatInput(
+            user_id="web",
+            user_message="",
+            image_source=[f"https://example.com/{index}.png" for index in range(6)],
+        )
+
+        with self.assertRaises(HTTPException) as error:
+            AgentHTTPServer._input_image_sources(input_data)
+
+        self.assertEqual(error.exception.status_code, 413)
 
 
 if __name__ == "__main__":

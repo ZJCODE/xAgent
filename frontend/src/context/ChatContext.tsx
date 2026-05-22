@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { getAgentInfo } from "../lib/api";
+import { getAgentInfo, uploadWorkspaceFile, workspaceBlobUrl } from "../lib/api";
 import type { AgentCapabilities, ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
 import { makeId } from "../lib/format";
 
@@ -16,9 +16,13 @@ const GLOBAL_SETTINGS_KEY = "xagent_web_settings";
 const HISTORY_KEY = "xagent_chat_history";
 const DEFAULT_CAPABILITIES: AgentCapabilities = {
   vision: true,
+  vision_input: true,
   web_search: false,
   image_generation: false,
 };
+const MAX_IMAGES_PER_MESSAGE = 5;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const ACCEPTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 type PanelId = ChatPanelState["id"];
 
@@ -72,6 +76,15 @@ function normalizeHistoryMessage(message: ChatMessage): ChatMessage {
   };
 }
 
+function canUseVision(capabilities: AgentCapabilities): boolean {
+  return capabilities.vision_input ?? capabilities.vision;
+}
+
+function safeUploadName(file: File): string {
+  const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "image";
+  return `temp/images/web/${Date.now()}-${Math.random().toString(16).slice(2, 10)}-${safeName}`;
+}
+
 function createPanel(panelId: PanelId): ChatPanelState {
   const savedSettings = readJson<Partial<ChatSettings>>(GLOBAL_SETTINGS_KEY, {});
   const history = readJson<ChatMessage[]>(historyKey(panelId), []);
@@ -111,13 +124,13 @@ function persistHistory(panel: ChatPanelState) {
     .filter((message) => !message.pending)
     .map((message) => ({
       ...message,
-      images: [],
+      images: message.images || [],
       imageCount: message.images?.length || message.imageCount,
     }));
   try {
     localStorage.setItem(historyKey(panel.id), JSON.stringify(slim));
   } catch {
-    // Local image data may exceed browser storage; chat still remains in memory.
+    // Browser storage is best-effort; the server-side message stream remains canonical.
   }
 }
 
@@ -167,21 +180,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const addImages = useCallback((panelId: PanelId, files: FileList | File[]) => {
-    if (!capabilities.vision) return;
-    Array.from(files).forEach((file) => {
-      if (!file.type.match(/^image\/(png|jpeg)$/)) return;
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const value = String(event.target?.result || "");
-        if (!value) return;
-        patchPanel(panelId, (panel) => ({
-          ...panel,
-          pendingImages: [...panel.pendingImages, value],
-        }));
-      };
-      reader.readAsDataURL(file);
-    });
-  }, [capabilities.vision, patchPanel]);
+    if (!canUseVision(capabilities)) return;
+    const remainingSlots = Math.max(0, MAX_IMAGES_PER_MESSAGE - panel.pendingImages.length);
+    const selectedFiles = Array.from(files)
+      .filter((file) => ACCEPTED_IMAGE_TYPES.has(file.type) && file.size <= MAX_IMAGE_BYTES)
+      .slice(0, remainingSlots);
+    if (!selectedFiles.length) return;
+
+    void Promise.all(
+      selectedFiles.map(async (file) => {
+        const uploaded = await uploadWorkspaceFile(file, safeUploadName(file));
+        const previewUrl = workspaceBlobUrl(uploaded.path);
+        patchPanel(panelId, (panel) => {
+          if (panel.pendingImages.length >= MAX_IMAGES_PER_MESSAGE) return panel;
+          return {
+            ...panel,
+            pendingImages: [...panel.pendingImages, previewUrl],
+          };
+        });
+      }),
+    ).catch(() => undefined);
+  }, [capabilities, panel.pendingImages.length, patchPanel]);
 
   const removeImage = useCallback(
     (panelId: PanelId, index: number) => {
@@ -332,9 +351,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const sendMessage = useCallback(
     async (panelId: PanelId, rawText: string) => {
       const text = rawText.trim();
-      if (!text || panel.sending) return;
+      if (panel.sending) return;
       const currentPanel = panel;
-      const images = capabilities.vision ? [...currentPanel.pendingImages] : [];
+      const images = canUseVision(capabilities) ? [...currentPanel.pendingImages] : [];
+      if (!text && !images.length) return;
       const userMessage: ChatMessage = {
         id: makeId("user"),
         role: "user",
@@ -368,7 +388,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       await runSocket(panelId, payload, assistantMessage.id).catch(() => undefined);
     },
-    [capabilities.vision, panel, patchPanel, runSocket],
+    [capabilities, panel, patchPanel, runSocket],
   );
 
   const sendObservation = useCallback(

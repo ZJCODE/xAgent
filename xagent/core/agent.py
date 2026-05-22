@@ -126,12 +126,15 @@ class Agent:
         self.message_handler = MessageHandler(
             message_storage=self.message_storage,
             system_prompt=self.system_prompt,
+            workspace_dir=self.workspace_dir,
         )
         self.tool_executor = ToolExecutor(
             tool_manager=self.tool_manager,
             message_storage=self.message_storage,
             client=self.client,
             model_api=self.model_api,
+            workspace_dir=self.workspace_dir,
+            caption_model=self.model if self.supports_vision else None,
         )
 
     @property
@@ -302,11 +305,15 @@ class Agent:
                 )
                 return reply_text
 
-            user_msg = await msg_handler.store_user_message(
-                user_message,
-                user_id,
-                image_source,
-            )
+            try:
+                user_msg = await msg_handler.store_user_message(
+                    user_message,
+                    user_id,
+                    image_source,
+                )
+            except ValueError as exc:
+                logger.warning("Invalid image input from %s: %s", user_id, exc)
+                return str(exc)
 
             effective_history_count = self._effective_history_count(history_count)
             recent_messages = await msg_handler.get_recent_messages(
@@ -331,6 +338,8 @@ class Agent:
                 memory_context=memory_context,
                 workspace_context=workspace_context,
                 include_images=getattr(self, "supports_vision", True),
+                workspace_dir=getattr(self, "workspace_dir", None),
+                current_message=user_msg,
             )
             input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 
@@ -502,11 +511,17 @@ class Agent:
                 yield {"type": "done"}
                 return
 
-            user_msg = await msg_handler.store_user_message(
-                user_message,
-                user_id,
-                image_source,
-            )
+            try:
+                user_msg = await msg_handler.store_user_message(
+                    user_message,
+                    user_id,
+                    image_source,
+                )
+            except ValueError as exc:
+                logger.warning("Invalid image input from %s: %s", user_id, exc)
+                yield {"type": "error", "error": str(exc), "status_code": 400}
+                yield {"type": "done"}
+                return
 
             effective_history_count = self._effective_history_count(history_count)
             recent_messages = await msg_handler.get_recent_messages(
@@ -531,6 +546,8 @@ class Agent:
                 memory_context=memory_context,
                 workspace_context=workspace_context,
                 include_images=getattr(self, "supports_vision", True),
+                workspace_dir=getattr(self, "workspace_dir", None),
+                current_message=user_msg,
             )
             input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 

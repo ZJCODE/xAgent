@@ -11,11 +11,11 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote
 
 import httpx
 from openai import AsyncOpenAI
 
+from xagent.utils.image_utils import workspace_blob_url
 from xagent.utils.tool_decorator import function_tool
 
 
@@ -91,6 +91,20 @@ class ConfiguredImageGenerationProvider:
         if not prompt:
             return _error_response(self.provider, "prompt is required")
         if self.provider == IMAGE_GENERATION_PROVIDER_OPENAI:
+            unsupported = {
+                "aspect_ratio": aspect_ratio,
+                "reference_image_url": reference_image_url,
+                "reference_image_urls": reference_image_urls,
+                "seed": seed,
+                "prompt_optimizer": prompt_optimizer,
+                "aigc_watermark": aigc_watermark,
+            }
+            unsupported_names = [name for name, value in unsupported.items() if value not in (None, "", [])]
+            if unsupported_names:
+                return _error_response(
+                    self.provider,
+                    f"OpenAI image generation does not support parameter(s): {', '.join(unsupported_names)}",
+                )
             return await self._generate_openai(
                 prompt=prompt,
                 size=size,
@@ -102,6 +116,19 @@ class ConfiguredImageGenerationProvider:
                 moderation=moderation,
             )
         if self.provider == IMAGE_GENERATION_PROVIDER_MINIMAX:
+            unsupported = {
+                "quality": quality,
+                "output_format": output_format,
+                "background": background,
+                "output_compression": output_compression,
+                "moderation": moderation,
+            }
+            unsupported_names = [name for name, value in unsupported.items() if value not in (None, "", [])]
+            if unsupported_names:
+                return _error_response(
+                    self.provider,
+                    f"MiniMax image generation does not support parameter(s): {', '.join(unsupported_names)}",
+                )
             return await self._generate_minimax(
                 prompt=prompt,
                 size=size,
@@ -134,18 +161,23 @@ class ConfiguredImageGenerationProvider:
             except Exception as exception:
                 return _error_response(self.provider, f"OpenAI client is not configured: {exception}")
 
-        image_format = _normalize_output_format(
-            output_format or self.config.get("output_format") or DEFAULT_IMAGE_GENERATION_FORMAT
-        )
         model = str(self.config.get("model") or DEFAULT_IMAGE_GENERATION_MODEL).strip()
-        params: dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "size": _clean_optional(size or self.config.get("size") or DEFAULT_IMAGE_GENERATION_SIZE),
-            "quality": _clean_optional(quality or self.config.get("quality") or DEFAULT_IMAGE_GENERATION_QUALITY),
-            "output_format": image_format,
-        }
-        normalized_background = _clean_optional(background or self.config.get("background") or DEFAULT_IMAGE_GENERATION_BACKGROUND)
+        try:
+            image_format = _normalize_output_format(
+                output_format or self.config.get("output_format") or DEFAULT_IMAGE_GENERATION_FORMAT
+            )
+            params: dict[str, Any] = {
+                "model": model,
+                "prompt": prompt,
+                "size": _normalize_openai_size(size or self.config.get("size") or DEFAULT_IMAGE_GENERATION_SIZE),
+                "quality": _normalize_openai_quality(quality or self.config.get("quality") or DEFAULT_IMAGE_GENERATION_QUALITY),
+                "output_format": image_format,
+            }
+            normalized_background = _normalize_openai_background(
+                background or self.config.get("background") or DEFAULT_IMAGE_GENERATION_BACKGROUND
+            )
+        except ValueError as exception:
+            return _error_response(self.provider, str(exception))
         if normalized_background:
             if _is_gpt_image_2(model) and normalized_background == "transparent":
                 return _error_response(
@@ -154,15 +186,24 @@ class ConfiguredImageGenerationProvider:
                 )
             params["background"] = normalized_background
 
-        normalized_compression = _normalize_output_compression(
-            output_compression if output_compression is not None else self.config.get("output_compression")
-        )
+        try:
+            normalized_compression = _normalize_output_compression(
+                output_compression if output_compression is not None else self.config.get("output_compression")
+            )
+        except ValueError as exception:
+            return _error_response(self.provider, str(exception))
         if normalized_compression is not None and image_format in {"jpeg", "webp"}:
             params["output_compression"] = normalized_compression
-        normalized_count = _normalize_count(n if n is not None else self.config.get("n"), max_count=10)
+        try:
+            normalized_count = _normalize_count(n if n is not None else self.config.get("n"), max_count=10)
+        except ValueError as exception:
+            return _error_response(self.provider, str(exception))
         if normalized_count is not None:
             params["n"] = normalized_count
-        normalized_moderation = _clean_optional(moderation or self.config.get("moderation"))
+        try:
+            normalized_moderation = _normalize_openai_moderation(moderation or self.config.get("moderation"))
+        except ValueError as exception:
+            return _error_response(self.provider, str(exception))
         if normalized_moderation:
             params["moderation"] = normalized_moderation
 
@@ -228,34 +269,43 @@ class ConfiguredImageGenerationProvider:
             "prompt": prompt,
             "response_format": "base64",
         }
-        requested_aspect_ratio = _clean_optional(aspect_ratio or self.config.get("aspect_ratio"))
-        normalized_width = _normalize_minimax_dimension(self.config.get("width"))
-        normalized_height = _normalize_minimax_dimension(self.config.get("height"))
-        if requested_aspect_ratio:
-            payload["aspect_ratio"] = _normalize_minimax_aspect_ratio(requested_aspect_ratio)
-        elif normalized_width is not None and normalized_height is not None:
-            payload["width"] = normalized_width
-            payload["height"] = normalized_height
-        else:
-            payload["aspect_ratio"] = (
-                _minimax_aspect_ratio_from_size(size or self.config.get("size"))
-                or DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO
-            )
+        try:
+            requested_aspect_ratio = _clean_optional(aspect_ratio or self.config.get("aspect_ratio"))
+            normalized_width = _normalize_minimax_dimension(self.config.get("width"))
+            normalized_height = _normalize_minimax_dimension(self.config.get("height"))
+            if requested_aspect_ratio:
+                payload["aspect_ratio"] = _normalize_minimax_aspect_ratio(requested_aspect_ratio)
+            elif normalized_width is not None and normalized_height is not None:
+                payload["width"] = normalized_width
+                payload["height"] = normalized_height
+            else:
+                payload["aspect_ratio"] = (
+                    _minimax_aspect_ratio_from_size(size or self.config.get("size"))
+                    or DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO
+                )
 
-        normalized_count = _normalize_count(n if n is not None else self.config.get("n"), max_count=9)
+            normalized_count = _normalize_count(n if n is not None else self.config.get("n"), max_count=9)
+        except ValueError as exception:
+            return _error_response(self.provider, str(exception))
         if normalized_count is not None:
             payload["n"] = normalized_count
         normalized_seed = _normalize_int(seed if seed is not None else self.config.get("seed"))
         if normalized_seed is not None:
             payload["seed"] = normalized_seed
-        normalized_prompt_optimizer = _normalize_optional_bool(
-            prompt_optimizer if prompt_optimizer is not None else self.config.get("prompt_optimizer")
-        )
+        try:
+            normalized_prompt_optimizer = _normalize_optional_bool(
+                prompt_optimizer if prompt_optimizer is not None else self.config.get("prompt_optimizer")
+            )
+        except ValueError as exception:
+            return _error_response(self.provider, str(exception))
         if normalized_prompt_optimizer is not None:
             payload["prompt_optimizer"] = normalized_prompt_optimizer
-        normalized_watermark = _normalize_optional_bool(
-            aigc_watermark if aigc_watermark is not None else self.config.get("aigc_watermark")
-        )
+        try:
+            normalized_watermark = _normalize_optional_bool(
+                aigc_watermark if aigc_watermark is not None else self.config.get("aigc_watermark")
+            )
+        except ValueError as exception:
+            return _error_response(self.provider, str(exception))
         if normalized_watermark is not None:
             payload["aigc_watermark"] = normalized_watermark
 
@@ -343,7 +393,7 @@ class ConfiguredImageGenerationProvider:
     def _save_image_file(self, image_bytes: bytes, image_format: str) -> dict:
         output_path = self._write_image_file(image_bytes, image_format)
         relative_path = output_path.relative_to(self.workspace_dir).as_posix()
-        blob_url = f"/api/workspace/blob?path={quote(relative_path)}"
+        blob_url = workspace_blob_url(relative_path)
         return {
             "path": relative_path,
             "blob_url": blob_url,
@@ -596,7 +646,45 @@ def _normalize_output_format(value: Any) -> str:
         return "jpeg"
     if normalized in {"png", "webp"}:
         return normalized
-    return DEFAULT_IMAGE_GENERATION_FORMAT
+    raise ValueError("output_format must be one of: png, jpeg, webp")
+
+
+def _normalize_openai_size(value: Any) -> str:
+    normalized = str(value or DEFAULT_IMAGE_GENERATION_SIZE).strip().lower()
+    allowed = {"auto", "1024x1024", "1024x1536", "1536x1024"}
+    if normalized in allowed:
+        return normalized
+    raise ValueError("size must be one of: auto, 1024x1024, 1024x1536, 1536x1024")
+
+
+def _normalize_openai_quality(value: Any) -> str:
+    normalized = str(value or DEFAULT_IMAGE_GENERATION_QUALITY).strip().lower()
+    allowed = {"auto", "low", "medium", "high"}
+    if normalized in allowed:
+        return normalized
+    raise ValueError("quality must be one of: auto, low, medium, high")
+
+
+def _normalize_openai_background(value: Any) -> Optional[str]:
+    normalized = _clean_optional(value)
+    if normalized is None:
+        return None
+    normalized = normalized.lower()
+    allowed = {"auto", "opaque", "transparent"}
+    if normalized in allowed:
+        return normalized
+    raise ValueError("background must be one of: auto, opaque, transparent")
+
+
+def _normalize_openai_moderation(value: Any) -> Optional[str]:
+    normalized = _clean_optional(value)
+    if normalized is None:
+        return None
+    normalized = normalized.lower()
+    allowed = {"auto", "low"}
+    if normalized in allowed:
+        return normalized
+    raise ValueError("moderation must be one of: auto, low")
 
 
 def _normalize_output_compression(value: Any) -> Optional[int]:
@@ -605,8 +693,10 @@ def _normalize_output_compression(value: Any) -> Optional[int]:
     try:
         compression = int(value)
     except (TypeError, ValueError):
-        return None
-    return min(100, max(0, compression))
+        raise ValueError("output_compression must be an integer from 0 to 100")
+    if compression < 0 or compression > 100:
+        raise ValueError("output_compression must be an integer from 0 to 100")
+    return compression
 
 
 def _normalize_count(value: Any, *, max_count: int) -> Optional[int]:
@@ -615,8 +705,10 @@ def _normalize_count(value: Any, *, max_count: int) -> Optional[int]:
     try:
         count = int(value)
     except (TypeError, ValueError):
-        return None
-    return min(max_count, max(1, count))
+        raise ValueError(f"n must be an integer from 1 to {max_count}")
+    if count < 1 or count > max_count:
+        raise ValueError(f"n must be an integer from 1 to {max_count}")
+    return count
 
 
 def _normalize_int(value: Any) -> Optional[int]:
@@ -638,33 +730,37 @@ def _normalize_optional_bool(value: Any) -> Optional[bool]:
         return True
     if normalized in {"0", "false", "no", "n", "off"}:
         return False
-    return None
+    raise ValueError("Boolean image generation options must be true or false")
 
 
 def _normalize_minimax_aspect_ratio(value: Any) -> str:
     normalized = str(value or "").strip()
     if normalized in MINIMAX_IMAGE_GENERATION_ASPECT_RATIOS:
         return normalized
-    return DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO
+    allowed = ", ".join(sorted(MINIMAX_IMAGE_GENERATION_ASPECT_RATIOS))
+    raise ValueError(f"aspect_ratio must be one of: {allowed}")
 
 
 def _minimax_aspect_ratio_from_size(value: Any) -> Optional[str]:
     size = str(value or "").strip().lower()
-    if not size or size == "auto" or "x" not in size:
+    if not size or size == "auto":
         return None
+    if "x" not in size:
+        raise ValueError("size must be auto or WIDTHxHEIGHT")
     width_text, height_text = size.split("x", 1)
     try:
         width = int(width_text.strip())
         height = int(height_text.strip())
     except ValueError:
-        return None
+        raise ValueError("size must be auto or WIDTHxHEIGHT")
     if width <= 0 or height <= 0:
-        return None
+        raise ValueError("size width and height must be positive")
     common_divisor = _greatest_common_divisor(width, height)
     ratio = f"{width // common_divisor}:{height // common_divisor}"
     if ratio in MINIMAX_IMAGE_GENERATION_ASPECT_RATIOS:
         return ratio
-    return None
+    allowed = ", ".join(sorted(MINIMAX_IMAGE_GENERATION_ASPECT_RATIOS))
+    raise ValueError(f"size aspect ratio must resolve to one of: {allowed}")
 
 
 def _greatest_common_divisor(left: int, right: int) -> int:
@@ -675,8 +771,10 @@ def _greatest_common_divisor(left: int, right: int) -> int:
 
 def _normalize_minimax_dimension(value: Any) -> Optional[int]:
     dimension = _normalize_int(value)
-    if dimension is None or dimension < 512 or dimension > 2048 or dimension % 8 != 0:
+    if dimension is None:
         return None
+    if dimension < 512 or dimension > 2048 or dimension % 8 != 0:
+        raise ValueError("MiniMax width/height must be integers from 512 to 2048 and multiples of 8")
     return dimension
 
 

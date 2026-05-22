@@ -96,7 +96,7 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["model"], "gpt-image-test")
             self.assertEqual(result["revised_prompt"], "A refined image prompt.")
             self.assertTrue(result["image"]["path"].startswith("temp/images/"))
-            self.assertIn("/api/workspace/blob?path=temp/images/", result["image"]["blob_url"])
+            self.assertIn("/api/workspace/blob?path=temp%2Fimages%2F", result["image"]["blob_url"])
             self.assertIn(result["image"]["blob_url"], result["image"]["markdown"])
 
             written = Path(tmpdir) / result["image"]["path"]
@@ -195,6 +195,35 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
             call["json"]["subject_reference"],
             [{"type": "character", "image_file": "https://example.com/reference.jpg"}],
         )
+
+    async def test_openai_image_generation_rejects_unsupported_reference_params(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = create_image_generation_tool(
+                {"provider": "openai"},
+                client=FakeOpenAIClient(SimpleNamespace(data=[])),
+                workspace_dir=tmpdir,
+            )
+
+            result = await tool(
+                prompt="Draw a product icon",
+                reference_image_url="https://example.com/reference.png",
+            )
+
+            self.assertEqual(result["status"], "error")
+            self.assertIn("reference_image_url", result["message"])
+
+    async def test_image_generation_rejects_invalid_openai_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = create_image_generation_tool(
+                {"provider": "openai"},
+                client=FakeOpenAIClient(SimpleNamespace(data=[])),
+                workspace_dir=tmpdir,
+            )
+
+            result = await tool(prompt="Draw a product icon", output_format="gif")
+
+            self.assertEqual(result["status"], "error")
+            self.assertIn("output_format", result["message"])
 
 
 if __name__ == "__main__":

@@ -1,13 +1,14 @@
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 from ..config import AgentConfig
 from ..providers import MODEL_API_OPENAI_CHAT_COMPLETIONS, MODEL_API_OPENAI_RESPONSES, normalize_model_api
 from .manager import ToolManager
 from ...components import MessageStorageBase
-from ...utils.image_utils import extract_source, is_image_output
+from ...utils.image_utils import bytes_to_data_uri, extract_source, is_image_output, read_image_file_bytes, resolve_workspace_blob_path
 from ...tools.image_generation_tool import (
     generated_image_description,
     generated_image_markdown,
@@ -27,11 +28,15 @@ class ToolExecutor:
         message_storage: MessageStorageBase,
         client: Any,
         model_api: str = MODEL_API_OPENAI_CHAT_COMPLETIONS,
+        workspace_dir: Optional[str | Path] = None,
+        caption_model: Optional[str] = AgentConfig.IMAGE_CAPTION_MODEL,
     ):
         self.tool_manager = tool_manager
         self.message_storage = message_storage
         self.client = client
         self.model_api = normalize_model_api(model_api)
+        self.workspace_dir = Path(workspace_dir).expanduser().resolve() if workspace_dir is not None else None
+        self.caption_model = caption_model
 
     async def handle_tool_calls(
         self,
@@ -158,6 +163,9 @@ class ToolExecutor:
 
     async def _caption_image(self, image_data_uri: str, prompt_hint: str = "") -> str:
         """Use a vision model to generate a detailed description of an image."""
+        if not self.caption_model:
+            return self._fallback_caption(prompt_hint)
+        image_data_uri = self._model_image_source(image_data_uri)
         caption_prompt = AgentConfig.IMAGE_CAPTION_PROMPT
         if prompt_hint:
             caption_prompt += f"\n\nOriginal generation prompt: \"{prompt_hint}\""
@@ -165,7 +173,7 @@ class ToolExecutor:
         try:
             if self.model_api == MODEL_API_OPENAI_RESPONSES:
                 response = await self.client.responses.create(
-                    model=AgentConfig.IMAGE_CAPTION_MODEL,
+                    model=self.caption_model,
                     input=[{
                         "role": "user",
                         "content": [
@@ -180,7 +188,7 @@ class ToolExecutor:
                     return caption.strip()
 
             response = await self.client.chat.completions.create(
-                model=AgentConfig.IMAGE_CAPTION_MODEL,
+                model=self.caption_model,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -197,6 +205,19 @@ class ToolExecutor:
         except Exception as e:
             logger.warning("Image captioning failed, falling back to prompt-based description: %s", e)
 
+        return self._fallback_caption(prompt_hint)
+
+    def _model_image_source(self, source: str) -> str:
+        if self.workspace_dir is None:
+            return source
+        image_path = resolve_workspace_blob_path(source, self.workspace_dir)
+        if image_path is None:
+            return source
+        image_bytes, mime_type = read_image_file_bytes(image_path, allowed_mime_types=None)
+        return bytes_to_data_uri(image_bytes, mime_type)
+
+    @staticmethod
+    def _fallback_caption(prompt_hint: str = "") -> str:
         if prompt_hint:
             return f"Generated image based on prompt: \"{prompt_hint}\""
         return "An image was generated and displayed to the user."

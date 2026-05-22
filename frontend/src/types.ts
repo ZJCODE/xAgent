@@ -13,6 +13,17 @@ export interface ChatMessage {
   error?: boolean;
 }
 
+export interface ImageAsset {
+  workspace_path?: string;
+  external_url?: string;
+  mime_type?: string;
+  size_bytes?: number;
+  width?: number;
+  height?: number;
+  blob_url?: string;
+  original_name?: string;
+}
+
 export interface ChatSettings {
   userId: string;
   stream: boolean;
@@ -29,8 +40,11 @@ export interface ChatPanelState {
 
 export interface AgentCapabilities {
   vision: boolean;
+  vision_input?: boolean;
   web_search: boolean;
   image_generation: boolean;
+  image_generation_provider?: string;
+  image_editing?: boolean;
 }
 
 export interface ChatEvent {
@@ -85,6 +99,10 @@ export interface FileReadResult extends FileNode {
   blob_url?: string;
 }
 
+export interface WorkspaceUploadResult extends FileNode {
+  status: string;
+}
+
 export interface SearchResult extends FileNode {
   matched_in: string[];
   snippet?: string;
@@ -97,6 +115,8 @@ export interface MessageItem {
   sender_id?: string;
   timestamp?: number;
   metadata?: Record<string, unknown>;
+  images?: ImageAsset[];
+  image_count?: number;
   tool_call?: {
     name: string;
     arguments: unknown;

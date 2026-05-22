@@ -24,6 +24,7 @@ from ..components import MessageStorageBase, MessageStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
 from ..tools import create_image_generation_tool, create_web_search_tool, create_workspace_run_command_tool
 from ..tools.image_generation_tool import (
+    IMAGE_GENERATION_PROVIDER_NONE,
     IMAGE_GENERATION_PROVIDER_OPENAI,
     normalize_image_generation_provider,
     IMAGE_GENERATION_PROVIDER_MINIMAX,
@@ -308,8 +309,6 @@ class BaseAgentRunner:
         if provider_name and provider_name != "custom" and "model_api" in provider_cfg:
             raise ValueError("provider.model_api is only supported when provider.name is custom")
         if "supports_vision" in provider_cfg:
-            if provider_name != "custom":
-                raise ValueError("provider.supports_vision is only supported when provider.name is custom")
             if not isinstance(provider_cfg["supports_vision"], bool):
                 raise ValueError("provider.supports_vision must be a boolean")
 
@@ -385,6 +384,41 @@ class BaseAgentRunner:
                 raise ValueError(
                     "image_generation.provider 'minimax' requires image_generation.api_key when provider is not MiniMax"
                 )
+        if image_generation_provider not in {
+            IMAGE_GENERATION_PROVIDER_NONE,
+            IMAGE_GENERATION_PROVIDER_OPENAI,
+            IMAGE_GENERATION_PROVIDER_MINIMAX,
+        }:
+            raise ValueError("image_generation.provider must be one of: none, openai, minimax")
+        if "size" in image_generation_cfg:
+            value = str(image_generation_cfg["size"] or "").strip().lower()
+            if image_generation_provider == IMAGE_GENERATION_PROVIDER_OPENAI:
+                allowed = {"auto", "1024x1024", "1024x1536", "1536x1024"}
+                if value not in allowed:
+                    raise ValueError("image_generation.size must be one of: auto, 1024x1024, 1024x1536, 1536x1024")
+        if "quality" in image_generation_cfg:
+            value = str(image_generation_cfg["quality"] or "").strip().lower()
+            if image_generation_provider == IMAGE_GENERATION_PROVIDER_OPENAI and value not in {"auto", "low", "medium", "high"}:
+                raise ValueError("image_generation.quality must be one of: auto, low, medium, high")
+        if "output_format" in image_generation_cfg:
+            value = str(image_generation_cfg["output_format"] or "").strip().lower()
+            if value == "jpg":
+                value = "jpeg"
+            if value not in {"png", "jpeg", "webp"}:
+                raise ValueError("image_generation.output_format must be one of: png, jpeg, webp")
+        if "background" in image_generation_cfg:
+            value = str(image_generation_cfg["background"] or "").strip().lower()
+            if image_generation_provider == IMAGE_GENERATION_PROVIDER_OPENAI and value not in {"auto", "opaque", "transparent"}:
+                raise ValueError("image_generation.background must be one of: auto, opaque, transparent")
+        if "moderation" in image_generation_cfg:
+            value = str(image_generation_cfg["moderation"] or "").strip().lower()
+            if image_generation_provider == IMAGE_GENERATION_PROVIDER_OPENAI and value not in {"auto", "low"}:
+                raise ValueError("image_generation.moderation must be one of: auto, low")
+        if "aspect_ratio" in image_generation_cfg:
+            value = str(image_generation_cfg["aspect_ratio"] or "").strip()
+            allowed_aspect_ratios = {"1:1", "16:9", "4:3", "3:2", "2:3", "3:4", "9:16", "21:9"}
+            if image_generation_provider == IMAGE_GENERATION_PROVIDER_MINIMAX and value not in allowed_aspect_ratios:
+                raise ValueError("image_generation.aspect_ratio must be a supported MiniMax aspect ratio")
         if "output_compression" in image_generation_cfg:
             value = image_generation_cfg["output_compression"]
             if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 100:

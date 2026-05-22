@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, Union
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import BaseModel
 
@@ -51,6 +51,7 @@ from .history import (
 )
 from .send import send_message
 from .users import FEISHU_USER_FALLBACK_NAME, FeishuUserResolver, extract_feishu_id, safe_display_name
+from ...utils.image_utils import workspace_blob_url
 
 
 class _FeishuLogRedactionFilter(logging.Filter):
@@ -697,9 +698,9 @@ class FeishuAdapter:
         if not output_path.exists():
             output_path.write_bytes(image.data)
         relative_path = output_path.relative_to(workspace_root).as_posix()
-        blob_url = f"/api/workspace/blob?path={quote(relative_path)}"
+        blob_url = workspace_blob_url(relative_path)
         return _FeishuInboundImageAsset(
-            image_source=self._image_resource_to_data_uri(image),
+            image_source=blob_url,
             path=relative_path,
             blob_url=blob_url,
             markdown=f"![Feishu image]({blob_url})",

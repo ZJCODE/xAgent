@@ -158,7 +158,7 @@ provider:
             with self.assertRaisesRegex(ValueError, "provider.supports_vision must be a boolean"):
                 BaseAgentRunner(config_dir=tmpdir)
 
-    def test_known_provider_config_rejects_manual_vision_override(self):
+    def test_known_provider_config_accepts_manual_vision_override(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -174,8 +174,8 @@ provider:
             )
             write_identity(tmpdir)
 
-            with self.assertRaisesRegex(ValueError, "provider.supports_vision is only supported"):
-                BaseAgentRunner(config_dir=tmpdir)
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            self.assertTrue(runner.agent.supports_vision)
 
     def test_provider_config_builds_anthropic_client(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -486,7 +486,7 @@ provider:
             self.assertEqual(config["search"]["provider"], "openai")
             self.assertEqual(config["search"]["api_key"], "openai-search-key")
 
-    def test_init_writes_openai_image_generation_key_for_non_openai_provider(self):
+    def test_init_rejects_openai_image_generation_for_non_openai_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
                 provider="deepseek",
@@ -501,8 +501,30 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["image_generation"]["provider"], "openai")
-            self.assertEqual(config["image_generation"]["api_key"], "openai-image-key")
+            self.assertEqual(
+                config["image_generation"],
+                {"provider": "openai", "api_key": "openai-image-key"},
+            )
+
+    def test_init_writes_minimax_image_generation_key_for_non_minimax_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="deepseek",
+                base_url="https://api.deepseek.com",
+                api_key="deepseek-key",
+                model="deepseek-v4-pro",
+                identity="# Identity\n\nYou draw with MiniMax.\n",
+                image_generation_provider="minimax",
+                image_generation_api_key="minimax-image-key",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                config["image_generation"],
+                {"provider": "minimax", "api_key": "minimax-image-key"},
+            )
 
     def test_init_writes_minimax_image_generation_for_minimax_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -512,6 +534,7 @@ provider:
                 api_key="minimax-key",
                 model="MiniMax-M2.7",
                 identity="# Identity\n\nYou draw with MiniMax.\n",
+                image_generation_provider="minimax",
             )
 
             result = init_agent_directory(tmpdir, selection=selection)
@@ -594,10 +617,11 @@ provider:
             ".",
         ])
 
-        selection = collect_init_selection(
-            input_func=lambda prompt: next(answers),
-            secret_input_func=lambda prompt: "openai-key",
-        )
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            selection = collect_init_selection(
+                input_func=lambda prompt: next(answers),
+                secret_input_func=lambda prompt: "openai-key",
+            )
 
         self.assertEqual(selection.provider, "openai")
         self.assertEqual(selection.model_api, "")
@@ -607,6 +631,7 @@ provider:
         self.assertEqual(selection.search_provider, "openai")
         self.assertEqual(selection.image_generation_provider, "openai")
         self.assertEqual(selection.identity, "# Identity\n\nYou investigate codebases.\n")
+        self.assertNotIn("Image generation provider", stdout.getvalue())
 
     def test_collect_init_selection_supports_langfuse_observability(self):
         answers = iter([
@@ -701,6 +726,7 @@ provider:
             "4",
             "",
             "",
+            "",
             ".",
         ])
 
@@ -723,6 +749,7 @@ provider:
             "4",
             "3",
             "1",
+            "",
             "",
             "",
             ".",
@@ -748,6 +775,7 @@ provider:
             "2",
             "",
             "",
+            "",
             ".",
         ])
         secrets = iter(["deepseek-key", "openai-search-key"])
@@ -766,6 +794,7 @@ provider:
             "2",
             "",
             "3",
+            "",
             "",
             "",
             ".",
@@ -787,14 +816,14 @@ provider:
             "",
             "1",
             "",
-            "",
             ".",
         ])
 
-        selection = collect_init_selection(
-            input_func=lambda prompt: next(answers),
-            secret_input_func=lambda prompt: "minimax-key",
-        )
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            selection = collect_init_selection(
+                input_func=lambda prompt: next(answers),
+                secret_input_func=lambda prompt: "minimax-key",
+            )
 
         self.assertEqual(selection.model_api, "")
         self.assertEqual(selection.provider, "minimax")
@@ -803,12 +832,14 @@ provider:
         self.assertEqual(selection.model, "MiniMax-M2.7")
         self.assertEqual(selection.search_provider, "duckduckgo")
         self.assertEqual(selection.image_generation_provider, "minimax")
+        self.assertNotIn("Image generation provider", stdout.getvalue())
 
     def test_collect_init_selection_supports_anthropic_provider(self):
         answers = iter([
             "5",
             "",
             "1",
+            "",
             "",
             "",
             ".",
@@ -835,6 +866,7 @@ provider:
             "1",
             "",
             "",
+            "",
             ".",
         ])
 
@@ -851,11 +883,34 @@ provider:
         self.assertTrue(selection.supports_vision)
         self.assertEqual(selection.search_provider, "duckduckgo")
 
+    def test_collect_init_selection_supports_openai_image_generation_for_non_openai_provider(self):
+        answers = iter([
+            "2",
+            "1",
+            "4",
+            "2",
+            "",
+            "",
+            ".",
+        ])
+        secrets = iter(["deepseek-key", "openai-image-key"])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: next(secrets),
+        )
+
+        self.assertEqual(selection.provider, "deepseek")
+        self.assertEqual(selection.search_provider, "none")
+        self.assertEqual(selection.image_generation_provider, "openai")
+        self.assertEqual(selection.image_generation_api_key, "openai-image-key")
+
     def test_collect_init_selection_non_openai_includes_openai_search(self):
         answers = iter([
             "2",
             "1",
             "1",
+            "",
             "",
             "",
             ".",
@@ -867,9 +922,11 @@ provider:
                 secret_input_func=lambda prompt: "deepseek-key",
             )
 
-        search_output = stdout.getvalue().split("Search provider", 1)[1].split("Image generation provider", 1)[0]
+        search_output = stdout.getvalue().split("Search provider", 1)[1]
         self.assertEqual(selection.search_provider, "duckduckgo")
         self.assertIn("openai", search_output)
+        self.assertIn("Image generation provider", stdout.getvalue())
+        self.assertIn("minimax", stdout.getvalue())
 
     def test_collect_init_selection_does_not_label_defaults(self):
         answers = iter([
@@ -891,6 +948,7 @@ provider:
         self.assertEqual(selection.image_generation_provider, "openai")
         self.assertIn("Describe this agent's role", selection.identity)
         self.assertNotIn("(default)", stdout.getvalue())
+        self.assertNotIn("Image generation provider", stdout.getvalue())
 
     def test_config_loads_duckduckgo_search_tool(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1035,7 +1093,7 @@ image_generation:
             self.assertEqual(image_provider.provider, "minimax")
             self.assertEqual(image_provider.config["api_key"], "minimax-key")
 
-    def test_config_rejects_openai_image_generation_for_non_openai_provider_without_key(self):
+    def test_config_rejects_openai_image_generation_for_non_openai_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1051,10 +1109,10 @@ image_generation:
             )
             write_identity(tmpdir)
 
-            with self.assertRaisesRegex(ValueError, "requires image_generation.api_key"):
+            with self.assertRaisesRegex(ValueError, "requires image_generation.api_key when provider is not OpenAI"):
                 BaseAgentRunner(config_dir=tmpdir)
 
-    def test_config_rejects_minimax_image_generation_for_non_minimax_provider_without_key(self):
+    def test_config_rejects_minimax_image_generation_for_non_minimax_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1070,7 +1128,7 @@ image_generation:
             )
             write_identity(tmpdir)
 
-            with self.assertRaisesRegex(ValueError, "provider 'minimax' requires image_generation.api_key"):
+            with self.assertRaisesRegex(ValueError, "requires image_generation.api_key when provider is not MiniMax"):
                 BaseAgentRunner(config_dir=tmpdir)
 
     def test_config_accepts_openai_image_generation_for_non_openai_provider_with_key(self):
@@ -1099,12 +1157,37 @@ image_generation:
                 if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
             )
 
-            self.assertIn("generate_image", runner.agent.tools)
-            self.assertFalse(runner.agent.supports_vision)
-            self.assertEqual(
-                str(image_provider.client.base_url).rstrip("/"),
-                "https://api.openai.com/v1",
+            self.assertEqual(image_provider.provider, "openai")
+            self.assertEqual(image_provider.config["api_key"], "openai-image-key")
+
+    def test_config_accepts_minimax_image_generation_for_non_minimax_provider_with_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    base_url: "https://api.deepseek.com"
+    api_key: "deepseek-key"
+image_generation:
+    provider: "minimax"
+    api_key: "minimax-image-key"
+""",
+                encoding="utf-8",
             )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            image_tool = runner.agent.tools["generate_image"]
+            image_provider = next(
+                cell.cell_contents
+                for cell in image_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
+            )
+
+            self.assertEqual(image_provider.provider, "minimax")
+            self.assertEqual(image_provider.config["api_key"], "minimax-image-key")
 
     def test_config_rejects_name_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
