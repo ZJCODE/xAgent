@@ -789,6 +789,226 @@ textarea {
   margin-bottom: 1rem;
 }
 
+.skill-document {
+  display: grid;
+  gap: 1rem;
+}
+
+.skill-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(5, 150, 105, 0.06)),
+    rgba(255, 255, 255, 0.52);
+  padding: 1.15rem;
+}
+
+.dark .skill-hero {
+  background:
+    linear-gradient(135deg, rgba(96, 165, 250, 0.12), rgba(52, 211, 153, 0.08)),
+    rgba(24, 24, 27, 0.62);
+}
+
+.skill-kicker {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 9999px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.dark .skill-kicker {
+  border-color: rgba(96, 165, 250, 0.24);
+  background: rgba(96, 165, 250, 0.12);
+  color: #93c5fd;
+}
+
+.skill-hero-main h3 {
+  margin-top: 0.6rem;
+  font-size: 1.7rem;
+  font-weight: 780;
+  line-height: 1.12;
+}
+
+.skill-hero-main p {
+  max-width: 70ch;
+  margin-top: 0.55rem;
+  color: var(--text-secondary);
+  font-size: 0.98rem;
+  line-height: 1.65;
+}
+
+.skill-hero-status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.status-dot-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  min-height: 28px;
+  border-radius: 9999px;
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--text-secondary);
+  padding: 0.22rem 0.65rem;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.dark .status-dot-chip {
+  background: rgba(9, 9, 11, 0.38);
+}
+
+.status-dot-chip::before {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  content: "";
+}
+
+.status-dot-chip.is-enabled::before,
+.status-dot-chip.is-valid::before {
+  background: #059669;
+}
+
+.status-dot-chip.is-disabled::before {
+  background: #71717a;
+}
+
+.status-dot-chip.is-invalid::before {
+  background: #dc2626;
+}
+
+.skill-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.7rem;
+}
+
+.skill-detail-grid div {
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.38);
+  padding: 0.72rem 0.8rem;
+}
+
+.dark .skill-detail-grid div {
+  background: rgba(24, 24, 27, 0.48);
+}
+
+.skill-detail-grid dt {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.skill-detail-grid dd {
+  overflow: hidden;
+  margin-top: 0.28rem;
+  color: var(--text-primary);
+  font-size: 0.86rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-issues {
+  display: grid;
+  gap: 0.5rem;
+  border-radius: 12px;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.07);
+  color: #b91c1c;
+  padding: 0.75rem;
+}
+
+.skill-issues div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.skill-issues strong {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.skill-issues span {
+  font-size: 0.86rem;
+}
+
+.skill-body-panel {
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.5);
+  padding: 1rem 1.1rem;
+}
+
+.dark .skill-body-panel {
+  background: rgba(24, 24, 27, 0.58);
+}
+
+.skill-markdown {
+  color: var(--text-primary);
+  font-size: 0.98rem;
+  line-height: 1.75;
+}
+
+.skill-markdown > :first-child {
+  margin-top: 0;
+}
+
+.skill-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.skill-markdown h1,
+.skill-markdown h2,
+.skill-markdown h3 {
+  margin: 1rem 0 0.45rem;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.skill-markdown h1 {
+  font-size: 1.28rem;
+}
+
+.skill-markdown h2 {
+  font-size: 1.1rem;
+}
+
+.skill-markdown h3 {
+  font-size: 1rem;
+}
+
+.skill-markdown ol,
+.skill-markdown ul {
+  display: grid;
+  gap: 0.45rem;
+  padding-left: 1.45rem;
+}
+
+.skill-markdown li::marker {
+  color: #2563eb;
+  font-weight: 800;
+}
+
 .skill-form-panel {
   display: block;
 }
@@ -1044,6 +1264,18 @@ textarea {
   .content-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .skill-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .skill-hero-main h3 {
+    font-size: 1.45rem;
+  }
+
+  .skill-hero-status {
+    justify-content: flex-start;
   }
 
   .search-control {

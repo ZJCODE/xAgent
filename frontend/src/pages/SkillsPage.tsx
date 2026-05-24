@@ -32,6 +32,36 @@ function skillForPath(skills: SkillMetadata[], path?: string): SkillMetadata | u
   return skills.find((skill) => skill.path === root || skill.name === root);
 }
 
+function isSkillMarkdown(path?: string): boolean {
+  return path === "SKILL.md" || path?.endsWith("/SKILL.md") === true;
+}
+
+function stripYamlQuotes(value: string): string {
+  const text = value.trim();
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1);
+  }
+  return text;
+}
+
+function parseSkillDocument(content: string): { body: string; fields: Record<string, string> } {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!match) return { body: content, fields: {} };
+
+  const fields: Record<string, string> = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (field) {
+      fields[field[1]] = stripYamlQuotes(field[2]);
+    }
+  }
+
+  return {
+    body: content.slice(match[0].length),
+    fields,
+  };
+}
+
 export function SkillsPage() {
   const [info, setInfo] = useState<SkillsInfo | null>(null);
   const [tree, setTree] = useState<FileNode[]>([]);
@@ -224,6 +254,90 @@ export function SkillsPage() {
     </>
   );
 
+  const renderSkillDocument = () => {
+    if (!selected) return null;
+
+    const document = parseSkillDocument(selected.content);
+    const description = selectedSkill?.description || document.fields.description || "";
+    const title = selectedSkill?.name || document.fields.name || selected.name || selected.path;
+    const body = document.body.trim();
+    const allowedTools = selectedSkill?.allowed_tools || document.fields["allowed-tools"];
+
+    return (
+      <article className="skill-document">
+        <header className="skill-hero">
+          <div className="skill-hero-main">
+            <span className="skill-kicker">Agent Skill</span>
+            <h3>{title}</h3>
+            {description ? <p>{description}</p> : null}
+          </div>
+          {selectedSkill ? (
+            <div className="skill-hero-status">
+              <span className={`status-dot-chip ${selectedSkill.enabled ? "is-enabled" : "is-disabled"}`}>
+                {selectedSkill.enabled ? "Enabled" : "Disabled"}
+              </span>
+              <span className={`status-dot-chip ${selectedSkill.valid ? "is-valid" : "is-invalid"}`}>
+                {selectedSkill.valid ? "Valid" : "Invalid"}
+              </span>
+            </div>
+          ) : null}
+        </header>
+
+        <dl className="skill-detail-grid">
+          <div>
+            <dt>File</dt>
+            <dd>{selected.path}</dd>
+          </div>
+          <div>
+            <dt>Size</dt>
+            <dd>{formatBytes(selected.size)}</dd>
+          </div>
+          <div>
+            <dt>Updated</dt>
+            <dd>{formatTimestamp(selected.modified)}</dd>
+          </div>
+          {selectedSkill?.compatibility ? (
+            <div>
+              <dt>Compatibility</dt>
+              <dd>{selectedSkill.compatibility}</dd>
+            </div>
+          ) : null}
+          {selectedSkill?.license ? (
+            <div>
+              <dt>License</dt>
+              <dd>{selectedSkill.license}</dd>
+            </div>
+          ) : null}
+          {allowedTools ? (
+            <div>
+              <dt>Allowed Tools</dt>
+              <dd>{allowedTools}</dd>
+            </div>
+          ) : null}
+        </dl>
+
+        {selectedSkill?.errors?.length ? (
+          <div className="skill-issues">
+            {selectedSkill.errors.map((issue) => (
+              <div key={`${issue.path}-${issue.code}-${issue.message}`}>
+                <strong>{issue.code}</strong>
+                <span>{issue.message}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {body ? (
+          <section className="skill-body-panel">
+            <Markdown content={body} className="skill-markdown" />
+          </section>
+        ) : (
+          <div className="empty-state">No instructions in this skill</div>
+        )}
+      </article>
+    );
+  };
+
   const renderSelected = () => {
     if (!selected) return renderOverview();
     return (
@@ -237,7 +351,7 @@ export function SkillsPage() {
           </div>
           {selectedSkill ? renderSkillActions(selectedSkill) : <span>{selected.mime_type}</span>}
         </div>
-        {selectedSkill ? (
+        {selectedSkill && !isSkillMarkdown(selected.path) ? (
           <div className="skill-meta-row">
             <span className="data-chip">{selectedSkill.enabled ? "enabled" : "disabled"}</span>
             <span className="data-chip">{selectedSkill.valid ? "valid" : "invalid"}</span>
@@ -245,7 +359,9 @@ export function SkillsPage() {
             {selectedSkill.license ? <span className="data-chip">{selectedSkill.license}</span> : null}
           </div>
         ) : null}
-        {selected.text && selected.path.endsWith(".md") ? (
+        {selected.text && isSkillMarkdown(selected.path) ? (
+          renderSkillDocument()
+        ) : selected.text && selected.path.endsWith(".md") ? (
           <Markdown content={selected.content} />
         ) : selected.text ? (
           <pre className="file-pre">{selected.content}</pre>
