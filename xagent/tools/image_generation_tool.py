@@ -723,6 +723,30 @@ def generated_image_description(tool_name: str, result: dict) -> str:
     return description + "]"
 
 
+def generated_image_attachments(result: dict) -> list[dict]:
+    attachments: list[dict] = []
+    images = result.get("images")
+    if not isinstance(images, list):
+        image = result.get("image")
+        images = [image] if isinstance(image, dict) else []
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        path = str(image.get("path") or "").strip()
+        blob_url = str(image.get("blob_url") or "").strip()
+        if not path and not blob_url:
+            continue
+        attachments.append({
+            "kind": "image",
+            "path": path,
+            "blob_url": blob_url,
+            "mime_type": str(image.get("mime_type") or ""),
+            "file_name": Path(path).name if path else "",
+            "caption": "",
+        })
+    return attachments
+
+
 def _generated_image_paths(result: dict) -> list[str]:
     images = result.get("images")
     if isinstance(images, list):

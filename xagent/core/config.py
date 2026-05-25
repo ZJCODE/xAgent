@@ -117,6 +117,13 @@ class AgentConfig:
             "- Do not claim the image was generated unless the tool returns a successful image result.\n"
             "- If generation fails, explain the failure briefly and offer a simpler prompt or settings.\n"
         ),
+        "attach_artifact": (
+            "\n**Artifact Delivery:**\n"
+            "- Use `attach_artifact` after creating or modifying a workspace file that the user asked you to send, show, return, share, or deliver.\n"
+            "- Pass a workspace-relative path, workspace blob URL, or absolute path inside the workspace.\n"
+            "- Do not only describe the file path in prose when the user expects the actual file or image.\n"
+            "- If attachment fails, explain the failure and include the workspace path when available.\n"
+        ),
         "read_skill": (
             "\n**Agent Skills Loading:**\n"
             "- The Available Skills system layer lists enabled skills by name and frontmatter description. Use that layer for discovery; do not call a tool just to list skills.\n"
@@ -134,6 +141,7 @@ class AgentConfig:
         "search_memory",
         "web_search",
         "generate_image",
+        "attach_artifact",
         "read_skill",
     )
 

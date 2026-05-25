@@ -400,9 +400,8 @@ class Agent:
                         max_concurrent_tools,
                     )
                     if tool_result is not None:
-                        image_data, description = tool_result
                         assistant_msg = await msg_handler.store_model_reply(
-                            description,
+                            tool_result.description,
                             self._assistant_sender_id,
                         )
                         self._schedule_experience_write(
@@ -410,7 +409,7 @@ class Agent:
                             memory_mode=memory_mode,
                             messages=[user_msg, assistant_msg],
                         )
-                        return image_data
+                        return tool_result.content
                     input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
                     continue
 
@@ -640,17 +639,17 @@ class Agent:
                         yield self._tool_event("tool_result", tool_call)
 
                     if tool_result is not None:
-                        image_data, description = tool_result
                         final_message_id = self._turn_message_id(user_msg, iteration_index, suffix="image")
                         for event in self._message_events(
                             message_id=final_message_id,
                             phase="final",
-                            content=image_data,
+                            content=tool_result.content,
                             stream=False,
+                            attachments=tool_result.attachments,
                         ):
                             yield event
                         assistant_msg = await msg_handler.store_model_reply(
-                            description,
+                            tool_result.description,
                             self._assistant_sender_id,
                             metadata={"turn_phase": "final"},
                         )
@@ -869,13 +868,21 @@ class Agent:
         }
 
     @staticmethod
-    def _message_done_event(message_id: str, phase: str, content: str) -> dict:
-        return {
+    def _message_done_event(
+        message_id: str,
+        phase: str,
+        content: str,
+        attachments: Optional[list[dict]] = None,
+    ) -> dict:
+        event = {
             "type": "message_done",
             "message_id": message_id,
             "phase": phase,
             "content": content,
         }
+        if attachments:
+            event["attachments"] = attachments
+        return event
 
     @classmethod
     def _message_events(
@@ -885,6 +892,7 @@ class Agent:
         content: str,
         stream: bool,
         deltas: Optional[list[str]] = None,
+        attachments: Optional[list[dict]] = None,
     ) -> list[dict]:
         events = [cls._message_start_event(message_id, phase)]
         if stream:
@@ -894,7 +902,7 @@ class Agent:
                 for chunk in chunks
                 if chunk
             )
-        events.append(cls._message_done_event(message_id, phase, content))
+        events.append(cls._message_done_event(message_id, phase, content, attachments=attachments))
         return events
 
     @staticmethod

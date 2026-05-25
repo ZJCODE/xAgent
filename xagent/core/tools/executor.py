@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -10,13 +11,29 @@ from .manager import ToolManager
 from ...components import MessageStorageBase
 from ...utils.image_utils import bytes_to_data_uri, extract_source, is_image_output, read_image_file_bytes, resolve_workspace_blob_path
 from ...tools.image_generation_tool import (
+    generated_image_attachments,
     generated_image_description,
     generated_image_markdown,
     is_generated_image_result,
 )
+from ...tools.artifact_tool import (
+    artifact_attachment_description,
+    artifact_attachment_markdown,
+    artifact_attachments,
+    is_artifact_attachment_result,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ToolDisplayResult:
+    """Displayable output from tool execution."""
+
+    content: str
+    description: str
+    attachments: list[dict] = field(default_factory=list)
 
 
 class ToolExecutor:
@@ -43,12 +60,12 @@ class ToolExecutor:
         tool_calls: list,
         input_messages: list,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-    ) -> Optional[tuple[str, str]]:
+    ) -> Optional[ToolDisplayResult]:
         """
         Handle tool calls by executing them concurrently with concurrency limit.
 
         Returns:
-            None if no image output, or (image_data, description) tuple.
+            None if no displayable output, otherwise a ToolDisplayResult.
         """
         if not tool_calls:
             return None
@@ -84,24 +101,29 @@ class ToolExecutor:
         tasks = [execute_with_semaphore(tc) for tc in function_calls]
         results = await asyncio.gather(*tasks)
 
-        pending_images = []
+        pending_contents = []
         pending_descriptions = []
+        pending_attachments = []
 
-        for tool_message, image_data, description in results:
+        for tool_message, display_result in results:
             input_messages.append(
                 self._to_responses_tool_result(tool_message)
                 if is_responses_call
                 else tool_message
             )
-            if image_data:
-                pending_images.append(image_data)
-            if description:
-                pending_descriptions.append(description)
+            if display_result is None:
+                continue
+            if display_result.content:
+                pending_contents.append(display_result.content)
+            if display_result.description:
+                pending_descriptions.append(display_result.description)
+            pending_attachments.extend(display_result.attachments)
 
-        if pending_images:
-            return (
-                "\n\n".join(pending_images),
-                "\n\n".join(pending_descriptions),
+        if pending_contents or pending_attachments:
+            return ToolDisplayResult(
+                content="\n\n".join(pending_contents),
+                description="\n\n".join(pending_descriptions),
+                attachments=self._dedupe_attachments(pending_attachments),
             )
 
         return None
@@ -109,8 +131,8 @@ class ToolExecutor:
     async def execute_single(
         self,
         tool_call,
-    ) -> tuple[dict, Optional[str], Optional[str]]:
-        """Execute a single tool call and return (tool_message, image_data, description)."""
+    ) -> tuple[dict, Optional[ToolDisplayResult]]:
+        """Execute a single tool call and return (tool_message, display_result)."""
         name = self._tool_name(tool_call)
         call_id = self._tool_call_id(tool_call)
         raw_arguments = self._tool_arguments(tool_call)
@@ -119,14 +141,14 @@ class ToolExecutor:
             args = json.loads(raw_arguments or "{}")
         except Exception as e:
             logger.error("Tool args parse error: %s", e)
-            return self._tool_result_message(call_id, f"Tool args parse error: {e}"), None, None
+            return self._tool_result_message(call_id, f"Tool args parse error: {e}"), None
 
         if not isinstance(args, dict):
-            return self._tool_result_message(call_id, "Tool args must be a JSON object."), None, None
+            return self._tool_result_message(call_id, "Tool args must be a JSON object."), None
 
         func = self.tool_manager.get_tool(name)
         if not func:
-            return self._tool_result_message(call_id, f"Tool `{name}` not found."), None, None
+            return self._tool_result_message(call_id, f"Tool `{name}` not found."), None
 
         logger.info("Calling tool: %s with args: %s", name, args)
 
@@ -138,11 +160,27 @@ class ToolExecutor:
 
         if is_generated_image_result(result):
             result_str = json.dumps(result, ensure_ascii=False)
-            image_data = generated_image_markdown(result)
+            content = generated_image_markdown(result)
             model_output = generated_image_description(name, result)
-            stored_output = f"{image_data}\n\n{model_output}"
+            stored_output = f"{content}\n\n{model_output}"
             logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
-            return self._tool_result_message(call_id, model_output), image_data, stored_output
+            return self._tool_result_message(call_id, model_output), ToolDisplayResult(
+                content=content,
+                description=stored_output,
+                attachments=generated_image_attachments(result),
+            )
+
+        if is_artifact_attachment_result(result):
+            result_str = json.dumps(result, ensure_ascii=False)
+            content = artifact_attachment_markdown(result)
+            model_output = artifact_attachment_description(name, result)
+            stored_output = f"{content}\n\n{model_output}" if content else model_output
+            logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
+            return self._tool_result_message(call_id, model_output), ToolDisplayResult(
+                content=content,
+                description=stored_output,
+                attachments=artifact_attachments(result),
+            )
 
         result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
 
@@ -159,7 +197,28 @@ class ToolExecutor:
             )
 
         logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
-        return self._tool_result_message(call_id, model_output), image_data, model_output if image_data else None
+        display_result = ToolDisplayResult(
+            content=image_data,
+            description=model_output,
+            attachments=[],
+        ) if image_data else None
+        return self._tool_result_message(call_id, model_output), display_result
+
+    @staticmethod
+    def _dedupe_attachments(attachments: list[dict]) -> list[dict]:
+        deduped: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            path = str(attachment.get("path") or "").strip()
+            blob_url = str(attachment.get("blob_url") or "").strip()
+            key = ("path", path) if path else ("blob_url", blob_url)
+            if not key[1] or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(attachment)
+        return deduped
 
     async def _caption_image(self, image_data_uri: str, prompt_hint: str = "") -> str:
         """Use a vision model to generate a detailed description of an image."""

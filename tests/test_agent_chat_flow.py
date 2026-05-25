@@ -10,7 +10,7 @@ from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.providers import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_OPENAI_RESPONSES
-from xagent.core.tools.executor import ToolExecutor
+from xagent.core.tools.executor import ToolDisplayResult, ToolExecutor
 from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
 
@@ -155,6 +155,26 @@ class FakeToolExecutor:
             {"role": "tool", "tool_call_id": "call-1", "content": "lookup result"},
         ])
         return None
+
+
+class FakeAttachmentToolExecutor:
+    def __init__(self, display_result):
+        self.display_result = display_result
+
+    async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools):
+        input_messages.extend([
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "attach_artifact", "arguments": "{}"},
+                }],
+            },
+            {"role": "tool", "tool_call_id": "call-1", "content": self.display_result.description},
+        ])
+        return self.display_result
 
 
 class FakeToolCall:
@@ -1160,6 +1180,51 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(model_client.stream_calls, [False, False])
 
+    async def test_chat_events_includes_tool_attachments_on_done_event(self):
+        storage = InMemoryMessageStorage()
+        attachment = {
+            "kind": "image",
+            "path": "temp/images/result.png",
+            "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+            "mime_type": "image/png",
+            "file_name": "result.png",
+            "caption": "Processed",
+        }
+        tool_result = ToolDisplayResult(
+            content="![Processed](/api/workspace/blob?path=temp%2Fimages%2Fresult.png)",
+            description="[Artifact attached by tool `attach_artifact` and displayed to user.]",
+            attachments=[attachment],
+        )
+        model_client = CapturingStreamingModelClient([
+            [
+                ModelStreamEvent(type="tool_calls", tool_calls=[
+                    ChatToolCall(call_id="call-1", name="attach_artifact", arguments="{}")
+                ]),
+            ],
+        ])
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            tool_executor=FakeAttachmentToolExecutor(tool_result),
+            memory_handler=FakeMemoryHandler(),
+        )
+
+        events = [
+            event async for event in Agent.chat_events(
+                agent,
+                user_message="send the image",
+                user_id="bob",
+                stream=False,
+                enable_memory=True,
+            )
+        ]
+
+        done_events = [event for event in events if event["type"] == "message_done"]
+        self.assertEqual(len(done_events), 1)
+        self.assertEqual(done_events[0]["content"], tool_result.content)
+        self.assertEqual(done_events[0]["attachments"], [attachment])
+        self.assertEqual(storage.messages[-1].content, tool_result.description)
+
     async def test_chat_wraps_turn_in_observability_context(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([
@@ -1386,16 +1451,72 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
             client=None,
         )
 
-        tool_message, image_data, description = await executor.execute_single(
+        tool_message, display_result = await executor.execute_single(
             FakeToolCall(name="lookup", arguments='{"value": "ok"}')
         )
 
         self.assertEqual(tool_message["role"], "tool")
         self.assertEqual(tool_message["tool_call_id"], "call-1")
         self.assertEqual(tool_message["content"], '{"value": "ok"}')
-        self.assertIsNone(image_data)
-        self.assertIsNone(description)
+        self.assertIsNone(display_result)
         self.assertEqual(storage.messages, [])
+
+    async def test_generated_image_tool_result_exposes_structured_attachment(self):
+        async def draw() -> dict:
+            return {
+                "status": "ok",
+                "type": "generated_image",
+                "prompt": "chart",
+                "image": {
+                    "path": "temp/images/chart.png",
+                    "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fchart.png",
+                    "markdown": "![Generated image](/api/workspace/blob?path=temp%2Fimages%2Fchart.png)",
+                    "mime_type": "image/png",
+                },
+            }
+
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"draw": draw}),
+            message_storage=InMemoryMessageStorage(),
+            client=None,
+        )
+
+        tool_message, display_result = await executor.execute_single(FakeToolCall(name="draw"))
+
+        self.assertIn("Image generated by tool `draw`", tool_message["content"])
+        self.assertIsNotNone(display_result)
+        self.assertEqual(display_result.content, "![Generated image](/api/workspace/blob?path=temp%2Fimages%2Fchart.png)")
+        self.assertEqual(display_result.attachments[0]["kind"], "image")
+        self.assertEqual(display_result.attachments[0]["path"], "temp/images/chart.png")
+
+    async def test_artifact_tool_result_exposes_structured_attachment(self):
+        async def attach() -> dict:
+            return {
+                "status": "ok",
+                "type": "artifact_attachment",
+                "artifact": {
+                    "kind": "file",
+                    "path": "reports/out.pdf",
+                    "blob_url": "/api/workspace/blob?path=reports%2Fout.pdf",
+                    "mime_type": "application/pdf",
+                    "file_name": "out.pdf",
+                    "caption": "Report",
+                },
+            }
+
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"attach_artifact": attach}),
+            message_storage=InMemoryMessageStorage(),
+            client=None,
+        )
+
+        tool_message, display_result = await executor.execute_single(FakeToolCall(name="attach_artifact"))
+
+        self.assertIn("Artifact attached by tool `attach_artifact`", tool_message["content"])
+        self.assertIsNotNone(display_result)
+        self.assertEqual(display_result.content, "[Report](/api/workspace/blob?path=reports%2Fout.pdf)")
+        self.assertEqual(display_result.attachments[0]["kind"], "file")
+        self.assertEqual(display_result.attachments[0]["caption"], "Report")
 
     async def test_handle_tool_calls_appends_standard_assistant_and_tool_messages(self):
         async def first() -> str:

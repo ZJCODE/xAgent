@@ -25,6 +25,7 @@ from ..components import MessageStorageBase, MessageStorageLocal
 from ..components.skills import SkillsStorageBase, SkillsStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
 from ..tools import (
+    create_attach_artifact_tool,
     create_image_generation_tool,
     create_read_skill_tool,
     create_web_search_tool,
@@ -745,12 +746,15 @@ class BaseAgentRunner:
     ) -> List[Any]:
         """Load default built-in tools."""
         if "capabilities" in agent_cfg or "tools" in agent_cfg:
-            self.logger.warning("Configured tools are ignored; run_command is built in by default.")
+            self.logger.warning("Configured tools are ignored; default built-in tools are loaded automatically.")
 
         tools = [
             create_workspace_run_command_tool(
                 default_working_directory=str(self.workspace_dir),
-            )
+            ),
+            create_attach_artifact_tool(
+                workspace_dir=str(self.workspace_dir),
+            ),
         ]
         search_client = self._initialize_search_client(agent_cfg, model_client=client)
         search_tool = create_web_search_tool(

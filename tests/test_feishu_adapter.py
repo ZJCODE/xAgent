@@ -11,7 +11,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     LogLevel = None
 
-from xagent.integrations.feishu.adapter import FeishuAdapter
+from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAttachment
 from xagent.integrations.feishu.config import FeishuAdapterConfig
 
 
@@ -42,6 +42,24 @@ class _FakeAgent:
         self.flush_count += 1
 
 
+class _AttachmentEventAgent(_FakeAgent):
+    def __init__(self, *, content, attachments):
+        super().__init__()
+        self.content = content
+        self.attachments = attachments
+
+    async def chat_events(self, **kwargs):
+        self.chat_calls.append(kwargs)
+        yield {
+            "type": "message_done",
+            "message_id": "m1",
+            "phase": "final",
+            "content": self.content,
+            "attachments": self.attachments,
+        }
+        yield {"type": "done"}
+
+
 class _SlowChatAgent(_FakeAgent):
     def __init__(self, *, started: asyncio.Event, release: asyncio.Event):
         super().__init__()
@@ -63,14 +81,28 @@ class _SlowChatAgent(_FakeAgent):
 
 
 class _FakeChannel:
-    def __init__(self, bot_open_id="ou_bot", bot_name="Mono", client=None):
+    def __init__(self, bot_open_id="ou_bot", bot_name="Mono", client=None, results=None):
         self.bot_identity = SimpleNamespace(open_id=bot_open_id, name=bot_name)
         self.client = client
         self.sent = []
+        self.results = list(results or [])
 
     async def send(self, chat_id, message, opts=None):
         self.sent.append((chat_id, message, opts))
+        if self.results:
+            return self.results.pop(0)
         return SimpleNamespace(success=True, message_id="om_reply", error=None, raw=None)
+
+
+class _FakeDownloadChannel(_FakeChannel):
+    def __init__(self, *args, download_data=b"\x89PNG\r\n\x1a\nimage", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.download_data = download_data
+        self.download_calls = []
+
+    async def download_resource(self, **kwargs):
+        self.download_calls.append(kwargs)
+        return {"data": self.download_data, "file_name": "public.png", "mime_type": "image/png"}
 
 
 class _FakeMessageResourceApi:
@@ -87,6 +119,24 @@ class _FakeMessageResourceApi:
             file_name=self.file_name,
             raw=SimpleNamespace(headers={"content-type": "image/png"}),
         )
+
+
+class _FailingMessageResourceApi:
+    def __init__(self):
+        self.requests = []
+
+    async def aget(self, request):
+        self.requests.append(request)
+        return SimpleNamespace(code=999, msg="download failed", file=None, raw=None)
+
+
+def _failed_send_result():
+    return SimpleNamespace(
+        success=False,
+        message_id=None,
+        error=SimpleNamespace(code=SimpleNamespace(value="failed"), raw_code=500, hint="failed"),
+        raw=None,
+    )
 
 
 class _FakeUserResolver:
@@ -280,6 +330,32 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertIn("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", agent.chat_calls[0]["user_message"])
             self.assertNotIn(str(workspace_dir), agent.chat_calls[0]["user_message"])
 
+    def test_direct_image_message_prefers_channel_download_resource(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            resource_api = _FakeMessageResourceApi(data=b"fallback")
+            client = SimpleNamespace(im=SimpleNamespace(v1=SimpleNamespace(message_resource=resource_api)))
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeDownloadChannel(client=client)
+            msg = SimpleNamespace(
+                chat_type="p2p",
+                chat_id="oc_dm",
+                message_id="om_image_public_download",
+                sender_id="ou_user",
+                message_type="image",
+                content='{"image_key":"img_test"}',
+            )
+
+            asyncio.run(adapter._dispatch(msg))
+
+            saved_images = list((workspace_dir / "temp" / "images" / "feishu").glob("*.png"))
+            self.assertEqual(adapter._channel.download_calls[0]["file_key"], "img_test")
+            self.assertEqual(resource_api.requests, [])
+            self.assertEqual(len(saved_images), 1)
+            self.assertEqual(saved_images[0].read_bytes(), adapter._channel.download_data)
+
     def test_direct_image_message_strips_redundant_inline_feishu_markdown(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir).resolve()
@@ -334,6 +410,30 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertIn("/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", adapter._channel.sent[0][1]["markdown"])
             self.assertNotIn(str(workspace_dir), adapter._channel.sent[0][1]["markdown"])
             self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_image_no_vision"})
+
+    def test_direct_image_download_failure_replies_without_calling_agent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            resource_api = _FailingMessageResourceApi()
+            client = SimpleNamespace(im=SimpleNamespace(v1=SimpleNamespace(message_resource=resource_api)))
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel(client=client)
+            msg = SimpleNamespace(
+                chat_type="p2p",
+                chat_id="oc_dm",
+                message_id="om_image_download_fail",
+                sender_id="ou_user",
+                message_type="image",
+                content='{"image_key":"img_test"}',
+            )
+
+            asyncio.run(adapter._dispatch(msg))
+
+            self.assertEqual(agent.chat_calls, [])
+            self.assertEqual(adapter._channel.sent[0][1], {"markdown": "图片下载失败，请重试或重新发送。"})
+            self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_image_download_fail"})
 
     def test_group_image_mention_keeps_workspace_blob_markdown_in_room_context(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -686,6 +786,122 @@ class FeishuAdapterTests(unittest.TestCase):
         sent_payload = adapter._channel.sent[0][1]
         self.assertEqual(sent_payload["image"]["source"], str(image_path.resolve()))
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user:media:1"})
+
+    def test_structured_attachment_is_sent_once_when_markdown_duplicates_it(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            image_path = workspace_dir / "temp" / "images" / "result.png"
+            image_path.parent.mkdir(parents=True)
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+            blob_url = "/api/workspace/blob?path=temp%2Fimages%2Fresult.png"
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel()
+
+            asyncio.run(adapter._send_markdown(
+                chat_id="oc_dm",
+                message_id="om_user",
+                uuid_message_id="om_user",
+                text=f"Here\n\n![Generated image]({blob_url})",
+                is_group=False,
+                attachments=[
+                    _FeishuOutboundAttachment(
+                        kind="image",
+                        path=image_path.resolve(),
+                        blob_url=blob_url,
+                    )
+                ],
+            ))
+
+        self.assertEqual(len(adapter._channel.sent), 2)
+        self.assertEqual(adapter._channel.sent[0][1], {"markdown": "Here"})
+        self.assertEqual(adapter._channel.sent[1][1]["image"]["source"], str(image_path.resolve()))
+        self.assertEqual(adapter._channel.sent[1][2], {"uuid": "om_user:media:1"})
+
+    def test_message_done_structured_attachment_is_sent_without_markdown_dependency(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            image_path = workspace_dir / "temp" / "images" / "result.png"
+            image_path.parent.mkdir(parents=True)
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+            agent = _AttachmentEventAgent(
+                content="Here is the processed image.",
+                attachments=[{
+                    "kind": "image",
+                    "path": "temp/images/result.png",
+                    "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+                    "mime_type": "image/png",
+                    "file_name": "result.png",
+                    "caption": "",
+                }],
+            )
+            agent.workspace_dir = workspace_dir
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel()
+
+            asyncio.run(adapter._dispatch(SimpleNamespace(
+                chat_type="p2p",
+                chat_id="oc_dm",
+                message_id="om_user",
+                sender_id="ou_user",
+                content_text="send it",
+            )))
+
+        self.assertEqual(len(adapter._channel.sent), 2)
+        self.assertEqual(adapter._channel.sent[0][1], {"markdown": "Here is the processed image."})
+        self.assertEqual(adapter._channel.sent[1][1]["image"]["source"], str(image_path.resolve()))
+
+    def test_image_attachment_retries_then_falls_back_to_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            image_path = workspace_dir / "result.png"
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel(results=[_failed_send_result(), _failed_send_result()])
+
+            asyncio.run(adapter._send_markdown(
+                chat_id="oc_dm",
+                message_id="om_user",
+                uuid_message_id="om_user",
+                text="![Generated image](/api/workspace/blob?path=result.png)",
+                is_group=False,
+            ))
+
+        self.assertEqual(len(adapter._channel.sent), 3)
+        self.assertIn("image", adapter._channel.sent[0][1])
+        self.assertIn("image", adapter._channel.sent[1][1])
+        self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user:media:1"})
+        self.assertEqual(adapter._channel.sent[1][2], {"uuid": "om_user:media:1"})
+        self.assertEqual(adapter._channel.sent[2][1]["file"]["source"], str(image_path.resolve()))
+        self.assertEqual(adapter._channel.sent[2][2], {"uuid": "om_user:media:1:file"})
+
+    def test_attachment_failure_sends_workspace_blob_notice(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            report_path = workspace_dir / "reports" / "out.pdf"
+            report_path.parent.mkdir(parents=True)
+            report_path.write_bytes(b"%PDF")
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel(results=[_failed_send_result(), _failed_send_result()])
+
+            asyncio.run(adapter._send_markdown(
+                chat_id="oc_dm",
+                message_id="om_user",
+                uuid_message_id="om_user",
+                text="[Report](/api/workspace/blob?path=reports%2Fout.pdf)",
+                is_group=False,
+            ))
+
+        self.assertEqual(len(adapter._channel.sent), 3)
+        self.assertIn("file", adapter._channel.sent[0][1])
+        self.assertIn("file", adapter._channel.sent[1][1])
+        self.assertIn("文件发送失败", adapter._channel.sent[2][1]["markdown"])
+        self.assertIn("/api/workspace/blob?path=reports%2Fout.pdf", adapter._channel.sent[2][1]["markdown"])
 
     def test_message_text_falls_back_to_content_text_for_sdk_batches(self):
         msg = SimpleNamespace(content_text="", content=SimpleNamespace(text="merged text"))
