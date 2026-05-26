@@ -61,6 +61,76 @@ class FakeAsyncHTTPClient:
 
 
 class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
+    def test_openai_image_generation_tool_schema_exposes_only_openai_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = create_image_generation_tool(
+                {"provider": "openai"},
+                client=FakeOpenAIClient(SimpleNamespace(data=[])),
+                workspace_dir=tmpdir,
+            )
+
+            properties = set(tool.tool_spec["function"]["parameters"]["properties"])
+
+            self.assertEqual(
+                properties,
+                {
+                    "prompt",
+                    "size",
+                    "quality",
+                    "output_format",
+                    "background",
+                    "output_compression",
+                    "n",
+                    "moderation",
+                },
+            )
+
+    def test_minimax_image_generation_tool_schema_exposes_only_minimax_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = create_image_generation_tool(
+                {"provider": "minimax", "api_key": "minimax-key"},
+                workspace_dir=tmpdir,
+            )
+
+            properties = set(tool.tool_spec["function"]["parameters"]["properties"])
+
+            self.assertEqual(
+                properties,
+                {
+                    "prompt",
+                    "size",
+                    "aspect_ratio",
+                    "reference_image_url",
+                    "reference_image_urls",
+                    "n",
+                    "seed",
+                    "prompt_optimizer",
+                    "aigc_watermark",
+                },
+            )
+
+    def test_qwen_image_generation_tool_schema_exposes_only_qwen_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = create_image_generation_tool(
+                {"provider": "qwen", "api_key": "qwen-key"},
+                workspace_dir=tmpdir,
+            )
+
+            properties = set(tool.tool_spec["function"]["parameters"]["properties"])
+
+            self.assertEqual(
+                properties,
+                {
+                    "prompt",
+                    "size",
+                    "n",
+                    "seed",
+                    "negative_prompt",
+                    "prompt_extend",
+                    "watermark",
+                },
+            )
+
     def test_normalize_image_generation_provider_aliases(self):
         self.assertEqual(normalize_image_generation_provider("openai_images"), "openai")
         self.assertEqual(normalize_image_generation_provider("minimax_images"), "minimax")

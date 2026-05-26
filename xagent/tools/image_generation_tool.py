@@ -71,6 +71,39 @@ PLACEHOLDER_API_KEYS = {
     "your_dashscope_api_key_here",
 }
 
+IMAGE_GENERATION_TOOL_PARAMETERS = {
+    IMAGE_GENERATION_PROVIDER_OPENAI: {
+        "prompt",
+        "size",
+        "quality",
+        "output_format",
+        "background",
+        "output_compression",
+        "n",
+        "moderation",
+    },
+    IMAGE_GENERATION_PROVIDER_MINIMAX: {
+        "prompt",
+        "size",
+        "aspect_ratio",
+        "reference_image_url",
+        "reference_image_urls",
+        "n",
+        "seed",
+        "prompt_optimizer",
+        "aigc_watermark",
+    },
+    IMAGE_GENERATION_PROVIDER_QWEN: {
+        "prompt",
+        "size",
+        "n",
+        "seed",
+        "negative_prompt",
+        "prompt_extend",
+        "watermark",
+    },
+}
+
 
 @dataclass(frozen=True)
 class ConfiguredImageGenerationProvider:
@@ -660,7 +693,25 @@ def create_image_generation_tool(
             moderation=moderation,
         )
 
+    _limit_tool_schema_to_provider(generate_image.tool_spec, provider)
     return generate_image
+
+
+def _limit_tool_schema_to_provider(tool_spec: dict, provider: str) -> None:
+    supported_parameters = IMAGE_GENERATION_TOOL_PARAMETERS.get(provider)
+    if not supported_parameters:
+        return
+
+    function_spec = tool_spec.get("function") or {}
+    parameters = function_spec.get("parameters") or {}
+    properties = parameters.get("properties") or {}
+    parameters["properties"] = {
+        name: schema
+        for name, schema in properties.items()
+        if name in supported_parameters
+    }
+    required = parameters.get("required") or []
+    parameters["required"] = [name for name in required if name in supported_parameters]
 
 
 def normalize_image_generation_provider(provider: Any) -> str:
