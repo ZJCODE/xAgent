@@ -178,7 +178,7 @@ export function MessagePage() {
                       ))
                     : null}
                 </div>
-                <Markdown content={message.content || ""} />
+                <Markdown content={message.content || ""} renderImages={false} />
                 {imageUrls.length ? (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {imageUrls.map((url, imageIndex) => (
@@ -200,6 +200,7 @@ export function MessagePage() {
                         href={attachmentUrl(attachment)}
                         target="_blank"
                         rel="noreferrer"
+                        download={attachmentLabel(attachment)}
                       >
                         <FileIcon size={14} />
                         <span>{attachmentLabel(attachment)}</span>

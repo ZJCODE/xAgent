@@ -79,7 +79,9 @@ class MessageHandler:
         reply_text: str,
         sender_id: str,
         metadata: Optional[Dict[str, Any]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Message:
+        normalized_attachments = dedupe_attachments(list(attachments or []))
         image_source = extract_image_urls_from_text(reply_text)
         model_msg = Message.create(
             content=reply_text,
@@ -88,6 +90,8 @@ class MessageHandler:
         )
         if metadata:
             model_msg.metadata.update(metadata)
+        if normalized_attachments:
+            model_msg.metadata[ATTACHMENT_METADATA_KEY] = normalized_attachments
         image_metadata = self._preview_image_metadata(image_source)
         if image_metadata and "images" not in model_msg.metadata:
             model_msg.metadata["images"] = image_metadata

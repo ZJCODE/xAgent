@@ -13,6 +13,7 @@ from xagent.interfaces.channels import enabled_channels_from_config
 from xagent.interfaces.cli import (
     AgentCLI,
     InitSelection,
+    _format_cli_attachments,
     _format_cli_workspace_links,
     build_parser,
     handle_config,
@@ -88,13 +89,33 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(formatted, source)
 
-    def test_chat_events_print_local_workspace_blob_links(self):
+    def test_cli_formats_structured_attachments_as_local_paths(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir).resolve() / "workspace"
+            attachments = [{
+                "kind": "image",
+                "path": "temp/images/result.png",
+                "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+                "mime_type": "image/png",
+            }]
+
+            formatted = _format_cli_attachments(attachments, workspace)
+
+        self.assertEqual(formatted, f"Attachments:\n- {workspace / 'temp' / 'images' / 'result.png'}")
+
+    def test_chat_events_print_structured_attachment_paths(self):
         class FakeAgent:
             async def chat_events(self, **kwargs):
                 yield {"type": "message_start"}
                 yield {
                     "type": "message_done",
-                    "content": "![Generated image](/api/workspace/blob?path=temp%2Fimages%2Fresult.png)",
+                    "content": "",
+                    "attachments": [{
+                        "kind": "image",
+                        "path": "temp/images/result.png",
+                        "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+                        "mime_type": "image/png",
+                    }],
                 }
                 yield {"type": "done"}
 
@@ -114,6 +135,7 @@ class CLICommandTests(unittest.TestCase):
 
         output = stdout.getvalue()
         self.assertIn(str(workspace / "temp" / "images" / "result.png"), output)
+        self.assertIn("Attachments:", output)
         self.assertNotIn("/api/workspace/blob", output)
 
     def test_parser_supports_init_schema_command(self):

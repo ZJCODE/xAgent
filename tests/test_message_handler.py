@@ -98,6 +98,21 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("write_memory", instructions)
         self.assertNotIn("write_daily_memory", instructions)
 
+    def test_tool_policy_directs_images_and_artifacts_to_attachments(self):
+        handler = MessageHandler(
+            system_prompt="",
+            message_storage=_FakeMessageStorage(),
+        )
+
+        messages = handler.build_instruction_messages(
+            tool_names=["generate_image", "attach_artifact"],
+        )
+        tool_policy = messages[1]["content"]
+
+        self.assertIn("structured attachment metadata", tool_policy)
+        self.assertIn("Do not embed them in reply text with Markdown image syntax", tool_policy)
+        self.assertIn("attach the workspace file instead", tool_policy)
+
     def test_build_instruction_messages_are_named_and_layered(self):
         handler = MessageHandler(
             system_prompt="# I am Mono\n\nKeep a warm voice.",

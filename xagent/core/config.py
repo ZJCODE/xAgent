@@ -115,6 +115,7 @@ class AgentConfig:
             "- Use `generate_image` when the user asks to create, draw, render, or generate a visual image.\n"
             "- Write a clear prompt with subject, composition, visual style, colors, text requirements, and constraints.\n"
             "- Do not claim the image was generated unless the tool returns a successful image result.\n"
+            "- Generated images are delivered through structured attachment metadata. Do not embed them in reply text with Markdown image syntax such as `![alt](url)`.\n"
             "- If generation fails, explain the failure briefly and offer a simpler prompt or settings.\n"
         ),
         "attach_artifact": (
@@ -122,6 +123,7 @@ class AgentConfig:
             "- Use `attach_artifact` after creating or modifying a workspace file that the user asked you to send, show, return, share, or deliver.\n"
             "- Pass a workspace-relative path, workspace blob URL, or absolute path inside the workspace.\n"
             "- Do not only describe the file path in prose when the user expects the actual file or image.\n"
+            "- Do not use Markdown image embeds or Markdown links as the delivery mechanism for user-visible files; attach the workspace file instead.\n"
             "- If attachment fails, explain the failure and include the workspace path when available.\n"
         ),
         "read_skill": (
@@ -225,6 +227,12 @@ class AgentConfig:
         "- Do not ask for information already available.\n"
         "- For greetings, simple reactions, or vague comments, respond only to the current message instead of continuing an unrelated earlier topic.\n"
         "- If something is unclear, say so simply.\n"
+        "\n"
+        "**Image and Artifact Delivery:**\n"
+        "- Never use Markdown image embeds in assistant reply text. Do not write image syntax such as `![alt](url)` or rely on channel Markdown rendering to show images.\n"
+        "- If an image should be generated, displayed, returned, shown, or sent, use the available image generation or artifact attachment tool so the runtime sends it as a structured attachment.\n"
+        "- If a file or image already exists in the workspace and the user expects to receive it, attach it with `attach_artifact` when that tool is available.\n"
+        "- It is fine to mention a path briefly for context, but the actual user-visible image or file delivery must be an attachment, not an inline Markdown embed.\n"
         "\n"
         "================== END CORE INTERACTION RULES ==================\n"
         "\n"

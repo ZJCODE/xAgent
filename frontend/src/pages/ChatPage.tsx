@@ -17,16 +17,29 @@ function isImageAttachment(attachment: AttachmentAsset): boolean {
   return attachment.kind === "image" || Boolean(attachment.mime_type?.startsWith("image/"));
 }
 
+function imageUrlsFromAttachments(attachments?: AttachmentAsset[]): string[] {
+  return (attachments || []).filter(isImageAttachment).map(attachmentUrl).filter(Boolean);
+}
+
+function imageUrlsForMessage(message: ChatPanelState["messages"][number]): string[] {
+  const urls = [...(message.images || []), ...imageUrlsFromAttachments(message.attachments)];
+  return urls.filter((url, index) => url && urls.indexOf(url) === index);
+}
+
+function fileAttachments(attachments?: AttachmentAsset[]): AttachmentAsset[] {
+  return (attachments || []).filter((attachment) => !isImageAttachment(attachment));
+}
+
 function AttachmentChips({ attachments }: { attachments?: AttachmentAsset[] }) {
-  const fileAttachments = (attachments || []).filter((attachment) => !isImageAttachment(attachment));
-  if (!fileAttachments.length) return null;
+  const files = fileAttachments(attachments);
+  if (!files.length) return null;
   return (
     <div className="mt-3 flex flex-wrap gap-2">
-      {fileAttachments.map((attachment, index) => {
+      {files.map((attachment, index) => {
         const url = attachmentUrl(attachment);
         const label = attachmentLabel(attachment);
         return (
-          <a key={`${url}-${index}`} className="attachment-chip" href={url} target="_blank" rel="noreferrer">
+          <a key={`${url}-${index}`} className="attachment-chip" href={url} target="_blank" rel="noreferrer" download={label}>
             <FileIcon size={14} />
             <span>{label}</span>
           </a>
@@ -39,10 +52,9 @@ function AttachmentChips({ attachments }: { attachments?: AttachmentAsset[] }) {
 function ChatBubble({ message }: { message: ChatPanelState["messages"][number] }) {
   const isUser = message.role === "user";
   const isObservation = message.role === "observation";
-  const imageAttachments = (message.attachments || []).filter(isImageAttachment).map(attachmentUrl).filter(Boolean);
-  const images = message.images?.length ? message.images : imageAttachments;
-  const persistedImageCount = isUser && !images.length ? message.imageCount || 0 : 0;
-  const persistedAttachmentCount = isUser && !message.attachments?.length ? message.attachmentCount || 0 : 0;
+  const images = imageUrlsForMessage(message);
+  const persistedImageCount = !images.length ? message.imageCount || 0 : 0;
+  const persistedAttachmentCount = !message.attachments?.length ? message.attachmentCount || 0 : 0;
   return (
     <div className={classNames("flex", isUser && "justify-end")}>
       <div
@@ -56,17 +68,19 @@ function ChatBubble({ message }: { message: ChatPanelState["messages"][number] }
         {message.pending && !message.content ? (
           <div className="text-zinc-400">Thinking...</div>
         ) : (
-          <Markdown content={message.content} />
+          <Markdown content={message.content} renderImages={false} />
         )}
         {message.pending && message.content ? <span className="typing-cursor" /> : null}
-        {isUser && images.length ? (
+        {images.length ? (
           <div className="mt-3 flex flex-wrap gap-2">
             {images.map((src, index) => (
-              <img key={`${message.id}-${index}`} src={src} alt="" className="h-20 rounded-lg border border-white/30 object-cover" />
+              <a key={`${message.id}-${index}`} href={src} target="_blank" rel="noreferrer" className="block">
+                <img src={src} alt="" className="h-24 max-w-[180px] rounded-lg border border-white/30 object-cover" />
+              </a>
             ))}
           </div>
         ) : null}
-        {isUser ? <AttachmentChips attachments={message.attachments} /> : null}
+        <AttachmentChips attachments={message.attachments} />
         {persistedImageCount ? (
           <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
             Attached {persistedImageCount} {persistedImageCount === 1 ? "image" : "images"}

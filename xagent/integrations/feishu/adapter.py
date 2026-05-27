@@ -1865,6 +1865,7 @@ class FeishuAdapter:
                 uuid_message_id=self._event_message_uuid(message_id, 1),
                 text=self._unsupported_image_message(image_assets),
                 is_group=is_group,
+                attachments=self._outbound_attachments_from_inbound_images(image_assets),
             )
             return
 
@@ -1922,6 +1923,23 @@ class FeishuAdapter:
     @staticmethod
     def _image_sources_for_model(image_assets: list[_FeishuInboundImageAsset]) -> list[str]:
         return [asset.image_source for asset in image_assets if asset.image_source]
+
+    def _outbound_attachments_from_inbound_images(
+        self,
+        image_assets: list[_FeishuInboundImageAsset],
+    ) -> list[_FeishuOutboundAttachment]:
+        attachments: list[_FeishuOutboundAttachment] = []
+        for asset in image_assets:
+            source = asset.blob_url or asset.path or asset.image_source
+            path = self._resolve_outbound_workspace_path(source)
+            if path is None:
+                continue
+            attachments.append(_FeishuOutboundAttachment(
+                kind="image",
+                path=path,
+                blob_url=asset.blob_url or self._path_to_workspace_blob_url(path),
+            ))
+        return self._dedupe_outbound_attachments(attachments)
 
     @staticmethod
     def _image_assets_from_attachment_assets(
@@ -1982,11 +2000,9 @@ class FeishuAdapter:
 
     @staticmethod
     def _unsupported_image_message(image_assets: list[_FeishuInboundImageAsset]) -> str:
-        blob_urls = [asset.blob_url for asset in image_assets if asset.blob_url]
-        if not blob_urls:
+        if not image_assets:
             return _FEISHU_UNSUPPORTED_IMAGE_MESSAGE
-        path_lines = "\n".join(f"- {blob_url}" for blob_url in blob_urls)
-        return f"{_FEISHU_UNSUPPORTED_IMAGE_MESSAGE}\n\n图片已保存到 workspace：\n{path_lines}"
+        return f"{_FEISHU_UNSUPPORTED_IMAGE_MESSAGE}\n\n图片已作为附件返回。"
 
     async def _send_attachment_download_failed(
         self,

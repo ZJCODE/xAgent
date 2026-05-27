@@ -164,28 +164,25 @@ longest edge is capped at 2048px by default, and the target payload is kept unde
 8MB when possible. Both images and files become workspace-backed attachments with
 a stable `/api/workspace/blob?path=...` URL.
 
-Images are recorded with the same markdown shape used by generated images, for
-example `![Feishu image](/api/workspace/blob?path=temp/images/feishu/input.png)`,
-so the Web UI Messages page can render the upload directly and later assistant
-replies can reuse the same workspace blob reference. Other files are recorded as
-normal markdown links and included in the message attachment manifest. At the
-model boundary the adapter passes provider-ready image data as `image_source`
-only for current-turn images; non-image files remain references, not raw bytes.
+Images and files are recorded as workspace attachment metadata, so the Web UI
+Messages page can render image previews or download entries without depending on
+Markdown image rendering. At the model boundary the adapter passes
+provider-ready image data as `image_source` only for current-turn images;
+non-image files remain references, not raw bytes.
 OpenAI and Qwen support vision by default; custom providers can opt in with
 `provider.supports_vision: true`. Providers without vision support do not call
 the model for image content and instead reply with a short unsupported-image
-message that includes the saved workspace blob reference when available. Plain
-file attachments still route to chat because they do not require vision support.
+message and returns the saved image through the normal Feishu attachment path
+when available. Plain file attachments still route to chat because they do not
+require vision support.
 
-When xAgent returns workspace blob markdown such as
-`![Generated image](/api/workspace/blob?path=temp/images/result.png)`, the
-adapter resolves the file under `workspace/`, writes a cached compressed
-derivative under `workspace/temp/images/feishu/outbound` when the image is too
-large for reliable transport, uploads that derivative through `FeishuChannel.send`,
-and sends it back as a native Feishu image. Markdown links to other workspace blob
-files are sent back as Feishu files. Any surrounding text is sent as markdown
-first, then attachments are sent as separate messages with deterministic UUID
-suffixes.
+When xAgent returns structured workspace attachments, the adapter resolves each
+file under `workspace/`, writes a cached compressed derivative under
+`workspace/temp/images/feishu/outbound` when an image is too large for reliable
+transport, uploads that derivative through `FeishuChannel.send`, and sends it
+back as a native Feishu image. Other workspace files are sent back as Feishu
+files. Any surrounding text is sent first, then attachments are sent as separate
+messages with deterministic UUID suffixes.
 
 ## Segmented replies
 

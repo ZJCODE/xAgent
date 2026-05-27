@@ -90,6 +90,10 @@ function attachmentBlobUrl(attachment: AttachmentAsset): string {
   return attachment.blob_url || (attachment.path ? workspaceBlobUrl(attachment.path) : "");
 }
 
+function attachmentImageUrls(attachments: AttachmentAsset[] = []): string[] {
+  return attachments.filter(isImageAttachment).map(attachmentBlobUrl).filter(Boolean);
+}
+
 function createPanel(panelId: PanelId): ChatPanelState {
   const savedSettings = readJson<Partial<ChatSettings>>(GLOBAL_SETTINGS_KEY, {});
   return {
@@ -318,11 +322,23 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (parsed.type === "message_done") {
           const localId = ensureAssistantMessage(parsed);
           const nextText = parsed.content == null ? (textByMessageId.get(localId) || "") : String(parsed.content);
+          const attachments = Array.isArray(parsed.attachments) ? parsed.attachments : undefined;
+          const imageUrls = attachments ? attachmentImageUrls(attachments) : undefined;
           textByMessageId.set(localId, nextText);
           patchPanel(panelId, (panel) => ({
             ...panel,
             messages: panel.messages.map((message) =>
-              message.id === localId ? { ...message, content: nextText, pending: false } : message,
+              message.id === localId
+                ? {
+                    ...message,
+                    content: nextText,
+                    pending: false,
+                    attachments: attachments ?? message.attachments,
+                    attachmentCount: attachments ? attachments.length || undefined : message.attachmentCount,
+                    images: imageUrls ?? message.images,
+                    imageCount: imageUrls ? imageUrls.length || undefined : message.imageCount,
+                  }
+                : message,
             ),
           }));
           return;
@@ -357,7 +373,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (panel.sending) return;
       const currentPanel = panel;
       const attachments = [...currentPanel.pendingAttachments];
-      const images = attachments.filter(isImageAttachment).map(attachmentBlobUrl).filter(Boolean);
+      const images = attachmentImageUrls(attachments);
       if (!text && !attachments.length) return;
       const userMessage: ChatMessage = {
         id: makeId("user"),

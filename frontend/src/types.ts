@@ -65,6 +65,7 @@ export interface ChatEvent {
   event?: string;
   delta?: string;
   content?: string;
+  attachments?: AttachmentAsset[];
   message?: unknown;
   message_id?: string;
   phase?: string;

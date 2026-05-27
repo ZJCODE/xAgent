@@ -15,7 +15,7 @@ from typing import Any, Optional
 import httpx
 from openai import AsyncOpenAI
 
-from xagent.utils.image_utils import workspace_blob_url
+from xagent.schemas.attachment import workspace_attachment_from_path
 from xagent.utils.tool_decorator import function_tool
 
 
@@ -589,12 +589,9 @@ class ConfiguredImageGenerationProvider:
 
     def _save_image_file(self, image_bytes: bytes, image_format: str) -> dict:
         output_path = self._write_image_file(image_bytes, image_format)
-        relative_path = output_path.relative_to(self.workspace_dir).as_posix()
-        blob_url = workspace_blob_url(relative_path)
+        attachment = workspace_attachment_from_path(output_path, self.workspace_dir)
         return {
-            "path": relative_path,
-            "blob_url": blob_url,
-            "markdown": f"![Generated image]({blob_url})",
+            **attachment,
             "format": image_format,
             "mime_type": _mime_type(image_format),
             "bytes": len(image_bytes),
@@ -745,17 +742,8 @@ def is_generated_image_result(result: Any) -> bool:
         and result.get("status") == "ok"
         and result.get("type") == "generated_image"
         and isinstance(result.get("image"), dict)
-        and bool(result["image"].get("markdown"))
+        and bool(result["image"].get("path") or result["image"].get("blob_url"))
     )
-
-
-def generated_image_markdown(result: dict) -> str:
-    images = result.get("images")
-    if isinstance(images, list):
-        markdowns = [str(image.get("markdown")) for image in images if isinstance(image, dict) and image.get("markdown")]
-        if markdowns:
-            return "\n\n".join(markdowns)
-    return str(result.get("image", {}).get("markdown") or "")
 
 
 def generated_image_description(tool_name: str, result: dict) -> str:
@@ -794,8 +782,12 @@ def generated_image_attachments(result: dict) -> list[dict]:
             "mime_type": str(image.get("mime_type") or ""),
             "file_name": Path(path).name if path else "",
             "caption": "",
+            "size_bytes": _optional_int(image.get("size_bytes") or image.get("bytes")),
         })
-    return attachments
+    return [
+        {key: value for key, value in attachment.items() if value not in (None, "")}
+        for attachment in attachments
+    ]
 
 
 def _generated_image_paths(result: dict) -> list[str]:
@@ -805,6 +797,16 @@ def _generated_image_paths(result: dict) -> list[str]:
         return [path for path in paths if path]
     path = str(result.get("image", {}).get("path") or "").strip()
     return [path] if path else []
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
 
 
 def _generated_image_response(

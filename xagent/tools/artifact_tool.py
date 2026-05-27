@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
-from xagent.schemas.attachment import attachment_markdown, workspace_attachment_from_path
+from xagent.schemas.attachment import workspace_attachment_from_path
 from xagent.utils.image_utils import workspace_blob_relative_path
 from xagent.utils.tool_decorator import function_tool
 
@@ -66,10 +66,6 @@ def is_artifact_attachment_result(result: Any) -> bool:
         and isinstance(result.get("artifact"), dict)
         and bool(result["artifact"].get("path") or result["artifact"].get("blob_url"))
     )
-
-
-def artifact_attachment_markdown(result: dict) -> str:
-    return attachment_markdown(result.get("artifact") or {})
 
 
 def artifact_attachment_description(tool_name: str, result: dict) -> str:

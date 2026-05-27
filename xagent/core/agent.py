@@ -410,6 +410,7 @@ class Agent:
                         assistant_msg = await msg_handler.store_model_reply(
                             tool_result.description,
                             self._assistant_sender_id,
+                            attachments=tool_result.attachments,
                         )
                         self._schedule_experience_write(
                             msg_handler=msg_handler,
@@ -663,6 +664,7 @@ class Agent:
                             tool_result.description,
                             self._assistant_sender_id,
                             metadata={"turn_phase": "final"},
+                            attachments=tool_result.attachments,
                         )
                         self._schedule_experience_write(
                             msg_handler=msg_handler,

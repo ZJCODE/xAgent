@@ -225,7 +225,7 @@ image_generation:
 
 非 OpenAI/MiniMax provider 默认写入 `image_generation.provider: none`。手动配置跨 provider 图像生成会在启动时被拒绝。
 
-`generate_image` 支持 text-to-image；MiniMax 还支持用 `reference_image_url` 或 `reference_image_urls` 生成主体参考图工作流。OpenAI 当前走 Image API 的生成端点，不包含 mask 编辑、Responses API 多轮编辑或 partial image streaming。图像生成配置只允许 provider-native：OpenAI 主 provider 可选 OpenAI 图像生成，MiniMax 主 provider 可选 MiniMax 图像生成，其他 provider 使用 `none`。生成文件会写入 `workspace/temp/images/`，工具返回的 Markdown 图片链接使用 URL 编码的 `/api/workspace/blob?path=...`，因此 Web chat、Messages 页面和 Workspace 页面都能展示生成结果。OpenAI/MiniMax 不支持的参数会返回明确错误，不再静默忽略。
+`generate_image` 支持 text-to-image；MiniMax 还支持用 `reference_image_url` 或 `reference_image_urls` 生成主体参考图工作流。OpenAI 当前走 Image API 的生成端点，不包含 mask 编辑、Responses API 多轮编辑或 partial image streaming。图像生成配置只允许 provider-native：OpenAI 主 provider 可选 OpenAI 图像生成，MiniMax 主 provider 可选 MiniMax 图像生成，其他 provider 使用 `none`。生成文件会写入 `workspace/temp/images/`，工具返回结构化 `attachments` 元数据，而不是把图片塞进 Markdown 正文；Web chat 和 Messages 页面用附件预览图片或下载文件，CLI 打印本地文件路径，Feishu 走原生图片/文件发送能力。OpenAI/MiniMax 不支持的参数会返回明确错误，不再静默忽略。
 
 ### 2.4 observability
 
@@ -1078,7 +1078,7 @@ Feishu Event/Webhook
 
 飞书适配器也走 `Agent.chat_events()`：每个 `message_done` 默认发送一条 markdown 消息；`channels.feishu.stream: true` 时使用 Feishu streaming card 增量更新当前段。
 
-如果飞书消息包含图片或文件，内置 Feishu adapter 会通过官方 message resource API 下载资源。图片保存到 `workspace/temp/images/feishu/`，非图片保存到 `workspace/temp/attachments/feishu/`，二者都会以 workspace attachment metadata 传入 Agent。大图会先按通道预算压缩：保留宽高比例、应用 EXIF 方向、去除元数据、最长边默认收敛到 2048px、目标大小默认 8MB 以内，并以 JPEG 派生图进入模型或 Feishu 原生上传；原始 workspace 文件不会因出站发送被覆盖。持久化的用户消息使用 workspace blob 引用，例如 `![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2Finput.png)` 或 `[report.pdf](/api/workspace/blob?path=temp%2Fattachments%2Ffeishu%2Freport.pdf)`，因此 Web UI Messages 页面可以直接渲染或下载。模型调用边界只会为当前 user turn 从 workspace 读取图片并转成 provider 可接受的图片输入；非图片文件保持为引用和清单。当当前 provider 不支持 vision 时，图片不会调用模型，会直接回复无法理解图片内容，并在可用时附上已保存的 workspace blob 引用。Agent 返回的 workspace blob 图片 Markdown 会被解析为本地 workspace 文件，并通过 `FeishuChannel.send({"image": ...})` 上传后作为飞书图片发送；非图片 workspace blob 链接会作为飞书文件发送。
+如果飞书消息包含图片或文件，内置 Feishu adapter 会通过官方 message resource API 下载资源。图片保存到 `workspace/temp/images/feishu/`，非图片保存到 `workspace/temp/attachments/feishu/`，二者都会以 workspace attachment metadata 传入 Agent。大图会先按通道预算压缩：保留宽高比例、应用 EXIF 方向、去除元数据、最长边默认收敛到 2048px、目标大小默认 8MB 以内，并以 JPEG 派生图进入模型或 Feishu 原生上传；原始 workspace 文件不会因出站发送被覆盖。持久化的用户消息保留 workspace attachment metadata，Messages 页面会按附件渲染图片预览或下载入口。模型调用边界只会为当前 user turn 从 workspace 读取图片并转成 provider 可接受的图片输入；非图片文件保持为引用和清单。当当前 provider 不支持 vision 时，图片不会调用模型，会直接回复无法理解图片内容，并把已保存图片作为飞书原生附件返回。Agent 返回的结构化 workspace attachments 会被解析为本地 workspace 文件，并通过 `FeishuChannel.send({"image": ...})` 或 `FeishuChannel.send({"file": ...})` 发送。
 
 飞书与 Web UI 使用同一条边界：文件先落到 workspace，再通过 attachment metadata 进入消息；图片上传或显式引用的当轮正常带入模型，后续纯文本消息不会自动复用旧图片。
 

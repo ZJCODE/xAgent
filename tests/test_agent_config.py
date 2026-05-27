@@ -48,6 +48,13 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("Name YYYY-MM-DD HH:mm: text", AgentConfig.BASE_AGENT_PROMPT)
         self.assertIn("[/room context]", AgentConfig.BASE_AGENT_PROMPT)
 
+    def test_base_agent_prompt_requires_attachment_delivery_for_images(self):
+        prompt = AgentConfig.BASE_AGENT_PROMPT
+
+        self.assertIn("Never use Markdown image embeds", prompt)
+        self.assertIn("structured attachment", prompt)
+        self.assertIn("attach_artifact", prompt)
+
     def test_memory_defaults_are_internal_balanced_values(self):
         self.assertEqual(AgentConfig.MEMORY_RECENT_DAYS, 3)
         self.assertEqual(AgentConfig.MEMORY_STALE_FLUSH_SECONDS, 180)

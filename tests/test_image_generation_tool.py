@@ -174,7 +174,7 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["revised_prompt"], "A refined image prompt.")
             self.assertTrue(result["image"]["path"].startswith("temp/images/"))
             self.assertIn("/api/workspace/blob?path=temp%2Fimages%2F", result["image"]["blob_url"])
-            self.assertIn(result["image"]["blob_url"], result["image"]["markdown"])
+            self.assertNotIn("markdown", result["image"])
 
             written = Path(tmpdir) / result["image"]["path"]
             self.assertEqual(written.read_bytes(), image_bytes)
@@ -254,7 +254,7 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["model"], "image-01")
             self.assertEqual(result["aspect_ratio"], "16:9")
             self.assertTrue(result["image"]["path"].startswith("temp/images/"))
-            self.assertIn(result["image"]["blob_url"], result["image"]["markdown"])
+            self.assertNotIn("markdown", result["image"])
 
             written = Path(tmpdir) / result["image"]["path"]
             self.assertEqual(written.read_bytes(), image_bytes)

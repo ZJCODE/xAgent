@@ -13,12 +13,10 @@ from ...utils.image_utils import bytes_to_data_uri, extract_source, is_image_out
 from ...tools.image_generation_tool import (
     generated_image_attachments,
     generated_image_description,
-    generated_image_markdown,
     is_generated_image_result,
 )
 from ...tools.artifact_tool import (
     artifact_attachment_description,
-    artifact_attachment_markdown,
     artifact_attachments,
     is_artifact_attachment_result,
 )
@@ -160,25 +158,21 @@ class ToolExecutor:
 
         if is_generated_image_result(result):
             result_str = json.dumps(result, ensure_ascii=False)
-            content = generated_image_markdown(result)
             model_output = generated_image_description(name, result)
-            stored_output = f"{content}\n\n{model_output}"
             logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
             return self._tool_result_message(call_id, model_output), ToolDisplayResult(
-                content=content,
-                description=stored_output,
+                content="",
+                description=model_output,
                 attachments=generated_image_attachments(result),
             )
 
         if is_artifact_attachment_result(result):
             result_str = json.dumps(result, ensure_ascii=False)
-            content = artifact_attachment_markdown(result)
             model_output = artifact_attachment_description(name, result)
-            stored_output = f"{content}\n\n{model_output}" if content else model_output
             logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
             return self._tool_result_message(call_id, model_output), ToolDisplayResult(
-                content=content,
-                description=stored_output,
+                content="",
+                description=model_output,
                 attachments=artifact_attachments(result),
             )
 

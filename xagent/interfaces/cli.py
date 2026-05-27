@@ -34,6 +34,7 @@ from ..core.providers import (
 )
 from ..core.runtime import create_runtime_heartbeat
 from ..utils.image_utils import workspace_blob_relative_path
+from ..schemas.attachment import dedupe_attachments
 from .base import BaseAgentConfig, BaseAgentRunner
 from .channels import (
     CHANNEL_API,
@@ -75,6 +76,27 @@ def _format_cli_workspace_links(content: Any, workspace_dir: str | Path | None) 
 
     return _WORKSPACE_BLOB_CLI_LINK_RE.sub(local_workspace_path, text)
 
+
+def _format_cli_attachments(attachments: Any, workspace_dir: str | Path | None) -> str:
+    if not isinstance(attachments, list) or workspace_dir is None:
+        return ""
+
+    workspace_root = Path(workspace_dir).expanduser().resolve()
+    paths: list[str] = []
+    for attachment in dedupe_attachments(attachments):
+        relative_path = str(attachment.get("path") or "").strip().strip("/")
+        if not relative_path:
+            relative_path = workspace_blob_relative_path(str(attachment.get("blob_url") or ""))
+        if not relative_path:
+            continue
+        candidate = (workspace_root / relative_path).resolve()
+        if not candidate.is_relative_to(workspace_root):
+            continue
+        paths.append(candidate.as_posix())
+
+    if not paths:
+        return ""
+    return "\n".join(f"{path}" for path in paths)
 
 class AgentCLI(BaseAgentRunner):
     """CLI Agent for xAgent."""
@@ -204,6 +226,9 @@ class AgentCLI(BaseAgentRunner):
     def _format_cli_output(self, content: Any) -> str:
         return _format_cli_workspace_links(content, getattr(self, "workspace_dir", None))
 
+    def _format_cli_event_attachments(self, attachments: Any) -> str:
+        return _format_cli_attachments(attachments, getattr(self, "workspace_dir", None))
+
     async def print_single_chat_events(
         self,
         message: str,
@@ -254,6 +279,7 @@ class AgentCLI(BaseAgentRunner):
                     line_has_streamed_text = True
                 continue
             if event_type == "message_done":
+                attachments_text = self._format_cli_event_attachments(event.get("attachments"))
                 if not line_open:
                     print("🤖 Agent: ", end="", flush=True)
                     line_open = True
@@ -264,6 +290,8 @@ class AgentCLI(BaseAgentRunner):
                 if line_open:
                     print()
                     line_open = False
+                if attachments_text:
+                    print(attachments_text)
                 line_has_streamed_text = False
                 continue
             if event_type == "error":
@@ -1292,7 +1320,7 @@ def handle_chat(args: argparse.Namespace) -> int:
         asyncio.run(run_interactive_chat())
         return 0
 
-    event_mode = bool(args.events or args.stream is not None)
+    event_mode = bool(args.events or args.stream is not None or hasattr(agent_cli.agent, "chat_events"))
     stream = bool(args.stream) if args.stream is not None else False
 
     async def run_single_message():
