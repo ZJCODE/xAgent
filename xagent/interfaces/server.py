@@ -23,6 +23,13 @@ from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..core.runtime import create_runtime_heartbeat
 from ..schemas import Message
+from ..schemas.attachment import (
+    ATTACHMENT_METADATA_KEY,
+    MAX_ATTACHMENT_BYTES,
+    MAX_MESSAGE_ATTACHMENT_BYTES,
+    attachment_image_sources,
+    dedupe_attachments,
+)
 from ..tools.image_generation_tool import normalize_image_generation_provider
 from ..utils.image_utils import (
     MAX_IMAGE_BYTES,
@@ -54,6 +61,26 @@ class ChatImageInput(BaseModel):
     original_name: Optional[str] = None
 
 
+class ChatAttachmentInput(BaseModel):
+    """Optional workspace-backed attachment metadata accepted by API clients."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    kind: Optional[str] = None
+    path: Optional[str] = None
+    workspace_path: Optional[str] = None
+    blob_url: Optional[str] = None
+    mime_type: Optional[str] = None
+    file_name: Optional[str] = None
+    original_name: Optional[str] = None
+    caption: Optional[str] = None
+    size_bytes: Optional[int] = None
+    source_channel: Optional[str] = None
+    source_message_id: Optional[str] = None
+    source_resource_id: Optional[str] = None
+    source_resource_type: Optional[str] = None
+
+
 class ChatInput(BaseModel):
     """Final-only request body for the HTTP chat endpoint."""
 
@@ -63,6 +90,7 @@ class ChatInput(BaseModel):
     user_message: str
     image_source: Optional[Union[str, List[str]]] = None
     images: Optional[List[ChatImageInput]] = None
+    attachments: Optional[List[ChatAttachmentInput]] = None
     history_count: Optional[int] = AgentConfig.DEFAULT_HISTORY_COUNT
     max_iter: Optional[int] = AgentConfig.DEFAULT_MAX_ITER
     max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
@@ -181,7 +209,8 @@ class AgentHTTPServer(BaseAgentRunner):
             ) from exc
 
     async def _call_agent(self, input_data: ChatInput):
-        image_sources = self._input_image_sources(input_data)
+        attachments = self._input_attachments(input_data)
+        image_sources = self._input_image_sources(input_data, attachments=attachments)
         return await self.agent(
             user_message=input_data.user_message,
             user_id=input_data.user_id,
@@ -189,6 +218,7 @@ class AgentHTTPServer(BaseAgentRunner):
             max_iter=input_data.max_iter,
             max_concurrent_tools=input_data.max_concurrent_tools,
             image_source=image_sources,
+            attachments=attachments,
             enable_memory=input_data.enable_memory,
         )
 
@@ -237,6 +267,7 @@ class AgentHTTPServer(BaseAgentRunner):
             chat_events = getattr(self.agent, "chat_events", None)
             if not callable(chat_events):
                 raise RuntimeError("Agent does not support chat_events().")
+            attachments = self._input_attachments(input_data)
 
             response = chat_events(
                 user_message=input_data.user_message,
@@ -244,7 +275,8 @@ class AgentHTTPServer(BaseAgentRunner):
                 history_count=input_data.history_count,
                 max_iter=input_data.max_iter,
                 max_concurrent_tools=input_data.max_concurrent_tools,
-                image_source=self._input_image_sources(input_data),
+                image_source=self._input_image_sources(input_data, attachments=attachments),
+                attachments=attachments,
                 stream=bool(input_data.stream),
                 enable_memory=input_data.enable_memory,
             )
@@ -341,7 +373,11 @@ class AgentHTTPServer(BaseAgentRunner):
         return str(response)
 
     @staticmethod
-    def _input_image_sources(input_data: ChatInput) -> Optional[Union[str, List[str]]]:
+    def _input_image_sources(
+        input_data: ChatInput,
+        *,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Union[str, List[str]]]:
         sources: List[str] = []
         raw_source = input_data.image_source
         if raw_source:
@@ -353,6 +389,15 @@ class AgentHTTPServer(BaseAgentRunner):
             source = image.blob_url or image.external_url or image.workspace_path or ""
             if source:
                 sources.append(source)
+        sources.extend(attachment_image_sources(attachments or []))
+        deduped_sources: List[str] = []
+        seen_sources: set[str] = set()
+        for source in sources:
+            normalized = str(source or "").strip()
+            if normalized and normalized not in seen_sources:
+                seen_sources.add(normalized)
+                deduped_sources.append(normalized)
+        sources = deduped_sources
         if not sources:
             return None
         if len(sources) > MAX_IMAGES_PER_MESSAGE:
@@ -367,6 +412,29 @@ class AgentHTTPServer(BaseAgentRunner):
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
         return sources[0] if len(sources) == 1 else sources
+
+    @staticmethod
+    def _input_attachments(input_data: ChatInput) -> Optional[List[Dict[str, Any]]]:
+        raw_attachments: List[Dict[str, Any]] = []
+        for attachment in input_data.attachments or []:
+            raw_attachments.append(attachment.model_dump(exclude_none=True))
+        for image in input_data.images or []:
+            raw_attachments.append({
+                "kind": "image",
+                "path": image.workspace_path,
+                "blob_url": image.blob_url,
+                "mime_type": image.mime_type,
+                "file_name": image.original_name,
+                "size_bytes": image.size_bytes,
+                "source_channel": "web",
+            })
+        attachments = dedupe_attachments(raw_attachments)
+        if not attachments:
+            return None
+        total_size = sum(int(attachment.get("size_bytes") or 0) for attachment in attachments)
+        if total_size > MAX_MESSAGE_ATTACHMENT_BYTES:
+            raise HTTPException(status_code=413, detail="Message attachments exceed 200MB")
+        return attachments
 
     @staticmethod
     def _remaining_time(deadline: float) -> float:
@@ -519,6 +587,7 @@ class AgentHTTPServer(BaseAgentRunner):
     @staticmethod
     def _message_item(message: Message) -> Dict[str, Any]:
         images = AgentHTTPServer._message_images(message)
+        attachments = AgentHTTPServer._message_attachments(message)
         item = {
             "role": message.role.value if hasattr(message.role, "value") else str(message.role),
             "type": message.type.value if hasattr(message.type, "value") else str(message.type),
@@ -528,6 +597,8 @@ class AgentHTTPServer(BaseAgentRunner):
             "metadata": message.metadata,
             "images": images,
             "image_count": len(images),
+            "attachments": attachments,
+            "attachment_count": len(attachments),
         }
         if message.tool_call:
             item["tool_call"] = {
@@ -538,16 +609,36 @@ class AgentHTTPServer(BaseAgentRunner):
         return item
 
     @staticmethod
+    def _message_attachments(message: Message) -> List[Dict[str, Any]]:
+        metadata_attachments = message.metadata.get(ATTACHMENT_METADATA_KEY) if isinstance(message.metadata, dict) else None
+        if not isinstance(metadata_attachments, list):
+            return []
+        return dedupe_attachments(metadata_attachments)
+
+    @staticmethod
     def _message_images(message: Message) -> List[Dict[str, Any]]:
+        attachment_images: List[Dict[str, Any]] = []
+        for attachment in AgentHTTPServer._message_attachments(message):
+            if attachment.get("kind") != "image":
+                continue
+            item = {
+                "workspace_path": attachment.get("path"),
+                "blob_url": attachment.get("blob_url"),
+                "mime_type": attachment.get("mime_type"),
+                "size_bytes": attachment.get("size_bytes"),
+                "original_name": attachment.get("file_name"),
+            }
+            attachment_images.append({key: value for key, value in item.items() if value not in (None, "")})
         metadata_images = message.metadata.get("images") if isinstance(message.metadata, dict) else None
         if isinstance(metadata_images, list):
-            return [
+            images = [
                 {key: value for key, value in dict(image).items() if value not in (None, "")}
                 for image in metadata_images
                 if isinstance(image, dict)
             ]
+            return AgentHTTPServer._dedupe_image_items([*images, *attachment_images])
         if not message.multimodal or not message.multimodal.image:
-            return []
+            return attachment_images
 
         images = message.multimodal.image if isinstance(message.multimodal.image, list) else [message.multimodal.image]
         result: List[Dict[str, Any]] = []
@@ -563,7 +654,20 @@ class AgentHTTPServer(BaseAgentRunner):
             elif source.startswith(("http://", "https://")):
                 item["external_url"] = source
             result.append({key: value for key, value in item.items() if value not in (None, "")})
-        return result
+        return AgentHTTPServer._dedupe_image_items([*result, *attachment_images])
+
+    @staticmethod
+    def _dedupe_image_items(images: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        deduped: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for image in images:
+            key = str(image.get("blob_url") or image.get("workspace_path") or image.get("external_url") or "")
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            deduped.append(image)
+        return deduped
 
     @staticmethod
     def _image_mime_type(source: str, image_format: str = "") -> str:
@@ -1263,8 +1367,11 @@ class AgentHTTPServer(BaseAgentRunner):
                 if detected_mime_type not in SUPPORTED_UPLOAD_IMAGE_MIME_TYPES:
                     allowed = ", ".join(sorted(SUPPORTED_UPLOAD_IMAGE_MIME_TYPES))
                     raise HTTPException(status_code=415, detail=f"Unsupported image MIME type; allowed: {allowed}")
+            elif len(content) > MAX_ATTACHMENT_BYTES:
+                raise HTTPException(status_code=413, detail="File upload exceeds 50MB")
             requested.write_bytes(content)
-            return {"status": "ok", **self._workspace_metadata(requested, workspace_root)}
+            metadata = self._workspace_metadata(requested, workspace_root)
+            return {"status": "ok", **metadata, "blob_url": workspace_blob_url(metadata["path"])}
 
         @app.get("/api/skills/info", tags=["Monitoring"])
         async def skills_info():

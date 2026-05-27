@@ -22,7 +22,7 @@ Follow the prompts to choose your provider, model, API key, optional tools, and 
 
 OpenAI runtimes default to OpenAI built-in web search and recommend OpenAI image generation during init, but image generation can be disabled. Other providers can choose DuckDuckGo, OpenAI search, Brave Search, or no search during init. OpenAI built-in search reuses the main API key when the main provider is OpenAI; non-OpenAI providers must set an OpenAI key in `search.api_key`. Brave Search requires a Brave Search API key in `search.api_key` or `BRAVE_SEARCH_API_KEY`.
 
-Image input is supported by OpenAI and Qwen by default, with the known provider list kept in `VISION_CAPABLE_PROVIDERS`. Other built-in providers reject image input clearly instead of sending unsupported image payloads to the model; the Web UI hides image upload controls when the active provider lacks vision support. Any provider can explicitly override vision support with `provider.supports_vision: true` or `false` when its selected model differs from the provider default. Image generation is a separate optional tool: OpenAI and MiniMax providers recommend their native image generation provider during init, but can choose `none`; other providers default to `none` and do not load cross-provider image generation. Web/API/Feishu inbound images and generated files are saved under `workspace/temp/images` and rendered through the workspace blob endpoint. Feishu workspace blob images/files are uploaded back as native Feishu attachments.
+Image input is supported by OpenAI and Qwen by default, with the known provider list kept in `VISION_CAPABLE_PROVIDERS`. Other built-in providers reject image input clearly instead of sending unsupported image payloads to the model; the Web UI keeps generic file upload available but only sends image bytes into the model when the active provider supports vision. Any provider can explicitly override vision support with `provider.supports_vision: true` or `false` when its selected model differs from the provider default. Image generation is a separate optional tool: OpenAI and MiniMax providers recommend their native image generation provider during init, but can choose `none`; other providers default to `none` and do not load cross-provider image generation. Web/API/Feishu inbound files are saved as workspace attachments under `workspace/temp/attachments/...`, images remain previewable through `workspace/temp/images/...`, and both use `/api/workspace/blob?path=...` links. Feishu compresses large images at the channel boundary before model input or native upload, then sends workspace blob images/files back as native Feishu attachments.
 
 Langfuse observability is included for teams that need LLM tracing, latency, usage, and error monitoring. It is disabled by default; `xagent init` can write an `observability` block only when you choose to enable it.
 
@@ -50,7 +50,7 @@ Start xAgent and open the web page in your browser:
 xagent web
 ```
 
-The web page is best for longer conversations, segmented replies, and image input.
+The web page is best for longer conversations, segmented replies, and file or image attachments.
 Use the Transport selector when you need to compare final-only HTTP with WebSocket event delivery. WebSocket is an API transport, not a separate channel.
 
 Run it as a managed background service instead:

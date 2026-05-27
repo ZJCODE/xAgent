@@ -199,6 +199,7 @@ class Agent:
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[Union[str, List[str]]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         enable_memory: bool = True,
@@ -210,6 +211,7 @@ class Agent:
             max_iter=max_iter,
             max_concurrent_tools=max_concurrent_tools,
             image_source=image_source,
+            attachments=attachments,
             output_type=output_type,
             stream=stream,
             enable_memory=enable_memory,
@@ -223,6 +225,7 @@ class Agent:
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[Union[str, List[str]]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         enable_memory: bool = True,
@@ -246,6 +249,7 @@ class Agent:
                     max_iter=max_iter,
                     max_concurrent_tools=max_concurrent_tools,
                     image_source=image_source,
+                    attachments=attachments,
                     stream=True,
                     enable_memory=enable_memory,
                 ):
@@ -272,6 +276,7 @@ class Agent:
                 max_iter=max_iter,
                 max_concurrent_tools=max_concurrent_tools,
                 image_source=image_source,
+                attachments=attachments,
                 stream=False,
                 enable_memory=enable_memory,
             ):
@@ -296,11 +301,12 @@ class Agent:
         try:
             turn_context.__enter__()
             entered_observability = True
-            if self._should_reject_image_input(user_message, image_source):
+            if self._should_reject_image_input(user_message, image_source, attachments):
                 user_msg = await msg_handler.store_user_message(
                     user_message,
                     user_id,
                     None,
+                    attachments=attachments,
                 )
                 reply_text = self._unsupported_image_input_message()
                 assistant_msg = await msg_handler.store_model_reply(
@@ -319,6 +325,7 @@ class Agent:
                     user_message,
                     user_id,
                     image_source,
+                    attachments=attachments,
                 )
             except ValueError as exc:
                 logger.warning("Invalid image input from %s: %s", user_id, exc)
@@ -442,6 +449,7 @@ class Agent:
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[Union[str, List[str]]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         enable_memory: bool = True,
@@ -462,6 +470,7 @@ class Agent:
                 max_iter=max_iter,
                 max_concurrent_tools=max_concurrent_tools,
                 image_source=image_source,
+                attachments=attachments,
                 output_type=output_type,
                 enable_memory=enable_memory,
             )
@@ -492,11 +501,12 @@ class Agent:
         try:
             turn_context.__enter__()
             entered_observability = True
-            if self._should_reject_image_input(user_message, image_source):
+            if self._should_reject_image_input(user_message, image_source, attachments):
                 user_msg = await msg_handler.store_user_message(
                     user_message,
                     user_id,
                     None,
+                    attachments=attachments,
                 )
                 reply_text = self._unsupported_image_input_message()
                 assistant_msg = await msg_handler.store_model_reply(
@@ -525,6 +535,7 @@ class Agent:
                     user_message,
                     user_id,
                     image_source,
+                    attachments=attachments,
                 )
             except ValueError as exc:
                 logger.warning("Invalid image input from %s: %s", user_id, exc)
@@ -756,6 +767,7 @@ class Agent:
         self,
         user_message: str,
         image_source: Optional[Union[str, List[str]]],
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> bool:
         if getattr(self, "supports_vision", True):
             return False
@@ -835,7 +847,10 @@ class Agent:
         return self._get_memory_mode_var().set(memory_mode)
 
     def _reset_memory_mode(self, token: Token) -> None:
-        self._get_memory_mode_var().reset(token)
+        try:
+            self._get_memory_mode_var().reset(token)
+        except ValueError as exc:
+            logger.debug("Skipping memory mode reset outside original context: %s", exc)
 
     def _current_memory_mode(self) -> MemoryMode:
         return self._get_memory_mode_var().get()

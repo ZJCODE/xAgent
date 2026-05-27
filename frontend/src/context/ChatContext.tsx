@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { getAgentInfo, uploadWorkspaceFile, workspaceBlobUrl } from "../lib/api";
-import type { AgentCapabilities, ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
+import type { AgentCapabilities, AttachmentAsset, ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
 import { makeId } from "../lib/format";
 
 const GLOBAL_SETTINGS_KEY = "xagent_web_settings";
@@ -22,6 +22,8 @@ const DEFAULT_CAPABILITIES: AgentCapabilities = {
 };
 const MAX_IMAGES_PER_MESSAGE = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 type PanelId = ChatPanelState["id"];
@@ -31,8 +33,8 @@ interface ChatContextValue {
   status: "idle" | "sending";
   capabilities: AgentCapabilities;
   updateSettings: (panelId: PanelId, settings: Partial<ChatSettings>) => void;
-  addImages: (panelId: PanelId, files: FileList | File[]) => void;
-  removeImage: (panelId: PanelId, index: number) => void;
+  addAttachments: (panelId: PanelId, files: FileList | File[]) => void;
+  removeAttachment: (panelId: PanelId, index: number) => void;
   sendMessage: (panelId: PanelId, text: string) => Promise<void>;
   sendObservation: (panelId: PanelId, text: string) => Promise<void>;
   clearPanel: (panelId: PanelId) => void;
@@ -76,8 +78,16 @@ function canUseVision(capabilities: AgentCapabilities): boolean {
 }
 
 function safeUploadName(file: File): string {
-  const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "image";
-  return `temp/images/web/${Date.now()}-${Math.random().toString(16).slice(2, 10)}-${safeName}`;
+  const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "attachment.bin";
+  return `temp/attachments/web/${Date.now()}-${Math.random().toString(16).slice(2, 10)}-${safeName}`;
+}
+
+function isImageAttachment(attachment: AttachmentAsset): boolean {
+  return attachment.kind === "image" || Boolean(attachment.mime_type?.startsWith("image/"));
+}
+
+function attachmentBlobUrl(attachment: AttachmentAsset): string {
+  return attachment.blob_url || (attachment.path ? workspaceBlobUrl(attachment.path) : "");
 }
 
 function createPanel(panelId: PanelId): ChatPanelState {
@@ -85,7 +95,7 @@ function createPanel(panelId: PanelId): ChatPanelState {
   return {
     id: panelId,
     messages: [],
-    pendingImages: [],
+    pendingAttachments: [],
     settings: {
       ...defaultSettings(panelId),
       ...savedSettings,
@@ -156,34 +166,50 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const addImages = useCallback((panelId: PanelId, files: FileList | File[]) => {
-    if (!canUseVision(capabilities)) return;
-    const remainingSlots = Math.max(0, MAX_IMAGES_PER_MESSAGE - panel.pendingImages.length);
+  const addAttachments = useCallback((panelId: PanelId, files: FileList | File[]) => {
+    const remainingSlots = Math.max(0, MAX_ATTACHMENTS_PER_MESSAGE - panel.pendingAttachments.length);
     const selectedFiles = Array.from(files)
-      .filter((file) => ACCEPTED_IMAGE_TYPES.has(file.type) && file.size <= MAX_IMAGE_BYTES)
+      .filter((file) => {
+        if (file.type.startsWith("image/")) {
+          return ACCEPTED_IMAGE_TYPES.has(file.type) && file.size <= MAX_IMAGE_BYTES;
+        }
+        return file.size <= MAX_ATTACHMENT_BYTES;
+      })
       .slice(0, remainingSlots);
     if (!selectedFiles.length) return;
 
     void Promise.all(
       selectedFiles.map(async (file) => {
         const uploaded = await uploadWorkspaceFile(file, safeUploadName(file));
-        const previewUrl = workspaceBlobUrl(uploaded.path);
+        const blobUrl = uploaded.blob_url || workspaceBlobUrl(uploaded.path);
+        const mimeType = uploaded.mime_type || file.type || "application/octet-stream";
+        const attachment: AttachmentAsset = {
+          kind: mimeType.startsWith("image/") ? "image" : "file",
+          path: uploaded.path,
+          workspace_path: uploaded.path,
+          blob_url: blobUrl,
+          mime_type: mimeType,
+          size_bytes: uploaded.size,
+          file_name: uploaded.name || file.name,
+          original_name: file.name,
+          source_channel: "web",
+        };
         patchPanel(panelId, (panel) => {
-          if (panel.pendingImages.length >= MAX_IMAGES_PER_MESSAGE) return panel;
+          if (panel.pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) return panel;
           return {
             ...panel,
-            pendingImages: [...panel.pendingImages, previewUrl],
+            pendingAttachments: [...panel.pendingAttachments, attachment],
           };
         });
       }),
     ).catch(() => undefined);
-  }, [capabilities, panel.pendingImages.length, patchPanel]);
+  }, [panel.pendingAttachments.length, patchPanel]);
 
-  const removeImage = useCallback(
+  const removeAttachment = useCallback(
     (panelId: PanelId, index: number) => {
       patchPanel(panelId, (panel) => ({
         ...panel,
-        pendingImages: panel.pendingImages.filter((_, itemIndex) => itemIndex !== index),
+        pendingAttachments: panel.pendingAttachments.filter((_, itemIndex) => itemIndex !== index),
       }));
     },
     [patchPanel],
@@ -330,14 +356,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const text = rawText.trim();
       if (panel.sending) return;
       const currentPanel = panel;
-      const images = canUseVision(capabilities) ? [...currentPanel.pendingImages] : [];
-      if (!text && !images.length) return;
+      const attachments = [...currentPanel.pendingAttachments];
+      const images = attachments.filter(isImageAttachment).map(attachmentBlobUrl).filter(Boolean);
+      if (!text && !attachments.length) return;
       const userMessage: ChatMessage = {
         id: makeId("user"),
         role: "user",
         content: text,
         images,
         imageCount: images.length || undefined,
+        attachments,
+        attachmentCount: attachments.length || undefined,
       };
       const assistantMessage: ChatMessage = {
         id: makeId("assistant"),
@@ -348,7 +377,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       patchPanel(panelId, (current) => ({
         ...current,
-        pendingImages: [],
+        pendingAttachments: [],
         sending: true,
         messages: [...current.messages, userMessage, assistantMessage],
       }));
@@ -359,8 +388,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         stream: panel.settings.stream,
         enable_memory: panel.settings.memory,
       };
-      if (images.length === 1) payload.image_source = images[0];
-      if (images.length > 1) payload.image_source = images;
+      if (attachments.length) payload.attachments = attachments;
+      if (canUseVision(capabilities)) {
+        if (images.length === 1) payload.image_source = images[0];
+        if (images.length > 1) payload.image_source = images;
+      }
       persistSettings(currentPanel);
 
       await runSocket(panelId, payload, assistantMessage.id).catch(() => undefined);
@@ -430,7 +462,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const clearPanel = useCallback(
     (panelId: PanelId) => {
-      patchPanel(panelId, (panel) => ({ ...panel, messages: [], pendingImages: [] }));
+      patchPanel(panelId, (panel) => ({ ...panel, messages: [], pendingAttachments: [] }));
       clearPersistedHistory(panelId);
     },
     [patchPanel],
@@ -448,8 +480,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       status,
       capabilities,
       updateSettings,
-      addImages,
-      removeImage,
+      addAttachments,
+      removeAttachment,
       sendMessage,
       sendObservation,
       clearPanel,
@@ -460,8 +492,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       status,
       capabilities,
       updateSettings,
-      addImages,
-      removeImage,
+      addAttachments,
+      removeAttachment,
       sendMessage,
       sendObservation,
       clearPanel,

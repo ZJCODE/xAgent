@@ -16,12 +16,14 @@ syntax:  ``![alt text](source)``
 
 import base64
 import binascii
+import io
 import mimetypes
 import os
 import re
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
@@ -45,6 +47,21 @@ MAX_IMAGES_PER_MESSAGE = 5
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 SUPPORTED_UPLOAD_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 WORKSPACE_IMAGE_OUTPUT_DIR = "temp/images/inbound"
+DEFAULT_IMAGE_TRANSPORT_MAX_BYTES = 8 * 1024 * 1024
+DEFAULT_IMAGE_TRANSPORT_MAX_EDGE = 2048
+DEFAULT_IMAGE_TRANSPORT_JPEG_QUALITY = 85
+DEFAULT_IMAGE_TRANSPORT_MIN_JPEG_QUALITY = 55
+
+
+@dataclass(frozen=True)
+class ImageCompressionResult:
+    data: bytes
+    mime_type: str
+    file_name: str
+    compressed: bool
+    original_size: int
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -103,10 +120,10 @@ def is_image_output(text: str) -> bool:
     md = _MARKDOWN_IMG_RE.match(text)
     if md:
         inner = md.group(2)
-        return bool(_DATA_URI_RE.match(inner)) or _is_image_url(inner) or is_workspace_blob_source(inner)
+        return bool(_DATA_URI_RE.match(inner)) or _is_image_url(inner) or _is_workspace_blob_image_source(inner)
 
     # Direct image URL
-    return _is_image_url(text) or is_workspace_blob_source(text)
+    return _is_image_url(text) or _is_workspace_blob_image_source(text)
 
 
 def _is_image_url(url: str) -> bool:
@@ -172,7 +189,7 @@ def extract_image_urls_from_text(text: str) -> list:
     # 1. Markdown images  — highest priority (extract inner src)
     for m in _MARKDOWN_IMG_IN_TEXT_RE.finditer(text):
         inner = m.group(1).strip()
-        if _DATA_URI_RE.match(inner) or _is_image_url(inner) or is_workspace_blob_source(inner):
+        if _DATA_URI_RE.match(inner) or _is_image_url(inner) or _is_workspace_blob_image_source(inner):
             _add(inner)
 
     # 2. Data URIs
@@ -181,7 +198,9 @@ def extract_image_urls_from_text(text: str) -> list:
 
     # 3. Workspace blob URLs
     for m in _WORKSPACE_BLOB_IN_TEXT_RE.finditer(text):
-        _add(m.group(0))
+        source = m.group(0)
+        if _is_workspace_blob_image_source(source):
+            _add(source)
 
     # 4. Direct image URLs
     for m in _IMAGE_URL_IN_TEXT_RE.finditer(text):
@@ -238,6 +257,14 @@ def is_workspace_blob_source(source: str) -> bool:
     return bool(workspace_blob_relative_path(source))
 
 
+def _is_workspace_blob_image_source(source: str) -> bool:
+    relative_path = workspace_blob_relative_path(source)
+    if not relative_path:
+        return False
+    mime_type, _ = mimetypes.guess_type(relative_path)
+    return bool(str(mime_type or "").lower().startswith("image/"))
+
+
 def resolve_workspace_blob_path(source: str, workspace_dir: str | Path) -> Optional[Path]:
     """Resolve a workspace blob URL to a file path inside workspace_dir."""
     relative_path = workspace_blob_relative_path(source)
@@ -272,6 +299,157 @@ def image_extension_for_mime(mime_type: str) -> str:
     if normalized == "image/gif":
         return "gif"
     return "png"
+
+
+def compressed_image_file_name(file_name: str, *, extension: str = "jpg") -> str:
+    """Return a conservative file name for a compressed image derivative."""
+    source_name = Path(str(file_name or "image")).name or "image"
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(source_name).stem).strip(".-_")[:80] or "image"
+    clean_extension = re.sub(r"[^A-Za-z0-9]+", "", str(extension or "jpg").lower()) or "jpg"
+    return f"{stem}.{clean_extension}"
+
+
+def compress_image_bytes_for_transport(
+    image_bytes: bytes,
+    *,
+    mime_type: str = "",
+    file_name: str = "",
+    max_bytes: int = DEFAULT_IMAGE_TRANSPORT_MAX_BYTES,
+    max_edge: int = DEFAULT_IMAGE_TRANSPORT_MAX_EDGE,
+    jpeg_quality: int = DEFAULT_IMAGE_TRANSPORT_JPEG_QUALITY,
+    min_jpeg_quality: int = DEFAULT_IMAGE_TRANSPORT_MIN_JPEG_QUALITY,
+) -> ImageCompressionResult:
+    """Resize and re-encode large images for chat/channel transport.
+
+    The helper keeps small images untouched. Large or very high-resolution images
+    are transposed according to EXIF orientation, stripped of metadata, resized
+    proportionally, flattened onto white if they contain transparency, and encoded
+    as progressive JPEG until they fit the target budget as closely as possible.
+    """
+    original_data = bytes(image_bytes or b"")
+    original_size = len(original_data)
+    detected_mime_type = detect_image_mime(original_data) or ""
+    normalized_mime_type = (detected_mime_type or str(mime_type or "").split(";", 1)[0].strip().lower() or "image/jpeg")
+    original_file_name = Path(str(file_name or "image")).name or "image"
+
+    def original_result(width: Optional[int] = None, height: Optional[int] = None) -> ImageCompressionResult:
+        return ImageCompressionResult(
+            data=original_data,
+            mime_type=normalized_mime_type,
+            file_name=original_file_name,
+            compressed=False,
+            original_size=original_size,
+            width=width,
+            height=height,
+        )
+
+    if not original_data:
+        return original_result()
+
+    try:
+        from PIL import Image, ImageOps  # type: ignore
+    except Exception:
+        return original_result()
+
+    try:
+        with Image.open(io.BytesIO(original_data)) as opened:
+            image = ImageOps.exif_transpose(opened)
+            if getattr(image, "is_animated", False):
+                try:
+                    image.seek(0)
+                except Exception:
+                    pass
+            image.load()
+            image = image.copy()
+    except Exception:
+        return original_result()
+
+    width, height = image.size
+    needs_resize = max(width, height) > max_edge if max_edge > 0 else False
+    if original_size <= max_bytes and not needs_resize:
+        return original_result(width=width, height=height)
+
+    image = _image_to_transport_rgb(image)
+    resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", 1)
+    if needs_resize:
+        image.thumbnail((max_edge, max_edge), resampling)
+
+    best_data = b""
+    best_size = 0
+    working = image
+    quality_values = list(range(
+        max(min(jpeg_quality, 95), min_jpeg_quality),
+        max(min_jpeg_quality, 1) - 1,
+        -5,
+    )) or [max(min_jpeg_quality, 1)]
+
+    for _resize_attempt in range(7):
+        for quality in quality_values:
+            candidate = _encode_transport_jpeg(working, quality=quality)
+            candidate_size = len(candidate)
+            if not best_data or candidate_size < best_size:
+                best_data = candidate
+                best_size = candidate_size
+            if candidate_size <= max_bytes:
+                return ImageCompressionResult(
+                    data=candidate,
+                    mime_type="image/jpeg",
+                    file_name=compressed_image_file_name(original_file_name, extension="jpg"),
+                    compressed=candidate != original_data,
+                    original_size=original_size,
+                    width=working.size[0],
+                    height=working.size[1],
+                )
+
+        if not best_data:
+            break
+        current_width, current_height = working.size
+        if current_width <= 320 and current_height <= 320:
+            break
+        ratio = (max_bytes / max(best_size, 1)) ** 0.5 * 0.92
+        ratio = max(0.5, min(0.85, ratio))
+        next_size = (
+            max(1, int(current_width * ratio)),
+            max(1, int(current_height * ratio)),
+        )
+        if next_size == working.size:
+            break
+        working = working.resize(next_size, resampling)
+
+    if best_data and (best_size < original_size or original_size > max_bytes):
+        return ImageCompressionResult(
+            data=best_data,
+            mime_type="image/jpeg",
+            file_name=compressed_image_file_name(original_file_name, extension="jpg"),
+            compressed=best_data != original_data,
+            original_size=original_size,
+            width=working.size[0],
+            height=working.size[1],
+        )
+    return original_result(width=width, height=height)
+
+
+def _image_to_transport_rgb(image: Any) -> Any:
+    if image.mode in {"RGBA", "LA"} or "transparency" in getattr(image, "info", {}):
+        from PIL import Image as PILImage  # type: ignore
+
+        rgba = image.convert("RGBA")
+        background = PILImage.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        return background
+    if image.mode != "RGB":
+        return image.convert("RGB")
+    return image
+
+
+def _encode_transport_jpeg(image: Any, *, quality: int) -> bytes:
+    output = io.BytesIO()
+    try:
+        image.save(output, format="JPEG", quality=quality, optimize=True, progressive=True)
+    except OSError:
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=quality, optimize=False, progressive=True)
+    return output.getvalue()
 
 
 def bytes_to_data_uri(image_bytes: bytes, mime_type: str) -> str:

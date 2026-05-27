@@ -42,7 +42,7 @@ Configure your Feishu bot
 3. Add extra permissions:
     * im:message.group_msg (for group chats)
     * im:message.group_at_msg.include_bot:readonly (for group @mentions from users and bots)
-    * im:resource:readonly (for downloading images sent to the bot)
+    * im:resource:readonly (for downloading images and files sent to the bot)
     * contact:user.base:readonly (for user display names)
     * admin:app.info:readonly (for other bot or agent display names)
 4. Copy your App ID and App Secret.
@@ -105,6 +105,7 @@ The adapter behaves like a real human teammate:
 | Group / topic, bot @mentioned | `agent.chat` | Pulls recent Feishu history first, then replies. Anchored to the source message via `reply_to`; never as a Feishu topic/thread reply. |
 | Group / topic, not @mentioned | ignored | The bot does not listen or speak unless explicitly addressed. |
 | Image content | `agent.chat` when the provider supports vision | Feishu image resources are downloaded and passed as `image_source`. If the configured model provider does not support image input, the adapter replies that it cannot understand image content. |
+| File content | `agent.chat` | Feishu file resources are downloaded into `workspace/temp/attachments/feishu` and passed as workspace attachments. The model sees a file manifest and workspace blob link, not raw file bytes. |
 
 > **Permission check.** The bot can reply to group @mentions with
 > `im:message.group_at_msg`; use
@@ -154,26 +155,37 @@ remains predictable across direct and group conversations.
 
 ## Images and files
 
-Incoming Feishu image messages are downloaded through the official message
-resource API and saved under `workspace/temp/images/feishu`. The user message is
-recorded with the same markdown shape used by generated images, for example
-`![Feishu image](/api/workspace/blob?path=temp/images/feishu/input.png)`, so the
-Web UI Messages page can render the upload directly and later assistant replies
-can reuse the same workspace blob reference. At the model boundary the adapter
-passes provider-ready image data as `image_source`; the persisted user-facing
-reference remains the workspace blob URL, not a machine-specific absolute path.
+Incoming Feishu image and file messages are downloaded through the official
+message resource API. Images are saved under `workspace/temp/images/feishu`; other
+files are saved under `workspace/temp/attachments/feishu`. Large images are
+compressed at the Feishu boundary before they are saved or sent to the model:
+EXIF orientation is applied, metadata is stripped, aspect ratio is preserved, the
+longest edge is capped at 2048px by default, and the target payload is kept under
+8MB when possible. Both images and files become workspace-backed attachments with
+a stable `/api/workspace/blob?path=...` URL.
+
+Images are recorded with the same markdown shape used by generated images, for
+example `![Feishu image](/api/workspace/blob?path=temp/images/feishu/input.png)`,
+so the Web UI Messages page can render the upload directly and later assistant
+replies can reuse the same workspace blob reference. Other files are recorded as
+normal markdown links and included in the message attachment manifest. At the
+model boundary the adapter passes provider-ready image data as `image_source`
+only for current-turn images; non-image files remain references, not raw bytes.
 OpenAI and Qwen support vision by default; custom providers can opt in with
 `provider.supports_vision: true`. Providers without vision support do not call
 the model for image content and instead reply with a short unsupported-image
-message that includes the saved workspace blob reference when available.
+message that includes the saved workspace blob reference when available. Plain
+file attachments still route to chat because they do not require vision support.
 
 When xAgent returns workspace blob markdown such as
 `![Generated image](/api/workspace/blob?path=temp/images/result.png)`, the
-adapter resolves the file under `workspace/`, uploads it through
-`FeishuChannel.send`, and sends it back as a native Feishu image. Markdown links
-to other workspace blob files are sent back as Feishu files. Any surrounding text
-is sent as markdown first, then attachments are sent as separate messages with
-deterministic UUID suffixes.
+adapter resolves the file under `workspace/`, writes a cached compressed
+derivative under `workspace/temp/images/feishu/outbound` when the image is too
+large for reliable transport, uploads that derivative through `FeishuChannel.send`,
+and sends it back as a native Feishu image. Markdown links to other workspace blob
+files are sent back as Feishu files. Any surrounding text is sent as markdown
+first, then attachments are sent as separate messages with deterministic UUID
+suffixes.
 
 ## Segmented replies
 

@@ -184,6 +184,8 @@ search:
 
 为了控制多轮视觉成本并保持上下文边界清晰，xAgent 只会把当前 user turn 显式携带的图片发送给模型。图片仍会保存在消息元数据与 workspace 中用于历史预览，但后续纯文本追问不会自动复用旧图片，除非用户再次上传或在当前消息中显式引用图片。
 
+通用文件接收走 `WorkspaceAttachment` 元数据：文件先保存到 `workspace/`，再以 `attachments` 传入聊天边界。每个 attachment 至少包含 `path` 或 `blob_url`，可附带 `mime_type`、`file_name`、`size_bytes`、`source_channel` 和平台资源 ID。非图片附件不会作为模型二进制输入发送，只会在用户消息中追加 `Attached files:` 清单，并保存在消息 metadata 中供 Web UI、Messages 页面和渠道适配器展示或转发。图片附件是同一套 attachment 的特例；当 provider 支持 vision 时，当前 turn 的图片 attachment 还会进入 `image_source` 流程。
+
 自定义 provider 可以显式声明是否支持图片 URL 理解：
 
 ```yaml
@@ -449,6 +451,15 @@ GET /health
   "user_id": "alice",
   "user_message": "帮我总结一下今天的会议",
   "image_source": null,
+  "attachments": [
+    {
+      "path": "temp/attachments/web/report.pdf",
+      "blob_url": "/api/workspace/blob?path=temp%2Fattachments%2Fweb%2Freport.pdf",
+      "mime_type": "application/pdf",
+      "file_name": "report.pdf",
+      "size_bytes": 12345
+    }
+  ],
   "history_count": 100,
   "max_iter": 10,
   "max_concurrent_tools": 10,
@@ -461,6 +472,7 @@ GET /health
 - `user_id`：必填，当前说话人的稳定 ID。接入飞书时建议使用 `open_id`、`union_id` 或内部用户 ID。
 - `user_message`：必填，用户消息文本。
 - `image_source`：可选，图片来源，支持字符串或字符串数组。可传图片 URL、`data:image/...;base64,...`，或服务端可访问的本地文件路径。文本里的图片 URL 和 Markdown 图片也会被自动识别。
+- `attachments`：可选，workspace-backed 文件附件数组。每项至少传 `path` 或 `blob_url`；建议同时传 `mime_type`、`file_name` 和 `size_bytes`。服务端会去重并限制单条消息附件总量不超过 200MB。非图片附件只作为文件引用进入上下文，图片附件在当前 turn 中按 provider vision 能力进入图片输入流程。
 - `history_count`：可选，默认 `100`，但实际注入模型前最多使用最近 `40` 条消息。
 - `max_iter`：可选，默认 `10`，工具调用循环上限。
 - `max_concurrent_tools`：可选，默认 `10`，单轮最多并发执行的工具数。
@@ -708,6 +720,21 @@ GET /api/workspace/search?query=project&limit=50
 
 使用 multipart form 上传文件。字段：`file` 为上传文件，`path` 可选；`path` 可以是目标文件路径，也可以用尾部 `/` 表示目标目录。
 
+上传图片会校验真实内容为 PNG、JPEG 或 WebP，单图最大 10MB；非图片附件最大 50MB。响应包含 `path`、`mime_type`、`size` 和 `blob_url`，可以直接作为 `/chat` 或 `/ws/chat` 的 `attachments` 条目继续发送。
+
+```json
+{
+  "status": "ok",
+  "name": "report.pdf",
+  "path": "temp/attachments/web/report.pdf",
+  "type": "file",
+  "size": 12345,
+  "mime_type": "application/pdf",
+  "binary": true,
+  "blob_url": "/api/workspace/blob?path=temp%2Fattachments%2Fweb%2Freport.pdf"
+}
+```
+
 #### GET /api/skills/info
 
 返回 skills 根目录、启用/禁用/无效计数、已发现 skill 元数据和整体验证结果。
@@ -805,7 +832,9 @@ GET /api/messages?count=50&offset=0
       "content": "你好",
       "sender_id": "alice",
       "timestamp": 1760000000.123,
-      "metadata": {}
+      "metadata": {},
+      "attachments": [],
+      "attachment_count": 0
     }
   ],
   "total": 1,
@@ -832,6 +861,8 @@ ws://127.0.0.1:8010/ws/chat
 ```
 
 WebSocket 是唯一远程分段事件协议入口。请求体与 `/chat` 基本相同，但额外支持 `stream`。事件化与文本流式是两件事：无论 `stream` 是否开启，`/ws/chat` 都会返回分段事件；`stream=false` 时不发送 `message_delta`，只发送完整 `message_done`。
+
+`attachments`、`images` 和 `image_source` 的含义与 `/chat` 相同。Web UI 会先调用 `/api/workspace/upload`，再把返回的 workspace `blob_url` 作为 attachment 发送到这里。
 
 请求示例：
 
@@ -1019,6 +1050,7 @@ Feishu Event/Webhook
 - `user_id`：优先使用稳定用户 ID，如 `union_id` 或内部账号 ID。
 - `user_message`：飞书消息纯文本内容；如果是富文本，需要适配服务先转换为可读文本。
 - `image_source`：如果消息里有图片，适配服务应优先传 `/api/workspace/blob?path=...`、公网 URL 或 data URI。xAgent 会把 data URI 和本地文件归一化保存到 workspace，并在模型调用边界按需转成 provider 可接受的图片输入。
+- `attachments`：如果平台消息里有文件，适配服务应先把文件保存到 `workspace/`，再传 workspace attachment metadata。这样 Web UI、Feishu 和其他 IM 都能共享同一套 blob URL 展示、下载和转发逻辑。
 
 ### 7.2 群聊中未 @ 机器人
 
@@ -1046,9 +1078,9 @@ Feishu Event/Webhook
 
 飞书适配器也走 `Agent.chat_events()`：每个 `message_done` 默认发送一条 markdown 消息；`channels.feishu.stream: true` 时使用 Feishu streaming card 增量更新当前段。
 
-如果飞书消息包含图片，内置 Feishu adapter 会通过官方 message resource API 下载图片并保存到 `workspace/temp/images/feishu/`。持久化的用户消息使用和生成图一致的 Markdown 引用，例如 `![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2Finput.png)`，因此 Web UI Messages 页面可以直接渲染，用户后续也可以在当前消息中显式引用同一个 workspace blob。模型调用边界只会为当前 user turn 从 workspace 读取图片并转成 provider 可接受的图片输入；对用户和消息历史暴露的是 workspace blob URL，而不是机器相关的绝对路径。当当前 provider 不支持 vision 时，不调用模型，直接回复无法理解图片内容，并在可用时附上已保存的 workspace blob 引用。Agent 返回的 workspace blob 图片 Markdown 会被解析为本地 workspace 文件，并通过 `FeishuChannel.send({"image": ...})` 上传后作为飞书图片发送；非图片 workspace blob 链接会作为飞书文件发送。
+如果飞书消息包含图片或文件，内置 Feishu adapter 会通过官方 message resource API 下载资源。图片保存到 `workspace/temp/images/feishu/`，非图片保存到 `workspace/temp/attachments/feishu/`，二者都会以 workspace attachment metadata 传入 Agent。大图会先按通道预算压缩：保留宽高比例、应用 EXIF 方向、去除元数据、最长边默认收敛到 2048px、目标大小默认 8MB 以内，并以 JPEG 派生图进入模型或 Feishu 原生上传；原始 workspace 文件不会因出站发送被覆盖。持久化的用户消息使用 workspace blob 引用，例如 `![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2Finput.png)` 或 `[report.pdf](/api/workspace/blob?path=temp%2Fattachments%2Ffeishu%2Freport.pdf)`，因此 Web UI Messages 页面可以直接渲染或下载。模型调用边界只会为当前 user turn 从 workspace 读取图片并转成 provider 可接受的图片输入；非图片文件保持为引用和清单。当当前 provider 不支持 vision 时，图片不会调用模型，会直接回复无法理解图片内容，并在可用时附上已保存的 workspace blob 引用。Agent 返回的 workspace blob 图片 Markdown 会被解析为本地 workspace 文件，并通过 `FeishuChannel.send({"image": ...})` 上传后作为飞书图片发送；非图片 workspace blob 链接会作为飞书文件发送。
 
-飞书与 Web UI 使用同一条边界：图片上传或显式引用的当轮正常带入模型，后续纯文本消息不会自动复用旧图片。
+飞书与 Web UI 使用同一条边界：文件先落到 workspace，再通过 attachment metadata 进入消息；图片上传或显式引用的当轮正常带入模型，后续纯文本消息不会自动复用旧图片。
 
 ### 7.4 多用户与记忆边界
 

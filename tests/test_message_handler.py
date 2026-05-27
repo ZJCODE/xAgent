@@ -15,6 +15,12 @@ from xagent.utils.image_utils import data_uri_to_bytes, extract_image_urls_from_
 class _FakeMessageStorage:
     path = "/tmp/fake.sqlite3"
 
+    def __init__(self):
+        self.messages = []
+
+    async def add_messages(self, *messages):
+        self.messages.extend(messages)
+
 
 class MessageHandlerMemoryContextTests(unittest.TestCase):
     def test_handler_persists_data_uri_as_metadata_and_blob_source(self):
@@ -53,6 +59,33 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         detected = extract_image_urls_from_text(f"please inspect ![Generated image]({blob_url})")
 
         self.assertEqual(detected, [blob_url])
+
+    def test_store_user_message_persists_attachment_manifest_metadata(self):
+        import asyncio
+
+        storage = _FakeMessageStorage()
+        handler = MessageHandler(
+            message_storage=storage,
+            workspace_dir="/tmp/workspace",
+        )
+
+        msg = asyncio.run(handler.store_user_message(
+            "please inspect this",
+            "Joy",
+            attachments=[{
+                "kind": "file",
+                "path": "reports/out.pdf",
+                "blob_url": "/api/workspace/blob?path=reports%2Fout.pdf",
+                "mime_type": "application/pdf",
+                "file_name": "out.pdf",
+                "size_bytes": 4,
+            }],
+        ))
+
+        self.assertIn("Attached files:", msg.content)
+        self.assertIn("[out.pdf](/api/workspace/blob?path=reports%2Fout.pdf)", msg.content)
+        self.assertEqual(msg.metadata["attachments"][0]["path"], "reports/out.pdf")
+        self.assertEqual(storage.messages, [msg])
     
     def test_build_instructions_includes_tool_prompts(self):
         """build_instructions includes tool-specific segments for active tools."""

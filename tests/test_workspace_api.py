@@ -130,6 +130,26 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(blob_response.status_code, 200)
             self.assertEqual(blob_response.content, image_bytes)
 
+    async def test_workspace_upload_accepts_non_image_attachment_with_blob_url(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = self._server(Path(tmpdir))
+            report_bytes = b"name,value\nalpha,1\n"
+
+            async with await self._client(server) as client:
+                upload_response = await client.post(
+                    "/api/workspace/upload",
+                    data={"path": "incoming/"},
+                    files={"file": ("report.csv", report_bytes, "text/csv")},
+                )
+                blob_response = await client.get("/api/workspace/blob", params={"path": "incoming/report.csv"})
+
+            self.assertEqual(upload_response.status_code, 200)
+            payload = upload_response.json()
+            self.assertEqual(payload["path"], "incoming/report.csv")
+            self.assertEqual(payload["blob_url"], "/api/workspace/blob?path=incoming%2Freport.csv")
+            self.assertEqual(blob_response.status_code, 200)
+            self.assertEqual(blob_response.content, report_bytes)
+
     async def test_workspace_path_traversal_is_denied(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

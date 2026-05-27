@@ -7,6 +7,12 @@ from typing import Any, Dict, List, Optional, Union
 from ..config import AgentConfig
 from ...components import MessageStorageBase
 from ...schemas import Message, RoleType, MessageType
+from ...schemas.attachment import (
+    ATTACHMENT_METADATA_KEY,
+    attachment_image_sources,
+    attachment_manifest_markdown,
+    dedupe_attachments,
+)
 from ...utils.image_utils import (
     MAX_IMAGES_PER_MESSAGE,
     ImageSourceType,
@@ -44,17 +50,25 @@ class MessageHandler:
         user_message: str,
         user_id: str,
         image_source: Optional[Union[str, List[str]]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Message:
-        """Store a user message, auto-detecting embedded image URLs."""
-        image_sources = self._merge_image_sources(user_message, image_source)
+        """Store a user message, auto-detecting embedded image URLs and attachments."""
+        normalized_attachments = dedupe_attachments(list(attachments or []))
+        message_content = self._append_attachment_manifest(user_message, normalized_attachments)
+        image_sources = self._merge_image_sources(message_content, image_source)
+        for source in attachment_image_sources(normalized_attachments):
+            if source not in image_sources:
+                image_sources.append(source)
         normalized_sources, image_metadata = self._prepare_message_images(image_sources)
 
         msg = Message.create(
-            content=user_message,
+            content=message_content,
             role=RoleType.USER,
             image_source=normalized_sources or None,
             sender_id=user_id,
         )
+        if normalized_attachments:
+            msg.metadata[ATTACHMENT_METADATA_KEY] = normalized_attachments
         if image_metadata:
             msg.metadata["images"] = image_metadata
         await self.message_storage.add_messages(msg)
@@ -407,6 +421,10 @@ class MessageHandler:
         if image_count:
             noun = "image" if image_count == 1 else "images"
             lines.append(f"[Attached {noun}: {image_count}]")
+        attachment_count = MessageHandler._count_message_attachments(message)
+        if attachment_count and attachment_count != image_count:
+            noun = "file" if attachment_count == 1 else "files"
+            lines.append(f"[Attached {noun}: {attachment_count}]")
         return lines
 
     @staticmethod
@@ -496,7 +514,11 @@ class MessageHandler:
         image_count = MessageHandler._count_message_images(message)
         if image_count:
             image_note_chars = len(f"[Attached images: {image_count}]")
-        return len(header) + len(content) + image_note_chars + 4
+        attachment_note_chars = 0
+        attachment_count = MessageHandler._count_message_attachments(message)
+        if attachment_count and attachment_count != image_count:
+            attachment_note_chars = len(f"[Attached files: {attachment_count}]")
+        return len(header) + len(content) + image_note_chars + attachment_note_chars + 4
 
     @staticmethod
     def _count_message_images(message: Message) -> int:
@@ -507,6 +529,28 @@ class MessageHandler:
             return 0
         images = message.multimodal.image
         return len(images) if isinstance(images, list) else 1
+
+    @staticmethod
+    def _count_message_attachments(message: Message) -> int:
+        metadata_attachments = message.metadata.get(ATTACHMENT_METADATA_KEY) if isinstance(message.metadata, dict) else None
+        return len(metadata_attachments) if isinstance(metadata_attachments, list) else 0
+
+    @staticmethod
+    def _append_attachment_manifest(user_message: str, attachments: List[Dict[str, Any]]) -> str:
+        content = str(user_message or "").strip()
+        if not attachments:
+            return content
+        pending = []
+        for attachment in attachments:
+            blob_url = str(attachment.get("blob_url") or "").strip()
+            path = str(attachment.get("path") or "").strip()
+            if (blob_url and blob_url in content) or (path and path in content):
+                continue
+            pending.append(attachment)
+        manifest = attachment_manifest_markdown(pending)
+        if not manifest:
+            return content
+        return f"{content}\n\n{manifest}" if content else manifest
 
     @staticmethod
     def _format_transcript_speaker(message: Message) -> str:

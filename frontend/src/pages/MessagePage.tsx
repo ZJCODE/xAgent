@@ -1,9 +1,9 @@
-import { RefreshCw, Search, X } from "lucide-react";
+import { FileIcon, RefreshCw, Search, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Markdown } from "../components/Markdown";
 import { getAgentInfo, getMessages, searchMessages } from "../lib/api";
 import { classNames, formatTimestamp } from "../lib/format";
-import type { MessageItem, MessageSearchResult } from "../types";
+import type { AttachmentAsset, MessageItem, MessageSearchResult } from "../types";
 
 const PAGE_SIZE = 50;
 
@@ -30,9 +30,29 @@ function isSearchResult(message: MessageItem | MessageSearchResult): message is 
 }
 
 function messageImageUrls(message: MessageItem | MessageSearchResult): string[] {
-  return (message.images || [])
+  const attachmentImages = (message.attachments || [])
+    .filter((attachment) => attachment.kind === "image" || Boolean(attachment.mime_type?.startsWith("image/")))
+    .map((attachment) => attachment.blob_url || (attachment.path ? workspaceBlobUrlFromPath(attachment.path) : ""));
+  return [...(message.images || [])
     .map((image) => image.blob_url || image.external_url || "")
-    .filter((url) => url && !(message.content || "").includes(url));
+    .filter((url) => url && !(message.content || "").includes(url)), ...attachmentImages]
+    .filter((url, index, urls) => url && urls.indexOf(url) === index && !(message.content || "").includes(url));
+}
+
+function workspaceBlobUrlFromPath(path: string): string {
+  return `/api/workspace/blob?path=${encodeURIComponent(path)}`;
+}
+
+function attachmentUrl(attachment: AttachmentAsset): string {
+  return attachment.blob_url || (attachment.path ? workspaceBlobUrlFromPath(attachment.path) : "");
+}
+
+function attachmentLabel(attachment: AttachmentAsset): string {
+  return attachment.caption || attachment.original_name || attachment.file_name || attachment.path?.split("/").pop() || "Attachment";
+}
+
+function messageFileAttachments(message: MessageItem | MessageSearchResult): AttachmentAsset[] {
+  return (message.attachments || []).filter((attachment) => !(attachment.kind === "image" || attachment.mime_type?.startsWith("image/")));
 }
 
 export function MessagePage() {
@@ -168,6 +188,22 @@ export function MessagePage() {
                         alt=""
                         className="h-24 max-w-[180px] rounded-lg border border-black/10 object-cover dark:border-white/15"
                       />
+                    ))}
+                  </div>
+                ) : null}
+                {messageFileAttachments(message).length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {messageFileAttachments(message).map((attachment, attachmentIndex) => (
+                      <a
+                        key={`${message.timestamp}-${attachmentIndex}-${attachmentUrl(attachment)}`}
+                        className="attachment-chip"
+                        href={attachmentUrl(attachment)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <FileIcon size={14} />
+                        <span>{attachmentLabel(attachment)}</span>
+                      </a>
                     ))}
                   </div>
                 ) : null}

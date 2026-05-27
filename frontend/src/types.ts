@@ -9,19 +9,32 @@ export interface ChatMessage {
   meta?: string;
   images?: string[];
   imageCount?: number;
+  attachments?: AttachmentAsset[];
+  attachmentCount?: number;
   pending?: boolean;
   error?: boolean;
 }
 
-export interface ImageAsset {
+export interface AttachmentAsset {
+  kind?: string;
+  path?: string;
   workspace_path?: string;
-  external_url?: string;
+  blob_url?: string;
   mime_type?: string;
   size_bytes?: number;
+  file_name?: string;
+  original_name?: string;
+  caption?: string;
+  source_channel?: string;
+  source_message_id?: string;
+  source_resource_id?: string;
+  source_resource_type?: string;
+}
+
+export interface ImageAsset extends AttachmentAsset {
+  external_url?: string;
   width?: number;
   height?: number;
-  blob_url?: string;
-  original_name?: string;
 }
 
 export interface ChatSettings {
@@ -33,7 +46,7 @@ export interface ChatSettings {
 export interface ChatPanelState {
   id: "single";
   messages: ChatMessage[];
-  pendingImages: string[];
+  pendingAttachments: AttachmentAsset[];
   settings: ChatSettings;
   sending: boolean;
 }
@@ -102,6 +115,7 @@ export interface FileReadResult extends FileNode {
 
 export interface WorkspaceUploadResult extends FileNode {
   status: string;
+  blob_url?: string;
 }
 
 export interface SearchResult extends FileNode {
@@ -118,6 +132,8 @@ export interface MessageItem {
   metadata?: Record<string, unknown>;
   images?: ImageAsset[];
   image_count?: number;
+  attachments?: AttachmentAsset[];
+  attachment_count?: number;
   tool_call?: {
     name: string;
     arguments: unknown;

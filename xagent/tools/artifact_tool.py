@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import mimetypes
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
-from xagent.utils.image_utils import workspace_blob_relative_path, workspace_blob_url
+from xagent.schemas.attachment import attachment_markdown, workspace_attachment_from_path
+from xagent.utils.image_utils import workspace_blob_relative_path
 from xagent.utils.tool_decorator import function_tool
 
 
@@ -44,17 +44,11 @@ def create_attach_artifact_tool(*, workspace_dir: str):
         if not resolved_path.is_file():
             return _artifact_error("Artifact path must point to a regular file")
 
-        relative_path = resolved_path.relative_to(workspace_root).as_posix()
-        mime_type, _ = mimetypes.guess_type(resolved_path.name)
-        mime_type = mime_type or "application/octet-stream"
-        artifact = {
-            "kind": "image" if mime_type.startswith("image/") else "file",
-            "path": relative_path,
-            "blob_url": workspace_blob_url(relative_path),
-            "mime_type": mime_type,
-            "file_name": resolved_path.name,
-            "caption": str(caption or "").strip(),
-        }
+        artifact = workspace_attachment_from_path(
+            resolved_path,
+            workspace_root,
+            caption=str(caption or "").strip(),
+        )
         return {
             "status": "ok",
             "type": ARTIFACT_ATTACHMENT_TYPE,
@@ -75,14 +69,7 @@ def is_artifact_attachment_result(result: Any) -> bool:
 
 
 def artifact_attachment_markdown(result: dict) -> str:
-    artifact = result.get("artifact") or {}
-    blob_url = str(artifact.get("blob_url") or "").strip()
-    if not blob_url:
-        return ""
-    label = str(artifact.get("caption") or artifact.get("file_name") or "Artifact").strip()
-    if str(artifact.get("kind") or "") == "image":
-        return f"![{label}]({blob_url})"
-    return f"[{label}]({blob_url})"
+    return attachment_markdown(result.get("artifact") or {})
 
 
 def artifact_attachment_description(tool_name: str, result: dict) -> str:

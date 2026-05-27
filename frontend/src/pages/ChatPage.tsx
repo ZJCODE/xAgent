@@ -1,14 +1,48 @@
-import { ImagePlus, Send, X } from "lucide-react";
+import { FileIcon, Paperclip, Send, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Markdown } from "../components/Markdown";
 import { useChat } from "../context/ChatContext";
 import { classNames } from "../lib/format";
-import type { ChatPanelState } from "../types";
+import type { AttachmentAsset, ChatPanelState } from "../types";
+
+function attachmentUrl(attachment: AttachmentAsset): string {
+  return attachment.blob_url || (attachment.path ? `/api/workspace/blob?path=${encodeURIComponent(attachment.path)}` : "");
+}
+
+function attachmentLabel(attachment: AttachmentAsset): string {
+  return attachment.caption || attachment.original_name || attachment.file_name || attachment.path?.split("/").pop() || "Attachment";
+}
+
+function isImageAttachment(attachment: AttachmentAsset): boolean {
+  return attachment.kind === "image" || Boolean(attachment.mime_type?.startsWith("image/"));
+}
+
+function AttachmentChips({ attachments }: { attachments?: AttachmentAsset[] }) {
+  const fileAttachments = (attachments || []).filter((attachment) => !isImageAttachment(attachment));
+  if (!fileAttachments.length) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {fileAttachments.map((attachment, index) => {
+        const url = attachmentUrl(attachment);
+        const label = attachmentLabel(attachment);
+        return (
+          <a key={`${url}-${index}`} className="attachment-chip" href={url} target="_blank" rel="noreferrer">
+            <FileIcon size={14} />
+            <span>{label}</span>
+          </a>
+        );
+      })}
+    </div>
+  );
+}
 
 function ChatBubble({ message }: { message: ChatPanelState["messages"][number] }) {
   const isUser = message.role === "user";
   const isObservation = message.role === "observation";
-  const persistedImageCount = isUser && !message.images?.length ? message.imageCount || 0 : 0;
+  const imageAttachments = (message.attachments || []).filter(isImageAttachment).map(attachmentUrl).filter(Boolean);
+  const images = message.images?.length ? message.images : imageAttachments;
+  const persistedImageCount = isUser && !images.length ? message.imageCount || 0 : 0;
+  const persistedAttachmentCount = isUser && !message.attachments?.length ? message.attachmentCount || 0 : 0;
   return (
     <div className={classNames("flex", isUser && "justify-end")}>
       <div
@@ -25,16 +59,22 @@ function ChatBubble({ message }: { message: ChatPanelState["messages"][number] }
           <Markdown content={message.content} />
         )}
         {message.pending && message.content ? <span className="typing-cursor" /> : null}
-        {isUser && message.images?.length ? (
+        {isUser && images.length ? (
           <div className="mt-3 flex flex-wrap gap-2">
-            {message.images.map((src, index) => (
+            {images.map((src, index) => (
               <img key={`${message.id}-${index}`} src={src} alt="" className="h-20 rounded-lg border border-white/30 object-cover" />
             ))}
           </div>
         ) : null}
+        {isUser ? <AttachmentChips attachments={message.attachments} /> : null}
         {persistedImageCount ? (
           <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
             Attached {persistedImageCount} {persistedImageCount === 1 ? "image" : "images"}
+          </div>
+        ) : null}
+        {persistedAttachmentCount ? (
+          <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+            Attached {persistedAttachmentCount} {persistedAttachmentCount === 1 ? "file" : "files"}
           </div>
         ) : null}
       </div>
@@ -43,12 +83,11 @@ function ChatBubble({ message }: { message: ChatPanelState["messages"][number] }
 }
 
 function ChatPanel({ panel }: { panel: ChatPanelState }) {
-  const { updateSettings, addImages, removeImage, sendMessage, sendObservation, capabilities } = useChat();
+  const { updateSettings, addAttachments, removeAttachment, sendMessage, sendObservation } = useChat();
   const [messageText, setMessageText] = useState("");
   const [observeText, setObserveText] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const canUploadImages = capabilities.vision_input ?? capabilities.vision;
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -58,7 +97,7 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
   const submitMessage = (event?: FormEvent) => {
     event?.preventDefault();
     const text = messageText.trim();
-    if (!text && !panel.pendingImages.length) return;
+    if (!text && !panel.pendingAttachments.length) return;
     setMessageText("");
     void sendMessage(panel.id, text);
   };
@@ -122,16 +161,21 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
         )}
       </div>
 
-      {panel.pendingImages.length ? (
+      {panel.pendingAttachments.length ? (
         <div className="border-t border-black/5 dark:border-white/10 px-3 sm:px-6 py-3">
-          {panel.pendingImages.map((src, index) => (
-            <span key={`${src.slice(0, 24)}-${index}`} className="image-chip">
-              <img src={src} alt="" />
-              <button type="button" onClick={() => removeImage(panel.id, index)} title="Remove image">
+          {panel.pendingAttachments.map((attachment, index) => {
+            const url = attachmentUrl(attachment);
+            const isImage = isImageAttachment(attachment);
+            return (
+            <span key={`${url.slice(0, 24)}-${index}`} className={isImage ? "image-chip" : "file-chip"}>
+              {isImage ? <img src={url} alt="" /> : <FileIcon size={15} />}
+              {!isImage ? <span>{attachmentLabel(attachment)}</span> : null}
+              <button type="button" onClick={() => removeAttachment(panel.id, index)} title="Remove attachment">
                 <X size={14} />
               </button>
             </span>
-          ))}
+          );
+          })}
         </div>
       ) : null}
 
@@ -163,31 +207,26 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
           }}
         />
         <div className="composer-actions">
-          {canUploadImages ? (
-            <>
-              <button
-                type="button"
-                className="icon-button composer-upload-button"
-                onClick={() => fileInputRef.current?.click()}
-                title="Upload image"
-                disabled={panel.sending}
-              >
-                <ImagePlus size={18} />
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                className="hidden"
-                accept="image/jpeg,image/png,image/webp"
-                multiple
-                onChange={(event) => {
-                  if (event.target.files) addImages(panel.id, event.target.files);
-                  event.currentTarget.value = "";
-                }}
-              />
-            </>
-          ) : null}
-          <button type="submit" className="send-button" disabled={panel.sending || (!messageText.trim() && !panel.pendingImages.length)}>
+          <button
+            type="button"
+            className="icon-button composer-upload-button"
+            onClick={() => fileInputRef.current?.click()}
+            title="Attach files"
+            disabled={panel.sending}
+          >
+            <Paperclip size={18} />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            multiple
+            onChange={(event) => {
+              if (event.target.files) addAttachments(panel.id, event.target.files);
+              event.currentTarget.value = "";
+            }}
+          />
+          <button type="submit" className="send-button" disabled={panel.sending || (!messageText.trim() && !panel.pendingAttachments.length)}>
             <Send size={16} />
             Send
           </button>

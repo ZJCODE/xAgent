@@ -11,6 +11,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     LogLevel = None
 
+from xagent.integrations.feishu import adapter as feishu_adapter_module
 from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAttachment
 from xagent.integrations.feishu.config import FeishuAdapterConfig
 
@@ -106,9 +107,10 @@ class _FakeDownloadChannel(_FakeChannel):
 
 
 class _FakeMessageResourceApi:
-    def __init__(self, data=b"\x89PNG\r\n\x1a\nimage", file_name="tiny.png"):
+    def __init__(self, data=b"\x89PNG\r\n\x1a\nimage", file_name="tiny.png", content_type="image/png"):
         self.data = data
         self.file_name = file_name
+        self.content_type = content_type
         self.requests = []
 
     async def aget(self, request):
@@ -117,7 +119,7 @@ class _FakeMessageResourceApi:
             code=0,
             file=io.BytesIO(self.data),
             file_name=self.file_name,
-            raw=SimpleNamespace(headers={"content-type": "image/png"}),
+            raw=SimpleNamespace(headers={"content-type": self.content_type}),
         )
 
 
@@ -137,6 +139,15 @@ def _failed_send_result():
         error=SimpleNamespace(code=SimpleNamespace(value="failed"), raw_code=500, hint="failed"),
         raw=None,
     )
+
+
+def _noisy_jpeg_bytes(*, size=(1400, 1400), quality=95) -> bytes:
+    from PIL import Image
+
+    image = Image.effect_noise(size, 96).convert("RGB")
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=quality)
+    return buffer.getvalue()
 
 
 class _FakeUserResolver:
@@ -242,6 +253,14 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_reconnect_callbacks_are_sync_sdk_hooks(self):
+        adapter = FeishuAdapter(agent=_FakeAgent(), config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+
+        self.assertFalse(asyncio.iscoroutinefunction(adapter._on_reconnecting))
+        self.assertFalse(asyncio.iscoroutinefunction(adapter._on_reconnected))
+        self.assertIsNone(adapter._on_reconnecting())
+        self.assertIsNone(adapter._on_reconnected())
+
     def test_log_redaction_hides_ws_credentials(self):
         record = logging.LogRecord(
             name="Lark",
@@ -330,6 +349,45 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertIn("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", agent.chat_calls[0]["user_message"])
             self.assertNotIn(str(workspace_dir), agent.chat_calls[0]["user_message"])
 
+    def test_direct_large_image_message_compresses_before_workspace_and_model(self):
+        original_max_bytes = feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_BYTES
+        original_max_edge = feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_EDGE
+        feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_BYTES = 180_000
+        feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_EDGE = 512
+        try:
+            image_bytes = _noisy_jpeg_bytes()
+            with tempfile.TemporaryDirectory() as tmpdir:
+                workspace_dir = Path(tmpdir).resolve()
+                agent = _FakeAgent()
+                agent.workspace_dir = workspace_dir
+                resource_api = _FakeMessageResourceApi(
+                    data=image_bytes,
+                    file_name="large.jpg",
+                    content_type="image/jpeg",
+                )
+                client = SimpleNamespace(im=SimpleNamespace(v1=SimpleNamespace(message_resource=resource_api)))
+                adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+                adapter._channel = _FakeChannel(client=client)
+                msg = SimpleNamespace(
+                    chat_type="p2p",
+                    chat_id="oc_dm",
+                    message_id="om_large_image",
+                    sender_id="ou_user",
+                    message_type="image",
+                    content='{"image_key":"img_large"}',
+                )
+
+                asyncio.run(adapter._dispatch(msg))
+
+                saved_images = list((workspace_dir / "temp" / "images" / "feishu").glob("*.jpg"))
+                self.assertEqual(len(saved_images), 1)
+                self.assertLess(saved_images[0].stat().st_size, len(image_bytes))
+                self.assertLessEqual(saved_images[0].stat().st_size, feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_BYTES)
+                self.assertEqual(agent.chat_calls[0]["attachments"][0]["size_bytes"], saved_images[0].stat().st_size)
+        finally:
+            feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_BYTES = original_max_bytes
+            feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_EDGE = original_max_edge
+
     def test_direct_image_message_prefers_channel_download_resource(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir).resolve()
@@ -355,6 +413,40 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertEqual(resource_api.requests, [])
             self.assertEqual(len(saved_images), 1)
             self.assertEqual(saved_images[0].read_bytes(), adapter._channel.download_data)
+
+    def test_direct_file_message_downloads_resource_as_attachment(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            agent = _FakeAgent()
+            agent.workspace_dir = workspace_dir
+            resource_api = _FakeMessageResourceApi(
+                data=b"%PDF-1.4\n",
+                file_name="report.pdf",
+                content_type="application/pdf",
+            )
+            client = SimpleNamespace(im=SimpleNamespace(v1=SimpleNamespace(message_resource=resource_api)))
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel(client=client)
+            msg = SimpleNamespace(
+                chat_type="p2p",
+                chat_id="oc_dm",
+                message_id="om_file",
+                sender_id="ou_user",
+                message_type="file",
+                content='{"file_key":"file_test","file_name":"report.pdf"}',
+            )
+
+            asyncio.run(adapter._dispatch(msg))
+
+            saved_files = list((workspace_dir / "temp" / "attachments" / "feishu").glob("*.pdf"))
+            self.assertEqual(resource_api.requests[0].message_id, "om_file")
+            self.assertEqual(resource_api.requests[0].file_key, "file_test")
+            self.assertEqual(resource_api.requests[0].type, "file")
+            self.assertEqual(len(saved_files), 1)
+            self.assertEqual(saved_files[0].read_bytes(), resource_api.data)
+            self.assertNotIn("image_source", agent.chat_calls[0])
+            self.assertEqual(agent.chat_calls[0]["attachments"][0]["kind"], "file")
+            self.assertTrue(agent.chat_calls[0]["attachments"][0]["path"].startswith("temp/attachments/feishu/"))
 
     def test_direct_image_message_strips_redundant_inline_feishu_markdown(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -786,6 +878,40 @@ class FeishuAdapterTests(unittest.TestCase):
         sent_payload = adapter._channel.sent[0][1]
         self.assertEqual(sent_payload["image"]["source"], str(image_path.resolve()))
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user:media:1"})
+
+    def test_large_workspace_blob_is_compressed_before_feishu_upload(self):
+        original_max_bytes = feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_BYTES
+        original_max_edge = feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_EDGE
+        feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_BYTES = 180_000
+        feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_EDGE = 512
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                workspace_dir = Path(tmpdir).resolve()
+                image_path = workspace_dir / "temp" / "attachments" / "web" / "large.jpg"
+                image_path.parent.mkdir(parents=True)
+                image_path.write_bytes(_noisy_jpeg_bytes())
+                agent = _FakeAgent()
+                agent.workspace_dir = workspace_dir
+                adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+                adapter._channel = _FakeChannel()
+
+                asyncio.run(adapter._send_markdown(
+                    chat_id="oc_dm",
+                    message_id="om_user",
+                    uuid_message_id="om_user",
+                    text="![Photo](/api/workspace/blob?path=temp%2Fattachments%2Fweb%2Flarge.jpg)",
+                    is_group=False,
+                ))
+
+                sent_path = Path(adapter._channel.sent[0][1]["image"]["source"])
+                self.assertNotEqual(sent_path, image_path.resolve())
+                self.assertTrue(sent_path.is_file())
+                self.assertTrue(sent_path.relative_to(workspace_dir).as_posix().startswith("temp/images/feishu/outbound/"))
+                self.assertLess(sent_path.stat().st_size, image_path.stat().st_size)
+                self.assertLessEqual(sent_path.stat().st_size, feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_BYTES)
+        finally:
+            feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_BYTES = original_max_bytes
+            feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_EDGE = original_max_edge
 
     def test_structured_attachment_is_sent_once_when_markdown_duplicates_it(self):
         with tempfile.TemporaryDirectory() as tmpdir:

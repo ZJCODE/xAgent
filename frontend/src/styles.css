@@ -462,6 +462,34 @@ textarea {
   object-fit: cover;
 }
 
+.file-chip,
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  max-width: min(100%, 260px);
+  border-radius: 9999px;
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.66);
+  color: inherit;
+  padding: 0.35rem 0.55rem;
+  text-decoration: none;
+}
+
+.dark .file-chip,
+.dark .attachment-chip {
+  background: rgba(24, 24, 27, 0.7);
+}
+
+.file-chip span,
+.attachment-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .console-page {
   display: flex;
   height: 100%;

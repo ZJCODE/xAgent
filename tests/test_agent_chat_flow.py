@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import unittest
 from types import SimpleNamespace
 
@@ -6,7 +7,7 @@ from pydantic import BaseModel
 
 from xagent.components.message import MessageStorageBase
 from xagent.core.agent import Agent
-from xagent.core.config import AgentConfig, ReplyType
+from xagent.core.config import AgentConfig, MemoryMode, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.providers import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_OPENAI_RESPONSES
@@ -946,6 +947,17 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.memory_handler = memory_handler or FakeMemoryHandler()
         agent.tool_executor = tool_executor or FakeToolExecutor()
         return agent
+
+    def test_reset_memory_mode_ignores_token_from_different_context(self):
+        agent = self._build_agent(
+            storage=InMemoryMessageStorage(),
+            model_client=CapturingModelClient([]),
+        )
+        memory_mode_var = agent._get_memory_mode_var()
+        other_context = contextvars.Context()
+        token = other_context.run(memory_mode_var.set, MemoryMode.DISABLED)
+
+        agent._reset_memory_mode(token)
 
     async def test_chat_keeps_tool_messages_transient_inside_loop(self):
         storage = InMemoryMessageStorage()
