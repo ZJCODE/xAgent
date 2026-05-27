@@ -504,6 +504,40 @@ provider:
             self.assertEqual(config["search"]["provider"], "openai")
             self.assertEqual(config["search"]["api_key"], "openai-search-key")
 
+    def test_init_writes_qwen_search_for_qwen_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="qwen",
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                api_key="qwen-key",
+                model="qwen3-max-2026-01-23",
+                identity="# Identity\n\nYou search with Qwen.\n",
+                search_provider="qwen",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["search"], {"provider": "qwen"})
+
+    def test_init_writes_qwen_search_key_for_non_qwen_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="deepseek",
+                base_url="https://api.deepseek.com",
+                api_key="deepseek-key",
+                model="deepseek-v4-pro",
+                identity="# Identity\n\nYou search with Qwen.\n",
+                search_provider="qwen",
+                search_api_key="qwen-search-key",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["search"]["provider"], "qwen")
+            self.assertEqual(config["search"]["api_key"], "qwen-search-key")
+
     def test_init_rejects_openai_image_generation_for_non_openai_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
@@ -757,7 +791,6 @@ provider:
         answers = iter([
             "2",
             "3",
-            "4",
             "",
             "",
             "",
@@ -782,7 +815,6 @@ provider:
         answers = iter([
             "4",
             "3",
-            "1",
             "",
             "",
             ".",
@@ -799,9 +831,30 @@ provider:
         self.assertEqual(selection.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1")
         self.assertEqual(selection.api_key, "qwen-key")
         self.assertEqual(selection.model, "qwen3.6-max-preview")
-        self.assertEqual(selection.search_provider, "duckduckgo")
+        self.assertEqual(selection.search_provider, "qwen")
         self.assertEqual(selection.image_generation_provider, "qwen")
+        self.assertNotIn("Search provider", stdout.getvalue())
         self.assertNotIn("Image generation provider", stdout.getvalue())
+
+    def test_collect_init_selection_supports_qwen_search_for_non_qwen_provider(self):
+        answers = iter([
+            "2",
+            "1",
+            "3",
+            "",
+            "",
+            ".",
+        ])
+        secrets = iter(["deepseek-key", "qwen-search-key"])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: next(secrets),
+        )
+
+        self.assertEqual(selection.provider, "deepseek")
+        self.assertEqual(selection.search_provider, "qwen")
+        self.assertEqual(selection.search_api_key, "qwen-search-key")
 
     def test_collect_init_selection_supports_openai_search_for_non_openai_provider(self):
         answers = iter([
@@ -824,32 +877,11 @@ provider:
         self.assertEqual(selection.search_provider, "openai")
         self.assertEqual(selection.search_api_key, "openai-search-key")
 
-    def test_collect_init_selection_supports_brave_search_api_key(self):
-        answers = iter([
-            "2",
-            "",
-            "3",
-            "",
-            "",
-            "",
-            ".",
-        ])
-        secrets = iter(["deepseek-key", "brave-key"])
-
-        selection = collect_init_selection(
-            input_func=lambda prompt: next(answers),
-            secret_input_func=lambda prompt: next(secrets),
-        )
-
-        self.assertEqual(selection.provider, "deepseek")
-        self.assertEqual(selection.search_provider, "brave")
-        self.assertEqual(selection.search_api_key, "brave-key")
-
     def test_collect_init_selection_supports_minimax_provider_with_builtin_anthropic_protocol(self):
         answers = iter([
             "3",
             "",
-            "1",
+            "",
             "",
             ".",
         ])
@@ -865,15 +897,13 @@ provider:
         self.assertEqual(selection.base_url, "https://api.minimaxi.com/anthropic")
         self.assertEqual(selection.api_key, "minimax-key")
         self.assertEqual(selection.model, "MiniMax-M2.7")
-        self.assertEqual(selection.search_provider, "duckduckgo")
+        self.assertEqual(selection.search_provider, "none")
         self.assertEqual(selection.image_generation_provider, "minimax")
         self.assertNotIn("Image generation provider", stdout.getvalue())
 
     def test_collect_init_selection_supports_anthropic_provider(self):
         answers = iter([
             "5",
-            "",
-            "1",
             "",
             "",
             "",
@@ -890,7 +920,7 @@ provider:
         self.assertEqual(selection.base_url, "https://api.anthropic.com")
         self.assertEqual(selection.api_key, "anthropic-key")
         self.assertEqual(selection.model, "claude-sonnet-4-20250514")
-        self.assertEqual(selection.search_provider, "duckduckgo")
+        self.assertEqual(selection.search_provider, "none")
 
     def test_collect_init_selection_custom_provider_selects_model_api_before_base_url(self):
         answers = iter([
@@ -898,7 +928,7 @@ provider:
             "2",
             "",
             "y",
-            "1",
+            "",
             "",
             "",
             "",
@@ -916,13 +946,13 @@ provider:
         self.assertEqual(selection.api_key, "custom-key")
         self.assertEqual(selection.model, "your_model_here")
         self.assertTrue(selection.supports_vision)
-        self.assertEqual(selection.search_provider, "duckduckgo")
+        self.assertEqual(selection.search_provider, "none")
 
     def test_collect_init_selection_supports_openai_image_generation_for_non_openai_provider(self):
         answers = iter([
             "2",
             "1",
-            "4",
+            "",
             "2",
             "",
             "",
@@ -944,7 +974,6 @@ provider:
         answers = iter([
             "2",
             "1",
-            "1",
             "",
             "",
             "",
@@ -958,8 +987,9 @@ provider:
             )
 
         search_output = stdout.getvalue().split("Search provider", 1)[1]
-        self.assertEqual(selection.search_provider, "duckduckgo")
+        self.assertEqual(selection.search_provider, "none")
         self.assertIn("openai", search_output)
+        self.assertIn("qwen", search_output)
         self.assertIn("Image generation provider", stdout.getvalue())
         self.assertIn("minimax", stdout.getvalue())
 
@@ -985,7 +1015,7 @@ provider:
         self.assertNotIn("(default)", stdout.getvalue())
         self.assertNotIn("Image generation provider", stdout.getvalue())
 
-    def test_config_loads_duckduckgo_search_tool(self):
+    def test_config_rejects_unknown_search_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -994,16 +1024,14 @@ provider:
     model: "gpt-5.4-mini"
     api_key: "test-key"
 search:
-    provider: "duckduckgo"
+    provider: "unsupported_search"
 """,
                 encoding="utf-8",
             )
             write_identity(tmpdir)
 
-            runner = BaseAgentRunner(config_dir=tmpdir)
-
-            self.assertIn("run_command", runner.agent.tools)
-            self.assertIn("web_search", runner.agent.tools)
+            with self.assertRaisesRegex(ValueError, "Unsupported search provider"):
+                BaseAgentRunner(config_dir=tmpdir)
 
     def test_config_skips_search_tool_when_disabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1076,6 +1104,90 @@ search:
                 str(search_provider.client.base_url).rstrip("/"),
                 "https://api.openai.com/v1",
             )
+
+    def test_config_rejects_qwen_search_for_non_qwen_provider_without_search_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    api_key: "test-key"
+search:
+    provider: "qwen"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "requires search.api_key"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_accepts_qwen_search_for_non_qwen_provider_with_search_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    base_url: "https://api.deepseek.com"
+    api_key: "deepseek-key"
+search:
+    provider: "qwen"
+    api_key: "qwen-search-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            web_search_tool = runner.agent.tools["web_search"]
+            search_provider = next(
+                cell.cell_contents
+                for cell in web_search_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredSearchProvider"
+            )
+
+            self.assertIn("web_search", runner.agent.tools)
+            self.assertEqual(search_provider.provider, "qwen")
+            self.assertEqual(search_provider.model, "qwen3-max-2026-01-23")
+            self.assertEqual(
+                str(search_provider.client.base_url).rstrip("/"),
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            )
+
+    def test_config_loads_qwen_search_tool_with_main_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "qwen"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model: "qwen3-max-2026-01-23"
+    api_key: "qwen-key"
+search:
+    provider: "qwen"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            web_search_tool = runner.agent.tools["web_search"]
+            search_provider = next(
+                cell.cell_contents
+                for cell in web_search_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredSearchProvider"
+            )
+
+            self.assertIn("web_search", runner.agent.tools)
+            self.assertEqual(search_provider.provider, "qwen")
+            self.assertEqual(search_provider.model, "qwen3-max-2026-01-23")
+            self.assertEqual(search_provider.config["api_key"], "qwen-key")
+            self.assertEqual(search_provider.config["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
     def test_config_loads_openai_image_generation_tool(self):
         with tempfile.TemporaryDirectory() as tmpdir:

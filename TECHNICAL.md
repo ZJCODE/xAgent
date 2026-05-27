@@ -147,19 +147,9 @@ provider:
 
 `search.provider` 支持：
 
-- `openai`：使用 OpenAI Responses API 的内置 web search。任意模型 provider 都可选择；当主 `provider` 不是 OpenAI 时，必须额外配置 `search.api_key` 作为 OpenAI API key。可选 `search.model` 指定用于搜索的 OpenAI 模型，默认使用 `gpt-5.4-mini`。
-- `duckduckgo`：不需要 API key。
-- `brave`：需要 `search.api_key`，也可通过环境变量 `BRAVE_SEARCH_API_KEY` 或 `BRAVE_API_KEY` 提供。
+- `openai`：使用 OpenAI Responses API 的内置 `web_search`。任意模型 provider 都可选择；当主 `provider` 不是 OpenAI 时，必须额外配置 `search.api_key` 作为 OpenAI API key。可选 `search.model` 指定用于搜索的 OpenAI 模型，默认使用 `gpt-5.4-mini`。OpenAI search 工具参数支持 `search_context_size`、`country`、`city`、`region`、`timezone`、`allowed_domains`、`blocked_domains`、`external_web_access`、`return_token_budget` 和 `force_search`。
+- `qwen`：使用 DashScope OpenAI-compatible Responses API 的内置 `web_search`。当主 `provider.name` 是 `qwen` 时，`xagent init` 会自动选择该搜索 provider 并复用主 Qwen API key；其它 provider 使用 Qwen search 时需要配置 `search.api_key`。默认同时启用 `web_extractor`、`code_interpreter` 和 `enable_thinking`，可通过工具参数或配置中的 `search.web_extractor`、`search.code_interpreter`、`search.enable_thinking` 关闭。
 - `none`：关闭联网搜索工具。
-
-Brave 示例：
-
-```yaml
-search:
-  provider: brave
-  api_key: YOUR_BRAVE_SEARCH_API_KEY
-  safesearch: moderate
-```
 
 非 OpenAI provider 使用 OpenAI search 示例：
 
@@ -174,6 +164,22 @@ search:
   provider: openai
   api_key: YOUR_OPENAI_API_KEY
   model: gpt-5.4-mini
+```
+
+Qwen provider 使用原生 search 示例：
+
+```yaml
+provider:
+  name: qwen
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key: YOUR_DASHSCOPE_API_KEY
+  model: qwen3-max-2026-01-23
+
+search:
+  provider: qwen
+  enable_thinking: true
+  web_extractor: true
+  code_interpreter: true
 ```
 
 当搜索开启时，Agent 会加载 `web_search` 工具；无论搜索是否开启，`run_command` 工具都会作为内置工具加载。

@@ -16,6 +16,7 @@ from ..core.providers import (
     normalize_provider_name,
     normalize_model_api,
     provider_is_official_openai,
+    provider_base_url,
     provider_model_api,
     provider_supports_vision,
     PROVIDER_MINIMAX,
@@ -39,7 +40,9 @@ from ..tools.image_generation_tool import (
     IMAGE_GENERATION_PROVIDER_QWEN,
 )
 from ..tools.search_tool import (
+    DEFAULT_QWEN_SEARCH_MODEL,
     SEARCH_PROVIDER_OPENAI,
+    SEARCH_PROVIDER_QWEN,
     is_placeholder_api_key,
     normalize_search_provider,
 )
@@ -342,6 +345,12 @@ class BaseAgentRunner:
             if is_placeholder_api_key(api_key):
                 raise ValueError(
                     "search.provider 'openai' requires search.api_key when provider is not OpenAI"
+                )
+        if search_provider == SEARCH_PROVIDER_QWEN and not self._is_qwen_provider(provider_cfg):
+            api_key = str(search_cfg.get("api_key") or "").strip()
+            if is_placeholder_api_key(api_key):
+                raise ValueError(
+                    "search.provider 'qwen' requires search.api_key when provider is not Qwen"
                 )
 
     def _validate_image_generation_config(
@@ -669,17 +678,38 @@ class BaseAgentRunner:
         *,
         model_client: Optional[Any],
     ) -> Optional[Any]:
-        """Build the client used by OpenAI built-in search."""
+        """Build the client used by provider-native search."""
         search_cfg = agent_cfg.get("search") or {}
         if not isinstance(search_cfg, dict):
             return model_client
 
         search_provider = normalize_search_provider(search_cfg.get("provider"))
-        if search_provider != SEARCH_PROVIDER_OPENAI:
+        provider_cfg = agent_cfg.get("provider") or {}
+        if search_provider == SEARCH_PROVIDER_OPENAI:
+            return self._initialize_openai_feature_client(search_cfg, provider_cfg, model_client=model_client)
+        if search_provider == SEARCH_PROVIDER_QWEN:
+            return self._initialize_qwen_search_client(search_cfg, provider_cfg, model_client=model_client)
+        return model_client
+
+    def _initialize_qwen_search_client(
+        self,
+        search_cfg: Dict[str, Any],
+        provider_cfg: Any,
+        *,
+        model_client: Optional[Any],
+    ) -> Optional[Any]:
+        if isinstance(provider_cfg, dict) and self._is_qwen_provider(provider_cfg):
             return model_client
 
-        provider_cfg = agent_cfg.get("provider") or {}
-        return self._initialize_openai_feature_client(search_cfg, provider_cfg, model_client=model_client)
+        api_key = str(search_cfg.get("api_key") or "").strip()
+        if not api_key or is_placeholder_api_key(api_key):
+            return None
+
+        client_kwargs: Dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": str(search_cfg.get("base_url") or provider_base_url(PROVIDER_QWEN)).strip(),
+        }
+        return self.observability.create_client(client_kwargs)
 
     def _initialize_image_generation_client(
         self,
@@ -736,6 +766,9 @@ class BaseAgentRunner:
         if search_provider == SEARCH_PROVIDER_OPENAI:
             if not isinstance(provider_cfg, dict) or not self._is_openai_provider(provider_cfg):
                 return AgentConfig.DEFAULT_MODEL
+        if search_provider == SEARCH_PROVIDER_QWEN:
+            if not isinstance(provider_cfg, dict) or not self._is_qwen_provider(provider_cfg):
+                return DEFAULT_QWEN_SEARCH_MODEL
         return self._get_agent_model(agent_cfg)
     
     def _load_agent_tools(
@@ -758,7 +791,7 @@ class BaseAgentRunner:
         ]
         search_client = self._initialize_search_client(agent_cfg, model_client=client)
         search_tool = create_web_search_tool(
-            agent_cfg.get("search"),
+            self._search_config_for_tools(agent_cfg),
             client=search_client,
             model=self._get_search_model(agent_cfg),
         )
@@ -776,6 +809,32 @@ class BaseAgentRunner:
         if getattr(self, "skills_storage", None) is not None:
             tools.append(create_read_skill_tool(self.skills_storage))
         return tools
+
+    def _search_config_for_tools(self, agent_cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        search_cfg = agent_cfg.get("search")
+        if not isinstance(search_cfg, dict):
+            return search_cfg
+
+        search_provider = normalize_search_provider(search_cfg.get("provider"))
+        if search_provider != SEARCH_PROVIDER_QWEN:
+            return search_cfg
+
+        provider_cfg = agent_cfg.get("provider") or {}
+        if not isinstance(provider_cfg, dict) or not self._is_qwen_provider(provider_cfg):
+            return search_cfg
+
+        merged_config = dict(search_cfg)
+        configured_key = str(search_cfg.get("api_key") or "").strip()
+        if not configured_key or is_placeholder_api_key(configured_key):
+            provider_key = str(provider_cfg.get("api_key") or "").strip()
+            if not is_placeholder_api_key(provider_key):
+                merged_config["api_key"] = provider_key
+
+        provider_base_url_value = str(provider_cfg.get("base_url") or "").strip()
+        if provider_base_url_value and not merged_config.get("base_url"):
+            merged_config["base_url"] = provider_base_url_value
+
+        return merged_config
 
     def _image_generation_config_for_tools(self, agent_cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         image_generation_cfg = agent_cfg.get("image_generation")

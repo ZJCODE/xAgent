@@ -389,10 +389,10 @@ CUSTOM_OPENAI_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_AP
 CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_API_ANTHROPIC_MESSAGES)
 API_KEY_PLACEHOLDER = "your_api_key_here"
 OPENAI_SEARCH_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
+QWEN_SEARCH_API_KEY_PLACEHOLDER = "your_qwen_api_key_here"
 OPENAI_IMAGE_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
 MINIMAX_IMAGE_API_KEY_PLACEHOLDER = "your_minimax_api_key_here"
 QWEN_IMAGE_API_KEY_PLACEHOLDER = "your_qwen_api_key_here"
-BRAVE_SEARCH_API_KEY_PLACEHOLDER = "YOUR_API_KEY"
 MODEL_PLACEHOLDER = "your_model_here"
 LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
 LANGFUSE_PUBLIC_KEY_PLACEHOLDER = "pk-lf-..."
@@ -434,15 +434,13 @@ QWEN_MODELS = (
 )
 OPENAI_SEARCH_PROVIDERS = (
     "openai",
-    "duckduckgo",
-    "brave",
+    "qwen",
     "none",
 )
 NON_OPENAI_SEARCH_PROVIDERS = (
-    "duckduckgo",
-    "openai",
-    "brave",
     "none",
+    "openai",
+    "qwen",
 )
 NON_OPENAI_IMAGE_GENERATION_PROVIDERS = (
     "none",
@@ -467,6 +465,14 @@ def _native_image_generation_provider(provider: str) -> str:
     if provider == PROVIDER_QWEN:
         return "qwen"
     return "none"
+
+
+def _native_search_provider(provider: str) -> str:
+    if provider == PROVIDER_OPENAI:
+        return "openai"
+    if provider == PROVIDER_QWEN:
+        return "qwen"
+    return ""
 
 
 def _image_generation_api_key_placeholder(provider: str) -> str:
@@ -536,10 +542,10 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
         search_config["api_key"] = selection.search_api_key or OPENAI_SEARCH_API_KEY_PLACEHOLDER
     elif search_config["provider"] == "openai" and selection.search_api_key:
         search_config["api_key"] = selection.search_api_key
-    elif search_config["provider"] == "brave":
-        search_config["api_key"] = BRAVE_SEARCH_API_KEY_PLACEHOLDER
-        if selection.search_api_key:
-            search_config["api_key"] = selection.search_api_key
+    elif search_config["provider"] == "qwen" and selection.provider != PROVIDER_QWEN:
+        search_config["api_key"] = selection.search_api_key or QWEN_SEARCH_API_KEY_PLACEHOLDER
+    elif search_config["provider"] == "qwen" and selection.search_api_key:
+        search_config["api_key"] = selection.search_api_key
     config["search"] = search_config
     selected_image_generation_provider = selection.image_generation_provider or "none"
     image_generation_config = {"provider": selected_image_generation_provider}
@@ -811,7 +817,8 @@ def collect_init_selection(
     if not api_key:
         api_key = API_KEY_PLACEHOLDER
 
-    search_provider = "openai" if provider == PROVIDER_OPENAI else _select_search_provider(provider, input_func=input_func)
+    native_search_provider = _native_search_provider(provider)
+    search_provider = native_search_provider or _select_search_provider(provider, input_func=input_func)
     search_api_key = ""
     if search_provider == "openai" and provider != PROVIDER_OPENAI:
         search_api_key = secret_input_func(
@@ -819,10 +826,12 @@ def collect_init_selection(
         ).strip()
         if not search_api_key:
             search_api_key = OPENAI_SEARCH_API_KEY_PLACEHOLDER
-    elif search_provider == "brave":
-        search_api_key = secret_input_func("Brave Search API key (leave blank to fill in later): ").strip()
+    elif search_provider == "qwen" and provider != PROVIDER_QWEN:
+        search_api_key = secret_input_func(
+            "Qwen API key for search (leave blank to fill in later): "
+        ).strip()
         if not search_api_key:
-            search_api_key = BRAVE_SEARCH_API_KEY_PLACEHOLDER
+            search_api_key = QWEN_SEARCH_API_KEY_PLACEHOLDER
 
     image_generation_provider = _select_image_generation_provider(provider, input_func=input_func)
     image_generation_api_key = ""

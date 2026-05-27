@@ -6,11 +6,8 @@ import logging
 import os
 from dataclasses import dataclass
 from html import unescape
-from html.parser import HTMLParser
-from typing import Any, Optional
-from urllib.parse import parse_qs, unquote, urlparse
+from typing import Any, Literal, Optional
 
-import httpx
 from openai import AsyncOpenAI
 
 from xagent.core.config import AgentConfig
@@ -20,20 +17,17 @@ from xagent.utils.tool_decorator import function_tool
 logger = logging.getLogger(__name__)
 
 SEARCH_PROVIDER_OPENAI = "openai"
-SEARCH_PROVIDER_DUCKDUCKGO = "duckduckgo"
-SEARCH_PROVIDER_BRAVE = "brave"
+SEARCH_PROVIDER_QWEN = "qwen"
 SEARCH_PROVIDER_NONE = "none"
 SUPPORTED_SEARCH_PROVIDERS = {
     SEARCH_PROVIDER_OPENAI,
-    SEARCH_PROVIDER_DUCKDUCKGO,
-    SEARCH_PROVIDER_BRAVE,
+    SEARCH_PROVIDER_QWEN,
     SEARCH_PROVIDER_NONE,
 }
 
-BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
-DUCKDUCKGO_INSTANT_ANSWER_ENDPOINT = "https://api.duckduckgo.com/"
-DUCKDUCKGO_HTML_ENDPOINT = "https://html.duckduckgo.com/html/"
-BRAVE_API_KEY_ENV_VARS = ("BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY")
+DEFAULT_QWEN_SEARCH_MODEL = "qwen3-max-2026-01-23"
+QWEN_COMPATIBLE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+QWEN_API_KEY_ENV_VARS = ("DASHSCOPE_API_KEY", "DASHSCOPE_API_TOKEN", "QWEN_API_KEY", "QWEN_API_TOKEN")
 PLACEHOLDER_API_KEYS = {
     "your_api_key",
     "your_api_key_here",
@@ -45,7 +39,32 @@ PLACEHOLDER_API_KEYS = {
     "your_qwen_api_key_here",
     "your_dashscope_api_key",
     "your_dashscope_api_key_here",
-    "your_brave_search_api_key",
+}
+
+OPENAI_SEARCH_CONTEXT_SIZES = {"low", "medium", "high"}
+OPENAI_RETURN_TOKEN_BUDGETS = {"default", "unlimited"}
+SEARCH_TOOL_PARAMETERS = {
+    SEARCH_PROVIDER_OPENAI: {
+        "query",
+        "max_results",
+        "search_context_size",
+        "country",
+        "city",
+        "region",
+        "timezone",
+        "allowed_domains",
+        "blocked_domains",
+        "external_web_access",
+        "return_token_budget",
+        "force_search",
+    },
+    SEARCH_PROVIDER_QWEN: {
+        "query",
+        "max_results",
+        "enable_thinking",
+        "web_extractor",
+        "code_interpreter",
+    },
 }
 
 
@@ -65,57 +84,6 @@ class SearchResult:
         }
 
 
-class DuckDuckGoHTMLParser(HTMLParser):
-    """Extract organic results from DuckDuckGo's HTML endpoint."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.results: list[SearchResult] = []
-        self._capturing_title = False
-        self._capturing_snippet = False
-        self._current_title_parts: list[str] = []
-        self._current_snippet_parts: list[str] = []
-        self._current_url = ""
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
-        attributes = dict(attrs)
-        class_name = attributes.get("class") or ""
-
-        if tag == "a" and "result__a" in class_name:
-            self._capturing_title = True
-            self._current_title_parts = []
-            self._current_url = _decode_duckduckgo_url(attributes.get("href") or "")
-            return
-
-        if "result__snippet" in class_name:
-            self._capturing_snippet = True
-            self._current_snippet_parts = []
-
-    def handle_data(self, data: str) -> None:
-        if self._capturing_title:
-            self._current_title_parts.append(data)
-        elif self._capturing_snippet:
-            self._current_snippet_parts.append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if self._capturing_title and tag == "a":
-            self._capturing_title = False
-            title = _clean_text(" ".join(self._current_title_parts))
-            if title and self._current_url:
-                self.results.append(SearchResult(title=title, url=self._current_url))
-
-        if self._capturing_snippet and tag in {"a", "div"}:
-            self._capturing_snippet = False
-            snippet = _clean_text(" ".join(self._current_snippet_parts))
-            if snippet and self.results:
-                latest = self.results[-1]
-                self.results[-1] = SearchResult(
-                    title=latest.title,
-                    url=latest.url,
-                    snippet=snippet,
-                )
-
-
 @dataclass(frozen=True)
 class ConfiguredSearchProvider:
     """Dispatch web search calls to the configured provider."""
@@ -129,8 +97,20 @@ class ConfiguredSearchProvider:
         self,
         query: str,
         max_results: int = 5,
-        freshness: Optional[str] = None,
+        search_context_size: Optional[Literal["low", "medium", "high"]] = None,
         country: Optional[str] = None,
+        city: Optional[str] = None,
+        region: Optional[str] = None,
+        timezone: Optional[str] = None,
+        allowed_domains: Optional[list[str]] = None,
+        blocked_domains: Optional[list[str]] = None,
+        external_web_access: Optional[bool] = None,
+        return_token_budget: Optional[Literal["default", "unlimited"]] = None,
+        force_search: Optional[bool] = None,
+        enable_thinking: Optional[bool] = None,
+        web_extractor: Optional[bool] = None,
+        code_interpreter: Optional[bool] = None,
+        freshness: Optional[str] = None,
         search_lang: Optional[str] = None,
     ) -> dict:
         query = query.strip()
@@ -138,21 +118,71 @@ class ConfiguredSearchProvider:
             return _error_response(self.provider, query, "query is required")
 
         result_limit = _normalize_result_limit(max_results)
+        provided_parameters = {
+            "search_context_size": search_context_size,
+            "country": country,
+            "city": city,
+            "region": region,
+            "timezone": timezone,
+            "allowed_domains": allowed_domains,
+            "blocked_domains": blocked_domains,
+            "external_web_access": external_web_access,
+            "return_token_budget": return_token_budget,
+            "force_search": force_search,
+            "enable_thinking": enable_thinking,
+            "web_extractor": web_extractor,
+            "code_interpreter": code_interpreter,
+            "freshness": freshness,
+            "search_lang": search_lang,
+        }
+        unsupported = _unsupported_parameters(self.provider, provided_parameters)
+        if unsupported:
+            return _error_response(
+                self.provider,
+                query,
+                f"{self.provider} web search does not support parameter(s): {', '.join(unsupported)}",
+            )
+
         if self.provider == SEARCH_PROVIDER_OPENAI:
-            return await self._search_openai(query, result_limit, freshness, country, search_lang)
-        if self.provider == SEARCH_PROVIDER_DUCKDUCKGO:
-            return await self._search_duckduckgo(query, result_limit, freshness, country, search_lang)
-        if self.provider == SEARCH_PROVIDER_BRAVE:
-            return await self._search_brave(query, result_limit, freshness, country, search_lang)
+            return await self._search_openai(
+                query=query,
+                result_limit=result_limit,
+                search_context_size=search_context_size,
+                country=country,
+                city=city,
+                region=region,
+                timezone=timezone,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                external_web_access=external_web_access,
+                return_token_budget=return_token_budget,
+                force_search=force_search,
+            )
+        if self.provider == SEARCH_PROVIDER_QWEN:
+            return await self._search_qwen(
+                query=query,
+                result_limit=result_limit,
+                enable_thinking=enable_thinking,
+                web_extractor=web_extractor,
+                code_interpreter=code_interpreter,
+            )
         return _error_response(self.provider, query, "search is disabled")
 
     async def _search_openai(
         self,
+        *,
         query: str,
         result_limit: int,
-        freshness: Optional[str],
+        search_context_size: Optional[str],
         country: Optional[str],
-        search_lang: Optional[str],
+        city: Optional[str],
+        region: Optional[str],
+        timezone: Optional[str],
+        allowed_domains: Optional[list[str]],
+        blocked_domains: Optional[list[str]],
+        external_web_access: Optional[bool],
+        return_token_budget: Optional[str],
+        force_search: Optional[bool],
     ) -> dict:
         search_client = self.client
         if search_client is None:
@@ -165,25 +195,32 @@ class ConfiguredSearchProvider:
                     f"OpenAI client is not configured: {exception}",
                 )
 
-        tool_config: dict[str, Any] = {
-            "type": "web_search",
-            "search_context_size": "medium",
-        }
-        normalized_country = _normalize_country(country)
-        if normalized_country:
-            tool_config["user_location"] = {
-                "type": "approximate",
-                "country": normalized_country,
-            }
+        try:
+            tool_config = _build_openai_tool_config(
+                config=self.config,
+                search_context_size=search_context_size,
+                country=country,
+                city=city,
+                region=region,
+                timezone=timezone,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                external_web_access=external_web_access,
+                return_token_budget=return_token_budget,
+            )
+            normalized_force_search = _normalize_optional_bool(
+                _option_value(force_search, self.config, "force_search")
+            )
+        except ValueError as exception:
+            return _error_response(self.provider, query, str(exception))
 
-        input_text = _build_openai_search_input(query, result_limit, freshness, search_lang)
         try:
             response = await search_client.responses.create(
-                model=self.model or AgentConfig.DEFAULT_MODEL,
+                model=self.model or self.config.get("model") or AgentConfig.DEFAULT_MODEL,
                 tools=[tool_config],
-                tool_choice="auto",
+                tool_choice="required" if normalized_force_search else "auto",
                 include=["web_search_call.action.sources"],
-                input=input_text,
+                input=_build_openai_search_input(query, result_limit),
             )
         except Exception as exception:
             logger.warning("OpenAI web search failed: %s", exception)
@@ -201,111 +238,84 @@ class ConfiguredSearchProvider:
             "results": [result.to_dict() for result in results],
         }
 
-    async def _search_duckduckgo(
+    async def _search_qwen(
         self,
+        *,
         query: str,
         result_limit: int,
-        freshness: Optional[str],
-        country: Optional[str],
-        search_lang: Optional[str],
+        enable_thinking: Optional[bool],
+        web_extractor: Optional[bool],
+        code_interpreter: Optional[bool],
     ) -> dict:
-        headers = {
-            "User-Agent": "xAgent/1.0 (+https://github.com/ZJCODE/xagent)",
-            "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
-        }
-        results: list[SearchResult] = []
-        errors: list[str] = []
-
-        async with httpx.AsyncClient(
-            timeout=AgentConfig.SEARCH_HTTP_TIMEOUT,
-            headers=headers,
-            follow_redirects=True,
-        ) as http_client:
+        search_client = self.client
+        if search_client is None:
             try:
-                results.extend(await _fetch_duckduckgo_instant_answer(http_client, query))
+                search_client = _create_qwen_search_client(self.config)
             except Exception as exception:
-                logger.debug("DuckDuckGo instant answer failed: %s", exception)
-                errors.append(str(exception))
-
-            if len(results) < result_limit:
-                try:
-                    html_results = await _fetch_duckduckgo_html_results(
-                        http_client,
-                        query,
-                        freshness=freshness,
-                        country=country,
-                        search_lang=search_lang,
-                    )
-                    results.extend(html_results)
-                except Exception as exception:
-                    logger.debug("DuckDuckGo HTML search failed: %s", exception)
-                    errors.append(str(exception))
-
-        normalized_results = _deduplicate_results(results)[:result_limit]
-        status = "ok" if normalized_results else "empty"
-        response = {
-            "status": status,
-            "provider": self.provider,
-            "query": query,
-            "results": [result.to_dict() for result in normalized_results],
-        }
-        if errors and not normalized_results:
-            response["message"] = "; ".join(errors)
-        return response
-
-    async def _search_brave(
-        self,
-        query: str,
-        result_limit: int,
-        freshness: Optional[str],
-        country: Optional[str],
-        search_lang: Optional[str],
-    ) -> dict:
-        api_key = _get_brave_api_key(self.config)
-        if is_placeholder_api_key(api_key):
+                return _error_response(
+                    self.provider,
+                    query,
+                    f"Qwen search client is not configured: {exception}",
+                )
+        if search_client is None:
             return _error_response(
                 self.provider,
                 query,
-                "Brave Search API key is required. Set search.api_key or BRAVE_SEARCH_API_KEY.",
+                "Qwen search requires search.api_key, provider.api_key, or DASHSCOPE_API_KEY.",
             )
 
-        params: dict[str, Any] = {
-            "q": query,
-            "count": min(result_limit, 20),
-            "safesearch": self.config.get("safesearch", "moderate"),
-            "extra_snippets": "true",
-        }
-        normalized_freshness = _normalize_brave_freshness(freshness)
-        normalized_country = _normalize_country(country)
-        if normalized_freshness:
-            params["freshness"] = normalized_freshness
-        if normalized_country:
-            params["country"] = normalized_country
-        if search_lang:
-            params["search_lang"] = search_lang.strip().lower()
-
-        headers = {
-            "Accept": "application/json",
-            "X-Subscription-Token": api_key,
-        }
         try:
-            async with httpx.AsyncClient(timeout=AgentConfig.SEARCH_HTTP_TIMEOUT) as http_client:
-                response = await http_client.get(BRAVE_SEARCH_ENDPOINT, params=params, headers=headers)
-                response.raise_for_status()
-                payload = response.json()
-        except Exception as exception:
-            logger.warning("Brave web search failed: %s", exception)
+            normalized_enable_thinking = _normalize_optional_bool(
+                _option_value(enable_thinking, self.config, "enable_thinking"),
+                default=True,
+            )
+            normalized_web_extractor = _normalize_optional_bool(
+                _option_value(web_extractor, self.config, "web_extractor"),
+                default=True,
+            )
+            normalized_code_interpreter = _normalize_optional_bool(
+                _option_value(code_interpreter, self.config, "code_interpreter"),
+                default=True,
+            )
+        except ValueError as exception:
             return _error_response(self.provider, query, str(exception))
 
-        results = _extract_brave_results(payload)[:result_limit]
-        query_info = payload.get("query") or {}
-        return {
-            "status": "ok" if results else "empty",
-            "provider": self.provider,
-            "query": query_info.get("original") or query,
-            "more_results_available": bool(query_info.get("more_results_available")),
-            "results": [result.to_dict() for result in results],
+        tools: list[dict[str, Any]] = [{"type": "web_search"}]
+        if normalized_web_extractor:
+            tools.append({"type": "web_extractor"})
+        if normalized_code_interpreter:
+            tools.append({"type": "code_interpreter"})
+
+        request: dict[str, Any] = {
+            "model": self.model or self.config.get("model") or DEFAULT_QWEN_SEARCH_MODEL,
+            "input": _build_qwen_search_input(query, result_limit),
+            "tools": tools,
         }
+        if normalized_enable_thinking:
+            request["extra_body"] = {"enable_thinking": True}
+
+        try:
+            response = await search_client.responses.create(**request)
+        except Exception as exception:
+            logger.warning("Qwen web search failed: %s", exception)
+            return _error_response(self.provider, query, str(exception))
+
+        answer = _extract_openai_output_text(response)
+        citation_results = _extract_openai_citation_results(response)
+        source_results = _extract_openai_source_results(response)
+        structured_results = _extract_structured_url_results(response)
+        results = _deduplicate_results(citation_results + source_results + structured_results)[:result_limit]
+        result = {
+            "status": "ok" if answer or results else "empty",
+            "provider": self.provider,
+            "query": query,
+            "answer": answer,
+            "results": [item.to_dict() for item in results],
+        }
+        tool_usage = _extract_tool_usage(response)
+        if tool_usage:
+            result["tool_usage"] = tool_usage
+        return result
 
 
 def create_web_search_tool(
@@ -335,28 +345,80 @@ def create_web_search_tool(
         ),
         param_descriptions={
             "query": "Search query. Include key entities, dates, and constraints.",
-            "max_results": "Maximum number of results to return, from 1 to 20. Defaults to 5.",
-            "freshness": "Optional freshness hint: day, week, month, year, or provider-specific value.",
-            "country": "Optional two-letter country code such as US, CN, GB, or DE.",
-            "search_lang": "Optional two-letter search language code such as en, zh, ja, or de.",
+            "max_results": "Maximum number of normalized source results to return, from 1 to 20. Defaults to 5.",
+            "search_context_size": "OpenAI only. Web search context size: low, medium, or high.",
+            "country": "OpenAI only. Approximate two-letter country code such as US, CN, GB, or DE.",
+            "city": "OpenAI only. Approximate user city for local search results.",
+            "region": "OpenAI only. Approximate state, province, or region for local search results.",
+            "timezone": "OpenAI only. IANA timezone such as America/Chicago or Asia/Shanghai.",
+            "allowed_domains": "OpenAI only. Domains to allow, without http:// or https:// prefixes.",
+            "blocked_domains": "OpenAI only. Domains to block, without http:// or https:// prefixes.",
+            "external_web_access": "OpenAI only. Set false to use cached/indexed web content without live access.",
+            "return_token_budget": "OpenAI only. Returned-token budget for GPT-5+ reasoning search: default or unlimited.",
+            "force_search": "OpenAI only. Require the web search tool instead of leaving it to auto tool choice.",
+            "enable_thinking": "Qwen only. Enable DashScope thinking mode. Defaults to true.",
+            "web_extractor": "Qwen only. Include DashScope web_extractor alongside web_search. Defaults to true.",
+            "code_interpreter": "Qwen only. Include DashScope code_interpreter alongside web_search. Defaults to true.",
         },
     )
     async def web_search(
         query: str,
         max_results: int = 5,
-        freshness: Optional[str] = None,
+        search_context_size: Optional[Literal["low", "medium", "high"]] = None,
         country: Optional[str] = None,
+        city: Optional[str] = None,
+        region: Optional[str] = None,
+        timezone: Optional[str] = None,
+        allowed_domains: Optional[list[str]] = None,
+        blocked_domains: Optional[list[str]] = None,
+        external_web_access: Optional[bool] = None,
+        return_token_budget: Optional[Literal["default", "unlimited"]] = None,
+        force_search: Optional[bool] = None,
+        enable_thinking: Optional[bool] = None,
+        web_extractor: Optional[bool] = None,
+        code_interpreter: Optional[bool] = None,
+        freshness: Optional[str] = None,
         search_lang: Optional[str] = None,
     ) -> dict:
         return await search_provider.search(
             query=query,
             max_results=max_results,
-            freshness=freshness,
+            search_context_size=search_context_size,
             country=country,
+            city=city,
+            region=region,
+            timezone=timezone,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            external_web_access=external_web_access,
+            return_token_budget=return_token_budget,
+            force_search=force_search,
+            enable_thinking=enable_thinking,
+            web_extractor=web_extractor,
+            code_interpreter=code_interpreter,
+            freshness=freshness,
             search_lang=search_lang,
         )
 
+    _limit_tool_schema_to_provider(web_search.tool_spec, provider)
     return web_search
+
+
+def _limit_tool_schema_to_provider(tool_spec: dict, provider: str) -> None:
+    supported_parameters = SEARCH_TOOL_PARAMETERS.get(provider)
+    if not supported_parameters:
+        return
+
+    function_spec = tool_spec.get("function") or {}
+    parameters = function_spec.get("parameters") or {}
+    properties = parameters.get("properties") or {}
+    parameters["properties"] = {
+        name: schema
+        for name, schema in properties.items()
+        if name in supported_parameters
+    }
+    required = parameters.get("required") or []
+    parameters["required"] = [name for name in required if name in supported_parameters]
 
 
 def normalize_search_provider(provider: Any) -> str:
@@ -368,11 +430,11 @@ def normalize_search_provider(provider: Any) -> str:
         "none": SEARCH_PROVIDER_NONE,
         "openai_builtin": SEARCH_PROVIDER_OPENAI,
         "openai_web_search": SEARCH_PROVIDER_OPENAI,
-        "ddg": SEARCH_PROVIDER_DUCKDUCKGO,
-        "duck_duck_go": SEARCH_PROVIDER_DUCKDUCKGO,
-        "duckduckgo": SEARCH_PROVIDER_DUCKDUCKGO,
-        "brave_search": SEARCH_PROVIDER_BRAVE,
-        "brave": SEARCH_PROVIDER_BRAVE,
+        "openai": SEARCH_PROVIDER_OPENAI,
+        "dashscope": SEARCH_PROVIDER_QWEN,
+        "qwen_search": SEARCH_PROVIDER_QWEN,
+        "qwen_web_search": SEARCH_PROVIDER_QWEN,
+        "qwen": SEARCH_PROVIDER_QWEN,
     }
     normalized = aliases.get(normalized, normalized)
     if normalized not in SUPPORTED_SEARCH_PROVIDERS:
@@ -380,101 +442,98 @@ def normalize_search_provider(provider: Any) -> str:
     return normalized
 
 
-async def _fetch_duckduckgo_instant_answer(
-    http_client: httpx.AsyncClient,
-    query: str,
-) -> list[SearchResult]:
-    response = await http_client.get(
-        DUCKDUCKGO_INSTANT_ANSWER_ENDPOINT,
-        params={
-            "q": query,
-            "format": "json",
-            "no_html": "1",
-            "skip_disambig": "1",
-        },
-    )
-    response.raise_for_status()
-    payload = response.json()
-
-    results: list[SearchResult] = []
-    abstract = _clean_text(payload.get("AbstractText") or "")
-    abstract_url = payload.get("AbstractURL") or ""
-    if abstract and abstract_url:
-        results.append(
-            SearchResult(
-                title=_clean_text(payload.get("Heading") or query),
-                url=abstract_url,
-                snippet=abstract,
-            )
-        )
-
-    for item in _iter_duckduckgo_topics(payload.get("Results") or []):
-        result = _duckduckgo_topic_to_result(item)
-        if result:
-            results.append(result)
-    for item in _iter_duckduckgo_topics(payload.get("RelatedTopics") or []):
-        result = _duckduckgo_topic_to_result(item)
-        if result:
-            results.append(result)
-    return results
+def _unsupported_parameters(provider: str, provided_parameters: dict[str, Any]) -> list[str]:
+    supported_parameters = SEARCH_TOOL_PARAMETERS.get(provider, set())
+    return [
+        name
+        for name, value in provided_parameters.items()
+        if name not in supported_parameters and _parameter_was_provided(value)
+    ]
 
 
-async def _fetch_duckduckgo_html_results(
-    http_client: httpx.AsyncClient,
-    query: str,
+def _parameter_was_provided(value: Any) -> bool:
+    return value not in (None, "", [], {}, ())
+
+
+def _build_openai_tool_config(
     *,
-    freshness: Optional[str],
+    config: dict,
+    search_context_size: Optional[str],
     country: Optional[str],
-    search_lang: Optional[str],
-) -> list[SearchResult]:
-    params: dict[str, str] = {"q": query}
-    region = _duckduckgo_region(country, search_lang)
-    freshness_value = _normalize_duckduckgo_freshness(freshness)
-    if region:
-        params["kl"] = region
-    if freshness_value:
-        params["df"] = freshness_value
+    city: Optional[str],
+    region: Optional[str],
+    timezone: Optional[str],
+    allowed_domains: Optional[list[str]],
+    blocked_domains: Optional[list[str]],
+    external_web_access: Optional[bool],
+    return_token_budget: Optional[str],
+) -> dict[str, Any]:
+    normalized_context_size = _normalize_openai_search_context_size(
+        _option_value(search_context_size, config, "search_context_size"),
+        default="medium",
+    )
+    tool_config: dict[str, Any] = {
+        "type": "web_search",
+        "search_context_size": normalized_context_size,
+    }
 
-    response = await http_client.get(DUCKDUCKGO_HTML_ENDPOINT, params=params)
-    response.raise_for_status()
-    parser = DuckDuckGoHTMLParser()
-    parser.feed(response.text)
-    return parser.results
+    location = _openai_user_location(
+        country=_option_value(country, config, "country"),
+        city=_option_value(city, config, "city"),
+        region=_option_value(region, config, "region"),
+        timezone=_option_value(timezone, config, "timezone"),
+    )
+    if location:
+        tool_config["user_location"] = location
+
+    normalized_allowed_domains = _normalize_domain_list(
+        _option_value(allowed_domains, config, "allowed_domains"),
+        field_name="allowed_domains",
+    )
+    normalized_blocked_domains = _normalize_domain_list(
+        _option_value(blocked_domains, config, "blocked_domains"),
+        field_name="blocked_domains",
+    )
+    if normalized_allowed_domains and normalized_blocked_domains:
+        raise ValueError("OpenAI web search supports allowed_domains or blocked_domains, not both")
+    if normalized_allowed_domains:
+        tool_config["filters"] = {"allowed_domains": normalized_allowed_domains}
+    if normalized_blocked_domains:
+        tool_config["filters"] = {"blocked_domains": normalized_blocked_domains}
+
+    normalized_external_access = _normalize_optional_bool(
+        _option_value(external_web_access, config, "external_web_access")
+    )
+    if normalized_external_access is not None:
+        tool_config["external_web_access"] = normalized_external_access
+
+    normalized_token_budget = _normalize_openai_return_token_budget(
+        _option_value(return_token_budget, config, "return_token_budget")
+    )
+    if normalized_token_budget:
+        tool_config["return_token_budget"] = normalized_token_budget
+
+    return tool_config
 
 
-def _iter_duckduckgo_topics(items: list[dict]) -> list[dict]:
-    topics: list[dict] = []
-    for item in items:
-        nested_topics = item.get("Topics")
-        if isinstance(nested_topics, list):
-            topics.extend(_iter_duckduckgo_topics(nested_topics))
-        else:
-            topics.append(item)
-    return topics
-
-
-def _duckduckgo_topic_to_result(item: dict) -> Optional[SearchResult]:
-    title = _clean_text(item.get("Text") or "")
-    url = item.get("FirstURL") or ""
-    if not title or not url:
-        return None
-    return SearchResult(title=title, url=url, snippet=title)
-
-
-def _extract_brave_results(payload: dict) -> list[SearchResult]:
-    web_section = payload.get("web") or {}
-    raw_results = web_section.get("results") or []
-    results: list[SearchResult] = []
-    for item in raw_results:
-        title = _clean_text(item.get("title") or "")
-        url = item.get("url") or ""
-        if not title or not url:
-            continue
-        snippets = [item.get("description") or ""]
-        snippets.extend(item.get("extra_snippets") or [])
-        snippet = _clean_text("\n".join(part for part in snippets if part))
-        results.append(SearchResult(title=title, url=url, snippet=snippet))
-    return _deduplicate_results(results)
+def _openai_user_location(
+    *,
+    country: Any,
+    city: Any,
+    region: Any,
+    timezone: Any,
+) -> dict[str, str]:
+    location: dict[str, str] = {"type": "approximate"}
+    normalized_country = _normalize_country(country)
+    if country and not normalized_country:
+        raise ValueError("country must be a two-letter country code")
+    if normalized_country:
+        location["country"] = normalized_country
+    for key, value in (("city", city), ("region", region), ("timezone", timezone)):
+        normalized_value = _clean_optional(value)
+        if normalized_value:
+            location[key] = normalized_value
+    return location if len(location) > 1 else {}
 
 
 def _extract_openai_output_text(response: Any) -> str:
@@ -524,33 +583,65 @@ def _extract_openai_source_results(response: Any) -> list[SearchResult]:
     return _deduplicate_results(results)
 
 
-def _build_openai_search_input(
-    query: str,
-    result_limit: int,
-    freshness: Optional[str],
-    search_lang: Optional[str],
-) -> str:
+def _extract_structured_url_results(response: Any) -> list[SearchResult]:
+    results: list[SearchResult] = []
+    for output_item in _field(response, "output", []) or []:
+        results.extend(_extract_structured_url_results_from_value(output_item))
+    return _deduplicate_results(results)
+
+
+def _extract_structured_url_results_from_value(value: Any) -> list[SearchResult]:
+    if isinstance(value, list):
+        results: list[SearchResult] = []
+        for item in value:
+            results.extend(_extract_structured_url_results_from_value(item))
+        return results
+
+    data = _as_mapping(value)
+    if not data:
+        return []
+
+    results = []
+    url = _first_text_field(data, "url", "link", "source_url")
+    if url:
+        title = _clean_text(_first_text_field(data, "title", "name", "site_name") or url)
+        snippet = _clean_text(_first_text_field(data, "snippet", "description", "summary") or "")
+        results.append(SearchResult(title=title, url=url, snippet=snippet))
+
+    for key in ("sources", "results", "citations", "references", "items"):
+        nested = data.get(key)
+        if nested is not None:
+            results.extend(_extract_structured_url_results_from_value(nested))
+    return results
+
+
+def _extract_tool_usage(response: Any) -> dict[str, int]:
+    usage = _field(response, "usage", {}) or {}
+    x_tools = _field(usage, "x_tools", {}) or {}
+    if not isinstance(x_tools, dict):
+        return {}
+
+    tool_usage: dict[str, int] = {}
+    for tool_name, details in x_tools.items():
+        count = _field(details, "count", 0)
+        try:
+            normalized_count = int(count)
+        except (TypeError, ValueError):
+            continue
+        tool_usage[str(tool_name)] = normalized_count
+    return tool_usage
+
+
+def _build_openai_search_input(query: str, result_limit: int) -> str:
     hints = [f"Search query: {query}", f"Return up to {result_limit} useful sources."]
-    if freshness:
-        hints.append(f"Prefer sources with this freshness hint when possible: {freshness}.")
-    if search_lang:
-        hints.append(f"Prefer sources in this language when possible: {search_lang}.")
     hints.append("Include concise findings and preserve source citations.")
     return "\n".join(hints)
 
 
-def _decode_duckduckgo_url(raw_url: str) -> str:
-    if not raw_url:
-        return ""
-    parsed_url = urlparse(raw_url)
-    query_values = parse_qs(parsed_url.query)
-    if "uddg" in query_values and query_values["uddg"]:
-        return unquote(query_values["uddg"][0])
-    if raw_url.startswith("//"):
-        return "https:" + raw_url
-    if raw_url.startswith("/"):
-        return "https://duckduckgo.com" + raw_url
-    return raw_url
+def _build_qwen_search_input(query: str, result_limit: int) -> str:
+    hints = [query, "", f"Use web search and extraction when useful. Return up to {result_limit} useful sources."]
+    hints.append("Provide a concise answer and keep source URLs available in the response.")
+    return "\n".join(hints)
 
 
 def _deduplicate_results(results: list[SearchResult]) -> list[SearchResult]:
@@ -569,6 +660,12 @@ def _clean_text(text: str) -> str:
     return " ".join(unescape(text).split())
 
 
+def _clean_optional(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 def _normalize_result_limit(max_results: int) -> int:
     try:
         requested = int(max_results)
@@ -577,67 +674,94 @@ def _normalize_result_limit(max_results: int) -> int:
     return max(1, min(requested, AgentConfig.MAX_SEARCH_RESULTS))
 
 
-def _normalize_country(country: Optional[str]) -> str:
+def _normalize_country(country: Any) -> str:
     if not country:
         return ""
-    country_code = country.strip().upper()
+    country_code = str(country).strip().upper()
     return country_code if len(country_code) == 2 else ""
 
 
-def _normalize_brave_freshness(freshness: Optional[str]) -> str:
-    if not freshness:
+def _normalize_openai_search_context_size(value: Any, *, default: str) -> str:
+    normalized = _clean_optional(value).lower() or default
+    if normalized not in OPENAI_SEARCH_CONTEXT_SIZES:
+        allowed = ", ".join(sorted(OPENAI_SEARCH_CONTEXT_SIZES))
+        raise ValueError(f"search_context_size must be one of: {allowed}")
+    return normalized
+
+
+def _normalize_openai_return_token_budget(value: Any) -> str:
+    normalized = _clean_optional(value).lower()
+    if not normalized:
         return ""
-    normalized = freshness.strip().lower()
-    return {
-        "day": "pd",
-        "daily": "pd",
-        "24h": "pd",
-        "week": "pw",
-        "weekly": "pw",
-        "month": "pm",
-        "monthly": "pm",
-        "year": "py",
-        "yearly": "py",
-    }.get(normalized, normalized)
+    if normalized not in OPENAI_RETURN_TOKEN_BUDGETS:
+        allowed = ", ".join(sorted(OPENAI_RETURN_TOKEN_BUDGETS))
+        raise ValueError(f"return_token_budget must be one of: {allowed}")
+    return normalized
 
 
-def _normalize_duckduckgo_freshness(freshness: Optional[str]) -> str:
-    if not freshness:
-        return ""
-    normalized = freshness.strip().lower()
-    return {
-        "day": "d",
-        "daily": "d",
-        "24h": "d",
-        "pd": "d",
-        "week": "w",
-        "weekly": "w",
-        "pw": "w",
-        "month": "m",
-        "monthly": "m",
-        "pm": "m",
-        "year": "y",
-        "yearly": "y",
-        "py": "y",
-    }.get(normalized, normalized)
+def _normalize_domain_list(value: Any, *, field_name: str) -> list[str]:
+    if value in (None, "", []):
+        return []
+    if isinstance(value, str):
+        raw_domains = [part for part in value.split(",") if part.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        raw_domains = list(value)
+    else:
+        raise ValueError(f"{field_name} must be a list of domains")
+
+    domains: list[str] = []
+    for raw_domain in raw_domains:
+        domain = str(raw_domain or "").strip().lower()
+        if not domain:
+            continue
+        for prefix in ("https://", "http://"):
+            if domain.startswith(prefix):
+                domain = domain[len(prefix):]
+        domain = domain.split("/", 1)[0]
+        if domain and domain not in domains:
+            domains.append(domain)
+    if len(domains) > 100:
+        raise ValueError(f"{field_name} can include at most 100 domains")
+    return domains
 
 
-def _duckduckgo_region(country: Optional[str], search_lang: Optional[str]) -> str:
-    normalized_country = _normalize_country(country)
-    if not normalized_country or not search_lang:
-        return ""
-    return f"{normalized_country.lower()}-{search_lang.strip().lower()}"
+def _normalize_optional_bool(value: Any, *, default: Optional[bool] = None) -> Optional[bool]:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Expected a boolean value, got: {value}")
 
 
-def _get_brave_api_key(config: dict) -> str:
-    configured_key = str(config.get("api_key") or config.get("subscription_token") or "").strip()
-    if configured_key:
+def _option_value(call_value: Any, config: dict, key: str) -> Any:
+    return call_value if call_value is not None else config.get(key)
+
+
+def _get_qwen_api_key(config: dict) -> str:
+    configured_key = str(config.get("api_key") or "").strip()
+    if configured_key and not is_placeholder_api_key(configured_key):
         return configured_key
-    for env_name in BRAVE_API_KEY_ENV_VARS:
+    for env_name in QWEN_API_KEY_ENV_VARS:
         env_value = os.getenv(env_name, "").strip()
         if env_value:
             return env_value
     return ""
+
+
+def _qwen_search_base_url(config: dict) -> str:
+    return str(config.get("base_url") or QWEN_COMPATIBLE_BASE_URL).strip().rstrip("/")
+
+
+def _create_qwen_search_client(config: dict) -> Optional[AsyncOpenAI]:
+    api_key = _get_qwen_api_key(config)
+    if not api_key:
+        return None
+    return AsyncOpenAI(api_key=api_key, base_url=_qwen_search_base_url(config))
 
 
 def is_placeholder_api_key(api_key: str) -> bool:
@@ -660,6 +784,31 @@ def _field(obj: Any, name: str, default: Any = None) -> Any:
     if isinstance(model_extra, dict) and name in model_extra:
         return model_extra.get(name, default)
     return value
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump()
+        except Exception:
+            dumped = None
+        if isinstance(dumped, dict):
+            return dumped
+    model_extra = getattr(value, "model_extra", None)
+    if isinstance(model_extra, dict):
+        return model_extra
+    return {}
+
+
+def _first_text_field(data: dict[str, Any], *names: str) -> str:
+    for name in names:
+        value = data.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _error_response(provider: str, query: str, message: str) -> dict:
