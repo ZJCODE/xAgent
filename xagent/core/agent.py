@@ -132,9 +132,6 @@ class Agent:
             tool_manager=self.tool_manager,
             message_storage=self.message_storage,
             client=self.client,
-            model_api=self.model_api,
-            workspace_dir=self.workspace_dir,
-            caption_model=self.model if self.supports_vision else None,
         )
 
     @property

@@ -1663,23 +1663,30 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
             {"type": "function_call_output", "call_id": "call-1", "output": "ok"},
         )
 
-    async def test_caption_image_can_use_responses_api(self):
-        client = FakeOpenAIClient(response_api_responses=[
-            _responses_response(output_text="A small generated chart.")
-        ])
+    async def test_direct_image_output_uses_prompt_without_caption_call(self):
+        async def draw(prompt: str) -> str:
+            return "data:image/png;base64,abc"
+
+        client = FakeOpenAIClient()
         executor = ToolExecutor(
-            tool_manager=FakeToolManager(),
+            tool_manager=FakeToolManager(tools={"draw": draw}),
             message_storage=InMemoryMessageStorage(),
             client=client,
-            model_api=MODEL_API_OPENAI_RESPONSES,
         )
 
-        caption = await executor._caption_image("data:image/png;base64,abc", "draw a chart")
+        tool_message, display_result = await executor.execute_single(
+            FakeToolCall(name="draw", arguments='{"prompt": "draw a chart"}')
+        )
 
-        self.assertEqual(caption, "A small generated chart.")
-        call = client.responses_api.calls[0]
-        self.assertFalse(call["store"])
-        self.assertEqual(call["input"][0]["content"][1]["type"], "input_image")
+        self.assertEqual(
+            tool_message["content"],
+            "[Image returned by tool `draw` and displayed to user. Prompt: draw a chart.]",
+        )
+        self.assertIsNotNone(display_result)
+        self.assertEqual(display_result.content, "data:image/png;base64,abc")
+        self.assertEqual(display_result.description, tool_message["content"])
+        self.assertEqual(client.responses_api.calls, [])
+        self.assertEqual(client.chat_completions.calls, [])
 
 
 if __name__ == "__main__":

@@ -50,12 +50,6 @@ class AgentConfig:
     TOOL_RESULT_PREVIEW_LENGTH = 20
     ERROR_RESPONSE_PREVIEW_LENGTH = 200
     DEFAULT_MAX_TOKENS = 4096
-    IMAGE_CAPTION_MODEL = "gpt-5.4-mini"  # lightweight vision model for image captioning
-    IMAGE_CAPTION_PROMPT = (
-        "Describe this image in detail for future reference. Include: subject matter, "
-        "composition, colors, style, mood, and any notable details. Be concise but thorough. "
-        "Respond in the same language as the user's original prompt if provided."
-    )
 
     # Retry configuration
     RETRY_ATTEMPTS = 3
