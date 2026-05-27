@@ -4,6 +4,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -32,6 +33,7 @@ from ..core.providers import (
     provider_model_api,
 )
 from ..core.runtime import create_runtime_heartbeat
+from ..utils.image_utils import workspace_blob_relative_path
 from .base import BaseAgentConfig, BaseAgentRunner
 from .channels import (
     CHANNEL_API,
@@ -44,6 +46,34 @@ from .channels import (
     normalize_channel_values,
 )
 from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
+
+
+_WORKSPACE_BLOB_CLI_LINK_RE = re.compile(
+    r'(?:https?://[^\s<>"\')\]]+)?/api/workspace/blob\?path=[^\s<>"\')\]]+',
+    re.IGNORECASE,
+)
+
+
+def _format_cli_workspace_links(content: Any, workspace_dir: str | Path | None) -> str:
+    if content is None:
+        return ""
+    text = str(content)
+    if not text or workspace_dir is None:
+        return text
+
+    workspace_root = Path(workspace_dir).expanduser().resolve()
+
+    def local_workspace_path(match: re.Match[str]) -> str:
+        source = match.group(0)
+        relative_path = workspace_blob_relative_path(source)
+        if not relative_path:
+            return source
+        candidate = (workspace_root / relative_path).resolve()
+        if not candidate.is_relative_to(workspace_root):
+            return source
+        return candidate.as_posix()
+
+    return _WORKSPACE_BLOB_CLI_LINK_RE.sub(local_workspace_path, text)
 
 
 class AgentCLI(BaseAgentRunner):
@@ -134,7 +164,7 @@ class AgentCLI(BaseAgentRunner):
                         user_id=user_id,
                         enable_memory=memory,
                     )
-                    print("🤖 Agent: " + str(response))
+                    print("🤖 Agent: " + self._format_cli_output(response))
                     continue
 
                 await self._print_chat_events(
@@ -164,11 +194,15 @@ class AgentCLI(BaseAgentRunner):
         memory: bool = True,
     ):
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
-        return await self.agent(
+        response = await self.agent(
             user_message=message,
             user_id=user_id,
             enable_memory=memory,
         )
+        return self._format_cli_output(response) if isinstance(response, str) else response
+
+    def _format_cli_output(self, content: Any) -> str:
+        return _format_cli_workspace_links(content, getattr(self, "workspace_dir", None))
 
     async def print_single_chat_events(
         self,
@@ -214,7 +248,7 @@ class AgentCLI(BaseAgentRunner):
                     print("🤖 Agent: ", end="", flush=True)
                     line_open = True
                     line_has_streamed_text = False
-                delta = event.get("delta", "")
+                delta = self._format_cli_output(event.get("delta", ""))
                 if delta:
                     print(delta, end="", flush=True)
                     line_has_streamed_text = True
@@ -226,7 +260,7 @@ class AgentCLI(BaseAgentRunner):
                 if not line_has_streamed_text:
                     content = event.get("content", "")
                     if content:
-                        print(content, end="", flush=True)
+                        print(self._format_cli_output(content), end="", flush=True)
                 if line_open:
                     print()
                     line_open = False

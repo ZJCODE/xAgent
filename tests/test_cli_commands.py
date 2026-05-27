@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import io
 import tempfile
 import unittest
@@ -10,7 +11,9 @@ import yaml
 
 from xagent.interfaces.channels import enabled_channels_from_config
 from xagent.interfaces.cli import (
+    AgentCLI,
     InitSelection,
+    _format_cli_workspace_links,
     build_parser,
     handle_config,
     handle_chat,
@@ -67,6 +70,52 @@ def _write_runtime(directory: str, *, feishu: bool = False) -> None:
 
 
 class CLICommandTests(unittest.TestCase):
+    def test_cli_formats_workspace_blob_links_as_local_paths(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir).resolve() / "workspace"
+            source = "![Generated image](/api/workspace/blob?path=temp%2Fimages%2Fresult.png)"
+
+            formatted = _format_cli_workspace_links(source, workspace)
+
+        self.assertEqual(formatted, f"![Generated image]({workspace / 'temp' / 'images' / 'result.png'})")
+
+    def test_cli_keeps_workspace_blob_traversal_urls_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir).resolve() / "workspace"
+            source = "![Generated image](/api/workspace/blob?path=..%2Fresult.png)"
+
+            formatted = _format_cli_workspace_links(source, workspace)
+
+        self.assertEqual(formatted, source)
+
+    def test_chat_events_print_local_workspace_blob_links(self):
+        class FakeAgent:
+            async def chat_events(self, **kwargs):
+                yield {"type": "message_start"}
+                yield {
+                    "type": "message_done",
+                    "content": "![Generated image](/api/workspace/blob?path=temp%2Fimages%2Fresult.png)",
+                }
+                yield {"type": "done"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir).resolve() / "workspace"
+            cli = AgentCLI.__new__(AgentCLI)
+            cli.agent = FakeAgent()
+            cli.workspace_dir = workspace
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                asyncio.run(cli._print_chat_events(
+                    user_message="draw",
+                    user_id="alice",
+                    stream=False,
+                    enable_memory=True,
+                ))
+
+        output = stdout.getvalue()
+        self.assertIn(str(workspace / "temp" / "images" / "result.png"), output)
+        self.assertNotIn("/api/workspace/blob", output)
+
     def test_parser_supports_init_schema_command(self):
         args = build_parser().parse_args([
             "init",
