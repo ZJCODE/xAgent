@@ -187,6 +187,18 @@ class AgentConfig:
     )
 
     # Foundational agent behavior — injected via the `instructions` API parameter
+
+    NO_VISION_NOTICE = (
+        "\n**Image Understanding Limitation:**\n"
+        "- The current model provider does not natively support image content understanding.\n"
+        "- However, if an available skill or tool supports image understanding, you may use it to help "
+        "describe, analyze, recognize, or interpret image content.\n"
+        "- If no such skill or tool is available, clearly tell the user that image content cannot be "
+        "understood with the current configuration.\n"
+        "- You may still help with file-level operations on images, such as rotating, compressing, "
+        "converting, or moving files, through workspace tools if available.\n"
+    )
+    
     BASE_AGENT_PROMPT = (
         "\n"
         "==================== CORE INTERACTION RULES ====================\n"

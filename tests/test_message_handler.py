@@ -84,8 +84,37 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
         self.assertIn("Attached files:", msg.content)
         self.assertIn("[out.pdf](/api/workspace/blob?path=reports%2Fout.pdf)", msg.content)
+        self.assertIn("path: reports/out.pdf", msg.content)
         self.assertEqual(msg.metadata["attachments"][0]["path"], "reports/out.pdf")
         self.assertEqual(storage.messages, [msg])
+
+    def test_store_user_message_promotes_workspace_image_source_to_attachment(self):
+        import asyncio
+
+        image_bytes = b"\x89PNG\r\n\x1a\nsmall"
+        image_source = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = _FakeMessageStorage()
+            handler = MessageHandler(
+                message_storage=storage,
+                workspace_dir=tmpdir,
+            )
+
+            msg = asyncio.run(handler.store_user_message(
+                "rotate this image",
+                "Joy",
+                image_source=image_source,
+            ))
+
+            attachment = msg.metadata["attachments"][0]
+            self.assertEqual(attachment["kind"], "image")
+            self.assertTrue(attachment["path"].startswith("temp/images/inbound/"))
+            self.assertIn("Attached files:", msg.content)
+            self.assertIn(attachment["blob_url"], msg.content)
+            self.assertIn(f"path: {attachment['path']}", msg.content)
+            self.assertEqual((Path(tmpdir) / attachment["path"]).read_bytes(), image_bytes)
+            self.assertEqual(storage.messages, [msg])
     
     def test_build_instructions_includes_tool_prompts(self):
         """build_instructions includes tool-specific segments for active tools."""

@@ -159,6 +159,9 @@ def attachment_manifest_markdown(values: list[Any], *, title: str = "Attached fi
         size_bytes = attachment.get("size_bytes")
         if isinstance(size_bytes, int) and size_bytes >= 0:
             details.append(f"{size_bytes} bytes")
+        path = str(attachment.get("path") or "").strip()
+        if path:
+            details.append(f"path: {path}")
         suffix = f" ({', '.join(details)})" if details else ""
         lines.append(f"- {link}{suffix}")
     return "\n".join(lines) if len(lines) > 1 else ""

@@ -104,7 +104,7 @@ The adapter behaves like a real human teammate:
 | Direct chat (`p2p`) | `agent.chat` | Always reply, sent as a fresh message (no quoting). |
 | Group / topic, bot @mentioned | `agent.chat` | Pulls recent Feishu history first, then replies. Anchored to the source message via `reply_to`; never as a Feishu topic/thread reply. |
 | Group / topic, not @mentioned | ignored | The bot does not listen or speak unless explicitly addressed. |
-| Image content | `agent.chat` when the provider supports vision | Feishu image resources are downloaded and passed as `image_source`. If the configured model provider does not support image input, the adapter replies that it cannot understand image content. |
+| Image content | `agent.chat` | Feishu image resources are downloaded into workspace attachments. Providers with vision also receive current-turn image input; providers without vision still get workspace file references for file-level tools. |
 | File content | `agent.chat` | Feishu file resources are downloaded into `workspace/temp/attachments/feishu` and passed as workspace attachments. The model sees a file manifest and workspace blob link, not raw file bytes. |
 
 > **Permission check.** The bot can reply to group @mentions with
@@ -170,11 +170,12 @@ Markdown image rendering. At the model boundary the adapter passes
 provider-ready image data as `image_source` only for current-turn images;
 non-image files remain references, not raw bytes.
 OpenAI and Qwen support vision by default; custom providers can opt in with
-`provider.supports_vision: true`. Providers without vision support do not call
-the model for image content and instead reply with a short unsupported-image
-message and returns the saved image through the normal Feishu attachment path
-when available. Plain file attachments still route to chat because they do not
-require vision support.
+`provider.supports_vision: true`. Providers without vision support do not
+receive image bytes as model image input, but image messages still route to chat
+with workspace-backed attachment references. This lets the agent use file-level
+tools for operations such as rotate, compress, convert, or reattach without
+claiming to understand the image contents. Plain file attachments route the same
+way because they do not require vision support.
 
 When xAgent returns structured workspace attachments, the adapter resolves each
 file under `workspace/`, writes a cached compressed derivative under

@@ -60,6 +60,11 @@ class MessageHandler:
             if source not in image_sources:
                 image_sources.append(source)
         normalized_sources, image_metadata = self._prepare_message_images(image_sources)
+        normalized_attachments = dedupe_attachments([
+            *normalized_attachments,
+            *self._attachments_from_image_metadata(image_metadata),
+        ])
+        message_content = self._append_attachment_manifest(user_message, normalized_attachments)
 
         msg = Message.create(
             content=message_content,
@@ -548,13 +553,34 @@ class MessageHandler:
         for attachment in attachments:
             blob_url = str(attachment.get("blob_url") or "").strip()
             path = str(attachment.get("path") or "").strip()
-            if (blob_url and blob_url in content) or (path and path in content):
+            if path and path in content:
+                continue
+            if blob_url and blob_url in content and not path:
                 continue
             pending.append(attachment)
         manifest = attachment_manifest_markdown(pending)
         if not manifest:
             return content
         return f"{content}\n\n{manifest}" if content else manifest
+
+    @staticmethod
+    def _attachments_from_image_metadata(image_metadata: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        attachments: List[Dict[str, Any]] = []
+        for metadata in image_metadata:
+            workspace_path = str(metadata.get("workspace_path") or "").strip()
+            blob_url = str(metadata.get("blob_url") or "").strip()
+            if not workspace_path and not blob_url:
+                continue
+            file_name = str(metadata.get("original_name") or Path(workspace_path).name or "image").strip()
+            attachments.append({
+                "kind": "image",
+                "path": workspace_path,
+                "blob_url": blob_url,
+                "mime_type": str(metadata.get("mime_type") or "image/png").strip(),
+                "file_name": file_name,
+                "size_bytes": metadata.get("size_bytes"),
+            })
+        return dedupe_attachments(attachments)
 
     @staticmethod
     def _format_transcript_speaker(message: Message) -> str:
@@ -800,12 +826,16 @@ class MessageHandler:
         self,
         tool_names: Optional[List[str]] = None,
         skills_catalog: str = "",
+        supports_vision: bool = True,
     ) -> list[dict]:
         """Build static named system layers for the model input."""
+        core_prompt = AgentConfig.BASE_AGENT_PROMPT.strip()
+        if not supports_vision:
+            core_prompt = core_prompt + AgentConfig.NO_VISION_NOTICE.rstrip()
         messages = [{
             "role": RoleType.SYSTEM.value,
             "name": AgentConfig.CORE_INTERACTION_RULES_NAME,
-            "content": AgentConfig.BASE_AGENT_PROMPT.strip(),
+            "content": core_prompt,
         }]
 
         tool_policy = self._build_tool_policy(tool_names=tool_names)

@@ -19,9 +19,6 @@ from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_clie
 from .tools import ToolExecutor, ToolManager
 from ..schemas import AgentTurnResult, Message
 from ..tools import create_write_memory_tool, create_search_memory_tool
-from ..utils.image_utils import extract_image_urls_from_text
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -301,25 +298,6 @@ class Agent:
         try:
             turn_context.__enter__()
             entered_observability = True
-            if self._should_reject_image_input(user_message, image_source, attachments):
-                user_msg = await msg_handler.store_user_message(
-                    user_message,
-                    user_id,
-                    None,
-                    attachments=attachments,
-                )
-                reply_text = self._unsupported_image_input_message()
-                assistant_msg = await msg_handler.store_model_reply(
-                    reply_text,
-                    self._assistant_sender_id,
-                )
-                self._schedule_experience_write(
-                    msg_handler=msg_handler,
-                    memory_mode=memory_mode,
-                    messages=[user_msg, assistant_msg],
-                )
-                return reply_text
-
             try:
                 user_msg = await msg_handler.store_user_message(
                     user_message,
@@ -348,7 +326,7 @@ class Agent:
             workspace_context = self._workspace_context(tool_names)
             skills_catalog = self._skills_catalog_context()
 
-            instructions = msg_handler.build_instruction_messages(tool_names=tool_names, skills_catalog=skills_catalog)
+            instructions = msg_handler.build_instruction_messages(tool_names=tool_names, skills_catalog=skills_catalog, supports_vision=getattr(self, "supports_vision", True))
             iteration_messages = msg_handler.build_turn_context_messages(
                 recent_messages,
                 current_user_id=user_id,
@@ -502,35 +480,6 @@ class Agent:
         try:
             turn_context.__enter__()
             entered_observability = True
-            if self._should_reject_image_input(user_message, image_source, attachments):
-                user_msg = await msg_handler.store_user_message(
-                    user_message,
-                    user_id,
-                    None,
-                    attachments=attachments,
-                )
-                reply_text = self._unsupported_image_input_message()
-                assistant_msg = await msg_handler.store_model_reply(
-                    reply_text,
-                    self._assistant_sender_id,
-                    metadata={"turn_phase": "final"},
-                )
-                self._schedule_experience_write(
-                    msg_handler=msg_handler,
-                    memory_mode=memory_mode,
-                    messages=[user_msg, assistant_msg],
-                )
-                message_id = self._turn_message_id(user_msg, 0)
-                for event in self._message_events(
-                    message_id=message_id,
-                    phase="final",
-                    content=reply_text,
-                    stream=stream,
-                ):
-                    yield event
-                yield {"type": "done"}
-                return
-
             try:
                 user_msg = await msg_handler.store_user_message(
                     user_message,
@@ -561,7 +510,7 @@ class Agent:
             workspace_context = self._workspace_context(tool_names)
             skills_catalog = self._skills_catalog_context()
 
-            instructions = msg_handler.build_instruction_messages(tool_names=tool_names, skills_catalog=skills_catalog)
+            instructions = msg_handler.build_instruction_messages(tool_names=tool_names, skills_catalog=skills_catalog, supports_vision=getattr(self, "supports_vision", True))
             iteration_messages = msg_handler.build_turn_context_messages(
                 recent_messages,
                 current_user_id=user_id,
@@ -764,27 +713,6 @@ class Agent:
             observability = NoopObservabilityRuntime()
             self.observability = observability
         return observability
-
-    def _should_reject_image_input(
-        self,
-        user_message: str,
-        image_source: Optional[Union[str, List[str]]],
-        attachments: Optional[List[Dict[str, Any]]] = None,
-    ) -> bool:
-        if getattr(self, "supports_vision", True):
-            return False
-        if image_source:
-            if isinstance(image_source, list):
-                return any(bool(str(item or "").strip()) for item in image_source)
-            return bool(str(image_source or "").strip())
-        return bool(extract_image_urls_from_text(user_message))
-
-    @staticmethod
-    def _unsupported_image_input_message() -> str:
-        return (
-            "The current model provider does not support image input. "
-            "Use OpenAI or Qwen for image understanding, or send a text-only message."
-        )
 
     async def _store_reply_and_schedule_experience(
         self,

@@ -83,7 +83,6 @@ class _FeishuLogRedactionFilter(logging.Filter):
 
 _LOG_REDACTION_FILTER = _FeishuLogRedactionFilter()
 
-_FEISHU_UNSUPPORTED_IMAGE_MESSAGE = "当前配置的模型不支持图片理解，无法理解图片内容。"
 _FEISHU_IMAGE_PLACEHOLDER = "The user sent an image."
 _FEISHU_INBOUND_IMAGE_OUTPUT_DIR = "temp/images/feishu"
 _FEISHU_OUTBOUND_IMAGE_OUTPUT_DIR = "temp/images/feishu/outbound"
@@ -1856,18 +1855,8 @@ class FeishuAdapter:
         attachments: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         image_assets = image_assets or []
-        image_sources = self._image_sources_for_model(image_assets)
-        if image_assets and not getattr(self.agent, "supports_vision", True):
-            anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
-            await self._send_markdown(
-                chat_id=chat_id,
-                message_id=anchor,
-                uuid_message_id=self._event_message_uuid(message_id, 1),
-                text=self._unsupported_image_message(image_assets),
-                is_group=is_group,
-                attachments=self._outbound_attachments_from_inbound_images(image_assets),
-            )
-            return
+        supports_vision = bool(getattr(self.agent, "supports_vision", True))
+        image_sources = self._image_sources_for_model(image_assets) if supports_vision else []
 
         chat_text = self._append_image_markdown_context(text, image_assets)
         if is_group:
@@ -1997,12 +1986,6 @@ class FeishuAdapter:
         if source.startswith("/api/workspace/blob?") or source.startswith("/"):
             return False
         return source.startswith("img_")
-
-    @staticmethod
-    def _unsupported_image_message(image_assets: list[_FeishuInboundImageAsset]) -> str:
-        if not image_assets:
-            return _FEISHU_UNSUPPORTED_IMAGE_MESSAGE
-        return f"{_FEISHU_UNSUPPORTED_IMAGE_MESSAGE}\n\n图片已作为附件返回。"
 
     async def _send_attachment_download_failed(
         self,

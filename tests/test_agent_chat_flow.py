@@ -1,6 +1,8 @@
 import asyncio
 import contextvars
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from pydantic import BaseModel
@@ -999,26 +1001,51 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             [RoleType.USER, RoleType.ASSISTANT],
         )
 
-    async def test_chat_rejects_image_input_for_non_vision_provider(self):
-        storage = InMemoryMessageStorage()
-        model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "should not be called")])
-        agent = self._build_agent(storage=storage, model_client=model_client)
-        agent.supports_vision = False
+    async def test_chat_routes_image_input_as_attachment_for_non_vision_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir).resolve()
+            storage = InMemoryMessageStorage()
+            model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "processed")])
+            agent = self._build_agent(storage=storage, model_client=model_client)
+            agent.supports_vision = False
+            agent.workspace_dir = workspace_dir
+            agent.message_handler = MessageHandler(
+                message_storage=storage,
+                system_prompt="",
+                workspace_dir=workspace_dir,
+            )
 
-        result = await Agent.chat(
-            agent,
-            user_message="Please inspect this image",
-            user_id="alice",
-            image_source="data:image/png;base64,AAAA",
-            enable_memory=False,
-        )
+            result = await Agent.chat(
+                agent,
+                user_message="Please rotate this image 90 degrees",
+                user_id="alice",
+                image_source="data:image/png;base64,iVBORw0KGgo=",
+                enable_memory=False,
+            )
 
-        self.assertIn("does not support image input", result)
-        self.assertEqual(model_client.calls, [])
-        stored_messages = await storage.get_messages(10)
-        self.assertEqual(len(stored_messages), 2)
-        self.assertIsNone(stored_messages[0].multimodal)
-        self.assertIn("does not support image input", stored_messages[1].content)
+            self.assertEqual(result, "processed")
+            self.assertEqual(len(model_client.calls), 1)
+            input_messages = model_client.calls[0]
+            self.assertNotIn("image_url", repr(input_messages))
+            recent_experience = next(
+                message for message in input_messages
+                if message.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME
+            )
+            self.assertIn("/api/workspace/blob?path=temp%2Fimages%2Finbound%2F", recent_experience["content"])
+            self.assertIn("path: temp/images/inbound/", recent_experience["content"])
+            current_task = next(
+                message for message in input_messages
+                if message.get("name") == AgentConfig.CURRENT_TASK_NAME
+            )
+            self.assertIsInstance(current_task["content"], str)
+
+            stored_messages = await storage.get_messages(10)
+            self.assertEqual(len(stored_messages), 2)
+            self.assertIn("Attached files:", stored_messages[0].content)
+            attachment = stored_messages[0].metadata["attachments"][0]
+            self.assertEqual(attachment["kind"], "image")
+            self.assertTrue(attachment["path"].startswith("temp/images/inbound/"))
+            self.assertTrue((workspace_dir / attachment["path"]).is_file())
 
     async def test_chat_events_streams_preface_then_tool_then_final_reply(self):
         storage = InMemoryMessageStorage()

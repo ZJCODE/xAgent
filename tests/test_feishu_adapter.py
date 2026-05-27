@@ -473,7 +473,7 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertNotIn("![image](img_test)", user_message)
             self.assertEqual(user_message.count("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F"), 1)
 
-    def test_direct_image_message_replies_when_provider_lacks_vision(self):
+    def test_direct_image_message_routes_attachment_when_provider_lacks_vision(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir).resolve()
             agent = _FakeAgent()
@@ -495,14 +495,15 @@ class FeishuAdapterTests(unittest.TestCase):
             asyncio.run(adapter._dispatch(msg))
 
             saved_images = list((workspace_dir / "temp" / "images" / "feishu").glob("*.png"))
-            self.assertEqual(agent.chat_calls, [])
+            self.assertEqual(len(agent.chat_calls), 1)
+            self.assertNotIn("image_source", agent.chat_calls[0])
+            self.assertEqual(agent.chat_calls[0]["attachments"][0]["kind"], "image")
+            self.assertTrue(agent.chat_calls[0]["attachments"][0]["path"].startswith("temp/images/feishu/"))
+            self.assertIn("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", agent.chat_calls[0]["user_message"])
             self.assertEqual(len(saved_images), 1)
             self.assertEqual(saved_images[0].read_bytes(), resource_api.data)
-            self.assertIn("不支持图片理解", adapter._channel.sent[0][1]["markdown"])
-            self.assertNotIn("/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", adapter._channel.sent[0][1]["markdown"])
-            self.assertNotIn(str(workspace_dir), adapter._channel.sent[0][1]["markdown"])
+            self.assertEqual(adapter._channel.sent[0][1], {"markdown": "agent reply"})
             self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_image_no_vision"})
-            self.assertEqual(adapter._channel.sent[1][1]["image"]["source"], str(saved_images[0].resolve()))
 
     def test_direct_image_download_failure_replies_without_calling_agent(self):
         with tempfile.TemporaryDirectory() as tmpdir:
