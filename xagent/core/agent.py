@@ -323,12 +323,16 @@ class Agent:
             workspace_context = self._workspace_context(tool_names)
             skills_catalog = self._skills_catalog_context()
 
-            instructions = msg_handler.build_instruction_messages(tool_names=tool_names, skills_catalog=skills_catalog, supports_vision=getattr(self, "supports_vision", True))
+            instructions = msg_handler.build_instruction_messages(
+                tool_names=tool_names,
+                skills_catalog=skills_catalog,
+                supports_vision=getattr(self, "supports_vision", True),
+                workspace_context=workspace_context,
+            )
             iteration_messages = msg_handler.build_turn_context_messages(
                 recent_messages,
                 current_user_id=user_id,
                 memory_context=memory_context,
-                workspace_context=workspace_context,
                 include_images=getattr(self, "supports_vision", True),
                 workspace_dir=getattr(self, "workspace_dir", None),
                 current_message=user_msg,
@@ -507,12 +511,16 @@ class Agent:
             workspace_context = self._workspace_context(tool_names)
             skills_catalog = self._skills_catalog_context()
 
-            instructions = msg_handler.build_instruction_messages(tool_names=tool_names, skills_catalog=skills_catalog, supports_vision=getattr(self, "supports_vision", True))
+            instructions = msg_handler.build_instruction_messages(
+                tool_names=tool_names,
+                skills_catalog=skills_catalog,
+                supports_vision=getattr(self, "supports_vision", True),
+                workspace_context=workspace_context,
+            )
             iteration_messages = msg_handler.build_turn_context_messages(
                 recent_messages,
                 current_user_id=user_id,
                 memory_context=memory_context,
-                workspace_context=workspace_context,
                 include_images=getattr(self, "supports_vision", True),
                 workspace_dir=getattr(self, "workspace_dir", None),
                 current_message=user_msg,

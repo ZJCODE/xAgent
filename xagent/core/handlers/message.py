@@ -297,13 +297,6 @@ class MessageHandler:
                 ),
             })
 
-        if workspace_context.strip():
-            context_messages.append({
-                "role": RoleType.USER.value,
-                "name": AgentConfig.WORKSPACE_CONTEXT_NAME,
-                "content": workspace_context.strip(),
-            })
-
         context_messages.append({
             "role": RoleType.USER.value,
             "name": AgentConfig.RECENT_EXPERIENCE_NAME,
@@ -800,6 +793,7 @@ class MessageHandler:
         self,
         tool_names: Optional[List[str]] = None,
         skills_catalog: str = "",
+        workspace_context: str = "",
     ) -> str:
         """Build the static instructions string for the model.
 
@@ -808,7 +802,11 @@ class MessageHandler:
           2. Tool Instructions — per-tool safety / usage rules
           3. User System Prompt — developer-supplied customisation
         """
-        instruction_messages = self.build_instruction_messages(tool_names=tool_names, skills_catalog=skills_catalog)
+        instruction_messages = self.build_instruction_messages(
+            tool_names=tool_names,
+            skills_catalog=skills_catalog,
+            workspace_context=workspace_context,
+        )
         instructions = "\n\n".join(
             message["content"] for message in instruction_messages if message.get("content")
         )
@@ -827,6 +825,7 @@ class MessageHandler:
         tool_names: Optional[List[str]] = None,
         skills_catalog: str = "",
         supports_vision: bool = True,
+        workspace_context: str = "",
     ) -> list[dict]:
         """Build static named system layers for the model input."""
         core_prompt = AgentConfig.BASE_AGENT_PROMPT.strip()
@@ -846,18 +845,25 @@ class MessageHandler:
                 "content": tool_policy,
             })
 
-        if skills_catalog.strip():
-            messages.append({
-                "role": RoleType.SYSTEM.value,
-                "name": AgentConfig.SKILLS_CATALOG_NAME,
-                "content": skills_catalog.strip(),
-            })
-
         if self.system_prompt.strip():
             messages.append({
                 "role": RoleType.SYSTEM.value,
                 "name": AgentConfig.IDENTITY_CONTEXT_NAME,
                 "content": AgentConfig.build_identity_context(self.system_prompt),
+            })
+
+        if workspace_context.strip():
+            messages.append({
+                "role": RoleType.SYSTEM.value,
+                "name": AgentConfig.WORKSPACE_CONTEXT_NAME,
+                "content": workspace_context.strip(),
+            })
+
+        if skills_catalog.strip():
+            messages.append({
+                "role": RoleType.SYSTEM.value,
+                "name": AgentConfig.SKILLS_CATALOG_NAME,
+                "content": skills_catalog.strip(),
             })
 
         return messages

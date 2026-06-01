@@ -55,4 +55,4 @@ Homepage = "https://github.com/ZJCODE/xagent#readme"
 packages = {find = {include = ["xagent*"], exclude = ["examples*", "tests*", "docs*"]}}
 
 [tool.setuptools.package-data]
-xagent = ["interfaces/static/**"]
+xagent = ["interfaces/static/**", "components/skills/builtin/**"]

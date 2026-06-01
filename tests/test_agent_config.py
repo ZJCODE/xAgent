@@ -56,10 +56,10 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("attach_artifact", prompt)
 
     def test_memory_defaults_are_internal_balanced_values(self):
-        self.assertEqual(AgentConfig.MEMORY_RECENT_DAYS, 3)
-        self.assertEqual(AgentConfig.MEMORY_STALE_FLUSH_SECONDS, 180)
-        self.assertEqual(AgentConfig.MEMORY_MESSAGE_THRESHOLD, 12)
-        self.assertEqual(AgentConfig.MEMORY_MIN_INTERVAL_SECONDS, 300)
+        self.assertEqual(AgentConfig.MEMORY_RECENT_DAYS, 2)
+        self.assertEqual(AgentConfig.MEMORY_STALE_FLUSH_SECONDS, 900)
+        self.assertEqual(AgentConfig.MEMORY_MESSAGE_THRESHOLD, 20)
+        self.assertEqual(AgentConfig.MEMORY_MIN_INTERVAL_SECONDS, 600)
 
 
 class ProviderConfigTests(unittest.TestCase):

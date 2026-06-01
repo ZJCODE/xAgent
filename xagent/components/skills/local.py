@@ -6,6 +6,7 @@ import json
 import mimetypes
 import re
 import shutil
+from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,6 +17,7 @@ from .base import SkillMetadata, SkillsStorageBase, SkillValidationIssue
 
 SKILL_FILENAME = "SKILL.md"
 SKILLS_STATE_FILENAME = ".xagent-skills.json"
+BUILTIN_SKILLS_DIRNAME = "builtin"
 _NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _XML_TAG_RE = re.compile(r"<[^>]+>")
 _TEXT_READ_LIMIT = 1_000_000
@@ -25,9 +27,11 @@ _SEARCH_TEXT_LIMIT = 2_000_000
 class SkillsStorageLocal(SkillsStorageBase):
     """Manage open-standard Agent Skills stored under a runtime skills directory."""
 
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, seed_builtins: bool = True):
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        if seed_builtins:
+            self._seed_builtin_skills()
 
     def list_skills(self, *, include_disabled: bool = True, include_invalid: bool = True) -> List[SkillMetadata]:
         skills: List[SkillMetadata] = []
@@ -278,6 +282,35 @@ class SkillsStorageLocal(SkillsStorageBase):
             "skills": [skill.to_dict() for skill in skills],
             "validation": self.validate_all(),
         }
+
+    def _seed_builtin_skills(self) -> None:
+        try:
+            builtin_root = resources.files("xagent.components.skills").joinpath(BUILTIN_SKILLS_DIRNAME)
+        except (ModuleNotFoundError, AttributeError):
+            return
+        if not builtin_root.is_dir():
+            return
+
+        for skill_resource in builtin_root.iterdir():
+            if not skill_resource.is_dir() or skill_resource.name.startswith((".", "__")):
+                continue
+            target = self.root / skill_resource.name
+            if target.exists():
+                continue
+            try:
+                self._copy_resource_tree(skill_resource, target)
+            except OSError:
+                if target.exists():
+                    shutil.rmtree(target, ignore_errors=True)
+
+    def _copy_resource_tree(self, source: Any, target: Path) -> None:
+        target.mkdir(parents=True, exist_ok=False)
+        for child in source.iterdir():
+            destination = target / child.name
+            if child.is_dir():
+                self._copy_resource_tree(child, destination)
+            elif child.is_file():
+                destination.write_bytes(child.read_bytes())
 
     def _skill_directories(self) -> List[Path]:
         try:

@@ -53,7 +53,7 @@ class MemoryHandler:
         )
         self._background_tasks: set[asyncio.Task] = set()
         self._pending_messages: List[dict] = []
-        self._pending_started_at: Optional[float] = None
+        self._last_activity_time: Optional[float] = None
         self._last_write_time: float = 0.0
         self._flush_timer_task: Optional[asyncio.Task] = None
 
@@ -85,7 +85,7 @@ class MemoryHandler:
         """Accumulate messages and schedule a background diary write when appropriate.
 
         Flushes immediately for regular batches when the threshold and write
-        interval allow it, and always schedules a stale fallback so short
+        interval allow it, and always schedules an idle fallback so short
         conversations cannot sit only in RAM indefinitely.
         """
         if not messages:
@@ -94,14 +94,12 @@ class MemoryHandler:
         self._pending_messages.extend(messages)
 
         now = time.time()
-        if self._pending_started_at is None:
-            self._pending_started_at = now
+        self._last_activity_time = now
 
         threshold_met = len(self._pending_messages) >= self.message_threshold
         interval_met = (now - self._last_write_time) >= self.min_interval_seconds
-        stale_met = (now - self._pending_started_at) >= self.stale_flush_seconds
 
-        if stale_met or (threshold_met and interval_met):
+        if threshold_met and interval_met:
             self._flush_diary_write()
             return
 
@@ -114,7 +112,7 @@ class MemoryHandler:
         if self._pending_messages:
             batch = list(self._pending_messages)
             self._pending_messages.clear()
-            self._pending_started_at = None
+            self._last_activity_time = None
             self._last_write_time = time.time()
             await self._do_diary_write(batch)
 
@@ -186,7 +184,7 @@ class MemoryHandler:
 
         batch = list(self._pending_messages)
         self._pending_messages.clear()
-        self._pending_started_at = None
+        self._last_activity_time = None
         self._last_write_time = time.time()
 
         task = asyncio.create_task(self._do_diary_write(batch))
@@ -313,11 +311,11 @@ class MemoryHandler:
             logger.error("Background memory task failed: %s", exc)
 
     def _schedule_flush_timer(self, now: Optional[float] = None) -> None:
-        if not self._pending_messages or self._pending_started_at is None:
+        if not self._pending_messages or self._last_activity_time is None:
             return
 
         now = now or time.time()
-        next_deadline = self._pending_started_at + self.stale_flush_seconds
+        next_deadline = self._last_activity_time + self.stale_flush_seconds
         if len(self._pending_messages) >= self.message_threshold:
             next_deadline = min(next_deadline, self._last_write_time + self.min_interval_seconds)
         delay = max(0.0, next_deadline - now)

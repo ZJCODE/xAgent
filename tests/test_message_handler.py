@@ -195,16 +195,16 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             [
                 AgentConfig.CORE_INTERACTION_RULES_NAME,
                 AgentConfig.TOOL_POLICY_NAME,
-                AgentConfig.SKILLS_CATALOG_NAME,
                 AgentConfig.IDENTITY_CONTEXT_NAME,
+                AgentConfig.SKILLS_CATALOG_NAME,
             ],
         )
         self.assertIn("Agent Skills Loading", messages[1]["content"])
         self.assertIn("Available Skills", messages[1]["content"])
-        self.assertIn("code-review", messages[2]["content"])
-        self.assertIn("Reviews code changes", messages[2]["content"])
-        self.assertNotIn("# Code Review", messages[2]["content"])
-        self.assertIn("# I am Mono", messages[3]["content"])
+        self.assertIn("# I am Mono", messages[2]["content"])
+        self.assertIn("code-review", messages[3]["content"])
+        self.assertIn("Reviews code changes", messages[3]["content"])
+        self.assertNotIn("# Code Review", messages[3]["content"])
 
     def test_build_turn_context_messages_match_prompt_layers(self):
         messages = [
@@ -237,11 +237,24 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Current time: 2026-05-14 09:30", context_messages[2]["content"])
         self.assertIn("what Joy most recently said", context_messages[2]["content"])
 
-    def test_build_turn_context_messages_can_include_workspace_context(self):
+    def test_workspace_context_is_static_instruction_layer(self):
+        handler = MessageHandler(
+            system_prompt="",
+            message_storage=_FakeMessageStorage(),
+        )
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
         ]
         workspace_context = AgentConfig.build_workspace_context("/tmp/xagent/workspace")
+
+        instruction_messages = handler.build_instruction_messages(
+            tool_names=["run_command"],
+            workspace_context=workspace_context,
+        )
+        self.assertEqual(instruction_messages[-1]["name"], AgentConfig.WORKSPACE_CONTEXT_NAME)
+        self.assertEqual(instruction_messages[-1]["role"], "system")
+        self.assertIn("/tmp/xagent/workspace", instruction_messages[-1]["content"])
+        self.assertIn("self-managed work area", instruction_messages[-1]["content"])
 
         context_messages = MessageHandler.build_turn_context_messages(
             messages,
@@ -253,13 +266,11 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertEqual(
             [message["name"] for message in context_messages],
             [
-                AgentConfig.WORKSPACE_CONTEXT_NAME,
                 AgentConfig.RECENT_EXPERIENCE_NAME,
                 AgentConfig.CURRENT_TASK_NAME,
             ],
         )
-        self.assertIn("/tmp/xagent/workspace", context_messages[0]["content"])
-        self.assertIn("self-managed work area", context_messages[0]["content"])
+        self.assertNotIn("/tmp/xagent/workspace", "\n".join(str(message["content"]) for message in context_messages))
 
     def test_turn_context_messages_attach_current_user_images_to_current_task(self):
         image_url = "https://example.com/screenshot.png"

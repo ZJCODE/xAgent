@@ -123,6 +123,29 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("first", today_text)
         self.assertIn("second", today_text)
 
+    async def test_stale_timer_uses_last_activity_deadline(self):
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=self.llm,
+            stale_flush_seconds=60,
+            message_threshold=10,
+            min_interval_seconds=300,
+        )
+        handler._pending_messages = [{"role": "user", "content": "first"}]
+        handler._last_activity_time = 130.0
+        delays = []
+
+        async def fake_run_flush_timer(delay):
+            delays.append(delay)
+
+        handler._run_flush_timer = fake_run_flush_timer
+        handler._schedule_flush_timer(now=150.0)
+        task = handler._flush_timer_task
+        self.assertIsNotNone(task)
+        await task
+
+        self.assertEqual(delays, [40.0])
+
     async def test_diary_write_does_not_create_people_profiles(self):
         handler = MemoryHandler(memory=self.memory, llm_service=_FakeLLMService())
         handler.schedule_diary_write([
