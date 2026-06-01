@@ -329,7 +329,8 @@ provider:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertIn("run_command", runner.agent.tools)
-            self.assertIn("schedule_command", runner.agent.tools)
+            self.assertIn("schedule_message", runner.agent.tools)
+            self.assertNotIn("schedule_command", runner.agent.tools)
             result = asyncio.run(runner.agent.tools["run_command"]("pwd"))
             self.assertEqual(result["return_code"], 0)
             self.assertEqual(Path(result["stdout"].strip()).resolve(), Path(tmpdir).resolve() / "workspace")

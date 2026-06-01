@@ -23,8 +23,6 @@ from xagent.interfaces.cli import (
     handle_logs,
     handle_restart,
     handle_run_channel_internal,
-    handle_schedule_add,
-    handle_schedule_start,
     handle_start,
     handle_status,
     handle_stop,
@@ -357,35 +355,6 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(messages.messages_command, "list")
         self.assertEqual(messages.count, 5)
 
-    def test_parser_supports_schedule_commands(self):
-        add = build_parser().parse_args([
-            "schedule",
-            "add",
-            "--dir",
-            "./agent-dir",
-            "--at",
-            "20260601-143000",
-            "echo hello",
-        ])
-
-        self.assertEqual(add.command, "schedule")
-        self.assertEqual(add.schedule_command, "add")
-        self.assertEqual(add.config_dir, "./agent-dir")
-        self.assertEqual(add.run_at, "20260601-143000")
-
-        start = build_parser().parse_args([
-            "schedule",
-            "start",
-            "--timeout",
-            "12",
-            "--poll-interval",
-            "0.5",
-        ])
-
-        self.assertEqual(start.schedule_command, "start")
-        self.assertEqual(start.task_timeout, 12)
-        self.assertEqual(start.poll_interval, 0.5)
-
     def test_main_without_subcommand_prints_quick_start(self):
         with patch("xagent.interfaces.cli._runtime_is_initialized", return_value=False):
             with patch("sys.stdout") as stdout:
@@ -695,42 +664,6 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(starter.call_count, 2)
         self.assertEqual(starter.call_args_list[0].kwargs["pid_path"], Path(tmpdir).resolve() / "run" / "api.pid")
         self.assertEqual(starter.call_args_list[0].kwargs["log_path"], Path(tmpdir).resolve() / "logs" / "api.log")
-
-    def test_schedule_add_writes_task_file_under_runtime_dir(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            args = argparse.Namespace(
-                config_dir=tmpdir,
-                run_at="20260601-143000",
-                delay_seconds=None,
-                task_command="echo hello",
-            )
-
-            exit_code = handle_schedule_add(args)
-
-            task_path = Path(tmpdir).resolve() / "tasks" / "20260601-143000.sh"
-            task_text = task_path.read_text(encoding="utf-8")
-
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(task_text, "echo hello\n")
-
-    def test_schedule_start_uses_managed_scheduler_paths(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            args = argparse.Namespace(
-                config_dir=tmpdir,
-                task_timeout=12,
-                poll_interval=0.5,
-            )
-
-            with patch("xagent.interfaces.cli.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
-                exit_code = handle_schedule_start(args)
-
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(starter.call_args.kwargs["pid_path"], Path(tmpdir).resolve() / "run" / "scheduler.pid")
-        self.assertEqual(starter.call_args.kwargs["log_path"], Path(tmpdir).resolve() / "logs" / "scheduler.log")
-        command = starter.call_args.args[0]
-        self.assertIn("_run-scheduler", command)
-        self.assertIn("--timeout", command)
-        self.assertIn("12", command)
 
     def test_stop_uses_managed_pid_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:

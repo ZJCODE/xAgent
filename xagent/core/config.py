@@ -102,18 +102,9 @@ class AgentConfig:
             "\n**Scheduled Messages and Reminders:**\n"
             "- Use `schedule_message` when the user asks to be reminded, notified, or messaged later.\n"
             "- Convert relative time requests into `delay_seconds` when clear, for example one minute means 60 seconds.\n"
-            "- The tool automatically captures the active delivery channel, so do not ask the user to start a scheduler CLI for normal Web/API/Feishu use.\n"
+            "- The tool automatically captures the active delivery channel; channel runtimes deliver due reminders.\n"
             "- Schedule only the future reminder content; still reply in the current turn with a brief confirmation after the tool succeeds.\n"
             "- Do not use scheduled messages to conceal actions or bypass confirmation requirements.\n"
-        ),
-        "schedule_command": (
-            "\n**Scheduled Shell Execution:**\n"
-            "- Use `schedule_command` only when the user asks for a future or delayed local shell action.\n"
-            "- Use `schedule_message` instead for reminders, notifications, or messages that should be sent back to the conversation.\n"
-            "- A scheduled command has the same safety boundary as `run_command`: destructive work or writes outside the workspace require explicit user approval first.\n"
-            "- Prefer simple, auditable commands; include absolute paths or workspace-relative paths when ambiguity would matter later.\n"
-            "- Shell command task files are an admin/CLI facility; channel runtimes do not execute arbitrary shell tasks.\n"
-            "- Do not use scheduled commands to hide actions from the user or bypass current-turn confirmation requirements.\n"
         ),
         "web_search": (
             "\n**Web Search:**\n"
@@ -152,7 +143,6 @@ class AgentConfig:
     TOOL_POLICY_ORDER = (
         "run_command",
         "schedule_message",
-        "schedule_command",
         "write_memory",
         "search_memory",
         "web_search",

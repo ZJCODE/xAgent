@@ -12,7 +12,6 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Tuple
 
@@ -33,14 +32,7 @@ from ..core.providers import (
     provider_base_url,
     provider_model_api,
 )
-from ..core.runtime import (
-    FileScheduler,
-    create_runtime_heartbeat,
-    enqueue_command,
-    list_scheduled_tasks,
-    parse_run_at,
-)
-from ..core.runtime.scheduler import DEFAULT_POLL_INTERVAL_SECONDS, DEFAULT_TASK_TIMEOUT_SECONDS
+from ..core.runtime import create_runtime_heartbeat
 from ..utils.image_utils import workspace_blob_relative_path
 from ..schemas.attachment import dedupe_attachments
 from .base import BaseAgentConfig, BaseAgentRunner
@@ -1068,23 +1060,6 @@ def _add_api_runtime_arguments(
     )
 
 
-def _add_scheduler_runtime_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--timeout",
-        dest="task_timeout",
-        type=int,
-        default=None,
-        help=f"Per-task timeout in seconds (default: {DEFAULT_TASK_TIMEOUT_SECONDS})",
-    )
-    parser.add_argument(
-        "--poll-interval",
-        dest="poll_interval",
-        type=float,
-        default=None,
-        help=f"Maximum seconds between directory refreshes (default: {DEFAULT_POLL_INTERVAL_SECONDS})",
-    )
-
-
 def _hide_subparser_choice(subparsers: argparse._SubParsersAction, name: str) -> None:
     subparsers._choices_actions = [
         action for action in subparsers._choices_actions if action.dest != name
@@ -1115,7 +1090,6 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "",
             "Runtime:",
             "  observe   Ingest context without generating a reply",
-            "  schedule  Queue and run file-backed shell tasks",
             "  service   Manage background channels",
             "  doctor    Check local xAgent readiness",
             "",
@@ -1127,8 +1101,6 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent init",
             "  xagent chat \"Help me plan today\"",
             "  xagent web",
-            "  xagent schedule add --in 60 \"echo hello\"",
-            "  xagent schedule start",
             "  xagent service start api",
             "  xagent service logs feishu -f",
             "",
@@ -1194,52 +1166,6 @@ def build_parser() -> argparse.ArgumentParser:
     observe_parser.add_argument("--event-type", default="observation", help="Observation event type")
     observe_parser.add_argument("--metadata", default=None, help="JSON object with observation metadata")
     observe_parser.set_defaults(handler=handle_observe)
-
-    schedule_parser = subparsers.add_parser("schedule", help="Queue and run file-backed shell tasks")
-    schedule_sub = schedule_parser.add_subparsers(dest="schedule_command", metavar="<action>")
-    schedule_sub.required = True
-
-    schedule_add = schedule_sub.add_parser("add", help="Add a shell command to the task queue")
-    _add_dir_argument(schedule_add)
-    schedule_time = schedule_add.add_mutually_exclusive_group(required=True)
-    schedule_time.add_argument(
-        "--at",
-        dest="run_at",
-        default=None,
-        help="Local time: YYYYMMDD-HHMMSS or YYYY-MM-DD HH:MM[:SS]",
-    )
-    schedule_time.add_argument("--in", dest="delay_seconds", type=int, default=None, help="Delay from now in seconds")
-    schedule_add.add_argument("task_command", metavar="COMMAND", help="Shell command text to run later")
-    schedule_add.set_defaults(handler=handle_schedule_add)
-
-    schedule_list = schedule_sub.add_parser("list", help="List pending scheduled tasks")
-    _add_dir_argument(schedule_list)
-    schedule_list.set_defaults(handler=handle_schedule_list)
-
-    schedule_run = schedule_sub.add_parser("run", help="Run the scheduler in the foreground")
-    _add_dir_argument(schedule_run)
-    _add_scheduler_runtime_arguments(schedule_run)
-    schedule_run.set_defaults(handler=handle_schedule_run)
-
-    schedule_start = schedule_sub.add_parser("start", help="Start the scheduler in the background")
-    _add_dir_argument(schedule_start)
-    _add_scheduler_runtime_arguments(schedule_start)
-    schedule_start.set_defaults(handler=handle_schedule_start)
-
-    schedule_stop = schedule_sub.add_parser("stop", help="Stop the background scheduler")
-    _add_dir_argument(schedule_stop)
-    schedule_stop.set_defaults(handler=handle_schedule_stop)
-
-    schedule_status = schedule_sub.add_parser("status", help="Show scheduler status")
-    _add_dir_argument(schedule_status)
-    schedule_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    schedule_status.set_defaults(handler=handle_schedule_status)
-
-    schedule_logs = schedule_sub.add_parser("logs", help="Show scheduler logs")
-    _add_dir_argument(schedule_logs)
-    schedule_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    schedule_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    schedule_logs.set_defaults(handler=handle_schedule_logs)
 
     service_parser = subparsers.add_parser("service", help="Manage background channels")
     service_sub = service_parser.add_subparsers(dest="service_command", metavar="<action>")
@@ -1345,12 +1271,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_api_runtime_arguments(internal_run)
     internal_run.set_defaults(handler=handle_run_channel_internal)
     _hide_subparser_choice(subparsers, "_run-channel")
-
-    internal_scheduler = subparsers.add_parser("_run-scheduler", help=argparse.SUPPRESS)
-    _add_dir_argument(internal_scheduler)
-    _add_scheduler_runtime_arguments(internal_scheduler)
-    internal_scheduler.set_defaults(handler=handle_schedule_run)
-    _hide_subparser_choice(subparsers, "_run-scheduler")
 
     return parser
 
@@ -1852,189 +1772,6 @@ def handle_logs(args: argparse.Namespace) -> int:
 
     if getattr(args, "follow", False):
         _follow_log(managed_paths(config_dir, channels[0]).log_path)
-    return 0
-
-
-SCHEDULER_PROCESS_NAME = "scheduler"
-
-
-def _scheduler_tasks_dir(args: argparse.Namespace) -> Path:
-    return _runtime_dir(args) / BaseAgentConfig.TASKS_DIRNAME
-
-
-def _scheduler_workspace_dir(args: argparse.Namespace) -> Path:
-    return _runtime_dir(args) / BaseAgentConfig.WORKSPACE_DIRNAME
-
-
-def _scheduler_command(args: argparse.Namespace) -> list[str]:
-    command = [sys.executable, "-m", "xagent.interfaces.cli", "_run-scheduler"]
-    config_dir = getattr(args, "config_dir", None)
-    if config_dir:
-        command.extend(["--dir", config_dir])
-    task_timeout = getattr(args, "task_timeout", None)
-    if task_timeout is not None:
-        command.extend(["--timeout", str(task_timeout)])
-    poll_interval = getattr(args, "poll_interval", None)
-    if poll_interval is not None:
-        command.extend(["--poll-interval", str(poll_interval)])
-    return command
-
-
-def _scheduler_runtime_values(args: argparse.Namespace) -> tuple[int, float]:
-    task_timeout = getattr(args, "task_timeout", None)
-    poll_interval = getattr(args, "poll_interval", None)
-    return (
-        int(task_timeout) if task_timeout is not None else DEFAULT_TASK_TIMEOUT_SECONDS,
-        float(poll_interval) if poll_interval is not None else DEFAULT_POLL_INTERVAL_SECONDS,
-    )
-
-
-def _format_task_preview(command: str, limit: int = 80) -> str:
-    line = " ".join(command.split())
-    if len(line) <= limit:
-        return line
-    return line[: limit - 3] + "..."
-
-
-def handle_schedule_add(args: argparse.Namespace) -> int:
-    try:
-        if getattr(args, "delay_seconds", None) is not None:
-            if args.delay_seconds < 0:
-                print("--in must be zero or positive")
-                return 1
-            run_at = datetime.now().replace(microsecond=0) + timedelta(seconds=args.delay_seconds)
-        else:
-            run_at = parse_run_at(args.run_at)
-        task = enqueue_command(args.task_command, run_at, _scheduler_tasks_dir(args))
-    except Exception as exc:
-        print(f"Failed to schedule task: {exc}")
-        return 1
-
-    print(f"Scheduled: {task.name}")
-    print(f"Run at: {task.run_at.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Tasks: {_scheduler_tasks_dir(args)}")
-    return 0
-
-
-def handle_schedule_list(args: argparse.Namespace) -> int:
-    tasks_dir = _scheduler_tasks_dir(args)
-    tasks = list_scheduled_tasks(tasks_dir, include_commands=True)
-    if not tasks:
-        print(f"No scheduled tasks: {tasks_dir}")
-        return 0
-
-    now = datetime.now().replace(microsecond=0)
-    for task in tasks:
-        state = "due" if task.run_at <= now else "pending"
-        preview = _format_task_preview(task.command)
-        print(f"{task.name}  {task.run_at.strftime('%Y-%m-%d %H:%M:%S')}  {state}  {preview}")
-    return 0
-
-
-def handle_schedule_run(args: argparse.Namespace) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [PID:%(process)d] %(levelname)s: %(message)s",
-        force=True,
-    )
-    task_timeout, poll_interval = _scheduler_runtime_values(args)
-    scheduler = FileScheduler(
-        _scheduler_tasks_dir(args),
-        working_directory=_scheduler_workspace_dir(args),
-        timeout_seconds=task_timeout,
-        poll_interval_seconds=poll_interval,
-        logger_=logging.getLogger(__name__),
-    )
-
-    previous_handlers: dict[int, object] = {}
-
-    def _request_stop(signum: int, _frame) -> None:
-        logging.info("scheduler received stop signal: %s", signum)
-        scheduler.request_stop()
-
-    for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
-        if signum is None:
-            continue
-        previous_handlers[signum] = signal.getsignal(signum)
-        signal.signal(signum, _request_stop)
-
-    try:
-        scheduler.run_forever()
-    finally:
-        for signum, previous_handler in previous_handlers.items():
-            signal.signal(signum, previous_handler)
-    return 0
-
-
-def handle_schedule_start(args: argparse.Namespace) -> int:
-    config_dir = _runtime_dir(args)
-    paths = managed_paths(config_dir, SCHEDULER_PROCESS_NAME)
-    result = start_background(
-        _scheduler_command(args),
-        pid_path=paths.pid_path,
-        log_path=paths.log_path,
-    )
-    if result.ok:
-        print(f"Started scheduler in background (pid={result.pid}).")
-        print(f"Tasks: {_scheduler_tasks_dir(args)}")
-        print(f"Logs: {paths.log_path}")
-        return 0
-
-    print(f"Failed to start scheduler: {result.error}")
-    if result.recent_output:
-        print(result.recent_output)
-    return 1
-
-
-def handle_schedule_stop(args: argparse.Namespace) -> int:
-    paths = managed_paths(_runtime_dir(args), SCHEDULER_PROCESS_NAME)
-    stopped, message = stop_managed_process(paths.pid_path)
-    print(f"scheduler: {message}")
-    return 0 if stopped else 1
-
-
-def handle_schedule_status(args: argparse.Namespace) -> int:
-    config_dir = _runtime_dir(args)
-    paths = managed_paths(config_dir, SCHEDULER_PROCESS_NAME)
-    pid = running_pid(paths.pid_path)
-    tasks_dir = _scheduler_tasks_dir(args)
-    pending_count = len(list_scheduled_tasks(tasks_dir))
-    failed_dir = tasks_dir / "failed"
-    failed_count = len([path for path in failed_dir.iterdir() if path.is_file()]) if failed_dir.is_dir() else 0
-    payload = {
-        "status": "running" if pid is not None else "stopped",
-        "pid": pid,
-        "pid_path": str(paths.pid_path),
-        "log_path": str(paths.log_path),
-        "tasks_dir": str(tasks_dir),
-        "pending": pending_count,
-        "failed": failed_count,
-    }
-
-    if getattr(args, "json_output", False):
-        print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0
-
-    pid_text = f" pid={pid}" if pid is not None else ""
-    print(f"scheduler: {payload['status']}{pid_text}")
-    print(f"  tasks: {tasks_dir}")
-    print(f"  pending: {pending_count}")
-    print(f"  failed: {failed_count}")
-    print(f"  pid: {paths.pid_path}")
-    print(f"  log: {paths.log_path}")
-    return 0
-
-
-def handle_schedule_logs(args: argparse.Namespace) -> int:
-    paths = managed_paths(_runtime_dir(args), SCHEDULER_PROCESS_NAME)
-    output = tail_text(paths.log_path, max_lines=max(1, int(args.lines)))
-    if output:
-        print(output)
-    elif not paths.log_path.exists():
-        print(f"No log file: {paths.log_path}")
-
-    if getattr(args, "follow", False):
-        _follow_log(paths.log_path)
     return 0
 
 

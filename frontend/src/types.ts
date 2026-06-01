@@ -85,7 +85,6 @@ export interface ScheduledTaskItem {
   payload: {
     title?: string;
     message?: string;
-    command?: string;
     user_id?: string;
     created_at?: string;
     target?: Record<string, unknown>;

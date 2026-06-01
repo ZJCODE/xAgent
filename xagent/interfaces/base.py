@@ -29,7 +29,6 @@ from ..tools import (
     create_attach_artifact_tool,
     create_image_generation_tool,
     create_read_skill_tool,
-    create_schedule_command_tool,
     create_schedule_message_tool,
     create_web_search_tool,
     create_workspace_run_command_tool,
@@ -791,9 +790,6 @@ class BaseAgentRunner:
                 default_working_directory=str(self.workspace_dir),
             ),
             create_schedule_message_tool(
-                tasks_dir=str(self.tasks_dir),
-            ),
-            create_schedule_command_tool(
                 tasks_dir=str(self.tasks_dir),
             ),
             create_attach_artifact_tool(

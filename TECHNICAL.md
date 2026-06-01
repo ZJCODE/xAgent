@@ -389,20 +389,7 @@ channels:
 
 调度器使用运行目录下的 `tasks/` 作为唯一状态队列。对话提醒使用 `YYYYMMDD-HHMMSS-xxxxxxxx.json`，文件名编码本地触发时间，内容是结构化任务：`kind=message`、`message`、`target.channel`、`target.user_id/chat_id` 等。API/Web 和 Feishu channel 启动时会自动运行一个轻量消费者，只领取自己能投递的 `message` 任务；领取前会原子重命名为运行中状态，成功后删除，失败后移动到 `tasks/failed/`。
 
-这意味着用户在对话中说“1 分钟后提醒我走两步”时，模型应调用 `schedule_message`，任务会由当前长连接 channel 自己投递，不需要用户再运行 `xagent schedule start`。Web UI 的 Tasks tab 通过 `/api/tasks` 查看和管理这些任务；在线 Web 客户端通过 `/ws/tasks` 接收已到期提醒。
-
-CLI shell 调度仍然保留为管理员工具。Shell 任务是 `YYYYMMDD-HHMMSS.sh` 或同秒冲突时的 `YYYYMMDD-HHMMSS-xxxxxxxx.sh`；文件内容就是要执行的 shell 命令。
-
-```bash
-xagent schedule add --in 60 "echo hello >> hello.log"
-xagent schedule add --at "2026-06-01 14:30:00" "python report.py"
-xagent schedule start
-xagent schedule status
-xagent schedule logs --follow
-xagent schedule stop
-```
-
-CLI shell 后台模式会写入 `<dir>/run/scheduler.pid` 和 `<dir>/logs/scheduler.log`。前台调试可用 `xagent schedule run`。shell 调度器默认从 `<dir>/workspace/` 执行命令，单任务默认超时 300 秒，可用 `--timeout` 调整。
+这意味着用户在对话中说“1 分钟后提醒我走两步”时，模型应调用 `schedule_message`，任务会由当前长连接 channel 自己投递。Web UI 的 Tasks tab 通过 `/api/tasks` 查看和管理这些任务；在线 Web 客户端通过 `/ws/tasks` 接收已到期提醒。
 
 ## 3. 启动参数
 
@@ -424,8 +411,6 @@ xagent service start all
 xagent service status all
 xagent service logs feishu --follow
 xagent service stop all
-xagent schedule start
-xagent schedule status
 ```
 
 参数说明：
@@ -440,7 +425,6 @@ xagent schedule status
 - `--max-concurrent-chats`：最大并发对话/观察请求数，默认 `4`。
 - `--queue-timeout`：等待可用并发槽的秒数，默认 `30`；超时返回 429。
 - `--chat-timeout`：单次对话/观察总超时时间，默认 `600` 秒；超时返回 504 或流式错误帧。
-- `xagent schedule ...`：管理 shell 命令定时任务；对话提醒由 API/Feishu channel 自动消费，不依赖该命令。PID 和日志分别位于 `<dir>/run/scheduler.pid` 与 `<dir>/logs/scheduler.log`。
 
 ## 4. HTTP API
 

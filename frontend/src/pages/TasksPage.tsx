@@ -20,7 +20,7 @@ function taskTarget(task: ScheduledTaskItem): string {
 }
 
 function taskContent(task: ScheduledTaskItem): string {
-  return String(task.payload.message || task.payload.command || "").trim();
+  return String(task.payload.message || "").trim();
 }
 
 export function TasksPage() {
@@ -90,7 +90,7 @@ export function TasksPage() {
                   </div>
                   <div className="task-row-main">
                     <div className="task-row-title">
-                      <h3>{task.payload.title || (task.kind === "command" ? "Command" : "Reminder")}</h3>
+                      <h3>{task.payload.title || "Reminder"}</h3>
                       <span className={classNames("task-state", task.state === "failed" && "failed")}>{task.state}</span>
                     </div>
                     <p>{taskContent(task) || task.name}</p>

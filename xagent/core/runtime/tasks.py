@@ -21,14 +21,11 @@ from .scheduler import (
     _unique_failed_path,
     ensure_scheduler_dirs,
     format_task_timestamp,
-    list_scheduled_tasks,
     parse_run_at,
-    parse_task_filename,
 )
 
 
 TASK_KIND_MESSAGE = "message"
-TASK_KIND_COMMAND = "command"
 TASK_PAYLOAD_VERSION = 1
 TASK_JSON_SUFFIX = ".json"
 TASK_STATE_PENDING = "pending"
@@ -144,17 +141,9 @@ def enqueue_message_task(
 
 
 def list_task_records(tasks_dir: Path | str, *, include_failed: bool = True) -> list[ScheduledTaskRecord]:
-    """Return pending structured and shell tasks, optionally including failed tasks."""
+    """Return pending scheduled message tasks, optionally including failed tasks."""
     root, failed = ensure_scheduler_dirs(tasks_dir)
     records: list[ScheduledTaskRecord] = []
-
-    for shell_task in list_scheduled_tasks(root, include_commands=True):
-        records.append(ScheduledTaskRecord(
-            path=shell_task.path,
-            run_at=shell_task.run_at,
-            kind=TASK_KIND_COMMAND,
-            payload={"command": shell_task.command},
-        ))
 
     for path in sorted(root.glob(f"*{TASK_JSON_SUFFIX}"), key=lambda item: item.name):
         record = _record_from_json_file(path, state=TASK_STATE_PENDING)
@@ -163,7 +152,7 @@ def list_task_records(tasks_dir: Path | str, *, include_failed: bool = True) -> 
 
     if include_failed and failed.is_dir():
         for path in sorted(failed.iterdir(), key=lambda item: item.name):
-            if TASK_JSON_SUFFIX not in path.name and not path.name.endswith(".sh.failed"):
+            if TASK_JSON_SUFFIX not in path.name:
                 continue
             record = _record_from_failed_file(path)
             if record is not None:
@@ -356,22 +345,7 @@ def _enqueue_json_payload(payload: dict[str, Any], run_at: datetime, root: Path,
 def _record_from_any_file(path: Path) -> Optional[ScheduledTaskRecord]:
     if TASK_JSON_SUFFIX in path.name:
         return _record_from_failed_file(path) if path.parent.name == FAILED_DIRNAME else _record_from_json_file(path)
-    if path.suffix == ".sh" or ".sh." in path.name:
-        return _record_from_shell_file(path)
     return None
-
-
-def _record_from_shell_file(path: Path) -> Optional[ScheduledTaskRecord]:
-    original_name = path.name.split(".failed", 1)[0].split(".timeout", 1)[0].split(".error", 1)[0]
-    run_at = parse_task_filename(original_name)
-    if run_at is None:
-        return None
-    state = TASK_STATE_FAILED if path.parent.name == FAILED_DIRNAME else TASK_STATE_PENDING
-    try:
-        command = path.read_text(encoding="utf-8", errors="replace").strip()
-    except OSError:
-        command = ""
-    return ScheduledTaskRecord(path=path, run_at=run_at, kind=TASK_KIND_COMMAND, state=state, payload={"command": command})
 
 
 def _record_from_failed_file(path: Path) -> Optional[ScheduledTaskRecord]:
@@ -383,18 +357,6 @@ def _record_from_failed_file(path: Path) -> Optional[ScheduledTaskRecord]:
             reason = candidate_reason
             original_name = path.name.split(marker, 1)[0]
             break
-    if original_name.endswith(".sh"):
-        record = _record_from_shell_file(path)
-        if record is None:
-            return None
-        return ScheduledTaskRecord(
-            path=record.path,
-            run_at=record.run_at,
-            kind=record.kind,
-            state=TASK_STATE_FAILED,
-            payload=record.payload,
-            reason=reason,
-        )
     if not original_name.endswith(TASK_JSON_SUFFIX):
         return None
     record = _record_from_json_file(path, state=TASK_STATE_FAILED, original_name=original_name, reason=reason)
