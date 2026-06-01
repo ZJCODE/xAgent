@@ -1,4 +1,4 @@
-export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/agent";
+export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/agent";
 
 export type ChatRole = "user" | "assistant" | "observation";
 
@@ -71,6 +71,46 @@ export interface ChatEvent {
   phase?: string;
   error?: string;
   status_code?: number;
+  task?: ScheduledTaskItem;
+}
+
+export interface ScheduledTaskItem {
+  name: string;
+  id: string;
+  kind: string;
+  state: "pending" | "running" | "failed" | string;
+  reason?: string;
+  run_at: string;
+  path: string;
+  payload: {
+    title?: string;
+    message?: string;
+    command?: string;
+    user_id?: string;
+    created_at?: string;
+    target?: Record<string, unknown>;
+    source?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+}
+
+export interface TasksResponse {
+  root: string;
+  tasks: ScheduledTaskItem[];
+  total: number;
+}
+
+export interface TaskCreateInput {
+  message: string;
+  run_at?: string;
+  delay_seconds?: number;
+  title?: string;
+  user_id?: string;
+}
+
+export interface TaskCreateResponse {
+  status: string;
+  task: ScheduledTaskItem;
 }
 
 export interface AgentInfo {

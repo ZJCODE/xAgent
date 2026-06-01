@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover - optional dependency
 from xagent.integrations.feishu import adapter as feishu_adapter_module
 from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAttachment
 from xagent.integrations.feishu.config import FeishuAdapterConfig
+from xagent.core.runtime import enqueue_message_task, list_task_records
 
 
 class _FakeAgent:
@@ -224,6 +225,29 @@ class FeishuAdapterTests(unittest.TestCase):
         asyncio.run(adapter.stop())
 
         self.assertEqual(agent.flush_count, 1)
+
+    def test_scheduled_task_dispatch_sends_to_feishu_chat(self):
+        async def run_test():
+            agent = _FakeAgent()
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel()
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_message_task(
+                    message="走两步",
+                    run_at="2026-06-01 14:30:00",
+                    tasks_dir=tmpdir,
+                    target={"channel": "feishu", "chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
+                    user_id="ou_user",
+                )
+                task = list_task_records(tmpdir)[0]
+                await adapter._dispatch_scheduled_task(task)
+
+            self.assertEqual(adapter._channel.sent[0][0], "oc_group")
+            self.assertEqual(adapter._channel.sent[0][1], {"markdown": "走两步"})
+            self.assertEqual(adapter._channel.sent[0][2]["reply_to"], "om_anchor")
+            self.assertTrue(adapter._channel.sent[0][2]["uuid"].startswith("scheduled:"))
+
+        asyncio.run(run_test())
 
     def test_on_message_routes_to_owner_event_loop(self):
         async def run_test():

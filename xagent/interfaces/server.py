@@ -3,9 +3,10 @@ import json
 import logging
 import mimetypes
 import shutil
+import tempfile
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -21,7 +22,15 @@ from .base import BaseAgentConfig, BaseAgentRunner
 from ..components.skills import SkillsStorageLocal
 from ..core.agent import Agent
 from ..core.config import AgentConfig
-from ..core.runtime import create_runtime_heartbeat
+from ..core.runtime import (
+    AsyncTaskScheduler,
+    ScheduledDeliveryContext,
+    create_runtime_heartbeat,
+    delete_task_file,
+    enqueue_message_task,
+    list_task_records,
+    scheduled_delivery_context,
+)
 from ..schemas import Message
 from ..schemas.attachment import (
     ATTACHMENT_METADATA_KEY,
@@ -161,6 +170,18 @@ class SkillStateInput(BaseModel):
     enabled: bool
 
 
+class TaskCreateInput(BaseModel):
+    """Request body for creating a scheduled Web/API message task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: str
+    run_at: Optional[str] = None
+    delay_seconds: Optional[int] = None
+    title: Optional[str] = None
+    user_id: Optional[str] = None
+
+
 class AgentHTTPServer(BaseAgentRunner):
     """HTTP server for xAgent."""
 
@@ -183,10 +204,22 @@ class AgentHTTPServer(BaseAgentRunner):
             self.config = {}
             self.message_storage = self.agent.message_storage
             self.skills_storage = getattr(self.agent, "skills_storage", None)
+            self._temporary_runtime = None
+            runtime_root = getattr(self.agent, "workspace", None) or config_dir
+            if runtime_root is None:
+                self._temporary_runtime = tempfile.TemporaryDirectory(prefix="xagent-runtime-")
+                runtime_root = self._temporary_runtime.name
+            self.workspace = Path(runtime_root).expanduser().resolve()
+            self.workspace_dir = Path(getattr(self.agent, "workspace_dir", self.workspace / BaseAgentConfig.WORKSPACE_DIRNAME)).expanduser().resolve()
+            self.tasks_dir = self.workspace / BaseAgentConfig.TASKS_DIRNAME
+            self.tasks_dir.mkdir(parents=True, exist_ok=True)
         else:
             super().__init__(config_dir=config_dir)
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
+        self._task_scheduler: Optional[AsyncTaskScheduler] = None
+        self._task_subscribers: dict[str, set[WebSocket]] = {}
+        self._task_subscribers_lock = asyncio.Lock()
         self.app = self._create_app()
         self.app.add_middleware(
             CORSMiddleware,
@@ -211,16 +244,18 @@ class AgentHTTPServer(BaseAgentRunner):
     async def _call_agent(self, input_data: ChatInput):
         attachments = self._input_attachments(input_data)
         image_sources = self._input_image_sources(input_data, attachments=attachments)
-        return await self.agent(
-            user_message=input_data.user_message,
-            user_id=input_data.user_id,
-            history_count=input_data.history_count,
-            max_iter=input_data.max_iter,
-            max_concurrent_tools=input_data.max_concurrent_tools,
-            image_source=image_sources,
-            attachments=attachments,
-            enable_memory=input_data.enable_memory,
-        )
+        context = self._scheduled_delivery_context(input_data, channel="api")
+        with scheduled_delivery_context(context):
+            return await self.agent(
+                user_message=input_data.user_message,
+                user_id=input_data.user_id,
+                history_count=input_data.history_count,
+                max_iter=input_data.max_iter,
+                max_concurrent_tools=input_data.max_concurrent_tools,
+                image_source=image_sources,
+                attachments=attachments,
+                enable_memory=input_data.enable_memory,
+            )
 
     async def _call_observe(self, input_data: ObserveInput):
         return await self.agent.observe(
@@ -268,22 +303,23 @@ class AgentHTTPServer(BaseAgentRunner):
             if not callable(chat_events):
                 raise RuntimeError("Agent does not support chat_events().")
             attachments = self._input_attachments(input_data)
-
-            response = chat_events(
-                user_message=input_data.user_message,
-                user_id=input_data.user_id,
-                history_count=input_data.history_count,
-                max_iter=input_data.max_iter,
-                max_concurrent_tools=input_data.max_concurrent_tools,
-                image_source=self._input_image_sources(input_data, attachments=attachments),
-                attachments=attachments,
-                stream=bool(input_data.stream),
-                enable_memory=input_data.enable_memory,
-            )
-            async for event in self._iterate_before_deadline(response, deadline):
-                if event.get("type") == "done":
-                    done_sent = True
-                yield event
+            context = self._scheduled_delivery_context(input_data, channel="web")
+            with scheduled_delivery_context(context):
+                response = chat_events(
+                    user_message=input_data.user_message,
+                    user_id=input_data.user_id,
+                    history_count=input_data.history_count,
+                    max_iter=input_data.max_iter,
+                    max_concurrent_tools=input_data.max_concurrent_tools,
+                    image_source=self._input_image_sources(input_data, attachments=attachments),
+                    attachments=attachments,
+                    stream=bool(input_data.stream),
+                    enable_memory=input_data.enable_memory,
+                )
+                async for event in self._iterate_before_deadline(response, deadline):
+                    if event.get("type") == "done":
+                        done_sent = True
+                    yield event
         except HTTPException as exc:
             self.logger.warning("WebSocket chat rejected for %s: %s", input_data.user_id, exc.detail)
             yield {"type": "error", "error": exc.detail, "status_code": exc.status_code}
@@ -335,6 +371,88 @@ class AgentHTTPServer(BaseAgentRunner):
             })
         finally:
             await websocket.send_json({"type": "done"})
+
+    @staticmethod
+    def _scheduled_delivery_context(input_data: ChatInput, *, channel: str) -> ScheduledDeliveryContext:
+        return ScheduledDeliveryContext(
+            channel=channel,
+            user_id=input_data.user_id,
+            target={"user_id": input_data.user_id},
+            metadata={"source": channel},
+        )
+
+    def _can_handle_scheduled_task(self, task) -> bool:
+        if task.kind != "message":
+            return False
+        target_channel = str(task.target.get("channel") or "")
+        return target_channel in {"api", "web"}
+
+    async def _dispatch_scheduled_task(self, task) -> None:
+        content = task.message.strip()
+        if not content:
+            raise ValueError("scheduled message is empty")
+        target = task.target
+        metadata = {
+            "scheduled_task": {
+                "id": task.task_id,
+                "name": task.name,
+                "run_at": task.run_at.isoformat(sep=" "),
+                "target": target,
+            }
+        }
+        stored_message = None
+        message_handler = getattr(self.agent, "message_handler", None)
+        store_model_reply = getattr(message_handler, "store_model_reply", None)
+        if callable(store_model_reply):
+            stored_message = await store_model_reply(
+                content,
+                getattr(self.agent, "_assistant_sender_id", "agent"),
+                metadata=metadata,
+            )
+        await self._broadcast_scheduled_message(task, content, stored_message=stored_message)
+
+    async def _broadcast_scheduled_message(self, task, content: str, *, stored_message=None) -> None:
+        target = task.target
+        user_id = str(target.get("user_id") or task.payload.get("user_id") or "")
+        if not user_id:
+            return
+        payload: Dict[str, Any] = {
+            "type": "scheduled_message",
+            "content": content,
+            "task": task.to_dict(),
+        }
+        if stored_message is not None:
+            payload["message"] = self._message_item(stored_message)
+
+        async with self._task_subscribers_lock:
+            subscribers = list(self._task_subscribers.get(user_id, set()))
+        stale: list[WebSocket] = []
+        for websocket in subscribers:
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                stale.append(websocket)
+        if stale:
+            async with self._task_subscribers_lock:
+                registered = self._task_subscribers.get(user_id)
+                if registered is not None:
+                    for websocket in stale:
+                        registered.discard(websocket)
+                    if not registered:
+                        self._task_subscribers.pop(user_id, None)
+
+    async def _register_task_subscriber(self, user_id: str, websocket: WebSocket) -> None:
+        async with self._task_subscribers_lock:
+            self._task_subscribers.setdefault(user_id, set()).add(websocket)
+
+    async def _unregister_task_subscriber(self, user_id: str, websocket: WebSocket) -> None:
+        async with self._task_subscribers_lock:
+            subscribers = self._task_subscribers.get(user_id)
+            if subscribers is None:
+                return
+            subscribers.discard(websocket)
+            if not subscribers:
+                self._task_subscribers.pop(user_id, None)
 
     async def _send_websocket_error(
         self,
@@ -790,6 +908,12 @@ class AgentHTTPServer(BaseAgentRunner):
             self.config.get("runtime") if isinstance(self.config, dict) else None,
             logger_=self.logger,
         )
+        task_scheduler = AsyncTaskScheduler(
+            self.tasks_dir,
+            can_handle=self._can_handle_scheduled_task,
+            dispatch=self._dispatch_scheduled_task,
+            logger_=self.logger,
+        )
         try:
             if heartbeat is not None:
                 await heartbeat.start()
@@ -797,8 +921,14 @@ class AgentHTTPServer(BaseAgentRunner):
                     "Runtime heartbeat started (interval=%ss)",
                     heartbeat.interval_seconds,
                 )
+            self._task_scheduler = task_scheduler
+            await task_scheduler.start()
+            self.logger.info("Scheduled message runtime started: tasks=%s", self.tasks_dir)
             yield
         finally:
+            await task_scheduler.stop()
+            self._task_scheduler = None
+            self.logger.info("Scheduled message runtime stopped")
             if heartbeat is not None:
                 await heartbeat.stop()
                 self.logger.info("Runtime heartbeat stopped")
@@ -839,6 +969,10 @@ class AgentHTTPServer(BaseAgentRunner):
 
             @app.get("/skills", include_in_schema=False)
             async def serve_skills():
+                return await serve_spa_index()
+
+            @app.get("/tasks", include_in_schema=False)
+            async def serve_tasks():
                 return await serve_spa_index()
 
             app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
@@ -952,6 +1086,20 @@ class AgentHTTPServer(BaseAgentRunner):
                         f"Agent observe error: {str(exc)}",
                     )
 
+        @app.websocket("/ws/tasks")
+        async def websocket_tasks(websocket: WebSocket):
+            user_id = (websocket.query_params.get("user_id") or "web_user").strip() or "web_user"
+            await websocket.accept()
+            await self._register_task_subscriber(user_id, websocket)
+            self.logger.info("Scheduled task WebSocket connected for %s", user_id)
+            try:
+                while True:
+                    await websocket.receive_text()
+            except WebSocketDisconnect:
+                self.logger.info("Scheduled task WebSocket disconnected for %s", user_id)
+            finally:
+                await self._unregister_task_subscriber(user_id, websocket)
+
         @app.post("/observe")
         async def observe(input_data: ObserveInput):
             self.logger.info(
@@ -1036,6 +1184,53 @@ class AgentHTTPServer(BaseAgentRunner):
                 "identity_editable": identity_editable,
                 "system_prompt": identity,
             }
+
+        @app.get("/api/tasks", tags=["Monitoring"])
+        async def tasks_list():
+            tasks = [record.to_dict() for record in list_task_records(self.tasks_dir)]
+            return {
+                "root": str(self.tasks_dir),
+                "tasks": tasks,
+                "total": len(tasks),
+            }
+
+        @app.post("/api/tasks/create", tags=["Monitoring"])
+        async def tasks_create(input_data: TaskCreateInput):
+            message = input_data.message.strip()
+            if not message:
+                raise HTTPException(status_code=400, detail="message is required")
+            if input_data.delay_seconds is None and not input_data.run_at:
+                raise HTTPException(status_code=400, detail="Provide either run_at or delay_seconds")
+            if input_data.delay_seconds is not None:
+                if input_data.delay_seconds < 0:
+                    raise HTTPException(status_code=400, detail="delay_seconds must be zero or positive")
+                run_at: str | datetime = datetime.now().replace(microsecond=0) + timedelta(seconds=input_data.delay_seconds)
+            else:
+                run_at = input_data.run_at or ""
+            user_id = (input_data.user_id or "web_user").strip() or "web_user"
+            try:
+                task = enqueue_message_task(
+                    message=message,
+                    run_at=run_at,
+                    tasks_dir=self.tasks_dir,
+                    target={"channel": "web", "user_id": user_id},
+                    user_id=user_id,
+                    title=input_data.title or "Reminder",
+                    source={"source": "tasks_api"},
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"status": "ok", "task": task.to_dict()}
+
+        @app.delete("/api/tasks/delete", tags=["Monitoring"])
+        async def tasks_delete(name: str = Query(..., description="Task file name")):
+            try:
+                task = delete_task_file(self.tasks_dir, name)
+            except FileNotFoundError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"status": "ok", "deleted": task.to_dict()}
 
         @app.get("/api/agent/identity", tags=["Monitoring"])
         async def agent_identity():

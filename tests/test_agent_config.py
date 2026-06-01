@@ -329,6 +329,7 @@ provider:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertIn("run_command", runner.agent.tools)
+            self.assertIn("schedule_command", runner.agent.tools)
             result = asyncio.run(runner.agent.tools["run_command"]("pwd"))
             self.assertEqual(result["return_code"], 0)
             self.assertEqual(Path(result["stdout"].strip()).resolve(), Path(tmpdir).resolve() / "workspace")
@@ -344,12 +345,14 @@ provider:
             self.assertEqual(result.messages_dir, Path(tmpdir).resolve() / "messages")
             self.assertEqual(result.workspace_dir, Path(tmpdir).resolve() / "workspace")
             self.assertEqual(result.skills_dir, Path(tmpdir).resolve() / "skills")
+            self.assertEqual(result.tasks_dir, Path(tmpdir).resolve() / "tasks")
             self.assertTrue(result.config_path.is_file())
             self.assertTrue(result.identity_path.is_file())
             self.assertTrue(result.memory_dir.is_dir())
             self.assertTrue(result.messages_dir.is_dir())
             self.assertTrue(result.workspace_dir.is_dir())
             self.assertTrue(result.skills_dir.is_dir())
+            self.assertTrue(result.tasks_dir.is_dir())
             self.assertFalse((result.memory_dir / "people").exists())
             self.assertFalse((Path(tmpdir) / "my_toolkit").exists())
 

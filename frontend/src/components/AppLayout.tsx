@@ -1,4 +1,4 @@
-import { Activity, Bot, Database, Files, MessageSquareText, Moon, Package, Wifi, WifiOff } from "lucide-react";
+import { Activity, Bot, Database, Files, ListTodo, MessageSquareText, Moon, Package, Wifi, WifiOff } from "lucide-react";
 import type { ReactNode } from "react";
 import { useChat } from "../context/ChatContext";
 import { classNames } from "../lib/format";
@@ -19,6 +19,7 @@ const navItems: Array<{ route: RoutePath; label: string; icon: ReactNode }> = [
   { route: "/message", label: "Messages", icon: <Activity size={15} /> },
   { route: "/workspace", label: "Workspace", icon: <Files size={15} /> },
   { route: "/skills", label: "Skills", icon: <Package size={15} /> },
+  { route: "/tasks", label: "Tasks", icon: <ListTodo size={15} /> },
   { route: "/agent", label: "Agent", icon: <Bot size={15} /> },
 ];
 

@@ -1202,6 +1202,117 @@ textarea {
   min-width: 0;
 }
 
+.tasks-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  gap: 1rem;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.task-form-panel,
+.task-list-panel,
+.task-row {
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.48);
+  padding: 1rem;
+}
+
+.dark .task-form-panel,
+.dark .task-list-panel,
+.dark .task-row {
+  background: rgba(24, 24, 27, 0.58);
+}
+
+.task-form-panel .form-field textarea {
+  min-height: 96px;
+  font-family: inherit;
+}
+
+.task-form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+.task-list-panel {
+  min-width: 0;
+}
+
+.task-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.task-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.85rem;
+}
+
+.task-row-icon {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(5, 150, 105, 0.1);
+  color: #047857;
+}
+
+.task-row-main {
+  min-width: 0;
+}
+
+.task-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.task-row-title h3 {
+  font-weight: 700;
+}
+
+.task-row-main p {
+  margin-bottom: 0.65rem;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.task-state {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  border-radius: 9999px;
+  background: rgba(34, 197, 94, 0.1);
+  color: #047857;
+  padding: 0.16rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.task-state.failed {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+.error-banner {
+  margin-bottom: 0.75rem;
+  border-radius: 12px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #dc2626;
+  padding: 0.7rem 0.85rem;
+  font-size: 0.86rem;
+}
+
 .agent-grid {
   display: grid;
   grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.4fr);
@@ -1278,6 +1389,10 @@ textarea {
 }
 
 @media (max-width: 940px) {
+  .tasks-layout {
+    grid-template-columns: 1fr;
+  }
+
   .agent-grid {
     grid-template-columns: 1fr;
   }
@@ -1327,5 +1442,14 @@ textarea {
 
   .observe-row button {
     width: 100%;
+  }
+
+  .task-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .task-row .danger-button {
+    grid-column: 2;
+    width: fit-content;
   }
 }

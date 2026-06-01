@@ -29,6 +29,8 @@ from ..tools import (
     create_attach_artifact_tool,
     create_image_generation_tool,
     create_read_skill_tool,
+    create_schedule_command_tool,
+    create_schedule_message_tool,
     create_web_search_tool,
     create_workspace_run_command_tool,
 )
@@ -57,6 +59,7 @@ class BaseAgentConfig:
     MESSAGE_DIRNAME = AgentConfig.MESSAGE_DIRNAME
     WORKSPACE_DIRNAME = AgentConfig.WORKSPACE_DIRNAME
     SKILLS_DIRNAME = AgentConfig.SKILLS_DIRNAME
+    TASKS_DIRNAME = AgentConfig.TASKS_DIRNAME
     MESSAGE_DB_FILENAME = AgentConfig.MESSAGE_DB_FILENAME
     CONFIG_FILENAME = "config.yaml"
     IDENTITY_FILENAME = "identity.md"
@@ -111,6 +114,8 @@ class BaseAgentRunner:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.skills_dir = self.workspace / BaseAgentConfig.SKILLS_DIRNAME
         self.skills_dir.mkdir(parents=True, exist_ok=True)
+        self.tasks_dir = self.workspace / BaseAgentConfig.TASKS_DIRNAME
+        self.tasks_dir.mkdir(parents=True, exist_ok=True)
         self.observability = self._initialize_observability(self.config)
 
         # Initialize components in dependency order
@@ -784,6 +789,12 @@ class BaseAgentRunner:
         tools = [
             create_workspace_run_command_tool(
                 default_working_directory=str(self.workspace_dir),
+            ),
+            create_schedule_message_tool(
+                tasks_dir=str(self.tasks_dir),
+            ),
+            create_schedule_command_tool(
+                tasks_dir=str(self.tasks_dir),
             ),
             create_attach_artifact_tool(
                 workspace_dir=str(self.workspace_dir),

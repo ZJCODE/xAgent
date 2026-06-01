@@ -155,6 +155,42 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    const userId = panel.settings.userId || "web_user";
+    const socket = new WebSocket(webSocketUrl(`/ws/tasks?user_id=${encodeURIComponent(userId)}`));
+
+    socket.addEventListener("message", (event) => {
+      let parsed: ChatEvent;
+      try {
+        parsed = JSON.parse(event.data) as ChatEvent;
+      } catch {
+        return;
+      }
+      if (parsed.type !== "scheduled_message") return;
+      const content = String(parsed.content || parsed.message || "").trim();
+      if (!content) return;
+      patchPanel("single", (current) => ({
+        ...current,
+        messages: [
+          ...current.messages,
+          {
+            id: makeId("scheduled"),
+            role: "assistant",
+            content,
+            meta: parsed.task?.payload?.title || "Scheduled",
+          },
+        ],
+      }));
+    });
+
+    socket.addEventListener("error", () => undefined);
+    return () => {
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close(1000);
+      }
+    };
+  }, [panel.settings.userId, patchPanel]);
+
   const updateSettings = useCallback(
     (panelId: PanelId, settings: Partial<ChatSettings>) => {
       void panelId;

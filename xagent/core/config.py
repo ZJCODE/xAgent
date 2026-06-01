@@ -26,6 +26,7 @@ class AgentConfig:
     MESSAGE_DIRNAME = "messages"
     WORKSPACE_DIRNAME = "workspace"
     SKILLS_DIRNAME = "skills"
+    TASKS_DIRNAME = "tasks"
     MESSAGE_DB_FILENAME = "messages.sqlite3"
     MEMORY_RECENT_DAYS = 2
     MEMORY_MESSAGE_THRESHOLD = 20
@@ -97,6 +98,23 @@ class AgentConfig:
             "- Stay within scope, use reasonable timeouts, and avoid unbounded output.\n"
             "- On failure: inspect `return_code` and `stderr`, explain the cause, suggest a targeted fix.\n"
         ),
+        "schedule_message": (
+            "\n**Scheduled Messages and Reminders:**\n"
+            "- Use `schedule_message` when the user asks to be reminded, notified, or messaged later.\n"
+            "- Convert relative time requests into `delay_seconds` when clear, for example one minute means 60 seconds.\n"
+            "- The tool automatically captures the active delivery channel, so do not ask the user to start a scheduler CLI for normal Web/API/Feishu use.\n"
+            "- Schedule only the future reminder content; still reply in the current turn with a brief confirmation after the tool succeeds.\n"
+            "- Do not use scheduled messages to conceal actions or bypass confirmation requirements.\n"
+        ),
+        "schedule_command": (
+            "\n**Scheduled Shell Execution:**\n"
+            "- Use `schedule_command` only when the user asks for a future or delayed local shell action.\n"
+            "- Use `schedule_message` instead for reminders, notifications, or messages that should be sent back to the conversation.\n"
+            "- A scheduled command has the same safety boundary as `run_command`: destructive work or writes outside the workspace require explicit user approval first.\n"
+            "- Prefer simple, auditable commands; include absolute paths or workspace-relative paths when ambiguity would matter later.\n"
+            "- Shell command task files are an admin/CLI facility; channel runtimes do not execute arbitrary shell tasks.\n"
+            "- Do not use scheduled commands to hide actions from the user or bypass current-turn confirmation requirements.\n"
+        ),
         "web_search": (
             "\n**Web Search:**\n"
             "- Use `web_search` when the answer depends on current, external, local, or source-backed information.\n"
@@ -133,6 +151,8 @@ class AgentConfig:
 
     TOOL_POLICY_ORDER = (
         "run_command",
+        "schedule_message",
+        "schedule_command",
         "write_memory",
         "search_memory",
         "web_search",

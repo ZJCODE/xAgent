@@ -12,6 +12,9 @@ import type {
   SkillStateResponse,
   SkillsInfo,
   SkillsTreeResponse,
+  TaskCreateInput,
+  TaskCreateResponse,
+  TasksResponse,
   WorkspaceUploadResult,
 } from "../types";
 
@@ -139,6 +142,22 @@ export async function searchMessages(query: string): Promise<MessageSearchRespon
 
 export async function getMessagesStats(): Promise<MessagesStats> {
   return requestJson("/api/messages/stats");
+}
+
+export async function getTasks(): Promise<TasksResponse> {
+  return requestJson("/api/tasks");
+}
+
+export async function createTask(input: TaskCreateInput): Promise<TaskCreateResponse> {
+  return requestJson("/api/tasks/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteTask(name: string): Promise<{ status: string; deleted: unknown }> {
+  return requestJson(`/api/tasks/delete?name=${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
 export function workspaceBlobUrl(path: string): string {

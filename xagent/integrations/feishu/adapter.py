@@ -41,6 +41,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 from pydantic import BaseModel
 
 from ...core.agent import Agent
+from ...core.config import AgentConfig
+from ...core.runtime import AsyncTaskScheduler, ScheduledDeliveryContext, scheduled_delivery_context
 from .config import FeishuAdapterConfig
 from .history import (
     FeishuHistoryFetcher,
@@ -201,6 +203,9 @@ class FeishuAdapter:
         self._processing_tasks_lock = threading.Lock()
         self._processing_tasks: set[asyncio.Task[None]] = set()
         self._artifact_renderer = FeishuArtifactRenderer(self)
+        runtime_root = Path(getattr(agent, "workspace", AgentConfig.DEFAULT_WORKSPACE)).expanduser().resolve()
+        self._tasks_dir = runtime_root / AgentConfig.TASKS_DIRNAME
+        self._task_scheduler: Optional[AsyncTaskScheduler] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -260,6 +265,14 @@ class FeishuAdapter:
         """
         loop = asyncio.get_running_loop()
         self._owner_loop = loop
+        task_scheduler = AsyncTaskScheduler(
+            self._tasks_dir,
+            can_handle=self._can_handle_scheduled_task,
+            dispatch=self._dispatch_scheduled_task,
+            logger_=self.logger,
+        )
+        self._task_scheduler = task_scheduler
+        await task_scheduler.start()
         run_task = loop.run_in_executor(None, self.run_blocking)
         stop_task = asyncio.create_task(self._stop_event.wait())
         try:
@@ -276,6 +289,8 @@ class FeishuAdapter:
                 if exc is not None:
                     raise exc
         finally:
+            await task_scheduler.stop()
+            self._task_scheduler = None
             self._safe_stop()
             await self._flush_agent_memory()
             self._owner_loop = None
@@ -1875,14 +1890,79 @@ class FeishuAdapter:
             image_sources=image_sources,
             attachments=attachments,
         )
-
-        await self._send_event_replies(
-            chat_id=chat_id,
-            is_group=is_group,
-            message_id=message_id,
-            chat_kwargs=chat_kwargs,
-            raw_msg=raw_msg,
+        anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
+        context = ScheduledDeliveryContext(
+            channel="feishu",
+            user_id=user_id,
+            target={
+                "chat_id": chat_id,
+                "message_id": anchor,
+                "is_group": is_group,
+                "sender_id": sender_id,
+                "sender_name": sender_name,
+            },
+            metadata={
+                "source": "feishu",
+                "message_id": message_id,
+                "chat_id": chat_id,
+            },
         )
+        with scheduled_delivery_context(context):
+            await self._send_event_replies(
+                chat_id=chat_id,
+                is_group=is_group,
+                message_id=message_id,
+                chat_kwargs=chat_kwargs,
+                raw_msg=raw_msg,
+            )
+
+    def _can_handle_scheduled_task(self, task) -> bool:
+        return (
+            task.kind == "message"
+            and str(task.target.get("channel") or "") == "feishu"
+            and self._channel is not None
+        )
+
+    async def _dispatch_scheduled_task(self, task) -> None:
+        assert self._channel is not None
+        target = task.target
+        chat_id = str(target.get("chat_id") or "").strip()
+        if not chat_id:
+            raise ValueError("scheduled Feishu task is missing chat_id")
+        content = task.message.strip()
+        if not content:
+            raise ValueError("scheduled Feishu message is empty")
+        message_id = str(target.get("message_id") or "").strip() or None
+        is_group = bool(target.get("is_group"))
+        result = await send_message(
+            self._channel,
+            chat_id=chat_id,
+            payload={"markdown": content},
+            reply_to=message_id if (is_group and message_id) else None,
+            uuid=self._message_uuid(f"scheduled:{task.task_id}"),
+            logger=self.logger,
+            message_id=message_id,
+        )
+        if getattr(result, "success", False) is False:
+            raise RuntimeError(f"Feishu scheduled send failed: {getattr(result, 'error', None)}")
+        message_handler = getattr(self.agent, "message_handler", None)
+        store_model_reply = getattr(message_handler, "store_model_reply", None)
+        if callable(store_model_reply):
+            try:
+                await store_model_reply(
+                    content,
+                    getattr(self.agent, "_assistant_sender_id", "agent"),
+                    metadata={
+                        "scheduled_task": {
+                            "id": task.task_id,
+                            "name": task.name,
+                            "run_at": task.run_at.isoformat(sep=" "),
+                            "target": target,
+                        }
+                    },
+                )
+            except Exception:
+                self.logger.debug("Failed to persist Feishu scheduled message", exc_info=True)
 
     def _chat_kwargs(
         self,
