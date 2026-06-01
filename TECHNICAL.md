@@ -890,14 +890,6 @@ GET /api/messages?count=50&offset=0
 GET /api/tasks
 ```
 
-#### POST /api/tasks/create
-
-从 Web/API 管理面创建一个提醒任务。需要提供 `message`，并在 `run_at` 与 `delay_seconds` 中二选一。
-
-```json
-{"message":"走两步","delay_seconds":60,"user_id":"web_user"}
-```
-
 #### DELETE /api/tasks/delete?name=...
 
 删除一个待执行或失败任务。`name` 必须是 `/api/tasks` 返回的文件名。

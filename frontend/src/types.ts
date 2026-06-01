@@ -100,19 +100,6 @@ export interface TasksResponse {
   total: number;
 }
 
-export interface TaskCreateInput {
-  message: string;
-  run_at?: string;
-  delay_seconds?: number;
-  title?: string;
-  user_id?: string;
-}
-
-export interface TaskCreateResponse {
-  status: string;
-  task: ScheduledTaskItem;
-}
-
 export interface AgentInfo {
   provider?: string;
   model: string;

@@ -12,8 +12,6 @@ import type {
   SkillStateResponse,
   SkillsInfo,
   SkillsTreeResponse,
-  TaskCreateInput,
-  TaskCreateResponse,
   TasksResponse,
   WorkspaceUploadResult,
 } from "../types";
@@ -146,14 +144,6 @@ export async function getMessagesStats(): Promise<MessagesStats> {
 
 export async function getTasks(): Promise<TasksResponse> {
   return requestJson("/api/tasks");
-}
-
-export async function createTask(input: TaskCreateInput): Promise<TaskCreateResponse> {
-  return requestJson("/api/tasks/create", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
 }
 
 export async function deleteTask(name: string): Promise<{ status: string; deleted: unknown }> {

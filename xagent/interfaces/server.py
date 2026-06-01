@@ -6,7 +6,6 @@ import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -27,7 +26,6 @@ from ..core.runtime import (
     ScheduledDeliveryContext,
     create_runtime_heartbeat,
     delete_task_file,
-    enqueue_message_task,
     list_task_records,
     scheduled_delivery_context,
 )
@@ -168,18 +166,6 @@ class SkillStateInput(BaseModel):
 
     name: str
     enabled: bool
-
-
-class TaskCreateInput(BaseModel):
-    """Request body for creating a scheduled Web/API message task."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    message: str
-    run_at: Optional[str] = None
-    delay_seconds: Optional[int] = None
-    title: Optional[str] = None
-    user_id: Optional[str] = None
 
 
 class AgentHTTPServer(BaseAgentRunner):
@@ -1193,34 +1179,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 "tasks": tasks,
                 "total": len(tasks),
             }
-
-        @app.post("/api/tasks/create", tags=["Monitoring"])
-        async def tasks_create(input_data: TaskCreateInput):
-            message = input_data.message.strip()
-            if not message:
-                raise HTTPException(status_code=400, detail="message is required")
-            if input_data.delay_seconds is None and not input_data.run_at:
-                raise HTTPException(status_code=400, detail="Provide either run_at or delay_seconds")
-            if input_data.delay_seconds is not None:
-                if input_data.delay_seconds < 0:
-                    raise HTTPException(status_code=400, detail="delay_seconds must be zero or positive")
-                run_at: str | datetime = datetime.now().replace(microsecond=0) + timedelta(seconds=input_data.delay_seconds)
-            else:
-                run_at = input_data.run_at or ""
-            user_id = (input_data.user_id or "web_user").strip() or "web_user"
-            try:
-                task = enqueue_message_task(
-                    message=message,
-                    run_at=run_at,
-                    tasks_dir=self.tasks_dir,
-                    target={"channel": "web", "user_id": user_id},
-                    user_id=user_id,
-                    title=input_data.title or "Reminder",
-                    source={"source": "tasks_api"},
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {"status": "ok", "task": task.to_dict()}
 
         @app.delete("/api/tasks/delete", tags=["Monitoring"])
         async def tasks_delete(name: str = Query(..., description="Task file name")):

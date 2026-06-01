@@ -1,20 +1,8 @@
-import { CalendarClock, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { CalendarClock, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { createTask, deleteTask, getTasks } from "../lib/api";
+import { deleteTask, getTasks } from "../lib/api";
 import { classNames } from "../lib/format";
 import type { ScheduledTaskItem, TasksResponse } from "../types";
-
-interface TaskForm {
-  message: string;
-  delaySeconds: string;
-  userId: string;
-}
-
-const defaultForm: TaskForm = {
-  message: "",
-  delaySeconds: "60",
-  userId: "web_user",
-};
 
 function formatRunAt(value: string): string {
   if (!value) return "";
@@ -38,9 +26,7 @@ function taskContent(task: ScheduledTaskItem): string {
 export function TasksPage() {
   const [data, setData] = useState<TasksResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [form, setForm] = useState<TaskForm>(defaultForm);
 
   const tasks = useMemo(() => data?.tasks || [], [data]);
   const pendingCount = tasks.filter((task) => task.state === "pending").length;
@@ -61,35 +47,6 @@ export function TasksPage() {
   useEffect(() => {
     void load();
   }, []);
-
-  const submit = async () => {
-    const message = form.message.trim();
-    const delay = Number.parseInt(form.delaySeconds, 10);
-    if (!message) {
-      setError("Message is required");
-      return;
-    }
-    if (!Number.isFinite(delay) || delay < 0) {
-      setError("Delay must be zero or positive");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    try {
-      await createTask({
-        message,
-        delay_seconds: delay,
-        user_id: form.userId.trim() || "web_user",
-        title: "Reminder",
-      });
-      setForm((value) => ({ ...value, message: "" }));
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const removeTask = async (task: ScheduledTaskItem) => {
     if (!window.confirm(`Delete task ${task.name}?`)) return;
@@ -120,46 +77,6 @@ export function TasksPage() {
       </div>
 
       <div className="tasks-layout">
-        <section className="task-form-panel">
-          <div className="content-heading">
-            <div>
-              <h3>New Reminder</h3>
-              <span>web channel</span>
-            </div>
-          </div>
-          <div className="skill-form">
-            <label className="form-field">
-              <span>Message</span>
-              <textarea
-                value={form.message}
-                placeholder="走两步"
-                onChange={(event) => setForm((value) => ({ ...value, message: event.target.value }))}
-              />
-            </label>
-            <div className="task-form-grid">
-              <label className="form-field">
-                <span>Delay Seconds</span>
-                <input
-                  value={form.delaySeconds}
-                  inputMode="numeric"
-                  onChange={(event) => setForm((value) => ({ ...value, delaySeconds: event.target.value }))}
-                />
-              </label>
-              <label className="form-field">
-                <span>User</span>
-                <input
-                  value={form.userId}
-                  onChange={(event) => setForm((value) => ({ ...value, userId: event.target.value }))}
-                />
-              </label>
-            </div>
-            <button type="button" className="ghost-button icon-text-button" disabled={saving} onClick={() => void submit()}>
-              <Plus size={15} />
-              Create
-            </button>
-          </div>
-        </section>
-
         <section className="task-list-panel">
           {error && <div className="error-banner">{error}</div>}
           {loading ? (
