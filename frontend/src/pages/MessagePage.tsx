@@ -2,7 +2,7 @@ import { FileIcon, RefreshCw, Search, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Markdown } from "../components/Markdown";
 import { getAgentInfo, getMessages, searchMessages } from "../lib/api";
-import { classNames, formatTimestamp } from "../lib/format";
+import { classNames, formatBytes, formatTimestamp } from "../lib/format";
 import type { AttachmentAsset, MessageItem, MessageSearchResult } from "../types";
 
 const PAGE_SIZE = 50;
@@ -53,6 +53,23 @@ function attachmentLabel(attachment: AttachmentAsset): string {
 
 function messageFileAttachments(message: MessageItem | MessageSearchResult): AttachmentAsset[] {
   return (message.attachments || []).filter((attachment) => !(attachment.kind === "image" || attachment.mime_type?.startsWith("image/")));
+}
+
+function FileArchivePreview({ attachment }: { attachment: AttachmentAsset }) {
+  const url = attachmentUrl(attachment);
+  const label = attachmentLabel(attachment);
+  const size = formatBytes(attachment.size_bytes);
+  return (
+    <a className="file-preview-bubble archive-file-preview" href={url} target="_blank" rel="noreferrer" download={label}>
+      <span className="file-preview-icon" aria-hidden="true">
+        <FileIcon size={34} />
+      </span>
+      <span className="file-preview-meta">
+        <span className="file-preview-name">{label}</span>
+        {size ? <span className="file-preview-size">{size}</span> : null}
+      </span>
+    </a>
+  );
 }
 
 export function MessagePage() {
@@ -163,6 +180,7 @@ export function MessagePage() {
         {activeMessages.length ? (
           activeMessages.map((message, index) => {
             const imageUrls = messageImageUrls(message);
+            const files = messageFileAttachments(message);
             return (
               <article key={`${message.timestamp}-${index}`} className={classNames("message-row", roleClass(message.role))}>
                 <div className="message-row-meta">
@@ -178,33 +196,29 @@ export function MessagePage() {
                       ))
                     : null}
                 </div>
-                <Markdown content={message.content || ""} renderImages={false} />
+                {message.content ? <Markdown content={message.content} renderImages={false} /> : null}
                 {imageUrls.length ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="message-archive-media">
                     {imageUrls.map((url, imageIndex) => (
-                      <img
+                      <a
                         key={`${message.timestamp}-${imageIndex}-${url}`}
-                        src={url}
-                        alt=""
-                        className="h-24 max-w-[180px] rounded-lg border border-black/10 object-cover dark:border-white/15"
-                      />
+                        href={url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="message-image-link archive-image-link"
+                      >
+                        <img src={url} alt="" className="message-image-preview" />
+                      </a>
                     ))}
                   </div>
                 ) : null}
-                {messageFileAttachments(message).length ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {messageFileAttachments(message).map((attachment, attachmentIndex) => (
-                      <a
+                {files.length ? (
+                  <div className="message-archive-media">
+                    {files.map((attachment, attachmentIndex) => (
+                      <FileArchivePreview
                         key={`${message.timestamp}-${attachmentIndex}-${attachmentUrl(attachment)}`}
-                        className="attachment-chip"
-                        href={attachmentUrl(attachment)}
-                        target="_blank"
-                        rel="noreferrer"
-                        download={attachmentLabel(attachment)}
-                      >
-                        <FileIcon size={14} />
-                        <span>{attachmentLabel(attachment)}</span>
-                      </a>
+                        attachment={attachment}
+                      />
                     ))}
                   </div>
                 ) : null}

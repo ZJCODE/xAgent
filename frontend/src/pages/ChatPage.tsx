@@ -2,7 +2,7 @@ import { FileIcon, Paperclip, Send, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Markdown } from "../components/Markdown";
 import { useChat } from "../context/ChatContext";
-import { classNames } from "../lib/format";
+import { classNames, formatBytes } from "../lib/format";
 import type { AttachmentAsset, ChatPanelState } from "../types";
 
 function attachmentUrl(attachment: AttachmentAsset): string {
@@ -30,69 +30,99 @@ function fileAttachments(attachments?: AttachmentAsset[]): AttachmentAsset[] {
   return (attachments || []).filter((attachment) => !isImageAttachment(attachment));
 }
 
-function AttachmentChips({ attachments }: { attachments?: AttachmentAsset[] }) {
-  const files = fileAttachments(attachments);
-  if (!files.length) return null;
+function FilePreviewBubble({ attachment }: { attachment: AttachmentAsset }) {
+  const url = attachmentUrl(attachment);
+  const label = attachmentLabel(attachment);
+  const size = formatBytes(attachment.size_bytes);
   return (
-    <div className="mt-3 flex flex-wrap gap-2">
-      {files.map((attachment, index) => {
-        const url = attachmentUrl(attachment);
-        const label = attachmentLabel(attachment);
-        return (
-          <a key={`${url}-${index}`} className="attachment-chip" href={url} target="_blank" rel="noreferrer" download={label}>
-            <FileIcon size={14} />
-            <span>{label}</span>
-          </a>
-        );
-      })}
+    <a className="file-preview-bubble" href={url} target="_blank" rel="noreferrer" download={label}>
+      <span className="file-preview-icon" aria-hidden="true">
+        <FileIcon size={34} />
+      </span>
+      <span className="file-preview-meta">
+        <span className="file-preview-name">{label}</span>
+        {size ? <span className="file-preview-size">{size}</span> : null}
+      </span>
+    </a>
+  );
+}
+
+function ChatMessageView({ message }: { message: ChatPanelState["messages"][number] }) {
+  const isUser = message.role === "user";
+  const isObservation = message.role === "observation";
+  const images = imageUrlsForMessage(message);
+  const files = fileAttachments(message.attachments);
+  const hasTextBubble = Boolean(message.content || message.pending);
+  const persistedImageCount = !images.length ? message.imageCount || 0 : 0;
+  const persistedAttachmentCount = !message.attachments?.length ? message.attachmentCount || 0 : 0;
+  return (
+    <div className={classNames("chat-message-group", isUser && "from-user")}>
+      {hasTextBubble ? (
+        <div
+          className={classNames(
+            "message-bubble",
+            isUser ? "user-bubble" : isObservation ? "observation-bubble" : "assistant-bubble",
+            message.error && "error-bubble",
+          )}
+        >
+          <div className="message-label">{isUser ? "You" : isObservation ? "Observation" : "xAgent"}</div>
+          {message.pending && !message.content ? (
+            <div className="text-zinc-400">Thinking...</div>
+          ) : (
+            <Markdown content={message.content} renderImages={false} />
+          )}
+          {message.pending && message.content ? <span className="typing-cursor" /> : null}
+        </div>
+      ) : null}
+      {images.map((src, index) => (
+        <a key={`${message.id}-${index}`} href={src} target="_blank" rel="noreferrer" className="message-image-link">
+          <img src={src} alt="" className="message-image-preview" />
+        </a>
+      ))}
+      {files.map((attachment, index) => (
+        <FilePreviewBubble key={`${attachmentUrl(attachment)}-${index}`} attachment={attachment} />
+      ))}
+      {persistedImageCount ? (
+        <div
+          className={classNames(
+            "message-bubble attachment-count-bubble",
+            isUser ? "user-bubble" : isObservation ? "observation-bubble" : "assistant-bubble",
+          )}
+        >
+          Attached {persistedImageCount} {persistedImageCount === 1 ? "image" : "images"}
+        </div>
+      ) : null}
+      {persistedAttachmentCount ? (
+        <div
+          className={classNames(
+            "message-bubble attachment-count-bubble",
+            isUser ? "user-bubble" : isObservation ? "observation-bubble" : "assistant-bubble",
+          )}
+        >
+          Attached {persistedAttachmentCount} {persistedAttachmentCount === 1 ? "file" : "files"}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function ChatBubble({ message }: { message: ChatPanelState["messages"][number] }) {
-  const isUser = message.role === "user";
-  const isObservation = message.role === "observation";
-  const images = imageUrlsForMessage(message);
-  const persistedImageCount = !images.length ? message.imageCount || 0 : 0;
-  const persistedAttachmentCount = !message.attachments?.length ? message.attachmentCount || 0 : 0;
+function PendingAttachmentPreview({ attachment, onRemove }: { attachment: AttachmentAsset; onRemove: () => void }) {
+  const url = attachmentUrl(attachment);
+  const isImage = isImageAttachment(attachment);
   return (
-    <div className={classNames("flex", isUser && "justify-end")}>
-      <div
-        className={classNames(
-          "message-bubble",
-          isUser ? "user-bubble" : isObservation ? "observation-bubble" : "assistant-bubble",
-          message.error && "error-bubble",
-        )}
-      >
-        <div className="message-label">{isUser ? "You" : isObservation ? "Observation" : "xAgent"}</div>
-        {message.pending && !message.content ? (
-          <div className="text-zinc-400">Thinking...</div>
-        ) : (
-          <Markdown content={message.content} renderImages={false} />
-        )}
-        {message.pending && message.content ? <span className="typing-cursor" /> : null}
-        {images.length ? (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {images.map((src, index) => (
-              <a key={`${message.id}-${index}`} href={src} target="_blank" rel="noreferrer" className="block">
-                <img src={src} alt="" className="h-24 max-w-[180px] rounded-lg border border-white/30 object-cover" />
-              </a>
-            ))}
-          </div>
-        ) : null}
-        <AttachmentChips attachments={message.attachments} />
-        {persistedImageCount ? (
-          <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-            Attached {persistedImageCount} {persistedImageCount === 1 ? "image" : "images"}
-          </div>
-        ) : null}
-        {persistedAttachmentCount ? (
-          <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-            Attached {persistedAttachmentCount} {persistedAttachmentCount === 1 ? "file" : "files"}
-          </div>
-        ) : null}
-      </div>
-    </div>
+    <span className={isImage ? "image-chip" : "file-chip"}>
+      {isImage ? (
+        <img src={url} alt="" />
+      ) : (
+        <span className="pending-file-icon" aria-hidden="true">
+          <FileIcon size={18} />
+        </span>
+      )}
+      {!isImage ? <span>{attachmentLabel(attachment)}</span> : null}
+      <button type="button" onClick={onRemove} title="Remove attachment">
+        <X size={14} />
+      </button>
+    </span>
   );
 }
 
@@ -161,7 +191,7 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
 
       <div ref={scrollRef} className="fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4">
         {panel.messages.length ? (
-          panel.messages.map((message) => <ChatBubble key={message.id} message={message} />)
+          panel.messages.map((message) => <ChatMessageView key={message.id} message={message} />)
         ) : (
           <div className="h-full min-h-[320px] flex items-center justify-center text-center text-sm text-zinc-500 dark:text-zinc-400">
             <div>
@@ -177,19 +207,13 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
 
       {panel.pendingAttachments.length ? (
         <div className="border-t border-black/5 dark:border-white/10 px-3 sm:px-6 py-3">
-          {panel.pendingAttachments.map((attachment, index) => {
-            const url = attachmentUrl(attachment);
-            const isImage = isImageAttachment(attachment);
-            return (
-            <span key={`${url.slice(0, 24)}-${index}`} className={isImage ? "image-chip" : "file-chip"}>
-              {isImage ? <img src={url} alt="" /> : <FileIcon size={15} />}
-              {!isImage ? <span>{attachmentLabel(attachment)}</span> : null}
-              <button type="button" onClick={() => removeAttachment(panel.id, index)} title="Remove attachment">
-                <X size={14} />
-              </button>
-            </span>
-          );
-          })}
+          {panel.pendingAttachments.map((attachment, index) => (
+            <PendingAttachmentPreview
+              key={`${attachmentUrl(attachment).slice(0, 24)}-${index}`}
+              attachment={attachment}
+              onRemove={() => removeAttachment(panel.id, index)}
+            />
+          ))}
         </div>
       ) : null}
 

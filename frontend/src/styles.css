@@ -288,6 +288,19 @@ textarea {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 5%, black 95%, transparent 100%);
 }
 
+.chat-message-group {
+  display: flex;
+  max-width: min(760px, 88%);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.48rem;
+}
+
+.chat-message-group.from-user {
+  margin-left: auto;
+  align-items: flex-end;
+}
+
 .message-bubble {
   max-width: min(760px, 88%);
   border-radius: 24px;
@@ -295,6 +308,10 @@ textarea {
   font-size: 0.92rem;
   line-height: 1.65;
   box-shadow: var(--shadow-card);
+}
+
+.chat-message-group .message-bubble {
+  max-width: 100%;
 }
 
 .assistant-bubble {
@@ -324,6 +341,128 @@ textarea {
 
 .error-bubble {
   border-color: rgba(239, 68, 68, 0.25);
+}
+
+.attachment-count-bubble {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  padding: 0.58rem 0.78rem;
+}
+
+.message-image-link {
+  --preview-max-width: min(420px, 78vw);
+  --preview-max-height: min(360px, 60vh);
+  display: block;
+  align-self: flex-start;
+  width: fit-content;
+  max-width: min(100%, var(--preview-max-width));
+  overflow: hidden;
+  border-radius: 20px;
+  box-shadow: var(--shadow-card);
+}
+
+.message-image-preview {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: var(--preview-max-height);
+}
+
+.file-preview-bubble {
+  display: grid;
+  width: min(320px, 78vw);
+  min-height: 92px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.85rem;
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--text-primary);
+  padding: 0.72rem;
+  text-decoration: none;
+  box-shadow: var(--shadow-card);
+}
+
+.dark .file-preview-bubble {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(24, 24, 27, 0.78);
+}
+
+.from-user .file-preview-bubble {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: #18181b;
+  color: #fafafa;
+}
+
+.dark .from-user .file-preview-bubble {
+  border-color: rgba(24, 24, 27, 0.14);
+  background: #fafafa;
+  color: #18181b;
+}
+
+.file-preview-icon,
+.pending-file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.file-preview-icon {
+  width: 68px;
+  height: 68px;
+  border-radius: 16px;
+  background: rgba(24, 24, 27, 0.08);
+  color: var(--text-secondary);
+}
+
+.dark .file-preview-icon {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.from-user .file-preview-icon {
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.dark .from-user .file-preview-icon {
+  background: rgba(24, 24, 27, 0.1);
+  color: rgba(24, 24, 27, 0.76);
+}
+
+.file-preview-meta {
+  min-width: 0;
+}
+
+.file-preview-name,
+.file-preview-size {
+  display: block;
+}
+
+.file-preview-name {
+  overflow: hidden;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview-size {
+  margin-top: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+
+.from-user .file-preview-size {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.dark .from-user .file-preview-size {
+  color: rgba(24, 24, 27, 0.55);
 }
 
 .message-label {
@@ -766,17 +905,23 @@ textarea {
 }
 
 .markdown-content img {
+  display: block;
+  width: auto;
+  height: auto;
   max-width: min(100%, 520px);
+  max-height: min(65vh, 520px);
   border-radius: 14px;
   margin: 0.65em 0;
 }
 
 .workspace-preview-image {
+  display: block;
+  width: auto;
+  height: auto;
   max-width: min(100%, 900px);
   max-height: 70vh;
   border-radius: 18px;
   border: 1px solid var(--border-soft);
-  object-fit: contain;
 }
 
 .skill-list {
@@ -1136,6 +1281,24 @@ textarea {
   margin-bottom: 0.5rem;
   color: var(--text-secondary);
   font-size: 0.76rem;
+}
+
+.message-archive-media {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  max-width: 100%;
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+}
+
+.archive-image-link {
+  --preview-max-width: min(360px, calc(100vw - 3rem));
+  --preview-max-height: min(300px, 52vh);
+}
+
+.archive-file-preview {
+  width: min(300px, 100%);
 }
 
 .meta-chip,
