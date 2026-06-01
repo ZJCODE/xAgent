@@ -1,4 +1,4 @@
-"""Shared helpers for file-backed scheduled message tasks."""
+"""Shared helpers for file-backed scheduled tasks."""
 from __future__ import annotations
 
 import os

@@ -98,13 +98,15 @@ class AgentConfig:
             "- Stay within scope, use reasonable timeouts, and avoid unbounded output.\n"
             "- On failure: inspect `return_code` and `stderr`, explain the cause, suggest a targeted fix.\n"
         ),
-        "schedule_message": (
-            "\n**Scheduled Messages and Reminders:**\n"
-            "- Use `schedule_message` when the user asks to be reminded, notified, or messaged later.\n"
+        "schedule_task": (
+            "\n**Scheduled Tasks and Reminders:**\n"
+            "- Use `schedule_task` when the user asks to be reminded, notified, messaged later, or asks you to do work at a later time.\n"
+            "- Use `task_type='message'` only when the due-time work is direct text delivery.\n"
+            "- Use `task_type='agent'` when the due-time work requires gathering information, using tools, or reasoning before replying.\n"
             "- Convert relative time requests into `delay_seconds` when clear, for example one minute means 60 seconds.\n"
-            "- The tool automatically captures the active delivery channel; channel runtimes deliver due reminders.\n"
-            "- Schedule only the future reminder content; still reply in the current turn with a brief confirmation after the tool succeeds.\n"
-            "- Do not use scheduled messages to conceal actions or bypass confirmation requirements.\n"
+            "- The tool automatically captures the active delivery channel; channel runtimes execute due tasks and deliver results.\n"
+            "- Schedule only the future task content; still reply in the current turn with a brief confirmation after the tool succeeds.\n"
+            "- Do not use scheduled tasks to conceal actions or bypass confirmation requirements.\n"
         ),
         "web_search": (
             "\n**Web Search:**\n"
@@ -142,7 +144,7 @@ class AgentConfig:
 
     TOOL_POLICY_ORDER = (
         "run_command",
-        "schedule_message",
+        "schedule_task",
         "write_memory",
         "search_memory",
         "web_search",

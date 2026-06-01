@@ -387,9 +387,9 @@ channels:
 
 ### 2.11 文件系统调度器
 
-调度器使用运行目录下的 `tasks/` 作为唯一状态队列。对话提醒使用 `YYYYMMDD-HHMMSS-xxxxxxxx.json`，文件名编码本地触发时间，内容是结构化任务：`kind=message`、`message`、`target.channel`、`target.user_id/chat_id` 等。API/Web 和 Feishu channel 启动时会自动运行一个轻量消费者，只领取自己能投递的 `message` 任务；领取前会原子重命名为运行中状态，成功后删除，失败后移动到 `tasks/failed/`。
+调度器使用运行目录下的 `tasks/` 作为唯一状态队列。计划任务使用 `YYYYMMDD-HHMMSS-xxxxxxxx.json`，文件名编码本地触发时间，内容是结构化任务 envelope：`kind=task`、`task.type`、`task.content`、`delivery.channel`、`delivery.target`、`execution` 等。`task.type=message` 表示到期后直接投递文本；`task.type=agent` 表示到期后运行一轮 agent，再把最终结果投递给原 channel。API/Web 和 Feishu channel 启动时会自动运行一个轻量消费者，只领取自己能处理的任务；领取前会原子重命名为运行中状态，成功后删除，失败后移动到 `tasks/failed/`。
 
-这意味着用户在对话中说“1 分钟后提醒我走两步”时，模型应调用 `schedule_message`，任务会由当前长连接 channel 自己投递。Web UI 的 Tasks tab 通过 `/api/tasks` 查看和管理这些任务；在线 Web 客户端通过 `/ws/tasks` 接收已到期提醒。
+这意味着用户在对话中说“1 分钟后提醒我走两步”时，模型应调用 `schedule_task(task_type="message", ...)`；说“半小时后帮我查一下当前系统的温度然后发我”时，应调用 `schedule_task(task_type="agent", ...)`。Web UI 的 Tasks tab 通过 `/api/tasks` 查看和管理这些任务；在线 Web 客户端通过 `/ws/tasks` 接收已到期结果。
 
 ## 3. 启动参数
 
@@ -868,7 +868,7 @@ GET /api/messages?count=50&offset=0
 
 #### GET /api/tasks
 
-列出 `tasks/` 中待执行和失败的任务。结构化提醒返回 `kind=message`，shell 任务返回 `kind=command`。
+列出 `tasks/` 中待执行和失败的任务。计划任务返回 `kind=task`，具体行为由 `payload.task.type` 区分。
 
 ```http
 GET /api/tasks
@@ -926,7 +926,7 @@ ws://127.0.0.1:8010/ws/tasks?user_id=web_user
 到期事件示例：
 
 ```json
-{"type":"scheduled_message","content":"走两步","task":{"kind":"message","state":"running"}}
+{"type":"scheduled_message","content":"走两步","task":{"kind":"task","state":"running","payload":{"task":{"type":"message","content":"走两步"}}}}
 ```
 
 ```json

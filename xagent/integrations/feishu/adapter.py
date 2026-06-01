@@ -1918,8 +1918,8 @@ class FeishuAdapter:
 
     def _can_handle_scheduled_task(self, task) -> bool:
         return (
-            task.kind == "message"
-            and str(task.target.get("channel") or "") == "feishu"
+            task.kind == "task"
+            and task.delivery_channel == "feishu"
             and self._channel is not None
         )
 
@@ -1929,9 +1929,9 @@ class FeishuAdapter:
         chat_id = str(target.get("chat_id") or "").strip()
         if not chat_id:
             raise ValueError("scheduled Feishu task is missing chat_id")
-        content = task.message.strip()
+        content = await self._scheduled_task_result(task)
         if not content:
-            raise ValueError("scheduled Feishu message is empty")
+            raise ValueError("scheduled Feishu task produced no content")
         message_id = str(target.get("message_id") or "").strip() or None
         is_group = bool(target.get("is_group"))
         result = await send_message(
@@ -1956,13 +1956,94 @@ class FeishuAdapter:
                         "scheduled_task": {
                             "id": task.task_id,
                             "name": task.name,
+                            "type": task.task_type,
                             "run_at": task.run_at.isoformat(sep=" "),
-                            "target": target,
+                            "delivery": task.delivery,
                         }
                     },
                 )
             except Exception:
-                self.logger.debug("Failed to persist Feishu scheduled message", exc_info=True)
+                self.logger.debug("Failed to persist Feishu scheduled task result", exc_info=True)
+
+    async def _scheduled_task_result(self, task) -> str:
+        task_type = task.task_type
+        if task_type == "message":
+            return task.content.strip()
+        if task_type != "agent":
+            raise ValueError(f"unsupported scheduled Feishu task type: {task_type}")
+
+        chat = getattr(self.agent, "chat", None)
+        if not callable(chat):
+            raise RuntimeError("Agent does not support chat().")
+        execution = self._scheduled_execution_options(task)
+        user_id = task.delivery_user_id or str(task.target.get("sender_id") or AgentConfig.DEFAULT_USER_ID)
+        context = ScheduledDeliveryContext(
+            channel="feishu",
+            user_id=user_id,
+            target=task.delivery.get("target") if isinstance(task.delivery.get("target"), dict) else {},
+            metadata={
+                "source": "scheduled_task",
+                "task_id": task.task_id,
+                "task_name": task.name,
+                "task_type": task.task_type,
+            },
+        )
+        with scheduled_delivery_context(context):
+            response = await chat(
+                user_message=self._scheduled_agent_prompt(task.content),
+                user_id=user_id,
+                history_count=execution["history_count"],
+                max_iter=execution["max_iter"],
+                max_concurrent_tools=execution["max_concurrent_tools"],
+                enable_memory=execution["enable_memory"],
+            )
+        return self._stringify_scheduled_agent_response(response).strip()
+
+    @staticmethod
+    def _scheduled_agent_prompt(content: str) -> str:
+        return (
+            "This scheduled task is now due. Execute it now and return the final message "
+            "that should be delivered to the user.\n\n"
+            f"Task: {content.strip()}"
+        )
+
+    @staticmethod
+    def _scheduled_execution_options(task) -> dict[str, Any]:
+        execution = task.execution
+        return {
+            "history_count": FeishuAdapter._positive_int(
+                execution.get("history_count"),
+                AgentConfig.DEFAULT_HISTORY_COUNT,
+            ),
+            "max_iter": FeishuAdapter._positive_int(
+                execution.get("max_iter"),
+                AgentConfig.DEFAULT_MAX_ITER,
+            ),
+            "max_concurrent_tools": FeishuAdapter._positive_int(
+                execution.get("max_concurrent_tools"),
+                AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+            ),
+            "enable_memory": bool(execution.get("enable_memory", True)),
+        }
+
+    @staticmethod
+    def _positive_int(value: Any, default: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
+
+    @staticmethod
+    def _stringify_scheduled_agent_response(response: Any) -> str:
+        if isinstance(response, str):
+            return response
+        if hasattr(response, "model_dump"):
+            try:
+                return json.dumps(response.model_dump(), ensure_ascii=False)
+            except Exception:
+                return str(response)
+        return str(response)
 
     def _chat_kwargs(
         self,

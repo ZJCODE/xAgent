@@ -64,11 +64,11 @@ xagent service stop api
 
 Use `api` for HTTP JSON, WebSocket, and the built-in web page. Use `feishu` for the Feishu bot, and `all` when you want every enabled channel. Without a channel, `service start` chooses one enabled channel, preferring `api`; other service actions default to `all`.
 
-## Scheduled Reminders
+## Scheduled Tasks
 
-In long-running channels, xAgent can schedule future messages directly from conversation. For example, if you say `一分钟后提醒我走两步` in the Web UI or Feishu, the agent writes a timestamped JSON task under `~/.xagent/tasks/` and the active channel runtime delivers the reminder automatically.
+In long-running channels, xAgent can schedule future work directly from conversation. For example, if you say `一分钟后提醒我走两步` in the Web UI or Feishu, the agent writes a `message` task under `~/.xagent/tasks/` and the active channel runtime delivers the reminder automatically. If you say `半小时后帮我查一下当前系统的温度然后发我`, the agent writes an `agent` task that runs when due, calls tools as needed, and sends the final result back to the same channel.
 
-The Web UI includes a Tasks tab for viewing, creating, and deleting scheduled tasks. API/Web reminder delivery is also pushed to connected Web clients through `/ws/tasks`.
+The Web UI includes a Tasks tab for viewing and deleting scheduled tasks. API/Web scheduled task results are also pushed to connected Web clients through `/ws/tasks`.
 
 ## Use From Feishu
 

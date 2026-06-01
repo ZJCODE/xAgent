@@ -368,38 +368,118 @@ class AgentHTTPServer(BaseAgentRunner):
         )
 
     def _can_handle_scheduled_task(self, task) -> bool:
-        if task.kind != "message":
+        if task.kind != "task":
             return False
-        target_channel = str(task.target.get("channel") or "")
+        target_channel = task.delivery_channel
         return target_channel in {"api", "web"}
 
     async def _dispatch_scheduled_task(self, task) -> None:
-        content = task.message.strip()
+        content = await self._scheduled_task_result(task)
         if not content:
-            raise ValueError("scheduled message is empty")
+            raise ValueError("scheduled task produced no content")
         target = task.target
         metadata = {
             "scheduled_task": {
                 "id": task.task_id,
                 "name": task.name,
+                "type": task.task_type,
                 "run_at": task.run_at.isoformat(sep=" "),
-                "target": target,
+                "delivery": task.delivery,
             }
         }
         stored_message = None
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        if callable(store_model_reply):
-            stored_message = await store_model_reply(
-                content,
-                getattr(self.agent, "_assistant_sender_id", "agent"),
-                metadata=metadata,
-            )
+        if task.task_type == "message":
+            message_handler = getattr(self.agent, "message_handler", None)
+            store_model_reply = getattr(message_handler, "store_model_reply", None)
+            if callable(store_model_reply):
+                stored_message = await store_model_reply(
+                    content,
+                    getattr(self.agent, "_assistant_sender_id", "agent"),
+                    metadata=metadata,
+                )
         await self._broadcast_scheduled_message(task, content, stored_message=stored_message)
+
+    async def _scheduled_task_result(self, task) -> str:
+        task_type = task.task_type
+        if task_type == "message":
+            return task.content.strip()
+        if task_type != "agent":
+            raise ValueError(f"unsupported scheduled task type: {task_type}")
+
+        execution = self._scheduled_execution_options(task)
+        user_id = task.delivery_user_id or str(task.target.get("user_id") or AgentConfig.DEFAULT_USER_ID)
+        prompt = self._scheduled_agent_prompt(task.content)
+        context = ScheduledDeliveryContext(
+            channel=task.delivery_channel,
+            user_id=user_id,
+            target=task.delivery.get("target") if isinstance(task.delivery.get("target"), dict) else {},
+            metadata={
+                "source": "scheduled_task",
+                "task_id": task.task_id,
+                "task_name": task.name,
+                "task_type": task.task_type,
+            },
+        )
+        await self._acquire_chat_slot()
+        try:
+            deadline = time.monotonic() + self._chat_timeout
+            with scheduled_delivery_context(context):
+                response = await self._await_before_deadline(
+                    self.agent.chat(
+                        user_message=prompt,
+                        user_id=user_id,
+                        history_count=execution["history_count"],
+                        max_iter=execution["max_iter"],
+                        max_concurrent_tools=execution["max_concurrent_tools"],
+                        enable_memory=execution["enable_memory"],
+                    ),
+                    deadline,
+                )
+        finally:
+            self._chat_semaphore.release()
+        result = self._response_payload(response)
+        if isinstance(result, str):
+            return result.strip()
+        return json.dumps(result, ensure_ascii=False).strip()
+
+    @staticmethod
+    def _scheduled_agent_prompt(content: str) -> str:
+        return (
+            "This scheduled task is now due. Execute it now and return the final message "
+            "that should be delivered to the user.\n\n"
+            f"Task: {content.strip()}"
+        )
+
+    @staticmethod
+    def _scheduled_execution_options(task) -> Dict[str, Any]:
+        execution = task.execution
+        return {
+            "history_count": AgentHTTPServer._positive_int(
+                execution.get("history_count"),
+                AgentConfig.DEFAULT_HISTORY_COUNT,
+            ),
+            "max_iter": AgentHTTPServer._positive_int(
+                execution.get("max_iter"),
+                AgentConfig.DEFAULT_MAX_ITER,
+            ),
+            "max_concurrent_tools": AgentHTTPServer._positive_int(
+                execution.get("max_concurrent_tools"),
+                AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+            ),
+            "enable_memory": bool(execution.get("enable_memory", True)),
+        }
+
+    @staticmethod
+    def _positive_int(value: Any, default: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
 
     async def _broadcast_scheduled_message(self, task, content: str, *, stored_message=None) -> None:
         target = task.target
-        user_id = str(target.get("user_id") or task.payload.get("user_id") or "")
+        user_id = str(target.get("user_id") or task.delivery_user_id or "")
         if not user_id:
             return
         payload: Dict[str, Any] = {
@@ -909,12 +989,12 @@ class AgentHTTPServer(BaseAgentRunner):
                 )
             self._task_scheduler = task_scheduler
             await task_scheduler.start()
-            self.logger.info("Scheduled message runtime started: tasks=%s", self.tasks_dir)
+            self.logger.info("Scheduled task runtime started: tasks=%s", self.tasks_dir)
             yield
         finally:
             await task_scheduler.stop()
             self._task_scheduler = None
-            self.logger.info("Scheduled message runtime stopped")
+            self.logger.info("Scheduled task runtime stopped")
             if heartbeat is not None:
                 await heartbeat.stop()
                 self.logger.info("Runtime heartbeat stopped")

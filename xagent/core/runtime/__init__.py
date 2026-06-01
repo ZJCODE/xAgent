@@ -8,7 +8,7 @@ from .tasks import (
     ScheduledTaskRecord,
     current_delivery_context,
     delete_task_file,
-    enqueue_message_task,
+    enqueue_scheduled_task,
     list_task_records,
     scheduled_delivery_context,
 )
@@ -23,7 +23,7 @@ __all__ = [
     "ScheduledTaskRecord",
     "current_delivery_context",
     "delete_task_file",
-    "enqueue_message_task",
+    "enqueue_scheduled_task",
     "list_task_records",
     "scheduled_delivery_context",
 ]

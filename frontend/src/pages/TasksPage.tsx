@@ -12,15 +12,23 @@ function formatRunAt(value: string): string {
 }
 
 function taskTarget(task: ScheduledTaskItem): string {
-  const target = task.payload.target || {};
-  const channel = String(target.channel || "");
-  const userId = String(target.user_id || task.payload.user_id || "");
+  const delivery = task.payload.delivery || {};
+  const target = delivery.target || {};
+  const channel = String(delivery.channel || "");
+  const userId = String(delivery.user_id || target.user_id || "");
   const chatId = String(target.chat_id || "");
   return [channel, userId || chatId].filter(Boolean).join(" · ") || "local";
 }
 
 function taskContent(task: ScheduledTaskItem): string {
-  return String(task.payload.message || "").trim();
+  return String(task.payload.task?.content || "").trim();
+}
+
+function taskTitle(task: ScheduledTaskItem): string {
+  const type = String(task.payload.task?.type || "").trim();
+  const title = String(task.payload.title || "").trim();
+  if (title) return type ? `${title} · ${type}` : title;
+  return type ? `Scheduled ${type}` : "Scheduled task";
 }
 
 export function TasksPage() {
@@ -90,7 +98,7 @@ export function TasksPage() {
                   </div>
                   <div className="task-row-main">
                     <div className="task-row-title">
-                      <h3>{task.payload.title || "Reminder"}</h3>
+                      <h3>{taskTitle(task)}</h3>
                       <span className={classNames("task-state", task.state === "failed" && "failed")}>{task.state}</span>
                     </div>
                     <p>{taskContent(task) || task.name}</p>

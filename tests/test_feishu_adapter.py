@@ -14,7 +14,7 @@ except ImportError:  # pragma: no cover - optional dependency
 from xagent.integrations.feishu import adapter as feishu_adapter_module
 from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAttachment
 from xagent.integrations.feishu.config import FeishuAdapterConfig
-from xagent.core.runtime import enqueue_message_task, list_task_records
+from xagent.core.runtime import enqueue_scheduled_task, list_task_records
 
 
 class _FakeAgent:
@@ -232,11 +232,13 @@ class FeishuAdapterTests(unittest.TestCase):
             adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
             adapter._channel = _FakeChannel()
             with tempfile.TemporaryDirectory() as tmpdir:
-                enqueue_message_task(
-                    message="走两步",
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="走两步",
                     run_at="2026-06-01 14:30:00",
                     tasks_dir=tmpdir,
-                    target={"channel": "feishu", "chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
+                    channel="feishu",
+                    target={"chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
                     user_id="ou_user",
                 )
                 task = list_task_records(tmpdir)[0]
@@ -246,6 +248,31 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertEqual(adapter._channel.sent[0][1], {"markdown": "走两步"})
             self.assertEqual(adapter._channel.sent[0][2]["reply_to"], "om_anchor")
             self.assertTrue(adapter._channel.sent[0][2]["uuid"].startswith("scheduled:"))
+
+        asyncio.run(run_test())
+
+    def test_scheduled_agent_task_dispatch_sends_agent_reply_to_feishu_chat(self):
+        async def run_test():
+            agent = _FakeAgent()
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel()
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_scheduled_task(
+                    task_type="agent",
+                    content="Check system temperature",
+                    run_at="2026-06-01 14:30:00",
+                    tasks_dir=tmpdir,
+                    channel="feishu",
+                    target={"chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
+                    user_id="ou_user",
+                )
+                task = list_task_records(tmpdir)[0]
+                await adapter._dispatch_scheduled_task(task)
+
+            self.assertEqual(adapter._channel.sent[0][0], "oc_group")
+            self.assertEqual(adapter._channel.sent[0][1], {"markdown": "agent reply"})
+            self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
+            self.assertIn("Check system temperature", agent.chat_calls[0]["user_message"])
 
         asyncio.run(run_test())
 

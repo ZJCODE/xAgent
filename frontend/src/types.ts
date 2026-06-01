@@ -84,10 +84,17 @@ export interface ScheduledTaskItem {
   path: string;
   payload: {
     title?: string;
-    message?: string;
-    user_id?: string;
+    task?: {
+      type?: string;
+      content?: string;
+    };
+    delivery?: {
+      channel?: string;
+      user_id?: string;
+      target?: Record<string, unknown>;
+    };
+    execution?: Record<string, unknown>;
     created_at?: string;
-    target?: Record<string, unknown>;
     source?: Record<string, unknown>;
     [key: string]: unknown;
   };

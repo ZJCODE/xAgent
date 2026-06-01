@@ -1,4 +1,4 @@
-"""Structured file-backed tasks for runtime message delivery."""
+"""Structured file-backed tasks for scheduled runtime delivery."""
 from __future__ import annotations
 
 import asyncio
@@ -25,13 +25,16 @@ from .scheduler import (
 )
 
 
-TASK_KIND_MESSAGE = "message"
-TASK_PAYLOAD_VERSION = 1
+TASK_KIND_TASK = "task"
+TASK_TYPE_MESSAGE = "message"
+TASK_TYPE_AGENT = "agent"
+TASK_PAYLOAD_VERSION = 2
 TASK_JSON_SUFFIX = ".json"
 TASK_STATE_PENDING = "pending"
 TASK_STATE_FAILED = "failed"
 TASK_STATE_RUNNING = "running"
 DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS = 1.0
+SUPPORTED_TASK_TYPES = {TASK_TYPE_MESSAGE, TASK_TYPE_AGENT}
 
 
 @dataclass(frozen=True)
@@ -65,13 +68,48 @@ class ScheduledTaskRecord:
         return str(raw_id or self.path.stem)
 
     @property
-    def message(self) -> str:
-        return str(self.payload.get("message") or "") if isinstance(self.payload, dict) else ""
+    def task(self) -> dict[str, Any]:
+        task = self.payload.get("task") if isinstance(self.payload, dict) else None
+        return dict(task) if isinstance(task, dict) else {}
+
+    @property
+    def task_type(self) -> str:
+        return str(self.task.get("type") or "")
+
+    @property
+    def content(self) -> str:
+        return str(self.task.get("content") or "")
+
+    @property
+    def delivery(self) -> dict[str, Any]:
+        delivery = self.payload.get("delivery") if isinstance(self.payload, dict) else None
+        return dict(delivery) if isinstance(delivery, dict) else {}
+
+    @property
+    def delivery_channel(self) -> str:
+        return str(self.delivery.get("channel") or "")
 
     @property
     def target(self) -> dict[str, Any]:
-        target = self.payload.get("target") if isinstance(self.payload, dict) else None
-        return dict(target) if isinstance(target, dict) else {}
+        delivery = self.delivery
+        target = delivery.get("target")
+        result = dict(target) if isinstance(target, dict) else {}
+        channel = str(delivery.get("channel") or "")
+        user_id = str(delivery.get("user_id") or "")
+        if channel:
+            result.setdefault("channel", channel)
+        if user_id:
+            result.setdefault("user_id", user_id)
+        return result
+
+    @property
+    def delivery_user_id(self) -> str:
+        return str(self.delivery.get("user_id") or "")
+
+    @property
+    def execution(self) -> dict[str, Any]:
+        execution = self.payload.get("execution") if isinstance(self.payload, dict) else None
+        return dict(execution) if isinstance(execution, dict) else {}
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,41 +145,54 @@ def scheduled_delivery_context(context: ScheduledDeliveryContext) -> Iterator[No
         _delivery_context_var.reset(token)
 
 
-def enqueue_message_task(
+def enqueue_scheduled_task(
     *,
-    message: str,
+    task_type: str,
+    content: str,
     run_at: str | datetime,
     tasks_dir: Path | str,
+    channel: str,
     target: dict[str, Any],
     user_id: str = "",
     title: str = "",
     source: Optional[dict[str, Any]] = None,
+    execution: Optional[dict[str, Any]] = None,
 ) -> ScheduledTaskRecord:
-    """Atomically enqueue a scheduled message task as JSON."""
-    content = message.strip()
-    if not content:
-        raise ValueError("scheduled message must not be empty")
+    """Atomically enqueue a scheduled task as JSON."""
+    normalized_type = str(task_type or "").strip().lower()
+    if normalized_type not in SUPPORTED_TASK_TYPES:
+        raise ValueError(f"task_type must be one of: {', '.join(sorted(SUPPORTED_TASK_TYPES))}")
+    normalized_content = content.strip()
+    if not normalized_content:
+        raise ValueError("scheduled task content must not be empty")
     parsed_run_at = parse_run_at(run_at)
     root, _failed = ensure_scheduler_dirs(tasks_dir)
     task_id = uuid.uuid4().hex
     payload = {
         "version": TASK_PAYLOAD_VERSION,
         "id": task_id,
-        "kind": TASK_KIND_MESSAGE,
+        "kind": TASK_KIND_TASK,
         "title": title.strip() if title else "",
-        "message": content,
-        "user_id": user_id,
-        "target": dict(target or {}),
+        "task": {
+            "type": normalized_type,
+            "content": normalized_content,
+        },
+        "delivery": {
+            "channel": str(channel or "").strip(),
+            "target": dict(target or {}),
+            "user_id": user_id,
+        },
+        "execution": dict(execution or {}),
         "source": dict(source or {}),
         "created_at": datetime.now().replace(microsecond=0).isoformat(sep=" "),
         "run_at": parsed_run_at.isoformat(sep=" "),
     }
     path = _enqueue_json_payload(payload, parsed_run_at, root, task_id=task_id)
-    return ScheduledTaskRecord(path=path, run_at=parsed_run_at, kind=TASK_KIND_MESSAGE, payload=payload)
+    return ScheduledTaskRecord(path=path, run_at=parsed_run_at, kind=TASK_KIND_TASK, payload=payload)
 
 
 def list_task_records(tasks_dir: Path | str, *, include_failed: bool = True) -> list[ScheduledTaskRecord]:
-    """Return pending scheduled message tasks, optionally including failed tasks."""
+    """Return pending scheduled tasks, optionally including failed tasks."""
     root, failed = ensure_scheduler_dirs(tasks_dir)
     records: list[ScheduledTaskRecord] = []
 
@@ -258,7 +309,7 @@ class AsyncTaskScheduler:
         now = self.now_provider()
         next_run_at: Optional[datetime] = None
         for record in list_task_records(self.tasks_dir, include_failed=False):
-            if record.kind != TASK_KIND_MESSAGE:
+            if record.kind != TASK_KIND_TASK:
                 continue
             if not self.can_handle(record):
                 continue
@@ -274,7 +325,7 @@ class AsyncTaskScheduler:
             try:
                 await self.dispatch(claimed)
             except Exception as exc:
-                self.logger.exception("scheduled message task failed -> %s: %s", record.name, exc)
+                self.logger.exception("scheduled task failed -> %s: %s", record.name, exc)
                 self._quarantine(claimed_path, record.name, "failed")
                 continue
             claimed_path.unlink(missing_ok=True)
@@ -384,7 +435,7 @@ def _record_from_json_file(
             run_at = parse_run_at(str(payload_run_at))
         except ValueError:
             pass
-    kind = str(payload.get("kind") or TASK_KIND_MESSAGE)
+    kind = str(payload.get("kind") or "")
     return ScheduledTaskRecord(path=path, run_at=run_at, kind=kind, state=state, payload=payload, reason=reason)
 
 
