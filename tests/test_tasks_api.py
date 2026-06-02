@@ -31,6 +31,30 @@ class _TaskAgent:
         return None
 
 
+class _AttachmentTaskAgent(_TaskAgent):
+    def __init__(self, runtime_root: Path):
+        super().__init__(runtime_root)
+        self.attachment = {
+            "kind": "image",
+            "path": "temp/images/result.png",
+            "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+            "mime_type": "image/png",
+            "file_name": "result.png",
+        }
+        self.chat_event_calls = []
+
+    async def chat_events(self, **kwargs):
+        self.chat_event_calls.append(kwargs)
+        yield {
+            "type": "message_done",
+            "message_id": "scheduled-image",
+            "phase": "final",
+            "content": "",
+            "attachments": [self.attachment],
+        }
+        yield {"type": "done"}
+
+
 class TaskApiTests(unittest.TestCase):
     def test_list_and_delete_task(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -87,15 +111,47 @@ class TaskApiTests(unittest.TestCase):
                 record = list_task_records(server.tasks_dir)[0]
                 delivered = []
 
-                async def capture_broadcast(task_record, content, *, stored_message=None):
-                    delivered.append((task_record.task_type, content, stored_message))
+                async def capture_broadcast(task_record, content, *, stored_message=None, attachments=None):
+                    delivered.append((task_record.task_type, content, stored_message, attachments))
 
                 server._broadcast_scheduled_message = capture_broadcast
                 await server._dispatch_scheduled_task(record)
 
-            self.assertEqual(delivered, [("agent", "agent scheduled result", None)])
+            self.assertEqual(delivered, [("agent", "agent scheduled result", None, [])])
             self.assertEqual(agent.chat_calls[0]["user_id"], "web_user")
             self.assertIn("Check system temperature", agent.chat_calls[0]["user_message"])
+
+        import asyncio
+
+        asyncio.run(run_test())
+
+    def test_dispatch_scheduled_agent_task_broadcasts_image_only_result(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                agent = _AttachmentTaskAgent(Path(tmpdir))
+                server = AgentHTTPServer(agent=agent, enable_web=False)
+                enqueue_scheduled_task(
+                    task_type="agent",
+                    content="Generate a pointillism image",
+                    run_at="2026-06-01 18:00:00",
+                    tasks_dir=server.tasks_dir,
+                    channel="web",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    title="Image Check",
+                )
+                record = list_task_records(server.tasks_dir)[0]
+                delivered = []
+
+                async def capture_broadcast(task_record, content, *, stored_message=None, attachments=None):
+                    delivered.append((task_record.task_type, content, stored_message, attachments))
+
+                server._broadcast_scheduled_message = capture_broadcast
+                await server._dispatch_scheduled_task(record)
+
+            self.assertEqual(delivered, [("agent", "", None, [agent.attachment])])
+            self.assertEqual(agent.chat_event_calls[0]["user_id"], "web_user")
+            self.assertFalse(agent.chat_event_calls[0]["stream"])
 
         import asyncio
 

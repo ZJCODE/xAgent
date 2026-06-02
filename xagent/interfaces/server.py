@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -51,6 +52,12 @@ from ..utils.image_utils import (
 _STATIC_DIR = Path(__file__).parent / "static"
 _WORKSPACE_TEXT_READ_LIMIT = 1_000_000
 _WORKSPACE_SEARCH_TEXT_LIMIT = 2_000_000
+
+
+@dataclass(frozen=True)
+class _ScheduledTaskResult:
+    content: str
+    attachments: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class ChatImageInput(BaseModel):
@@ -374,10 +381,9 @@ class AgentHTTPServer(BaseAgentRunner):
         return target_channel in {"api", "web"}
 
     async def _dispatch_scheduled_task(self, task) -> None:
-        content = await self._scheduled_task_result(task)
-        if not content:
+        result = await self._scheduled_task_result(task)
+        if not result.content and not result.attachments:
             raise ValueError("scheduled task produced no content")
-        target = task.target
         metadata = {
             "scheduled_task": {
                 "id": task.task_id,
@@ -393,16 +399,22 @@ class AgentHTTPServer(BaseAgentRunner):
             store_model_reply = getattr(message_handler, "store_model_reply", None)
             if callable(store_model_reply):
                 stored_message = await store_model_reply(
-                    content,
+                    result.content,
                     getattr(self.agent, "_assistant_sender_id", "agent"),
                     metadata=metadata,
+                    attachments=result.attachments,
                 )
-        await self._broadcast_scheduled_message(task, content, stored_message=stored_message)
+        await self._broadcast_scheduled_message(
+            task,
+            result.content,
+            stored_message=stored_message,
+            attachments=result.attachments,
+        )
 
-    async def _scheduled_task_result(self, task) -> str:
+    async def _scheduled_task_result(self, task) -> _ScheduledTaskResult:
         task_type = task.task_type
         if task_type == "message":
-            return task.content.strip()
+            return _ScheduledTaskResult(task.content.strip())
         if task_type != "agent":
             raise ValueError(f"unsupported scheduled task type: {task_type}")
 
@@ -424,8 +436,21 @@ class AgentHTTPServer(BaseAgentRunner):
         try:
             deadline = time.monotonic() + self._chat_timeout
             with scheduled_delivery_context(context):
+                chat_events = getattr(self.agent, "chat_events", None)
+                if callable(chat_events):
+                    return await self._scheduled_agent_event_result(
+                        chat_events,
+                        prompt=prompt,
+                        user_id=user_id,
+                        execution=execution,
+                        deadline=deadline,
+                    )
+
+                chat = getattr(self.agent, "chat", None)
+                if not callable(chat):
+                    raise RuntimeError("Agent does not support chat_events() or chat().")
                 response = await self._await_before_deadline(
-                    self.agent.chat(
+                    chat(
                         user_message=prompt,
                         user_id=user_id,
                         history_count=execution["history_count"],
@@ -437,10 +462,49 @@ class AgentHTTPServer(BaseAgentRunner):
                 )
         finally:
             self._chat_semaphore.release()
-        result = self._response_payload(response)
+        return self._scheduled_response_result(response)
+
+    async def _scheduled_agent_event_result(
+        self,
+        chat_events,
+        *,
+        prompt: str,
+        user_id: str,
+        execution: Dict[str, Any],
+        deadline: float,
+    ) -> _ScheduledTaskResult:
+        final_content = ""
+        final_attachments: List[Dict[str, Any]] = []
+        last_error = ""
+        async for event in self._iterate_before_deadline(
+            chat_events(
+                user_message=prompt,
+                user_id=user_id,
+                history_count=execution["history_count"],
+                max_iter=execution["max_iter"],
+                max_concurrent_tools=execution["max_concurrent_tools"],
+                enable_memory=execution["enable_memory"],
+                stream=False,
+            ),
+            deadline,
+        ):
+            event_type = event.get("type")
+            if event_type == "message_done" and str(event.get("phase") or "final") == "final":
+                final_content = str(event.get("content") or "").strip()
+                raw_attachments = event.get("attachments")
+                final_attachments = dedupe_attachments(raw_attachments if isinstance(raw_attachments, list) else [])
+            elif event_type == "error":
+                last_error = str(event.get("error") or "").strip()
+        if final_content or final_attachments:
+            return _ScheduledTaskResult(final_content, final_attachments)
+        return _ScheduledTaskResult(last_error)
+
+    @staticmethod
+    def _scheduled_response_result(response: Any) -> _ScheduledTaskResult:
+        result = AgentHTTPServer._response_payload(response)
         if isinstance(result, str):
-            return result.strip()
-        return json.dumps(result, ensure_ascii=False).strip()
+            return _ScheduledTaskResult(result.strip())
+        return _ScheduledTaskResult(json.dumps(result, ensure_ascii=False).strip())
 
     @staticmethod
     def _scheduled_agent_prompt(content: str) -> str:
@@ -477,16 +541,26 @@ class AgentHTTPServer(BaseAgentRunner):
             return default
         return parsed if parsed > 0 else default
 
-    async def _broadcast_scheduled_message(self, task, content: str, *, stored_message=None) -> None:
+    async def _broadcast_scheduled_message(
+        self,
+        task,
+        content: str,
+        *,
+        stored_message=None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         target = task.target
         user_id = str(target.get("user_id") or task.delivery_user_id or "")
         if not user_id:
             return
+        normalized_attachments = dedupe_attachments(list(attachments or []))
         payload: Dict[str, Any] = {
             "type": "scheduled_message",
             "content": content,
             "task": task.to_dict(),
         }
+        if normalized_attachments:
+            payload["attachments"] = normalized_attachments
         if stored_message is not None:
             payload["message"] = self._message_item(stored_message)
 

@@ -33,7 +33,7 @@ import mimetypes
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, Union
 from urllib.parse import parse_qs, unquote, urlparse
@@ -101,6 +101,12 @@ class _FeishuOutboundAttachment:
     path: Path
     caption: str = ""
     blob_url: str = ""
+
+
+@dataclass(frozen=True)
+class _FeishuScheduledTaskResult:
+    content: str
+    attachments: list[_FeishuOutboundAttachment] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1929,28 +1935,38 @@ class FeishuAdapter:
         chat_id = str(target.get("chat_id") or "").strip()
         if not chat_id:
             raise ValueError("scheduled Feishu task is missing chat_id")
-        content = await self._scheduled_task_result(task)
-        if not content:
+        result = await self._scheduled_task_result(task)
+        if not result.content and not result.attachments:
             raise ValueError("scheduled Feishu task produced no content")
         message_id = str(target.get("message_id") or "").strip() or None
         is_group = bool(target.get("is_group"))
-        result = await send_message(
-            self._channel,
-            chat_id=chat_id,
-            payload={"markdown": content},
-            reply_to=message_id if (is_group and message_id) else None,
-            uuid=self._message_uuid(f"scheduled:{task.task_id}"),
-            logger=self.logger,
-            message_id=message_id,
-        )
-        if getattr(result, "success", False) is False:
-            raise RuntimeError(f"Feishu scheduled send failed: {getattr(result, 'error', None)}")
+        uuid_message_id = self._message_uuid(f"scheduled:{task.task_id}")
+        if result.content:
+            send_result = await send_message(
+                self._channel,
+                chat_id=chat_id,
+                payload={"markdown": result.content},
+                reply_to=message_id if (is_group and message_id) else None,
+                uuid=uuid_message_id,
+                logger=self.logger,
+                message_id=message_id,
+            )
+            if getattr(send_result, "success", False) is False:
+                raise RuntimeError(f"Feishu scheduled send failed: {getattr(send_result, 'error', None)}")
+        if result.attachments:
+            await self._send_outbound_attachments(
+                chat_id=chat_id,
+                message_id=message_id,
+                uuid_message_id=uuid_message_id,
+                attachments=result.attachments,
+                is_group=is_group,
+            )
         message_handler = getattr(self.agent, "message_handler", None)
         store_model_reply = getattr(message_handler, "store_model_reply", None)
         if callable(store_model_reply):
             try:
                 await store_model_reply(
-                    content,
+                    result.content,
                     getattr(self.agent, "_assistant_sender_id", "agent"),
                     metadata={
                         "scheduled_task": {
@@ -1961,20 +1977,30 @@ class FeishuAdapter:
                             "delivery": task.delivery,
                         }
                     },
+                    attachments=[
+                        {
+                            "kind": attachment.kind,
+                            "path": self._workspace_blob_relative_path(attachment.blob_url),
+                            "blob_url": attachment.blob_url or self._path_to_workspace_blob_url(attachment.path),
+                            "caption": attachment.caption,
+                        }
+                        for attachment in result.attachments
+                    ],
                 )
             except Exception:
                 self.logger.debug("Failed to persist Feishu scheduled task result", exc_info=True)
 
-    async def _scheduled_task_result(self, task) -> str:
+    async def _scheduled_task_result(self, task) -> _FeishuScheduledTaskResult:
         task_type = task.task_type
         if task_type == "message":
-            return task.content.strip()
+            return _FeishuScheduledTaskResult(task.content.strip())
         if task_type != "agent":
             raise ValueError(f"unsupported scheduled Feishu task type: {task_type}")
 
+        chat_events = getattr(self.agent, "chat_events", None)
         chat = getattr(self.agent, "chat", None)
-        if not callable(chat):
-            raise RuntimeError("Agent does not support chat().")
+        if not callable(chat_events) and not callable(chat):
+            raise RuntimeError("Agent does not support chat_events() or chat().")
         execution = self._scheduled_execution_options(task)
         user_id = task.delivery_user_id or str(task.target.get("sender_id") or AgentConfig.DEFAULT_USER_ID)
         context = ScheduledDeliveryContext(
@@ -1989,6 +2015,15 @@ class FeishuAdapter:
             },
         )
         with scheduled_delivery_context(context):
+            if callable(chat_events):
+                return await self._scheduled_task_event_result(
+                    chat_events,
+                    prompt=self._scheduled_agent_prompt(task.content),
+                    user_id=user_id,
+                    execution=execution,
+                )
+
+            assert callable(chat)
             response = await chat(
                 user_message=self._scheduled_agent_prompt(task.content),
                 user_id=user_id,
@@ -1997,7 +2032,37 @@ class FeishuAdapter:
                 max_concurrent_tools=execution["max_concurrent_tools"],
                 enable_memory=execution["enable_memory"],
             )
-        return self._stringify_scheduled_agent_response(response).strip()
+        return _FeishuScheduledTaskResult(self._stringify_scheduled_agent_response(response).strip())
+
+    async def _scheduled_task_event_result(
+        self,
+        chat_events,
+        *,
+        prompt: str,
+        user_id: str,
+        execution: dict[str, Any],
+    ) -> _FeishuScheduledTaskResult:
+        final_content = ""
+        final_attachments: list[_FeishuOutboundAttachment] = []
+        last_error = ""
+        async for event in chat_events(
+            user_message=prompt,
+            user_id=user_id,
+            history_count=execution["history_count"],
+            max_iter=execution["max_iter"],
+            max_concurrent_tools=execution["max_concurrent_tools"],
+            enable_memory=execution["enable_memory"],
+            stream=False,
+        ):
+            event_type = event.get("type")
+            if event_type == "message_done" and str(event.get("phase") or "final") == "final":
+                final_content = str(event.get("content") or "").strip()
+                final_attachments = self._outbound_attachments_from_event(event)
+            elif event_type == "error":
+                last_error = str(event.get("error") or "").strip()
+        if final_content or final_attachments:
+            return _FeishuScheduledTaskResult(final_content, final_attachments)
+        return _FeishuScheduledTaskResult(last_error)
 
     @staticmethod
     def _scheduled_agent_prompt(content: str) -> str:

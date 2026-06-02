@@ -276,6 +276,45 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_scheduled_agent_task_dispatch_sends_image_only_event_to_feishu_chat(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                workspace_dir = Path(tmpdir).resolve()
+                image_path = workspace_dir / "temp" / "images" / "result.png"
+                image_path.parent.mkdir(parents=True)
+                image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+                agent = _AttachmentEventAgent(
+                    content="",
+                    attachments=[{
+                        "kind": "image",
+                        "path": "temp/images/result.png",
+                        "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+                        "mime_type": "image/png",
+                        "file_name": "result.png",
+                    }],
+                )
+                agent.workspace_dir = workspace_dir
+                adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+                adapter._channel = _FakeChannel()
+                enqueue_scheduled_task(
+                    task_type="agent",
+                    content="Generate image",
+                    run_at="2026-06-01 18:00:00",
+                    tasks_dir=tmpdir,
+                    channel="feishu",
+                    target={"chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
+                    user_id="ou_user",
+                )
+                task = list_task_records(tmpdir)[0]
+                await adapter._dispatch_scheduled_task(task)
+
+            self.assertEqual(len(adapter._channel.sent), 1)
+            self.assertEqual(adapter._channel.sent[0][0], "oc_group")
+            self.assertEqual(adapter._channel.sent[0][1]["image"]["source"], str(image_path))
+            self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
+
+        asyncio.run(run_test())
+
     def test_on_message_routes_to_owner_event_loop(self):
         async def run_test():
             agent = _FakeAgent()

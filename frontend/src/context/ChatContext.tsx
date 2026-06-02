@@ -87,11 +87,32 @@ function isImageAttachment(attachment: AttachmentAsset): boolean {
 }
 
 function attachmentBlobUrl(attachment: AttachmentAsset): string {
-  return attachment.blob_url || (attachment.path ? workspaceBlobUrl(attachment.path) : "");
+  return (
+    attachment.blob_url ||
+    (attachment.path ? workspaceBlobUrl(attachment.path) : "") ||
+    (attachment.workspace_path ? workspaceBlobUrl(attachment.workspace_path) : "") ||
+    ((attachment as { external_url?: string }).external_url || "")
+  );
 }
 
 function attachmentImageUrls(attachments: AttachmentAsset[] = []): string[] {
   return attachments.filter(isImageAttachment).map(attachmentBlobUrl).filter(Boolean);
+}
+
+function imageAssetUrls(images: AttachmentAsset[] = []): string[] {
+  return images.map(attachmentBlobUrl).filter(Boolean);
+}
+
+type ScheduledMessagePayload = {
+  content?: unknown;
+  attachments?: AttachmentAsset[];
+  images?: AttachmentAsset[];
+  image_count?: number;
+  attachment_count?: number;
+};
+
+function scheduledMessagePayload(message: unknown): ScheduledMessagePayload | undefined {
+  return message && typeof message === "object" ? (message as ScheduledMessagePayload) : undefined;
 }
 
 function createPanel(panelId: PanelId): ChatPanelState {
@@ -167,8 +188,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (parsed.type !== "scheduled_message") return;
-      const content = String(parsed.content || parsed.message || "").trim();
-      if (!content) return;
+      const scheduledMessage = scheduledMessagePayload(parsed.message);
+      const fallbackMessageContent = typeof parsed.message === "string" ? parsed.message : scheduledMessage?.content;
+      const content = String(parsed.content ?? fallbackMessageContent ?? "").trim();
+      const attachments = Array.isArray(parsed.attachments)
+        ? parsed.attachments
+        : Array.isArray(scheduledMessage?.attachments)
+          ? scheduledMessage.attachments
+          : undefined;
+      const imageUrls = attachments
+        ? attachmentImageUrls(attachments)
+        : Array.isArray(scheduledMessage?.images)
+          ? imageAssetUrls(scheduledMessage.images)
+          : undefined;
+      const imageCount = imageUrls ? imageUrls.length || undefined : scheduledMessage?.image_count;
+      const attachmentCount = attachments ? attachments.length || undefined : scheduledMessage?.attachment_count;
+      if (!content && !imageUrls?.length && !attachments?.length && !imageCount && !attachmentCount) return;
       patchPanel("single", (current) => ({
         ...current,
         messages: [
@@ -177,6 +212,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             id: makeId("scheduled"),
             role: "assistant",
             content,
+            images: imageUrls,
+            imageCount,
+            attachments,
+            attachmentCount,
             meta: parsed.task?.payload?.title || "Scheduled",
           },
         ],
