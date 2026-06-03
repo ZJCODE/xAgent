@@ -33,14 +33,18 @@ from xagent.interfaces.cli import (
 from xagent.interfaces.processes import StartResult
 
 
-def _selection() -> InitSelection:
+def _selection(**overrides) -> InitSelection:
+    values = {
+        "provider": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "test-key",
+        "model": "gpt-5.4-mini",
+        "identity": "# Identity\n\nTest agent.\n",
+        "search_provider": "openai",
+    }
+    values.update(overrides)
     return InitSelection(
-        provider="openai",
-        base_url="https://api.openai.com/v1",
-        api_key="test-key",
-        model="gpt-5.4-mini",
-        identity="# Identity\n\nTest agent.\n",
-        search_provider="openai",
+        **values,
     )
 
 
@@ -508,6 +512,46 @@ class CLICommandTests(unittest.TestCase):
             self.assertFalse(memory_marker.exists())
             self.assertFalse(messages_marker.exists())
             self.assertFalse(workspace_marker.exists())
+
+    def test_init_prints_post_setup_guide_with_custom_dir_commands(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(config_dir=tmpdir, force=False, schema=False)
+            resolved_dir = str(Path(tmpdir).resolve())
+
+            with patch("xagent.interfaces.cli.collect_init_selection", return_value=_selection()):
+                with patch("sys.stdout") as stdout:
+                    exit_code = handle_init(args)
+
+        self.assertEqual(exit_code, 0)
+        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        self.assertIn("Pick how you want to use it next", output)
+        self.assertIn(f"xagent chat --dir {resolved_dir}", output)
+        self.assertIn(f"xagent web --dir {resolved_dir}", output)
+        self.assertIn(f"xagent service start api --dir {resolved_dir}", output)
+        self.assertIn(f"xagent init feishu --dir {resolved_dir}", output)
+        self.assertIn(f"xagent service start feishu --dir {resolved_dir}", output)
+        self.assertIn(f"xagent doctor --dir {resolved_dir}", output)
+        self.assertNotIn(f"xagent voice --dir {resolved_dir}", output)
+
+    def test_init_prints_voice_entry_when_voice_is_configured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(config_dir=tmpdir, force=False, schema=False)
+            resolved_dir = str(Path(tmpdir).resolve())
+
+            with patch(
+                "xagent.interfaces.cli.collect_init_selection",
+                return_value=_selection(
+                    voice_enabled=True,
+                    voice_provider="qwen",
+                    voice_api_key="voice-key",
+                ),
+            ):
+                with patch("sys.stdout") as stdout:
+                    exit_code = handle_init(args)
+
+        self.assertEqual(exit_code, 0)
+        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        self.assertIn(f"xagent voice --dir {resolved_dir}", output)
 
     def test_init_feishu_updates_unified_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:

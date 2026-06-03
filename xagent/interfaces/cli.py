@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -995,7 +996,7 @@ def init_agent_directory(
 
     if conflicts and not force:
         print("╭─────────────────────────────────────────────────────────╮")
-        print("│ xAgent init found existing managed files.              │")
+        print("│ xAgent init found existing managed files.               │")
         print("╰─────────────────────────────────────────────────────────╯")
         for path in conflicts:
             print(f"Existing: {path}")
@@ -1054,6 +1055,63 @@ def _clear_runtime_directory(path: Path) -> None:
         shutil.rmtree(path)
     elif path.exists():
         path.unlink()
+
+
+def _format_init_command(command: str, *, config_dir: Path) -> str:
+    default_dir = Path(BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
+    if config_dir == default_dir:
+        return command
+    return f"{command} --dir {shlex.quote(str(config_dir))}"
+
+
+def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> None:
+    ready_now = [
+        (
+            "chat",
+            _format_init_command("xagent chat", config_dir=config_dir),
+            "Talk to the agent in your terminal.",
+        ),
+        (
+            "web",
+            _format_init_command("xagent web", config_dir=config_dir),
+            "Open the built-in Web UI.",
+        ),
+        (
+            "api",
+            _format_init_command("xagent service start api", config_dir=config_dir),
+            "Run the HTTP / SSE / WebSocket service in the background.",
+        ),
+    ]
+    if selection.voice_enabled:
+        ready_now.insert(
+            2,
+            (
+                "voice",
+                _format_init_command("xagent voice", config_dir=config_dir),
+                "Talk to the agent by microphone.",
+            ),
+        )
+
+    feishu_init = _format_init_command("xagent init feishu", config_dir=config_dir)
+    feishu_start = _format_init_command("xagent service start feishu", config_dir=config_dir)
+    doctor_command = _format_init_command("xagent doctor", config_dir=config_dir)
+
+    print("")
+    print("╭─────────────────────────────────────────────────────────╮")
+    print("│ xAgent is ready. Pick how you want to use it next.      │")
+    print("╰─────────────────────────────────────────────────────────╯")
+    print("Ready now:")
+    for name, command, description in ready_now:
+        print(f"  {name:<7} {command}")
+        print(f"          {description}")
+    print("")
+    print("Optional:")
+    print(f"  feishu  {feishu_init}")
+    print(f"          Create a Feishu bot config, then start it with {feishu_start}.")
+    print("")
+    print("Check:")
+    print(f"  doctor   {doctor_command}")
+    print("          Verify local config, files, and channel readiness.")
 
 
 def _add_dir_argument(parser: argparse.ArgumentParser) -> None:
@@ -1389,6 +1447,8 @@ def handle_init(args: argparse.Namespace) -> int:
         selection=selection,
         clear_runtime_data=clear_runtime_data,
     )
+    if result.wrote_files:
+        _print_init_next_steps(config_dir=result.config_path.parent, selection=selection)
     return 0 if result.wrote_files else 1
 
 
