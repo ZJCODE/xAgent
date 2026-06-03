@@ -298,7 +298,6 @@ class FeishuAdapter:
             await task_scheduler.stop()
             self._task_scheduler = None
             self._safe_stop()
-            await self._flush_agent_memory()
             self._owner_loop = None
 
     def run_blocking(self) -> None:
@@ -336,12 +335,6 @@ class FeishuAdapter:
         """Request a graceful shutdown of the connect loop."""
         self._stop_event.set()
         self._safe_stop()
-        await self._flush_agent_memory()
-
-    async def _flush_agent_memory(self) -> None:
-        flusher = getattr(self.agent, "flush_memory", None)
-        if flusher is not None:
-            await flusher()
 
     def _safe_stop(self) -> None:
         self._cancel_processing_tasks()

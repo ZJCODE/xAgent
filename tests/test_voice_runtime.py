@@ -124,6 +124,19 @@ class InterruptRecognizer:
         yield self.utterances[1]
 
 
+class BlockingRecognizer:
+    def __init__(self):
+        self.started = threading.Event()
+
+    def iter_utterances(self, audio_chunks, *, pause_event: threading.Event, stop_event: threading.Event):
+        del audio_chunks, pause_event
+        self.started.set()
+        while not stop_event.is_set():
+            time.sleep(0.005)
+        if False:
+            yield VoiceUtterance(text="never")
+
+
 class FakeWebSocket:
     def __init__(self):
         self.sent = []
@@ -180,6 +193,33 @@ class VoiceRuntimeTests(unittest.TestCase):
         })
 
         self.assertFalse(config.enable_interruptions)
+
+    def test_runtime_cancel_stops_waiting_for_blocked_recognizer(self):
+        async def run_cancelled_runtime():
+            config = VoiceChannelConfig.from_dict({"api_key": "test-key"})
+            recognizer = BlockingRecognizer()
+            runtime = VoiceRuntime(
+                agent=FakeAgent(),
+                config=config,
+                microphone=FakeMicrophone(),
+                recognizer=recognizer,
+                synthesizer=FakeSynthesizer(),
+                player=FakePlayer(),
+                options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+                output=lambda *args, **kwargs: None,
+            )
+
+            task = asyncio.create_task(runtime.run_forever())
+            deadline = time.monotonic() + 1.0
+            while not recognizer.started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.005)
+            self.assertTrue(recognizer.started.is_set())
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=0.2)
+            self.assertTrue(runtime.stop_event.is_set())
+
+        asyncio.run(run_cancelled_runtime())
 
     def test_runtime_routes_soniox_endpoint_utterance_to_agent_and_tts(self):
         config = VoiceChannelConfig.from_dict({

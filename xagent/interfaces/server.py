@@ -1074,12 +1074,6 @@ class AgentHTTPServer(BaseAgentRunner):
             if heartbeat is not None:
                 await heartbeat.stop()
                 self.logger.info("Runtime heartbeat stopped")
-            await self._flush_agent_memory()
-
-    async def _flush_agent_memory(self) -> None:
-        flusher = getattr(self.agent, "flush_memory", None)
-        if flusher is not None:
-            await flusher()
 
     def _add_web_ui(self, app: FastAPI) -> None:
         if _STATIC_DIR.is_dir():

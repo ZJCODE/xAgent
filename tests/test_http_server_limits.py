@@ -250,16 +250,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
         factory.assert_called_once()
         self.assertTrue(heartbeat.started)
         self.assertTrue(heartbeat.stopped)
-        self.assertTrue(agent.flushed)
-
-    def test_shutdown_flushes_agent_memory(self):
-        agent = FlushTrackingAgent()
-        server = AgentHTTPServer(agent=agent, enable_web=False)
-
-        with TestClient(server.app):
-            pass
-
-        self.assertTrue(agent.flushed)
+        self.assertFalse(agent.flushed)
 
     def test_websocket_chat_stream_false_returns_done_boundaries(self):
         server = AgentHTTPServer(agent=FastStreamingAgent(), enable_web=False)

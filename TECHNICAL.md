@@ -263,11 +263,11 @@ observability:
 
 启用后，xAgent 会在创建 OpenAI SDK `AsyncOpenAI` client 时使用 `langfuse.openai.AsyncOpenAI`。主对话、流式回复、工具调用循环、图片 caption、长期记忆 LLM 格式化以及 OpenAI built-in search 都会共用这个 client。官方 OpenAI 主对话使用 Responses API，DeepSeek/Qwen/custom OpenAI-compatible provider 使用 Chat Completions；两者都按 Langfuse SDK 当前能力做 best-effort 捕获。Anthropic SDK 路径当前使用 Anthropic SDK 原生客户端，不经过 Langfuse OpenAI wrapper。
 
-Langfuse SDK 会在后台排队发送事件。CLI 单次 chat、observe、Feishu 进程退出和 API server lifespan shutdown 都会复用 xAgent 的 flush 路径，尽量在进程结束前提交观测事件。flush 失败只会写 warning，不会阻止消息或记忆落盘。
+Langfuse SDK 会在后台排队发送事件。xAgent 不会在 CLI 单次 chat、observe、Feishu 进程退出或 API server lifespan shutdown 时阻塞等待观测事件提交；退出体验优先，未提交事件按 SDK 自身后台策略处理。
 
 ### 2.5 memory
 
-长期记忆默认自动管理，不需要在 `config.yaml` 中配置。每轮对话会自动注入最近 3 天的长期记忆上下文；后台写入会按内部批量策略、短会话兜底、长驻进程内部 heartbeat 和正常退出 flush 进行，避免普通用户理解或维护写入调度参数。
+长期记忆默认自动管理，不需要在 `config.yaml` 中配置。每轮对话会自动注入最近 3 天的长期记忆上下文；完整原始记录以 `messages/` 为准，长期记忆是基于消息流异步整理出的派生数据。后台写入会按内部批量策略、短会话兜底和长驻进程内部 heartbeat 执行，不在退出时阻塞用户体验。
 
 API server lifespan 和 Feishu daemon 会启动内部 heartbeat；CLI 单次/交互 chat 不启动。第一版 heartbeat 只做记忆维护：定期 flush 待写入记忆，并在每周一为上一周生成 weekly summary。summary 生成不是模型可见工具。
 
@@ -1161,7 +1161,7 @@ memory/
 
 Agent 会基于对话和观察事件异步整理长期记忆。`enable_memory` 会影响 `/chat` 的记忆行为：
 
-后台写入会先累积，并按内部批量阈值和短会话兜底策略写入。CLI、API server 和 Feishu channel 正常退出时也会 flush 记忆，避免短对话只停留在内存中。长驻 API/Feishu 运行时还会通过 runtime heartbeat 定期执行相同维护，并在每周一生成上一周 weekly summary。
+后台写入会先累积，并按内部批量阈值和短会话兜底策略写入。退出 CLI、API server 或 Feishu channel 时不会强制 flush 记忆；短对话至少会保存在 `messages/` 中，后续可由批量写入、idle fallback、长驻 API/Feishu runtime heartbeat 或显式 `write_memory` 工具整理进长期记忆。长驻 API/Feishu 运行时还会通过 runtime heartbeat 定期执行相同维护，并在每周一生成上一周 weekly summary。
 
 当前长期记忆只保留时间维度。人物、项目或其他主题可以从时间日记和汇总中检索得到；需要外置项目记录或临时状态时，应写入 `workspace/`。
 

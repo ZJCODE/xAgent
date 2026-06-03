@@ -21,6 +21,7 @@ from xagent.interfaces.cli import (
     handle_init,
     handle_init_feishu,
     handle_logs,
+    handle_observe,
     handle_restart,
     handle_run_channel_internal,
     handle_start,
@@ -263,11 +264,11 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_runtime.run_count, 1)
-        self.assertEqual(fake_agent.flush_count, 1)
+        self.assertEqual(fake_agent.flush_count, 0)
         self.assertFalse(factory.call_args.kwargs["options"].enable_memory)
         self.assertEqual(factory.call_args.kwargs["options"].user_id, "alice")
 
-    def test_interactive_chat_exit_flushes_with_status_message(self):
+    def test_interactive_chat_exit_does_not_flush_memory(self):
         class FakeAgent:
             model = "gpt-test"
             tools = {}
@@ -303,12 +304,12 @@ class CLICommandTests(unittest.TestCase):
                         exit_code = handle_chat(args)
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_agent.flush_count, 1)
+        self.assertEqual(fake_agent.flush_count, 0)
         output = stdout.getvalue()
         self.assertIn("Thank you for using xAgent CLI", output)
-        self.assertIn("正在写入退出前记忆", output)
+        self.assertNotIn("正在写入退出前记忆", output)
 
-    def test_single_chat_flushes_with_status_message(self):
+    def test_single_chat_does_not_flush_memory(self):
         class FakeAgent:
             model = "gpt-test"
             tools = {}
@@ -348,12 +349,12 @@ class CLICommandTests(unittest.TestCase):
                     exit_code = handle_chat(args)
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_agent.flush_count, 1)
+        self.assertEqual(fake_agent.flush_count, 0)
         self.assertEqual(fake_agent.call_kwargs["user_id"], "alice")
         self.assertNotIn("stream", fake_agent.call_kwargs)
         output = stdout.getvalue()
         self.assertIn("single reply", output)
-        self.assertIn("正在写入退出前记忆", output)
+        self.assertNotIn("正在写入退出前记忆", output)
 
     def test_parser_supports_web_command(self):
         args = build_parser().parse_args([
@@ -424,6 +425,43 @@ class CLICommandTests(unittest.TestCase):
         messages = build_parser().parse_args(["inspect", "messages", "list", "--count", "5"])
         self.assertEqual(messages.messages_command, "list")
         self.assertEqual(messages.count, 5)
+
+    def test_observe_does_not_flush_memory_on_exit(self):
+        class FakeAgent:
+            def __init__(self):
+                self.observe_kwargs = None
+                self.flush_count = 0
+
+            async def observe(self, **kwargs):
+                self.observe_kwargs = kwargs
+                return "observed"
+
+            async def flush_memory(self):
+                self.flush_count += 1
+
+        fake_agent = FakeAgent()
+
+        def init_runner(self, config_dir=None):
+            self.agent = fake_agent
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(
+                text="ambient context",
+                source="sensor",
+                event_type="presence",
+                metadata='{"memory_policy":"always"}',
+                config_dir=tmpdir,
+            )
+
+            with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", init_runner):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = handle_observe(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_agent.flush_count, 0)
+        self.assertEqual(fake_agent.observe_kwargs["context"], "ambient context")
+        self.assertEqual(fake_agent.observe_kwargs["metadata"], {"memory_policy": "always"})
+        self.assertIn("observed", stdout.getvalue())
 
     def test_main_without_subcommand_prints_quick_start(self):
         with patch("xagent.interfaces.cli._runtime_is_initialized", return_value=False):

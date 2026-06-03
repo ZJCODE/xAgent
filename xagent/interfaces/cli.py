@@ -1452,27 +1452,16 @@ def handle_init(args: argparse.Namespace) -> int:
     return 0 if result.wrote_files else 1
 
 
-async def _flush_chat_exit_memory(agent: Any) -> None:
-    flusher = getattr(agent, "flush_memory", None)
-    if flusher is None:
-        return
-    print("⏳ 正在写入退出前记忆，请稍候...")
-    await flusher()
-
-
 def handle_chat(args: argparse.Namespace) -> int:
     agent_cli = AgentCLI(config_dir=args.config_dir, verbose=args.verbose)
 
     if args.message is None:
         async def run_interactive_chat():
-            try:
-                await agent_cli.chat_interactive(
-                    user_id=args.user_id,
-                    stream=args.stream,
-                    memory=args.memory,
-                )
-            finally:
-                await _flush_chat_exit_memory(agent_cli.agent)
+            await agent_cli.chat_interactive(
+                user_id=args.user_id,
+                stream=args.stream,
+                memory=args.memory,
+            )
 
         asyncio.run(run_interactive_chat())
         return 0
@@ -1481,24 +1470,21 @@ def handle_chat(args: argparse.Namespace) -> int:
     stream = bool(args.stream) if args.stream is not None else False
 
     async def run_single_message():
-        try:
-            if event_mode and hasattr(agent_cli.agent, "chat_events"):
-                await agent_cli.print_single_chat_events(
-                    message=args.message,
-                    user_id=args.user_id,
-                    stream=stream,
-                    memory=args.memory,
-                )
-                return
-
-            response = await agent_cli.chat_single(
+        if event_mode and hasattr(agent_cli.agent, "chat_events"):
+            await agent_cli.print_single_chat_events(
                 message=args.message,
                 user_id=args.user_id,
+                stream=stream,
                 memory=args.memory,
             )
-            print(response)
-        finally:
-            await _flush_chat_exit_memory(agent_cli.agent)
+            return
+
+        response = await agent_cli.chat_single(
+            message=args.message,
+            user_id=args.user_id,
+            memory=args.memory,
+        )
+        print(response)
 
     asyncio.run(run_single_message())
     return 0
@@ -1532,14 +1518,8 @@ def handle_voice(args: argparse.Namespace) -> int:
         print(f"Failed to start voice channel: {exc}")
         return 1
 
-    async def _run_voice() -> None:
-        try:
-            await runtime.run_forever()
-        finally:
-            await _flush_chat_exit_memory(runner.agent)
-
     try:
-        asyncio.run(_run_voice())
+        asyncio.run(runtime.run_forever())
     except KeyboardInterrupt:
         print("\nVoice channel stopped.")
     except Exception as exc:
@@ -2043,19 +2023,16 @@ def handle_observe(args: argparse.Namespace) -> int:
     runner = BaseAgentRunner(config_dir=args.config_dir)
 
     async def _run_observe():
-        try:
-            result = await runner.agent.observe(
-                context=args.text,
-                source=args.source,
-                event_type=args.event_type,
-                metadata=metadata,
-            )
-            if hasattr(result, "model_dump"):
-                print(json.dumps(result.model_dump(), indent=2, sort_keys=True))
-            else:
-                print(result)
-        finally:
-            await runner.agent.flush_memory()
+        result = await runner.agent.observe(
+            context=args.text,
+            source=args.source,
+            event_type=args.event_type,
+            metadata=metadata,
+        )
+        if hasattr(result, "model_dump"):
+            print(json.dumps(result.model_dump(), indent=2, sort_keys=True))
+        else:
+            print(result)
 
     asyncio.run(_run_observe())
     return 0
