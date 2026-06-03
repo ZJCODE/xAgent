@@ -26,6 +26,7 @@ from xagent.interfaces.cli import (
     handle_start,
     handle_status,
     handle_stop,
+    handle_voice,
     handle_web,
     main,
 )
@@ -196,6 +197,71 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertTrue(args.events)
         self.assertTrue(args.stream)
+
+    def test_parser_supports_voice_command(self):
+        args = build_parser().parse_args([
+            "voice",
+            "--dir",
+            "./agent-dir",
+            "--user-id",
+            "alice",
+            "--no-memory",
+        ])
+
+        self.assertEqual(args.command, "voice")
+        self.assertEqual(args.config_dir, "./agent-dir")
+        self.assertEqual(args.user_id, "alice")
+        self.assertFalse(args.memory)
+
+    def test_voice_command_runs_foreground_runtime(self):
+        class FakeAgent:
+            model = "gpt-test"
+            tools = {}
+
+            def __init__(self):
+                self.flush_count = 0
+
+            async def flush_memory(self):
+                self.flush_count += 1
+
+        class FakeRuntime:
+            def __init__(self):
+                self.run_count = 0
+
+            async def run_forever(self):
+                self.run_count += 1
+
+        fake_agent = FakeAgent()
+        fake_runtime = FakeRuntime()
+
+        def init_runner(self, config_dir=None):
+            self.agent = fake_agent
+            self.config = {
+                "channels": {
+                    "voice": {
+                        "api_key": "soniox-key",
+                    }
+                }
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                user_id="alice",
+                verbose=False,
+                memory=False,
+            )
+
+            with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", init_runner):
+                with patch("xagent.voice.factory.create_local_voice_runtime", return_value=fake_runtime) as factory:
+                    with patch("sys.stdout", new_callable=io.StringIO):
+                        exit_code = handle_voice(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_runtime.run_count, 1)
+        self.assertEqual(fake_agent.flush_count, 1)
+        self.assertFalse(factory.call_args.kwargs["options"].enable_memory)
+        self.assertEqual(factory.call_args.kwargs["options"].user_id, "alice")
 
     def test_interactive_chat_exit_flushes_with_status_message(self):
         class FakeAgent:

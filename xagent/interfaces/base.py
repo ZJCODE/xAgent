@@ -181,11 +181,16 @@ class BaseAgentRunner:
         if channels_cfg is not None and not isinstance(channels_cfg, dict):
             raise ValueError("channels must be a dictionary")
         if isinstance(channels_cfg, dict):
-            allowed_channel_keys = {"api", "feishu"}
+            allowed_channel_keys = {"api", "feishu", "voice"}
             unsupported_channel_keys = sorted(set(channels_cfg) - allowed_channel_keys)
             if unsupported_channel_keys:
                 joined_keys = ", ".join(unsupported_channel_keys)
                 raise ValueError(f"Unsupported channels key(s): {joined_keys}")
+            voice_cfg = channels_cfg.get("voice")
+            if voice_cfg is not None:
+                from ..voice.config import VoiceChannelConfig
+
+                VoiceChannelConfig.from_dict(voice_cfg)
 
         runtime_cfg = config.get("runtime")
         if runtime_cfg is not None and not isinstance(runtime_cfg, dict):

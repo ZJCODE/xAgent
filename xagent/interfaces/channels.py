@@ -9,6 +9,7 @@ import yaml
 
 CHANNEL_API = "api"
 CHANNEL_FEISHU = "feishu"
+CHANNEL_VOICE = "voice"
 CHANNEL_ALL = "all"
 VALID_CHANNELS = {CHANNEL_API, CHANNEL_FEISHU}
 
@@ -121,3 +122,11 @@ def feishu_config(config: Mapping[str, Any]) -> dict[str, Any]:
     runtime_config = dict(data)
     runtime_config.pop("enabled", None)
     return runtime_config
+
+
+def voice_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    channels = config.get("channels") if isinstance(config, Mapping) else None
+    if not isinstance(channels, Mapping):
+        return {}
+    data = channels.get(CHANNEL_VOICE)
+    return dict(data) if isinstance(data, Mapping) else {}

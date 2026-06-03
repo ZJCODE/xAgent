@@ -1,5 +1,6 @@
-import io
 import asyncio
+import io
+import tomllib
 import unittest
 import tempfile
 from pathlib import Path
@@ -681,10 +682,86 @@ provider:
                 },
             )
 
+    def test_init_writes_minimal_voice_config_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                api_key="openai-key",
+                model="gpt-5.4-mini",
+                identity="# Identity\n\nYou talk.\n",
+                search_provider="openai",
+                voice_enabled=True,
+                voice_provider="soniox",
+                voice_api_key="soniox-key",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["channels"]["voice"], {"provider": "soniox", "api_key": "soniox-key"})
+
+    def test_init_writes_soniox_placeholder_when_voice_key_is_blank(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                api_key="openai-key",
+                model="gpt-5.4-mini",
+                identity="# Identity\n\nYou talk.\n",
+                search_provider="openai",
+                voice_enabled=True,
+                voice_provider="soniox",
+                voice_api_key="",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                config["channels"]["voice"],
+                {"provider": "soniox", "api_key": "your_soniox_api_key_here"},
+            )
+
+    def test_init_writes_minimal_qwen_voice_config_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="deepseek",
+                base_url="https://api.deepseek.com",
+                api_key="deepseek-key",
+                model="deepseek-v4-pro",
+                identity="# Identity\n\nYou talk.\n",
+                voice_enabled=True,
+                voice_provider="qwen",
+                voice_api_key="qwen-voice-key",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["channels"]["voice"], {"provider": "qwen", "api_key": "qwen-voice-key"})
+
+    def test_init_omits_voice_config_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                api_key="openai-key",
+                model="gpt-5.4-mini",
+                identity="# Identity\n\nNo voice.\n",
+                search_provider="openai",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertNotIn("voice", config["channels"])
+
     def test_collect_init_selection_supports_custom_identity(self):
         answers = iter([
             "1",
             "4",
+            "",
             "",
             "You investigate codebases.",
             ".",
@@ -706,6 +783,87 @@ provider:
         self.assertEqual(selection.identity, "# Identity\n\nYou investigate codebases.\n")
         self.assertNotIn("Image generation provider", stdout.getvalue())
 
+    def test_collect_init_selection_supports_soniox_voice(self):
+        answers = iter([
+            "1",
+            "",
+            "",
+            "y",
+            "1",
+            ".",
+        ])
+        secrets = iter(["openai-key", "soniox-key"])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: next(secrets),
+        )
+
+        self.assertTrue(selection.voice_enabled)
+        self.assertEqual(selection.voice_provider, "soniox")
+        self.assertEqual(selection.voice_api_key, "soniox-key")
+
+    def test_collect_init_selection_voice_blank_key_uses_placeholder(self):
+        answers = iter([
+            "1",
+            "",
+            "",
+            "y",
+            "1",
+            ".",
+        ])
+        secrets = iter(["openai-key", ""])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: next(secrets),
+        )
+
+        self.assertTrue(selection.voice_enabled)
+        self.assertEqual(selection.voice_provider, "soniox")
+        self.assertEqual(selection.voice_api_key, "your_soniox_api_key_here")
+
+    def test_collect_init_selection_supports_qwen_voice_key(self):
+        answers = iter([
+            "2",
+            "1",
+            "",
+            "",
+            "",
+            "y",
+            "2",
+            ".",
+        ])
+        secrets = iter(["deepseek-key", "qwen-voice-key"])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: next(secrets),
+        )
+
+        self.assertTrue(selection.voice_enabled)
+        self.assertEqual(selection.voice_provider, "qwen")
+        self.assertEqual(selection.voice_api_key, "qwen-voice-key")
+
+    def test_collect_init_selection_reuses_main_qwen_key_for_qwen_voice(self):
+        answers = iter([
+            "4",
+            "",
+            "",
+            "y",
+            "",
+            ".",
+        ])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: "qwen-key",
+        )
+
+        self.assertTrue(selection.voice_enabled)
+        self.assertEqual(selection.voice_provider, "qwen")
+        self.assertEqual(selection.voice_api_key, "qwen-key")
+
     def test_collect_init_selection_supports_langfuse_observability(self):
         answers = iter([
             "1",
@@ -713,6 +871,7 @@ provider:
             "y",
             "pk-lf-test",
             "https://jp.cloud.langfuse.com",
+            "",
             ".",
         ])
         secrets = iter(["openai-key", "sk-lf-test"])
@@ -733,6 +892,7 @@ provider:
             "",
             "1",
             "",
+            "",
             ".",
         ])
 
@@ -752,6 +912,7 @@ provider:
             "",
             "",
             "1",
+            "",
             "",
             ".",
         ])
@@ -777,6 +938,7 @@ provider:
             "y",
             "pk-lf-test",
             "",
+            "",
             ".",
         ])
         secrets = iter(["custom-key", "sk-lf-test"])
@@ -796,6 +958,7 @@ provider:
         answers = iter([
             "2",
             "3",
+            "",
             "",
             "",
             "",
@@ -820,6 +983,7 @@ provider:
         answers = iter([
             "4",
             "3",
+            "",
             "",
             "",
             ".",
@@ -848,6 +1012,7 @@ provider:
             "3",
             "",
             "",
+            "",
             ".",
         ])
         secrets = iter(["deepseek-key", "qwen-search-key"])
@@ -869,6 +1034,7 @@ provider:
             "",
             "",
             "",
+            "",
             ".",
         ])
         secrets = iter(["deepseek-key", "openai-search-key"])
@@ -885,6 +1051,7 @@ provider:
     def test_collect_init_selection_supports_minimax_provider_with_builtin_anthropic_protocol(self):
         answers = iter([
             "3",
+            "",
             "",
             "",
             "",
@@ -909,6 +1076,7 @@ provider:
     def test_collect_init_selection_supports_anthropic_provider(self):
         answers = iter([
             "5",
+            "",
             "",
             "",
             "",
@@ -937,6 +1105,7 @@ provider:
             "",
             "",
             "",
+            "",
             ".",
         ])
 
@@ -961,6 +1130,7 @@ provider:
             "2",
             "",
             "",
+            "",
             ".",
         ])
         secrets = iter(["deepseek-key", "openai-image-key"])
@@ -982,6 +1152,7 @@ provider:
             "",
             "",
             "",
+            "",
             ".",
         ])
 
@@ -1000,6 +1171,7 @@ provider:
 
     def test_collect_init_selection_does_not_label_defaults(self):
         answers = iter([
+            "",
             "",
             "",
             "",
@@ -1497,6 +1669,210 @@ runtime:
             self.assertEqual(runner.config["runtime"]["heartbeat_interval_seconds"], 12)
             self.assertNotIn("enabled", runner.config["channels"]["api"])
             self.assertEqual(enabled_channels_from_config(runner.config), ["api"])
+
+    def test_config_accepts_soniox_voice_channel_without_enabling_service_all(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    api:
+        host: 127.0.0.1
+        port: 8010
+    voice:
+        api_key: test-soniox-key
+        stt:
+            model: stt-rt-v4
+            max_endpoint_delay_ms: 700
+        tts:
+            model: tts-rt-v1
+            voice: Adrian
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertEqual(runner.config["channels"]["voice"]["stt"]["model"], "stt-rt-v4")
+            self.assertEqual(enabled_channels_from_config(runner.config), ["api"])
+
+    def test_voice_config_rejects_missing_api_key_even_when_env_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    voice: {}
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with patch.dict("os.environ", {"SONIOX_API_KEY": "env-soniox-key"}):
+                runner = BaseAgentRunner(config_dir=tmpdir)
+                with self.assertRaisesRegex(ValueError, "channels.voice.api_key"):
+                    runner.config["channels"]["voice"]
+                    from xagent.voice.config import VoiceChannelConfig
+
+                    VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_api_key()
+
+    def test_voice_config_rejects_placeholder_api_key(self):
+        from xagent.voice.config import VoiceChannelConfig
+
+        config = VoiceChannelConfig.from_dict({"api_key": "your_soniox_api_key_here"})
+
+        with self.assertRaisesRegex(ValueError, "channels.voice.api_key"):
+            config.resolved_api_key()
+
+    def test_voice_config_rejects_qwen_placeholder_api_key(self):
+        from xagent.voice.config import VoiceChannelConfig
+
+        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "your_qwen_api_key_here"})
+
+        with self.assertRaisesRegex(ValueError, "channels.voice.api_key"):
+            config.resolved_api_key()
+
+    def test_voice_config_accepts_qwen_defaults(self):
+        from xagent.voice.config import VoiceChannelConfig
+
+        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+
+        self.assertEqual(config.provider, "qwen")
+        self.assertEqual(config.stt.provider, "qwen")
+        self.assertEqual(config.stt.model, "qwen3-asr-flash-realtime")
+        self.assertEqual(config.stt.audio_format, "pcm")
+        self.assertEqual(config.stt.vad_threshold, 0.2)
+        self.assertEqual(config.stt.silence_duration_ms, 400)
+        self.assertEqual(config.tts.provider, "qwen")
+        self.assertEqual(config.tts.model, "qwen3-tts-flash-realtime")
+        self.assertEqual(config.tts.voice, "Cherry")
+        self.assertEqual(config.tts.audio_format, "pcm")
+
+    def test_config_rejects_unsupported_nested_voice_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    voice:
+        stt:
+            provider: openai
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "voice provider must be one of"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_mixed_voice_providers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    voice:
+        provider: qwen
+        api_key: qwen-key
+        stt:
+            provider: soniox
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "provider must match"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_unsupported_top_level_voice_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    voice:
+        provider: openai
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "voice provider must be one of"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_invalid_voice_endpoint_delay(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    voice:
+        stt:
+            max_endpoint_delay_ms: 300
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "max_endpoint_delay_ms"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_non_pcm_voice_tts_audio_format(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    voice:
+        tts:
+            audio_format: mp3
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "voice.tts.audio_format must be pcm_s16le"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_voice_dependencies_are_main_project_dependencies(self):
+        pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+        dependencies = "\n".join(pyproject["project"]["dependencies"])
+        self.assertNotIn("optional-dependencies", pyproject["project"])
+        self.assertIn("sounddevice", dependencies)
+        self.assertIn("websockets", dependencies)
+        self.assertNotIn("soniox", dependencies)
+
+    def test_readme_voice_usage_uses_single_install_path(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("pip install myxagent", readme)
+        self.assertIn("xagent init", readme)
+        self.assertIn("xagent voice", readme)
+        self.assertNotIn("myxagent[voice]", readme)
+        self.assertNotIn("SONIOX_API_KEY", readme)
 
     def test_config_rejects_memory_section_as_unsupported(self):
         with tempfile.TemporaryDirectory() as tmpdir:

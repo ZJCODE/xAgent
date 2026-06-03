@@ -385,6 +385,63 @@ channels:
     group_history_count: 10
 ```
 
+`channels.voice` 配置本机前台语音模式。当前版本支持 Soniox 和 Qwen，不支持 OpenAI 语音，不参与 `xagent service start all`，也没有 `/ws/voice`。
+
+普通用户只需要通过 `xagent init` 选择语音 provider 并写入 API key：
+
+```yaml
+channels:
+  voice:
+    provider: qwen
+    api_key: your_qwen_api_key_here
+```
+
+或：
+
+```yaml
+channels:
+  voice:
+    provider: soniox
+    api_key: your_soniox_api_key_here
+```
+
+高级配置可以手动覆盖 STT/TTS 默认值：
+
+```yaml
+channels:
+  voice:
+    provider: soniox
+    api_key: soniox-key
+    stt:
+      model: stt-rt-v4
+      audio_format: pcm_s16le
+      sample_rate: 16000
+      num_channels: 1
+      enable_endpoint_detection: true
+      max_endpoint_delay_ms: 700
+      language_hints: ["zh", "en"]
+      enable_language_identification: true
+      enable_speaker_diarization: false
+    tts:
+      model: tts-rt-v1
+      voice: Adrian
+      audio_format: pcm_s16le
+      sample_rate: 24000
+      language_policy: from_stt_dominant
+      fallback_language: zh
+```
+
+Qwen 默认使用 `qwen3-asr-flash-realtime` 和 `qwen3-tts-flash-realtime`，通过 DashScope Realtime WebSocket 发送 `session.update`、音频/文本 buffer 事件，并接收最终转写与音频 delta。
+
+运行：
+
+```bash
+xagent init
+xagent voice --dir ~/.xagent
+```
+
+语音链路是本机麦克风 PCM → Soniox realtime STT → `<end>` endpoint token → `Agent.chat_events(stream=True)` → Soniox realtime TTS → 本机扬声器。播放期间会暂停麦克风流，避免把扬声器声音重新送入 STT。
+
 ### 2.11 文件系统调度器
 
 调度器使用运行目录下的 `tasks/` 作为唯一状态队列。计划任务使用 `YYYYMMDD-HHMMSS-xxxxxxxx.json`，文件名编码本地触发时间，内容是结构化任务 envelope：`kind=task`、`task.type`、`task.content`、`delivery.channel`、`delivery.target`、`execution` 等。`task.type=message` 表示到期后直接投递文本；`task.type=agent` 表示到期后运行一轮 agent，再把最终结果投递给原 channel。API/Web 和 Feishu channel 启动时会自动运行一个轻量消费者，只领取自己能处理的任务；领取前会原子重命名为运行中状态，成功后删除，失败后移动到 `tasks/failed/`。

@@ -45,6 +45,7 @@ from .channels import (
     feishu_config,
     load_config_file,
     normalize_channel_values,
+    voice_config,
 )
 from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
 
@@ -379,6 +380,9 @@ class InitSelection:
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_base_url: str = ""
+    voice_enabled: bool = False
+    voice_provider: str = "soniox"
+    voice_api_key: str = ""
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -394,6 +398,8 @@ QWEN_SEARCH_API_KEY_PLACEHOLDER = "your_qwen_api_key_here"
 OPENAI_IMAGE_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
 MINIMAX_IMAGE_API_KEY_PLACEHOLDER = "your_minimax_api_key_here"
 QWEN_IMAGE_API_KEY_PLACEHOLDER = "your_qwen_api_key_here"
+SONIOX_KEY_PLACEHOLDER = "your_soniox_api_key_here"
+QWEN_KEY_PLACEHOLDER = "your_qwen_api_key_here"
 MODEL_PLACEHOLDER = "your_model_here"
 LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
 LANGFUSE_PUBLIC_KEY_PLACEHOLDER = "pk-lf-..."
@@ -456,6 +462,10 @@ MINIMAX_IMAGE_GENERATION_PROVIDERS = (
     "minimax",
     "none",
 )
+VOICE_PROVIDERS = (
+    "soniox",
+    "qwen",
+)
 
 
 def _native_image_generation_provider(provider: str) -> str:
@@ -484,6 +494,12 @@ def _image_generation_api_key_placeholder(provider: str) -> str:
     if provider == "qwen":
         return QWEN_IMAGE_API_KEY_PLACEHOLDER
     return API_KEY_PLACEHOLDER
+
+
+def _voice_api_key_placeholder(provider: str) -> str:
+    if provider == "qwen":
+        return QWEN_KEY_PLACEHOLDER
+    return SONIOX_KEY_PLACEHOLDER
 
 
 def _default_init_selection() -> InitSelection:
@@ -538,6 +554,12 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
             }
         },
     }
+    if selection.voice_enabled:
+        voice_provider = selection.voice_provider or "soniox"
+        config["channels"]["voice"] = {
+            "provider": voice_provider,
+            "api_key": selection.voice_api_key.strip() or _voice_api_key_placeholder(voice_provider),
+        }
     search_config = {"provider": selection.search_provider or "none"}
     if search_config["provider"] == "openai" and selection.provider != PROVIDER_OPENAI:
         search_config["api_key"] = selection.search_api_key or OPENAI_SEARCH_API_KEY_PLACEHOLDER
@@ -883,6 +905,30 @@ def collect_init_selection(
             input_func=input_func,
         )
 
+    voice_enabled = _prompt_yes_no(
+        "Enable local voice?",
+        default=False,
+        input_func=input_func,
+    )
+    voice_provider = "soniox"
+    voice_api_key = ""
+    if voice_enabled:
+        voice_provider = _select_option(
+            "Voice provider",
+            VOICE_PROVIDERS,
+            default_index=1 if provider == PROVIDER_QWEN else 0,
+            input_func=input_func,
+        )
+        if voice_provider == "qwen" and provider == PROVIDER_QWEN:
+            voice_api_key = api_key if api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
+        else:
+            prompt_name = "Qwen" if voice_provider == "qwen" else "Soniox"
+            voice_api_key = secret_input_func(
+                f"{prompt_name} API key for voice (leave blank to fill in later): "
+            ).strip()
+            if not voice_api_key:
+                voice_api_key = _voice_api_key_placeholder(voice_provider)
+
     identity = _prompt_multiline_identity(input_func=input_func)
 
     return InitSelection(
@@ -901,6 +947,9 @@ def collect_init_selection(
         langfuse_public_key=langfuse_public_key,
         langfuse_secret_key=langfuse_secret_key,
         langfuse_base_url=langfuse_base_url,
+        voice_enabled=voice_enabled,
+        voice_provider=voice_provider,
+        voice_api_key=voice_api_key,
     )
 
 
@@ -1086,6 +1135,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "Start here:",
             "  init      Create config.yaml and identity.md",
             "  chat      Chat with the configured agent",
+            "  voice     Talk with the configured agent by microphone",
             "  web       Open the built-in web UI",
             "",
             "Runtime:",
@@ -1100,6 +1150,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "Examples:",
             "  xagent init",
             "  xagent chat \"Help me plan today\"",
+            "  xagent voice",
             "  xagent web",
             "  xagent service start api",
             "  xagent service logs feishu -f",
@@ -1153,6 +1204,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable or disable memory tools",
     )
     chat_parser.set_defaults(handler=handle_chat)
+
+    voice_parser = subparsers.add_parser("voice", help="Talk with the configured agent by microphone")
+    _add_dir_argument(voice_parser)
+    voice_parser.add_argument("--user-id", dest="user_id", default="local_voice", help="Speaker identifier")
+    voice_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    voice_parser.add_argument(
+        "--memory",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable memory tools",
+    )
+    voice_parser.set_defaults(handler=handle_voice)
 
     web_parser = subparsers.add_parser("web", help="Open the built-in web UI")
     _add_dir_argument(web_parser)
@@ -1359,6 +1422,50 @@ def handle_chat(args: argparse.Namespace) -> int:
             await _flush_chat_exit_memory(agent_cli.agent)
 
     asyncio.run(run_single_message())
+    return 0
+
+
+def handle_voice(args: argparse.Namespace) -> int:
+    if getattr(args, "verbose", False):
+        logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger("xagent").setLevel(logging.INFO)
+    else:
+        logging.getLogger().setLevel(logging.CRITICAL)
+        logging.getLogger("xagent").setLevel(logging.CRITICAL)
+
+    try:
+        runner = BaseAgentRunner(config_dir=args.config_dir)
+        from ..voice.config import VoiceChannelConfig
+        from ..voice.factory import create_local_voice_runtime
+        from ..voice.runtime import VoiceRuntimeOptions
+
+        runtime_config = VoiceChannelConfig.from_dict(voice_config(runner.config))
+        runtime = create_local_voice_runtime(
+            agent=runner.agent,
+            config=runtime_config,
+            options=VoiceRuntimeOptions(
+                user_id=args.user_id or "local_voice",
+                enable_memory=bool(args.memory),
+                stream=True,
+            ),
+        )
+    except Exception as exc:
+        print(f"Failed to start voice channel: {exc}")
+        return 1
+
+    async def _run_voice() -> None:
+        try:
+            await runtime.run_forever()
+        finally:
+            await _flush_chat_exit_memory(runner.agent)
+
+    try:
+        asyncio.run(_run_voice())
+    except KeyboardInterrupt:
+        print("\nVoice channel stopped.")
+    except Exception as exc:
+        print(f"Voice channel error: {exc}")
+        return 1
     return 0
 
 

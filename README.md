@@ -18,7 +18,7 @@ Run the first-time setup:
 xagent init
 ```
 
-Follow the prompts to choose your provider, model, API key, optional tools, and identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. For a custom provider, `xagent init` asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
+Follow the prompts to choose your provider, model, API key, optional tools, local voice, and identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. For a custom provider, `xagent init` asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
 
 OpenAI runtimes default to OpenAI built-in web search and recommend OpenAI image generation during init, while Qwen runtimes default to DashScope/Qwen built-in web search and Qwen image generation. Other providers can choose OpenAI search, Qwen search, or no search during init. OpenAI and Qwen native search reuse the main API key when the main provider matches; cross-provider OpenAI or Qwen search must set the matching key in `search.api_key`.
 
@@ -42,6 +42,18 @@ xagent chat "Help me plan today"
 
 The CLI is best for quick questions, terminal work, and short back-and-forth sessions.
 
+## Use From Voice
+
+Enable local voice during first-time setup, then start a foreground voice session:
+
+```bash
+xagent init
+xagent voice
+xagent voice --user-id local_voice --no-memory
+```
+
+Voice mode supports Soniox and Qwen in this version. `xagent init` writes the selected voice provider and API key into `config.yaml`; no separate voice extra or environment variable setup is required. It streams microphone audio to the selected realtime STT service, uses provider-side endpoint detection to decide when a user turn ends, calls the existing xAgent text runtime, and streams the assistant reply through the selected realtime TTS service. It is not part of `xagent service start all` yet.
+
 ## Use From The Web Page
 
 Start xAgent and open the web page in your browser:
@@ -62,7 +74,7 @@ xagent service logs api
 xagent service stop api
 ```
 
-Use `api` for HTTP JSON, WebSocket, and the built-in web page. Use `feishu` for the Feishu bot, and `all` when you want every enabled channel. Without a channel, `service start` chooses one enabled channel, preferring `api`; other service actions default to `all`.
+Use `api` for HTTP JSON, WebSocket, and the built-in web page. Use `feishu` for the Feishu bot, and `all` when you want every enabled managed channel. The local `voice` command is foreground-only and is not managed by `service` in this version. Without a channel, `service start` chooses one enabled channel, preferring `api`; other service actions default to `all`.
 
 ## Scheduled Tasks
 
