@@ -73,6 +73,7 @@ class VoiceSTTConfig(BaseModel):
     turn_detection: Literal["server_vad"] = "server_vad"
     silence_duration_ms: int = Field(default=_QWEN_SILENCE_DURATION_MS_DEFAULT, ge=200, le=3000)
     vad_threshold: float = Field(default=_QWEN_VAD_THRESHOLD_DEFAULT, ge=0.0, le=1.0)
+    session_options: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider")
     @classmethod
@@ -117,6 +118,11 @@ class VoiceSTTConfig(BaseModel):
             raise ValueError("voice.stt.language_hints must include at least one language")
         return hints
 
+    @field_validator("session_options")
+    @classmethod
+    def _validate_session_options(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return dict(value)
+
     @model_validator(mode="after")
     def _validate_endpointing(self) -> "VoiceSTTConfig":
         self.audio_format = _normalize_provider_audio_format(self.provider, self.audio_format)
@@ -142,6 +148,7 @@ class VoiceTTSConfig(BaseModel):
     language_type: str = "Auto"
     instructions: str | None = None
     optimize_instructions: bool = False
+    session_options: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider")
     @classmethod
@@ -163,6 +170,11 @@ class VoiceTTSConfig(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("session_options")
+    @classmethod
+    def _validate_session_options(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return dict(value)
 
     @field_validator("audio_format")
     @classmethod

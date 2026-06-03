@@ -502,6 +502,28 @@ def _voice_api_key_placeholder(provider: str) -> str:
     return SONIOX_KEY_PLACEHOLDER
 
 
+def _voice_defaults_for_provider(provider: str) -> dict[str, dict[str, str]]:
+    if provider == "qwen":
+        return {
+            "stt": {
+                "model": "qwen3-asr-flash-realtime",
+            },
+            "tts": {
+                "model": "qwen3-tts-flash-realtime",
+                "voice": "Cherry",
+            },
+        }
+    return {
+        "stt": {
+            "model": "stt-rt-v4",
+        },
+        "tts": {
+            "model": "tts-rt-v1",
+            "voice": "Adrian",
+        },
+    }
+
+
 def _default_init_selection() -> InitSelection:
     return InitSelection(
         provider="openai",
@@ -559,6 +581,7 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
         config["channels"]["voice"] = {
             "provider": voice_provider,
             "api_key": selection.voice_api_key.strip() or _voice_api_key_placeholder(voice_provider),
+            **_voice_defaults_for_provider(voice_provider),
         }
     search_config = {"provider": selection.search_provider or "none"}
     if search_config["provider"] == "openai" and selection.provider != PROVIDER_OPENAI:

@@ -394,6 +394,11 @@ channels:
   voice:
     provider: qwen
     api_key: your_qwen_api_key_here
+    stt:
+      model: qwen3-asr-flash-realtime
+    tts:
+      model: qwen3-tts-flash-realtime
+      voice: Cherry
 ```
 
 或：
@@ -403,9 +408,14 @@ channels:
   voice:
     provider: soniox
     api_key: your_soniox_api_key_here
+    stt:
+      model: stt-rt-v4
+    tts:
+      model: tts-rt-v1
+      voice: Adrian
 ```
 
-高级配置可以手动覆盖 STT/TTS 默认值：
+高级配置可以手动覆盖 STT/TTS 默认值。Soniox 示例：
 
 ```yaml
 channels:
@@ -433,6 +443,45 @@ channels:
 
 Qwen 默认使用 `qwen3-asr-flash-realtime` 和 `qwen3-tts-flash-realtime`，通过 DashScope Realtime WebSocket 发送 `session.update`、音频/文本 buffer 事件，并接收最终转写与音频 delta。
 
+Qwen 高级配置示例：
+
+```yaml
+channels:
+  voice:
+    provider: qwen
+    api_key: qwen-key
+    websocket_base_url: wss://dashscope.aliyuncs.com/api-ws/v1/realtime
+    stt:
+      model: qwen3-asr-flash-realtime
+      audio_format: pcm
+      sample_rate: 16000
+      num_channels: 1
+      language: zh
+      turn_detection: server_vad
+      vad_threshold: 0.2
+      silence_duration_ms: 400
+      session_options:
+        # Optional DashScope session.update.session fields not modeled above.
+        custom_stt_option: true
+    tts:
+      model: qwen3-tts-instruct-flash-realtime
+      voice: Cherry
+      audio_format: pcm
+      sample_rate: 24000
+      language_policy: from_stt_dominant
+      fallback_language: zh
+      max_buffer_chars: 80
+      mode: server_commit
+      language_type: Auto
+      instructions: 语速自然，语气友好。
+      optimize_instructions: true
+      session_options:
+        # Optional DashScope session.update.session fields not modeled above.
+        custom_tts_option: value
+```
+
+`session_options` 会合并到 Qwen 的 `session.update.session` payload；上面已经显式建模的字段仍以同名配置项为准。
+
 运行：
 
 ```bash
@@ -440,7 +489,7 @@ xagent init
 xagent voice --dir ~/.xagent
 ```
 
-语音链路是本机麦克风 PCM → Soniox realtime STT → `<end>` endpoint token → `Agent.chat_events(stream=True)` → Soniox realtime TTS → 本机扬声器。播放期间会暂停麦克风流，避免把扬声器声音重新送入 STT。
+语音链路是本机麦克风 PCM → realtime STT → provider-side endpoint detection → `Agent.chat_events(stream=True)` → realtime TTS → 本机扬声器。播放期间会暂停麦克风流，避免把扬声器声音重新送入 STT。
 
 ### 2.11 文件系统调度器
 

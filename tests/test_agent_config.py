@@ -699,7 +699,15 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["channels"]["voice"], {"provider": "soniox", "api_key": "soniox-key"})
+            self.assertEqual(
+                config["channels"]["voice"],
+                {
+                    "provider": "soniox",
+                    "api_key": "soniox-key",
+                    "stt": {"model": "stt-rt-v4"},
+                    "tts": {"model": "tts-rt-v1", "voice": "Adrian"},
+                },
+            )
 
     def test_init_writes_soniox_placeholder_when_voice_key_is_blank(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -720,7 +728,12 @@ provider:
 
             self.assertEqual(
                 config["channels"]["voice"],
-                {"provider": "soniox", "api_key": "your_soniox_api_key_here"},
+                {
+                    "provider": "soniox",
+                    "api_key": "your_soniox_api_key_here",
+                    "stt": {"model": "stt-rt-v4"},
+                    "tts": {"model": "tts-rt-v1", "voice": "Adrian"},
+                },
             )
 
     def test_init_writes_minimal_qwen_voice_config_when_enabled(self):
@@ -739,7 +752,15 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["channels"]["voice"], {"provider": "qwen", "api_key": "qwen-voice-key"})
+            self.assertEqual(
+                config["channels"]["voice"],
+                {
+                    "provider": "qwen",
+                    "api_key": "qwen-voice-key",
+                    "stt": {"model": "qwen3-asr-flash-realtime"},
+                    "tts": {"model": "qwen3-tts-flash-realtime", "voice": "Cherry"},
+                },
+            )
 
     def test_init_omits_voice_config_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1755,6 +1776,53 @@ channels:
         self.assertEqual(config.tts.voice, "Cherry")
         self.assertEqual(config.tts.audio_format, "pcm")
 
+    def test_config_accepts_advanced_qwen_voice_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    voice:
+        provider: qwen
+        api_key: qwen-key
+        websocket_base_url: wss://dashscope.aliyuncs.com/api-ws/v1/realtime
+        stt:
+            model: qwen3-asr-flash-realtime
+            audio_format: pcm
+            sample_rate: 16000
+            num_channels: 1
+            language: zh
+            turn_detection: server_vad
+            vad_threshold: 0.1
+            silence_duration_ms: 500
+            session_options:
+                custom_stt_option: true
+        tts:
+            model: qwen3-tts-instruct-flash-realtime
+            voice: Cherry
+            audio_format: pcm
+            sample_rate: 24000
+            language_policy: from_stt_dominant
+            fallback_language: zh
+            max_buffer_chars: 120
+            mode: server_commit
+            language_type: Auto
+            instructions: "语速自然，语气友好。"
+            optimize_instructions: true
+            session_options:
+                custom_tts_option: value
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertEqual(runner.config["channels"]["voice"]["provider"], "qwen")
+
     def test_config_rejects_unsupported_nested_voice_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1853,7 +1921,7 @@ channels:
             )
             write_identity(tmpdir)
 
-            with self.assertRaisesRegex(ValueError, "voice.tts.audio_format must be pcm_s16le"):
+            with self.assertRaisesRegex(ValueError, "voice.tts.audio_format must be one of"):
                 BaseAgentRunner(config_dir=tmpdir)
 
     def test_voice_dependencies_are_main_project_dependencies(self):

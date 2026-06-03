@@ -148,7 +148,8 @@ class QwenRealtimeSTT:
                 sender.join(timeout=1.0)
 
     def _session_update_event(self) -> dict[str, Any]:
-        session = {
+        session = dict(self.config.session_options)
+        session.update({
             "modalities": ["text"],
             "input_audio_format": self.config.audio_format,
             "sample_rate": self.config.sample_rate,
@@ -157,7 +158,7 @@ class QwenRealtimeSTT:
                 "threshold": self.config.vad_threshold,
                 "silence_duration_ms": self.config.silence_duration_ms,
             },
-        }
+        })
         if self.config.language:
             session["input_audio_transcription"] = {
                 "language": self.config.language,
@@ -255,13 +256,14 @@ class QwenRealtimeTTS:
                 sender.join(timeout=1.0)
 
     def _session_update_event(self, *, language: str) -> dict[str, Any]:
-        session = {
+        session = dict(self.config.session_options)
+        session.update({
             "mode": self.config.mode,
             "voice": self.config.voice,
             "language_type": _qwen_language_type(language, fallback=self.config.language_type),
             "response_format": self.config.audio_format,
             "sample_rate": self.config.sample_rate,
-        }
+        })
         if self.config.instructions:
             session["instructions"] = self.config.instructions
             if self.config.optimize_instructions:

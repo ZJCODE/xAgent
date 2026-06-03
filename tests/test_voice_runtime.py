@@ -142,7 +142,7 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             url,
-            "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?model=qwen3-tts-flash-realtime",
+            "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-tts-flash-realtime",
         )
 
     def test_qwen_stt_session_update_uses_realtime_audio_config(self):
@@ -158,6 +158,24 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(event["session"]["turn_detection"]["type"], "server_vad")
         self.assertEqual(event["session"]["turn_detection"]["threshold"], 0.2)
         self.assertEqual(event["session"]["turn_detection"]["silence_duration_ms"], 400)
+
+    def test_qwen_stt_session_update_includes_session_options(self):
+        config = VoiceChannelConfig.from_dict(
+            {
+                "provider": "qwen",
+                "api_key": "qwen-key",
+                "stt": {
+                    "session_options": {
+                        "custom_stt_option": True,
+                    },
+                },
+            }
+        )
+        stt = QwenRealtimeSTT(api_key="qwen-key", config=config.stt)
+
+        event = stt._session_update_event()
+
+        self.assertTrue(event["session"]["custom_stt_option"])
 
     def test_qwen_stt_audio_loop_sends_base64_append_events(self):
         config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
@@ -207,6 +225,24 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(event["session"]["language_type"], "Chinese")
         self.assertEqual(event["session"]["instructions"], "语速较快，适合介绍产品。")
         self.assertTrue(event["session"]["optimize_instructions"])
+
+    def test_qwen_tts_session_update_includes_session_options(self):
+        config = VoiceChannelConfig.from_dict(
+            {
+                "provider": "qwen",
+                "api_key": "qwen-key",
+                "tts": {
+                    "session_options": {
+                        "custom_tts_option": "value",
+                    },
+                },
+            }
+        )
+        tts = QwenRealtimeTTS(api_key="qwen-key", config=config.tts)
+
+        event = tts._session_update_event(language="")
+
+        self.assertEqual(event["session"]["custom_tts_option"], "value")
 
     def test_qwen_tts_timeout_loop_flushes_text_and_finishes_session(self):
         config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
