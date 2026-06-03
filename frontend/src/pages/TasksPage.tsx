@@ -29,6 +29,20 @@ function taskTitle(task: ScheduledTaskItem): string {
   return type ? `Scheduled ${type}` : "Scheduled task";
 }
 
+function taskRecurrenceLabels(task: ScheduledTaskItem): string[] {
+  const recurrence = Array.isArray(task.recurrence) ? task.recurrence : [];
+  return recurrence
+    .map((rule) => {
+      const kind = String(rule?.kind || "").trim();
+      const time = String(rule?.time || "").trim();
+      const weekdays = Array.isArray(rule?.weekdays)
+        ? rule.weekdays.map((item) => String(item || "").trim()).filter(Boolean).join(", ")
+        : "";
+      return [kind, weekdays, time].filter(Boolean).join(" · ");
+    })
+    .filter(Boolean);
+}
+
 export function TasksPage() {
   const [data, setData] = useState<TasksResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -101,7 +115,9 @@ export function TasksPage() {
                     <div className="chip-list">
                       <span className="data-chip">{formatRunAt(task.next_run_at)}</span>
                       <span className="data-chip">{taskTarget(task)}</span>
-                      {task.recurrence && <span className="data-chip">{task.recurrence}</span>}
+                      {taskRecurrenceLabels(task).map((label) => (
+                        <span key={`${task.task_id}-${label}`} className="data-chip">{label}</span>
+                      ))}
                     </div>
                   </div>
                   <button type="button" className="danger-button" onClick={() => void removeTask(task)} title="Delete task">

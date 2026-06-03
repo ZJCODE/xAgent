@@ -19,27 +19,26 @@ from .scheduler import (
     TASK_TIMESTAMP_FORMAT,
     _fsync_directory,
     _unique_failed_path,
-    calculate_next_daily_run_at,
+    calculate_next_recurrence_run_at,
     ensure_scheduler_dirs,
     format_task_timestamp,
     parse_run_at,
-    resolve_daily_run_at,
+    normalize_recurrence_rules,
+    resolve_recurrence_run_at,
 )
 
 
 TASK_KIND_TASK = "task"
 TASK_TYPE_MESSAGE = "message"
 TASK_TYPE_AGENT = "agent"
-TASK_RECURRENCE_DAILY = "daily"
 TASK_STATUS_ACTIVE = "active"
-TASK_PAYLOAD_VERSION = 3
+TASK_PAYLOAD_VERSION = 4
 TASK_JSON_SUFFIX = ".json"
 TASK_STATE_PENDING = "pending"
 TASK_STATE_FAILED = "failed"
 TASK_STATE_RUNNING = "running"
 DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS = 1.0
 SUPPORTED_TASK_TYPES = {TASK_TYPE_MESSAGE, TASK_TYPE_AGENT}
-SUPPORTED_TASK_RECURRENCES = {TASK_RECURRENCE_DAILY}
 
 
 @dataclass(frozen=True)
@@ -90,8 +89,8 @@ class ScheduledTaskRecord:
         return str(self.payload.get("title") or "").strip()
 
     @property
-    def recurrence(self) -> str:
-        return str(self.payload.get("recurrence") or "").strip().lower()
+    def recurrence(self) -> list[dict[str, Any]]:
+        return normalize_recurrence_rules(self.payload.get("recurrence"))
 
     @property
     def delivery(self) -> dict[str, Any]:
@@ -178,41 +177,35 @@ def scheduled_delivery_context(context: ScheduledDeliveryContext) -> Iterator[No
         _delivery_context_var.reset(token)
 
 
-def normalize_task_recurrence(recurrence: Optional[str]) -> str:
-    """Normalize an optional recurrence string."""
-    normalized = str(recurrence or "").strip().lower()
-    if not normalized:
-        return ""
-    if normalized not in SUPPORTED_TASK_RECURRENCES:
-        raise ValueError(f"recurrence must be one of: {', '.join(sorted(SUPPORTED_TASK_RECURRENCES))}")
-    return normalized
+def normalize_task_recurrence(recurrence: Any) -> list[dict[str, Any]]:
+    """Normalize optional recurrence rules."""
+    return normalize_recurrence_rules(recurrence)
 
 
 def resolve_scheduled_task_run_at(
     *,
     run_at: Optional[str | datetime] = None,
     delay_seconds: Optional[int] = None,
-    recurrence: Optional[str] = None,
+    recurrence: Any = None,
     now: datetime | None = None,
-) -> tuple[datetime, str]:
+) -> tuple[datetime, list[dict[str, Any]]]:
     """Resolve creation-time schedule parameters into a concrete next run datetime."""
     current = (now or datetime.now()).replace(microsecond=0)
     normalized_recurrence = normalize_task_recurrence(recurrence)
     if normalized_recurrence:
         if delay_seconds is not None:
             raise ValueError("delay_seconds is not supported for recurring tasks")
-        if run_at is None:
-            raise ValueError("run_at is required for recurring tasks")
-        if normalized_recurrence == TASK_RECURRENCE_DAILY:
-            return resolve_daily_run_at(str(run_at), now=current), normalized_recurrence
+        if run_at is not None:
+            raise ValueError("run_at is only supported for one-time tasks; recurring tasks must define time inside recurrence")
+        return resolve_recurrence_run_at(normalized_recurrence, now=current), normalized_recurrence
 
     if delay_seconds is None and run_at is None:
         raise ValueError("Provide either run_at or delay_seconds.")
     if delay_seconds is not None:
         if delay_seconds < 0:
             raise ValueError("delay_seconds must be zero or positive.")
-        return current + timedelta(seconds=delay_seconds), ""
-    return parse_run_at(run_at or ""), ""
+        return current + timedelta(seconds=delay_seconds), []
+    return parse_run_at(run_at or ""), []
 
 
 def enqueue_scheduled_task(
@@ -225,7 +218,7 @@ def enqueue_scheduled_task(
     target: dict[str, Any],
     user_id: str = "",
     title: str = "",
-    recurrence: Optional[str] = None,
+    recurrence: Any = None,
     source: Optional[dict[str, Any]] = None,
     execution: Optional[dict[str, Any]] = None,
 ) -> ScheduledTaskRecord:
@@ -472,9 +465,7 @@ class AsyncTaskScheduler:
         if not recurrence:
             path.unlink(missing_ok=True)
             return
-        if recurrence != TASK_RECURRENCE_DAILY:
-            raise ValueError(f"unsupported recurrence: {recurrence}")
-        next_run_at = calculate_next_daily_run_at(record.run_at, now=self.now_provider())
+        next_run_at = calculate_next_recurrence_run_at(recurrence, now=self.now_provider())
         self._reschedule_record(path, record, next_run_at)
 
     def _reschedule_record(self, path: Path, record: ScheduledTaskRecord, next_run_at: datetime) -> None:

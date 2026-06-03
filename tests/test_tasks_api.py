@@ -85,6 +85,31 @@ class TaskApiTests(unittest.TestCase):
                 listed_again = client.get("/api/tasks")
                 self.assertEqual(listed_again.json()["total"], 0)
 
+    def test_list_weekly_task_includes_weekdays(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = _TaskAgent(Path(tmpdir))
+            server = AgentHTTPServer(agent=agent, enable_web=False)
+            task = enqueue_scheduled_task(
+                task_type="message",
+                content="喝茶",
+                run_at="2099-01-07 13:28:00",
+                tasks_dir=server.tasks_dir,
+                channel="web",
+                target={"user_id": "web_user"},
+                user_id="web_user",
+                title="喝茶提醒",
+                recurrence=[{"kind": "weekly", "time": "13:28:00", "weekdays": ["wed", "fri"]}],
+            )
+            with TestClient(server.app) as client:
+                listed = client.get("/api/tasks")
+                self.assertEqual(listed.status_code, 200)
+                self.assertEqual(listed.json()["total"], 1)
+                self.assertEqual(listed.json()["tasks"][0]["task_id"], task.task_id)
+                self.assertEqual(
+                    listed.json()["tasks"][0]["recurrence"],
+                    [{"kind": "weekly", "time": "13:28:00", "weekdays": ["wed", "fri"]}],
+                )
+
     def test_create_task_endpoint_is_not_exposed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = _TaskAgent(Path(tmpdir))

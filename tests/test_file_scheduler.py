@@ -121,7 +121,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     channel="web",
                     target={"user_id": "web_user"},
                     user_id="web_user",
-                    recurrence="daily",
+                    recurrence=[{"kind": "daily", "time": "10:00:00"}],
                     title="日报提醒",
                 )
                 delivered = []
@@ -138,8 +138,44 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertEqual(delivered, ["写日报"])
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0].task_id, original.task_id)
-            self.assertEqual(records[0].recurrence, "daily")
+            self.assertEqual(records[0].recurrence, [{"kind": "daily", "time": "10:00:00"}])
             self.assertEqual(records[0].run_at, datetime(2026, 6, 4, 10, 0, 0))
+
+        async def _append_delivered(delivered, message):
+            delivered.append(message)
+
+        asyncio.run(run_test())
+
+    def test_async_scheduler_reschedules_weekly_task_to_next_future_weekday(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="喝茶",
+                    run_at=datetime(2026, 6, 3, 13, 28, 0),
+                    tasks_dir=tmpdir,
+                    channel="web",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "weekly", "time": "13:28:00", "weekdays": ["wed", "fri"]}],
+                    title="喝茶提醒",
+                )
+                delivered = []
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "web",
+                    dispatch=lambda task: _append_delivered(delivered, task.content),
+                    now_provider=lambda: datetime(2026, 6, 5, 14, 0, 0),
+                )
+
+                await scheduler.tick()
+                records = list_task_records(tmpdir, include_failed=False)
+
+            self.assertEqual(delivered, ["喝茶"])
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].task_id, original.task_id)
+            self.assertEqual(records[0].recurrence, [{"kind": "weekly", "time": "13:28:00", "weekdays": ["wed", "fri"]}])
+            self.assertEqual(records[0].run_at, datetime(2026, 6, 10, 13, 28, 0))
 
         async def _append_delivered(delivered, message):
             delivered.append(message)
@@ -157,7 +193,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     channel="web",
                     target={"user_id": "web_user"},
                     user_id="web_user",
-                    recurrence="daily",
+                    recurrence=[{"kind": "daily", "time": "10:00:00"}],
                     title="日报提醒",
                 )
                 scheduler = AsyncTaskScheduler(
@@ -174,7 +210,42 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertEqual(active_records, [])
             self.assertEqual(len(all_records), 1)
             self.assertEqual(all_records[0].state, "failed")
-            self.assertEqual(all_records[0].recurrence, "daily")
+            self.assertEqual(all_records[0].recurrence, [{"kind": "daily", "time": "10:00:00"}])
+
+        async def _raise_dispatch_error(task):
+            raise RuntimeError(f"boom: {task.content}")
+
+        asyncio.run(run_test())
+
+    def test_async_scheduler_quarantines_failed_weekly_task_without_reschedule(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="走路",
+                    run_at=datetime(2026, 6, 3, 14, 28, 0),
+                    tasks_dir=tmpdir,
+                    channel="web",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "weekly", "time": "14:28:00", "weekdays": ["wed", "fri"]}],
+                    title="走路提醒",
+                )
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "web",
+                    dispatch=_raise_dispatch_error,
+                    now_provider=lambda: datetime(2026, 6, 3, 14, 28, 0),
+                )
+
+                await scheduler.tick()
+                active_records = list_task_records(tmpdir, include_failed=False)
+                all_records = list_task_records(tmpdir)
+
+            self.assertEqual(active_records, [])
+            self.assertEqual(len(all_records), 1)
+            self.assertEqual(all_records[0].state, "failed")
+            self.assertEqual(all_records[0].recurrence, [{"kind": "weekly", "time": "14:28:00", "weekdays": ["wed", "fri"]}])
 
         async def _raise_dispatch_error(task):
             raise RuntimeError(f"boom: {task.content}")
@@ -210,10 +281,9 @@ class ScheduledTaskTests(unittest.TestCase):
                 created = await tool(
                     action="create",
                     task_type="message",
-                    content="记得写日报",
-                    run_at="10:00:00",
-                    recurrence="daily",
-                    title="日报提醒",
+                    content="记得走路",
+                    recurrence=[{"kind": "weekly", "time": "10:00:00", "weekdays": ["wed", "fri"]}],
+                    title="走路提醒",
                 )
                 listed = await tool(action="list")
                 deleted = await tool(action="delete", task_id=created["task"]["task_id"])
@@ -221,10 +291,11 @@ class ScheduledTaskTests(unittest.TestCase):
                 records = list_task_records(tmpdir, include_failed=False)
 
             self.assertTrue(created["ok"])
-            self.assertEqual(created["task"]["recurrence"], "daily")
+            self.assertEqual(created["task"]["recurrence"], [{"kind": "weekly", "time": "10:00:00", "weekdays": ["wed", "fri"]}])
             self.assertEqual(created["task"]["status"], "active")
             self.assertEqual(listed["total"], 1)
             self.assertEqual(listed["tasks"][0]["task_id"], created["task"]["task_id"])
+            self.assertEqual(listed["tasks"][0]["recurrence"], [{"kind": "weekly", "time": "10:00:00", "weekdays": ["wed", "fri"]}])
             self.assertEqual(records, [])
             self.assertTrue(deleted["ok"])
             self.assertEqual(deleted["deleted"]["task_id"], created["task"]["task_id"])
@@ -243,16 +314,46 @@ class ScheduledTaskTests(unittest.TestCase):
                     action="create",
                     task_type="message",
                     content="写日报",
-                    run_at="10:00:00",
                     delay_seconds=60,
-                    recurrence="daily",
+                    recurrence=[{"kind": "daily", "time": "10:00:00"}],
                 )
-                invalid_daily_time = await tool(
+                daily_with_run_at = await tool(
                     action="create",
                     task_type="message",
                     content="写日报",
                     run_at="2026-06-01 10:00:00",
-                    recurrence="daily",
+                    recurrence=[{"kind": "daily", "time": "10:00:00"}],
+                )
+                missing_weekly_time = await tool(
+                    action="create",
+                    task_type="message",
+                    content="喝茶",
+                    recurrence=[{"kind": "weekly", "weekdays": ["wed"]}],
+                )
+                weekly_with_delay = await tool(
+                    action="create",
+                    task_type="message",
+                    content="喝茶",
+                    delay_seconds=60,
+                    recurrence=[{"kind": "weekly", "time": "13:28:00", "weekdays": ["wed"]}],
+                )
+                invalid_weekly_time = await tool(
+                    action="create",
+                    task_type="message",
+                    content="喝茶",
+                    recurrence=[{"kind": "weekly", "time": "2026-06-03 13:28:00", "weekdays": ["wed"]}],
+                )
+                invalid_weekly_missing_weekdays = await tool(
+                    action="create",
+                    task_type="message",
+                    content="走路",
+                    recurrence=[{"kind": "weekly", "time": "14:28:00"}],
+                )
+                invalid_recurrence_kind = await tool(
+                    action="create",
+                    task_type="message",
+                    content="写日报",
+                    recurrence=[{"kind": "monthly", "time": "10:00:00"}],
                 )
                 missing_task_type = await tool(action="create", content="走两步", delay_seconds=60)
                 missing_task_id = await tool(action="delete")
@@ -265,8 +366,18 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertIn("content", empty_content["error"])
             self.assertFalse(recurring_delay["ok"])
             self.assertIn("not supported", recurring_delay["error"])
-            self.assertFalse(invalid_daily_time["ok"])
-            self.assertIn("HH:MM", invalid_daily_time["error"])
+            self.assertFalse(daily_with_run_at["ok"])
+            self.assertIn("one-time tasks", daily_with_run_at["error"])
+            self.assertFalse(missing_weekly_time["ok"])
+            self.assertIn("run_at like HH:MM", missing_weekly_time["error"])
+            self.assertFalse(weekly_with_delay["ok"])
+            self.assertIn("not supported", weekly_with_delay["error"])
+            self.assertFalse(invalid_weekly_time["ok"])
+            self.assertIn("run_at like HH:MM", invalid_weekly_time["error"])
+            self.assertFalse(invalid_weekly_missing_weekdays["ok"])
+            self.assertIn("weekdays", invalid_weekly_missing_weekdays["error"])
+            self.assertFalse(invalid_recurrence_kind["ok"])
+            self.assertIn("kind must be one of", invalid_recurrence_kind["error"])
             self.assertFalse(missing_task_type["ok"])
             self.assertIn("task_type", missing_task_type["error"])
             self.assertFalse(missing_task_id["ok"])

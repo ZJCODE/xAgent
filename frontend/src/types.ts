@@ -74,13 +74,19 @@ export interface ChatEvent {
   task?: ScheduledTaskItem;
 }
 
+export interface ScheduledTaskRecurrenceRule {
+  kind: "daily" | "weekly" | string;
+  time: string;
+  weekdays?: string[];
+}
+
 export interface ScheduledTaskItem {
   task_id: string;
   title: string;
   task_type: "message" | "agent" | string;
   content: string;
   next_run_at: string;
-  recurrence?: "daily" | string | null;
+  recurrence?: ScheduledTaskRecurrenceRule[] | null;
   status: "active" | string;
   channel?: string;
   user_id?: string;
