@@ -9,6 +9,14 @@ class _FakeDefaults:
         self.device = device
 
 
+class _FakeInputOutputPair:
+    def __init__(self, input_index, output_index):
+        self._values = [input_index, output_index]
+
+    def __iter__(self):
+        return iter(self._values)
+
+
 class _FakeSoundDevice:
     def __init__(self):
         self.default = _FakeDefaults(device=(-1, 0))
@@ -57,7 +65,91 @@ class _FakeSoundDevice:
         raise ValueError("unknown output device")
 
 
+class _FakeMacSoundDevice:
+    def __init__(self):
+        self.default = _FakeDefaults(device=_FakeInputOutputPair(2, 3))
+        self._devices = [
+            {
+                "name": "Cast Audio",
+                "hostapi": 0,
+                "max_input_channels": 2,
+                "max_output_channels": 2,
+                "default_samplerate": 44100,
+            },
+            {
+                "name": "Cast Audio (UI Sounds)",
+                "hostapi": 0,
+                "max_input_channels": 2,
+                "max_output_channels": 2,
+                "default_samplerate": 44100,
+            },
+            {
+                "name": "iMac麦克风",
+                "hostapi": 0,
+                "max_input_channels": 1,
+                "max_output_channels": 0,
+                "default_samplerate": 48000,
+            },
+            {
+                "name": "iMac扬声器",
+                "hostapi": 0,
+                "max_input_channels": 0,
+                "max_output_channels": 2,
+                "default_samplerate": 48000,
+            },
+            {
+                "name": "NeCastAudio B",
+                "hostapi": 0,
+                "max_input_channels": 2,
+                "max_output_channels": 2,
+                "default_samplerate": 48000,
+            },
+        ]
+
+    def query_devices(self):
+        return list(self._devices)
+
+    def query_hostapis(self):
+        return ({"name": "Core Audio", "default_input_device": 2, "default_output_device": 3},)
+
+    def check_input_settings(self, *, device, channels, samplerate, dtype):
+        del dtype
+        if (device, channels, samplerate) in {
+            (0, 1, 16000),
+            (1, 1, 16000),
+            (2, 1, 16000),
+            (4, 1, 16000),
+        }:
+            return None
+        raise ValueError("unsupported input settings")
+
+    def check_output_settings(self, *, device, channels, samplerate, dtype):
+        del dtype
+        if (device, channels, samplerate) in {
+            (0, 1, 24000),
+            (1, 1, 24000),
+            (3, 1, 24000),
+            (4, 1, 24000),
+        }:
+            return None
+        raise ValueError("unsupported output settings")
+
+
 class VoiceAudioTests(unittest.TestCase):
+    def test_default_device_indices_accept_sounddevice_pair(self):
+        fake_sd = type("FakeSD", (), {"default": _FakeDefaults(device=_FakeInputOutputPair(2, 3))})()
+
+        self.assertEqual(voice_audio._default_device_indices(fake_sd), (2, 3))
+
+    def test_query_audio_devices_preserves_hostapi_zero_and_defaults(self):
+        fake_sd = _FakeMacSoundDevice()
+
+        devices = voice_audio._query_audio_devices(fake_sd)
+
+        self.assertEqual(devices[0].hostapi_name, "Core Audio")
+        self.assertTrue(devices[2].is_default_input)
+        self.assertTrue(devices[3].is_default_output)
+
     def test_resolve_audio_profile_prefers_duplex_usb_device(self):
         fake_sd = _FakeSoundDevice()
 
@@ -75,6 +167,22 @@ class VoiceAudioTests(unittest.TestCase):
         self.assertEqual(profile.output_selection.device_index, 2)
         self.assertEqual(profile.output_selection.stream_channels, 2)
         self.assertEqual(profile.output_selection.stream_sample_rate, 48000)
+
+    def test_resolve_audio_profile_prefers_default_mac_builtins(self):
+        fake_sd = _FakeMacSoundDevice()
+
+        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+            profile = voice_audio.resolve_audio_io_profile(
+                input_sample_rate=16000,
+                input_channels=1,
+                output_sample_rate=24000,
+                output_channels=1,
+            )
+
+        self.assertEqual(profile.input_selection.device_index, 2)
+        self.assertEqual(profile.input_selection.device_name, "iMac麦克风")
+        self.assertEqual(profile.output_selection.device_index, 3)
+        self.assertEqual(profile.output_selection.device_name, "iMac扬声器")
 
     def test_input_converter_downmixes_stereo_to_mono(self):
         converter = voice_audio._PCMInputConverter(

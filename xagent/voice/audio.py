@@ -5,8 +5,9 @@ import logging
 import queue
 import threading
 from array import array
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterator, Sequence
+from typing import Any, Iterator
 
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,7 @@ def _query_audio_devices(sd) -> list[_AudioDeviceInfo]:  # noqa: ANN001
             _AudioDeviceInfo(
                 index=index,
                 name=str(info.get("name") or f"device-{index}"),
-                hostapi_name=hostapi_names.get(int(info.get("hostapi", -1) or -1), ""),
+                hostapi_name=hostapi_names.get(_coerce_int(info.get("hostapi")), ""),
                 max_input_channels=int(info.get("max_input_channels", 0) or 0),
                 max_output_channels=int(info.get("max_output_channels", 0) or 0),
                 default_sample_rate=int(round(float(info.get("default_samplerate", 0) or 0))),
@@ -149,13 +150,15 @@ def _default_device_indices(sd) -> tuple[int | None, int | None]:  # noqa: ANN00
         raw_defaults = getattr(getattr(sd, "default", None), "device", None)
     except Exception:
         raw_defaults = None
-    if not isinstance(raw_defaults, Sequence) or len(raw_defaults) < 2:
+    if raw_defaults is None:
+        return (None, None)
+    values = _coerce_default_pair(raw_defaults)
+    if len(values) < 2:
         return (None, None)
     defaults: list[int | None] = []
-    for value in raw_defaults[:2]:
-        try:
-            normalized = int(value)
-        except (TypeError, ValueError):
+    for value in values[:2]:
+        normalized = _coerce_int(value)
+        if normalized is None:
             defaults.append(None)
             continue
         defaults.append(normalized if normalized >= 0 else None)
@@ -168,6 +171,13 @@ def _log_audio_device_inventory(devices: list[_AudioDeviceInfo]) -> None:
     if not devices:
         logger.info("No local audio devices reported by sounddevice")
         return
+    default_inputs = [device.name for device in devices if device.is_default_input]
+    default_outputs = [device.name for device in devices if device.is_default_output]
+    logger.info(
+        "Default audio devices: input=%s output=%s",
+        ", ".join(default_inputs) or "none",
+        ", ".join(default_outputs) or "none",
+    )
     logger.info("Detected %s local audio device(s):", len(devices))
     for device in devices:
         flags: list[str] = []
@@ -334,6 +344,33 @@ def _supports_output_settings(sd, device: int, channels: int, sample_rate: int, 
 
 def _normalize_device_name(value: str) -> str:
     return " ".join(str(value or "").lower().split())
+
+
+def _coerce_default_pair(raw_defaults: Any) -> list[Any]:
+    values: list[Any] = []
+    for key in (0, 1, "input", "output"):
+        try:
+            value = raw_defaults[key]
+        except Exception:
+            continue
+        values.append(value)
+        if len(values) == 2:
+            return values
+    try:
+        if isinstance(raw_defaults, Iterable):
+            values = list(raw_defaults)
+    except TypeError:
+        values = []
+    if values:
+        return values
+    return [raw_defaults]
+
+
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class _PCMInputConverter:
