@@ -394,6 +394,7 @@ channels:
   voice:
     provider: qwen
     api_key: your_qwen_api_key_here
+    enable_interruptions: false
     stt:
       model: qwen3-asr-flash-realtime
     tts:
@@ -451,6 +452,7 @@ channels:
     provider: qwen
     api_key: qwen-key
     websocket_base_url: wss://dashscope.aliyuncs.com/api-ws/v1/realtime
+    enable_interruptions: false
     stt:
       model: qwen3-asr-flash-realtime
       audio_format: pcm
@@ -489,7 +491,7 @@ xagent init
 xagent voice --dir ~/.xagent
 ```
 
-语音链路是本机麦克风 PCM → realtime STT → provider-side endpoint detection → `Agent.chat_events(stream=True)` → realtime TTS → 本机扬声器。播放期间会暂停麦克风流，避免把扬声器声音重新送入 STT。
+语音链路是本机麦克风 PCM → realtime STT → provider-side endpoint detection → `Agent.chat_events(stream=True)` → realtime TTS → 本机扬声器。默认情况下，播放期间会暂停麦克风流，避免把扬声器声音重新送入 STT。配置 `enable_interruptions: true` 后，播放期间会继续监听麦克风；如果 STT 在当前回复仍在播放时产出新的用户句子，runtime 会取消当前 TTS 和本地播放，并立即处理新的用户输入。
 
 ### 2.11 文件系统调度器
 

@@ -208,6 +208,7 @@ class VoiceChannelConfig(BaseModel):
     provider: str = VOICE_PROVIDER_SONIOX
     api_key: str | None = None
     websocket_base_url: str | None = None
+    enable_interruptions: bool = False
     stt: VoiceSTTConfig = Field(default_factory=VoiceSTTConfig)
     tts: VoiceTTSConfig = Field(default_factory=VoiceTTSConfig)
 

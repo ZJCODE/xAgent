@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import uuid
 from dataclasses import dataclass
@@ -106,22 +107,29 @@ class VoiceRuntime:
             stop_event=self.stop_event,
         )
         try:
+            next_utterance_task = self._create_next_utterance_task(utterances)
             while not self.stop_event.is_set():
-                utterance = await asyncio.to_thread(_next_or_none, utterances)
+                utterance = await next_utterance_task
                 if utterance is None:
                     break
                 transcript = utterance.text.strip()
                 if not transcript:
+                    next_utterance_task = self._create_next_utterance_task(utterances)
                     continue
                 self.output(f"User: {transcript}")
-                await self._reply_to_utterance(utterance)
+                next_utterance_task = await self._reply_to_utterance(utterance, utterances)
         finally:
             self.stop_event.set()
 
-    async def _reply_to_utterance(self, utterance: VoiceUtterance) -> None:
+    async def _reply_to_utterance(
+        self,
+        utterance: VoiceUtterance,
+        utterances: Iterator[VoiceUtterance],
+    ) -> "asyncio.Task[VoiceUtterance | None]":
         self.pause_event.set()
         language = self.config.tts_language_for(utterance.language)
         text_queue = _TextChunkQueue()
+        playback_stop_event = threading.Event()
         player_errors: list[BaseException] = []
 
         def play_worker() -> None:
@@ -129,30 +137,96 @@ class VoiceRuntime:
                 audio_chunks = self.synthesizer.synthesize_chunks(
                     text_queue,
                     language=language,
-                    stop_event=self.stop_event,
+                    stop_event=playback_stop_event,
                 )
-                self.player.play_chunks(audio_chunks, stop_event=self.stop_event)
+                self.player.play_chunks(audio_chunks, stop_event=playback_stop_event)
             except BaseException as exc:  # noqa: BLE001 - surfaced after agent turn
                 player_errors.append(exc)
 
         worker = threading.Thread(target=play_worker, daemon=True)
         worker.start()
+        reply_task = asyncio.create_task(self._feed_reply_text(utterance.text, text_queue))
+        playback_task = asyncio.create_task(asyncio.to_thread(worker.join))
+        interrupt_task: asyncio.Task[VoiceUtterance | None] | None = None
+        if self.config.enable_interruptions:
+            self.pause_event.clear()
+            interrupt_task = self._create_next_utterance_task(utterances)
         try:
-            async for text in self._agent_text_chunks(utterance.text):
-                if text:
-                    text_queue.put(text)
+            if interrupt_task is None:
+                await reply_task
+                await playback_task
+                if player_errors:
+                    raise RuntimeError(f"Voice playback failed: {player_errors[0]}") from player_errors[0]
+                return self._create_next_utterance_task(utterances)
+
+            done, _pending = await asyncio.wait(
+                {playback_task, interrupt_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if interrupt_task in done:
+                interrupt = interrupt_task.result()
+                if interrupt is not None:
+                    await self._cancel_reply(reply_task, playback_task, text_queue, playback_stop_event)
+                    return self._completed_utterance_task(interrupt)
+                await reply_task
+                await playback_task
+                if player_errors:
+                    raise RuntimeError(f"Voice playback failed: {player_errors[0]}") from player_errors[0]
+                return self._completed_utterance_task(None)
+
+            await reply_task
+            if player_errors:
+                raise RuntimeError(f"Voice playback failed: {player_errors[0]}") from player_errors[0]
+            if interrupt_task.done():
+                return self._completed_utterance_task(interrupt_task.result())
+            return interrupt_task
         except asyncio.CancelledError:
-            self.synthesizer.cancel()
+            await self._cancel_reply(reply_task, playback_task, text_queue, playback_stop_event)
             raise
         except Exception:
-            self.synthesizer.cancel()
+            await self._cancel_reply(reply_task, playback_task, text_queue, playback_stop_event)
             raise
         finally:
-            text_queue.close()
-            await asyncio.to_thread(worker.join)
             self.pause_event.clear()
-        if player_errors:
-            raise RuntimeError(f"Voice playback failed: {player_errors[0]}") from player_errors[0]
+
+    async def _feed_reply_text(self, transcript: str, text_queue: "_TextChunkQueue") -> None:
+        try:
+            async for text in self._agent_text_chunks(transcript):
+                if text:
+                    text_queue.put(text)
+        finally:
+            text_queue.close()
+
+    async def _cancel_reply(
+        self,
+        reply_task: "asyncio.Task[None]",
+        playback_task: "asyncio.Task[Any]",
+        text_queue: "_TextChunkQueue",
+        playback_stop_event: threading.Event,
+    ) -> None:
+        self.pause_event.set()
+        playback_stop_event.set()
+        self.synthesizer.cancel()
+        text_queue.close()
+        if not reply_task.done():
+            reply_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reply_task
+        if not playback_task.done():
+            await asyncio.wait({playback_task}, timeout=1.0)
+
+    @staticmethod
+    def _completed_utterance_task(utterance: VoiceUtterance | None) -> "asyncio.Task[VoiceUtterance | None]":
+        async def _return_utterance() -> VoiceUtterance | None:
+            return utterance
+
+        return asyncio.create_task(_return_utterance())
+
+    @staticmethod
+    def _create_next_utterance_task(
+        utterances: Iterator[VoiceUtterance],
+    ) -> "asyncio.Task[VoiceUtterance | None]":
+        return asyncio.create_task(asyncio.to_thread(_next_or_none, utterances))
 
     async def _agent_text_chunks(self, transcript: str) -> AsyncIterator[str]:
         if not hasattr(self.agent, "chat_events"):

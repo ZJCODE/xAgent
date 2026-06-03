@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+import time
 import unittest
 
 from xagent.voice.config import VoiceChannelConfig, VoiceTTSConfig
@@ -51,6 +52,78 @@ class FakePlayer:
         self.played.extend(chunks)
 
 
+class StopAwareSynthesizer:
+    def __init__(self):
+        self.cancelled = False
+        self.stop_event_was_set = False
+
+    def synthesize_chunks(self, text_chunks, *, language: str, stop_event: threading.Event):
+        del language
+        for text in text_chunks:
+            if "first" not in text:
+                yield text.encode("utf-8")
+                continue
+            yield b"started"
+            deadline = time.monotonic() + 1.0
+            while not stop_event.is_set() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.stop_event_was_set = self.stop_event_was_set or stop_event.is_set()
+            if stop_event.is_set():
+                return
+            yield b"should-not-play"
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class StopAwarePlayer:
+    def __init__(self):
+        self.played = []
+        self.stop_event_was_set = False
+
+    def play_chunks(self, chunks, *, stop_event: threading.Event):
+        for chunk in chunks:
+            self.played.append(chunk)
+            if stop_event.is_set():
+                self.stop_event_was_set = True
+                break
+        self.stop_event_was_set = self.stop_event_was_set or stop_event.is_set()
+
+
+class PauseAwarePlayer:
+    def __init__(self, pause_event: threading.Event, *, wait_for_clear: bool = False):
+        self.pause_event = pause_event
+        self.wait_for_clear = wait_for_clear
+        self.pause_was_set = False
+        self.pause_was_cleared = False
+        self.played = []
+
+    def play_chunks(self, chunks, *, stop_event: threading.Event):
+        self.pause_was_set = self.pause_event.is_set()
+        if self.wait_for_clear:
+            deadline = time.monotonic() + 1.0
+            while self.pause_event.is_set() and time.monotonic() < deadline and not stop_event.is_set():
+                time.sleep(0.005)
+        self.pause_was_cleared = not self.pause_event.is_set()
+        self.played.extend(chunks)
+
+
+class InterruptRecognizer:
+    def __init__(self):
+        self.utterances = [
+            VoiceUtterance(text="first", language="zh"),
+            VoiceUtterance(text="interrupt", language="zh"),
+        ]
+
+    def iter_utterances(self, audio_chunks, *, pause_event: threading.Event, stop_event: threading.Event):
+        del audio_chunks
+        yield self.utterances[0]
+        deadline = time.monotonic() + 1.0
+        while pause_event.is_set() and time.monotonic() < deadline and not stop_event.is_set():
+            time.sleep(0.005)
+        yield self.utterances[1]
+
+
 class FakeWebSocket:
     def __init__(self):
         self.sent = []
@@ -69,7 +142,45 @@ class FakeAgent:
         yield {"type": "done"}
 
 
+class InterruptibleAgent:
+    def __init__(self):
+        self.messages = []
+
+    async def chat_events(self, **kwargs):
+        transcript = kwargs["user_message"]
+        self.messages.append(transcript)
+        yield {"type": "message_start", "message_id": transcript, "phase": "final"}
+        yield {"type": "message_delta", "message_id": transcript, "phase": "final", "delta": f"{transcript} "}
+        if transcript == "first":
+            await asyncio.sleep(0.2)
+        yield {"type": "message_done", "message_id": transcript, "phase": "final", "content": f"{transcript} done"}
+        yield {"type": "done"}
+
+
 class VoiceRuntimeTests(unittest.TestCase):
+    def test_voice_config_disables_interruptions_by_default(self):
+        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+
+        self.assertFalse(config.enable_interruptions)
+
+    def test_voice_config_accepts_enabled_interruptions(self):
+        config = VoiceChannelConfig.from_dict({
+            "provider": "qwen",
+            "api_key": "qwen-key",
+            "enable_interruptions": True,
+        })
+
+        self.assertTrue(config.enable_interruptions)
+
+    def test_voice_config_accepts_disabled_interruptions(self):
+        config = VoiceChannelConfig.from_dict({
+            "provider": "qwen",
+            "api_key": "qwen-key",
+            "enable_interruptions": False,
+        })
+
+        self.assertFalse(config.enable_interruptions)
+
     def test_runtime_routes_soniox_endpoint_utterance_to_agent_and_tts(self):
         config = VoiceChannelConfig.from_dict({
             "api_key": "test-key",
@@ -101,6 +212,103 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(synth.calls[0]["language"], "zh")
         self.assertEqual(synth.calls[0]["chunks"], ["hello ", "there."])
         self.assertEqual(player.played, [b"hello ", b"there."])
+
+    def test_runtime_default_keeps_microphone_paused_during_playback(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "test-key"})
+        agent = FakeAgent()
+        synth = FakeSynthesizer()
+        runtime = VoiceRuntime(
+            agent=agent,
+            config=config,
+            microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([VoiceUtterance(text="你好", language="zh")]),
+            synthesizer=synth,
+            player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            output=lambda *args, **kwargs: None,
+        )
+        player = PauseAwarePlayer(runtime.pause_event)
+        runtime.player = player
+
+        asyncio.run(runtime.run_forever())
+
+        self.assertTrue(player.pause_was_set)
+        self.assertFalse(player.pause_was_cleared)
+
+    def test_runtime_enabled_interruptions_clear_pause_during_playback(self):
+        config = VoiceChannelConfig.from_dict({
+            "api_key": "test-key",
+            "enable_interruptions": True,
+        })
+        agent = FakeAgent()
+        synth = FakeSynthesizer()
+        runtime = VoiceRuntime(
+            agent=agent,
+            config=config,
+            microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([VoiceUtterance(text="你好", language="zh")]),
+            synthesizer=synth,
+            player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            output=lambda *args, **kwargs: None,
+        )
+        player = PauseAwarePlayer(runtime.pause_event, wait_for_clear=True)
+        runtime.player = player
+
+        asyncio.run(runtime.run_forever())
+
+        self.assertTrue(player.pause_was_set)
+        self.assertTrue(player.pause_was_cleared)
+
+    def test_runtime_interrupt_cancels_current_reply_and_processes_new_utterance(self):
+        config = VoiceChannelConfig.from_dict({
+            "api_key": "test-key",
+            "enable_interruptions": True,
+        })
+        agent = InterruptibleAgent()
+        synth = FakeSynthesizer()
+        player = FakePlayer()
+        runtime = VoiceRuntime(
+            agent=agent,
+            config=config,
+            microphone=FakeMicrophone(),
+            recognizer=InterruptRecognizer(),
+            synthesizer=synth,
+            player=player,
+            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            output=lambda *args, **kwargs: None,
+        )
+
+        asyncio.run(runtime.run_forever())
+
+        self.assertTrue(synth.cancelled)
+        self.assertEqual(agent.messages, ["first", "interrupt"])
+
+    def test_runtime_interrupt_stops_current_playback(self):
+        config = VoiceChannelConfig.from_dict({
+            "api_key": "test-key",
+            "enable_interruptions": True,
+        })
+        agent = InterruptibleAgent()
+        synth = StopAwareSynthesizer()
+        player = StopAwarePlayer()
+        runtime = VoiceRuntime(
+            agent=agent,
+            config=config,
+            microphone=FakeMicrophone(),
+            recognizer=InterruptRecognizer(),
+            synthesizer=synth,
+            player=player,
+            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            output=lambda *args, **kwargs: None,
+        )
+
+        asyncio.run(runtime.run_forever())
+
+        self.assertTrue(synth.cancelled)
+        self.assertTrue(synth.stop_event_was_set)
+        self.assertTrue(player.stop_event_was_set)
+        self.assertNotIn(b"should-not-play", player.played)
 
     def test_tts_batches_small_deltas_before_sending(self):
         chunks = list(_batch_text_chunks(["hel", "lo", " ", "there", "."], max_chars=80))

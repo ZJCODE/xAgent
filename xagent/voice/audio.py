@@ -96,6 +96,10 @@ class SoundDevicePlayer:
         ) as stream:
             for chunk in chunks:
                 if stop_event.is_set():
+                    stream.abort()
                     break
                 if chunk:
                     stream.write(chunk)
+                    if stop_event.is_set():
+                        stream.abort()
+                        break
