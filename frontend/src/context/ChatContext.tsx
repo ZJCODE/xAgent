@@ -216,7 +216,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             imageCount,
             attachments,
             attachmentCount,
-            meta: parsed.task?.payload?.title || "Scheduled",
+            meta: parsed.task?.title || "Scheduled",
           },
         ],
       }));

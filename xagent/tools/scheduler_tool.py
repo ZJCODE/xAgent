@@ -1,56 +1,106 @@
 """Built-in tool for scheduled conversation tasks."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal, Optional
 
 from xagent.core.config import AgentConfig
-from xagent.core.runtime import current_delivery_context, enqueue_scheduled_task
+from xagent.core.runtime import (
+    current_delivery_context,
+    delete_scheduled_task,
+    enqueue_scheduled_task,
+    list_active_task_views,
+    resolve_scheduled_task_run_at,
+)
 from xagent.utils.tool_decorator import function_tool
 
 
 def create_schedule_task_tool(*, tasks_dir: str):
-    """Create a tool that schedules a future task for the active channel."""
+    """Create a tool that manages scheduled tasks for the active channel."""
     task_root = Path(tasks_dir).expanduser().resolve()
 
     @function_tool(
-        name="schedule_task",
+        name="manage_scheduled_tasks",
         description=(
-            "Schedule a future task for the current conversation channel. "
-            "Use task_type='message' for a direct future reminder/message, and task_type='agent' "
-            "when the future task must gather information, call tools, or perform reasoning before replying. "
-            "The active xAgent channel runtime executes due tasks and delivers the final result automatically."
+            "Manage future tasks for the current conversation channel. "
+            "Use action='create' to schedule a one-time or daily recurring task, action='list' to view active tasks, "
+            "and action='delete' to remove a task by task_id. "
+            "Use task_type='message' for direct future delivery, and task_type='agent' when the due-time work "
+            "must gather information, call tools, or reason before replying."
         ),
         param_descriptions={
+            "action": "Use 'create' to add a task, 'list' to view active tasks, or 'delete' to remove a task by task_id.",
             "task_type": "Use 'message' for direct text delivery, or 'agent' for a due-time agent turn that can call tools before replying.",
             "content": "For message tasks, the exact text to send later. For agent tasks, the instruction to execute when due.",
-            "run_at": "Local delivery time, such as 20260601-143000 or 2026-06-01 14:30:00. Optional when delay_seconds is provided.",
-            "delay_seconds": "Delay from now in seconds. Optional when run_at is provided.",
+            "run_at": "For one-time tasks, a local datetime such as 20260601-143000 or 2026-06-01 14:30:00. For recurrence='daily', use a local wall-clock time such as 10:00 or 10:00:00.",
+            "delay_seconds": "Delay from now in seconds for one-time tasks. Not supported for recurring tasks.",
+            "recurrence": "Optional recurrence. Use 'daily' for a once-per-day task at the specified local wall-clock time.",
             "title": "Optional short label for the task, such as Reminder or Temperature Check.",
+            "task_id": "Stable task id used by action='delete'. Obtain it from action='list' or the result of action='create'.",
         },
     )
-    def schedule_task(
-        task_type: Literal["message", "agent"],
-        content: str,
+    def manage_scheduled_tasks(
+        action: Literal["create", "list", "delete"],
+        task_type: Optional[Literal["message", "agent"]] = None,
+        content: Optional[str] = None,
         run_at: Optional[str] = None,
         delay_seconds: Optional[int] = None,
+        recurrence: Optional[Literal["daily"]] = None,
         title: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> dict:
-        if delay_seconds is None and not run_at:
+        if action == "list":
+            tasks = list_active_task_views(task_root)
             return {
-                "scheduled": False,
-                "error": "Provide either run_at or delay_seconds.",
+                "ok": True,
+                "action": "list",
+                "tasks": tasks,
+                "total": len(tasks),
+                "tasks_dir": str(task_root),
             }
-        if delay_seconds is not None:
-            if delay_seconds < 0:
+
+        if action == "delete":
+            try:
+                task = delete_scheduled_task(task_root, task_id or "")
+            except Exception as exc:
                 return {
-                    "scheduled": False,
-                    "error": "delay_seconds must be zero or positive.",
+                    "ok": False,
+                    "action": "delete",
+                    "error": str(exc),
                 }
-            scheduled_at: str | datetime = datetime.now().replace(microsecond=0) + timedelta(seconds=delay_seconds)
-        else:
-            scheduled_at = run_at or ""
+            return {
+                "ok": True,
+                "action": "delete",
+                "deleted": task.to_task_view(),
+                "tasks_dir": str(task_root),
+            }
+
+        if action != "create":
+            return {
+                "ok": False,
+                "action": str(action or ""),
+                "error": "action must be one of: create, list, delete",
+            }
+
+        if task_type is None:
+            return {
+                "ok": False,
+                "action": "create",
+                "error": "task_type is required for create.",
+            }
+
+        try:
+            scheduled_at, normalized_recurrence = resolve_scheduled_task_run_at(
+                run_at=run_at,
+                delay_seconds=delay_seconds,
+                recurrence=recurrence,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "action": "create",
+                "error": str(exc),
+            }
 
         context = current_delivery_context()
         if context is None:
@@ -67,13 +117,14 @@ def create_schedule_task_tool(*, tasks_dir: str):
         try:
             task = enqueue_scheduled_task(
                 task_type=task_type,
-                content=content,
+                content=content or "",
                 run_at=scheduled_at,
                 tasks_dir=task_root,
                 channel=channel,
                 target=target,
                 user_id=user_id,
                 title=title or "Reminder",
+                recurrence=normalized_recurrence or None,
                 source=source,
                 execution={
                     "history_count": AgentConfig.DEFAULT_HISTORY_COUNT,
@@ -84,17 +135,16 @@ def create_schedule_task_tool(*, tasks_dir: str):
             )
         except Exception as exc:
             return {
-                "scheduled": False,
+                "ok": False,
+                "action": "create",
                 "error": str(exc),
             }
 
         return {
-            "scheduled": True,
-            "task": task.name,
-            "task_type": task.task_type,
-            "run_at": task.run_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "channel": channel or "local",
+            "ok": True,
+            "action": "create",
+            "task": task.to_task_view(),
             "tasks_dir": str(task_root),
         }
 
-    return schedule_task
+    return manage_scheduled_tasks

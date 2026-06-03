@@ -98,12 +98,14 @@ class AgentConfig:
             "- Stay within scope, use reasonable timeouts, and avoid unbounded output.\n"
             "- On failure: inspect `return_code` and `stderr`, explain the cause, suggest a targeted fix.\n"
         ),
-        "schedule_task": (
+        "manage_scheduled_tasks": (
             "\n**Scheduled Tasks and Reminders:**\n"
-            "- Use `schedule_task` when the user asks to be reminded, notified, messaged later, or asks you to do work at a later time.\n"
+            "- Use `manage_scheduled_tasks` when the user asks to be reminded, notified, messaged later, manage existing scheduled tasks, or asks you to do work at a later time.\n"
+            "- Use `action='create'` to add a task, `action='list'` to inspect active tasks, and `action='delete'` to remove a task by `task_id`.\n"
             "- Use `task_type='message'` only when the due-time work is direct text delivery.\n"
             "- Use `task_type='agent'` when the due-time work requires gathering information, using tools, or reasoning before replying.\n"
-            "- Convert relative time requests into `delay_seconds` when clear, for example one minute means 60 seconds.\n"
+            "- Convert clear relative one-time requests into `delay_seconds`, for example one minute means 60 seconds.\n"
+            "- For daily recurring tasks, provide `recurrence='daily'` with a local wall-clock `run_at` such as 10:00:00.\n"
             "- The tool automatically captures the active delivery channel; channel runtimes execute due tasks and deliver results.\n"
             "- Schedule only the future task content; still reply in the current turn with a brief confirmation after the tool succeeds.\n"
             "- Do not use scheduled tasks to conceal actions or bypass confirmation requirements.\n"
@@ -144,7 +146,7 @@ class AgentConfig:
 
     TOOL_POLICY_ORDER = (
         "run_command",
-        "schedule_task",
+        "manage_scheduled_tasks",
         "write_memory",
         "search_memory",
         "web_search",

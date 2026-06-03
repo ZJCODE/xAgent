@@ -75,29 +75,16 @@ export interface ChatEvent {
 }
 
 export interface ScheduledTaskItem {
-  name: string;
-  id: string;
-  kind: string;
-  state: "pending" | "running" | "failed" | string;
-  reason?: string;
-  run_at: string;
-  path: string;
-  payload: {
-    title?: string;
-    task?: {
-      type?: string;
-      content?: string;
-    };
-    delivery?: {
-      channel?: string;
-      user_id?: string;
-      target?: Record<string, unknown>;
-    };
-    execution?: Record<string, unknown>;
-    created_at?: string;
-    source?: Record<string, unknown>;
-    [key: string]: unknown;
-  };
+  task_id: string;
+  title: string;
+  task_type: "message" | "agent" | string;
+  content: string;
+  next_run_at: string;
+  recurrence?: "daily" | string | null;
+  status: "active" | string;
+  channel?: string;
+  user_id?: string;
+  target?: Record<string, unknown>;
 }
 
 export interface TasksResponse {

@@ -74,10 +74,13 @@ class TaskApiTests(unittest.TestCase):
                 listed = client.get("/api/tasks")
                 self.assertEqual(listed.status_code, 200)
                 self.assertEqual(listed.json()["total"], 1)
-                self.assertEqual(listed.json()["tasks"][0]["payload"]["delivery"]["channel"], "web")
+                self.assertEqual(listed.json()["tasks"][0]["task_id"], task.task_id)
+                self.assertEqual(listed.json()["tasks"][0]["channel"], "web")
+                self.assertEqual(listed.json()["tasks"][0]["status"], "active")
 
-                deleted = client.delete(f"/api/tasks/delete?name={task.name}")
+                deleted = client.delete(f"/api/tasks/delete?task_id={task.task_id}")
                 self.assertEqual(deleted.status_code, 200)
+                self.assertEqual(deleted.json()["deleted"]["task_id"], task.task_id)
 
                 listed_again = client.get("/api/tasks")
                 self.assertEqual(listed_again.json()["total"], 0)

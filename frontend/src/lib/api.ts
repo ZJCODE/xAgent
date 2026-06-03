@@ -146,8 +146,8 @@ export async function getTasks(): Promise<TasksResponse> {
   return requestJson("/api/tasks");
 }
 
-export async function deleteTask(name: string): Promise<{ status: string; deleted: unknown }> {
-  return requestJson(`/api/tasks/delete?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+export async function deleteTask(taskId: string): Promise<{ status: string; deleted: unknown }> {
+  return requestJson(`/api/tasks/delete?task_id=${encodeURIComponent(taskId)}`, { method: "DELETE" });
 }
 
 export function workspaceBlobUrl(path: string): string {

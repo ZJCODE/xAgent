@@ -495,9 +495,9 @@ xagent voice --dir ~/.xagent
 
 ### 2.11 文件系统调度器
 
-调度器使用运行目录下的 `tasks/` 作为唯一状态队列。计划任务使用 `YYYYMMDD-HHMMSS-xxxxxxxx.json`，文件名编码本地触发时间，内容是结构化任务 envelope：`kind=task`、`task.type`、`task.content`、`delivery.channel`、`delivery.target`、`execution` 等。`task.type=message` 表示到期后直接投递文本；`task.type=agent` 表示到期后运行一轮 agent，再把最终结果投递给原 channel。API/Web 和 Feishu channel 启动时会自动运行一个轻量消费者，只领取自己能处理的任务；领取前会原子重命名为运行中状态，成功后删除，失败后移动到 `tasks/failed/`。
+调度器使用运行目录下的 `tasks/` 作为唯一状态队列。计划任务使用 `YYYYMMDD-HHMMSS-xxxxxxxx.json`，文件名编码当前生效的下一次触发时间，内容是结构化任务 envelope：`kind=task`、稳定 `id`、`title`、`task.type`、`task.content`、`delivery.channel`、`delivery.target`、`execution` 等。`task.type=message` 表示到期后直接投递文本；`task.type=agent` 表示到期后运行一轮 agent，再把最终结果投递给原 channel。`recurrence="daily"` 的任务会在成功执行后计算下一个未来触发时刻并继续保留同一个 `task_id`；失败仍然移动到 `tasks/failed/`。API/Web 和 Feishu channel 启动时会自动运行一个轻量消费者，只领取自己能处理的任务；领取前会原子重命名为运行中状态。
 
-这意味着用户在对话中说“1 分钟后提醒我走两步”时，模型应调用 `schedule_task(task_type="message", ...)`；说“半小时后帮我查一下当前系统的温度然后发我”时，应调用 `schedule_task(task_type="agent", ...)`。Web UI 的 Tasks tab 通过 `/api/tasks` 查看和管理这些任务；在线 Web 客户端通过 `/ws/tasks` 接收已到期结果。
+这意味着用户在对话中说“1 分钟后提醒我走两步”时，模型应调用 `manage_scheduled_tasks(action="create", task_type="message", ...)`；说“每天 10 点提醒我写日报”时，应调用 `manage_scheduled_tasks(action="create", task_type="message", recurrence="daily", run_at="10:00:00", ...)`；说“半小时后帮我查一下当前系统的温度然后发我”时，应调用 `manage_scheduled_tasks(action="create", task_type="agent", ...)`。查看和删除任务则分别使用 `action="list"` 与 `action="delete"`。Web UI 的 Tasks tab 通过 `/api/tasks` 查看和管理这些任务；在线 Web 客户端通过 `/ws/tasks` 接收已到期结果。
 
 ## 3. 启动参数
 
@@ -976,15 +976,15 @@ GET /api/messages?count=50&offset=0
 
 #### GET /api/tasks
 
-列出 `tasks/` 中待执行和失败的任务。计划任务返回 `kind=task`，具体行为由 `payload.task.type` 区分。
+列出 `tasks/` 中当前 active 的任务。每条记录至少包含 `task_id`、`title`、`task_type`、`content`、`next_run_at`、`recurrence`、`status`、`channel`。
 
 ```http
 GET /api/tasks
 ```
 
-#### DELETE /api/tasks/delete?name=...
+#### DELETE /api/tasks/delete?task_id=...
 
-删除一个待执行或失败任务。`name` 必须是 `/api/tasks` 返回的文件名。
+删除一个 active 任务。`task_id` 必须来自 `/api/tasks` 返回结果。
 
 ## 5. WebSocket API
 

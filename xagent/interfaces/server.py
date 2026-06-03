@@ -26,7 +26,9 @@ from ..core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     create_runtime_heartbeat,
+    delete_scheduled_task,
     delete_task_file,
+    list_active_task_views,
     list_task_records,
     scheduled_delivery_context,
 )
@@ -1327,7 +1329,7 @@ class AgentHTTPServer(BaseAgentRunner):
 
         @app.get("/api/tasks", tags=["Monitoring"])
         async def tasks_list():
-            tasks = [record.to_dict() for record in list_task_records(self.tasks_dir)]
+            tasks = list_active_task_views(self.tasks_dir)
             return {
                 "root": str(self.tasks_dir),
                 "tasks": tasks,
@@ -1335,14 +1337,14 @@ class AgentHTTPServer(BaseAgentRunner):
             }
 
         @app.delete("/api/tasks/delete", tags=["Monitoring"])
-        async def tasks_delete(name: str = Query(..., description="Task file name")):
+        async def tasks_delete(task_id: str = Query(..., description="Stable scheduled task id")):
             try:
-                task = delete_task_file(self.tasks_dir, name)
+                task = delete_scheduled_task(self.tasks_dir, task_id)
             except FileNotFoundError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {"status": "ok", "deleted": task.to_dict()}
+            return {"status": "ok", "deleted": task.to_task_view()}
 
         @app.get("/api/agent/identity", tags=["Monitoring"])
         async def agent_identity():

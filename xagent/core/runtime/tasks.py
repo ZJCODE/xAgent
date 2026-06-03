@@ -9,7 +9,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterator, Optional
 
@@ -19,22 +19,27 @@ from .scheduler import (
     TASK_TIMESTAMP_FORMAT,
     _fsync_directory,
     _unique_failed_path,
+    calculate_next_daily_run_at,
     ensure_scheduler_dirs,
     format_task_timestamp,
     parse_run_at,
+    resolve_daily_run_at,
 )
 
 
 TASK_KIND_TASK = "task"
 TASK_TYPE_MESSAGE = "message"
 TASK_TYPE_AGENT = "agent"
-TASK_PAYLOAD_VERSION = 2
+TASK_RECURRENCE_DAILY = "daily"
+TASK_STATUS_ACTIVE = "active"
+TASK_PAYLOAD_VERSION = 3
 TASK_JSON_SUFFIX = ".json"
 TASK_STATE_PENDING = "pending"
 TASK_STATE_FAILED = "failed"
 TASK_STATE_RUNNING = "running"
 DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS = 1.0
 SUPPORTED_TASK_TYPES = {TASK_TYPE_MESSAGE, TASK_TYPE_AGENT}
+SUPPORTED_TASK_RECURRENCES = {TASK_RECURRENCE_DAILY}
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,14 @@ class ScheduledTaskRecord:
         return str(self.task.get("content") or "")
 
     @property
+    def title(self) -> str:
+        return str(self.payload.get("title") or "").strip()
+
+    @property
+    def recurrence(self) -> str:
+        return str(self.payload.get("recurrence") or "").strip().lower()
+
+    @property
     def delivery(self) -> dict[str, Any]:
         delivery = self.payload.get("delivery") if isinstance(self.payload, dict) else None
         return dict(delivery) if isinstance(delivery, dict) else {}
@@ -111,6 +124,12 @@ class ScheduledTaskRecord:
         execution = self.payload.get("execution") if isinstance(self.payload, dict) else None
         return dict(execution) if isinstance(execution, dict) else {}
 
+    @property
+    def status(self) -> str:
+        if self.state in {TASK_STATE_PENDING, TASK_STATE_RUNNING}:
+            return TASK_STATUS_ACTIVE
+        return self.state
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -121,6 +140,20 @@ class ScheduledTaskRecord:
             "run_at": self.run_at.isoformat(sep=" "),
             "path": str(self.path),
             "payload": self.payload,
+        }
+
+    def to_task_view(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "title": self.title or "Reminder",
+            "task_type": self.task_type,
+            "content": self.content,
+            "next_run_at": self.run_at.isoformat(sep=" "),
+            "recurrence": self.recurrence or None,
+            "status": self.status,
+            "channel": self.delivery_channel or "local",
+            "user_id": self.delivery_user_id,
+            "target": self.target,
         }
 
 
@@ -145,6 +178,43 @@ def scheduled_delivery_context(context: ScheduledDeliveryContext) -> Iterator[No
         _delivery_context_var.reset(token)
 
 
+def normalize_task_recurrence(recurrence: Optional[str]) -> str:
+    """Normalize an optional recurrence string."""
+    normalized = str(recurrence or "").strip().lower()
+    if not normalized:
+        return ""
+    if normalized not in SUPPORTED_TASK_RECURRENCES:
+        raise ValueError(f"recurrence must be one of: {', '.join(sorted(SUPPORTED_TASK_RECURRENCES))}")
+    return normalized
+
+
+def resolve_scheduled_task_run_at(
+    *,
+    run_at: Optional[str | datetime] = None,
+    delay_seconds: Optional[int] = None,
+    recurrence: Optional[str] = None,
+    now: datetime | None = None,
+) -> tuple[datetime, str]:
+    """Resolve creation-time schedule parameters into a concrete next run datetime."""
+    current = (now or datetime.now()).replace(microsecond=0)
+    normalized_recurrence = normalize_task_recurrence(recurrence)
+    if normalized_recurrence:
+        if delay_seconds is not None:
+            raise ValueError("delay_seconds is not supported for recurring tasks")
+        if run_at is None:
+            raise ValueError("run_at is required for recurring tasks")
+        if normalized_recurrence == TASK_RECURRENCE_DAILY:
+            return resolve_daily_run_at(str(run_at), now=current), normalized_recurrence
+
+    if delay_seconds is None and run_at is None:
+        raise ValueError("Provide either run_at or delay_seconds.")
+    if delay_seconds is not None:
+        if delay_seconds < 0:
+            raise ValueError("delay_seconds must be zero or positive.")
+        return current + timedelta(seconds=delay_seconds), ""
+    return parse_run_at(run_at or ""), ""
+
+
 def enqueue_scheduled_task(
     *,
     task_type: str,
@@ -155,6 +225,7 @@ def enqueue_scheduled_task(
     target: dict[str, Any],
     user_id: str = "",
     title: str = "",
+    recurrence: Optional[str] = None,
     source: Optional[dict[str, Any]] = None,
     execution: Optional[dict[str, Any]] = None,
 ) -> ScheduledTaskRecord:
@@ -165,6 +236,7 @@ def enqueue_scheduled_task(
     normalized_content = content.strip()
     if not normalized_content:
         raise ValueError("scheduled task content must not be empty")
+    normalized_recurrence = normalize_task_recurrence(recurrence)
     parsed_run_at = parse_run_at(run_at)
     root, _failed = ensure_scheduler_dirs(tasks_dir)
     task_id = uuid.uuid4().hex
@@ -187,8 +259,20 @@ def enqueue_scheduled_task(
         "created_at": datetime.now().replace(microsecond=0).isoformat(sep=" "),
         "run_at": parsed_run_at.isoformat(sep=" "),
     }
+    if normalized_recurrence:
+        payload["recurrence"] = normalized_recurrence
     path = _enqueue_json_payload(payload, parsed_run_at, root, task_id=task_id)
     return ScheduledTaskRecord(path=path, run_at=parsed_run_at, kind=TASK_KIND_TASK, payload=payload)
+
+
+def list_active_task_records(tasks_dir: Path | str) -> list[ScheduledTaskRecord]:
+    """Return active scheduled tasks only."""
+    return list_task_records(tasks_dir, include_failed=False)
+
+
+def list_active_task_views(tasks_dir: Path | str) -> list[dict[str, Any]]:
+    """Return active scheduled tasks in the user-facing tool/API shape."""
+    return [record.to_task_view() for record in list_active_task_records(tasks_dir)]
 
 
 def list_task_records(tasks_dir: Path | str, *, include_failed: bool = True) -> list[ScheduledTaskRecord]:
@@ -220,6 +304,19 @@ def delete_task_file(tasks_dir: Path | str, name: str) -> ScheduledTaskRecord:
         raise ValueError(f"unsupported task file: {name}")
     path.unlink()
     return record
+
+
+def delete_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
+    """Delete an active scheduled task by stable task id."""
+    normalized_task_id = str(task_id or "").strip()
+    if not normalized_task_id:
+        raise ValueError("task_id is required")
+    for record in list_active_task_records(tasks_dir):
+        if record.task_id != normalized_task_id:
+            continue
+        record.path.unlink()
+        return record
+    raise FileNotFoundError(f"task not found: {normalized_task_id}")
 
 
 class AsyncTaskScheduler:
@@ -308,7 +405,7 @@ class AsyncTaskScheduler:
     async def tick(self) -> Optional[datetime]:
         now = self.now_provider()
         next_run_at: Optional[datetime] = None
-        for record in list_task_records(self.tasks_dir, include_failed=False):
+        for record in list_active_task_records(self.tasks_dir):
             if record.kind != TASK_KIND_TASK:
                 continue
             if not self.can_handle(record):
@@ -328,7 +425,11 @@ class AsyncTaskScheduler:
                 self.logger.exception("scheduled task failed -> %s: %s", record.name, exc)
                 self._quarantine(claimed_path, record.name, "failed")
                 continue
-            claimed_path.unlink(missing_ok=True)
+            try:
+                self._complete_record(claimed_path, claimed)
+            except Exception as exc:
+                self.logger.exception("scheduled task completion failed -> %s: %s", record.name, exc)
+                self._quarantine(claimed_path, record.name, "error")
 
         return next_run_at
 
@@ -366,12 +467,26 @@ class AsyncTaskScheduler:
         except OSError as exc:
             self.logger.error("failed to quarantine structured task %s: %s", original_name, exc)
 
+    def _complete_record(self, path: Path, record: ScheduledTaskRecord) -> None:
+        recurrence = record.recurrence
+        if not recurrence:
+            path.unlink(missing_ok=True)
+            return
+        if recurrence != TASK_RECURRENCE_DAILY:
+            raise ValueError(f"unsupported recurrence: {recurrence}")
+        next_run_at = calculate_next_daily_run_at(record.run_at, now=self.now_provider())
+        self._reschedule_record(path, record, next_run_at)
+
+    def _reschedule_record(self, path: Path, record: ScheduledTaskRecord, next_run_at: datetime) -> None:
+        payload = dict(record.payload)
+        payload["run_at"] = next_run_at.isoformat(sep=" ")
+        _replace_json_payload(path, payload)
+        _move_running_task(path, self.tasks_dir, next_run_at, task_id=record.task_id)
+
 
 def _enqueue_json_payload(payload: dict[str, Any], run_at: datetime, root: Path, *, task_id: str) -> Path:
     stamp = format_task_timestamp(run_at)
     temp_path = root / f".{stamp}-{uuid.uuid4().hex}.tmp"
-    candidates = [f"{stamp}-{task_id[:8]}{TASK_JSON_SUFFIX}"]
-    candidates.extend(f"{stamp}-{uuid.uuid4().hex[:8]}{TASK_JSON_SUFFIX}" for _ in range(32))
 
     with temp_path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, sort_keys=True, indent=2)
@@ -380,8 +495,7 @@ def _enqueue_json_payload(payload: dict[str, Any], run_at: datetime, root: Path,
         os.fsync(handle.fileno())
 
     try:
-        for candidate in candidates:
-            final_path = root / candidate
+        for final_path in _task_file_candidates(root, run_at, task_id=task_id):
             try:
                 os.link(temp_path, final_path)
             except FileExistsError:
@@ -391,6 +505,36 @@ def _enqueue_json_payload(payload: dict[str, Any], run_at: datetime, root: Path,
         raise FileExistsError(f"could not reserve a unique task filename for {stamp}")
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def _replace_json_payload(path: Path, payload: dict[str, Any]) -> None:
+    temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, sort_keys=True, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, path)
+    _fsync_directory(path.parent)
+
+
+def _task_file_candidates(root: Path, run_at: datetime, *, task_id: str) -> Iterator[Path]:
+    stamp = format_task_timestamp(run_at)
+    yield root / f"{stamp}-{task_id[:8]}{TASK_JSON_SUFFIX}"
+    for _ in range(32):
+        yield root / f"{stamp}-{uuid.uuid4().hex[:8]}{TASK_JSON_SUFFIX}"
+
+
+def _move_running_task(path: Path, root: Path, run_at: datetime, *, task_id: str) -> Path:
+    for candidate in _task_file_candidates(root, run_at, task_id=task_id):
+        try:
+            os.link(path, candidate)
+        except FileExistsError:
+            continue
+        _fsync_directory(root)
+        path.unlink(missing_ok=True)
+        return candidate
+    raise FileExistsError(f"could not reserve a unique task filename for {format_task_timestamp(run_at)}")
 
 
 def _record_from_any_file(path: Path) -> Optional[ScheduledTaskRecord]:

@@ -7,9 +7,13 @@ from .tasks import (
     ScheduledDeliveryContext,
     ScheduledTaskRecord,
     current_delivery_context,
+    delete_scheduled_task,
     delete_task_file,
     enqueue_scheduled_task,
+    list_active_task_records,
+    list_active_task_views,
     list_task_records,
+    resolve_scheduled_task_run_at,
     scheduled_delivery_context,
 )
 
@@ -22,8 +26,12 @@ __all__ = [
     "ScheduledDeliveryContext",
     "ScheduledTaskRecord",
     "current_delivery_context",
+    "delete_scheduled_task",
     "delete_task_file",
     "enqueue_scheduled_task",
+    "list_active_task_records",
+    "list_active_task_views",
     "list_task_records",
+    "resolve_scheduled_task_run_at",
     "scheduled_delivery_context",
 ]

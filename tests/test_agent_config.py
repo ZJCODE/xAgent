@@ -330,7 +330,8 @@ provider:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertIn("run_command", runner.agent.tools)
-            self.assertIn("schedule_task", runner.agent.tools)
+            self.assertIn("manage_scheduled_tasks", runner.agent.tools)
+            self.assertNotIn("schedule_task", runner.agent.tools)
             self.assertNotIn("schedule_message", runner.agent.tools)
             self.assertNotIn("schedule_command", runner.agent.tools)
             result = asyncio.run(runner.agent.tools["run_command"]("pwd"))

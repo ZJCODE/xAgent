@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 
@@ -48,6 +48,48 @@ def parse_run_at(value: str | datetime) -> datetime:
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone().replace(tzinfo=None)
     return parsed.replace(microsecond=0)
+
+
+def parse_time_of_day(value: str) -> time:
+    """Parse a local wall-clock time such as HH:MM or HH:MM:SS."""
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("daily recurring tasks require run_at like HH:MM[:SS]")
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(text, fmt).time().replace(microsecond=0)
+        except ValueError:
+            continue
+    raise ValueError("daily recurring tasks require run_at like HH:MM[:SS]")
+
+
+def resolve_daily_run_at(value: str, *, now: datetime | None = None) -> datetime:
+    """Resolve a local daily wall-clock time into the next future datetime."""
+    current = (now or datetime.now()).replace(microsecond=0)
+    parsed_time = parse_time_of_day(value)
+    candidate = current.replace(
+        hour=parsed_time.hour,
+        minute=parsed_time.minute,
+        second=parsed_time.second,
+        microsecond=0,
+    )
+    if candidate <= current:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def calculate_next_daily_run_at(value: datetime, *, now: datetime | None = None) -> datetime:
+    """Advance a daily recurring task to the next future wall-clock occurrence."""
+    current = (now or datetime.now()).replace(microsecond=0)
+    candidate = current.replace(
+        hour=value.hour,
+        minute=value.minute,
+        second=value.second,
+        microsecond=0,
+    )
+    if candidate <= current:
+        candidate += timedelta(days=1)
+    return candidate
 
 
 def ensure_scheduler_dirs(tasks_dir: Path | str) -> tuple[Path, Path]:
