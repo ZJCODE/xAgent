@@ -381,7 +381,7 @@ class InitSelection:
     langfuse_secret_key: str = ""
     langfuse_base_url: str = ""
     voice_enabled: bool = False
-    voice_provider: str = "soniox"
+    voice_provider: str = "none"
     voice_api_key: str = ""
 
 
@@ -463,6 +463,7 @@ MINIMAX_IMAGE_GENERATION_PROVIDERS = (
     "none",
 )
 VOICE_PROVIDERS = (
+    "none",
     "soniox",
     "qwen",
 )
@@ -901,6 +902,27 @@ def collect_init_selection(
     if model_api:
         provider_api_cfg["model_api"] = model_api
     selected_model_api = provider_model_api(provider_api_cfg)
+    voice_provider = _select_option(
+        "Voice provider",
+        VOICE_PROVIDERS,
+        default_index=0,
+        input_func=input_func,
+    )
+    voice_enabled = voice_provider != "none"
+    voice_api_key = ""
+    if voice_enabled:
+        if voice_provider == "qwen" and provider == PROVIDER_QWEN:
+            voice_api_key = api_key if api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
+        else:
+            prompt_name = "Qwen" if voice_provider == "qwen" else "Soniox"
+            voice_api_key = secret_input_func(
+                f"{prompt_name} API key for voice (leave blank to fill in later): "
+            ).strip()
+            if not voice_api_key:
+                voice_api_key = _voice_api_key_placeholder(voice_provider)
+
+    identity = _prompt_multiline_identity(input_func=input_func)
+
     observability_enabled = False
     langfuse_public_key = ""
     langfuse_secret_key = ""
@@ -927,32 +949,6 @@ def collect_init_selection(
             default=LANGFUSE_BASE_URL,
             input_func=input_func,
         )
-
-    voice_enabled = _prompt_yes_no(
-        "Enable local voice?",
-        default=False,
-        input_func=input_func,
-    )
-    voice_provider = "soniox"
-    voice_api_key = ""
-    if voice_enabled:
-        voice_provider = _select_option(
-            "Voice provider",
-            VOICE_PROVIDERS,
-            default_index=1 if provider == PROVIDER_QWEN else 0,
-            input_func=input_func,
-        )
-        if voice_provider == "qwen" and provider == PROVIDER_QWEN:
-            voice_api_key = api_key if api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
-        else:
-            prompt_name = "Qwen" if voice_provider == "qwen" else "Soniox"
-            voice_api_key = secret_input_func(
-                f"{prompt_name} API key for voice (leave blank to fill in later): "
-            ).strip()
-            if not voice_api_key:
-                voice_api_key = _voice_api_key_placeholder(voice_provider)
-
-    identity = _prompt_multiline_identity(input_func=input_func)
 
     return InitSelection(
         provider=provider,
