@@ -1725,7 +1725,7 @@ channels:
             self.assertEqual(runner.config["channels"]["voice"]["stt"]["model"], "stt-rt-v4")
             self.assertEqual(enabled_channels_from_config(runner.config), ["api"])
 
-    def test_voice_config_rejects_missing_api_key_even_when_env_exists(self):
+    def test_voice_config_requires_provider_before_api_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1742,6 +1742,30 @@ channels:
 
             with patch.dict("os.environ", {"SONIOX_API_KEY": "env-soniox-key"}):
                 runner = BaseAgentRunner(config_dir=tmpdir)
+                with self.assertRaisesRegex(ValueError, "channels.voice.provider"):
+                    runner.config["channels"]["voice"]
+                    from xagent.voice.config import VoiceChannelConfig
+
+                    VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_api_key()
+
+    def test_voice_config_rejects_missing_api_key_for_explicit_provider_even_when_env_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    voice:
+        provider: soniox
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with patch.dict("os.environ", {"SONIOX_API_KEY": "env-soniox-key"}):
+                runner = BaseAgentRunner(config_dir=tmpdir)
                 with self.assertRaisesRegex(ValueError, "channels.voice.api_key"):
                     runner.config["channels"]["voice"]
                     from xagent.voice.config import VoiceChannelConfig
@@ -1751,10 +1775,19 @@ channels:
     def test_voice_config_rejects_placeholder_api_key(self):
         from xagent.voice.config import VoiceChannelConfig
 
-        config = VoiceChannelConfig.from_dict({"api_key": "your_soniox_api_key_here"})
+        config = VoiceChannelConfig.from_dict({"provider": "soniox", "api_key": "your_soniox_api_key_here"})
 
         with self.assertRaisesRegex(ValueError, "channels.voice.api_key"):
             config.resolved_api_key()
+
+    def test_voice_config_accepts_none_provider_without_implying_soniox(self):
+        from xagent.voice.config import VoiceChannelConfig
+
+        config = VoiceChannelConfig.from_dict({"provider": "none"})
+
+        self.assertIsNone(config.provider)
+        with self.assertRaisesRegex(ValueError, "channels.voice.provider"):
+            config.resolved_provider()
 
     def test_voice_config_rejects_qwen_placeholder_api_key(self):
         from xagent.voice.config import VoiceChannelConfig

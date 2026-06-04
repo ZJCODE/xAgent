@@ -18,12 +18,13 @@ def create_local_voice_runtime(
     input_device: AudioDevicePreference = None,
     output_device: AudioDevicePreference = None,
 ) -> VoiceRuntime:
-    if config.provider == VOICE_PROVIDER_QWEN:
+    provider = config.resolved_provider()
+    if provider == VOICE_PROVIDER_QWEN:
         recognizer, synthesizer = create_qwen_adapters(config)
-    elif config.provider == VOICE_PROVIDER_SONIOX:
+    elif provider == VOICE_PROVIDER_SONIOX:
         recognizer, synthesizer = create_soniox_adapters(config)
     else:  # pragma: no cover - guarded by config validation
-        raise ValueError(f"Unsupported voice provider: {config.provider}")
+        raise ValueError(f"Unsupported voice provider: {provider}")
     audio_profile = resolve_audio_io_profile(
         input_sample_rate=config.stt.sample_rate,
         input_channels=config.stt.num_channels,

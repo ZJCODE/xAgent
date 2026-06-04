@@ -650,6 +650,16 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertIsInstance(runtime.recognizer, QwenRealtimeSTT)
         self.assertIsInstance(runtime.synthesizer, QwenRealtimeTTS)
 
+    def test_voice_factory_requires_provider_selection(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "test-key"})
+
+        with self.assertRaisesRegex(ValueError, "channels.voice.provider"):
+            create_local_voice_runtime(
+                agent=object(),
+                config=config,
+                options=VoiceRuntimeOptions(),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
