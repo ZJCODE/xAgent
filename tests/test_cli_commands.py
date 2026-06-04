@@ -649,9 +649,10 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["feishu"]["app_secret"], "qr_secret")
         self.assertIs(config["channels"]["feishu"]["stream"], False)
         self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], False)
-        self.assertIn("The browser authorization link will appear here next.", output)
-        self.assertIn("Optional, only if you want to use the agent in group chats", output)
-        self.assertIn("If you only use the agent in direct chat, you can skip this for now.", output)
+        self.assertIn("Optional: group chat setup", output)
+        self.assertIn("Only if you want to use the agent in group chats:", output)
+        self.assertIn("If you only use the agent in direct chat, you can skip this section for now.", output)
+        self.assertIn("Start your Feishu bot", output)
 
     def test_init_feishu_one_click_cancelled_leaves_config_untouched(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -713,10 +714,9 @@ class CLICommandTests(unittest.TestCase):
         output = stdout.getvalue()
 
         self.assertEqual(result, ("cli_reg", "reg_secret"))
-        self.assertIn("Authorization link ready.", output)
-        self.assertIn("Verification code: Z9YC-ZV4A", output)
-        self.assertIn("Link expires in: 60 minutes", output)
-        self.assertIn("Browser link:\nhttps://open.feishu.cn/page/launcher?user_code=Z9YC-ZV4A&from=sdk&tp=sdk", output)
+        self.assertIn("Click --->", output)
+        self.assertIn("https://open.feishu.cn/page/launcher?user_code=Z9YC-ZV4A&from=sdk&tp=sdk", output)
+        self.assertIn("Waiting for authorization...", output)
         self.assertNotIn("{'url':", output)
 
     def test_register_feishu_app_via_qr_handles_access_denied(self):
