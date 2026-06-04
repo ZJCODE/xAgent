@@ -395,6 +395,9 @@ channels:
     provider: qwen
     api_key: your_qwen_api_key_here
     enable_interruptions: false
+    audio:
+      input: auto
+      output: auto
     stt:
       model: qwen3-asr-flash-realtime
     tts:
@@ -409,6 +412,9 @@ channels:
   voice:
     provider: soniox
     api_key: your_soniox_api_key_here
+    audio:
+      input: auto
+      output: auto
     stt:
       model: stt-rt-v4
     tts:
@@ -441,6 +447,18 @@ channels:
       language_policy: from_stt_dominant
       fallback_language: zh
 ```
+
+本机音频设备默认使用 `auto`，会按系统默认输入/输出、同名 duplex 设备、采样率与声道兼容性自动选择。需要固定设备时，可以用设备名或 `#index`：
+
+```yaml
+channels:
+  voice:
+    audio:
+      input: "MacBook Pro麦克风"
+      output: "MacBook Pro扬声器"
+```
+
+先运行 `xagent voice --list-devices` 查看可用设备；临时覆盖可以用 `xagent voice --input-device "MacBook Pro麦克风" --output-device "MacBook Pro扬声器"`。设备 index 会随插拔变化，长期配置更推荐使用设备名。
 
 Qwen 默认使用 `qwen3-asr-flash-realtime` 和 `qwen3-tts-flash-realtime`，通过 DashScope Realtime WebSocket 发送 `session.update`、音频/文本 buffer 事件，并接收最终转写与音频 delta。
 

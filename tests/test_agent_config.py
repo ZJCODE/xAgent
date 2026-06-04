@@ -705,6 +705,7 @@ provider:
                 {
                     "provider": "soniox",
                     "api_key": "soniox-key",
+                    "audio": {"input": "auto", "output": "auto"},
                     "stt": {"model": "stt-rt-v4"},
                     "tts": {"model": "tts-rt-v1", "voice": "Adrian"},
                 },
@@ -732,6 +733,7 @@ provider:
                 {
                     "provider": "soniox",
                     "api_key": "your_soniox_api_key_here",
+                    "audio": {"input": "auto", "output": "auto"},
                     "stt": {"model": "stt-rt-v4"},
                     "tts": {"model": "tts-rt-v1", "voice": "Adrian"},
                 },
@@ -758,6 +760,7 @@ provider:
                 {
                     "provider": "qwen",
                     "api_key": "qwen-voice-key",
+                    "audio": {"input": "auto", "output": "auto"},
                     "stt": {"model": "qwen3-asr-flash-realtime"},
                     "tts": {"model": "qwen3-tts-flash-realtime", "voice": "Cherry"},
                 },

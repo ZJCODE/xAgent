@@ -57,6 +57,9 @@ class AudioIOProfile:
     output_selection: AudioStreamSelection
 
 
+AudioDevicePreference = str | int | None
+
+
 def resolve_audio_io_profile(
     *,
     input_sample_rate: int,
@@ -64,6 +67,8 @@ def resolve_audio_io_profile(
     output_sample_rate: int,
     output_channels: int,
     dtype: str = "int16",
+    input_device: AudioDevicePreference = None,
+    output_device: AudioDevicePreference = None,
 ) -> AudioIOProfile:
     sd = _import_sounddevice()
     devices = _query_audio_devices(sd)
@@ -74,6 +79,7 @@ def resolve_audio_io_profile(
         desired_rate=input_sample_rate,
         desired_channels=input_channels,
         dtype=dtype,
+        preferred_device=input_device,
     )
     output_selection = _select_output_device(
         sd,
@@ -82,6 +88,7 @@ def resolve_audio_io_profile(
         desired_channels=output_channels,
         dtype=dtype,
         preferred_duplex_name=input_selection.device_name,
+        preferred_device=output_device,
     )
     logger.info(
         "Voice audio input selected: device=%s hostapi=%s stream=%sch@%sHz target=%sch@%sHz",
@@ -105,6 +112,12 @@ def resolve_audio_io_profile(
         input_selection=input_selection,
         output_selection=output_selection,
     )
+
+
+def list_audio_devices_text() -> str:
+    sd = _import_sounddevice()
+    devices = _query_audio_devices(sd)
+    return _format_audio_device_inventory(devices)
 
 
 def _query_audio_devices(sd) -> list[_AudioDeviceInfo]:  # noqa: ANN001
@@ -198,6 +211,33 @@ def _log_audio_device_inventory(devices: list[_AudioDeviceInfo]) -> None:
         )
 
 
+def _format_audio_device_inventory(devices: list[_AudioDeviceInfo]) -> str:
+    input_lines = ["Input devices:", "  auto  Best available input"]
+    output_lines = ["Output devices:", "  auto  Best available output"]
+    for device in devices:
+        details = _format_device_details(device)
+        if device.max_input_channels > 0:
+            input_lines.append(f"  #{device.index}  {device.name}  {details}")
+        if device.max_output_channels > 0:
+            output_lines.append(f"  #{device.index}  {device.name}  {details}")
+    return "\n".join([*input_lines, "", *output_lines])
+
+
+def _format_device_details(device: _AudioDeviceInfo) -> str:
+    flags: list[str] = []
+    if device.is_default_input:
+        flags.append("default-input")
+    if device.is_default_output:
+        flags.append("default-output")
+    flags.append(device.hostapi_name or "unknown")
+    if device.max_input_channels > 0:
+        flags.append(f"in={device.max_input_channels}")
+    if device.max_output_channels > 0:
+        flags.append(f"out={device.max_output_channels}")
+    flags.append(f"default-rate={device.default_sample_rate}Hz")
+    return ", ".join(flags)
+
+
 def _select_input_device(
     sd,  # noqa: ANN001
     devices: list[_AudioDeviceInfo],
@@ -205,9 +245,15 @@ def _select_input_device(
     desired_rate: int,
     desired_channels: int,
     dtype: str,
+    preferred_device: AudioDevicePreference = None,
 ) -> AudioStreamSelection:
+    eligible_devices = _filter_preferred_devices(
+        devices,
+        preference=preferred_device,
+        direction="input",
+    )
     candidates: list[tuple[int, AudioStreamSelection]] = []
-    for device in devices:
+    for device in eligible_devices:
         if device.max_input_channels <= 0:
             continue
         for channels in _candidate_channel_counts(device.max_input_channels, desired_channels):
@@ -241,6 +287,11 @@ def _select_input_device(
                     )
                 )
     if not candidates:
+        if not _is_auto_device_preference(preferred_device):
+            raise RuntimeError(
+                f"Configured input audio device {preferred_device!r} does not support "
+                f"{desired_channels}ch/{desired_rate}Hz capture"
+            )
         raise RuntimeError(
             f"No compatible input device found for {desired_channels}ch/{desired_rate}Hz capture"
         )
@@ -256,10 +307,16 @@ def _select_output_device(
     desired_channels: int,
     dtype: str,
     preferred_duplex_name: str,
+    preferred_device: AudioDevicePreference = None,
 ) -> AudioStreamSelection:
     preferred_name = _normalize_device_name(preferred_duplex_name)
+    eligible_devices = _filter_preferred_devices(
+        devices,
+        preference=preferred_device,
+        direction="output",
+    )
     candidates: list[tuple[int, AudioStreamSelection]] = []
-    for device in devices:
+    for device in eligible_devices:
         if device.max_output_channels <= 0:
             continue
         for channels in _candidate_channel_counts(device.max_output_channels, desired_channels):
@@ -295,6 +352,11 @@ def _select_output_device(
                     )
                 )
     if not candidates:
+        if not _is_auto_device_preference(preferred_device):
+            raise RuntimeError(
+                f"Configured output audio device {preferred_device!r} does not support "
+                f"{desired_channels}ch/{desired_rate}Hz playback"
+            )
         raise RuntimeError(
             f"No compatible output device found for {desired_channels}ch/{desired_rate}Hz playback"
         )
@@ -318,6 +380,75 @@ def _candidate_sample_rates(default_rate: int, desired_rate: int) -> list[int]:
             continue
         options.append(int(value))
     return options
+
+
+def _filter_preferred_devices(
+    devices: list[_AudioDeviceInfo],
+    *,
+    preference: AudioDevicePreference,
+    direction: str,
+) -> list[_AudioDeviceInfo]:
+    if _is_auto_device_preference(preference):
+        return devices
+    device = _resolve_preferred_device(devices, preference)
+    if direction == "input" and device.max_input_channels <= 0:
+        raise RuntimeError(f"Configured input audio device {preference!r} has no input channels")
+    if direction == "output" and device.max_output_channels <= 0:
+        raise RuntimeError(f"Configured output audio device {preference!r} has no output channels")
+    return [device]
+
+
+def _resolve_preferred_device(
+    devices: list[_AudioDeviceInfo],
+    preference: AudioDevicePreference,
+) -> _AudioDeviceInfo:
+    preferred_index = _preferred_device_index(preference)
+    if preferred_index is not None:
+        for device in devices:
+            if device.index == preferred_index:
+                return device
+        raise RuntimeError(f"Configured audio device index #{preferred_index} was not found")
+
+    preferred_name = _normalize_device_name(str(preference))
+    exact_matches = [device for device in devices if _normalize_device_name(device.name) == preferred_name]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(exact_matches) > 1:
+        raise RuntimeError(f"Configured audio device name {preference!r} matched multiple devices")
+
+    partial_matches = [
+        device for device in devices if preferred_name in _normalize_device_name(device.name)
+    ]
+    if len(partial_matches) == 1:
+        return partial_matches[0]
+    if len(partial_matches) > 1:
+        matches = ", ".join(f"#{device.index} {device.name}" for device in partial_matches)
+        raise RuntimeError(f"Configured audio device name {preference!r} is ambiguous: {matches}")
+    raise RuntimeError(
+        f"Configured audio device {preference!r} was not found. "
+        "Run `xagent voice --list-devices` to see available devices."
+    )
+
+
+def _is_auto_device_preference(preference: AudioDevicePreference) -> bool:
+    if preference is None:
+        return True
+    if isinstance(preference, str):
+        return preference.strip().lower() in {"", "auto", "default", "best"}
+    return False
+
+
+def _preferred_device_index(preference: AudioDevicePreference) -> int | None:
+    if isinstance(preference, int):
+        return preference
+    if not isinstance(preference, str):
+        return None
+    value = preference.strip()
+    if value.startswith("#"):
+        value = value[1:].strip()
+    if not value.isdigit():
+        return None
+    return int(value)
 
 
 def _supports_input_settings(sd, device: int, channels: int, sample_rate: int, dtype: str) -> bool:  # noqa: ANN001

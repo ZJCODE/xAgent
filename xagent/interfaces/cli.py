@@ -583,6 +583,10 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
         config["channels"]["voice"] = {
             "provider": voice_provider,
             "api_key": selection.voice_api_key.strip() or _voice_api_key_placeholder(voice_provider),
+            "audio": {
+                "input": "auto",
+                "output": "auto",
+            },
             **_voice_defaults_for_provider(voice_provider),
         }
     search_config = {"provider": selection.search_provider or "none"}
@@ -1287,6 +1291,21 @@ def build_parser() -> argparse.ArgumentParser:
     voice_parser.add_argument("--user-id", dest="user_id", default="local_voice", help="Speaker identifier")
     voice_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     voice_parser.add_argument(
+        "--list-devices",
+        action="store_true",
+        help="List available local audio input/output devices and exit",
+    )
+    voice_parser.add_argument(
+        "--input-device",
+        default=None,
+        help="Override voice input device by name, #index, index, or auto",
+    )
+    voice_parser.add_argument(
+        "--output-device",
+        default=None,
+        help="Override voice output device by name, #index, index, or auto",
+    )
+    voice_parser.add_argument(
         "--memory",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -1499,6 +1518,12 @@ def handle_voice(args: argparse.Namespace) -> int:
         logging.getLogger("xagent").setLevel(logging.CRITICAL)
 
     try:
+        if getattr(args, "list_devices", False):
+            from ..voice.audio import list_audio_devices_text
+
+            print(list_audio_devices_text())
+            return 0
+
         runner = BaseAgentRunner(config_dir=args.config_dir)
         from ..voice.config import VoiceChannelConfig
         from ..voice.factory import create_local_voice_runtime
@@ -1514,6 +1539,8 @@ def handle_voice(args: argparse.Namespace) -> int:
                 stream=True,
                 tasks_dir=runner.tasks_dir,
             ),
+            input_device=args.input_device,
+            output_device=args.output_device,
         )
     except Exception as exc:
         print(f"Failed to start voice channel: {exc}")

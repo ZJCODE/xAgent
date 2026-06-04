@@ -216,6 +216,19 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         self.assertFalse(config.enable_interruptions)
 
+    def test_voice_config_accepts_audio_device_preferences(self):
+        config = VoiceChannelConfig.from_dict({
+            "provider": "qwen",
+            "api_key": "qwen-key",
+            "audio": {
+                "input": "MacBook Pro麦克风",
+                "output": "#4",
+            },
+        })
+
+        self.assertEqual(config.audio.input, "MacBook Pro麦克风")
+        self.assertEqual(config.audio.output, "#4")
+
     def test_runtime_cancel_stops_waiting_for_blocked_recognizer(self):
         async def run_cancelled_runtime():
             config = VoiceChannelConfig.from_dict({"api_key": "test-key"})

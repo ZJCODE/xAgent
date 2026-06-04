@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .audio import SoundDeviceMicrophone, SoundDevicePlayer, resolve_audio_io_profile
+from .audio import AudioDevicePreference, SoundDeviceMicrophone, SoundDevicePlayer, resolve_audio_io_profile
 from .config import VOICE_PROVIDER_QWEN, VOICE_PROVIDER_SONIOX, VoiceChannelConfig
 from .runtime import VoiceRuntime, VoiceRuntimeOptions
 from .qwen import create_qwen_adapters
@@ -15,6 +15,8 @@ def create_local_voice_runtime(
     agent: Any,
     config: VoiceChannelConfig,
     options: VoiceRuntimeOptions,
+    input_device: AudioDevicePreference = None,
+    output_device: AudioDevicePreference = None,
 ) -> VoiceRuntime:
     if config.provider == VOICE_PROVIDER_QWEN:
         recognizer, synthesizer = create_qwen_adapters(config)
@@ -27,6 +29,8 @@ def create_local_voice_runtime(
         input_channels=config.stt.num_channels,
         output_sample_rate=config.tts.sample_rate,
         output_channels=1,
+        input_device=input_device if input_device is not None else config.audio.input,
+        output_device=output_device if output_device is not None else config.audio.output,
     )
     microphone = SoundDeviceMicrophone(
         sample_rate=config.stt.sample_rate,

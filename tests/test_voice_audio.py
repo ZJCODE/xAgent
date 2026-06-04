@@ -184,6 +184,65 @@ class VoiceAudioTests(unittest.TestCase):
         self.assertEqual(profile.output_selection.device_index, 3)
         self.assertEqual(profile.output_selection.device_name, "iMac扬声器")
 
+    def test_resolve_audio_profile_honors_named_device_preferences(self):
+        fake_sd = _FakeMacSoundDevice()
+
+        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+            profile = voice_audio.resolve_audio_io_profile(
+                input_sample_rate=16000,
+                input_channels=1,
+                output_sample_rate=24000,
+                output_channels=1,
+                input_device="Cast Audio",
+                output_device="iMac扬声器",
+            )
+
+        self.assertEqual(profile.input_selection.device_index, 0)
+        self.assertEqual(profile.input_selection.device_name, "Cast Audio")
+        self.assertEqual(profile.output_selection.device_index, 3)
+        self.assertEqual(profile.output_selection.device_name, "iMac扬声器")
+
+    def test_resolve_audio_profile_accepts_index_preferences(self):
+        fake_sd = _FakeMacSoundDevice()
+
+        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+            profile = voice_audio.resolve_audio_io_profile(
+                input_sample_rate=16000,
+                input_channels=1,
+                output_sample_rate=24000,
+                output_channels=1,
+                input_device=2,
+                output_device="#4",
+            )
+
+        self.assertEqual(profile.input_selection.device_index, 2)
+        self.assertEqual(profile.output_selection.device_index, 4)
+
+    def test_resolve_audio_profile_rejects_wrong_direction_preference(self):
+        fake_sd = _FakeMacSoundDevice()
+
+        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+            with self.assertRaisesRegex(RuntimeError, "has no output channels"):
+                voice_audio.resolve_audio_io_profile(
+                    input_sample_rate=16000,
+                    input_channels=1,
+                    output_sample_rate=24000,
+                    output_channels=1,
+                    output_device="iMac麦克风",
+                )
+
+    def test_list_audio_devices_text_splits_input_and_output_devices(self):
+        fake_sd = _FakeMacSoundDevice()
+
+        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+            text = voice_audio.list_audio_devices_text()
+
+        self.assertIn("Input devices:", text)
+        self.assertIn("Output devices:", text)
+        self.assertIn("auto  Best available input", text)
+        self.assertIn("#2  iMac麦克风", text)
+        self.assertIn("#3  iMac扬声器", text)
+
     def test_input_converter_downmixes_stereo_to_mono(self):
         converter = voice_audio._PCMInputConverter(
             source_channels=2,

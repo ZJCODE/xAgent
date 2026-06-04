@@ -200,6 +200,29 @@ class VoiceTTSConfig(BaseModel):
         return self
 
 
+class VoiceAudioConfig(BaseModel):
+    """Local audio device preferences for the voice channel."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input: str | int | None = "auto"
+    output: str | int | None = "auto"
+
+    @field_validator("input", "output")
+    @classmethod
+    def _validate_device_preference(cls, value: str | int | None) -> str | int | None:
+        if value is None:
+            return None
+        if isinstance(value, int):
+            if value < 0:
+                raise ValueError("voice.audio device index must be non-negative")
+            return value
+        normalized = value.strip()
+        if not normalized:
+            return "auto"
+        return normalized
+
+
 class VoiceChannelConfig(BaseModel):
     """User-facing configuration for `channels.voice`."""
 
@@ -209,6 +232,7 @@ class VoiceChannelConfig(BaseModel):
     api_key: str | None = None
     websocket_base_url: str | None = None
     enable_interruptions: bool = False
+    audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
     stt: VoiceSTTConfig = Field(default_factory=VoiceSTTConfig)
     tts: VoiceTTSConfig = Field(default_factory=VoiceTTSConfig)
 
