@@ -135,6 +135,38 @@ class _FakeMacSoundDevice:
         raise ValueError("unsupported output settings")
 
 
+class _FakeStereoUsbSoundDevice:
+    def __init__(self):
+        self.default = _FakeDefaults(device=(0, 0))
+        self._devices = [
+            {
+                "name": "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:0,0)",
+                "hostapi": 0,
+                "max_input_channels": 2,
+                "max_output_channels": 2,
+                "default_samplerate": 16000,
+            },
+        ]
+
+    def query_devices(self):
+        return list(self._devices)
+
+    def query_hostapis(self):
+        return [{"name": "ALSA"}]
+
+    def check_input_settings(self, *, device, channels, samplerate, dtype):
+        del device, dtype
+        if channels in {1, 2} and samplerate == 16000:
+            return None
+        raise ValueError("unsupported input settings")
+
+    def check_output_settings(self, *, device, channels, samplerate, dtype):
+        del device, dtype
+        if channels in {1, 2} and samplerate in {16000, 24000}:
+            return None
+        raise ValueError("unsupported output settings")
+
+
 class VoiceAudioTests(unittest.TestCase):
     def test_default_device_indices_accept_sounddevice_pair(self):
         fake_sd = type("FakeSD", (), {"default": _FakeDefaults(device=_FakeInputOutputPair(2, 3))})()
@@ -183,6 +215,24 @@ class VoiceAudioTests(unittest.TestCase):
         self.assertEqual(profile.input_selection.device_name, "iMac麦克风")
         self.assertEqual(profile.output_selection.device_index, 3)
         self.assertEqual(profile.output_selection.device_name, "iMac扬声器")
+
+    def test_resolve_audio_profile_prefers_natural_stereo_stream_for_stereo_usb_device(self):
+        fake_sd = _FakeStereoUsbSoundDevice()
+
+        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+            profile = voice_audio.resolve_audio_io_profile(
+                input_sample_rate=16000,
+                input_channels=1,
+                output_sample_rate=24000,
+                output_channels=1,
+            )
+
+        self.assertEqual(profile.input_selection.device_index, 0)
+        self.assertEqual(profile.input_selection.stream_channels, 2)
+        self.assertEqual(profile.input_selection.target_channels, 1)
+        self.assertEqual(profile.output_selection.device_index, 0)
+        self.assertEqual(profile.output_selection.stream_channels, 2)
+        self.assertEqual(profile.output_selection.target_channels, 1)
 
     def test_resolve_audio_profile_honors_named_device_preferences(self):
         fake_sd = _FakeMacSoundDevice()

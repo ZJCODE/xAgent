@@ -263,10 +263,11 @@ def _select_input_device(
                 score = 0
                 if device.is_default_input:
                     score += 200
-                if channels == desired_channels:
-                    score += 120
-                elif channels == 2:
-                    score += 90
+                score += _channel_score(
+                    max_channels=device.max_input_channels,
+                    channels=channels,
+                    desired_channels=desired_channels,
+                )
                 if sample_rate == desired_rate:
                     score += 80
                 elif sample_rate == device.default_sample_rate:
@@ -328,10 +329,11 @@ def _select_output_device(
                     score += 200
                 if _normalize_device_name(device.name) == preferred_name:
                     score += 260
-                if channels == desired_channels:
-                    score += 120
-                elif channels == 2:
-                    score += 100
+                score += _channel_score(
+                    max_channels=device.max_output_channels,
+                    channels=channels,
+                    desired_channels=desired_channels,
+                )
                 if sample_rate == desired_rate:
                     score += 80
                 elif sample_rate == device.default_sample_rate:
@@ -366,11 +368,24 @@ def _select_output_device(
 
 def _candidate_channel_counts(max_channels: int, desired_channels: int) -> list[int]:
     options: list[int] = []
-    for value in (desired_channels, 2, 1, min(max_channels, 2)):
+    natural_channels = min(max_channels, 2)
+    for value in (natural_channels, desired_channels, 2, 1):
         if value <= 0 or value > max_channels or value in options:
             continue
         options.append(value)
     return options or [max_channels]
+
+
+def _channel_score(*, max_channels: int, channels: int, desired_channels: int) -> int:
+    natural_channels = min(max_channels, 2)
+    score = 0
+    if channels == natural_channels:
+        score += 140
+    if channels == desired_channels:
+        score += 100
+    if channels == 2:
+        score += 30
+    return score
 
 
 def _candidate_sample_rates(default_rate: int, desired_rate: int) -> list[int]:
