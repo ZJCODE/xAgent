@@ -2023,6 +2023,24 @@ def _format_feishu_expiry(expire_in: Optional[int]) -> Optional[str]:
     return f"{seconds} {unit}"
 
 
+def _try_print_qr_ascii(url: str) -> bool:
+    """Try to print ASCII QR code. Returns True if succeeded, False if qrcode unavailable."""
+    try:
+        import qrcode
+    except ImportError:
+        return False
+
+    try:
+        qr = qrcode.QRCode()
+        qr.add_data(url)
+        qr.make()
+        print("\n📱 Or scan this QR code with your Feishu app:\n")
+        qr.print_ascii(invert=True)
+        return True
+    except Exception:
+        return False
+
+
 def _print_feishu_post_setup(config_path: Path) -> None:
     print(f"\nUpdated {config_path} with channels.feishu\n")
 
@@ -2066,11 +2084,23 @@ def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
     def on_qr_code(qr_payload: Any) -> None:
         url, expire_in, user_code = _normalize_feishu_qr_payload(qr_payload)
         expiry_label = _format_feishu_expiry(expire_in)
-        if url:
-            print("Click ---> ", url)
-        else:
+
+        if not url:
             print("\nFeishu returned an authorization step, but no browser link was included.")
             print("Please retry `xagent init feishu`, or use `--manual` if the problem persists.")
+            print("\nWaiting for authorization... (press Ctrl+C to cancel)\n")
+            return
+
+        # Display link
+        print("\n🔗 Click this link to authorize (or paste into your browser):\n")
+        print(f"{url}\n")
+
+        # Try to display ASCII QR code
+        if _try_print_qr_ascii(url):
+            print("\n✓ Choose your preferred auth method above.")
+        else:
+            print("\n💡 Tip: Install qrcode for ASCII QR display: pip install qrcode[pil]")
+
         print("\nWaiting for authorization... (press Ctrl+C to cancel)\n")
 
     def on_status_change(info: dict) -> None:
@@ -2160,7 +2190,7 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
         print("")
         print("Creating your Feishu Agent.\n")
         print("Tip: rerun with --manual to enter an existing App ID/Secret instead.\n")
-        print("The browser authorization link will appear here next. Keep this terminal open.\n")
+        print("\nChoose one authorization method below. Keep this terminal open until authorization finishes.\n")
         credentials = _register_feishu_app_via_qr()
         if credentials is None:
             return 1

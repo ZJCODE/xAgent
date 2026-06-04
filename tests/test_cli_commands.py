@@ -714,10 +714,15 @@ class CLICommandTests(unittest.TestCase):
         output = stdout.getvalue()
 
         self.assertEqual(result, ("cli_reg", "reg_secret"))
-        self.assertIn("Click --->", output)
+        self.assertIn("Click this link to authorize", output)
         self.assertIn("https://open.feishu.cn/page/launcher?user_code=Z9YC-ZV4A&from=sdk&tp=sdk", output)
+        self.assertIn("Verification code: Z9YC-ZV4A", output)
+        self.assertIn("Link expires in: 60 minutes", output)
         self.assertIn("Waiting for authorization...", output)
         self.assertNotIn("{'url':", output)
+        # QR code should either be shown or installation tip provided
+        qr_or_tip = "Scan this QR code" in output or "Install qrcode" in output
+        self.assertTrue(qr_or_tip, "Should display either QR code or installation tip")
 
     def test_register_feishu_app_via_qr_handles_access_denied(self):
         from xagent.interfaces.cli import _register_feishu_app_via_qr
