@@ -521,7 +521,7 @@ def _voice_defaults_for_provider(provider: str) -> dict[str, dict[str, str]]:
         },
         "tts": {
             "model": "tts-rt-v1",
-            "voice": "Adrian",
+            "voice": "Owen",
         },
     }
 

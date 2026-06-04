@@ -707,7 +707,7 @@ provider:
                     "api_key": "soniox-key",
                     "audio": {"input": "auto", "output": "auto"},
                     "stt": {"model": "stt-rt-v4"},
-                    "tts": {"model": "tts-rt-v1", "voice": "Adrian"},
+                    "tts": {"model": "tts-rt-v1", "voice": "Owen"},
                 },
             )
 
@@ -735,7 +735,7 @@ provider:
                     "api_key": "your_soniox_api_key_here",
                     "audio": {"input": "auto", "output": "auto"},
                     "stt": {"model": "stt-rt-v4"},
-                    "tts": {"model": "tts-rt-v1", "voice": "Adrian"},
+                    "tts": {"model": "tts-rt-v1", "voice": "Owen"},
                 },
             )
 
@@ -1714,7 +1714,7 @@ channels:
             max_endpoint_delay_ms: 700
         tts:
             model: tts-rt-v1
-            voice: Adrian
+            voice: Owen
 """,
                 encoding="utf-8",
             )

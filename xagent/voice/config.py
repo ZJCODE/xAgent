@@ -32,7 +32,7 @@ _DEFAULT_TTS_MODELS = {
     VOICE_PROVIDER_QWEN: "qwen3-tts-flash-realtime",
 }
 _DEFAULT_TTS_VOICES = {
-    VOICE_PROVIDER_SONIOX: "Adrian",
+    VOICE_PROVIDER_SONIOX: "Owen",
     VOICE_PROVIDER_QWEN: "Cherry",
 }
 
@@ -138,7 +138,7 @@ class VoiceTTSConfig(BaseModel):
 
     provider: str = VOICE_PROVIDER_SONIOX
     model: str = "tts-rt-v1"
-    voice: str = "Adrian"
+    voice: str = "Owen"
     audio_format: str = "pcm_s16le"
     sample_rate: int = 24000
     language_policy: Literal["from_stt_dominant", "fallback"] = "from_stt_dominant"

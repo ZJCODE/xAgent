@@ -419,7 +419,7 @@ channels:
       model: stt-rt-v4
     tts:
       model: tts-rt-v1
-      voice: Adrian
+      voice: Owen
 ```
 
 高级配置可以手动覆盖 STT/TTS 默认值。Soniox 示例：
@@ -441,7 +441,7 @@ channels:
       enable_speaker_diarization: false
     tts:
       model: tts-rt-v1
-      voice: Adrian
+      voice: Owen
       audio_format: pcm_s16le
       sample_rate: 24000
       language_policy: from_stt_dominant
