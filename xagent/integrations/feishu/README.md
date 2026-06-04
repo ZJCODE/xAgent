@@ -54,11 +54,20 @@ Configure your Feishu bot
 # First time only (creates ~/.xagent/config.yaml + identity.md)
 xagent init
 
-# Add channels.feishu to ~/.xagent/config.yaml
+# One-click: create the Feishu app and write channels.feishu for you.
+# Opens an authorization link; sign in with a Feishu workspace admin account.
 xagent init feishu
+
+# Prefer to paste an existing App ID/Secret? Use the manual flow instead:
+xagent init feishu --manual
+# (passing --app-id / --app-secret also switches to manual)
 ```
 
-This updates `~/.xagent/config.yaml`:
+The one-click flow uses the Feishu device-authorization grant (`lark_oapi`
+`register_app`, requires `lark-oapi>=1.5.5`). It prints a link to open in your
+browser, waits for an admin to approve, then stores the returned credentials.
+
+Either way this updates `~/.xagent/config.yaml`:
 
 ```yaml
 channels:
@@ -68,6 +77,7 @@ channels:
     stream: false
     enable_memory: true
     group_history_count: 10
+    group_reply_without_mention: false
 ```
 
 `${ENV_VAR}` placeholders are expanded at load time — keep secrets out of git.
@@ -95,17 +105,32 @@ xagent service start feishu --dir ~/.xagent
 `~/.xagent/run/feishu.pid`, and appends logs to `~/.xagent/logs/feishu.log`.
 Use `xagent service logs feishu -f` when you want to watch logs live.
 
-## Routing rules (hardcoded — no knobs)
+## Routing rules
 
 The adapter behaves like a real human teammate:
 
 | Message | Routed to | Notes |
 |---|---|---|
 | Direct chat (`p2p`) | `agent.chat` | Always reply, sent as a fresh message (no quoting). |
-| Group / topic, bot @mentioned | `agent.chat` | Pulls recent Feishu history first, then replies. Anchored to the source message via `reply_to`; never as a Feishu topic/thread reply. |
-| Group / topic, not @mentioned | ignored | The bot does not listen or speak unless explicitly addressed. |
+| Group, bot @mentioned | `agent.chat` | Pulls recent Feishu history first, then replies as a plain message — no quote/@ of the sender, since the context is already obvious. |
+| Topic group (话题群) | `agent.chat` | Anchored to the topic `root` message via `reply_to`; this is a Feishu structural requirement so the reply renders in the main view instead of a hidden sub-thread. |
+| Group / topic, not @mentioned | ignored by default | Set `group_reply_without_mention: true` to route every group/topic message to `agent.chat`. |
+| Scheduled delivery | `agent.chat` / message | Sent as a plain message; never quotes or @mentions the person who created the reminder. |
 | Image content | `agent.chat` | Feishu image resources are downloaded into workspace attachments. Providers with vision also receive current-turn image input; providers without vision still get workspace file references for file-level tools. |
 | File content | `agent.chat` | Feishu file resources are downloaded into `workspace/temp/attachments/feishu` and passed as workspace attachments. The model sees a file manifest and workspace blob link, not raw file bytes. |
+
+```yaml
+channels:
+  feishu:
+    app_id: cli_xxx
+    app_secret: ${LARK_APP_SECRET}
+    group_reply_without_mention: true
+```
+
+When this is enabled, xAgent replies to every group/topic message it receives.
+Watch `group_history_count`, provider/API rate limits, and whether other bots in
+the same room may create reply loops. The adapter still ignores messages sent by
+the current bot/app itself.
 
 > **Permission check.** The bot can reply to group @mentions with
 > `im:message.group_at_msg`; use
@@ -113,7 +138,11 @@ The adapter behaves like a real human teammate:
 > may @ the current bot. To read recent group history after the @mention,
 > the app also needs Feishu history/group message read permissions such as
 > `im:message:readonly` plus `im:message.group_msg`, `admin:app.info:readonly`. If those permissions are
-> missing, xAgent simply replies using the current @message.
+> missing, xAgent simply replies using the current message. To route group
+> messages without @mentions, make sure the app is allowed to receive normal
+> group messages and is re-published/re-installed after scope changes; the SDK
+> policy must also allow non-mention group traffic. If `advanced.policy` is set,
+> that explicit SDK policy takes precedence over `group_reply_without_mention`.
 
 Before a message reaches xAgent, the adapter resolves Feishu sender IDs with
 the official `client.contact.v3.user.get(request)` API and passes the display
@@ -127,8 +156,8 @@ sender's `app_id` with `client.application.v6.application.get(request)`. Queryin
 other apps requires Feishu's application information permission; without it,
 those senders fall back the same way as unresolved users.
 
-For group/topic traffic, the adapter wraps recent messages plus the current
-mention in a room-context block before calling `agent.chat`:
+For routed group/topic traffic, the adapter wraps recent messages plus the
+current message in a room-context block before calling `agent.chat`:
 
 ```text
 [room context]

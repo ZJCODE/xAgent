@@ -374,7 +374,11 @@ channels:
 
 未显式传 channel 时，`xagent service start` 会从已启用 channel 中选择单个入口：优先 `api`，如果只启用了 `feishu` 则选择 `feishu`。`stop`、`restart`、`status` 和 `logs` 默认使用 `all`。`logs --follow` 必须显式指定单个 channel。
 
-`channels.feishu` 由 `xagent init feishu` 写入。`${ENV_VAR}` 形式会在 Feishu adapter 加载配置时展开，也可通过 `LARK_APP_ID` 和 `LARK_APP_SECRET` 提供凭据。
+`channels.feishu` 由 `xagent init feishu` 写入。默认走一键注册：基于飞书设备授权
+流程（`lark_oapi.register_app`，需 `lark-oapi>=1.5.5`），打印授权链接，由飞书管理员
+授权后自动写入 `app_id`/`app_secret`。需要使用已有应用凭据时用 `xagent init feishu
+--manual`（或直接传 `--app-id`/`--app-secret`）。`${ENV_VAR}` 形式会在 Feishu
+adapter 加载配置时展开，也可通过 `LARK_APP_ID` 和 `LARK_APP_SECRET` 提供凭据。
 
 ```yaml
 channels:
@@ -383,7 +387,19 @@ channels:
     app_secret: ${LARK_APP_SECRET}
     enable_memory: true
     group_history_count: 10
+    group_reply_without_mention: false
 ```
+
+默认情况下，群聊和话题群只有 @bot 的消息会进入 `Agent.chat`。
+`group_reply_without_mention: true` 会放宽 SDK mention policy，并让未 @ 的
+群聊/话题群消息也进入 chat。开启后需要确认飞书应用已具备普通群消息事件/权限，并关注
+`group_history_count`、限流以及多 bot 群里的回复回路风险；如果配置了
+`advanced.policy`，显式 SDK policy 优先。
+
+回复语义：普通群和 p2p 回复都以普通消息发送，不再用 `reply_to` 引用原消息（飞书的
+`reply_to` 会把原作者拉进通知，相当于 @ 对方，造成每次回复都打扰发消息人）。仅话题群
+保留 `reply_to=root`，这是飞书结构性要求，否则回复会落入用户看不到的隐藏子线程。所有
+定时/调度交付一律不引用、不 @ 创建提醒的人。
 
 `channels.voice` 配置本机前台语音模式。当前版本支持 Soniox 和 Qwen，不支持 OpenAI 语音，不参与 `xagent service start all`，也没有 `/ws/voice`。
 

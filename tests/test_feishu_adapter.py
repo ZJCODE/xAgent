@@ -1,10 +1,12 @@
 import asyncio
 import io
 import logging
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 try:
     from lark_oapi import LogLevel
@@ -165,6 +167,58 @@ class _FakeUserResolver:
 
 
 class FeishuAdapterTests(unittest.TestCase):
+    def _build_channel_with_fake_sdk(self, config):
+        fake_lark = ModuleType("lark_oapi")
+        fake_channel_module = ModuleType("lark_oapi.channel")
+        fake_config_module = ModuleType("lark_oapi.channel.config")
+
+        class FakeLogLevel:
+            DEBUG = "debug"
+            INFO = "info"
+            WARNING = "warning"
+            ERROR = "error"
+            __members__ = {
+                "DEBUG": DEBUG,
+                "INFO": INFO,
+                "WARNING": WARNING,
+                "ERROR": ERROR,
+            }
+
+        class FakePolicyConfig:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        class FakeTextBatchConfig:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        class FakeSafetyConfig:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        class FakeFeishuChannel:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        fake_lark.LogLevel = FakeLogLevel
+        fake_lark.channel = fake_channel_module
+        fake_channel_module.FeishuChannel = FakeFeishuChannel
+        fake_channel_module.config = fake_config_module
+        fake_config_module.PolicyConfig = FakePolicyConfig
+        fake_config_module.SafetyConfig = FakeSafetyConfig
+        fake_config_module.TextBatchConfig = FakeTextBatchConfig
+
+        with patch.dict(
+            sys.modules,
+            {
+                "lark_oapi": fake_lark,
+                "lark_oapi.channel": fake_channel_module,
+                "lark_oapi.channel.config": fake_config_module,
+            },
+        ):
+            adapter = FeishuAdapter(agent=_FakeAgent(), config=config)
+            return adapter._build_channel()
+
     @unittest.skipIf(LogLevel is None, "lark-oapi is not installed")
     def test_normalize_log_level_accepts_yaml_friendly_strings(self):
         self.assertEqual(FeishuAdapter._normalize_log_level("info", LogLevel), LogLevel.INFO)
@@ -206,6 +260,7 @@ class FeishuAdapterTests(unittest.TestCase):
         )
 
         self.assertFalse(cfg.show_sender_ids)
+        self.assertFalse(cfg.group_reply_without_mention)
 
     def test_config_accepts_show_sender_ids(self):
         cfg = FeishuAdapterConfig.from_dict(
@@ -217,6 +272,47 @@ class FeishuAdapterTests(unittest.TestCase):
         )
 
         self.assertTrue(cfg.show_sender_ids)
+
+    def test_config_accepts_group_reply_without_mention(self):
+        cfg = FeishuAdapterConfig.from_dict(
+            {
+                "app_id": "cli_test",
+                "app_secret": "secret",
+                "group_reply_without_mention": True,
+            }
+        )
+
+        self.assertTrue(cfg.group_reply_without_mention)
+
+    def test_build_channel_requires_group_mentions_by_default(self):
+        channel = self._build_channel_with_fake_sdk(
+            FeishuAdapterConfig(app_id="cli_test", app_secret="secret")
+        )
+
+        self.assertTrue(channel.kwargs["policy"].require_mention)
+
+    def test_build_channel_relaxes_group_mention_policy_when_enabled(self):
+        channel = self._build_channel_with_fake_sdk(
+            FeishuAdapterConfig(
+                app_id="cli_test",
+                app_secret="secret",
+                group_reply_without_mention=True,
+            )
+        )
+
+        self.assertFalse(channel.kwargs["policy"].require_mention)
+
+    def test_build_channel_preserves_advanced_policy_override(self):
+        channel = self._build_channel_with_fake_sdk(
+            FeishuAdapterConfig(
+                app_id="cli_test",
+                app_secret="secret",
+                group_reply_without_mention=True,
+                advanced={"policy": "marker"},
+            )
+        )
+
+        self.assertEqual(channel.kwargs["policy"], "marker")
 
     def test_stop_flushes_agent_memory(self):
         agent = _FakeAgent()
@@ -246,7 +342,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
             self.assertEqual(adapter._channel.sent[0][0], "oc_group")
             self.assertEqual(adapter._channel.sent[0][1], {"markdown": "走两步"})
-            self.assertEqual(adapter._channel.sent[0][2]["reply_to"], "om_anchor")
+            self.assertNotIn("reply_to", adapter._channel.sent[0][2])
             self.assertTrue(adapter._channel.sent[0][2]["uuid"].startswith("scheduled:"))
 
         asyncio.run(run_test())
@@ -790,7 +886,8 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertEqual(agent.chat_calls[0]["user_id"], "Feishu User")
-        self.assertEqual(adapter._channel.sent[0][2], {"reply_to": "om_group_msg", "uuid": "om_group_msg"})
+        self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_group_msg"})
+        self.assertNotIn("reply_to", adapter._channel.sent[0][2])
         self.assertNotIn("reply_in_thread", adapter._channel.sent[0][2])
 
     def test_group_mention_routes_to_chat_when_bot_identity_unresolved(self):
@@ -831,7 +928,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
         self.assertIn(": The user mentioned you without adding any text.", agent.chat_calls[0]["user_message"])
         self.assertIn("[/room context]", agent.chat_calls[0]["user_message"])
-        self.assertEqual(adapter._channel.sent[0][2], {"reply_to": "om_empty_at", "uuid": "om_empty_at"})
+        self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_empty_at"})
 
     def test_group_mention_matches_raw_nested_open_id_dict(self):
         agent = _FakeAgent()
@@ -872,6 +969,68 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(agent.observe_calls, [])
         self.assertEqual(adapter._channel.sent, [])
 
+    def test_unmentioned_group_message_routes_when_enabled(self):
+        agent = _FakeAgent()
+        logger = logging.getLogger("test_unmentioned_group_message_routes_when_enabled")
+        adapter = FeishuAdapter(
+            agent=agent,
+            config=FeishuAdapterConfig(
+                app_id="cli_test",
+                app_secret="secret",
+                group_history_count=0,
+                group_reply_without_mention=True,
+            ),
+            logger=logger,
+        )
+        adapter._channel = _FakeChannel(bot_open_id="ou_bot")
+        msg = SimpleNamespace(
+            chat_type="group",
+            chat_id="oc_group",
+            message_id="om_ambient",
+            sender_id="ou_user",
+            sender_name="Alice",
+            content_text="ambient group message",
+            mentioned_bot=False,
+            mentions=[],
+        )
+
+        with self.assertLogs(logger, level="INFO") as logs:
+            asyncio.run(adapter._dispatch(msg))
+
+        self.assertEqual(len(agent.chat_calls), 1)
+        self.assertIn("Alice", agent.chat_calls[0]["user_message"])
+        self.assertIn("ambient group message", agent.chat_calls[0]["user_message"])
+        self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_ambient"})
+        self.assertTrue(any("reason=group_reply_without_mention" in item for item in logs.output))
+
+    def test_unmentioned_group_empty_text_uses_neutral_placeholder_when_enabled(self):
+        agent = _FakeAgent()
+        adapter = FeishuAdapter(
+            agent=agent,
+            config=FeishuAdapterConfig(
+                app_id="cli_test",
+                app_secret="secret",
+                group_history_count=0,
+                group_reply_without_mention=True,
+            ),
+        )
+        adapter._channel = _FakeChannel(bot_open_id="ou_bot")
+        msg = SimpleNamespace(
+            chat_type="group",
+            chat_id="oc_group",
+            message_id="om_empty",
+            sender_id="ou_user",
+            sender_name="Alice",
+            content_text="",
+            mentioned_bot=False,
+            mentions=[],
+        )
+
+        asyncio.run(adapter._dispatch(msg))
+
+        self.assertIn(": The user sent a group message without text.", agent.chat_calls[0]["user_message"])
+        self.assertNotIn("mentioned you", agent.chat_calls[0]["user_message"])
+
     def test_unmentioned_topic_message_is_ignored(self):
         agent = _FakeAgent()
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
@@ -892,6 +1051,36 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(agent.chat_calls, [])
         self.assertEqual(agent.observe_calls, [])
         self.assertEqual(adapter._channel.sent, [])
+
+    def test_unmentioned_topic_message_routes_when_enabled(self):
+        agent = _FakeAgent()
+        adapter = FeishuAdapter(
+            agent=agent,
+            config=FeishuAdapterConfig(
+                app_id="cli_test",
+                app_secret="secret",
+                group_history_count=0,
+                group_reply_without_mention=True,
+            ),
+        )
+        adapter._channel = _FakeChannel(bot_open_id="ou_bot")
+        msg = SimpleNamespace(
+            chat_type="topic",
+            chat_id="oc_topic",
+            message_id="om_inside_thread",
+            sender_id="ou_user",
+            sender_name="Bob",
+            content_text="hello everyone",
+            mentioned_bot=False,
+            mentions=[],
+            root_id="om_topic_root",
+        )
+
+        asyncio.run(adapter._dispatch(msg))
+
+        self.assertEqual(len(agent.chat_calls), 1)
+        self.assertIn("hello everyone", agent.chat_calls[0]["user_message"])
+        self.assertEqual(adapter._channel.sent[0][2], {"reply_to": "om_topic_root", "uuid": "om_inside_thread"})
 
     def test_bot_sender_message_is_ignored(self):
         agent = _FakeAgent()
@@ -919,6 +1108,23 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(opts, {"reply_to": "om_x", "uuid": "om_x"})
         self.assertNotIn("reply_in_thread", opts)
+
+    def test_reply_anchor_omits_quote_for_normal_group_and_p2p(self):
+        adapter = FeishuAdapter(agent=_FakeAgent(), config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+
+        normal_group = SimpleNamespace(chat_type="group", message_id="om_msg")
+        p2p = SimpleNamespace(chat_type="p2p", message_id="om_dm")
+
+        self.assertIsNone(adapter._reply_anchor(raw_msg=normal_group, message_id="om_msg"))
+        self.assertIsNone(adapter._reply_anchor(raw_msg=p2p, message_id="om_dm"))
+        self.assertIsNone(adapter._reply_anchor(raw_msg=None, message_id="om_msg"))
+
+    def test_reply_anchor_keeps_root_for_topic_group(self):
+        adapter = FeishuAdapter(agent=_FakeAgent(), config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+
+        topic = SimpleNamespace(chat_type="topic", message_id="om_inside", root_id="om_root")
+
+        self.assertEqual(adapter._reply_anchor(raw_msg=topic, message_id="om_inside"), "om_root")
 
     def test_topic_group_anchors_reply_to_root_but_uuid_uses_trigger_message(self):
         agent = _FakeAgent()
@@ -1354,7 +1560,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
         self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
         self.assertIn(": @Mono hi", agent.chat_calls[0]["user_message"])
-        self.assertEqual(adapter._channel.sent[0][2], {"reply_to": "om_at", "uuid": "om_at"})
+        self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_at"})
 
 
 class FeishuHistoryFetcherTests(unittest.TestCase):

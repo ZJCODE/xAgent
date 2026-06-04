@@ -5,7 +5,8 @@ Routing is intentionally small:
 * ``p2p`` (direct chat with the bot): reply with ``agent.chat``.
 * ``group`` / ``topic`` with bot @mentioned: pull recent Feishu history,
     then reply with ``agent.chat``.
-* ``group`` / ``topic`` without @mention: ignore.
+* ``group`` / ``topic`` without @mention: reply only when
+    ``group_reply_without_mention`` is enabled; otherwise ignore.
 * Any other chat type is ignored.
 
 Before a Feishu message reaches the agent, the sender ID is resolved to a
@@ -236,9 +237,9 @@ class FeishuAdapter:
         if self.config.domain:
             kwargs["domain"] = self.config.domain
         if "policy" not in self.config.advanced:
-            # Let the SDK filter group traffic to @mentions. The adapter still
-            # checks mentions itself because identity can resolve late.
-            kwargs["policy"] = PolicyConfig(require_mention=True)
+            kwargs["policy"] = PolicyConfig(
+                require_mention=not self.config.group_reply_without_mention
+            )
         if "safety" not in self.config.advanced:
             kwargs["safety"] = SafetyConfig(text_batch=TextBatchConfig(delay_ms=0))
         # Forward any advanced FeishuChannel kwargs (policy, safety, ...).
@@ -520,7 +521,8 @@ class FeishuAdapter:
             return
 
         if chat_type in {"group", "topic"}:
-            if self._is_bot_mentioned(msg):
+            mentioned = self._is_bot_mentioned(msg)
+            if mentioned or self.config.group_reply_without_mention:
                 attachment_download = await self._download_message_attachment_assets_with_failures(msg, message_id=message_id)
                 if attachment_download.failed_resources:
                     await self._send_attachment_download_failed(
@@ -536,15 +538,25 @@ class FeishuAdapter:
                 if not text and image_assets and len(image_assets) == len(attachment_assets):
                     text = _FEISHU_IMAGE_PLACEHOLDER
                 elif not text and attachment_assets:
-                    text = "The user mentioned you with file attachments."
+                    text = (
+                        "The user mentioned you with file attachments."
+                        if mentioned
+                        else "The user sent file attachments."
+                    )
                 elif not text:
-                    text = "The user mentioned you without adding any text."
+                    text = (
+                        "The user mentioned you without adding any text."
+                        if mentioned
+                        else "The user sent a group message without text."
+                    )
+                route_reason = "mention" if mentioned else "group_reply_without_mention"
                 self.logger.info(
-                    "Feishu @mention routed to chat: chat_type=%s chat_id=%s message_id=%s sender_id=%s",
+                    "Feishu group message routed to chat: chat_type=%s chat_id=%s message_id=%s sender_id=%s reason=%s",
                     chat_type,
                     chat_id,
                     message_id,
                     sender_id,
+                    route_reason,
                 )
                 sender_name = await self._resolve_sender_name(
                     sender_id,
@@ -1939,7 +1951,7 @@ class FeishuAdapter:
                 self._channel,
                 chat_id=chat_id,
                 payload={"markdown": result.content},
-                reply_to=message_id if (is_group and message_id) else None,
+                reply_to=None,
                 uuid=uuid_message_id,
                 logger=self.logger,
                 message_id=message_id,
@@ -1949,7 +1961,7 @@ class FeishuAdapter:
         if result.attachments:
             await self._send_outbound_attachments(
                 chat_id=chat_id,
-                message_id=message_id,
+                message_id=None,
                 uuid_message_id=uuid_message_id,
                 attachments=result.attachments,
                 is_group=is_group,
@@ -2475,20 +2487,25 @@ class FeishuAdapter:
     ) -> Optional[str]:
         """Pick the right reply anchor for the current message.
 
-        For topic groups (话题群), anchoring to the triggering message
-        pushes the reply into a hidden sub-thread the user does not see.
-        We anchor to the topic's ``root`` message instead so the reply
-        renders in the main chat view, matching how human users reply.
-        For normal groups and p2p, the triggering message id is used.
+        A Feishu ``reply_to`` renders as a quote-reply that pulls the
+        original message author into notifications (effectively an @).
+        For ordinary group and p2p replies this is unwanted noise — the
+        context is already obvious, so we return ``None`` to send a plain
+        message without quoting anyone.
+
+        Topic groups (话题群) are the sole exception: anchoring is a
+        structural requirement there, because a message without an anchor
+        to the topic ``root`` lands in a hidden sub-thread the user never
+        sees. We therefore keep ``reply_to=root`` for topic groups only.
         """
         if raw_msg is None:
-            return message_id
+            return None
         chat_type = self._message_field(raw_msg, "chat_type")
         if chat_type == "topic":
             root_id = self._root_message_id(raw_msg)
             if root_id:
                 return root_id
-        return message_id
+        return None
 
     @staticmethod
     def _root_message_id(msg: Any) -> Optional[str]:

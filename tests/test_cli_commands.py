@@ -598,6 +598,7 @@ class CLICommandTests(unittest.TestCase):
                 config_dir=tmpdir,
                 app_id=None,
                 app_secret=None,
+                manual=True,
                 force=False,
             )
 
@@ -615,10 +616,121 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("enabled", config["channels"]["feishu"])
         self.assertNotIn("log_level", config["channels"]["feishu"])
         self.assertIs(config["channels"]["feishu"]["stream"], False)
+        self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], False)
         self.assertNotIn("show_sender_ids", config["channels"]["feishu"])
         self.assertNotIn("runtime", config)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         self.assertIn("xagent service start feishu", output)
+
+    def test_init_feishu_one_click_writes_registered_credentials(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                app_id=None,
+                app_secret=None,
+                manual=False,
+                force=False,
+            )
+
+            with patch(
+                "xagent.interfaces.cli._register_feishu_app_via_qr",
+                return_value=("cli_qr_app", "qr_secret"),
+            ) as register_mock:
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = handle_init_feishu(args)
+
+            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
+            output = stdout.getvalue()
+
+        self.assertEqual(exit_code, 0)
+        register_mock.assert_called_once_with()
+        self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_qr_app")
+        self.assertEqual(config["channels"]["feishu"]["app_secret"], "qr_secret")
+        self.assertIs(config["channels"]["feishu"]["stream"], False)
+        self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], False)
+        self.assertIn("The browser authorization link will appear here next.", output)
+        self.assertIn("Optional, only if you want to use the agent in group chats", output)
+        self.assertIn("If you only use the agent in direct chat, you can skip this for now.", output)
+
+    def test_init_feishu_one_click_cancelled_leaves_config_untouched(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                app_id=None,
+                app_secret=None,
+                manual=False,
+                force=False,
+            )
+
+            with patch("xagent.interfaces.cli._register_feishu_app_via_qr", return_value=None):
+                with patch("sys.stdout"):
+                    exit_code = handle_init_feishu(args)
+
+            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertNotIn("feishu", config.get("channels", {}))
+
+    def test_init_feishu_explicit_credentials_skip_qr_flow(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                app_id="cli_explicit",
+                app_secret="explicit_secret",
+                manual=False,
+                force=False,
+            )
+
+            with patch("xagent.interfaces.cli._register_feishu_app_via_qr") as register_mock:
+                with patch("sys.stdout"):
+                    exit_code = handle_init_feishu(args)
+
+            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        register_mock.assert_not_called()
+        self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_explicit")
+        self.assertEqual(config["channels"]["feishu"]["app_secret"], "explicit_secret")
+
+    def test_register_feishu_app_via_qr_formats_link_payload_and_returns_credentials(self):
+        from xagent.interfaces.cli import _register_feishu_app_via_qr
+
+        def fake_register_app(*, on_qr_code, on_status_change, source, cancel_event):
+            on_qr_code({
+                "url": "https://open.feishu.cn/page/launcher?user_code=Z9YC-ZV4A&from=sdk&tp=sdk",
+                "expire_in": 3600,
+            })
+            on_status_change({"status": "polling"})
+            return {"client_id": "cli_reg", "client_secret": "reg_secret", "user_info": {"name": "Admin"}}
+
+        with patch("lark_oapi.register_app", side_effect=fake_register_app):
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                result = _register_feishu_app_via_qr()
+
+        output = stdout.getvalue()
+
+        self.assertEqual(result, ("cli_reg", "reg_secret"))
+        self.assertIn("Authorization link ready.", output)
+        self.assertIn("Verification code: Z9YC-ZV4A", output)
+        self.assertIn("Link expires in: 60 minutes", output)
+        self.assertIn("Browser link:\nhttps://open.feishu.cn/page/launcher?user_code=Z9YC-ZV4A&from=sdk&tp=sdk", output)
+        self.assertNotIn("{'url':", output)
+
+    def test_register_feishu_app_via_qr_handles_access_denied(self):
+        from xagent.interfaces.cli import _register_feishu_app_via_qr
+        from lark_oapi.scene.registration import AppAccessDeniedError
+
+        def fake_register_app(**_kwargs):
+            raise AppAccessDeniedError("access_denied", "admin rejected")
+
+        with patch("lark_oapi.register_app", side_effect=fake_register_app):
+            with patch("sys.stdout"):
+                result = _register_feishu_app_via_qr()
+
+        self.assertIsNone(result)
 
     def test_run_channel_feishu_ignores_enabled_runtime_flag(self):
         with tempfile.TemporaryDirectory() as tmpdir:

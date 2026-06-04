@@ -32,12 +32,13 @@ def _expand_env(value: Any) -> Any:
 class FeishuAdapterConfig:
     """User-facing configuration for the Feishu adapter.
 
-    The adapter behaves like a human teammate by default — no behavioral
-    knobs are exposed:
+    The adapter behaves like a human teammate by default and only speaks in
+    group rooms when addressed explicitly:
 
     * ``p2p`` direct chats: always reply.
     * ``group`` / ``topic`` with @bot: reply.
-    * ``group`` / ``topic`` without @bot: ignore.
+    * ``group`` / ``topic`` without @bot: reply only when
+      ``group_reply_without_mention`` is true; otherwise ignore.
 
     Only credentials and a handful of operational defaults are configurable.
 
@@ -52,10 +53,13 @@ class FeishuAdapterConfig:
         history_count / max_iter / max_concurrent_tools: Per-turn knobs
             forwarded to ``agent.chat``.
         group_history_count: How many recent Feishu group/topic messages to
-            pull on each @mention. ``0`` disables history pulls.
+            pull for each routed group/topic message. ``0`` disables history
+            pulls.
         history_fetch_timeout: Maximum seconds to wait for Feishu history.
         show_sender_ids: Include Feishu sender IDs such as ``ou_xxx`` or
             ``cli_xxx`` in room-context speaker labels.
+        group_reply_without_mention: Route all group/topic messages to chat,
+            even when the bot was not @mentioned. Defaults to false.
         advanced: Raw pass-through kwargs for ``FeishuChannel`` (policy,
             safety, ...). Reserved for power users.
     """
@@ -75,6 +79,7 @@ class FeishuAdapterConfig:
     group_history_count: int = 10
     history_fetch_timeout: float = 5.0
     show_sender_ids: bool = False
+    group_reply_without_mention: bool = False
 
     advanced: Dict[str, Any] = field(default_factory=dict)
 

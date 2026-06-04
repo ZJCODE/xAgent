@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Tuple
+from urllib.parse import parse_qs, urlparse
 
 import yaml
 
@@ -1259,6 +1260,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_dir_argument(init_feishu)
     init_feishu.add_argument("--app-id", dest="app_id", default=None, help="Feishu app id (cli_xxx)")
     init_feishu.add_argument("--app-secret", dest="app_secret", default=None, help="Feishu app secret")
+    init_feishu.add_argument(
+        "--manual",
+        action="store_true",
+        help="Enter App ID/Secret manually instead of the one-click QR code flow",
+    )
     init_feishu.add_argument("--force", action="store_true", help="Overwrite existing channels.feishu config")
     init_feishu.set_defaults(handler=handle_init_feishu)
 
@@ -1969,6 +1975,145 @@ def handle_logs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _feishu_channel_config(app_id: str, app_secret: str) -> dict[str, Any]:
+    return {
+        "app_id": app_id,
+        "app_secret": app_secret,
+        "stream": False,
+        "enable_memory": True,
+        "group_history_count": 10,
+        "group_reply_without_mention": False,
+    }
+
+
+def _normalize_feishu_qr_payload(payload: Any) -> tuple[Optional[str], Optional[int], Optional[str]]:
+    url: Optional[str] = None
+    expire_in: Optional[int] = None
+    if isinstance(payload, str):
+        url = payload.strip() or None
+    elif isinstance(payload, dict):
+        raw_url = payload.get("url") or payload.get("verification_uri_complete")
+        if raw_url is not None:
+            url = str(raw_url).strip() or None
+        raw_expire = payload.get("expire_in") or payload.get("expires_in")
+        if raw_expire is not None:
+            try:
+                expire_in = int(raw_expire)
+            except (TypeError, ValueError):
+                expire_in = None
+    elif payload is not None:
+        url = str(payload).strip() or None
+
+    user_code: Optional[str] = None
+    if url:
+        user_code = parse_qs(urlparse(url).query).get("user_code", [None])[0]
+    return url, expire_in, user_code
+
+
+def _format_feishu_expiry(expire_in: Optional[int]) -> Optional[str]:
+    if expire_in is None or expire_in <= 0:
+        return None
+    minutes, seconds = divmod(expire_in, 60)
+    if seconds == 0:
+        unit = "minute" if minutes == 1 else "minutes"
+        return f"{minutes} {unit}"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    unit = "second" if seconds == 1 else "seconds"
+    return f"{seconds} {unit}"
+
+
+def _print_feishu_post_setup(config_path: Path) -> None:
+    print(f"\nUpdated {config_path} with channels.feishu\n")
+
+    print("===== Optional: group chat setup in the Feishu Developer Console =====\n")
+    print("Only if you want to use the agent in group chats:")
+    print("1. Open your agent: https://open.feishu.cn/app")
+    print("2. Check these extra permissions in the Feishu Developer Console:")
+    print("  - im:message.group_msg (for group chats)")
+    print("  - im:message.group_at_msg.include_bot:readonly (for group @mentions from users and bots)")
+    print("  - contact:user.base:readonly (for user display names)")
+    print("  - admin:app.info:readonly (for other bot or agent display names)")
+    print("\nIf you only use the agent in direct chat, you can skip this section for now.\n")
+
+    print("===== Start your Feishu bot =====\n")
+    print("Run: `xagent service start feishu` or `xagent service start all` to start your bot.\n")
+    print("======================================================\n")
+
+def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
+    """Run the one-click Feishu app registration (RFC 8628 device flow).
+
+    Returns ``(app_id, app_secret)`` on success, or ``None`` if the user
+    cancelled or the SDK is missing.
+    """
+    try:
+        from lark_oapi import register_app
+        from lark_oapi.scene.registration import (
+            AppAccessDeniedError,
+            AppExpiredError,
+            RegisterAppError,
+        )
+    except ImportError:
+        print("One-click registration requires lark-oapi>=1.5.5.")
+        print("Upgrade with: pip install -U 'lark-oapi>=1.5.5'")
+        print("Or rerun with --manual to enter the App ID/Secret yourself.")
+        return None
+
+    import threading
+
+    cancel_event = threading.Event()
+
+    def on_qr_code(qr_payload: Any) -> None:
+        url, expire_in, user_code = _normalize_feishu_qr_payload(qr_payload)
+        expiry_label = _format_feishu_expiry(expire_in)
+        if url:
+            print("Click ---> ", url)
+        else:
+            print("\nFeishu returned an authorization step, but no browser link was included.")
+            print("Please retry `xagent init feishu`, or use `--manual` if the problem persists.")
+        print("\nWaiting for authorization... (press Ctrl+C to cancel)\n")
+
+    def on_status_change(info: dict) -> None:
+        status = info.get("status")
+        if status == "domain_switched":
+            print("Switched to Lark Suite domain, continuing...")
+
+    try:
+        result = register_app(
+            on_qr_code=on_qr_code,
+            on_status_change=on_status_change,
+            source="xagent-cli",
+            cancel_event=cancel_event,
+        )
+    except KeyboardInterrupt:
+        cancel_event.set()
+        print("\nRegistration cancelled.")
+        return None
+    except AppAccessDeniedError:
+        print("\nAuthorization was denied. Ask a Feishu admin to approve the app, then retry.")
+        return None
+    except AppExpiredError:
+        print("\nThe authorization request expired. Rerun `xagent init feishu` to try again.")
+        return None
+    except RegisterAppError as exc:
+        error, description = (exc.args + ("", ""))[:2]
+        print(f"\nRegistration failed: {error} {description}".rstrip())
+        return None
+
+    app_id = str(result.get("client_id") or "").strip()
+    app_secret = str(result.get("client_secret") or "").strip()
+    if not app_id or not app_secret:
+        print("\nRegistration did not return credentials. Rerun with --manual to enter them yourself.")
+        return None
+
+    user_info = result.get("user_info") or {}
+    user_name = user_info.get("name") or user_info.get("en_name")
+    if user_name:
+        print(f"\nAuthorized by {user_name}.")
+    print(f"Created Feishu app: {app_id}")
+    return app_id, app_secret
+
+
 def handle_init_feishu(args: argparse.Namespace) -> int:
     config_path = _config_path(args)
     if not config_path.is_file():
@@ -1994,45 +2139,42 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
         print("channels.feishu already exists. Use --force to overwrite.")
         return 1
 
-    print("")
-    print("Feishu setup guide:\n")
-    print("1. Create an agent: https://open.feishu.cn/page/launcher")
-    print("2. Copy your App ID and App Secret.")
-    print("")
+    manual = args.manual or bool(args.app_id) or bool(args.app_secret)
 
-    app_id = args.app_id or input("Feishu App ID: ").strip()
-    if not app_id:
-        print("App ID is required.")
-        return 1
-    app_secret = args.app_secret or getpass.getpass("Feishu App Secret: ").strip()
-    if not app_secret:
-        print("App Secret is required.")
-        return 1
+    if manual:
+        print("")
+        print("Feishu setup guide:\n")
+        print("1. Create an agent: https://open.feishu.cn/page/launcher")
+        print("2. Copy your App ID and App Secret.")
+        print("")
+
+        app_id = args.app_id or input("Feishu App ID: ").strip()
+        if not app_id:
+            print("App ID is required.")
+            return 1
+        app_secret = args.app_secret or getpass.getpass("Feishu App Secret: ").strip()
+        if not app_secret:
+            print("App Secret is required.")
+            return 1
+    else:
+        print("")
+        print("Creating your Feishu Agent.\n")
+        print("Tip: rerun with --manual to enter an existing App ID/Secret instead.\n")
+        print("The browser authorization link will appear here next. Keep this terminal open.\n")
+        credentials = _register_feishu_app_via_qr()
+        if credentials is None:
+            return 1
+        app_id, app_secret = credentials
 
     api_cfg = channels_cfg.setdefault("api", {})
     if isinstance(api_cfg, dict):
         api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
         api_cfg.setdefault("port", BaseAgentConfig.DEFAULT_PORT)
 
-    channels_cfg["feishu"] = {
-        "app_id": app_id,
-        "app_secret": app_secret,
-        "stream": False,
-        "enable_memory": True,
-        "group_history_count": 10,
-    }
+    channels_cfg["feishu"] = _feishu_channel_config(app_id, app_secret)
 
     config_path.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
-    print(f"\nUpdated {config_path} with channels.feishu\n")
-    print("===== Finish setup in the Feishu Developer Console =====\n")
-    print("1. Open your agent: https://open.feishu.cn/app")
-    print("2. Add extra permissions:")
-    print("  - im:message.group_msg (for group chats)")
-    print("  - im:message.group_at_msg.include_bot:readonly (for group @mentions from users and bots)")
-    print("  - contact:user.base:readonly (for user display names)")
-    print("  - admin:app.info:readonly (for other bot or agent display names)")
-    print("\nRun: `xagent service start feishu` or `xagent service start all` to start your bot.\n")
-    print("======================================================\n")
+    _print_feishu_post_setup(config_path)
     return 0
 
 

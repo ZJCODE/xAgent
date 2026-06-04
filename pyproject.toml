@@ -36,7 +36,7 @@ dependencies = [
     "requests>=2.32.0",
     
     # Utilities
-    "lark-oapi>=1.4.16",
+    "lark-oapi>=1.5.5",
     "pillow>=10.0.0",
     "posthog>=3.6.0",
     "pyyaml>=6.0.2",

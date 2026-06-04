@@ -89,7 +89,10 @@ The Web UI includes a Tasks tab for viewing and deleting scheduled tasks. API/We
 Configure the Feishu channel after the base init:
 
 ```bash
+# One-click: creates the Feishu app and writes the config (admin authorization required)
 xagent init feishu
+# Or paste an existing App ID/Secret instead:
+xagent init feishu --manual
 xagent service start feishu
 ```
 
