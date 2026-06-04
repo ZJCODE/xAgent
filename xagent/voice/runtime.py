@@ -6,7 +6,16 @@ import contextlib
 import threading
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Protocol
+
+from xagent.core.config import AgentConfig
+from xagent.core.runtime import (
+    AsyncTaskScheduler,
+    ScheduledDeliveryContext,
+    ScheduledTaskRecord,
+    scheduled_delivery_context,
+)
 
 from .config import VoiceChannelConfig
 
@@ -26,6 +35,7 @@ class VoiceRuntimeOptions:
     user_id: str = "local_voice"
     enable_memory: bool = True
     stream: bool = True
+    tasks_dir: Optional[Path | str] = None
 
 
 class VoiceMicrophone(Protocol):
@@ -93,6 +103,14 @@ class VoiceRuntime:
         self.output = output
         self.pause_event = threading.Event()
         self.stop_event = threading.Event()
+        self._playback_lock = asyncio.Lock()
+        self.task_scheduler: AsyncTaskScheduler | None = None
+        if self.options.tasks_dir is not None:
+            self.task_scheduler = AsyncTaskScheduler(
+                self.options.tasks_dir,
+                can_handle=self._can_handle_scheduled_task,
+                dispatch=self._dispatch_scheduled_task,
+            )
 
     async def run_forever(self) -> None:
         """Run the foreground voice loop until interrupted or stopped."""
@@ -108,6 +126,8 @@ class VoiceRuntime:
         )
         next_utterance_task: asyncio.Future[VoiceUtterance | None] | None = None
         try:
+            if self.task_scheduler is not None:
+                await self.task_scheduler.start()
             next_utterance_task = self._create_next_utterance_task(utterances)
             while not self.stop_event.is_set():
                 utterance = await next_utterance_task
@@ -123,8 +143,18 @@ class VoiceRuntime:
             self.stop_event.set()
             if next_utterance_task is not None and not next_utterance_task.done():
                 next_utterance_task.cancel()
+            if self.task_scheduler is not None:
+                await self.task_scheduler.stop()
 
     async def _reply_to_utterance(
+        self,
+        utterance: VoiceUtterance,
+        utterances: Iterator[VoiceUtterance],
+    ) -> "asyncio.Future[VoiceUtterance | None]":
+        async with self._playback_lock:
+            return await self._reply_to_utterance_locked(utterance, utterances)
+
+    async def _reply_to_utterance_locked(
         self,
         utterance: VoiceUtterance,
         utterances: Iterator[VoiceUtterance],
@@ -261,11 +291,12 @@ class VoiceRuntime:
 
     async def _agent_text_chunks(self, transcript: str) -> AsyncIterator[str]:
         if not hasattr(self.agent, "chat_events"):
-            response = await self.agent(
-                user_message=transcript,
-                user_id=self.options.user_id,
-                enable_memory=self.options.enable_memory,
-            )
+            with scheduled_delivery_context(self._delivery_context()):
+                response = await self.agent(
+                    user_message=transcript,
+                    user_id=self.options.user_id,
+                    enable_memory=self.options.enable_memory,
+                )
             text = str(response or "")
             if text:
                 self.output(f"Agent: {text}")
@@ -275,38 +306,141 @@ class VoiceRuntime:
         self.output("Agent: ", end="")
         started = False
         message_delta_seen: set[str] = set()
-        async for event in self.agent.chat_events(
-            user_message=transcript,
-            user_id=self.options.user_id,
-            stream=self.options.stream,
-            enable_memory=self.options.enable_memory,
-        ):
-            event_type = event.get("type")
-            message_id = str(event.get("message_id") or uuid.uuid4().hex)
-            if event_type == "message_delta":
-                delta = str(event.get("delta") or "")
-                if not delta:
-                    continue
-                message_delta_seen.add(message_id)
-                self.output(delta, end="")
-                started = True
-                yield delta
-                continue
-            if event_type == "message_done":
-                content = str(event.get("content") or "")
-                if content and message_id not in message_delta_seen:
-                    self.output(content, end="")
+        with scheduled_delivery_context(self._delivery_context()):
+            async for event in self.agent.chat_events(
+                user_message=transcript,
+                user_id=self.options.user_id,
+                stream=self.options.stream,
+                enable_memory=self.options.enable_memory,
+            ):
+                event_type = event.get("type")
+                message_id = str(event.get("message_id") or uuid.uuid4().hex)
+                if event_type == "message_delta":
+                    delta = str(event.get("delta") or "")
+                    if not delta:
+                        continue
+                    message_delta_seen.add(message_id)
+                    self.output(delta, end="")
                     started = True
-                    yield content
-                continue
-            if event_type == "error":
-                error = str(event.get("error") or "Agent processing error.")
-                if started:
-                    self.output("")
-                self.output(f"Agent error: {error}")
-                return
+                    yield delta
+                    continue
+                if event_type == "message_done":
+                    content = str(event.get("content") or "")
+                    if content and message_id not in message_delta_seen:
+                        self.output(content, end="")
+                        started = True
+                        yield content
+                    continue
+                if event_type == "error":
+                    error = str(event.get("error") or "Agent processing error.")
+                    if started:
+                        self.output("")
+                    self.output(f"Agent error: {error}")
+                    return
         if started:
             self.output("")
+
+    def _delivery_context(self, *, task: ScheduledTaskRecord | None = None) -> ScheduledDeliveryContext:
+        if task is None:
+            return ScheduledDeliveryContext(
+                channel="voice",
+                user_id=self.options.user_id,
+                target={"user_id": self.options.user_id},
+                metadata={"source": "voice"},
+            )
+        return ScheduledDeliveryContext(
+            channel="voice",
+            user_id=task.delivery_user_id or self.options.user_id,
+            target=task.delivery.get("target") if isinstance(task.delivery.get("target"), dict) else {},
+            metadata={
+                "source": "scheduled_task",
+                "task_id": task.task_id,
+                "task_name": task.name,
+                "task_type": task.task_type,
+            },
+        )
+
+    def _can_handle_scheduled_task(self, task: ScheduledTaskRecord) -> bool:
+        return task.kind == "task" and task.delivery_channel == "voice"
+
+    async def _dispatch_scheduled_task(self, task: ScheduledTaskRecord) -> None:
+        text = await self._scheduled_task_text(task)
+        if not text:
+            raise ValueError("scheduled voice task produced no content")
+        self.output(f"\nScheduled task: {task.title or task.task_type or 'Reminder'}")
+        async with self._playback_lock:
+            await self._play_scheduled_text(text)
+
+    async def _play_scheduled_text(self, text: str) -> None:
+        self.pause_event.set()
+        playback_stop_event = threading.Event()
+        playback_task: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        player_errors: list[BaseException] = []
+
+        def play_worker() -> None:
+            text_queue = _TextChunkQueue()
+            try:
+                text_queue.put(text)
+                text_queue.close()
+                audio_chunks = self.synthesizer.synthesize_chunks(
+                    text_queue,
+                    language=self.config.tts_language_for(""),
+                    stop_event=playback_stop_event,
+                )
+                self.player.play_chunks(audio_chunks, stop_event=playback_stop_event)
+            except BaseException as exc:  # noqa: BLE001 - forwarded to scheduler
+                player_errors.append(exc)
+            finally:
+                text_queue.close()
+                _complete_future_threadsafe(playback_task, None)
+
+        threading.Thread(target=play_worker, daemon=True, name="xagent-voice-scheduled-playback").start()
+        try:
+            await playback_task
+            if player_errors:
+                raise RuntimeError(f"Voice scheduled playback failed: {player_errors[0]}") from player_errors[0]
+        finally:
+            playback_stop_event.set()
+            self.pause_event.clear()
+
+    async def _scheduled_task_text(self, task: ScheduledTaskRecord) -> str:
+        if task.task_type == "message":
+            return task.content.strip()
+        if task.task_type != "agent":
+            raise ValueError(f"unsupported scheduled voice task type: {task.task_type}")
+
+        prompt = f"Scheduled task is due now. Complete it and reply with the message to deliver:\n\n{task.content}"
+        with scheduled_delivery_context(self._delivery_context(task=task)):
+            if hasattr(self.agent, "chat_events"):
+                parts: list[str] = []
+                message_delta_seen: set[str] = set()
+                async for event in self.agent.chat_events(
+                    user_message=prompt,
+                    user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
+                    stream=self.options.stream,
+                    enable_memory=self.options.enable_memory,
+                ):
+                    event_type = event.get("type")
+                    message_id = str(event.get("message_id") or uuid.uuid4().hex)
+                    if event_type == "message_delta":
+                        delta = str(event.get("delta") or "")
+                        if delta:
+                            message_delta_seen.add(message_id)
+                            parts.append(delta)
+                    elif event_type == "message_done" and message_id not in message_delta_seen:
+                        content = str(event.get("content") or "")
+                        if content:
+                            parts.append(content)
+                    elif event_type == "error":
+                        raise RuntimeError(str(event.get("error") or "Agent processing error."))
+                return "".join(parts).strip()
+
+            response = await self.agent(
+                user_message=prompt,
+                user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
+                enable_memory=self.options.enable_memory,
+            )
+        return str(response or "").strip()
 
 
 def _next_or_none(iterator: Iterator[VoiceUtterance]) -> VoiceUtterance | None:

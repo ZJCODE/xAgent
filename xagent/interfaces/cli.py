@@ -1512,6 +1512,7 @@ def handle_voice(args: argparse.Namespace) -> int:
                 user_id=args.user_id or "local_voice",
                 enable_memory=bool(args.memory),
                 stream=True,
+                tasks_dir=runner.tasks_dir,
             ),
         )
     except Exception as exc:

@@ -1,9 +1,12 @@
 import asyncio
 import json
+import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta
 
+from xagent.core.runtime import current_delivery_context, enqueue_scheduled_task, list_active_task_records
 from xagent.voice.config import VoiceChannelConfig, VoiceTTSConfig
 from xagent.voice.factory import create_local_voice_runtime
 from xagent.voice.qwen import QwenRealtimeSTT, QwenRealtimeTTS, _qwen_realtime_url
@@ -155,6 +158,25 @@ class FakeAgent:
         yield {"type": "done"}
 
 
+class ContextCapturingAgent:
+    async def chat_events(self, **kwargs):
+        self.kwargs = kwargs
+        context = current_delivery_context()
+        self.context = context
+        yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "ok"}
+        yield {"type": "done"}
+
+
+class ScheduledAgent:
+    async def chat_events(self, **kwargs):
+        self.kwargs = kwargs
+        context = current_delivery_context()
+        self.context = context
+        yield {"type": "message_delta", "message_id": "m1", "phase": "final", "delta": "done"}
+        yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "done"}
+        yield {"type": "done"}
+
+
 class InterruptibleAgent:
     def __init__(self):
         self.messages = []
@@ -252,6 +274,97 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(synth.calls[0]["language"], "zh")
         self.assertEqual(synth.calls[0]["chunks"], ["hello ", "there."])
         self.assertEqual(player.played, [b"hello ", b"there."])
+
+    def test_runtime_sets_voice_delivery_context_for_scheduled_task_creation(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "test-key"})
+        agent = ContextCapturingAgent()
+        runtime = VoiceRuntime(
+            agent=agent,
+            config=config,
+            microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([VoiceUtterance(text="提醒我", language="zh")]),
+            synthesizer=FakeSynthesizer(),
+            player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            output=lambda *args, **kwargs: None,
+        )
+
+        asyncio.run(runtime.run_forever())
+
+        self.assertEqual(agent.context.channel, "voice")
+        self.assertEqual(agent.context.user_id, "alice")
+        self.assertEqual(agent.context.target["user_id"], "alice")
+
+    def test_runtime_dispatches_due_voice_message_task_to_tts(self):
+        async def run_task():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="该喝水了",
+                    run_at=datetime.now() - timedelta(seconds=1),
+                    tasks_dir=tmpdir,
+                    channel="voice",
+                    user_id="alice",
+                    target={"user_id": "alice"},
+                )
+                synth = FakeSynthesizer()
+                player = FakePlayer()
+                runtime = VoiceRuntime(
+                    agent=FakeAgent(),
+                    config=VoiceChannelConfig.from_dict({"api_key": "test-key"}),
+                    microphone=FakeMicrophone(),
+                    recognizer=FakeRecognizer([]),
+                    synthesizer=synth,
+                    player=player,
+                    options=VoiceRuntimeOptions(user_id="alice", enable_memory=False, tasks_dir=tmpdir),
+                    output=lambda *args, **kwargs: None,
+                )
+
+                self.assertIsNotNone(runtime.task_scheduler)
+                await runtime.task_scheduler.tick()
+
+                self.assertEqual(synth.calls[0]["chunks"], ["该喝水了"])
+                self.assertEqual(player.played, ["该喝水了".encode("utf-8")])
+                self.assertEqual(list_active_task_records(tmpdir), [])
+
+        asyncio.run(run_task())
+
+    def test_runtime_dispatches_due_voice_agent_task_with_voice_context(self):
+        async def run_task():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_scheduled_task(
+                    task_type="agent",
+                    content="查一下状态",
+                    run_at=datetime.now() - timedelta(seconds=1),
+                    tasks_dir=tmpdir,
+                    channel="voice",
+                    user_id="alice",
+                    target={"user_id": "alice"},
+                )
+                agent = ScheduledAgent()
+                synth = FakeSynthesizer()
+                runtime = VoiceRuntime(
+                    agent=agent,
+                    config=VoiceChannelConfig.from_dict({"api_key": "test-key"}),
+                    microphone=FakeMicrophone(),
+                    recognizer=FakeRecognizer([]),
+                    synthesizer=synth,
+                    player=FakePlayer(),
+                    options=VoiceRuntimeOptions(user_id="fallback", enable_memory=False, tasks_dir=tmpdir),
+                    output=lambda *args, **kwargs: None,
+                )
+
+                self.assertIsNotNone(runtime.task_scheduler)
+                await runtime.task_scheduler.tick()
+
+                self.assertEqual(agent.kwargs["user_id"], "alice")
+                self.assertIn("Scheduled task is due now", agent.kwargs["user_message"])
+                self.assertEqual(agent.context.channel, "voice")
+                self.assertEqual(agent.context.user_id, "alice")
+                self.assertEqual(synth.calls[0]["chunks"], ["done"])
+                self.assertEqual(list_active_task_records(tmpdir), [])
+
+        asyncio.run(run_task())
 
     def test_runtime_default_keeps_microphone_paused_during_playback(self):
         config = VoiceChannelConfig.from_dict({"api_key": "test-key"})
