@@ -364,13 +364,13 @@ class AgentCLI(BaseAgentRunner):
                 if line_open and console is not None:
                     console.print()
                 if console is not None:
-                    console.print("[green]xAgent[/green]: ", end="")
+                    console.print("[magenta]xAgent[/magenta]: ", end="")
                 line_open = True
                 line_has_streamed_text = False
                 continue
             if event_type == "message_delta":
                 if not line_open and console is not None:
-                    console.print("[green]xAgent[/green]: ", end="")
+                    console.print("[magenta]xAgent[/magenta]: ", end="")
                     line_open = True
                     line_has_streamed_text = False
                 delta = self._format_cli_output(event.get("delta", ""))
@@ -526,6 +526,9 @@ MODEL_PLACEHOLDER = "your_model_here"
 LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
 LANGFUSE_PUBLIC_KEY_PLACEHOLDER = "pk-lf-..."
 LANGFUSE_SECRET_KEY_PLACEHOLDER = "sk-lf-..."
+CUSTOM_MODEL_OPTION = "Custom"
+DEFAULT_MESSAGE_LIST_COUNT = 5
+MESSAGE_LIST_COUNT_CHOICES = (2, 5, 10)
 
 OPENAI_MODELS = (
     "gpt-5.4",
@@ -844,6 +847,28 @@ def _select_option(
         print(f"Please enter a number from 1 to {len(options)}.")
 
 
+def _model_options(options: Sequence[str]) -> tuple[str, ...]:
+    if CUSTOM_MODEL_OPTION in options:
+        return tuple(options)
+
+    values = list(options)
+    values.append(CUSTOM_MODEL_OPTION)
+    return tuple(values)
+
+
+def _resolve_selected_model(
+    selected_model: str,
+    *,
+    prompt_text: Callable[[str, Optional[str]], str],
+) -> str:
+    if selected_model == CUSTOM_MODEL_OPTION:
+        custom_model = prompt_text("Custom model name", MODEL_PLACEHOLDER).strip()
+        return custom_model or MODEL_PLACEHOLDER
+    if selected_model == "Decide later":
+        return MODEL_PLACEHOLDER
+    return selected_model
+
+
 def _select_search_provider(
     provider: str,
     *,
@@ -978,6 +1003,12 @@ def _menu_option_rows(options: Sequence[str], descriptions: Optional[dict[str, s
     return rows
 
 
+def _model_option_rows(options: Sequence[str], descriptions: Optional[dict[str, str]] = None) -> list[MenuOption]:
+    option_descriptions = dict(descriptions or {})
+    option_descriptions[CUSTOM_MODEL_OPTION] = "Enter a custom model name now."
+    return _menu_option_rows(_model_options(options), option_descriptions)
+
+
 def _terminal_select_option(
     ui: TerminalUI,
     title: str,
@@ -996,6 +1027,78 @@ def _terminal_select_option(
     if choice is None:
         raise KeyboardInterrupt()
     return choice.key
+
+
+def _select_model_option(
+    title: str,
+    options: Sequence[str],
+    *,
+    default_index: int = 0,
+    input_func: Callable[[str], str] = input,
+) -> str:
+    return _resolve_selected_model(
+        _select_option(
+            title,
+            _model_options(options),
+            default_index=default_index,
+            input_func=input_func,
+        ),
+        prompt_text=lambda prompt, default: _prompt_text(
+            prompt,
+            default=default,
+            input_func=input_func,
+        ),
+    )
+
+
+def _terminal_select_model_option(
+    ui: TerminalUI,
+    title: str,
+    options: Sequence[str],
+    *,
+    descriptions: Optional[dict[str, str]] = None,
+    default_index: int = 0,
+    subtitle: str = "",
+) -> str:
+    choice = ui.select(
+        label=title,
+        subtitle=subtitle,
+        options=_model_option_rows(options, descriptions),
+        default_index=default_index,
+    )
+    if choice is None:
+        raise KeyboardInterrupt()
+    return _resolve_selected_model(
+        choice.key,
+        prompt_text=lambda prompt, default: _terminal_prompt_text(ui, prompt, default=default),
+    )
+
+
+def _prompt_message_list_count_terminal_ui(ui: TerminalUI) -> Optional[int]:
+    choice = ui.select(
+        label="Recent message count",
+        subtitle="Choose how many recent stored messages to print.",
+        options=[
+            MenuOption(str(count), str(count), f"Show the latest {count} stored messages.")
+            for count in MESSAGE_LIST_COUNT_CHOICES
+        ]
+        + [MenuOption("custom", "Custom", "Enter a custom number.")],
+        default_index=0,
+    )
+    if choice is None:
+        return None
+    if choice.key != "custom":
+        return int(choice.key)
+
+    while True:
+        raw_value = ui.ask_text(
+            "Recent message count",
+            default=str(DEFAULT_MESSAGE_LIST_COUNT),
+            subtitle="Enter a positive whole number.",
+        ).strip()
+        if raw_value.isdigit() and int(raw_value) > 0:
+            return int(raw_value)
+        ui.print_panel("Please enter a positive whole number.", title="Input Required")
 
 
 def _terminal_prompt_text(ui: TerminalUI, prompt: str, *, default: Optional[str] = None) -> str:
@@ -1045,7 +1148,7 @@ def collect_init_selection_terminal_ui(
     supports_vision = False
 
     if provider == PROVIDER_OPENAI:
-        selected_model = _terminal_select_option(
+        selected_model = _terminal_select_model_option(
             wizard_ui,
             "OpenAI Model",
             OPENAI_MODELS,
@@ -1060,7 +1163,7 @@ def collect_init_selection_terminal_ui(
         )
         base_url = OPENAI_BASE_URL
     elif provider == PROVIDER_ANTHROPIC:
-        selected_model = _terminal_select_option(
+        selected_model = _terminal_select_model_option(
             wizard_ui,
             "Anthropic Model",
             ANTHROPIC_MODELS,
@@ -1068,7 +1171,7 @@ def collect_init_selection_terminal_ui(
         )
         base_url = ANTHROPIC_BASE_URL
     elif provider == PROVIDER_DEEPSEEK:
-        selected_model = _terminal_select_option(
+        selected_model = _terminal_select_model_option(
             wizard_ui,
             "DeepSeek Model",
             DEEPSEEK_MODELS,
@@ -1076,7 +1179,7 @@ def collect_init_selection_terminal_ui(
         )
         base_url = DEEPSEEK_BASE_URL
     elif provider == PROVIDER_MINIMAX:
-        selected_model = _terminal_select_option(
+        selected_model = _terminal_select_model_option(
             wizard_ui,
             "MiniMax Model",
             MINIMAX_MODELS,
@@ -1084,7 +1187,7 @@ def collect_init_selection_terminal_ui(
         )
         base_url = MINIMAX_BASE_URL
     elif provider == PROVIDER_QWEN:
-        selected_model = _terminal_select_option(
+        selected_model = _terminal_select_model_option(
             wizard_ui,
             "Qwen Model",
             QWEN_MODELS,
@@ -1298,7 +1401,7 @@ def collect_init_selection(
     supports_vision = False
 
     if provider == PROVIDER_OPENAI:
-        selected_model = _select_option(
+        selected_model = _select_model_option(
             "OpenAI model",
             OPENAI_MODELS,
             default_index=1,
@@ -1306,7 +1409,7 @@ def collect_init_selection(
         )
         base_url = OPENAI_BASE_URL
     elif provider == PROVIDER_ANTHROPIC:
-        selected_model = _select_option(
+        selected_model = _select_model_option(
             "Anthropic model",
             ANTHROPIC_MODELS,
             default_index=0,
@@ -1314,7 +1417,7 @@ def collect_init_selection(
         )
         base_url = ANTHROPIC_BASE_URL
     elif provider == PROVIDER_DEEPSEEK:
-        selected_model = _select_option(
+        selected_model = _select_model_option(
             "DeepSeek model",
             DEEPSEEK_MODELS,
             default_index=0,
@@ -1322,7 +1425,7 @@ def collect_init_selection(
         )
         base_url = DEEPSEEK_BASE_URL
     elif provider == PROVIDER_MINIMAX:
-        selected_model = _select_option(
+        selected_model = _select_model_option(
             "MiniMax model",
             MINIMAX_MODELS,
             default_index=0,
@@ -1330,7 +1433,7 @@ def collect_init_selection(
         )
         base_url = MINIMAX_BASE_URL
     elif provider == PROVIDER_QWEN:
-        selected_model = _select_option(
+        selected_model = _select_model_option(
             "Qwen model",
             QWEN_MODELS,
             default_index=1,
@@ -3478,7 +3581,7 @@ def _run_inspect_launcher(config_dir: Path) -> int:
         MenuOption("memory_stats", "Memory Stats", "Show long-term memory file counts and bytes."),
         MenuOption("memory_list", "Memory List", "List memory markdown files."),
         MenuOption("messages_stats", "Message Stats", "Show message stream storage stats."),
-        MenuOption("messages_list", "Message List", "List recent stored messages."),
+        MenuOption("messages_list", "Message List", "Choose how many recent stored messages to print."),
         MenuOption("back", "Back", "Return to the main launcher."),
     ]
 
@@ -3511,11 +3614,14 @@ def _run_inspect_launcher(config_dir: Path) -> int:
         elif option.key == "messages_stats":
             exit_code = handle_messages(_launcher_args(config_dir=str(config_dir), messages_command="stats"))
         else:
+            count = _prompt_message_list_count_terminal_ui(ui)
+            if count is None:
+                continue
             exit_code = handle_messages(
                 _launcher_args(
                     config_dir=str(config_dir),
                     messages_command="list",
-                    count=20,
+                    count=count,
                     offset=0,
                 )
             )

@@ -4,6 +4,7 @@ import tomllib
 import unittest
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import yaml
@@ -20,7 +21,12 @@ from xagent.core.providers import (
     provider_model_api,
 )
 from xagent.interfaces.channels import enabled_channels_from_config
-from xagent.interfaces.cli import InitSelection, collect_init_selection, init_agent_directory
+from xagent.interfaces.cli import (
+    InitSelection,
+    collect_init_selection,
+    collect_init_selection_terminal_ui,
+    init_agent_directory,
+)
 from xagent.interfaces.base import BaseAgentRunner
 
 
@@ -1111,6 +1117,73 @@ provider:
         self.assertEqual(selection.search_provider, "none")
         self.assertEqual(selection.image_generation_provider, "none")
         self.assertIn("Describe this agent's role", selection.identity)
+
+    def test_collect_init_selection_supports_custom_model_name(self):
+        answers = iter([
+            "1",
+            "6",
+            "gpt-5.4-lab",
+            "",
+            "",
+            "",
+            ".",
+        ])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: "",
+        )
+
+        self.assertEqual(selection.provider, "openai")
+        self.assertEqual(selection.model, "gpt-5.4-lab")
+        self.assertEqual(selection.api_key, "your_api_key_here")
+
+    def test_collect_init_selection_terminal_ui_supports_custom_model_name(self):
+        class FakeUI:
+            interactive = True
+
+            def __init__(self):
+                self.model_options = []
+
+            def select(self, *, label, subtitle="", options, default_index=0):
+                del subtitle, default_index
+                if label == "Provider":
+                    return SimpleNamespace(key="deepseek")
+                if label == "DeepSeek Model":
+                    self.model_options = [option.key for option in options]
+                    return SimpleNamespace(key="Custom")
+                if label == "Search Provider":
+                    return SimpleNamespace(key="none")
+                if label == "Image Generation Provider":
+                    return SimpleNamespace(key="none")
+                raise AssertionError(f"Unexpected select prompt: {label}")
+
+            def confirm(self, label, *, default=False):
+                del default
+                if label in {"Enable Langfuse observability?", "Enable voice mode?"}:
+                    return False
+                raise AssertionError(f"Unexpected confirm prompt: {label}")
+
+            def ask_text(self, label, *, default=None, secret=False, subtitle=""):
+                del default, secret, subtitle
+                if label == "Custom model name":
+                    return "deepseek-v4-lab"
+                if label == "Identity":
+                    return "Terminal identity"
+                raise AssertionError(f"Unexpected text prompt: {label}")
+
+            def ask_secret(self, prompt):
+                del prompt
+                return ""
+
+        ui = FakeUI()
+
+        selection = collect_init_selection_terminal_ui(ui=ui)
+
+        self.assertIn("Custom", ui.model_options)
+        self.assertEqual(selection.provider, "deepseek")
+        self.assertEqual(selection.model, "deepseek-v4-lab")
+        self.assertEqual(selection.api_key, "your_api_key_here")
 
     def test_collect_init_selection_supports_qwen_models(self):
         answers = iter([

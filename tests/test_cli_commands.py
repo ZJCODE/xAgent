@@ -14,6 +14,7 @@ from xagent.interfaces.cli import (
     AgentCLI,
     FeishuInitSelection,
     InitSelection,
+    _run_inspect_launcher,
     _format_cli_attachments,
     _format_cli_workspace_links,
     build_parser,
@@ -110,6 +111,57 @@ class CLICommandTests(unittest.TestCase):
             formatted = _format_cli_attachments(attachments, workspace)
 
         self.assertEqual(formatted, f"Attachments:\n- {workspace / 'temp' / 'images' / 'result.png'}")
+
+    def test_inspect_launcher_message_list_accepts_custom_count(self):
+        class FakeUI:
+            def __init__(self):
+                self.menu_choices = iter([
+                    SimpleNamespace(key="messages_list"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.count_option_keys = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del title, subtitle, options, footer
+                return next(self.menu_choices)
+
+            def select(self, *, label, subtitle="", options, default_index=0):
+                del subtitle, default_index
+                if label != "Recent message count":
+                    raise AssertionError(f"Unexpected select prompt: {label}")
+                self.count_option_keys = [option.key for option in options]
+                return SimpleNamespace(key="custom")
+
+            def ask_text(self, label, *, default=None, secret=False, subtitle=""):
+                del default, secret, subtitle
+                if label != "Recent message count":
+                    raise AssertionError(f"Unexpected text prompt: {label}")
+                return "7"
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
+                with patch("xagent.interfaces.cli.handle_messages", return_value=0) as handle_messages:
+                    exit_code = _run_inspect_launcher(Path(tmpdir))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_ui.count_option_keys, ["5", "10", "20", "50", "custom"])
+        handle_messages.assert_called_once()
+        args = handle_messages.call_args.args[0]
+        self.assertEqual(args.messages_command, "list")
+        self.assertEqual(args.count, 7)
+        self.assertEqual(args.offset, 0)
 
     def test_chat_events_print_structured_attachment_paths(self):
         class FakeAgent:
