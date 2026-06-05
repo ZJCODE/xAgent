@@ -2809,12 +2809,6 @@ def _print_feishu_post_setup(config_path: Path, selection: FeishuInitSelection) 
     summary.append("Configured behavior:\n")
     summary.append(f"- App ID: {selection.app_id}\n")
     summary.append(f"- Routing: {_feishu_routing_label(selection.group_reply_without_mention)}\n")
-    summary.append(f"- Delivery: {_feishu_delivery_label(selection.stream)}\n")
-    summary.append(f"- Memory: {_feishu_memory_label(selection.enable_memory)}\n")
-    summary.append(f"- Room context: {_feishu_group_history_label(selection.group_history_count)}\n")
-    summary.append(
-        f"- Sender labels: {_feishu_sender_label(group_history_count=selection.group_history_count, show_sender_ids=selection.show_sender_ids)}"
-    )
     ui.print_panel(summary, title="Feishu Ready", leading_blank_line=True)
 
     feishu_start = _format_init_command("xagent service start feishu", config_dir=config_dir)
@@ -2851,7 +2845,7 @@ def _print_feishu_post_setup(config_path: Path, selection: FeishuInitSelection) 
     if selection.group_reply_without_mention:
         next_steps.append("\n\n")
         next_steps.append(
-            "Caution: routing every group message can increase cost, reply to almost every message, feel noisy in busy rooms, and trigger reply loops when other bots are in the same room. Re-publish the app after scope changes.",
+            "Caution: The bot will respond to most group messages, which may increase costs and create noise in busy rooms.",
             style="yellow",
         )
 
