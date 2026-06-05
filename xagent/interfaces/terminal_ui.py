@@ -55,7 +55,7 @@ class TerminalUI:
 
     def print_panel(
         self,
-        message: str,
+        message,
         *,
         title: Optional[str] = None,
         border_style: str = "dim",
@@ -69,7 +69,10 @@ class TerminalUI:
             if message:
                 text.append("\n")
         if message:
-            text.append(str(message))
+            if isinstance(message, Text):
+                text.append_text(message)
+            else:
+                text.append(str(message))
         self.console.print(text, highlight=False, soft_wrap=True)
         self.console.print()
 

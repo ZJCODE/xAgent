@@ -52,6 +52,8 @@ from .channels import (
 from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
 from .terminal_ui import MenuOption, TerminalUI, rich_terminal_available
 
+from rich.text import Text  # type: ignore[import-not-found]
+
 
 _WORKSPACE_BLOB_CLI_LINK_RE = re.compile(
     r'(?:https?://[^\s<>"\')\]]+)?/api/workspace/blob\?path=[^\s<>"\')\]]+',
@@ -1622,21 +1624,26 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
     feishu_init = _format_init_command("xagent init feishu", config_dir=config_dir)
     feishu_start = _format_init_command("xagent service start feishu", config_dir=config_dir)
     doctor_command = _format_init_command("xagent doctor", config_dir=config_dir)
-    lines = ["Pick how you want to use it next.", "", "Ready now:"]
+    
+    content = Text()
+    content.append("Pick how you want to use it next.\n\n")
+    content.append("Ready now:\n")
     for name, command, description in ready_now:
-        lines.append(f"{name:<7} {command}")
-        lines.append(f"        {description}")
-    lines.extend([
-        "",
-        "Optional:",
-        f"feishu  {feishu_init}",
-        f"        Create a Feishu bot config, then start it with {feishu_start}.",
-        "",
-        "Check:",
-        f"doctor  {doctor_command}",
-        "        Verify local config, files, and channel readiness.",
-    ])
-    TerminalUI().print_panel("\n".join(lines), title="Next Steps")
+        content.append(f"{name:<7} ", style="")
+        content.append(command, style="cyan")
+        content.append(f"\n        {description}\n")
+    content.append("\nOptional:\n")
+    content.append("feishu  ", style="")
+    content.append(feishu_init, style="cyan")
+    content.append(f"\n        Create a Feishu bot config, then start it with ")
+    content.append(feishu_start, style="cyan")
+    content.append(".\n\n")
+    content.append("Check:\n")
+    content.append("doctor  ", style="")
+    content.append(doctor_command, style="cyan")
+    content.append("\n        Verify local config, files, and channel readiness.")
+    
+    TerminalUI().print_panel(content, title="Next Steps")
 
 
 def _add_dir_argument(parser: argparse.ArgumentParser) -> None:
