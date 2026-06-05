@@ -650,6 +650,24 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertIsInstance(runtime.recognizer, QwenRealtimeSTT)
         self.assertIsInstance(runtime.synthesizer, QwenRealtimeTTS)
 
+    def test_voice_factory_routes_custom_stt_tts_providers(self):
+        config = VoiceChannelConfig.from_dict(
+            {
+                "provider": "custom",
+                "stt": {"provider": "qwen", "api_key": "qwen-stt-key"},
+                "tts": {"provider": "soniox", "api_key": "soniox-tts-key"},
+            }
+        )
+
+        runtime = create_local_voice_runtime(
+            agent=object(),
+            config=config,
+            options=VoiceRuntimeOptions(),
+        )
+
+        self.assertIsInstance(runtime.recognizer, QwenRealtimeSTT)
+        self.assertIsInstance(runtime.synthesizer, SonioxRealtimeTTS)
+
     def test_voice_factory_requires_provider_selection(self):
         config = VoiceChannelConfig.from_dict({"api_key": "test-key"})
 

@@ -385,6 +385,10 @@ class InitSelection:
     voice_enabled: bool = False
     voice_provider: str = "none"
     voice_api_key: str = ""
+    voice_stt_provider: str = ""
+    voice_stt_api_key: str = ""
+    voice_tts_provider: str = ""
+    voice_tts_api_key: str = ""
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -466,6 +470,11 @@ MINIMAX_IMAGE_GENERATION_PROVIDERS = (
 )
 VOICE_PROVIDERS = (
     "none",
+    "soniox",
+    "qwen",
+    "custom",
+)
+VOICE_CUSTOM_PROVIDERS = (
     "soniox",
     "qwen",
 )
@@ -581,15 +590,36 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
     }
     if selection.voice_enabled:
         voice_provider = selection.voice_provider or "soniox"
-        config["channels"]["voice"] = {
+        voice_config = {
             "provider": voice_provider,
-            "api_key": selection.voice_api_key.strip() or _voice_api_key_placeholder(voice_provider),
             "audio": {
                 "input": "auto",
                 "output": "auto",
             },
-            **_voice_defaults_for_provider(voice_provider),
         }
+        if voice_provider == "custom":
+            stt_provider = selection.voice_stt_provider or "soniox"
+            tts_provider = selection.voice_tts_provider or "qwen"
+            stt_defaults = _voice_defaults_for_provider(stt_provider)["stt"]
+            tts_defaults = _voice_defaults_for_provider(tts_provider)["tts"]
+            voice_config["stt"] = {
+                "provider": stt_provider,
+                "api_key": selection.voice_stt_api_key.strip() or _voice_api_key_placeholder(stt_provider),
+                **stt_defaults,
+            }
+            voice_config["tts"] = {
+                "provider": tts_provider,
+                "api_key": selection.voice_tts_api_key.strip() or _voice_api_key_placeholder(tts_provider),
+                **tts_defaults,
+            }
+        else:
+            voice_config.update(
+                {
+                    "api_key": selection.voice_api_key.strip() or _voice_api_key_placeholder(voice_provider),
+                    **_voice_defaults_for_provider(voice_provider),
+                }
+            )
+        config["channels"]["voice"] = voice_config
     search_config = {"provider": selection.search_provider or "none"}
     if search_config["provider"] == "openai" and selection.provider != PROVIDER_OPENAI:
         search_config["api_key"] = selection.search_api_key or OPENAI_SEARCH_API_KEY_PLACEHOLDER
@@ -761,6 +791,24 @@ def _prompt_image_generation_api_key(
     return api_key or _image_generation_api_key_placeholder(image_generation_provider)
 
 
+def _prompt_voice_api_key(
+    voice_provider: str,
+    *,
+    provider: str,
+    main_api_key: str,
+    purpose: str = "voice",
+    secret_input_func: Callable[[str], str] = getpass.getpass,
+) -> str:
+    if voice_provider == "qwen" and provider == PROVIDER_QWEN:
+        return main_api_key if main_api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
+
+    prompt_name = "Qwen" if voice_provider == "qwen" else "Soniox"
+    api_key = secret_input_func(
+        f"{prompt_name} API key for {purpose} (leave blank to fill in later): "
+    ).strip()
+    return api_key or _voice_api_key_placeholder(voice_provider)
+
+
 def _select_custom_model_api(
     *,
     input_func: Callable[[str], str] = input,
@@ -870,6 +918,37 @@ def collect_init_selection(
     if not api_key:
         api_key = API_KEY_PLACEHOLDER
 
+    provider_api_cfg = {"name": provider}
+    if model_api:
+        provider_api_cfg["model_api"] = model_api
+    selected_model_api = provider_model_api(provider_api_cfg)
+    observability_enabled = False
+    langfuse_public_key = ""
+    langfuse_secret_key = ""
+    langfuse_base_url = ""
+    if model_api_uses_openai_client(selected_model_api):
+        observability_enabled = _prompt_yes_no(
+            "Enable Langfuse observability?",
+            default=False,
+            input_func=input_func,
+        )
+    if observability_enabled:
+        langfuse_public_key = _prompt_text(
+            "Langfuse public key",
+            default=LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
+            input_func=input_func,
+        )
+        langfuse_secret_key = secret_input_func(
+            "Langfuse secret key (leave blank to fill in later): "
+        ).strip()
+        if not langfuse_secret_key:
+            langfuse_secret_key = LANGFUSE_SECRET_KEY_PLACEHOLDER
+        langfuse_base_url = _prompt_text(
+            "Langfuse base URL",
+            default=LANGFUSE_BASE_URL,
+            input_func=input_func,
+        )
+
     native_search_provider = _native_search_provider(provider)
     search_provider = native_search_provider or _select_search_provider(provider, input_func=input_func)
     search_api_key = ""
@@ -904,57 +983,66 @@ def collect_init_selection(
             secret_input_func=secret_input_func,
         )
 
-    provider_api_cfg = {"name": provider}
-    if model_api:
-        provider_api_cfg["model_api"] = model_api
-    selected_model_api = provider_model_api(provider_api_cfg)
-    voice_provider = _select_option(
-        "Voice provider",
-        VOICE_PROVIDERS,
-        default_index=0,
+    voice_enabled = False
+    voice_provider = "none"
+    voice_api_key = ""
+    voice_stt_provider = ""
+    voice_stt_api_key = ""
+    voice_tts_provider = ""
+    voice_tts_api_key = ""
+
+    voice_enabled = _prompt_yes_no(
+        "Enable voice mode?",
+        default=False,
         input_func=input_func,
     )
-    voice_enabled = voice_provider != "none"
-    voice_api_key = ""
     if voice_enabled:
-        if voice_provider == "qwen" and provider == PROVIDER_QWEN:
+        voice_provider = _select_option(
+            "Voice provider",
+            VOICE_PROVIDERS,
+            default_index=1,
+            input_func=input_func,
+        )
+        voice_enabled = voice_provider != "none"
+    if voice_enabled:
+        if voice_provider == "custom":
+            voice_stt_provider = _select_option(
+                "STT provider",
+                VOICE_CUSTOM_PROVIDERS,
+                default_index=0,
+                input_func=input_func,
+            )
+            voice_stt_api_key = _prompt_voice_api_key(
+                voice_stt_provider,
+                provider=provider,
+                main_api_key=api_key,
+                purpose="STT",
+                secret_input_func=secret_input_func,
+            )
+            voice_tts_provider = _select_option(
+                "TTS provider",
+                VOICE_CUSTOM_PROVIDERS,
+                default_index=0,
+                input_func=input_func,
+            )
+            voice_tts_api_key = _prompt_voice_api_key(
+                voice_tts_provider,
+                provider=provider,
+                main_api_key=api_key,
+                purpose="TTS",
+                secret_input_func=secret_input_func,
+            )
+        elif voice_provider == "qwen" and provider == PROVIDER_QWEN:
             voice_api_key = api_key if api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
         else:
-            prompt_name = "Qwen" if voice_provider == "qwen" else "Soniox"
-            voice_api_key = secret_input_func(
-                f"{prompt_name} API key for voice (leave blank to fill in later): "
-            ).strip()
-            if not voice_api_key:
-                voice_api_key = _voice_api_key_placeholder(voice_provider)
+            voice_api_key = _prompt_voice_api_key(
+                voice_provider,
+                provider=provider,
+                main_api_key=api_key,
+                secret_input_func=secret_input_func,
+            )
 
     identity = _prompt_multiline_identity(input_func=input_func)
-
-    observability_enabled = False
-    langfuse_public_key = ""
-    langfuse_secret_key = ""
-    langfuse_base_url = ""
-    if model_api_uses_openai_client(selected_model_api):
-        observability_enabled = _prompt_yes_no(
-            "Enable Langfuse observability?",
-            default=False,
-            input_func=input_func,
-        )
-    if observability_enabled:
-        langfuse_public_key = _prompt_text(
-            "Langfuse public key",
-            default=LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
-            input_func=input_func,
-        )
-        langfuse_secret_key = secret_input_func(
-            "Langfuse secret key (leave blank to fill in later): "
-        ).strip()
-        if not langfuse_secret_key:
-            langfuse_secret_key = LANGFUSE_SECRET_KEY_PLACEHOLDER
-        langfuse_base_url = _prompt_text(
-            "Langfuse base URL",
-            default=LANGFUSE_BASE_URL,
-            input_func=input_func,
-        )
 
     return InitSelection(
         provider=provider,
@@ -975,6 +1063,10 @@ def collect_init_selection(
         voice_enabled=voice_enabled,
         voice_provider=voice_provider,
         voice_api_key=voice_api_key,
+        voice_stt_provider=voice_stt_provider,
+        voice_stt_api_key=voice_stt_api_key,
+        voice_tts_provider=voice_tts_provider,
+        voice_tts_api_key=voice_tts_api_key,
     )
 
 

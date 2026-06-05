@@ -349,11 +349,18 @@ class QwenRealtimeTTS:
 
 
 def create_qwen_adapters(config: VoiceChannelConfig) -> tuple[QwenRealtimeSTT, QwenRealtimeTTS]:
-    api_key = config.resolved_api_key()
     websocket_base_url = config.resolved_websocket_base_url() or QWEN_REALTIME_WEBSOCKET_BASE_URL
     return (
-        QwenRealtimeSTT(api_key=api_key, config=config.stt, websocket_base_url=websocket_base_url),
-        QwenRealtimeTTS(api_key=api_key, config=config.tts, websocket_base_url=websocket_base_url),
+        QwenRealtimeSTT(
+            api_key=config.resolved_stt_api_key(),
+            config=config.stt,
+            websocket_base_url=websocket_base_url,
+        ),
+        QwenRealtimeTTS(
+            api_key=config.resolved_tts_api_key(),
+            config=config.tts,
+            websocket_base_url=websocket_base_url,
+        ),
     )
 
 

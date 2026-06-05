@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 VOICE_PROVIDER_SONIOX = "soniox"
 VOICE_PROVIDER_QWEN = "qwen"
+VOICE_PROVIDER_CUSTOM = "custom"
 VOICE_PROVIDERS = {VOICE_PROVIDER_SONIOX, VOICE_PROVIDER_QWEN}
+VOICE_CHANNEL_PROVIDERS = VOICE_PROVIDERS | {VOICE_PROVIDER_CUSTOM}
 SONIOX_KEY_PLACEHOLDER = "your_soniox_api_key_here"
 QWEN_KEY_PLACEHOLDER = "your_qwen_api_key_here"
 GENERIC_KEY_PLACEHOLDER = "your_api_key_here"
@@ -43,14 +45,22 @@ def _channel_voice_provider(value: str | None) -> str | None:
     normalized = str(value).strip().lower()
     if not normalized or normalized == "none":
         return None
-    if normalized not in VOICE_PROVIDERS:
+    if normalized not in VOICE_CHANNEL_PROVIDERS:
+        allowed = ", ".join(sorted(VOICE_CHANNEL_PROVIDERS))
+        raise ValueError(f"voice provider must be one of: {allowed}")
+    return normalized
+
+
+def _nested_voice_provider(value: str | None) -> str | None:
+    normalized = _channel_voice_provider(value)
+    if normalized == VOICE_PROVIDER_CUSTOM:
         allowed = ", ".join(sorted(VOICE_PROVIDERS))
         raise ValueError(f"voice provider must be one of: {allowed}")
     return normalized
 
 
 def _voice_provider(value: str | None) -> str:
-    normalized = _channel_voice_provider(value)
+    normalized = _nested_voice_provider(value)
     if normalized is None:
         return VOICE_PROVIDER_SONIOX
     return normalized
@@ -71,6 +81,7 @@ class VoiceSTTConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: str = VOICE_PROVIDER_SONIOX
+    api_key: str | None = None
     model: str = "stt-rt-v4"
     audio_format: str = "pcm_s16le"
     sample_rate: int = 16000
@@ -90,6 +101,13 @@ class VoiceSTTConfig(BaseModel):
     @classmethod
     def _validate_provider(cls, value: str) -> str:
         return _voice_provider(value)
+
+    @field_validator("api_key")
+    @classmethod
+    def _validate_api_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
     @field_validator("model")
     @classmethod
@@ -148,6 +166,7 @@ class VoiceTTSConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: str = VOICE_PROVIDER_SONIOX
+    api_key: str | None = None
     model: str = "tts-rt-v1"
     voice: str = "Owen"
     audio_format: str = "pcm_s16le"
@@ -165,6 +184,13 @@ class VoiceTTSConfig(BaseModel):
     @classmethod
     def _validate_provider(cls, value: str) -> str:
         return _voice_provider(value)
+
+    @field_validator("api_key")
+    @classmethod
+    def _validate_api_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
     @field_validator("model", "voice", "fallback_language", "language_type")
     @classmethod
@@ -264,6 +290,8 @@ class VoiceChannelConfig(BaseModel):
     def _validate_nested_providers(self) -> "VoiceChannelConfig":
         if self.provider is None:
             return self
+        if self.provider == VOICE_PROVIDER_CUSTOM:
+            return self
         if self.stt.provider != self.provider or self.tts.provider != self.provider:
             raise ValueError("channels.voice provider must match voice.stt.provider and voice.tts.provider")
         return self
@@ -289,10 +317,28 @@ class VoiceChannelConfig(BaseModel):
             )
         return api_key
 
+    def resolved_stt_api_key(self) -> str:
+        return self._resolved_nested_api_key(self.stt.provider, self.stt.api_key, "stt")
+
+    def resolved_tts_api_key(self) -> str:
+        return self._resolved_nested_api_key(self.tts.provider, self.tts.api_key, "tts")
+
+    def _resolved_nested_api_key(self, provider: str, api_key: str | None, section: str) -> str:
+        nested_api_key = str(api_key or "").strip()
+        if nested_api_key and nested_api_key not in _VOICE_KEY_PLACEHOLDERS:
+            return nested_api_key
+        try:
+            return self.resolved_api_key()
+        except ValueError as exc:
+            raise ValueError(
+                f"{provider} voice API key is required. Set channels.voice.{section}.api_key "
+                "or channels.voice.api_key in config.yaml."
+            ) from exc
+
     def resolved_provider(self) -> str:
         if self.provider is not None:
             return self.provider
-        allowed = ", ".join(sorted(VOICE_PROVIDERS))
+        allowed = ", ".join(sorted(VOICE_CHANNEL_PROVIDERS))
         raise ValueError(
             f"voice provider is required. Set channels.voice.provider to one of: {allowed}. "
             "Remove channels.voice if you are not using voice."
@@ -316,7 +362,7 @@ def _normalize_voice_config(data: dict[str, Any]) -> dict[str, Any]:
     declared_provider = _channel_voice_provider(normalized.get("provider"))
 
     stt = dict(normalized.get("stt") or {})
-    stt_provider = _channel_voice_provider(stt.get("provider")) if "provider" in stt else None
+    stt_provider = _nested_voice_provider(stt.get("provider")) if "provider" in stt else None
     if "provider" in stt:
         if stt_provider is None:
             stt.pop("provider", None)
@@ -326,7 +372,7 @@ def _normalize_voice_config(data: dict[str, Any]) -> dict[str, Any]:
     normalized["stt"] = stt
 
     tts = dict(normalized.get("tts") or {})
-    tts_provider = _channel_voice_provider(tts.get("provider")) if "provider" in tts else None
+    tts_provider = _nested_voice_provider(tts.get("provider")) if "provider" in tts else None
     if "provider" in tts:
         if tts_provider is None:
             tts.pop("provider", None)
@@ -334,7 +380,12 @@ def _normalize_voice_config(data: dict[str, Any]) -> dict[str, Any]:
             tts["provider"] = tts_provider
 
     inferred_providers = {item for item in (stt_provider, tts_provider) if item is not None}
-    if declared_provider is None:
+    if declared_provider == VOICE_PROVIDER_CUSTOM:
+        if stt_provider is None or tts_provider is None:
+            raise ValueError("channels.voice custom provider requires voice.stt.provider and voice.tts.provider")
+        provider = declared_provider
+        normalized["provider"] = provider
+    elif declared_provider is None:
         if len(inferred_providers) > 1:
             raise ValueError("channels.voice provider must match voice.stt.provider and voice.tts.provider")
         provider = next(iter(inferred_providers), None)
@@ -345,17 +396,19 @@ def _normalize_voice_config(data: dict[str, Any]) -> dict[str, Any]:
         normalized["provider"] = provider
 
     if provider is not None:
-        stt.setdefault("provider", provider)
-        stt.setdefault("model", _DEFAULT_STT_MODELS[provider])
-        stt.setdefault("audio_format", "pcm" if provider == VOICE_PROVIDER_QWEN else "pcm_s16le")
-        if provider == VOICE_PROVIDER_QWEN:
+        stt_default_provider = stt_provider or provider
+        tts_default_provider = tts_provider or provider
+        stt.setdefault("provider", stt_default_provider)
+        stt.setdefault("model", _DEFAULT_STT_MODELS[stt_default_provider])
+        stt.setdefault("audio_format", "pcm" if stt_default_provider == VOICE_PROVIDER_QWEN else "pcm_s16le")
+        if stt_default_provider == VOICE_PROVIDER_QWEN:
             stt.setdefault("vad_threshold", _QWEN_VAD_THRESHOLD_DEFAULT)
             stt.setdefault("silence_duration_ms", _QWEN_SILENCE_DURATION_MS_DEFAULT)
 
-        tts.setdefault("provider", provider)
-        tts.setdefault("model", _DEFAULT_TTS_MODELS[provider])
-        tts.setdefault("voice", _DEFAULT_TTS_VOICES[provider])
-        tts.setdefault("audio_format", "pcm" if provider == VOICE_PROVIDER_QWEN else "pcm_s16le")
+        tts.setdefault("provider", tts_default_provider)
+        tts.setdefault("model", _DEFAULT_TTS_MODELS[tts_default_provider])
+        tts.setdefault("voice", _DEFAULT_TTS_VOICES[tts_default_provider])
+        tts.setdefault("audio_format", "pcm" if tts_default_provider == VOICE_PROVIDER_QWEN else "pcm_s16le")
 
     normalized["tts"] = tts
 

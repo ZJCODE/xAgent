@@ -6,8 +6,13 @@ from typing import Any
 from .audio import AudioDevicePreference, SoundDeviceMicrophone, SoundDevicePlayer, resolve_audio_io_profile
 from .config import VOICE_PROVIDER_QWEN, VOICE_PROVIDER_SONIOX, VoiceChannelConfig
 from .runtime import VoiceRuntime, VoiceRuntimeOptions
-from .qwen import create_qwen_adapters
-from .soniox import create_soniox_adapters
+from .qwen import (
+    QWEN_REALTIME_WEBSOCKET_BASE_URL,
+    QwenRealtimeSTT,
+    QwenRealtimeTTS,
+    create_qwen_adapters,
+)
+from .soniox import SonioxRealtimeSTT, SonioxRealtimeTTS, create_soniox_adapters
 
 
 def create_local_voice_runtime(
@@ -19,12 +24,16 @@ def create_local_voice_runtime(
     output_device: AudioDevicePreference = None,
 ) -> VoiceRuntime:
     provider = config.resolved_provider()
-    if provider == VOICE_PROVIDER_QWEN:
-        recognizer, synthesizer = create_qwen_adapters(config)
-    elif provider == VOICE_PROVIDER_SONIOX:
-        recognizer, synthesizer = create_soniox_adapters(config)
-    else:  # pragma: no cover - guarded by config validation
-        raise ValueError(f"Unsupported voice provider: {provider}")
+    if config.stt.provider == config.tts.provider == provider:
+        if provider == VOICE_PROVIDER_QWEN:
+            recognizer, synthesizer = create_qwen_adapters(config)
+        elif provider == VOICE_PROVIDER_SONIOX:
+            recognizer, synthesizer = create_soniox_adapters(config)
+        else:  # pragma: no cover - guarded by config validation
+            raise ValueError(f"Unsupported voice provider: {provider}")
+    else:
+        recognizer = _create_stt_adapter(config)
+        synthesizer = _create_tts_adapter(config)
     audio_profile = resolve_audio_io_profile(
         input_sample_rate=config.stt.sample_rate,
         input_channels=config.stt.num_channels,
@@ -58,3 +67,29 @@ def create_local_voice_runtime(
         player=player,
         options=options,
     )
+
+
+def _create_stt_adapter(config: VoiceChannelConfig) -> Any:
+    if config.stt.provider == VOICE_PROVIDER_QWEN:
+        websocket_base_url = config.resolved_websocket_base_url() or QWEN_REALTIME_WEBSOCKET_BASE_URL
+        return QwenRealtimeSTT(
+            api_key=config.resolved_stt_api_key(),
+            config=config.stt,
+            websocket_base_url=websocket_base_url,
+        )
+    if config.stt.provider == VOICE_PROVIDER_SONIOX:
+        return SonioxRealtimeSTT(api_key=config.resolved_stt_api_key(), config=config.stt)
+    raise ValueError(f"Unsupported STT provider: {config.stt.provider}")
+
+
+def _create_tts_adapter(config: VoiceChannelConfig) -> Any:
+    if config.tts.provider == VOICE_PROVIDER_QWEN:
+        websocket_base_url = config.resolved_websocket_base_url() or QWEN_REALTIME_WEBSOCKET_BASE_URL
+        return QwenRealtimeTTS(
+            api_key=config.resolved_tts_api_key(),
+            config=config.tts,
+            websocket_base_url=websocket_base_url,
+        )
+    if config.tts.provider == VOICE_PROVIDER_SONIOX:
+        return SonioxRealtimeTTS(api_key=config.resolved_tts_api_key(), config=config.tts)
+    raise ValueError(f"Unsupported TTS provider: {config.tts.provider}")

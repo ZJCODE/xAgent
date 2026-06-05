@@ -347,10 +347,9 @@ class SonioxRealtimeTTS:
 
 
 def create_soniox_adapters(config: VoiceChannelConfig) -> tuple[SonioxRealtimeSTT, SonioxRealtimeTTS]:
-    api_key = config.resolved_api_key()
     return (
-        SonioxRealtimeSTT(api_key=api_key, config=config.stt),
-        SonioxRealtimeTTS(api_key=api_key, config=config.tts),
+        SonioxRealtimeSTT(api_key=config.resolved_stt_api_key(), config=config.stt),
+        SonioxRealtimeTTS(api_key=config.resolved_tts_api_key(), config=config.tts),
     )
 
 

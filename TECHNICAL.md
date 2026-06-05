@@ -438,6 +438,26 @@ channels:
       voice: Owen
 ```
 
+如果需要混用 STT 和 TTS provider，可以在 `xagent init` 的 Voice Provider 里选择 `custom`：
+
+```yaml
+channels:
+  voice:
+    provider: custom
+    audio:
+      input: auto
+      output: auto
+    stt:
+      provider: qwen
+      api_key: qwen-stt-key
+      model: qwen3-asr-flash-realtime
+    tts:
+      provider: soniox
+      api_key: soniox-tts-key
+      model: tts-rt-v1
+      voice: Owen
+```
+
 高级配置可以手动覆盖 STT/TTS 默认值。Soniox 示例：
 
 ```yaml

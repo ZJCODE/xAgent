@@ -766,6 +766,44 @@ provider:
                 },
             )
 
+    def test_init_writes_custom_voice_config_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                api_key="openai-key",
+                model="gpt-5.4-mini",
+                identity="# Identity\n\nYou talk.\n",
+                voice_enabled=True,
+                voice_provider="custom",
+                voice_stt_provider="qwen",
+                voice_stt_api_key="qwen-voice-key",
+                voice_tts_provider="soniox",
+                voice_tts_api_key="soniox-key",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                config["channels"]["voice"],
+                {
+                    "provider": "custom",
+                    "audio": {"input": "auto", "output": "auto"},
+                    "stt": {
+                        "provider": "qwen",
+                        "api_key": "qwen-voice-key",
+                        "model": "qwen3-asr-flash-realtime",
+                    },
+                    "tts": {
+                        "provider": "soniox",
+                        "api_key": "soniox-key",
+                        "model": "tts-rt-v1",
+                        "voice": "Owen",
+                    },
+                },
+            )
+
     def test_init_omits_voice_config_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
@@ -814,7 +852,7 @@ provider:
             "",
             "",
             "y",
-            "1",
+            "2",
             ".",
         ])
         secrets = iter(["openai-key", "soniox-key"])
@@ -834,7 +872,7 @@ provider:
             "",
             "",
             "y",
-            "1",
+            "2",
             ".",
         ])
         secrets = iter(["openai-key", ""])
@@ -856,7 +894,7 @@ provider:
             "",
             "",
             "y",
-            "2",
+            "3",
             ".",
         ])
         secrets = iter(["deepseek-key", "qwen-voice-key"])
@@ -876,7 +914,7 @@ provider:
             "",
             "",
             "y",
-            "",
+            "3",
             ".",
         ])
 
@@ -888,6 +926,36 @@ provider:
         self.assertTrue(selection.voice_enabled)
         self.assertEqual(selection.voice_provider, "qwen")
         self.assertEqual(selection.voice_api_key, "qwen-key")
+
+    def test_collect_init_selection_supports_custom_voice_providers(self):
+        events = []
+        answers = iter([
+            "1",
+            "",
+            "",
+            "y",
+            "4",
+            "1",
+            "2",
+            ".",
+        ])
+        secrets = iter(["openai-key", "soniox-stt-key", "qwen-tts-key"])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: events.append(("input", prompt)) or next(answers),
+            secret_input_func=lambda prompt: events.append(("secret", prompt)) or next(secrets),
+        )
+
+        self.assertTrue(selection.voice_enabled)
+        self.assertEqual(selection.voice_provider, "custom")
+        self.assertEqual(selection.voice_stt_provider, "soniox")
+        self.assertEqual(selection.voice_stt_api_key, "soniox-stt-key")
+        self.assertEqual(selection.voice_tts_provider, "qwen")
+        self.assertEqual(selection.voice_tts_api_key, "qwen-tts-key")
+        self.assertLess(
+            events.index(("secret", "Soniox API key for STT (leave blank to fill in later): ")),
+            events.index(("secret", "Qwen API key for TTS (leave blank to fill in later): ")),
+        )
 
     def test_collect_init_selection_supports_langfuse_observability(self):
         answers = iter([
@@ -958,10 +1026,10 @@ provider:
             "1",
             "",
             "",
-            "1",
-            "",
             "y",
             "pk-lf-test",
+            "",
+            "",
             "",
             "",
             ".",
@@ -1034,8 +1102,8 @@ provider:
         answers = iter([
             "2",
             "1",
-            "3",
             "",
+            "3",
             "",
             "",
             ".",
@@ -1055,6 +1123,7 @@ provider:
         answers = iter([
             "2",
             "1",
+            "",
             "2",
             "",
             "",
@@ -1152,8 +1221,8 @@ provider:
             "2",
             "1",
             "",
-            "2",
             "",
+            "2",
             "",
             "",
             ".",
@@ -1171,6 +1240,7 @@ provider:
         self.assertEqual(selection.image_generation_api_key, "openai-image-key")
 
     def test_collect_init_selection_non_openai_includes_openai_search(self):
+        prompts = []
         answers = iter([
             "2",
             "1",
@@ -1183,7 +1253,7 @@ provider:
 
         with patch("sys.stdout", new_callable=io.StringIO) as stdout:
             selection = collect_init_selection(
-                input_func=lambda prompt: next(answers),
+                input_func=lambda prompt: prompts.append(prompt) or next(answers),
                 secret_input_func=lambda prompt: "deepseek-key",
             )
 
@@ -1193,6 +1263,7 @@ provider:
         self.assertIn("qwen", search_output)
         self.assertIn("Image generation provider", stdout.getvalue())
         self.assertIn("minimax", stdout.getvalue())
+        self.assertEqual(prompts[2], "Enable Langfuse observability? [y/N]: ")
 
     def test_collect_init_selection_does_not_label_defaults(self):
         answers = iter([
@@ -1812,6 +1883,27 @@ channels:
         self.assertEqual(config.tts.model, "qwen3-tts-flash-realtime")
         self.assertEqual(config.tts.voice, "Cherry")
         self.assertEqual(config.tts.audio_format, "pcm")
+
+    def test_voice_config_accepts_custom_stt_tts_providers(self):
+        from xagent.voice.config import VoiceChannelConfig
+
+        config = VoiceChannelConfig.from_dict(
+            {
+                "provider": "custom",
+                "stt": {"provider": "qwen", "api_key": "qwen-stt-key"},
+                "tts": {"provider": "soniox", "api_key": "soniox-tts-key"},
+            }
+        )
+
+        self.assertEqual(config.provider, "custom")
+        self.assertEqual(config.stt.provider, "qwen")
+        self.assertEqual(config.stt.model, "qwen3-asr-flash-realtime")
+        self.assertEqual(config.stt.audio_format, "pcm")
+        self.assertEqual(config.resolved_stt_api_key(), "qwen-stt-key")
+        self.assertEqual(config.tts.provider, "soniox")
+        self.assertEqual(config.tts.model, "tts-rt-v1")
+        self.assertEqual(config.tts.voice, "Owen")
+        self.assertEqual(config.resolved_tts_api_key(), "soniox-tts-key")
 
     def test_config_accepts_advanced_qwen_voice_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
