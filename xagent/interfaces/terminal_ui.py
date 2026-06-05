@@ -183,12 +183,15 @@ class TerminalUI:
                 if key in quit_keys:
                     return None
 
-    def _read_line(self, label: str, *, default: Optional[str], secret: bool) -> str:
+    def _read_line(self, label: str, *, default: Optional[str], secret: bool, subtitle: str = "") -> str:
         buffer: list[str] = []
 
         def render() -> Text:
             text = Text()
-            text.append("? ", style="cyan")
+            if subtitle:
+                text.append(subtitle, style="grey50")
+                text.append("\n")
+            text.append("?  ", style="cyan")
             text.append(label, style="bold")
             if default:
                 text.append(f"  [{default}]", style="grey50")
@@ -327,7 +330,7 @@ class TerminalUI:
             return None
         return choice.key == "yes"
 
-    def ask_text(self, label: str, *, default: Optional[str] = None, secret: bool = False) -> str:
+    def ask_text(self, label: str, *, default: Optional[str] = None, secret: bool = False, subtitle: str = "") -> str:
         """Inline text/secret prompt that records a collapsed summary line."""
         if not self.interactive:
             suffix = f" [{default}]" if default else ""
@@ -337,7 +340,7 @@ class TerminalUI:
                 value = default
             return value
 
-        raw = self._read_line(label, default=default, secret=secret)
+        raw = self._read_line(label, default=default, secret=secret, subtitle=subtitle)
         value = raw.strip()
         if not value and default is not None:
             value = default

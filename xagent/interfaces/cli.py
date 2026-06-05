@@ -999,21 +999,13 @@ def _terminal_prompt_yes_no(ui: TerminalUI, prompt: str, *, default: bool = Fals
 
 
 def _terminal_prompt_multiline_identity(ui: TerminalUI) -> str:
-    ui.print_panel(
-        "Describe the agent's role and tone. Type '.' on its own line to finish, "
-        "or finish now for a template.",
-        title="Identity",
-        leading_blank_line=True,
+    text = ui.ask_text(
+        "Identity",
+        default="Describe the agent's role and tone.",
     )
-    lines: list[str] = []
-    while True:
-        line = ui.input("[grey50]› [/grey50]")
-        if line.strip() == ".":
-            break
-        lines.append(line)
-    meaningful = [line for line in lines if line.strip()]
-    ui.record("Identity", f"{len(meaningful)} line(s) provided" if meaningful else "default template", skipped=not meaningful)
-    return _format_identity_markdown("\n".join(lines))
+    if not text:
+        text = ""
+    return _format_identity_markdown(text)
 
 
 def collect_init_selection_terminal_ui(
