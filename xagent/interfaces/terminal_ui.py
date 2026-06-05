@@ -112,7 +112,7 @@ class TerminalUI:
                 title_style = "bold bright_black" if active else "bright_black"
                 desc_style = "bright_black"
             elif active:
-                title_style = "bold cyan"
+                title_style = "cyan"
                 desc_style = "grey50"
             else:
                 title_style = "default"
