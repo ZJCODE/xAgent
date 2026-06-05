@@ -3475,7 +3475,7 @@ def _run_service_launcher(config_dir: Path) -> int:
             title="xAgent Services",
             subtitle=f"Runtime: {config_dir}",
             options=actions,
-            footer="Up/Down Select  •  Enter Confirm  •  q Back",
+            footer="↑/↓ Move • Enter Select  •  q Back",
         )
         if option is None or option.key == "back":
             ui.clear()
@@ -3528,7 +3528,7 @@ def _run_service_launcher(config_dir: Path) -> int:
                 title="Choose Channel",
                 subtitle="Select which runtime slice to manage.",
                 options=_launcher_channel_options(),
-                footer="Up/Down Select  •  Enter Confirm  •  q Back",
+                footer="↑/↓ Move • Enter Select  •  q Back",
             )
             if channel_option is None or channel_option.key == "back":
                 continue
@@ -3590,7 +3590,7 @@ def _run_inspect_launcher(config_dir: Path) -> int:
             title="xAgent Inspect",
             subtitle=f"Runtime: {config_dir}",
             options=actions,
-            footer="Up/Down Select  •  Enter Confirm  •  q Back",
+            footer="↑/↓ Move • Enter Select  •  q Back",
         )
         if option is None or option.key == "back":
             ui.clear()
@@ -3644,7 +3644,7 @@ def _run_interactive_launcher() -> int:
                 f"Status: {'ready' if initialized else 'setup required'}"
             ),
             options=_launcher_options(initialized=initialized),
-            footer="Up/Down Select  •  Enter Confirm  •  q Exit",
+            footer="↑/↓ Move • Enter Select  •  q Exit",
         )
         if option is None or option.key == "exit":
             ui.clear()
