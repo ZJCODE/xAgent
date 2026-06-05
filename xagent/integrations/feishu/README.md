@@ -58,14 +58,31 @@ xagent init
 # Opens an authorization link; sign in with a Feishu workspace admin account.
 xagent init feishu
 
+# The wizard asks only for the Feishu-specific decisions that matter most:
+# - whether xAgent should create a new app or use existing credentials
+# - whether the bot should reply only when mentioned, or to every group message
+
 # Prefer to paste an existing App ID/Secret? Use the manual flow instead:
 xagent init feishu --manual
 # (passing --app-id / --app-secret also switches to manual)
+
+# Prefer to script the setup instead of using the defaults-first wizard?
+xagent init feishu \
+  --manual \
+  --app-id cli_xxx \
+  --app-secret your_secret \
+  --stream \
+  --group-history-count 20 \
+  --show-sender-ids \
+  --group-reply-without-mention
 ```
 
 The one-click flow uses the Feishu device-authorization grant (`lark_oapi`
 `register_app`, requires `lark-oapi>=1.5.5`). It prints a link to open in your
 browser, waits for an admin to approve, then stores the returned credentials.
+After credentials are ready, the setup flow applies the recommended defaults for
+delivery, memory, and room context, writes `channels.feishu`, and prints the
+exact start/status/logs commands for that runtime directory.
 
 Either way this updates `~/.xagent/config.yaml`:
 

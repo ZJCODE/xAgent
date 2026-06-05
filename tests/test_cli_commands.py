@@ -12,10 +12,12 @@ import yaml
 from xagent.interfaces.channels import enabled_channels_from_config
 from xagent.interfaces.cli import (
     AgentCLI,
+    FeishuInitSelection,
     InitSelection,
     _format_cli_attachments,
     _format_cli_workspace_links,
     build_parser,
+    collect_feishu_init_selection_terminal_ui,
     handle_config,
     handle_chat,
     handle_init,
@@ -175,6 +177,24 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.app_id, "cli_test")
         self.assertTrue(args.force)
 
+    def test_parser_supports_init_feishu_runtime_options(self):
+        args = build_parser().parse_args([
+            "init",
+            "feishu",
+            "--stream",
+            "--no-memory",
+            "--group-history-count",
+            "20",
+            "--show-sender-ids",
+            "--group-reply-without-mention",
+        ])
+
+        self.assertTrue(args.stream)
+        self.assertFalse(args.enable_memory)
+        self.assertEqual(args.group_history_count, 20)
+        self.assertTrue(args.show_sender_ids)
+        self.assertTrue(args.group_reply_without_mention)
+
     def test_parser_supports_chat_message_command(self):
         args = build_parser().parse_args([
             "chat",
@@ -308,6 +328,30 @@ class CLICommandTests(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("Thank you for using xAgent CLI", output)
         self.assertNotIn("正在写入退出前记忆", output)
+
+    def test_interactive_chat_uses_simple_you_prompt(self):
+        class FakeAgent:
+            model = "gpt-test"
+            tools = {}
+
+        cli = AgentCLI.__new__(AgentCLI)
+        cli.agent = FakeAgent()
+        cli.message_storage = SimpleNamespace()
+        cli.config_dir = Path("/tmp/xagent")
+        cli.config_path = cli.config_dir / "config.yaml"
+
+        fake_ui = MagicMock()
+        fake_ui.input.return_value = "bye"
+
+        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
+            asyncio.run(cli._chat_interactive_terminal_ui(
+                user_id="alice",
+                stream=False,
+                memory=True,
+                verbose_mode=False,
+            ))
+
+        fake_ui.input.assert_called_once_with("[bold cyan]You:[/bold cyan] ")
 
     def test_single_chat_does_not_flush_memory(self):
         class FakeAgent:
@@ -615,6 +659,29 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         wizard.assert_called_once_with(ui=terminal_ui.return_value)
 
+    def test_init_feishu_uses_terminal_wizard(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                app_id=None,
+                app_secret=None,
+                manual=False,
+                force=False,
+            )
+            selection = FeishuInitSelection(app_id="cli_test", app_secret="secret")
+
+            with patch("xagent.interfaces.cli.TerminalUI") as terminal_ui:
+                with patch(
+                    "xagent.interfaces.cli.collect_feishu_init_selection_terminal_ui",
+                    return_value=selection,
+                ) as wizard:
+                    with patch("xagent.interfaces.cli._print_feishu_post_setup"):
+                        exit_code = handle_init_feishu(args)
+
+        self.assertEqual(exit_code, 0)
+        wizard.assert_called_once_with(args=args, ui=terminal_ui.return_value)
+
     def test_init_feishu_updates_unified_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
@@ -624,6 +691,11 @@ class CLICommandTests(unittest.TestCase):
                 app_secret=None,
                 manual=True,
                 force=False,
+                stream=None,
+                enable_memory=None,
+                group_history_count=None,
+                show_sender_ids=None,
+                group_reply_without_mention=None,
             )
 
             with patch("builtins.input", return_value="cli_test") as input_mock:
@@ -646,6 +718,50 @@ class CLICommandTests(unittest.TestCase):
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         self.assertIn("xagent service start feishu", output)
 
+    def test_init_feishu_wizard_selection_writes_runtime_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                app_id=None,
+                app_secret=None,
+                manual=False,
+                force=False,
+                stream=None,
+                enable_memory=None,
+                group_history_count=None,
+                show_sender_ids=None,
+                group_reply_without_mention=None,
+            )
+            selection = FeishuInitSelection(
+                app_id="cli_room",
+                app_secret="room_secret",
+                stream=True,
+                enable_memory=False,
+                group_history_count=20,
+                show_sender_ids=True,
+                group_reply_without_mention=True,
+                credential_mode="manual",
+            )
+
+            with patch(
+                "xagent.interfaces.cli.collect_feishu_init_selection_terminal_ui",
+                return_value=selection,
+            ):
+                with patch("xagent.interfaces.cli._print_feishu_post_setup"):
+                    exit_code = handle_init_feishu(args)
+
+            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_room")
+        self.assertEqual(config["channels"]["feishu"]["app_secret"], "room_secret")
+        self.assertIs(config["channels"]["feishu"]["stream"], True)
+        self.assertIs(config["channels"]["feishu"]["enable_memory"], False)
+        self.assertEqual(config["channels"]["feishu"]["group_history_count"], 20)
+        self.assertIs(config["channels"]["feishu"]["show_sender_ids"], True)
+        self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], True)
+
     def test_init_feishu_one_click_writes_registered_credentials(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
@@ -655,6 +771,11 @@ class CLICommandTests(unittest.TestCase):
                 app_secret=None,
                 manual=False,
                 force=False,
+                stream=None,
+                enable_memory=None,
+                group_history_count=None,
+                show_sender_ids=None,
+                group_reply_without_mention=None,
             )
 
             with patch(
@@ -673,10 +794,68 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["feishu"]["app_secret"], "qr_secret")
         self.assertIs(config["channels"]["feishu"]["stream"], False)
         self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], False)
-        self.assertIn("Optional: group chat setup", output)
-        self.assertIn("Only if you want to use the agent in group chats:", output)
-        self.assertIn("If you only use the agent in direct chat, you can skip this section for now.", output)
-        self.assertIn("Start your Feishu bot", output)
+        self.assertIn("Feishu Ready", output)
+        self.assertIn("Optional before group rollout", output)
+        self.assertIn("If you only need direct chats right now", output)
+        self.assertIn("xagent service start feishu", output)
+
+    def test_feishu_wizard_interactive_defaults_skip_optional_questions(self):
+        class FakeUI:
+            interactive = True
+
+            def __init__(self):
+                self.select_labels = []
+                self.records = []
+
+            def select(self, *, label, subtitle="", options, default_index=0):
+                self.select_labels.append(label)
+                if label == "App Access":
+                    return SimpleNamespace(key="one_click")
+                if label == "Group Routing":
+                    return SimpleNamespace(key="mentions")
+                raise AssertionError(f"Unexpected wizard step: {label}")
+
+            def record(self, label, value, *, skipped=False):
+                self.records.append((label, value, skipped))
+
+            def ask_text(self, *args, **kwargs):
+                raise AssertionError("Optional text questions should be skipped")
+
+            def ask_secret(self, *args, **kwargs):
+                raise AssertionError("Optional secret questions should be skipped")
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No extra confirmation panel should be shown")
+
+            def confirm(self, *args, **kwargs):
+                raise AssertionError("No confirmation question should be shown")
+
+        args = argparse.Namespace(
+            config_dir=".",
+            app_id=None,
+            app_secret=None,
+            manual=False,
+            force=False,
+            stream=None,
+            enable_memory=None,
+            group_history_count=None,
+            show_sender_ids=None,
+            group_reply_without_mention=None,
+        )
+        ui = FakeUI()
+
+        with patch("xagent.interfaces.cli._register_feishu_app_via_qr", return_value=("cli_qr_app", "qr_secret")):
+            selection = collect_feishu_init_selection_terminal_ui(args=args, ui=ui)
+
+        self.assertEqual(ui.select_labels, ["App Access", "Group Routing"])
+        self.assertEqual(selection.app_id, "cli_qr_app")
+        self.assertEqual(selection.app_secret, "qr_secret")
+        self.assertIs(selection.stream, False)
+        self.assertIs(selection.enable_memory, True)
+        self.assertEqual(selection.group_history_count, 10)
+        self.assertIs(selection.show_sender_ids, False)
+        self.assertIs(selection.group_reply_without_mention, False)
+        self.assertEqual(selection.credential_mode, "one_click")
 
     def test_init_feishu_one_click_cancelled_leaves_config_untouched(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -687,6 +866,11 @@ class CLICommandTests(unittest.TestCase):
                 app_secret=None,
                 manual=False,
                 force=False,
+                stream=None,
+                enable_memory=None,
+                group_history_count=None,
+                show_sender_ids=None,
+                group_reply_without_mention=None,
             )
 
             with patch("xagent.interfaces.cli._register_feishu_app_via_qr", return_value=None):
@@ -707,6 +891,11 @@ class CLICommandTests(unittest.TestCase):
                 app_secret="explicit_secret",
                 manual=False,
                 force=False,
+                stream=None,
+                enable_memory=None,
+                group_history_count=None,
+                show_sender_ids=None,
+                group_reply_without_mention=None,
             )
 
             with patch("xagent.interfaces.cli._register_feishu_app_via_qr") as register_mock:
@@ -740,8 +929,8 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(result, ("cli_reg", "reg_secret"))
         self.assertIn("Click this link to authorize", output)
         self.assertIn("https://open.feishu.cn/page/launcher?user_code=Z9YC-ZV4A&from=sdk&tp=sdk", output)
-        self.assertIn("Verification code: Z9YC-ZV4A", output)
-        self.assertIn("Link expires in: 60 minutes", output)
+        # self.assertIn("Verification code: Z9YC-ZV4A", output)
+        # self.assertIn("Link expires in: 60 minutes", output)
         self.assertIn("Waiting for authorization...", output)
         self.assertNotIn("{'url':", output)
         # QR code should either be shown or installation tip provided

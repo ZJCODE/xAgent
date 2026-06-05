@@ -162,12 +162,7 @@ class AgentCLI(BaseAgentRunner):
 
         while True:
             try:
-                status = (
-                    f"[dim]stream {'on' if stream else 'off'} | "
-                    f"memory {'on' if memory else 'off'} | "
-                    f"verbose {'on' if verbose_mode else 'off'}[/dim]"
-                )
-                user_input = ui.input(f"[bold cyan]You[/bold cyan] {status}\n[bold cyan]> [/bold cyan]").strip()
+                user_input = ui.input("[bold cyan]You:[/bold cyan] ").strip()
 
                 if user_input.lower() in ["exit", "quit", "bye"]:
                     ui.print_panel(
@@ -496,6 +491,20 @@ class InitSelection:
     voice_stt_api_key: str = ""
     voice_tts_provider: str = ""
     voice_tts_api_key: str = ""
+
+
+@dataclass(frozen=True)
+class FeishuInitSelection:
+    """Interactive choices used to configure the Feishu channel."""
+
+    app_id: str
+    app_secret: str
+    stream: bool = False
+    enable_memory: bool = True
+    group_history_count: int = 10
+    show_sender_ids: bool = False
+    group_reply_without_mention: bool = False
+    credential_mode: str = "one_click"
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -1646,6 +1655,41 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
     TerminalUI().print_panel(content, title="Next Steps")
 
 
+def _feishu_routing_label(group_reply_without_mention: bool) -> str:
+    if group_reply_without_mention:
+        return "Direct chats + every group/topic message"
+    return "Direct chats + group/topic @mentions"
+
+
+def _feishu_delivery_label(stream: bool) -> str:
+    if stream:
+        return "Streaming cards"
+    return "Standard segmented messages"
+
+
+def _feishu_memory_label(enable_memory: bool) -> str:
+    if enable_memory:
+        return "Enabled"
+    return "Disabled"
+
+
+def _feishu_group_history_label(group_history_count: int) -> str:
+    if group_history_count <= 0:
+        return "Disabled"
+    unit = "message" if group_history_count == 1 else "messages"
+    return f"{group_history_count} recent {unit}"
+
+
+def _feishu_sender_label(*, group_history_count: int, show_sender_ids: bool) -> str:
+    if group_history_count <= 0:
+        if show_sender_ids:
+            return "Ready once room context is enabled"
+        return "Not used while room context is off"
+    if show_sender_ids:
+        return "Display names + sender IDs"
+    return "Display names only"
+
+
 def _add_dir_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dir",
@@ -1791,6 +1835,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--manual",
         action="store_true",
         help="Enter App ID/Secret manually instead of the one-click QR code flow",
+    )
+    init_feishu.add_argument(
+        "--stream",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Use Feishu streaming cards for in-progress replies",
+    )
+    init_feishu.add_argument(
+        "--memory",
+        dest="enable_memory",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable long-term memory for Feishu chats",
+    )
+    init_feishu.add_argument(
+        "--group-history-count",
+        type=int,
+        default=None,
+        help="How many recent group/topic messages to fetch before replying (default: 10)",
+    )
+    init_feishu.add_argument(
+        "--show-sender-ids",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Include Feishu sender IDs in fetched room context",
+    )
+    init_feishu.add_argument(
+        "--group-reply-without-mention",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Route every group/topic message, even without an @mention",
     )
     init_feishu.add_argument("--force", action="store_true", help="Overwrite existing channels.feishu config")
     init_feishu.set_defaults(handler=handle_init_feishu)
@@ -2509,15 +2584,165 @@ def handle_logs(args: argparse.Namespace) -> int:
     return 0
 
 
-def _feishu_channel_config(app_id: str, app_secret: str) -> dict[str, Any]:
-    return {
-        "app_id": app_id,
-        "app_secret": app_secret,
-        "stream": False,
-        "enable_memory": True,
-        "group_history_count": 10,
-        "group_reply_without_mention": False,
+def _feishu_channel_config(selection: FeishuInitSelection) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "app_id": selection.app_id,
+        "app_secret": selection.app_secret,
+        "stream": selection.stream,
+        "enable_memory": selection.enable_memory,
+        "group_history_count": selection.group_history_count,
+        "group_reply_without_mention": selection.group_reply_without_mention,
     }
+    if selection.show_sender_ids:
+        config["show_sender_ids"] = True
+    return config
+
+
+def collect_feishu_init_selection_terminal_ui(
+    *,
+    args: argparse.Namespace,
+    ui: Optional[TerminalUI] = None,
+    input_func: Optional[Callable[[str], str]] = None,
+    secret_input_func: Optional[Callable[[str], str]] = None,
+) -> Optional[FeishuInitSelection]:
+    wizard_ui = ui or TerminalUI()
+    interactive = wizard_ui.interactive
+    input_func = input_func or input
+    secret_input_func = secret_input_func or getpass.getpass
+
+    app_id_arg = str(getattr(args, "app_id", "") or "").strip()
+    app_secret_arg = str(getattr(args, "app_secret", "") or "").strip()
+    manual_requested = bool(getattr(args, "manual", False) or app_id_arg or app_secret_arg)
+
+    if manual_requested:
+        credential_mode = "manual"
+        if interactive:
+            wizard_ui.record("App Access", "Use existing App ID / App Secret")
+    elif interactive:
+        choice = wizard_ui.select(
+            label="App Access",
+            subtitle="Choose how xAgent should get the Feishu credentials.",
+            options=[
+                MenuOption(
+                    "one_click",
+                    "Create new Feishu app",
+                    "Recommended. Create a new Feishu app and authorize it.",
+                ),
+                MenuOption(
+                    "manual",
+                    "Use existing App ID / App Secret",
+                    "Paste credentials from an app you already created in the Feishu developer console.",
+                ),
+            ],
+            default_index=0,
+        )
+        if choice is None:
+            raise KeyboardInterrupt()
+        credential_mode = choice.key
+    else:
+        credential_mode = "one_click"
+
+    if credential_mode == "one_click":
+        credentials = _register_feishu_app_via_qr()
+        if credentials is None:
+            return None
+        app_id, app_secret = credentials
+        if interactive:
+            wizard_ui.record("App ID", app_id)
+    else:
+        app_id = app_id_arg
+        while not app_id:
+            if interactive:
+                app_id = wizard_ui.ask_text(
+                    "Feishu App ID",
+                    subtitle="Create or open the app in https://open.feishu.cn/app, then copy the App ID.",
+                ).strip()
+                if app_id:
+                    break
+                wizard_ui.print_panel("Feishu App ID is required.", title="Input Required")
+                continue
+            app_id = _prompt_text("Feishu App ID", input_func=input_func).strip()
+            if not app_id:
+                print("App ID is required.")
+                return None
+        if interactive and app_id_arg:
+            wizard_ui.record("App ID", app_id)
+
+        app_secret = app_secret_arg
+        while not app_secret:
+            if interactive:
+                app_secret = wizard_ui.ask_secret("Feishu App Secret").strip()
+                if app_secret:
+                    break
+                wizard_ui.print_panel("Feishu App Secret is required.", title="Input Required")
+                continue
+            app_secret = secret_input_func("Feishu App Secret: ").strip()
+            if not app_secret:
+                print("App Secret is required.")
+                return None
+        if interactive and app_secret_arg:
+            wizard_ui.record("App Secret", "Provided via command line")
+
+    group_reply_arg = getattr(args, "group_reply_without_mention", None)
+    if group_reply_arg is None:
+        if interactive:
+            choice = wizard_ui.select(
+                label="Group Routing",
+                subtitle="Choose when the bot should respond in group chats.",
+                options=[
+                    MenuOption(
+                        "mentions",
+                        "Direct chats + group @mentions",
+                        "Safe default. The bot stays quiet in group until someone mentions it.",
+                    ),
+                    MenuOption(
+                        "ambient",
+                        "Direct chats + every group message",
+                        "Use for room-assistant scenarios. Higher cost, replies to almost every message, and can feel noisy in busy groups.",
+                    ),
+                ],
+                default_index=0,
+            )
+            if choice is None:
+                raise KeyboardInterrupt()
+            group_reply_without_mention = choice.key == "ambient"
+        else:
+            group_reply_without_mention = False
+    else:
+        group_reply_without_mention = bool(group_reply_arg)
+        if interactive:
+            wizard_ui.record("Group Routing", _feishu_routing_label(group_reply_without_mention))
+
+    stream_arg = getattr(args, "stream", None)
+    stream = bool(stream_arg) if stream_arg is not None else False
+
+    enable_memory_arg = getattr(args, "enable_memory", None)
+    enable_memory = bool(enable_memory_arg) if enable_memory_arg is not None else True
+
+    group_history_arg = getattr(args, "group_history_count", None)
+    if group_history_arg is not None and group_history_arg < 0:
+        if interactive:
+            wizard_ui.print_panel("--group-history-count must be >= 0", title="Feishu Setup Stopped")
+        else:
+            print("--group-history-count must be >= 0")
+        return None
+    group_history_count = int(group_history_arg) if group_history_arg is not None else 10
+
+    show_sender_ids_arg = getattr(args, "show_sender_ids", None)
+    show_sender_ids = bool(show_sender_ids_arg) if show_sender_ids_arg is not None else False
+
+    selection = FeishuInitSelection(
+        app_id=app_id,
+        app_secret=app_secret,
+        stream=stream,
+        enable_memory=enable_memory,
+        group_history_count=group_history_count,
+        show_sender_ids=show_sender_ids,
+        group_reply_without_mention=group_reply_without_mention,
+        credential_mode=credential_mode,
+    )
+
+    return selection
 
 
 def _normalize_feishu_qr_payload(payload: Any) -> tuple[Optional[str], Optional[int], Optional[str]]:
@@ -2575,22 +2800,62 @@ def _try_print_qr_ascii(url: str) -> bool:
         return False
 
 
-def _print_feishu_post_setup(config_path: Path) -> None:
-    print(f"\nUpdated {config_path} with channels.feishu\n")
+def _print_feishu_post_setup(config_path: Path, selection: FeishuInitSelection) -> None:
+    config_dir = config_path.parent
+    ui = TerminalUI()
 
-    print("===== Optional: group chat setup in the Feishu Developer Console =====\n")
-    print("Only if you want to use the agent in group chats:")
-    print("1. Open your agent: https://open.feishu.cn/app")
-    print("2. Check these extra permissions in the Feishu Developer Console:")
-    print("  - im:message.group_msg (for group chats)")
-    print("  - im:message.group_at_msg.include_bot:readonly (for group @mentions from users and bots)")
-    print("  - contact:user.base:readonly (for user display names)")
-    print("  - admin:app.info:readonly (for other bot or agent display names)")
-    print("\nIf you only use the agent in direct chat, you can skip this section for now.\n")
+    summary = Text()
+    summary.append(f"Feishu channel updated in {config_path}\n\n")
+    summary.append("Configured behavior:\n")
+    summary.append(f"- App ID: {selection.app_id}\n")
+    summary.append(f"- Routing: {_feishu_routing_label(selection.group_reply_without_mention)}\n")
+    summary.append(f"- Delivery: {_feishu_delivery_label(selection.stream)}\n")
+    summary.append(f"- Memory: {_feishu_memory_label(selection.enable_memory)}\n")
+    summary.append(f"- Room context: {_feishu_group_history_label(selection.group_history_count)}\n")
+    summary.append(
+        f"- Sender labels: {_feishu_sender_label(group_history_count=selection.group_history_count, show_sender_ids=selection.show_sender_ids)}"
+    )
+    ui.print_panel(summary, title="Feishu Ready", leading_blank_line=True)
 
-    print("===== Start your Feishu bot =====\n")
-    print("Run: `xagent service start feishu` or `xagent service start all` to start your bot.\n")
-    print("======================================================\n")
+    feishu_start = _format_init_command("xagent service start feishu", config_dir=config_dir)
+    start_all = _format_init_command("xagent service start all", config_dir=config_dir)
+    status = _format_init_command("xagent service status feishu", config_dir=config_dir)
+    logs = _format_init_command("xagent service logs feishu -f", config_dir=config_dir)
+    doctor = _format_init_command("xagent doctor", config_dir=config_dir)
+
+    next_steps = Text()
+    next_steps.append("Run next:\n")
+    next_steps.append("start   ")
+    next_steps.append(feishu_start, style="cyan")
+    next_steps.append("\n        Start only the Feishu channel.\n")
+    next_steps.append("all     ")
+    next_steps.append(start_all, style="cyan")
+    next_steps.append("\n        Start every configured channel for this runtime.\n")
+    next_steps.append("status  ")
+    next_steps.append(status, style="cyan")
+    next_steps.append("\n        Check PID, logs, and whether the bot is already running.\n")
+    next_steps.append("logs    ")
+    next_steps.append(logs, style="cyan")
+    next_steps.append("\n        Follow the Feishu channel log live.\n")
+    next_steps.append("doctor  ")
+    next_steps.append(doctor, style="cyan")
+    next_steps.append("\n        Verify config, files, and channel readiness.\n")
+
+    next_steps.append("\nOptional before group rollout:\n")
+    next_steps.append("- im:message.group_msg\n")
+    next_steps.append("- im:message.group_at_msg.include_bot:readonly\n")
+    next_steps.append("- im:resource:readonly\n")
+    next_steps.append("- contact:user.base:readonly\n")
+    next_steps.append("- admin:app.info:readonly\n")
+    next_steps.append("\nIf you only need direct chats right now, you can skip the group permission work and start the bot immediately.")
+    if selection.group_reply_without_mention:
+        next_steps.append("\n\n")
+        next_steps.append(
+            "Caution: routing every group message can increase cost, reply to almost every message, feel noisy in busy rooms, and trigger reply loops when other bots are in the same room. Re-publish the app after scope changes.",
+            style="yellow",
+        )
+
+    ui.print_panel(next_steps, title="Next Steps")
 
 def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
     """Run the one-click Feishu app registration (RFC 8628 device flow).
@@ -2628,10 +2893,10 @@ def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
         # Display link
         print("\n🔗 Click this link to authorize (or paste into your browser):\n")
         print(f"{url}\n")
-        if user_code:
-            print(f"Verification code: {user_code}")
-        if expiry_label:
-            print(f"Link expires in: {expiry_label}")
+        # if user_code:
+        #     print(f"Verification code: {user_code}")
+        # if expiry_label:
+        #     print(f"Link expires in: {expiry_label}")
 
         # Try to display ASCII QR code
         if _try_print_qr_ascii(url):
@@ -2683,66 +2948,63 @@ def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
 
 
 def handle_init_feishu(args: argparse.Namespace) -> int:
+    ui = TerminalUI()
     config_path = _config_path(args)
+    init_command = _format_init_command("xagent init", config_dir=config_path.parent)
     if not config_path.is_file():
-        print(f"Config not found: {config_path}")
-        print("Run: xagent init")
+        ui.print_panel(
+            f"Config not found: {config_path}\nRun {init_command} first, then return to Feishu setup.",
+            title="Feishu Setup Stopped",
+        )
         return 1
 
     try:
         with config_path.open("r", encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
     except yaml.YAMLError as exc:
-        print(f"Invalid YAML in {config_path}: {exc}")
+        ui.print_panel(f"Invalid YAML in {config_path}: {exc}", title="Feishu Setup Stopped", border_style="red")
         return 1
     if not isinstance(config, dict):
-        print(f"Configuration must be a mapping: {config_path}")
+        ui.print_panel(f"Configuration must be a mapping: {config_path}", title="Feishu Setup Stopped", border_style="red")
         return 1
 
     channels_cfg = config.setdefault("channels", {})
     if not isinstance(channels_cfg, dict):
-        print("channels must be a dictionary")
+        ui.print_panel("channels must be a dictionary", title="Feishu Setup Stopped", border_style="red")
         return 1
     if "feishu" in channels_cfg and not args.force:
-        print("channels.feishu already exists. Use --force to overwrite.")
+        force_command = _format_init_command("xagent init feishu --force", config_dir=config_path.parent)
+        ui.print_panel(
+            f"channels.feishu already exists in {config_path}.\nRun {force_command} to overwrite the Feishu channel settings.",
+            title="Feishu Setup Stopped",
+        )
         return 1
 
-    manual = args.manual or bool(args.app_id) or bool(args.app_secret)
+    intro_lines = [
+        f"Runtime: {config_path.parent}",
+        f"Config: {config_path}",
+    ]
+    if "feishu" in channels_cfg:
+        intro_lines.append("Existing channels.feishu settings will be replaced.")
+    ui.print_panel("\n".join(intro_lines), title="Feishu Setup", leading_blank_line=True)
 
-    if manual:
-        print("")
-        print("Feishu setup guide:\n")
-        print("1. Create an agent: https://open.feishu.cn/page/launcher")
-        print("2. Copy your App ID and App Secret.")
-        print("")
-
-        app_id = args.app_id or input("Feishu App ID: ").strip()
-        if not app_id:
-            print("App ID is required.")
-            return 1
-        app_secret = args.app_secret or getpass.getpass("Feishu App Secret: ").strip()
-        if not app_secret:
-            print("App Secret is required.")
-            return 1
-    else:
-        print("")
-        print("Creating your Feishu Agent.\n")
-        print("Tip: rerun with --manual to enter an existing App ID/Secret instead.\n")
-        print("\nChoose one authorization method below. Keep this terminal open until authorization finishes.\n")
-        credentials = _register_feishu_app_via_qr()
-        if credentials is None:
-            return 1
-        app_id, app_secret = credentials
+    try:
+        selection = collect_feishu_init_selection_terminal_ui(args=args, ui=ui)
+    except KeyboardInterrupt:
+        ui.print_panel("Feishu setup cancelled before writing config.", title="Feishu Setup Cancelled")
+        return 1
+    if selection is None:
+        return 1
 
     api_cfg = channels_cfg.setdefault("api", {})
     if isinstance(api_cfg, dict):
         api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
         api_cfg.setdefault("port", BaseAgentConfig.DEFAULT_PORT)
 
-    channels_cfg["feishu"] = _feishu_channel_config(app_id, app_secret)
+    channels_cfg["feishu"] = _feishu_channel_config(selection)
 
     config_path.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
-    _print_feishu_post_setup(config_path)
+    _print_feishu_post_setup(config_path, selection)
     return 0
 
 
