@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from html import unescape
 from typing import Any, Literal, Optional
 
+import httpx
 from openai import AsyncOpenAI
 
 from xagent.core.config import AgentConfig
@@ -18,16 +19,21 @@ logger = logging.getLogger(__name__)
 
 SEARCH_PROVIDER_OPENAI = "openai"
 SEARCH_PROVIDER_QWEN = "qwen"
+SEARCH_PROVIDER_MINIMAX = "minimax"
 SEARCH_PROVIDER_NONE = "none"
 SUPPORTED_SEARCH_PROVIDERS = {
     SEARCH_PROVIDER_OPENAI,
     SEARCH_PROVIDER_QWEN,
+    SEARCH_PROVIDER_MINIMAX,
     SEARCH_PROVIDER_NONE,
 }
 
 DEFAULT_QWEN_SEARCH_MODEL = "qwen3-max-2026-01-23"
 QWEN_COMPATIBLE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 QWEN_API_KEY_ENV_VARS = ("DASHSCOPE_API_KEY", "DASHSCOPE_API_TOKEN", "QWEN_API_KEY", "QWEN_API_TOKEN")
+MINIMAX_SEARCH_ENDPOINT = "https://api.minimaxi.com/v1/coding_plan/search"
+MINIMAX_SEARCH_TIMEOUT = 30.0
+MINIMAX_API_KEY_ENV_VARS = ("MINIMAX_API_KEY", "MINIMAX_API_TOKEN")
 PLACEHOLDER_API_KEYS = {
     "your_api_key",
     "your_api_key_here",
@@ -64,6 +70,10 @@ SEARCH_TOOL_PARAMETERS = {
         "enable_thinking",
         "web_extractor",
         "code_interpreter",
+    },
+    SEARCH_PROVIDER_MINIMAX: {
+        "query",
+        "max_results",
     },
 }
 
@@ -166,6 +176,8 @@ class ConfiguredSearchProvider:
                 web_extractor=web_extractor,
                 code_interpreter=code_interpreter,
             )
+        if self.provider == SEARCH_PROVIDER_MINIMAX:
+            return await self._search_minimax(query=query, result_limit=result_limit)
         return _error_response(self.provider, query, "search is disabled")
 
     async def _search_openai(
@@ -317,6 +329,42 @@ class ConfiguredSearchProvider:
             result["tool_usage"] = tool_usage
         return result
 
+    async def _search_minimax(self, *, query: str, result_limit: int) -> dict:
+        api_key = _get_minimax_api_key(self.config)
+        if not api_key:
+            return _error_response(
+                self.provider,
+                query,
+                "MiniMax search requires search.api_key, provider.api_key, or MINIMAX_API_KEY.",
+            )
+
+        endpoint = _minimax_search_endpoint(self.config)
+        try:
+            async with httpx.AsyncClient(timeout=MINIMAX_SEARCH_TIMEOUT) as http_client:
+                response = await http_client.post(
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"q": query},
+                )
+                response.raise_for_status()
+                response_json = response.json()
+        except Exception as exception:
+            logger.warning("MiniMax web search failed: %s", exception)
+            return _error_response(self.provider, query, str(exception))
+
+        answer = _extract_minimax_answer(response_json)
+        results = _extract_minimax_results(response_json)[:result_limit]
+        return {
+            "status": "ok" if answer or results else "empty",
+            "provider": self.provider,
+            "query": query,
+            "answer": answer,
+            "results": [item.to_dict() for item in results],
+        }
+
 
 def create_web_search_tool(
     search_config: Optional[dict],
@@ -435,6 +483,9 @@ def normalize_search_provider(provider: Any) -> str:
         "qwen_search": SEARCH_PROVIDER_QWEN,
         "qwen_web_search": SEARCH_PROVIDER_QWEN,
         "qwen": SEARCH_PROVIDER_QWEN,
+        "minimax_search": SEARCH_PROVIDER_MINIMAX,
+        "minimax_web_search": SEARCH_PROVIDER_MINIMAX,
+        "minimax": SEARCH_PROVIDER_MINIMAX,
     }
     normalized = aliases.get(normalized, normalized)
     if normalized not in SUPPORTED_SEARCH_PROVIDERS:
@@ -632,6 +683,61 @@ def _extract_tool_usage(response: Any) -> dict[str, int]:
     return tool_usage
 
 
+def _extract_minimax_answer(response: Any) -> str:
+    data = _as_mapping(response)
+    for candidate in (
+        data,
+        _as_mapping(data.get("data")),
+        _as_mapping(data.get("result")),
+    ):
+        answer = _first_text_field(candidate, "answer", "summary", "text", "content")
+        if answer:
+            return _clean_text(answer)
+    return ""
+
+
+def _extract_minimax_results(response: Any) -> list[SearchResult]:
+    results = _extract_minimax_results_from_value(response)
+    return _deduplicate_results(results)
+
+
+def _extract_minimax_results_from_value(value: Any) -> list[SearchResult]:
+    if isinstance(value, list):
+        results: list[SearchResult] = []
+        for item in value:
+            results.extend(_extract_minimax_results_from_value(item))
+        return results
+
+    data = _as_mapping(value)
+    if not data:
+        return []
+
+    results: list[SearchResult] = []
+    url = _first_text_field(data, "url", "link", "source_url", "source")
+    if url:
+        title = _clean_text(_first_text_field(data, "title", "name", "site_name") or url)
+        snippet = _clean_text(
+            _first_text_field(data, "snippet", "description", "summary", "content", "text") or ""
+        )
+        results.append(SearchResult(title=title, url=url, snippet=snippet))
+
+    for key in (
+        "organic",
+        "data",
+        "result",
+        "results",
+        "items",
+        "sources",
+        "citations",
+        "references",
+        "webpages",
+    ):
+        nested = data.get(key)
+        if nested is not None:
+            results.extend(_extract_minimax_results_from_value(nested))
+    return results
+
+
 def _build_openai_search_input(query: str, result_limit: int) -> str:
     hints = [f"Search query: {query}", f"Return up to {result_limit} useful sources."]
     hints.append("Include concise findings and preserve source citations.")
@@ -762,6 +868,21 @@ def _create_qwen_search_client(config: dict) -> Optional[AsyncOpenAI]:
     if not api_key:
         return None
     return AsyncOpenAI(api_key=api_key, base_url=_qwen_search_base_url(config))
+
+
+def _get_minimax_api_key(config: dict) -> str:
+    configured_key = str(config.get("api_key") or "").strip()
+    if configured_key and not is_placeholder_api_key(configured_key):
+        return configured_key
+    for env_name in MINIMAX_API_KEY_ENV_VARS:
+        env_value = os.getenv(env_name, "").strip()
+        if env_value:
+            return env_value
+    return ""
+
+
+def _minimax_search_endpoint(config: dict) -> str:
+    return str(config.get("endpoint") or MINIMAX_SEARCH_ENDPOINT).strip()
 
 
 def is_placeholder_api_key(api_key: str) -> bool:

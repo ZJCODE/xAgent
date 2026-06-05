@@ -18,7 +18,7 @@ Run the first-time setup:
 xagent init
 ```
 
-Follow the prompts to choose your provider, model, API key, optional tools, local voice, and identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. For a custom provider, `xagent init` asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
+Follow the prompts to choose your provider, model, API key, optional tools, local voice, and identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. Search is always an explicit init choice and supports `none`, OpenAI, Qwen, and MiniMax; matching search providers reuse the main API key. For a custom provider, `xagent init` asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
 
 OpenAI runtimes default to OpenAI built-in web search and recommend OpenAI image generation during init, while Qwen runtimes default to DashScope/Qwen built-in web search and Qwen image generation. Other providers can choose OpenAI search, Qwen search, or no search during init. OpenAI and Qwen native search reuse the main API key when the main provider matches; cross-provider OpenAI or Qwen search must set the matching key in `search.api_key`.
 

@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from xagent.tools.search_tool import (
     create_web_search_tool,
@@ -22,11 +23,39 @@ class FakeOpenAIClient:
         self.responses = FakeResponses(response)
 
 
+class FakeHTTPResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
+class FakeHTTPClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.posts = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+    async def post(self, url, *, headers, json):
+        self.posts.append({"url": url, "headers": headers, "json": json})
+        return FakeHTTPResponse(self.payload)
+
+
 class SearchToolTests(unittest.IsolatedAsyncioTestCase):
     def test_normalize_search_provider_aliases(self):
         self.assertEqual(normalize_search_provider("openai_builtin"), "openai")
         self.assertEqual(normalize_search_provider("dashscope"), "qwen")
         self.assertEqual(normalize_search_provider("qwen_search"), "qwen")
+        self.assertEqual(normalize_search_provider("minimax_search"), "minimax")
         self.assertEqual(normalize_search_provider("off"), "none")
 
     def test_unknown_search_provider_is_unsupported(self):
@@ -64,6 +93,17 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("country", properties)
         self.assertNotIn("freshness", properties)
 
+    def test_minimax_tool_schema_includes_only_minimax_parameters(self):
+        tool = create_web_search_tool({"provider": "minimax", "api_key": "minimax-key"})
+        properties = tool.tool_spec["function"]["parameters"]["properties"]
+
+        self.assertIn("query", properties)
+        self.assertIn("max_results", properties)
+        self.assertNotIn("search_context_size", properties)
+        self.assertNotIn("enable_thinking", properties)
+        self.assertNotIn("web_extractor", properties)
+        self.assertNotIn("country", properties)
+
     async def test_qwen_placeholder_key_returns_config_error(self):
         tool = create_web_search_tool({"provider": "qwen", "api_key": "your_qwen_api_key_here"})
 
@@ -72,6 +112,15 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["provider"], "qwen")
         self.assertIn("Qwen search requires", result["message"])
+
+    async def test_minimax_placeholder_key_returns_config_error(self):
+        tool = create_web_search_tool({"provider": "minimax", "api_key": "your_minimax_api_key_here"})
+
+        result = await tool(query="杭州天气", max_results=1)
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["provider"], "minimax")
+        self.assertIn("MiniMax search requires", result["message"])
 
     async def test_openai_search_rejects_qwen_only_parameters(self):
         tool = create_web_search_tool({"provider": "openai"}, client=FakeOpenAIClient(SimpleNamespace()))
@@ -86,6 +135,14 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
             {"provider": "qwen"},
             client=FakeOpenAIClient(SimpleNamespace()),
         )
+
+        result = await tool(query="杭州天气", country="CN")
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("country", result["message"])
+
+    async def test_minimax_search_rejects_openai_only_parameters(self):
+        tool = create_web_search_tool({"provider": "minimax", "api_key": "minimax-key"})
 
         result = await tool(query="杭州天气", country="CN")
 
@@ -235,6 +292,75 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
         call = client.responses.calls[0]
         self.assertEqual(call["tools"], [{"type": "web_search"}])
         self.assertNotIn("extra_body", call)
+
+    async def test_minimax_search_uses_coding_plan_search_endpoint(self):
+        http_client = FakeHTTPClient(
+            {
+                "answer": "杭州今天有雨。",
+                "results": [
+                    {
+                        "title": "杭州天气",
+                        "url": "https://weather.example.com/hangzhou",
+                        "snippet": "小雨。",
+                    },
+                    {
+                        "title": "重复",
+                        "url": "https://weather.example.com/hangzhou",
+                        "snippet": "重复结果。",
+                    },
+                ],
+            }
+        )
+        tool = create_web_search_tool({"provider": "minimax", "api_key": "minimax-key"})
+
+        with patch("xagent.tools.search_tool.httpx.AsyncClient", return_value=http_client):
+            result = await tool(query="杭州天气", max_results=5)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["provider"], "minimax")
+        self.assertEqual(result["answer"], "杭州今天有雨。")
+        self.assertEqual(result["results"], [{
+            "title": "杭州天气",
+            "url": "https://weather.example.com/hangzhou",
+            "snippet": "小雨。",
+        }])
+        post = http_client.posts[0]
+        self.assertEqual(post["url"], "https://api.minimaxi.com/v1/coding_plan/search")
+        self.assertEqual(post["headers"]["Authorization"], "Bearer minimax-key")
+        self.assertEqual(post["headers"]["Content-Type"], "application/json")
+        self.assertEqual(post["json"], {"q": "杭州天气"})
+
+    async def test_minimax_search_parses_top_level_organic_results(self):
+        http_client = FakeHTTPClient(
+            {
+                "organic": [
+                    {
+                        "title": "杭州-天气预报",
+                        "link": "http://nmc.cn/publish/forecast/AZJ/hangzhou.html",
+                        "snippet": "20:15更新 杭州 晴",
+                    },
+                    {
+                        "title": "重复结果",
+                        "link": "http://nmc.cn/publish/forecast/AZJ/hangzhou.html",
+                        "snippet": "重复",
+                    },
+                ],
+                "base_resp": {"status_code": 0, "status_msg": "success"},
+            }
+        )
+        tool = create_web_search_tool({"provider": "minimax", "api_key": "minimax-key"})
+
+        with patch("xagent.tools.search_tool.httpx.AsyncClient", return_value=http_client):
+            result = await tool(query="杭州天气", max_results=5)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["provider"], "minimax")
+        self.assertEqual(result["answer"], "")
+        self.assertEqual(result["results"], [{
+            "title": "杭州-天气预报",
+            "url": "http://nmc.cn/publish/forecast/AZJ/hangzhou.html",
+            "snippet": "20:15更新 杭州 晴",
+        }])
 
 
 if __name__ == "__main__":

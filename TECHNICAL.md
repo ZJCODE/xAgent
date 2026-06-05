@@ -116,7 +116,7 @@ provider:
   name: minimax
   base_url: https://api.minimaxi.com/anthropic
   api_key: your_api_key_here
-  model: MiniMax-M2.7
+  model: MiniMax-M3
 
 # Qwen OpenAI-compatible
 provider:
@@ -151,10 +151,11 @@ provider:
 
 ### 2.2 search
 
-`search.provider` 支持：
+`xagent init` 会对所有模型 provider 显式询问 `search.provider`，不会根据主 provider 自动启用搜索。`search.provider` 支持：
 
-- `openai`：使用 OpenAI Responses API 的内置 `web_search`。任意模型 provider 都可选择；当主 `provider` 不是 OpenAI 时，必须额外配置 `search.api_key` 作为 OpenAI API key。可选 `search.model` 指定用于搜索的 OpenAI 模型，默认使用 `gpt-5.4-mini`。OpenAI search 工具参数支持 `search_context_size`、`country`、`city`、`region`、`timezone`、`allowed_domains`、`blocked_domains`、`external_web_access`、`return_token_budget` 和 `force_search`。
-- `qwen`：使用 DashScope OpenAI-compatible Responses API 的内置 `web_search`。当主 `provider.name` 是 `qwen` 时，`xagent init` 会自动选择该搜索 provider 并复用主 Qwen API key；其它 provider 使用 Qwen search 时需要配置 `search.api_key`。默认同时启用 `web_extractor`、`code_interpreter` 和 `enable_thinking`，可通过工具参数或配置中的 `search.web_extractor`、`search.code_interpreter`、`search.enable_thinking` 关闭。
+- `openai`：使用 OpenAI Responses API 的内置 `web_search`。任意模型 provider 都可选择；当主 `provider.name` 不是 OpenAI 时，必须额外配置 `search.api_key` 作为 OpenAI API key。可选 `search.model` 指定用于搜索的 OpenAI 模型，默认使用 `gpt-5.4-mini`。OpenAI search 工具参数支持 `search_context_size`、`country`、`city`、`region`、`timezone`、`allowed_domains`、`blocked_domains`、`external_web_access`、`return_token_budget` 和 `force_search`。
+- `qwen`：使用 DashScope OpenAI-compatible Responses API 的内置 `web_search`。当主 `provider.name` 是 `qwen` 时复用主 Qwen API key；其它 provider 使用 Qwen search 时需要配置 `search.api_key`。默认同时启用 `web_extractor`、`code_interpreter` 和 `enable_thinking`，可通过工具参数或配置中的 `search.web_extractor`、`search.code_interpreter`、`search.enable_thinking` 关闭。
+- `minimax`：调用 MiniMax `POST https://api.minimaxi.com/v1/coding_plan/search`。当主 `provider.name` 是 `minimax` 时复用主 MiniMax API key；其它 provider 使用 MiniMax search 时需要配置 `search.api_key`。MiniMax search 工具参数只暴露 `query` 和 `max_results`。
 - `none`：关闭联网搜索工具。
 
 非 OpenAI provider 使用 OpenAI search 示例：
@@ -186,6 +187,19 @@ search:
   enable_thinking: true
   web_extractor: true
   code_interpreter: true
+```
+
+MiniMax search 示例：
+
+```yaml
+provider:
+  name: minimax
+  base_url: https://api.minimaxi.com/anthropic
+  api_key: YOUR_MINIMAX_API_KEY
+  model: MiniMax-M3
+
+search:
+  provider: minimax
 ```
 
 当搜索开启时，Agent 会加载 `web_search` 工具；无论搜索是否开启，`run_command` 工具都会作为内置工具加载。

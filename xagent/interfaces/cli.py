@@ -430,14 +430,9 @@ DEEPSEEK_MODELS = (
     "Decide later",
 )
 MINIMAX_MODELS = (
+    "MiniMax-M3",
     "MiniMax-M2.7",
     "MiniMax-M2.7-highspeed",
-    "MiniMax-M2.5",
-    "MiniMax-M2.5-highspeed",
-    "MiniMax-M2.1",
-    "MiniMax-M2.1-highspeed",
-    "MiniMax-M2",
-    "Decide later",
 )
 QWEN_MODELS = (
     "qwen3.6-plus",
@@ -445,15 +440,11 @@ QWEN_MODELS = (
     "qwen3.6-max-preview",
     "Decide later",
 )
-OPENAI_SEARCH_PROVIDERS = (
-    "openai",
-    "qwen",
-    "none",
-)
-NON_OPENAI_SEARCH_PROVIDERS = (
+SEARCH_PROVIDERS = (
     "none",
     "openai",
     "qwen",
+    "minimax",
 )
 NON_OPENAI_IMAGE_GENERATION_PROVIDERS = (
     "none",
@@ -490,12 +481,14 @@ def _native_image_generation_provider(provider: str) -> str:
     return "none"
 
 
-def _native_search_provider(provider: str) -> str:
-    if provider == PROVIDER_OPENAI:
-        return "openai"
-    if provider == PROVIDER_QWEN:
-        return "qwen"
-    return ""
+def _search_api_key_placeholder(provider: str) -> str:
+    if provider == "openai":
+        return OPENAI_SEARCH_API_KEY_PLACEHOLDER
+    if provider == "qwen":
+        return QWEN_SEARCH_API_KEY_PLACEHOLDER
+    if provider == "minimax":
+        return MINIMAX_IMAGE_API_KEY_PLACEHOLDER
+    return API_KEY_PLACEHOLDER
 
 
 def _image_generation_api_key_placeholder(provider: str) -> str:
@@ -621,14 +614,13 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
             )
         config["channels"]["voice"] = voice_config
     search_config = {"provider": selection.search_provider or "none"}
-    if search_config["provider"] == "openai" and selection.provider != PROVIDER_OPENAI:
-        search_config["api_key"] = selection.search_api_key or OPENAI_SEARCH_API_KEY_PLACEHOLDER
-    elif search_config["provider"] == "openai" and selection.search_api_key:
-        search_config["api_key"] = selection.search_api_key
-    elif search_config["provider"] == "qwen" and selection.provider != PROVIDER_QWEN:
-        search_config["api_key"] = selection.search_api_key or QWEN_SEARCH_API_KEY_PLACEHOLDER
-    elif search_config["provider"] == "qwen" and selection.search_api_key:
-        search_config["api_key"] = selection.search_api_key
+    if search_config["provider"] in {"openai", "qwen", "minimax"}:
+        if search_config["provider"] != selection.provider:
+            search_config["api_key"] = (
+                selection.search_api_key.strip() or _search_api_key_placeholder(search_config["provider"])
+            )
+        elif selection.search_api_key:
+            search_config["api_key"] = selection.search_api_key
     config["search"] = search_config
     selected_image_generation_provider = selection.image_generation_provider or "none"
     image_generation_config = {"provider": selected_image_generation_provider}
@@ -741,10 +733,10 @@ def _select_search_provider(
     *,
     input_func: Callable[[str], str] = input,
 ) -> str:
-    options = OPENAI_SEARCH_PROVIDERS if provider == PROVIDER_OPENAI else NON_OPENAI_SEARCH_PROVIDERS
+    del provider
     return _select_option(
         "Search provider",
-        options,
+        SEARCH_PROVIDERS,
         default_index=0,
         input_func=input_func,
     )
@@ -789,6 +781,25 @@ def _prompt_image_generation_api_key(
     else:
         return ""
     return api_key or _image_generation_api_key_placeholder(image_generation_provider)
+
+
+def _prompt_search_api_key(
+    search_provider: str,
+    *,
+    secret_input_func: Callable[[str], str] = getpass.getpass,
+) -> str:
+    prompt_names = {
+        "openai": "OpenAI",
+        "qwen": "Qwen",
+        "minimax": "MiniMax",
+    }
+    prompt_name = prompt_names.get(search_provider)
+    if not prompt_name:
+        return ""
+    api_key = secret_input_func(
+        f"{prompt_name} API key for search (leave blank to fill in later): "
+    ).strip()
+    return api_key or _search_api_key_placeholder(search_provider)
 
 
 def _prompt_voice_api_key(
@@ -949,21 +960,13 @@ def collect_init_selection(
             input_func=input_func,
         )
 
-    native_search_provider = _native_search_provider(provider)
-    search_provider = native_search_provider or _select_search_provider(provider, input_func=input_func)
+    search_provider = _select_search_provider(provider, input_func=input_func)
     search_api_key = ""
-    if search_provider == "openai" and provider != PROVIDER_OPENAI:
-        search_api_key = secret_input_func(
-            "OpenAI API key for search (leave blank to fill in later): "
-        ).strip()
-        if not search_api_key:
-            search_api_key = OPENAI_SEARCH_API_KEY_PLACEHOLDER
-    elif search_provider == "qwen" and provider != PROVIDER_QWEN:
-        search_api_key = secret_input_func(
-            "Qwen API key for search (leave blank to fill in later): "
-        ).strip()
-        if not search_api_key:
-            search_api_key = QWEN_SEARCH_API_KEY_PLACEHOLDER
+    if search_provider in {"openai", "qwen", "minimax"} and search_provider != provider:
+        search_api_key = _prompt_search_api_key(
+            search_provider,
+            secret_input_func=secret_input_func,
+        )
 
     image_generation_provider = _select_image_generation_provider(provider, input_func=input_func)
     image_generation_api_key = ""

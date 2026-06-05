@@ -42,6 +42,7 @@ from ..tools.image_generation_tool import (
 )
 from ..tools.search_tool import (
     DEFAULT_QWEN_SEARCH_MODEL,
+    SEARCH_PROVIDER_MINIMAX,
     SEARCH_PROVIDER_OPENAI,
     SEARCH_PROVIDER_QWEN,
     is_placeholder_api_key,
@@ -360,6 +361,12 @@ class BaseAgentRunner:
             if is_placeholder_api_key(api_key):
                 raise ValueError(
                     "search.provider 'qwen' requires search.api_key when provider is not Qwen"
+                )
+        if search_provider == SEARCH_PROVIDER_MINIMAX and not self._is_minimax_provider(provider_cfg):
+            api_key = str(search_cfg.get("api_key") or "").strip()
+            if is_placeholder_api_key(api_key):
+                raise ValueError(
+                    "search.provider 'minimax' requires search.api_key when provider is not MiniMax"
                 )
 
     def _validate_image_generation_config(
@@ -828,11 +835,18 @@ class BaseAgentRunner:
             return search_cfg
 
         search_provider = normalize_search_provider(search_cfg.get("provider"))
-        if search_provider != SEARCH_PROVIDER_QWEN:
+        if search_provider not in {SEARCH_PROVIDER_QWEN, SEARCH_PROVIDER_MINIMAX}:
             return search_cfg
 
         provider_cfg = agent_cfg.get("provider") or {}
-        if not isinstance(provider_cfg, dict) or not self._is_qwen_provider(provider_cfg):
+        provider_matches_search = (
+            isinstance(provider_cfg, dict)
+            and (
+                (search_provider == SEARCH_PROVIDER_QWEN and self._is_qwen_provider(provider_cfg))
+                or (search_provider == SEARCH_PROVIDER_MINIMAX and self._is_minimax_provider(provider_cfg))
+            )
+        )
+        if not provider_matches_search:
             return search_cfg
 
         merged_config = dict(search_cfg)

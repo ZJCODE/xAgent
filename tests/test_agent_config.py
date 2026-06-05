@@ -545,6 +545,40 @@ provider:
             self.assertEqual(config["search"]["provider"], "qwen")
             self.assertEqual(config["search"]["api_key"], "qwen-search-key")
 
+    def test_init_writes_minimax_search_for_minimax_provider_without_duplicate_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="minimax",
+                base_url="https://api.minimaxi.com/anthropic",
+                api_key="minimax-key",
+                model="MiniMax-M3",
+                identity="# Identity\n\nYou search with MiniMax.\n",
+                search_provider="minimax",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["search"], {"provider": "minimax"})
+
+    def test_init_writes_minimax_search_key_for_non_minimax_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                api_key="openai-key",
+                model="gpt-5.4-mini",
+                identity="# Identity\n\nYou search with MiniMax.\n",
+                search_provider="minimax",
+                search_api_key="minimax-search-key",
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(config["search"]["provider"], "minimax")
+            self.assertEqual(config["search"]["api_key"], "minimax-search-key")
+
     def test_init_rejects_openai_image_generation_for_non_openai_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
@@ -826,6 +860,7 @@ provider:
             "4",
             "",
             "",
+            "",
             "You investigate codebases.",
             ".",
         ])
@@ -841,7 +876,7 @@ provider:
         self.assertEqual(selection.base_url, "https://api.openai.com/v1")
         self.assertEqual(selection.api_key, "openai-key")
         self.assertEqual(selection.model, "gpt-5.5")
-        self.assertEqual(selection.search_provider, "openai")
+        self.assertEqual(selection.search_provider, "none")
         self.assertEqual(selection.image_generation_provider, "openai")
         self.assertEqual(selection.identity, "# Identity\n\nYou investigate codebases.\n")
         self.assertNotIn("Image generation provider", stdout.getvalue())
@@ -849,6 +884,7 @@ provider:
     def test_collect_init_selection_supports_soniox_voice(self):
         answers = iter([
             "1",
+            "",
             "",
             "",
             "y",
@@ -869,6 +905,7 @@ provider:
     def test_collect_init_selection_voice_blank_key_uses_placeholder(self):
         answers = iter([
             "1",
+            "",
             "",
             "",
             "y",
@@ -913,6 +950,7 @@ provider:
             "4",
             "",
             "",
+            "",
             "y",
             "3",
             ".",
@@ -931,6 +969,7 @@ provider:
         events = []
         answers = iter([
             "1",
+            "",
             "",
             "",
             "y",
@@ -964,6 +1003,7 @@ provider:
             "y",
             "pk-lf-test",
             "https://jp.cloud.langfuse.com",
+            "",
             "",
             ".",
         ])
@@ -1093,9 +1133,9 @@ provider:
         self.assertEqual(selection.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1")
         self.assertEqual(selection.api_key, "qwen-key")
         self.assertEqual(selection.model, "qwen3.6-max-preview")
-        self.assertEqual(selection.search_provider, "qwen")
+        self.assertEqual(selection.search_provider, "none")
         self.assertEqual(selection.image_generation_provider, "qwen")
-        self.assertNotIn("Search provider", stdout.getvalue())
+        self.assertIn("Search provider", stdout.getvalue())
         self.assertNotIn("Image generation provider", stdout.getvalue())
 
     def test_collect_init_selection_supports_qwen_search_for_non_qwen_provider(self):
@@ -1162,7 +1202,7 @@ provider:
         self.assertEqual(selection.provider, "minimax")
         self.assertEqual(selection.base_url, "https://api.minimaxi.com/anthropic")
         self.assertEqual(selection.api_key, "minimax-key")
-        self.assertEqual(selection.model, "MiniMax-M2.7")
+        self.assertEqual(selection.model, "MiniMax-M3")
         self.assertEqual(selection.search_provider, "none")
         self.assertEqual(selection.image_generation_provider, "minimax")
         self.assertNotIn("Image generation provider", stdout.getvalue())
@@ -1271,6 +1311,7 @@ provider:
             "",
             "",
             "",
+            "",
             ".",
         ])
 
@@ -1282,7 +1323,7 @@ provider:
 
         self.assertEqual(selection.provider, "openai")
         self.assertEqual(selection.model, "gpt-5.4-mini")
-        self.assertEqual(selection.search_provider, "openai")
+        self.assertEqual(selection.search_provider, "none")
         self.assertEqual(selection.image_generation_provider, "openai")
         self.assertIn("Describe this agent's role", selection.identity)
         self.assertNotIn("(default)", stdout.getvalue())
@@ -1430,6 +1471,54 @@ search:
                 str(search_provider.client.base_url).rstrip("/"),
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
             )
+
+    def test_config_rejects_minimax_search_for_non_minimax_provider_without_search_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "openai"
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+search:
+    provider: "minimax"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "requires search.api_key"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_loads_minimax_search_tool_with_main_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "minimax"
+    base_url: "https://api.minimaxi.com/anthropic"
+    model: "MiniMax-M3"
+    api_key: "minimax-key"
+search:
+    provider: "minimax"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            web_search_tool = runner.agent.tools["web_search"]
+            search_provider = next(
+                cell.cell_contents
+                for cell in web_search_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredSearchProvider"
+            )
+
+            self.assertIn("web_search", runner.agent.tools)
+            self.assertEqual(search_provider.provider, "minimax")
+            self.assertEqual(search_provider.config["api_key"], "minimax-key")
 
     def test_config_loads_qwen_search_tool_with_main_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
