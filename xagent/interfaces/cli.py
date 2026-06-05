@@ -50,6 +50,7 @@ from .channels import (
     voice_config,
 )
 from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
+from .terminal_ui import MenuOption, TerminalUI, rich_terminal_available
 
 
 _WORKSPACE_BLOB_CLI_LINK_RE = re.compile(
@@ -134,8 +135,24 @@ class AgentCLI(BaseAgentRunner):
 
         verbose_mode = logging.getLogger().level <= logging.INFO
         user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
+        await self._chat_interactive_terminal_ui(
+            user_id=user_id,
+            stream=stream,
+            memory=memory,
+            verbose_mode=verbose_mode,
+        )
 
-        self._print_banner(
+    async def _chat_interactive_terminal_ui(
+        self,
+        *,
+        user_id: str,
+        stream: bool,
+        memory: bool,
+        verbose_mode: bool,
+    ) -> None:
+        ui = TerminalUI()
+        self._print_terminal_banner(
+            ui,
             stream=stream,
             memory=memory,
             verbose_mode=verbose_mode,
@@ -143,44 +160,58 @@ class AgentCLI(BaseAgentRunner):
 
         while True:
             try:
-                user_input = input("\n👤 You: ").strip()
+                status = (
+                    f"[dim]stream {'on' if stream else 'off'} | "
+                    f"memory {'on' if memory else 'off'} | "
+                    f"verbose {'on' if verbose_mode else 'off'}[/dim]"
+                )
+                user_input = ui.input(f"[bold cyan]You[/bold cyan] {status}\n[bold cyan]> [/bold cyan]").strip()
 
                 if user_input.lower() in ["exit", "quit", "bye"]:
-                    print("\n╭───────────────────────────────────────╮")
-                    print("│  👋 Thank you for using xAgent CLI!   │")
-                    print("│         See you next time! 🚀         │")
-                    print("╰───────────────────────────────────────╯")
+                    ui.print_panel(
+                        "Thank you for using xAgent CLI. See you next time.",
+                        title="Session Ended",
+                    )
                     break
 
                 if user_input.lower() == "clear":
                     await self.message_storage.clear_messages()
-                    print("🧹 ✨ Global message stream cleared.")
+                    ui.print_panel(
+                        "Global message stream cleared.",
+                        title="Cleared",
+                    )
                     continue
 
                 if user_input.lower().startswith("stream "):
                     stream_cmd = user_input.lower().split()
                     if len(stream_cmd) == 2 and stream_cmd[1] in {"on", "off"}:
                         stream = stream_cmd[1] == "on"
-                        print(f"{'🌊' if stream else '📄'} ✨ Streaming {'enabled' if stream else 'disabled'}.")
+                        ui.print_panel(
+                            f"Streaming {'enabled' if stream else 'disabled'}.",
+                            title="Chat Status",
+                        )
                     else:
-                        print("⚠️  Usage: stream on/off")
+                        ui.print_panel("Usage: stream on/off", title="Chat Status")
                     continue
 
                 if user_input.lower().startswith("memory "):
                     memory_cmd = user_input.lower().split()
                     if len(memory_cmd) == 2 and memory_cmd[1] in {"on", "off"}:
                         memory = memory_cmd[1] == "on"
-                        print(f"{'🧠' if memory else '🚫'} ✨ Memory {'enabled' if memory else 'disabled'}.")
+                        ui.print_panel(
+                            f"Memory {'enabled' if memory else 'disabled'}.",
+                            title="Chat Status",
+                        )
                     else:
-                        print("⚠️  Usage: memory on/off")
+                        ui.print_panel("Usage: memory on/off", title="Chat Status")
                     continue
 
                 if user_input.lower() == "help":
-                    self._show_help()
+                    self._show_terminal_help(ui)
                     continue
 
                 if not user_input:
-                    print("💭 Please enter a message to chat with the agent.")
+                    ui.print_panel("Enter a message to chat with the agent.", title="Empty Input")
                     continue
 
                 if not hasattr(self.agent, "chat_events"):
@@ -189,10 +220,15 @@ class AgentCLI(BaseAgentRunner):
                         user_id=user_id,
                         enable_memory=memory,
                     )
-                    print("🤖 Agent: " + self._format_cli_output(response))
+                    ui.print_panel(
+                        self._format_cli_output(response),
+                        title="xAgent",
+                        border_style="green",
+                    )
                     continue
 
-                await self._print_chat_events(
+                await self._print_chat_events_terminal_ui(
+                    ui=ui,
                     user_message=user_input,
                     user_id=user_id,
                     enable_memory=memory,
@@ -200,13 +236,13 @@ class AgentCLI(BaseAgentRunner):
                 )
 
             except KeyboardInterrupt:
-                print("\n\n╭─────────────────────────────────────╮")
-                print("│  👋 Session interrupted by user    │")
-                print("│      Thank you for using xAgent!   │")
-                print("╰─────────────────────────────────────╯")
+                ui.print_panel(
+                    "Session interrupted by user.",
+                    title="Session Ended",
+                )
                 break
             except Exception as exc:
-                print(f"\n❌ Oops! An error occurred: {exc}")
+                ui.print_panel(f"An error occurred: {exc}", title="Error", border_style="red")
                 if verbose_mode:
                     import traceback
 
@@ -307,8 +343,71 @@ class AgentCLI(BaseAgentRunner):
         if line_open:
             print()
 
-    def _print_banner(
+    async def _print_chat_events_terminal_ui(
         self,
+        *,
+        ui: TerminalUI,
+        user_message: str,
+        user_id: str,
+        stream: bool,
+        enable_memory: bool,
+    ) -> None:
+        console = ui.console
+        line_open = False
+        line_has_streamed_text = False
+
+        async for event in self.agent.chat_events(
+            user_message=user_message,
+            user_id=user_id,
+            stream=stream,
+            enable_memory=enable_memory,
+        ):
+            event_type = event.get("type")
+            if event_type == "message_start":
+                if line_open and console is not None:
+                    console.print()
+                if console is not None:
+                    console.print("[bold green]xAgent[/bold green]: ", end="")
+                line_open = True
+                line_has_streamed_text = False
+                continue
+            if event_type == "message_delta":
+                if not line_open and console is not None:
+                    console.print("[bold green]xAgent[/bold green]: ", end="")
+                    line_open = True
+                    line_has_streamed_text = False
+                delta = self._format_cli_output(event.get("delta", ""))
+                if delta and console is not None:
+                    console.print(delta, end="", markup=False, highlight=False, soft_wrap=True)
+                    line_has_streamed_text = True
+                continue
+            if event_type == "message_done":
+                attachments_text = self._format_cli_event_attachments(event.get("attachments"))
+                content = self._format_cli_output(event.get("content", ""))
+                if line_has_streamed_text:
+                    if console is not None:
+                        console.print()
+                elif content:
+                    ui.print_panel(content, title="xAgent", border_style="green")
+                else:
+                    ui.print_panel("", title="xAgent", border_style="green")
+                if attachments_text:
+                    ui.print_panel(attachments_text, title="Attachments")
+                line_open = False
+                line_has_streamed_text = False
+                continue
+            if event_type == "error":
+                ui.print_panel(event.get("error", "Agent processing error."), title="Error", border_style="red")
+                line_open = False
+                line_has_streamed_text = False
+
+        if line_open and console is not None:
+            console.print()
+
+    def _print_terminal_banner(
+        self,
+        ui: TerminalUI,
+        *,
         stream: bool,
         memory: bool,
         verbose_mode: bool,
@@ -318,34 +417,40 @@ class AgentCLI(BaseAgentRunner):
             if self.config_path.is_file()
             else f"Config: default values ({self.config_path} not found)"
         )
-        print("xAgent chat")
-        print(config_msg)
-        print(f"Dir: {self.config_dir}")
-        print(f"Model: {self.agent.model}")
-        print(f"Tools: {len(self.agent.tools)} loaded")
-        print(
-            "Status: "
-            f"verbose={'on' if verbose_mode else 'off'}, "
-            f"stream={'on' if stream else 'off'}, "
-            f"memory={'on' if memory else 'off'}"
+        ui.print_panel(
+            "\n".join([
+                config_msg,
+                f"Runtime: {self.config_dir}",
+                f"Model: {self.agent.model}",
+                f"Tools: {len(self.agent.tools)} loaded",
+                (
+                    "Status: "
+                    f"verbose={'on' if verbose_mode else 'off'}, "
+                    f"stream={'on' if stream else 'off'}, "
+                    f"memory={'on' if memory else 'off'}"
+                ),
+                "",
+                "Type a message to chat. Use help for commands or exit to leave.",
+            ]),
+            title="xAgent Chat",
         )
-        print("")
-        print("Type a message to chat. Type 'help' for chat commands or 'exit' to quit.")
 
-    def _show_help(self):
-        print("\nChat commands:")
-        print("  exit, quit, bye    Exit the chat session")
-        print("  clear              Clear the agent message stream")
-        print("  stream on/off      Toggle streamed delta printing")
-        print("  memory on/off      Toggle memory storage mode")
-        print("  help               Show this help message")
-
-        print("\nBuilt-in tools:")
-        if self.agent.tools:
-            for tool_name in self.agent.tools.keys():
-                print(f"  {tool_name}")
-        else:
-            print("  No built-in tools available")
+    def _show_terminal_help(self, ui: TerminalUI) -> None:
+        tool_lines = [f"- {tool_name}" for tool_name in self.agent.tools.keys()] or ["- No built-in tools available"]
+        ui.print_panel(
+            "\n".join([
+                "Chat commands:",
+                "exit, quit, bye    Exit the chat session",
+                "clear              Clear the agent message stream",
+                "stream on/off      Toggle streamed delta printing",
+                "memory on/off      Toggle memory storage mode",
+                "help               Show this help message",
+                "",
+                "Built-in tools:",
+                *tool_lines,
+            ]),
+            title="Chat Help",
+        )
 
 
 @dataclass(frozen=True)
@@ -848,6 +953,330 @@ def _prompt_multiline_identity(input_func: Callable[[str], str] = input) -> str:
     return _format_identity_markdown("\n".join(lines))
 
 
+def _menu_option_rows(options: Sequence[str], descriptions: Optional[dict[str, str]] = None) -> list[MenuOption]:
+    option_descriptions = descriptions or {}
+    rows: list[MenuOption] = []
+    for option in options:
+        rows.append(
+            MenuOption(
+                key=option,
+                title=option,
+                description=option_descriptions.get(option, f"Use {option}."),
+            )
+        )
+    return rows
+
+
+def _terminal_select_option(
+    ui: TerminalUI,
+    title: str,
+    options: Sequence[str],
+    *,
+    descriptions: Optional[dict[str, str]] = None,
+    default_index: int = 0,
+    subtitle: str = "",
+) -> str:
+    choice = ui.select(
+        label=title,
+        subtitle=subtitle,
+        options=_menu_option_rows(options, descriptions),
+        default_index=default_index,
+    )
+    if choice is None:
+        raise KeyboardInterrupt()
+    return choice.key
+
+
+def _terminal_prompt_text(ui: TerminalUI, prompt: str, *, default: Optional[str] = None) -> str:
+    return ui.ask_text(prompt, default=default)
+
+
+def _terminal_prompt_yes_no(ui: TerminalUI, prompt: str, *, default: bool = False) -> bool:
+    result = ui.confirm(prompt, default=default)
+    if result is None:
+        raise KeyboardInterrupt()
+    return result
+
+
+def _terminal_prompt_multiline_identity(ui: TerminalUI) -> str:
+    ui.print_panel(
+        "Describe the agent's role and tone. Type '.' on its own line to finish, "
+        "or finish now for a template.",
+        title="Identity",
+        leading_blank_line=True,
+    )
+    lines: list[str] = []
+    while True:
+        line = ui.input("[grey50]› [/grey50]")
+        if line.strip() == ".":
+            break
+        lines.append(line)
+    meaningful = [line for line in lines if line.strip()]
+    ui.record("Identity", f"{len(meaningful)} line(s) provided" if meaningful else "default template", skipped=not meaningful)
+    return _format_identity_markdown("\n".join(lines))
+
+
+def collect_init_selection_terminal_ui(
+    *,
+    ui: Optional[TerminalUI] = None,
+    secret_input_func: Callable[[str], str] = getpass.getpass,
+) -> InitSelection:
+    wizard_ui = ui or TerminalUI()
+    ask_secret = wizard_ui.ask_secret if wizard_ui.interactive else secret_input_func
+
+    provider = _terminal_select_option(
+        wizard_ui,
+        "Provider",
+        KNOWN_PROVIDERS,
+        descriptions={
+            PROVIDER_OPENAI: "GPT family via the OpenAI platform.",
+            PROVIDER_DEEPSEEK: "DeepSeek chat and coding models.",
+            PROVIDER_MINIMAX: "MiniMax models via the Anthropic-style API.",
+            PROVIDER_QWEN: "Qwen models via DashScope-compatible APIs.",
+            PROVIDER_ANTHROPIC: "Claude models via Anthropic Messages.",
+            PROVIDER_CUSTOM: "Bring your own OpenAI, Responses, or Anthropic endpoint.",
+        },
+        subtitle="Choose the model provider to configure.",
+    )
+    model_api = ""
+    supports_vision = False
+
+    if provider == PROVIDER_OPENAI:
+        selected_model = _terminal_select_option(
+            wizard_ui,
+            "OpenAI Model",
+            OPENAI_MODELS,
+            descriptions={
+                "gpt-5.4": "Highest capability general model.",
+                "gpt-5.4-mini": "Balanced default for speed and quality.",
+                "gpt-5.4-nano": "Lowest latency and cost.",
+                "gpt-5.5": "Newest OpenAI release.",
+                "Decide later": "Write a placeholder and fill it in later.",
+            },
+            default_index=1,
+        )
+        base_url = OPENAI_BASE_URL
+    elif provider == PROVIDER_ANTHROPIC:
+        selected_model = _terminal_select_option(
+            wizard_ui,
+            "Anthropic Model",
+            ANTHROPIC_MODELS,
+            default_index=0,
+        )
+        base_url = ANTHROPIC_BASE_URL
+    elif provider == PROVIDER_DEEPSEEK:
+        selected_model = _terminal_select_option(
+            wizard_ui,
+            "DeepSeek Model",
+            DEEPSEEK_MODELS,
+            default_index=0,
+        )
+        base_url = DEEPSEEK_BASE_URL
+    elif provider == PROVIDER_MINIMAX:
+        selected_model = _terminal_select_option(
+            wizard_ui,
+            "MiniMax Model",
+            MINIMAX_MODELS,
+            default_index=0,
+        )
+        base_url = MINIMAX_BASE_URL
+    elif provider == PROVIDER_QWEN:
+        selected_model = _terminal_select_option(
+            wizard_ui,
+            "Qwen Model",
+            QWEN_MODELS,
+            default_index=1,
+        )
+        base_url = QWEN_BASE_URL
+    else:
+        model_api = _terminal_select_option(
+            wizard_ui,
+            "Custom Provider Model API",
+            (
+                MODEL_API_OPENAI_CHAT_COMPLETIONS,
+                MODEL_API_OPENAI_RESPONSES,
+                MODEL_API_ANTHROPIC_MESSAGES,
+            ),
+            default_index=0,
+            subtitle="Select the wire protocol your custom provider speaks.",
+        )
+        selected_model = "Decide later"
+        default_base_url = (
+            CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER
+            if model_api == MODEL_API_ANTHROPIC_MESSAGES
+            else CUSTOM_OPENAI_BASE_URL_PLACEHOLDER
+        )
+        base_url = _terminal_prompt_text(
+            wizard_ui,
+            "Custom provider base URL",
+            default=default_base_url,
+        )
+        supports_vision = _terminal_prompt_yes_no(
+            wizard_ui,
+            "Does this custom provider support image URL input?",
+            default=False,
+        )
+
+    model = MODEL_PLACEHOLDER if selected_model == "Decide later" else selected_model
+    api_key = ask_secret("API key (leave blank to fill in later): ").strip() or API_KEY_PLACEHOLDER
+
+    provider_api_cfg = {"name": provider}
+    if model_api:
+        provider_api_cfg["model_api"] = model_api
+    selected_model_api = provider_model_api(provider_api_cfg)
+
+    observability_enabled = False
+    langfuse_public_key = ""
+    langfuse_secret_key = ""
+    langfuse_base_url = ""
+    if model_api_uses_openai_client(selected_model_api):
+        observability_enabled = _terminal_prompt_yes_no(
+            wizard_ui,
+            "Enable Langfuse observability?",
+            default=False,
+        )
+    if observability_enabled:
+        langfuse_public_key = _terminal_prompt_text(
+            wizard_ui,
+            "Langfuse public key",
+            default=LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
+        )
+        langfuse_secret_key = (
+            ask_secret("Langfuse secret key (leave blank to fill in later): ").strip()
+            or LANGFUSE_SECRET_KEY_PLACEHOLDER
+        )
+        langfuse_base_url = _terminal_prompt_text(
+            wizard_ui,
+            "Langfuse base URL",
+            default=LANGFUSE_BASE_URL,
+        )
+
+    search_provider = _terminal_select_option(
+        wizard_ui,
+        "Search Provider",
+        SEARCH_PROVIDERS,
+        descriptions={
+            "none": "Do not enable a provider-native web search tool.",
+            "openai": "Use OpenAI web search.",
+            "qwen": "Use Qwen web search via DashScope.",
+            "minimax": "Use MiniMax web search.",
+        },
+        default_index=0,
+    )
+    search_api_key = ""
+    if search_provider in {"openai", "qwen", "minimax"} and search_provider != provider:
+        search_api_key = _prompt_search_api_key(search_provider, secret_input_func=ask_secret)
+
+    if provider in {PROVIDER_OPENAI, PROVIDER_MINIMAX, PROVIDER_QWEN}:
+        image_generation_provider = _native_image_generation_provider(provider)
+    else:
+        image_generation_provider = _terminal_select_option(
+            wizard_ui,
+            "Image Generation Provider",
+            NON_OPENAI_IMAGE_GENERATION_PROVIDERS,
+            descriptions={
+                "none": "Do not enable image generation.",
+                "openai": "Use OpenAI image generation.",
+                "minimax": "Use MiniMax image generation.",
+            },
+            default_index=0,
+        )
+    image_generation_api_key = ""
+    if image_generation_provider in {"openai", "minimax", "qwen"} and image_generation_provider != provider:
+        image_generation_api_key = _prompt_image_generation_api_key(
+            image_generation_provider,
+            secret_input_func=ask_secret,
+        )
+
+    voice_enabled = _terminal_prompt_yes_no(wizard_ui, "Enable voice mode?", default=False)
+    voice_provider = "none"
+    voice_api_key = ""
+    voice_stt_provider = ""
+    voice_stt_api_key = ""
+    voice_tts_provider = ""
+    voice_tts_api_key = ""
+
+    if voice_enabled:
+        voice_provider = _terminal_select_option(
+            wizard_ui,
+            "Voice Provider",
+            VOICE_PROVIDERS,
+            descriptions={
+                "none": "Disable voice features.",
+                "soniox": "Use Soniox voice runtime defaults.",
+                "qwen": "Use Qwen voice runtime defaults.",
+                "custom": "Pick separate STT and TTS providers.",
+            },
+            default_index=1,
+        )
+        voice_enabled = voice_provider != "none"
+
+    if voice_enabled:
+        if voice_provider == "custom":
+            voice_stt_provider = _terminal_select_option(
+                wizard_ui,
+                "STT Provider",
+                VOICE_CUSTOM_PROVIDERS,
+                default_index=0,
+            )
+            voice_stt_api_key = _prompt_voice_api_key(
+                voice_stt_provider,
+                provider=provider,
+                main_api_key=api_key,
+                purpose="STT",
+                secret_input_func=ask_secret,
+            )
+            voice_tts_provider = _terminal_select_option(
+                wizard_ui,
+                "TTS Provider",
+                VOICE_CUSTOM_PROVIDERS,
+                default_index=0,
+            )
+            voice_tts_api_key = _prompt_voice_api_key(
+                voice_tts_provider,
+                provider=provider,
+                main_api_key=api_key,
+                purpose="TTS",
+                secret_input_func=ask_secret,
+            )
+        elif voice_provider == "qwen" and provider == PROVIDER_QWEN:
+            voice_api_key = api_key if api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
+        else:
+            voice_api_key = _prompt_voice_api_key(
+                voice_provider,
+                provider=provider,
+                main_api_key=api_key,
+                secret_input_func=ask_secret,
+            )
+
+    identity = _terminal_prompt_multiline_identity(wizard_ui)
+
+    return InitSelection(
+        provider=provider,
+        model_api=model_api,
+        supports_vision=supports_vision,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        identity=identity,
+        search_provider=search_provider,
+        search_api_key=search_api_key,
+        image_generation_provider=image_generation_provider,
+        image_generation_api_key=image_generation_api_key,
+        observability_enabled=observability_enabled,
+        langfuse_public_key=langfuse_public_key,
+        langfuse_secret_key=langfuse_secret_key,
+        langfuse_base_url=langfuse_base_url,
+        voice_enabled=voice_enabled,
+        voice_provider=voice_provider,
+        voice_api_key=voice_api_key,
+        voice_stt_provider=voice_stt_provider,
+        voice_stt_api_key=voice_stt_api_key,
+        voice_tts_provider=voice_tts_provider,
+        voice_tts_api_key=voice_tts_api_key,
+    )
+
+
 def collect_init_selection(
     *,
     input_func: Callable[[str], str] = input,
@@ -1095,12 +1524,14 @@ def init_agent_directory(
     conflicts = tuple(path for path in managed_paths if path.exists())
 
     if conflicts and not force:
-        print("╭─────────────────────────────────────────────────────────╮")
-        print("│ xAgent init found existing managed files.               │")
-        print("╰─────────────────────────────────────────────────────────╯")
-        for path in conflicts:
-            print(f"Existing: {path}")
-        print("Re-run with --force to overwrite config.yaml and identity.md.")
+        TerminalUI().print_panel(
+            "\n".join([
+                "xAgent init found existing managed files.",
+                *(f"Existing: {path}" for path in conflicts),
+                "Re-run with --force to overwrite config.yaml and identity.md.",
+            ]),
+            title="Init Stopped",
+        )
         return InitResult(
             config_path=config_path,
             identity_path=identity_path,
@@ -1127,16 +1558,20 @@ def init_agent_directory(
     config_path.write_text(_config_yaml(selection, schema=schema), encoding="utf-8")
     identity_path.write_text(selection.identity, encoding="utf-8")
 
-    print("╭─────────────────────────────────────────────────────────╮")
-    print("│ xAgent project files written successfully.             │")
-    print("╰─────────────────────────────────────────────────────────╯")
-    print(f"Config: {config_path}")
-    print(f"Identity: {identity_path}")
-    print(f"Memory: {memory_dir}")
-    print(f"Messages: {messages_dir}")
-    print(f"Workspace: {workspace_dir}")
-    print(f"Skills: {skills_dir}")
-    print(f"Tasks: {tasks_dir}")
+    TerminalUI().print_panel(
+        "\n".join([
+            "xAgent project files written successfully.",
+            f"Config: {config_path}",
+            f"Identity: {identity_path}",
+            f"Memory: {memory_dir}",
+            f"Messages: {messages_dir}",
+            f"Workspace: {workspace_dir}",
+            f"Skills: {skills_dir}",
+            f"Tasks: {tasks_dir}",
+        ]),
+        title="xAgent Ready",
+        leading_blank_line=True,
+    )
     return InitResult(
         config_path=config_path,
         identity_path=identity_path,
@@ -1195,23 +1630,21 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
     feishu_init = _format_init_command("xagent init feishu", config_dir=config_dir)
     feishu_start = _format_init_command("xagent service start feishu", config_dir=config_dir)
     doctor_command = _format_init_command("xagent doctor", config_dir=config_dir)
-
-    print("")
-    print("╭─────────────────────────────────────────────────────────╮")
-    print("│ xAgent is ready. Pick how you want to use it next.      │")
-    print("╰─────────────────────────────────────────────────────────╯")
-    print("Ready now:")
+    lines = ["Pick how you want to use it next.", "", "Ready now:"]
     for name, command, description in ready_now:
-        print(f"  {name:<7} {command}")
-        print(f"          {description}")
-    print("")
-    print("Optional:")
-    print(f"  feishu  {feishu_init}")
-    print(f"          Create a Feishu bot config, then start it with {feishu_start}.")
-    print("")
-    print("Check:")
-    print(f"  doctor   {doctor_command}")
-    print("          Verify local config, files, and channel readiness.")
+        lines.append(f"{name:<7} {command}")
+        lines.append(f"        {description}")
+    lines.extend([
+        "",
+        "Optional:",
+        f"feishu  {feishu_init}",
+        f"        Create a Feishu bot config, then start it with {feishu_start}.",
+        "",
+        "Check:",
+        f"doctor  {doctor_command}",
+        "        Verify local config, files, and channel readiness.",
+    ])
+    TerminalUI().print_panel("\n".join(lines), title="Next Steps")
 
 
 def _add_dir_argument(parser: argparse.ArgumentParser) -> None:
@@ -1553,13 +1986,20 @@ def handle_init(args: argparse.Namespace) -> int:
         return 0 if result.wrote_files else 1
 
     clear_runtime_data = False
-    if args.force:
-        clear_runtime_data = _prompt_yes_no(
-            "Clear existing memory/, messages/, and workspace/ data as part of init --force?",
-            default=False,
-        )
+    ui = TerminalUI()
+    try:
+        if args.force:
+            clear_runtime_data = _terminal_prompt_yes_no(
+                ui,
+                "Clear existing memory/, messages/, and workspace/ data as part of init --force?",
+                default=False,
+            )
 
-    selection = collect_init_selection()
+        selection = collect_init_selection_terminal_ui(ui=ui)
+    except KeyboardInterrupt:
+        ui.print_panel("Init cancelled before writing files.", title="Init Cancelled")
+        return 1
+
     result = init_agent_directory(
         args.config_dir,
         force=args.force,
@@ -1638,10 +2078,10 @@ def handle_voice(args: argparse.Namespace) -> int:
                 user_id=args.user_id or "local_voice",
                 enable_memory=bool(args.memory),
                 stream=True,
-                tasks_dir=runner.tasks_dir,
+                tasks_dir=getattr(runner, "tasks_dir", None),
             ),
-            input_device=args.input_device,
-            output_device=args.output_device,
+            input_device=getattr(args, "input_device", None),
+            output_device=getattr(args, "output_device", None),
         )
     except Exception as exc:
         print(f"Failed to start voice channel: {exc}")
@@ -2129,7 +2569,7 @@ def _try_print_qr_ascii(url: str) -> bool:
         qr = qrcode.QRCode()
         qr.add_data(url)
         qr.make()
-        print("\n📱 Or scan this QR code with your Feishu app:\n")
+        print("\n📱 Scan this QR code with your Feishu app:\n")
         qr.print_ascii(invert=True)
         return True
     except Exception:
@@ -2189,6 +2629,10 @@ def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
         # Display link
         print("\n🔗 Click this link to authorize (or paste into your browser):\n")
         print(f"{url}\n")
+        if user_code:
+            print(f"Verification code: {user_code}")
+        if expiry_label:
+            print(f"Link expires in: {expiry_label}")
 
         # Try to display ASCII QR code
         if _try_print_qr_ascii(url):
@@ -2563,10 +3007,367 @@ def print_quick_start() -> None:
     print("Use 'xagent --help' to see all commands.")
 
 
+def _xagent_version_text() -> str:
+    try:
+        from xagent.__version__ import __version__
+    except Exception:  # pragma: no cover - defensive
+        return "unknown"
+    return __version__
+
+
+def _launcher_args(**kwargs: Any) -> argparse.Namespace:
+    return argparse.Namespace(**kwargs)
+
+
+def _launcher_options(*, initialized: bool) -> list[MenuOption]:
+    return [
+        MenuOption(
+            key="init",
+            title="Setup",
+            description="Create or refresh config, identity, workspace, memory, and tasks.",
+        ),
+        MenuOption(
+            key="chat",
+            title="Chat",
+            description="Talk with the configured agent in the terminal.",
+            disabled=not initialized,
+        ),
+        MenuOption(
+            key="web",
+            title="Web UI",
+            description="Start the built-in browser workspace.",
+            disabled=not initialized,
+        ),
+        MenuOption(
+            key="voice",
+            title="Voice",
+            description="Start microphone mode with the configured runtime.",
+            disabled=not initialized,
+        ),
+        MenuOption(
+            key="service",
+            title="Services",
+            description="Start, stop, inspect, and tail background channels.",
+            disabled=not initialized,
+        ),
+        MenuOption(
+            key="inspect",
+            title="Inspect",
+            description="Read config, identity, memory, and message state.",
+            disabled=not initialized,
+        ),
+        MenuOption(
+            key="doctor",
+            title="Doctor",
+            description="Validate local files, config, and enabled channels.",
+        ),
+        MenuOption(
+            key="version",
+            title="Version",
+            description="Show xAgent and Python versions.",
+        ),
+        MenuOption(
+            key="exit",
+            title="Exit",
+            description="Close the launcher.",
+        ),
+    ]
+
+
+def _launcher_channel_options(*, include_all: bool = True) -> list[MenuOption]:
+    options = [
+        MenuOption(
+            key=CHANNEL_API,
+            title="API",
+            description="HTTP, SSE, WebSocket, and browser UI runtime.",
+        ),
+        MenuOption(
+            key=CHANNEL_FEISHU,
+            title="Feishu",
+            description="Feishu bot channel using the configured app credentials.",
+        ),
+    ]
+    if include_all:
+        options.append(
+            MenuOption(
+                key="all",
+                title="All Enabled",
+                description="Use every channel enabled by the current config.",
+            )
+        )
+    options.append(MenuOption(key="back", title="Back", description="Return to the previous menu."))
+    return options
+
+
+def _run_service_launcher(config_dir: Path) -> int:
+    ui = TerminalUI()
+    actions = [
+        MenuOption("start_api", "Start API", "Run the API channel in the background."),
+        MenuOption("start_feishu", "Start Feishu", "Run the Feishu channel in the background."),
+        MenuOption("start_all", "Start All", "Start every enabled channel in the background."),
+        MenuOption("stop", "Stop", "Stop one channel or all enabled channels."),
+        MenuOption("restart", "Restart", "Restart one channel or all enabled channels."),
+        MenuOption("status", "Status", "Show pid and log paths for running services."),
+        MenuOption("logs", "Logs", "Print the latest log output for a channel."),
+        MenuOption("back", "Back", "Return to the main launcher."),
+    ]
+
+    while True:
+        option = ui.select_menu(
+            title="xAgent Services",
+            subtitle=f"Runtime: {config_dir}",
+            options=actions,
+            footer="Up/Down Select  •  Enter Confirm  •  q Back",
+        )
+        if option is None or option.key == "back":
+            ui.clear()
+            return 0
+
+        if option.key == "start_api":
+            ui.clear()
+            exit_code = handle_start(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    channels=[CHANNEL_API],
+                    host=None,
+                    port=None,
+                    open_browser=False,
+                    max_concurrent_chats=None,
+                    queue_timeout=None,
+                    chat_timeout=None,
+                )
+            )
+        elif option.key == "start_feishu":
+            ui.clear()
+            exit_code = handle_start(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    channels=[CHANNEL_FEISHU],
+                    host=None,
+                    port=None,
+                    open_browser=False,
+                    max_concurrent_chats=None,
+                    queue_timeout=None,
+                    chat_timeout=None,
+                )
+            )
+        elif option.key == "start_all":
+            ui.clear()
+            exit_code = handle_start(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    channels=["all"],
+                    host=None,
+                    port=None,
+                    open_browser=False,
+                    max_concurrent_chats=None,
+                    queue_timeout=None,
+                    chat_timeout=None,
+                )
+            )
+        else:
+            channel_option = ui.select_menu(
+                title="Choose Channel",
+                subtitle="Select which runtime slice to manage.",
+                options=_launcher_channel_options(),
+                footer="Up/Down Select  •  Enter Confirm  •  q Back",
+            )
+            if channel_option is None or channel_option.key == "back":
+                continue
+            ui.clear()
+            channels = [channel_option.key]
+            if option.key == "stop":
+                exit_code = handle_stop(_launcher_args(config_dir=str(config_dir), channels=channels))
+            elif option.key == "restart":
+                exit_code = handle_restart(
+                    _launcher_args(
+                        config_dir=str(config_dir),
+                        channels=channels,
+                        host=None,
+                        port=None,
+                        open_browser=False,
+                        max_concurrent_chats=None,
+                        queue_timeout=None,
+                        chat_timeout=None,
+                    )
+                )
+            elif option.key == "status":
+                exit_code = handle_status(
+                    _launcher_args(
+                        config_dir=str(config_dir),
+                        channels=channels,
+                        json_output=False,
+                    )
+                )
+            else:
+                exit_code = handle_logs(
+                    _launcher_args(
+                        config_dir=str(config_dir),
+                        channels=channels,
+                        lines=80,
+                        follow=False,
+                    )
+                )
+
+        if exit_code != 0:
+            ui.print_panel(f"Service action exited with status {exit_code}.", title="Services")
+        ui.pause("Press Enter to return to Services")
+
+
+def _run_inspect_launcher(config_dir: Path) -> int:
+    ui = TerminalUI()
+    actions = [
+        MenuOption("config_show", "Config", "Show the current config.yaml."),
+        MenuOption("config_validate", "Validate Config", "Parse and validate config.yaml."),
+        MenuOption("identity_show", "Identity", "Show the current identity.md."),
+        MenuOption("memory_stats", "Memory Stats", "Show long-term memory file counts and bytes."),
+        MenuOption("memory_list", "Memory List", "List memory markdown files."),
+        MenuOption("messages_stats", "Message Stats", "Show message stream storage stats."),
+        MenuOption("messages_list", "Message List", "List recent stored messages."),
+        MenuOption("back", "Back", "Return to the main launcher."),
+    ]
+
+    while True:
+        option = ui.select_menu(
+            title="xAgent Inspect",
+            subtitle=f"Runtime: {config_dir}",
+            options=actions,
+            footer="Up/Down Select  •  Enter Confirm  •  q Back",
+        )
+        if option is None or option.key == "back":
+            ui.clear()
+            return 0
+
+        ui.clear()
+        if option.key == "config_show":
+            exit_code = handle_config(_launcher_args(config_dir=str(config_dir), config_command="show"))
+        elif option.key == "config_validate":
+            exit_code = handle_config(_launcher_args(config_dir=str(config_dir), config_command="validate"))
+        elif option.key == "identity_show":
+            exit_code = handle_identity(_launcher_args(config_dir=str(config_dir), identity_command="show"))
+        elif option.key == "memory_stats":
+            exit_code = handle_memory(
+                _launcher_args(config_dir=str(config_dir), memory_command="stats", scope="all", yes=False)
+            )
+        elif option.key == "memory_list":
+            exit_code = handle_memory(
+                _launcher_args(config_dir=str(config_dir), memory_command="list", scope="all", yes=False)
+            )
+        elif option.key == "messages_stats":
+            exit_code = handle_messages(_launcher_args(config_dir=str(config_dir), messages_command="stats"))
+        else:
+            exit_code = handle_messages(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    messages_command="list",
+                    count=20,
+                    offset=0,
+                )
+            )
+
+        if exit_code != 0:
+            ui.print_panel(f"Inspect action exited with status {exit_code}.", title="Inspect")
+        ui.pause("Press Enter to return to Inspect")
+
+
+def _run_interactive_launcher() -> int:
+    config_dir = Path(BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
+    ui = TerminalUI()
+
+    while True:
+        initialized = _runtime_is_initialized(config_dir)
+        option = ui.select_menu(
+            title=f"xAgent {_xagent_version_text()}",
+            subtitle=(
+                f"Runtime: {config_dir}\n"
+                f"Status: {'ready' if initialized else 'setup required'}"
+            ),
+            options=_launcher_options(initialized=initialized),
+            footer="Up/Down Select  •  Enter Confirm  •  q Exit",
+        )
+        if option is None or option.key == "exit":
+            ui.clear()
+            return 0
+
+        if option.disabled:
+            ui.clear()
+            ui.print_panel(
+                "This workflow needs a configured runtime first. Choose Setup to create config.yaml and identity.md.",
+                title="Not Ready",
+            )
+            ui.pause()
+            continue
+
+        ui.clear()
+        if option.key == "init":
+            exit_code = handle_init(_launcher_args(config_dir=str(config_dir), force=False, schema=False))
+        elif option.key == "chat":
+            exit_code = handle_chat(
+                _launcher_args(
+                    message=None,
+                    config_dir=str(config_dir),
+                    user_id=None,
+                    verbose=False,
+                    stream=None,
+                    events=False,
+                    memory=True,
+                )
+            )
+        elif option.key == "web":
+            exit_code = handle_web(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    host=None,
+                    port=None,
+                    open_browser=True,
+                    max_concurrent_chats=None,
+                    queue_timeout=None,
+                    chat_timeout=None,
+                )
+            )
+        elif option.key == "voice":
+            exit_code = handle_voice(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    user_id="local_voice",
+                    verbose=False,
+                    list_devices=False,
+                    input_device=None,
+                    output_device=None,
+                    memory=True,
+                )
+            )
+        elif option.key == "service":
+            _run_service_launcher(config_dir)
+            continue
+        elif option.key == "inspect":
+            _run_inspect_launcher(config_dir)
+            continue
+        elif option.key == "doctor":
+            exit_code = handle_doctor(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    channels=None,
+                    online=False,
+                )
+            )
+        else:
+            exit_code = handle_version(_launcher_args())
+
+        if exit_code != 0:
+            ui.print_panel(
+                f"The selected workflow exited with status {exit_code}.",
+                title="Command Finished",
+            )
+        ui.pause("Press Enter to return to the launcher")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     if not argv:
+        if rich_terminal_available():
+            return _run_interactive_launcher()
         print_quick_start()
         return 0
 

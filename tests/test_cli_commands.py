@@ -475,6 +475,14 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("chat", output)
         self.assertIn("web", output)
 
+    def test_main_uses_interactive_launcher_when_terminal_ui_is_available(self):
+        with patch("xagent.interfaces.cli.rich_terminal_available", return_value=True):
+            with patch("xagent.interfaces.cli._run_interactive_launcher", return_value=0) as launcher:
+                exit_code = main([])
+
+        self.assertEqual(exit_code, 0)
+        launcher.assert_called_once_with()
+
     def test_root_help_groups_public_commands(self):
         help_text = build_parser().format_help()
 
@@ -506,12 +514,13 @@ class CLICommandTests(unittest.TestCase):
             workspace_marker.write_text("keep-workspace", encoding="utf-8")
             args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
 
-            with patch("xagent.interfaces.cli._prompt_yes_no", return_value=False) as prompt:
-                with patch("xagent.interfaces.cli.collect_init_selection", return_value=_selection()):
+            with patch("xagent.interfaces.cli._terminal_prompt_yes_no", return_value=False) as prompt:
+                with patch("xagent.interfaces.cli.collect_init_selection_terminal_ui", return_value=_selection()):
                     exit_code = handle_init(args)
 
             self.assertEqual(exit_code, 0)
             prompt.assert_called_once_with(
+                unittest.mock.ANY,
                 "Clear existing memory/, messages/, and workspace/ data as part of init --force?",
                 default=False,
             )
@@ -535,12 +544,13 @@ class CLICommandTests(unittest.TestCase):
             workspace_marker.write_text("clear-workspace", encoding="utf-8")
             args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
 
-            with patch("xagent.interfaces.cli._prompt_yes_no", return_value=True) as prompt:
-                with patch("xagent.interfaces.cli.collect_init_selection", return_value=_selection()):
+            with patch("xagent.interfaces.cli._terminal_prompt_yes_no", return_value=True) as prompt:
+                with patch("xagent.interfaces.cli.collect_init_selection_terminal_ui", return_value=_selection()):
                     exit_code = handle_init(args)
 
             self.assertEqual(exit_code, 0)
             prompt.assert_called_once_with(
+                unittest.mock.ANY,
                 "Clear existing memory/, messages/, and workspace/ data as part of init --force?",
                 default=False,
             )
@@ -556,12 +566,12 @@ class CLICommandTests(unittest.TestCase):
             args = argparse.Namespace(config_dir=tmpdir, force=False, schema=False)
             resolved_dir = str(Path(tmpdir).resolve())
 
-            with patch("xagent.interfaces.cli.collect_init_selection", return_value=_selection()):
-                with patch("sys.stdout") as stdout:
+            with patch("xagent.interfaces.cli.collect_init_selection_terminal_ui", return_value=_selection()):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     exit_code = handle_init(args)
 
         self.assertEqual(exit_code, 0)
-        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        output = stdout.getvalue()
         self.assertIn("Pick how you want to use it next", output)
         self.assertIn(f"xagent chat --dir {resolved_dir}", output)
         self.assertIn(f"xagent web --dir {resolved_dir}", output)
@@ -577,19 +587,33 @@ class CLICommandTests(unittest.TestCase):
             resolved_dir = str(Path(tmpdir).resolve())
 
             with patch(
-                "xagent.interfaces.cli.collect_init_selection",
+                "xagent.interfaces.cli.collect_init_selection_terminal_ui",
                 return_value=_selection(
                     voice_enabled=True,
                     voice_provider="qwen",
                     voice_api_key="voice-key",
                 ),
             ):
-                with patch("sys.stdout") as stdout:
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     exit_code = handle_init(args)
 
         self.assertEqual(exit_code, 0)
-        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        output = stdout.getvalue()
         self.assertIn(f"xagent voice --dir {resolved_dir}", output)
+
+    def test_init_uses_terminal_wizard(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(config_dir=tmpdir, force=False, schema=False)
+
+            with patch("xagent.interfaces.cli.TerminalUI") as terminal_ui:
+                with patch(
+                    "xagent.interfaces.cli.collect_init_selection_terminal_ui",
+                    return_value=_selection(),
+                ) as wizard:
+                    exit_code = handle_init(args)
+
+        self.assertEqual(exit_code, 0)
+        wizard.assert_called_once_with(ui=terminal_ui.return_value)
 
     def test_init_feishu_updates_unified_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
