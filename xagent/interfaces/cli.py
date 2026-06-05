@@ -162,7 +162,7 @@ class AgentCLI(BaseAgentRunner):
 
         while True:
             try:
-                user_input = ui.input("[bold cyan]You:[/bold cyan] ").strip()
+                user_input = ui.input("[cyan]You:[/cyan] ").strip()
 
                 if user_input.lower() in ["exit", "quit", "bye"]:
                     ui.print_panel(
@@ -364,13 +364,13 @@ class AgentCLI(BaseAgentRunner):
                 if line_open and console is not None:
                     console.print()
                 if console is not None:
-                    console.print("[bold green]xAgent[/bold green]: ", end="")
+                    console.print("[green]xAgent[/green]: ", end="")
                 line_open = True
                 line_has_streamed_text = False
                 continue
             if event_type == "message_delta":
                 if not line_open and console is not None:
-                    console.print("[bold green]xAgent[/bold green]: ", end="")
+                    console.print("[green]xAgent[/green]: ", end="")
                     line_open = True
                     line_has_streamed_text = False
                 delta = self._format_cli_output(event.get("delta", ""))

@@ -314,7 +314,7 @@ class TerminalUI:
                 title=label,
                 options=options,
                 subtitle=subtitle,
-                footer="↑/↓ Move · Enter Select · Esc Cancel",
+                footer="↑/↓ Move · Enter Select · q Cancel",
                 default_index=default_index,
                 screen=False,
             )
