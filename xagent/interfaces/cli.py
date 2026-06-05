@@ -102,7 +102,7 @@ def _format_cli_attachments(attachments: Any, workspace_dir: str | Path | None) 
 
     if not paths:
         return ""
-    return "Attachments:\n" + "\n".join(f"- {path}" for path in paths)
+    return "\n".join(f"- {path}" for path in paths)
 
 class AgentCLI(BaseAgentRunner):
     """CLI Agent for xAgent."""
