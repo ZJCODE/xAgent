@@ -15,8 +15,13 @@ from xagent.interfaces.cli import (
     FeishuInitSelection,
     InitSelection,
     _run_inspect_launcher,
+    _run_interactive_launcher,
+    _run_service_launcher,
     _format_cli_attachments,
     _format_cli_workspace_links,
+    _launcher_channel_options,
+    _launcher_help_content,
+    _launcher_options,
     build_parser,
     collect_feishu_init_selection_terminal_ui,
     handle_config,
@@ -579,6 +584,151 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         launcher.assert_called_once_with()
 
+    def test_launcher_options_use_resetup_after_initial_setup(self):
+        initial_options = _launcher_options(initialized=False)
+        reset_options = _launcher_options(initialized=True)
+
+        self.assertEqual(initial_options[0].title, "Setup")
+        self.assertEqual(reset_options[0].title, "Resetup")
+        self.assertIn("force", reset_options[0].description.lower())
+        self.assertIn("Help", [option.title for option in reset_options])
+
+    def test_launcher_channel_all_label_is_simple(self):
+        options = _launcher_channel_options()
+        all_option = next(option for option in options if option.key == "all")
+
+        self.assertEqual(all_option.title, "All")
+        self.assertEqual(all_option.description, "Use all enabled channels.")
+
+    def test_service_launcher_start_chooses_channel_before_starting(self):
+        class FakeUI:
+            def __init__(self):
+                self.service_choices = iter([
+                    SimpleNamespace(key="start"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.channel_choices = iter([SimpleNamespace(key="api")])
+                self.service_option_titles = []
+                self.channel_option_titles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title == "xAgent Services":
+                    self.service_option_titles = [option.title for option in options]
+                    return next(self.service_choices)
+                if title == "Choose Channel":
+                    self.channel_option_titles = [option.title for option in options]
+                    return next(self.channel_choices)
+                raise AssertionError(f"Unexpected menu: {title}")
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        fake_ui = FakeUI()
+
+        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
+            with patch("xagent.interfaces.cli.handle_start", return_value=0) as starter:
+                exit_code = _run_service_launcher(Path("/tmp/xagent"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Start", fake_ui.service_option_titles)
+        self.assertNotIn("Start API", fake_ui.service_option_titles)
+        self.assertEqual(fake_ui.channel_option_titles[:3], ["API", "Feishu", "All"])
+        starter.assert_called_once()
+        args = starter.call_args.args[0]
+        self.assertEqual(args.channels, ["api"])
+        self.assertEqual(args.config_dir, "/tmp/xagent")
+
+    def test_interactive_launcher_resetup_runs_force_init(self):
+        class FakeUI:
+            def __init__(self):
+                self.choices = iter([
+                    SimpleNamespace(key="init", disabled=False),
+                    SimpleNamespace(key="exit", disabled=False),
+                ])
+                self.option_titles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del title, subtitle, footer
+                if not self.option_titles:
+                    self.option_titles = [option.title for option in options]
+                return next(self.choices)
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        fake_ui = FakeUI()
+
+        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
+            with patch("xagent.interfaces.cli._runtime_is_initialized", return_value=True):
+                with patch("xagent.interfaces.cli.handle_init", return_value=0) as init_handler:
+                    exit_code = _run_interactive_launcher()
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Resetup", fake_ui.option_titles)
+        init_handler.assert_called_once()
+        args = init_handler.call_args.args[0]
+        self.assertTrue(args.force)
+        self.assertFalse(args.schema)
+
+    def test_interactive_launcher_help_prints_command_guide(self):
+        class FakeUI:
+            def __init__(self):
+                self.choices = iter([
+                    SimpleNamespace(key="help", disabled=False),
+                    SimpleNamespace(key="exit", disabled=False),
+                ])
+                self.panels = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del title, subtitle, options, footer
+                return next(self.choices)
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, message, *, title=None, **kwargs):
+                del kwargs
+                self.panels.append((title, str(message)))
+
+        fake_ui = FakeUI()
+
+        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
+            with patch("xagent.interfaces.cli._runtime_is_initialized", return_value=True):
+                exit_code = _run_interactive_launcher()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_ui.panels[0][0], "xAgent Help")
+        self.assertIn("xagent init --force", fake_ui.panels[0][1])
+        self.assertIn("xagent service start api", fake_ui.panels[0][1])
+
+    def test_launcher_help_content_switches_setup_command_by_state(self):
+        config_dir = Path("/tmp/xagent")
+
+        setup_help = str(_launcher_help_content(config_dir=config_dir, initialized=False))
+        resetup_help = str(_launcher_help_content(config_dir=config_dir, initialized=True))
+
+        self.assertIn("xagent init --dir /tmp/xagent", setup_help)
+        self.assertIn("xagent init --force --dir /tmp/xagent", resetup_help)
+
     def test_root_help_groups_public_commands(self):
         help_text = build_parser().format_help()
 
@@ -602,12 +752,18 @@ class CLICommandTests(unittest.TestCase):
             memory_marker = root / "memory" / "entry.md"
             messages_marker = root / "messages" / "messages.sqlite3"
             workspace_marker = root / "workspace" / "notes.md"
+            tasks_marker = root / "tasks" / "task.json"
+            skills_marker = root / "skills" / "demo" / "SKILL.md"
             memory_marker.parent.mkdir()
             messages_marker.parent.mkdir()
             workspace_marker.parent.mkdir()
+            tasks_marker.parent.mkdir()
+            skills_marker.parent.mkdir(parents=True)
             memory_marker.write_text("keep-memory", encoding="utf-8")
             messages_marker.write_text("keep-messages", encoding="utf-8")
             workspace_marker.write_text("keep-workspace", encoding="utf-8")
+            tasks_marker.write_text("keep-task", encoding="utf-8")
+            skills_marker.write_text("keep-skill", encoding="utf-8")
             args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
 
             with patch("xagent.interfaces.cli._terminal_prompt_yes_no", return_value=False) as prompt:
@@ -617,12 +773,14 @@ class CLICommandTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             prompt.assert_called_once_with(
                 unittest.mock.ANY,
-                "Clear existing memory/, messages/, and workspace/ data as part of init --force?",
+                "Clear existing memory/, messages/, workspace/, tasks/, and skills/ data as part of init --force?",
                 default=False,
             )
             self.assertEqual(memory_marker.read_text(encoding="utf-8"), "keep-memory")
             self.assertEqual(messages_marker.read_text(encoding="utf-8"), "keep-messages")
             self.assertEqual(workspace_marker.read_text(encoding="utf-8"), "keep-workspace")
+            self.assertEqual(tasks_marker.read_text(encoding="utf-8"), "keep-task")
+            self.assertEqual(skills_marker.read_text(encoding="utf-8"), "keep-skill")
 
     def test_init_force_can_clear_runtime_dirs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -632,12 +790,18 @@ class CLICommandTests(unittest.TestCase):
             memory_marker = root / "memory" / "entry.md"
             messages_marker = root / "messages" / "messages.sqlite3"
             workspace_marker = root / "workspace" / "notes.md"
+            tasks_marker = root / "tasks" / "task.json"
+            skills_marker = root / "skills" / "demo" / "SKILL.md"
             memory_marker.parent.mkdir()
             messages_marker.parent.mkdir()
             workspace_marker.parent.mkdir()
+            tasks_marker.parent.mkdir()
+            skills_marker.parent.mkdir(parents=True)
             memory_marker.write_text("clear-memory", encoding="utf-8")
             messages_marker.write_text("clear-messages", encoding="utf-8")
             workspace_marker.write_text("clear-workspace", encoding="utf-8")
+            tasks_marker.write_text("clear-task", encoding="utf-8")
+            skills_marker.write_text("clear-skill", encoding="utf-8")
             args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
 
             with patch("xagent.interfaces.cli._terminal_prompt_yes_no", return_value=True) as prompt:
@@ -647,15 +811,19 @@ class CLICommandTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             prompt.assert_called_once_with(
                 unittest.mock.ANY,
-                "Clear existing memory/, messages/, and workspace/ data as part of init --force?",
+                "Clear existing memory/, messages/, workspace/, tasks/, and skills/ data as part of init --force?",
                 default=False,
             )
             self.assertTrue((root / "memory").is_dir())
             self.assertTrue((root / "messages").is_dir())
             self.assertTrue((root / "workspace").is_dir())
+            self.assertTrue((root / "tasks").is_dir())
+            self.assertTrue((root / "skills").is_dir())
             self.assertFalse(memory_marker.exists())
             self.assertFalse(messages_marker.exists())
             self.assertFalse(workspace_marker.exists())
+            self.assertFalse(tasks_marker.exists())
+            self.assertFalse(skills_marker.exists())
 
     def test_init_prints_post_setup_guide_with_custom_dir_commands(self):
         with tempfile.TemporaryDirectory() as tmpdir:

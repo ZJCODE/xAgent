@@ -1627,6 +1627,7 @@ def init_agent_directory(
     skills_dir = resolved_dir / BaseAgentConfig.SKILLS_DIRNAME
     tasks_dir = resolved_dir / BaseAgentConfig.TASKS_DIRNAME
     managed_paths = (config_path, identity_path)
+    runtime_dirs = (memory_dir, messages_dir, workspace_dir, skills_dir, tasks_dir)
     conflicts = tuple(path for path in managed_paths if path.exists())
 
     if conflicts and not force:
@@ -1651,9 +1652,8 @@ def init_agent_directory(
         )
 
     if clear_runtime_data:
-        _clear_runtime_directory(memory_dir)
-        _clear_runtime_directory(messages_dir)
-        _clear_runtime_directory(workspace_dir)
+        for runtime_dir in runtime_dirs:
+            _clear_runtime_directory(runtime_dir)
     memory_dir.mkdir(parents=True, exist_ok=True)
     messages_dir.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -2168,7 +2168,7 @@ def handle_init(args: argparse.Namespace) -> int:
         if args.force:
             clear_runtime_data = _terminal_prompt_yes_no(
                 ui,
-                "Clear existing memory/, messages/, and workspace/ data as part of init --force?",
+                "Clear existing memory/, messages/, workspace/, tasks/, and skills/ data as part of init --force?",
                 default=False,
             )
 
@@ -3378,11 +3378,17 @@ def _launcher_args(**kwargs: Any) -> argparse.Namespace:
 
 
 def _launcher_options(*, initialized: bool) -> list[MenuOption]:
+    setup_title = "Resetup" if initialized else "Setup"
+    setup_description = (
+        "Re-run setup with --force; runtime data is kept unless you choose to clear it."
+        if initialized
+        else "Create config, identity, workspace, memory, and tasks."
+    )
     return [
         MenuOption(
             key="init",
-            title="Setup",
-            description="Create or refresh config, identity, workspace, memory, and tasks.",
+            title=setup_title,
+            description=setup_description,
         ),
         MenuOption(
             key="chat",
@@ -3420,6 +3426,11 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
             description="Validate local files, config, and enabled channels.",
         ),
         MenuOption(
+            key="help",
+            title="Help",
+            description="Learn the common xAgent commands and when to use them.",
+        ),
+        MenuOption(
             key="version",
             title="Version",
             description="Show xAgent and Python versions.",
@@ -3449,20 +3460,58 @@ def _launcher_channel_options(*, include_all: bool = True) -> list[MenuOption]:
         options.append(
             MenuOption(
                 key="all",
-                title="All Enabled",
-                description="Use every channel enabled by the current config.",
+                title="All",
+                description="Use all enabled channels.",
             )
         )
     options.append(MenuOption(key="back", title="Back", description="Return to the previous menu."))
     return options
 
 
+def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
+    setup_command = "xagent init --force" if initialized else "xagent init"
+    content = Text()
+    content.append(f"Runtime: {config_dir}\n\n")
+    content.append("Common commands:\n")
+    content.append("setup    ")
+    content.append(_format_init_command(setup_command, config_dir=config_dir), style="cyan")
+    content.append("\n         Create or reconfigure config.yaml and identity.md.\n")
+    content.append("chat     ")
+    content.append(_format_init_command('xagent chat "Help me plan today"', config_dir=config_dir), style="cyan")
+    content.append("\n         Send one message, or run ")
+    content.append(_format_init_command("xagent chat", config_dir=config_dir), style="cyan")
+    content.append(" for an interactive terminal chat.\n")
+    content.append("web      ")
+    content.append(_format_init_command("xagent web", config_dir=config_dir), style="cyan")
+    content.append("\n         Start the API channel in the foreground and open the Web UI.\n")
+    content.append("voice    ")
+    content.append(_format_init_command("xagent voice", config_dir=config_dir), style="cyan")
+    content.append("\n         Start local microphone/speaker mode when voice is configured.\n")
+    content.append("service  ")
+    content.append(_format_init_command("xagent service start api", config_dir=config_dir), style="cyan")
+    content.append("\n         Run API, Feishu, or all enabled channels in the background.\n")
+    content.append("status   ")
+    content.append(_format_init_command("xagent service status all", config_dir=config_dir), style="cyan")
+    content.append("\n         Show PID files and log paths for managed services.\n")
+    content.append("logs     ")
+    content.append(_format_init_command("xagent service logs feishu -f", config_dir=config_dir), style="cyan")
+    content.append("\n         Follow a single channel log; omit -f to print recent lines.\n")
+    content.append("feishu   ")
+    content.append(_format_init_command("xagent init feishu", config_dir=config_dir), style="cyan")
+    content.append("\n         Configure the Feishu bot after base setup.\n")
+    content.append("inspect  ")
+    content.append(_format_init_command("xagent inspect config show", config_dir=config_dir), style="cyan")
+    content.append("\n         Read config, identity, memory, and message state.\n")
+    content.append("doctor   ")
+    content.append(_format_init_command("xagent doctor", config_dir=config_dir), style="cyan")
+    content.append("\n         Check local config, files, and channel readiness.\n")
+    return content
+
+
 def _run_service_launcher(config_dir: Path) -> int:
     ui = TerminalUI()
     actions = [
-        MenuOption("start_api", "Start API", "Run the API channel in the background."),
-        MenuOption("start_feishu", "Start Feishu", "Run the Feishu channel in the background."),
-        MenuOption("start_all", "Start All", "Start every enabled channel in the background."),
+        MenuOption("start", "Start", "Start one channel or all enabled channels."),
         MenuOption("stop", "Stop", "Stop one channel or all enabled channels."),
         MenuOption("restart", "Restart", "Restart one channel or all enabled channels."),
         MenuOption("status", "Status", "Show pid and log paths for running services."),
@@ -3481,12 +3530,21 @@ def _run_service_launcher(config_dir: Path) -> int:
             ui.clear()
             return 0
 
-        if option.key == "start_api":
-            ui.clear()
+        channel_option = ui.select_menu(
+            title="Choose Channel",
+            subtitle="Select which runtime slice to manage.",
+            options=_launcher_channel_options(),
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if channel_option is None or channel_option.key == "back":
+            continue
+        ui.clear()
+        channels = [channel_option.key]
+        if option.key == "start":
             exit_code = handle_start(
                 _launcher_args(
                     config_dir=str(config_dir),
-                    channels=[CHANNEL_API],
+                    channels=channels,
                     host=None,
                     port=None,
                     open_browser=False,
@@ -3495,12 +3553,13 @@ def _run_service_launcher(config_dir: Path) -> int:
                     chat_timeout=None,
                 )
             )
-        elif option.key == "start_feishu":
-            ui.clear()
-            exit_code = handle_start(
+        elif option.key == "stop":
+            exit_code = handle_stop(_launcher_args(config_dir=str(config_dir), channels=channels))
+        elif option.key == "restart":
+            exit_code = handle_restart(
                 _launcher_args(
                     config_dir=str(config_dir),
-                    channels=[CHANNEL_FEISHU],
+                    channels=channels,
                     host=None,
                     port=None,
                     open_browser=False,
@@ -3509,63 +3568,23 @@ def _run_service_launcher(config_dir: Path) -> int:
                     chat_timeout=None,
                 )
             )
-        elif option.key == "start_all":
-            ui.clear()
-            exit_code = handle_start(
+        elif option.key == "status":
+            exit_code = handle_status(
                 _launcher_args(
                     config_dir=str(config_dir),
-                    channels=["all"],
-                    host=None,
-                    port=None,
-                    open_browser=False,
-                    max_concurrent_chats=None,
-                    queue_timeout=None,
-                    chat_timeout=None,
+                    channels=channels,
+                    json_output=False,
                 )
             )
         else:
-            channel_option = ui.select_menu(
-                title="Choose Channel",
-                subtitle="Select which runtime slice to manage.",
-                options=_launcher_channel_options(),
-                footer="↑/↓ Move • Enter Select  •  q Back",
+            exit_code = handle_logs(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    channels=channels,
+                    lines=80,
+                    follow=False,
+                )
             )
-            if channel_option is None or channel_option.key == "back":
-                continue
-            ui.clear()
-            channels = [channel_option.key]
-            if option.key == "stop":
-                exit_code = handle_stop(_launcher_args(config_dir=str(config_dir), channels=channels))
-            elif option.key == "restart":
-                exit_code = handle_restart(
-                    _launcher_args(
-                        config_dir=str(config_dir),
-                        channels=channels,
-                        host=None,
-                        port=None,
-                        open_browser=False,
-                        max_concurrent_chats=None,
-                        queue_timeout=None,
-                        chat_timeout=None,
-                    )
-                )
-            elif option.key == "status":
-                exit_code = handle_status(
-                    _launcher_args(
-                        config_dir=str(config_dir),
-                        channels=channels,
-                        json_output=False,
-                    )
-                )
-            else:
-                exit_code = handle_logs(
-                    _launcher_args(
-                        config_dir=str(config_dir),
-                        channels=channels,
-                        lines=80,
-                        follow=False,
-                    )
-                )
 
         if exit_code != 0:
             ui.print_panel(f"Service action exited with status {exit_code}.", title="Services")
@@ -3661,7 +3680,7 @@ def _run_interactive_launcher() -> int:
 
         ui.clear()
         if option.key == "init":
-            exit_code = handle_init(_launcher_args(config_dir=str(config_dir), force=False, schema=False))
+            exit_code = handle_init(_launcher_args(config_dir=str(config_dir), force=initialized, schema=False))
         elif option.key == "chat":
             exit_code = handle_chat(
                 _launcher_args(
@@ -3712,14 +3731,17 @@ def _run_interactive_launcher() -> int:
                     online=False,
                 )
             )
+        elif option.key == "help":
+            ui.print_panel(_launcher_help_content(config_dir=config_dir, initialized=initialized), title="xAgent Help")
+            exit_code = 0
         else:
             exit_code = handle_version(_launcher_args())
 
-        if exit_code != 0:
-            ui.print_panel(
-                f"The selected workflow exited with status {exit_code}.",
-                title="Command Finished",
-            )
+        # if exit_code != 0:
+        #     ui.print_panel(
+        #         f"The selected workflow exited with status {exit_code}.",
+        #         title="Command Finished",
+        #     )
         ui.pause("Press Enter to return to the launcher")
 
 
