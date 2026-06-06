@@ -704,6 +704,7 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
         voice_provider = selection.voice_provider or "soniox"
         voice_config = {
             "provider": voice_provider,
+            "enable_interruptions": False,
             "audio": {
                 "input": "auto",
                 "output": "auto",
