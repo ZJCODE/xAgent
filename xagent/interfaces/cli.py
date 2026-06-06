@@ -3380,9 +3380,9 @@ def _launcher_args(**kwargs: Any) -> argparse.Namespace:
 def _launcher_options(*, initialized: bool) -> list[MenuOption]:
     setup_title = "Resetup" if initialized else "Setup"
     setup_description = (
-        "Re-run setup with --force; runtime data is kept unless you choose to clear it."
+        "Re-create config and identity settings."
         if initialized
-        else "Create config, identity, workspace, memory, and tasks."
+        else "Create config and identity settings."
     )
     return [
         MenuOption(
