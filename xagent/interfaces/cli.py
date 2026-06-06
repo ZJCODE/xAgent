@@ -733,12 +733,16 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
                 **tts_defaults,
             }
         else:
-            voice_config.update(
-                {
-                    "api_key": selection.voice_api_key.strip() or _voice_api_key_placeholder(voice_provider),
-                    **_voice_defaults_for_provider(voice_provider),
-                }
-            )
+            voice_api_key = selection.voice_api_key.strip() or _voice_api_key_placeholder(voice_provider)
+            voice_defaults = _voice_defaults_for_provider(voice_provider)
+            voice_config["stt"] = {
+                "api_key": voice_api_key,
+                **voice_defaults["stt"],
+            }
+            voice_config["tts"] = {
+                "api_key": voice_api_key,
+                **voice_defaults["tts"],
+            }
         config["channels"]["voice"] = voice_config
     search_config = {"provider": selection.search_provider or "none"}
     if search_config["provider"] in {"openai", "qwen", "minimax"}:

@@ -202,14 +202,23 @@ class InterruptibleAgent:
         yield {"type": "done"}
 
 
+def voice_channel_config(data):
+    config = dict(data or {})
+    api_key = config.pop("api_key", None)
+    if api_key is not None:
+        config.setdefault("stt", {}).setdefault("api_key", api_key)
+        config.setdefault("tts", {}).setdefault("api_key", api_key)
+    return VoiceChannelConfig.from_dict(config)
+
+
 class VoiceRuntimeTests(unittest.TestCase):
     def test_voice_config_disables_interruptions_by_default(self):
-        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
 
         self.assertFalse(config.enable_interruptions)
 
     def test_voice_config_accepts_enabled_interruptions(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "provider": "qwen",
             "api_key": "qwen-key",
             "enable_interruptions": True,
@@ -218,7 +227,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertTrue(config.enable_interruptions)
 
     def test_voice_config_accepts_disabled_interruptions(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "provider": "qwen",
             "api_key": "qwen-key",
             "enable_interruptions": False,
@@ -227,14 +236,14 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertFalse(config.enable_interruptions)
 
     def test_voice_config_disables_wake_by_default(self):
-        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
 
         self.assertFalse(config.wake.enabled)
         self.assertEqual(config.wake.wake_phrases, ["xAgent"])
         self.assertEqual(config.wake.match_mode, "prefix")
 
     def test_voice_config_accepts_wake_phrases(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "provider": "qwen",
             "api_key": "qwen-key",
             "wake": {
@@ -254,7 +263,7 @@ class VoiceRuntimeTests(unittest.TestCase):
 
     def test_voice_config_rejects_enabled_wake_without_phrases(self):
         with self.assertRaisesRegex(ValueError, "voice.wake.wake_phrases"):
-            VoiceChannelConfig.from_dict({
+            voice_channel_config({
                 "provider": "qwen",
                 "api_key": "qwen-key",
                 "wake": {
@@ -264,7 +273,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             })
 
     def test_voice_config_accepts_audio_device_preferences(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "provider": "qwen",
             "api_key": "qwen-key",
             "audio": {
@@ -278,7 +287,7 @@ class VoiceRuntimeTests(unittest.TestCase):
 
     def test_runtime_cancel_stops_waiting_for_blocked_recognizer(self):
         async def run_cancelled_runtime():
-            config = VoiceChannelConfig.from_dict({"api_key": "test-key"})
+            config = voice_channel_config({"api_key": "test-key"})
             recognizer = BlockingRecognizer()
             runtime = VoiceRuntime(
                 agent=FakeAgent(),
@@ -304,7 +313,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         asyncio.run(run_cancelled_runtime())
 
     def test_runtime_routes_soniox_endpoint_utterance_to_agent_and_tts(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "api_key": "test-key",
             "tts": {
                 "language_policy": "from_stt_dominant",
@@ -336,7 +345,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(player.played, [b"hello ", b"there."])
 
     def test_runtime_ignores_speech_until_wake_phrase(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "api_key": "test-key",
             "wake": {
                 "enabled": True,
@@ -367,7 +376,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(player.played, [b"hello ", b"there."])
 
     def test_runtime_phrase_only_wake_handles_next_utterance(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "api_key": "test-key",
             "wake": {
                 "enabled": True,
@@ -394,7 +403,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(agent.kwargs["user_message"], "明天提醒我喝水")
 
     def test_runtime_exit_phrase_returns_to_wake_waiting(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "api_key": "test-key",
             "wake": {
                 "enabled": True,
@@ -425,7 +434,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(agent.messages, ["打开灯", "打开空调"])
 
     def test_runtime_sets_voice_delivery_context_for_scheduled_task_creation(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "test-key"})
+        config = voice_channel_config({"api_key": "test-key"})
         agent = ContextCapturingAgent()
         runtime = VoiceRuntime(
             agent=agent,
@@ -460,7 +469,7 @@ class VoiceRuntimeTests(unittest.TestCase):
                 player = FakePlayer()
                 runtime = VoiceRuntime(
                     agent=FakeAgent(),
-                    config=VoiceChannelConfig.from_dict({"api_key": "test-key"}),
+                    config=voice_channel_config({"api_key": "test-key"}),
                     microphone=FakeMicrophone(),
                     recognizer=FakeRecognizer([]),
                     synthesizer=synth,
@@ -494,7 +503,7 @@ class VoiceRuntimeTests(unittest.TestCase):
                 synth = FakeSynthesizer()
                 runtime = VoiceRuntime(
                     agent=agent,
-                    config=VoiceChannelConfig.from_dict({"api_key": "test-key"}),
+                    config=voice_channel_config({"api_key": "test-key"}),
                     microphone=FakeMicrophone(),
                     recognizer=FakeRecognizer([]),
                     synthesizer=synth,
@@ -516,7 +525,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         asyncio.run(run_task())
 
     def test_runtime_default_keeps_microphone_paused_during_playback(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "test-key"})
+        config = voice_channel_config({"api_key": "test-key"})
         agent = FakeAgent()
         synth = FakeSynthesizer()
         runtime = VoiceRuntime(
@@ -538,7 +547,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertFalse(player.pause_was_cleared)
 
     def test_runtime_enabled_interruptions_clear_pause_during_playback(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "api_key": "test-key",
             "enable_interruptions": True,
         })
@@ -563,7 +572,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertTrue(player.pause_was_cleared)
 
     def test_runtime_interrupt_cancels_current_reply_and_processes_new_utterance(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "api_key": "test-key",
             "enable_interruptions": True,
         })
@@ -587,7 +596,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(agent.messages, ["first", "interrupt"])
 
     def test_runtime_interrupt_stops_current_playback(self):
-        config = VoiceChannelConfig.from_dict({
+        config = voice_channel_config({
             "api_key": "test-key",
             "enable_interruptions": True,
         })
@@ -656,7 +665,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         )
 
     def test_qwen_stt_session_update_uses_realtime_audio_config(self):
-        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
         stt = QwenRealtimeSTT(api_key="qwen-key", config=config.stt)
 
         event = stt._session_update_event()
@@ -670,7 +679,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(event["session"]["turn_detection"]["silence_duration_ms"], 400)
 
     def test_qwen_stt_session_update_includes_session_options(self):
-        config = VoiceChannelConfig.from_dict(
+        config = voice_channel_config(
             {
                 "provider": "qwen",
                 "api_key": "qwen-key",
@@ -688,7 +697,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertTrue(event["session"]["custom_stt_option"])
 
     def test_qwen_stt_audio_loop_sends_base64_append_events(self):
-        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
         stt = QwenRealtimeSTT(api_key="qwen-key", config=config.stt)
         ws = FakeWebSocket()
 
@@ -705,7 +714,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["audio"], "YXVkaW8=")
 
     def test_qwen_tts_session_update_uses_pcm_server_commit_defaults(self):
-        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
         tts = QwenRealtimeTTS(api_key="qwen-key", config=config.tts)
 
         event = tts._session_update_event(language="")
@@ -718,7 +727,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(event["session"]["sample_rate"], 24000)
 
     def test_qwen_tts_session_update_uses_detected_language_and_instructions(self):
-        config = VoiceChannelConfig.from_dict(
+        config = voice_channel_config(
             {
                 "provider": "qwen",
                 "api_key": "qwen-key",
@@ -737,7 +746,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertTrue(event["session"]["optimize_instructions"])
 
     def test_qwen_tts_session_update_includes_session_options(self):
-        config = VoiceChannelConfig.from_dict(
+        config = voice_channel_config(
             {
                 "provider": "qwen",
                 "api_key": "qwen-key",
@@ -755,7 +764,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(event["session"]["custom_tts_option"], "value")
 
     def test_qwen_tts_timeout_loop_flushes_text_and_finishes_session(self):
-        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
         tts = QwenRealtimeTTS(api_key="qwen-key", config=config.tts)
         ws = FakeWebSocket()
         items = iter(["hello", None])
@@ -775,7 +784,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(payloads[-1]["type"], "session.finish")
 
     def test_voice_factory_routes_qwen_provider_to_qwen_adapters(self):
-        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
 
         runtime = create_local_voice_runtime(
             agent=object(),
@@ -787,7 +796,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertIsInstance(runtime.synthesizer, QwenRealtimeTTS)
 
     def test_voice_factory_routes_custom_stt_tts_providers(self):
-        config = VoiceChannelConfig.from_dict(
+        config = voice_channel_config(
             {
                 "provider": "custom",
                 "stt": {"provider": "qwen", "api_key": "qwen-stt-key"},
@@ -805,7 +814,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertIsInstance(runtime.synthesizer, SonioxRealtimeTTS)
 
     def test_voice_factory_requires_provider_selection(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "test-key"})
+        config = voice_channel_config({"api_key": "test-key"})
 
         with self.assertRaisesRegex(ValueError, "channels.voice.provider"):
             create_local_voice_runtime(

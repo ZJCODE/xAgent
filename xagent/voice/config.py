@@ -291,7 +291,6 @@ class VoiceChannelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: str | None = None
-    api_key: str | None = None
     websocket_base_url: str | None = None
     enable_interruptions: bool = False
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
@@ -334,15 +333,6 @@ class VoiceChannelConfig(BaseModel):
         except ValidationError as exc:
             raise ValueError(str(exc)) from exc
 
-    def resolved_api_key(self) -> str:
-        provider = self.resolved_provider()
-        api_key = str(self.api_key or "").strip()
-        if not api_key or api_key in _VOICE_KEY_PLACEHOLDERS:
-            raise ValueError(
-                f"{provider} voice API key is required. Set channels.voice.api_key in config.yaml."
-            )
-        return api_key
-
     def resolved_stt_api_key(self) -> str:
         return self._resolved_nested_api_key(self.stt.provider, self.stt.api_key, "stt")
 
@@ -353,13 +343,9 @@ class VoiceChannelConfig(BaseModel):
         nested_api_key = str(api_key or "").strip()
         if nested_api_key and nested_api_key not in _VOICE_KEY_PLACEHOLDERS:
             return nested_api_key
-        try:
-            return self.resolved_api_key()
-        except ValueError as exc:
-            raise ValueError(
-                f"{provider} voice API key is required. Set channels.voice.{section}.api_key "
-                "or channels.voice.api_key in config.yaml."
-            ) from exc
+        raise ValueError(
+            f"{provider} voice API key is required. Set channels.voice.{section}.api_key in config.yaml."
+        )
 
     def resolved_provider(self) -> str:
         if self.provider is not None:
@@ -394,7 +380,6 @@ def _normalize_voice_config(data: dict[str, Any]) -> dict[str, Any]:
             stt.pop("provider", None)
         else:
             stt["provider"] = stt_provider
-
     normalized["stt"] = stt
 
     tts = dict(normalized.get("tts") or {})

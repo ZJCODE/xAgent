@@ -744,10 +744,17 @@ provider:
                 config["channels"]["voice"],
                 {
                     "provider": "soniox",
-                    "api_key": "soniox-key",
+                    "enable_interruptions": False,
                     "audio": {"input": "auto", "output": "auto"},
-                    "stt": {"model": "stt-rt-v4"},
-                    "tts": {"model": "tts-rt-v1", "voice": "Owen"},
+                    "wake": {
+                        "enabled": False,
+                        "wake_phrases": ["xAgent"],
+                        "exit_phrases": ["exit", "stop", "goodbye", "that's all", "never mind"],
+                        "match_mode": "prefix",
+                        "idle_timeout_seconds": 60,
+                    },
+                    "stt": {"api_key": "soniox-key", "model": "stt-rt-v4"},
+                    "tts": {"api_key": "soniox-key", "model": "tts-rt-v1", "voice": "Owen"},
                 },
             )
 
@@ -772,10 +779,17 @@ provider:
                 config["channels"]["voice"],
                 {
                     "provider": "soniox",
-                    "api_key": "your_soniox_api_key_here",
+                    "enable_interruptions": False,
                     "audio": {"input": "auto", "output": "auto"},
-                    "stt": {"model": "stt-rt-v4"},
-                    "tts": {"model": "tts-rt-v1", "voice": "Owen"},
+                    "wake": {
+                        "enabled": False,
+                        "wake_phrases": ["xAgent"],
+                        "exit_phrases": ["exit", "stop", "goodbye", "that's all", "never mind"],
+                        "match_mode": "prefix",
+                        "idle_timeout_seconds": 60,
+                    },
+                    "stt": {"api_key": "your_soniox_api_key_here", "model": "stt-rt-v4"},
+                    "tts": {"api_key": "your_soniox_api_key_here", "model": "tts-rt-v1", "voice": "Owen"},
                 },
             )
 
@@ -799,10 +813,17 @@ provider:
                 config["channels"]["voice"],
                 {
                     "provider": "qwen",
-                    "api_key": "qwen-voice-key",
+                    "enable_interruptions": False,
                     "audio": {"input": "auto", "output": "auto"},
-                    "stt": {"model": "qwen3-asr-flash-realtime"},
-                    "tts": {"model": "qwen3-tts-flash-realtime", "voice": "Cherry"},
+                    "wake": {
+                        "enabled": False,
+                        "wake_phrases": ["xAgent"],
+                        "exit_phrases": ["exit", "stop", "goodbye", "that's all", "never mind"],
+                        "match_mode": "prefix",
+                        "idle_timeout_seconds": 60,
+                    },
+                    "stt": {"api_key": "qwen-voice-key", "model": "qwen3-asr-flash-realtime"},
+                    "tts": {"api_key": "qwen-voice-key", "model": "qwen3-tts-flash-realtime", "voice": "Cherry"},
                 },
             )
 
@@ -829,7 +850,15 @@ provider:
                 config["channels"]["voice"],
                 {
                     "provider": "custom",
+                    "enable_interruptions": False,
                     "audio": {"input": "auto", "output": "auto"},
+                    "wake": {
+                        "enabled": False,
+                        "wake_phrases": ["xAgent"],
+                        "exit_phrases": ["exit", "stop", "goodbye", "that's all", "never mind"],
+                        "match_mode": "prefix",
+                        "idle_timeout_seconds": 60,
+                    },
                     "stt": {
                         "provider": "qwen",
                         "api_key": "qwen-voice-key",
@@ -1941,11 +1970,13 @@ channels:
         host: 127.0.0.1
         port: 8010
     voice:
-        api_key: test-soniox-key
+        provider: soniox
         stt:
+            api_key: test-soniox-key
             model: stt-rt-v4
             max_endpoint_delay_ms: 700
         tts:
+            api_key: test-soniox-key
             model: tts-rt-v1
             voice: Owen
 """,
@@ -1979,7 +2010,13 @@ channels:
                     runner.config["channels"]["voice"]
                     from xagent.voice.config import VoiceChannelConfig
 
-                    VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_api_key()
+                    VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_provider()
+
+    def test_voice_config_rejects_top_level_api_key(self):
+        from xagent.voice.config import VoiceChannelConfig
+
+        with self.assertRaisesRegex(ValueError, "api_key"):
+            VoiceChannelConfig.from_dict({"provider": "soniox", "api_key": "soniox-key"})
 
     def test_voice_config_rejects_missing_api_key_for_explicit_provider_even_when_env_exists(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1999,19 +2036,19 @@ channels:
 
             with patch.dict("os.environ", {"SONIOX_API_KEY": "env-soniox-key"}):
                 runner = BaseAgentRunner(config_dir=tmpdir)
-                with self.assertRaisesRegex(ValueError, "channels.voice.api_key"):
+                with self.assertRaisesRegex(ValueError, "channels.voice.stt.api_key"):
                     runner.config["channels"]["voice"]
                     from xagent.voice.config import VoiceChannelConfig
 
-                    VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_api_key()
+                    VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_stt_api_key()
 
     def test_voice_config_rejects_placeholder_api_key(self):
         from xagent.voice.config import VoiceChannelConfig
 
-        config = VoiceChannelConfig.from_dict({"provider": "soniox", "api_key": "your_soniox_api_key_here"})
+        config = VoiceChannelConfig.from_dict({"provider": "soniox", "stt": {"api_key": "your_soniox_api_key_here"}})
 
-        with self.assertRaisesRegex(ValueError, "channels.voice.api_key"):
-            config.resolved_api_key()
+        with self.assertRaisesRegex(ValueError, "channels.voice.stt.api_key"):
+            config.resolved_stt_api_key()
 
     def test_voice_config_accepts_none_provider_without_implying_soniox(self):
         from xagent.voice.config import VoiceChannelConfig
@@ -2025,15 +2062,19 @@ channels:
     def test_voice_config_rejects_qwen_placeholder_api_key(self):
         from xagent.voice.config import VoiceChannelConfig
 
-        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "your_qwen_api_key_here"})
+        config = VoiceChannelConfig.from_dict({"provider": "qwen", "stt": {"api_key": "your_qwen_api_key_here"}})
 
-        with self.assertRaisesRegex(ValueError, "channels.voice.api_key"):
-            config.resolved_api_key()
+        with self.assertRaisesRegex(ValueError, "channels.voice.stt.api_key"):
+            config.resolved_stt_api_key()
 
     def test_voice_config_accepts_qwen_defaults(self):
         from xagent.voice.config import VoiceChannelConfig
 
-        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+        config = VoiceChannelConfig.from_dict({
+            "provider": "qwen",
+            "stt": {"api_key": "qwen-key"},
+            "tts": {"api_key": "qwen-key"},
+        })
 
         self.assertEqual(config.provider, "qwen")
         self.assertEqual(config.stt.provider, "qwen")
@@ -2078,9 +2119,9 @@ provider:
 channels:
     voice:
         provider: qwen
-        api_key: qwen-key
         websocket_base_url: wss://dashscope.aliyuncs.com/api-ws/v1/realtime
         stt:
+            api_key: qwen-key
             model: qwen3-asr-flash-realtime
             audio_format: pcm
             sample_rate: 16000
@@ -2092,6 +2133,7 @@ channels:
             session_options:
                 custom_stt_option: true
         tts:
+            api_key: qwen-key
             model: qwen3-tts-instruct-flash-realtime
             voice: Cherry
             audio_format: pcm
@@ -2145,7 +2187,6 @@ provider:
 channels:
     voice:
         provider: qwen
-        api_key: qwen-key
         stt:
             provider: soniox
 """,
