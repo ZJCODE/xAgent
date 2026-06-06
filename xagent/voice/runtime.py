@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
+import time
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +20,9 @@ from xagent.core.runtime import (
 )
 
 from .config import VoiceChannelConfig
+
+
+_WAKE_IDLE_TIMEOUT = object()
 
 
 @dataclass(frozen=True)
@@ -111,10 +116,12 @@ class VoiceRuntime:
                 can_handle=self._can_handle_scheduled_task,
                 dispatch=self._dispatch_scheduled_task,
             )
+        self._wake_active = False
+        self._wake_last_activity_at = 0.0
 
     async def run_forever(self) -> None:
         """Run the foreground voice loop until interrupted or stopped."""
-        self.output("xAgent voice ready. Speak to the microphone; press Ctrl+C to stop.")
+        self.output(self._ready_message())
         audio_chunks = self.microphone.iter_chunks(
             pause_event=self.pause_event,
             stop_event=self.stop_event,
@@ -130,21 +137,127 @@ class VoiceRuntime:
                 await self.task_scheduler.start()
             next_utterance_task = self._create_next_utterance_task(utterances)
             while not self.stop_event.is_set():
-                utterance = await next_utterance_task
-                if utterance is None:
+                utterance_result = await self._await_next_utterance(next_utterance_task)
+                if utterance_result is _WAKE_IDLE_TIMEOUT:
+                    continue
+                if utterance_result is None:
                     break
+                utterance = self._utterance_after_wake_gate(utterance_result)
+                if utterance is None:
+                    next_utterance_task = self._create_next_utterance_task(utterances)
+                    continue
                 transcript = utterance.text.strip()
                 if not transcript:
                     next_utterance_task = self._create_next_utterance_task(utterances)
                     continue
                 self.output(f"User: {transcript}")
                 next_utterance_task = await self._reply_to_utterance(utterance, utterances)
+                self._record_wake_activity()
         finally:
             self.stop_event.set()
             if next_utterance_task is not None and not next_utterance_task.done():
                 next_utterance_task.cancel()
             if self.task_scheduler is not None:
                 await self.task_scheduler.stop()
+
+    def _ready_message(self) -> str:
+        if not self.config.wake.enabled:
+            return "xAgent voice ready. Speak to the microphone; press Ctrl+C to stop."
+        phrases = ", ".join(self.config.wake.wake_phrases)
+        return f"xAgent voice ready. Waiting for wake phrase ({phrases}); press Ctrl+C to stop."
+
+    async def _await_next_utterance(
+        self,
+        next_utterance_task: "asyncio.Future[VoiceUtterance | None]",
+    ) -> VoiceUtterance | None | object:
+        if not self.config.wake.enabled or not self._wake_active:
+            return await next_utterance_task
+
+        remaining = self.config.wake.idle_timeout_seconds - (time.monotonic() - self._wake_last_activity_at)
+        if remaining <= 0:
+            self._deactivate_wake(reason="timeout")
+            return _WAKE_IDLE_TIMEOUT
+        try:
+            return await asyncio.wait_for(asyncio.shield(next_utterance_task), timeout=remaining)
+        except asyncio.TimeoutError:
+            self._deactivate_wake(reason="timeout")
+            return _WAKE_IDLE_TIMEOUT
+
+    def _utterance_after_wake_gate(self, utterance: VoiceUtterance) -> VoiceUtterance | None:
+        if not self.config.wake.enabled:
+            return utterance
+
+        transcript = utterance.text.strip()
+        if not transcript:
+            return None
+
+        if self._wake_active:
+            if self._is_exit_phrase(transcript):
+                self._deactivate_wake(reason="exit")
+                return None
+            self._record_wake_activity()
+            return utterance
+
+        remainder = self._wake_remainder(transcript)
+        if remainder is None:
+            return None
+
+        self._activate_wake()
+        if not remainder:
+            self.output("Wake phrase detected. Listening.")
+            return None
+        if self._is_exit_phrase(remainder):
+            self._deactivate_wake(reason="exit")
+            return None
+        return VoiceUtterance(text=remainder, language=utterance.language)
+
+    def _activate_wake(self) -> None:
+        self._wake_active = True
+        self._record_wake_activity()
+
+    def _deactivate_wake(self, *, reason: str) -> None:
+        if not self._wake_active:
+            return
+        self._wake_active = False
+        self._wake_last_activity_at = 0.0
+        if reason == "timeout":
+            self.output("Wake session timed out. Waiting for wake phrase.")
+        elif reason == "exit":
+            self.output("Wake session ended. Waiting for wake phrase.")
+
+    def _record_wake_activity(self) -> None:
+        if self.config.wake.enabled and self._wake_active:
+            self._wake_last_activity_at = time.monotonic()
+
+    def _wake_remainder(self, transcript: str) -> str | None:
+        return self._match_phrase_remainder(transcript, self.config.wake.wake_phrases)
+
+    def _is_exit_phrase(self, transcript: str) -> bool:
+        return self._match_phrase_remainder(transcript, self.config.wake.exit_phrases) is not None
+
+    def _match_phrase_remainder(self, transcript: str, phrases: list[str]) -> str | None:
+        normalized, index_map = _normalize_voice_text_with_map(transcript)
+        if not normalized:
+            return None
+
+        for phrase in phrases:
+            normalized_phrase = _normalize_voice_text(phrase)
+            if not normalized_phrase:
+                continue
+            start = 0
+            if self.config.wake.match_mode == "contains":
+                start = normalized.find(normalized_phrase)
+                if start < 0:
+                    continue
+            elif not normalized.startswith(normalized_phrase):
+                continue
+
+            end = start + len(normalized_phrase)
+            if end > len(index_map):
+                return ""
+            original_end = index_map[end - 1] + 1
+            return _strip_leading_voice_separators(transcript[original_end:])
+        return None
 
     async def _reply_to_utterance(
         self,
@@ -470,6 +583,34 @@ def _complete_future_threadsafe(
         loop.call_soon_threadsafe(complete)
     except RuntimeError:
         return
+
+
+def _normalize_voice_text(text: str) -> str:
+    normalized, _index_map = _normalize_voice_text_with_map(text)
+    return normalized
+
+
+def _normalize_voice_text_with_map(text: str) -> tuple[str, list[int]]:
+    normalized: list[str] = []
+    index_map: list[int] = []
+    for index, char in enumerate(text):
+        if char.isspace() or unicodedata.category(char).startswith("P"):
+            continue
+        for folded in char.casefold():
+            normalized.append(folded)
+            index_map.append(index)
+    return "".join(normalized), index_map
+
+
+def _strip_leading_voice_separators(text: str) -> str:
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char.isspace() or unicodedata.category(char).startswith("P"):
+            index += 1
+            continue
+        break
+    return text[index:].strip()
 
 
 class _TextChunkQueue:

@@ -425,6 +425,12 @@ channels:
     provider: qwen
     api_key: your_qwen_api_key_here
     enable_interruptions: false
+    wake:
+      enabled: true
+      wake_phrases: ["xAgent", "hey xAgent"]
+      exit_phrases: ["exit", "stop", "goodbye", "that's all", "never mind"]
+      match_mode: prefix
+      idle_timeout_seconds: 60
     audio:
       input: auto
       output: auto
@@ -510,6 +516,10 @@ channels:
 
 先运行 `xagent voice --list-devices` 查看可用设备；临时覆盖可以用 `xagent voice --input-device "MacBook Pro麦克风" --output-device "MacBook Pro扬声器"`。设备 index 会随插拔变化，长期配置更推荐使用设备名。
 
+共享空间里建议开启 `wake`。开启后 runtime 仍会持续把麦克风音频交给 realtime STT，但只有完整转写命中 `wake.wake_phrases` 后才会进入 agent 对话；未唤醒时的背景语音不会调用 agent，也不会作为消息保存。`match_mode` 同时作用于 `wake_phrases` 和 `exit_phrases`：默认 `prefix` 只接受转写句首的短语，误触发更少；需要更宽松时可以改成 `contains`。如果唤醒句后还有内容，例如“xAgent，几点了”，runtime 会剥离唤醒短语并把“几点了”作为用户输入；如果只说唤醒短语本身，runtime 会进入已唤醒状态并等待下一句。
+
+已唤醒状态会在两种情况下恢复到待唤醒：用户说出 `exit_phrases` 中的短语，或超过 `idle_timeout_seconds` 没有新的用户输入。推荐保留空闲超时，避免家庭环境中一次唤醒后长期监听所有对话。语音调度任务仍可按 `delivery_channel: voice` 主动播报，不受 wake gate 影响。
+
 Qwen 默认使用 `qwen3-asr-flash-realtime` 和 `qwen3-tts-flash-realtime`，通过 DashScope Realtime WebSocket 发送 `session.update`、音频/文本 buffer 事件，并接收最终转写与音频 delta。
 
 Qwen 高级配置示例：
@@ -521,6 +531,12 @@ channels:
     api_key: qwen-key
     websocket_base_url: wss://dashscope.aliyuncs.com/api-ws/v1/realtime
     enable_interruptions: false
+    wake:
+      enabled: false
+      wake_phrases: ["xAgent"]
+      exit_phrases: ["exit", "stop", "goodbye", "that's all", "never mind"]
+      match_mode: prefix
+      idle_timeout_seconds: 60
     stt:
       model: qwen3-asr-flash-realtime
       audio_format: pcm
@@ -559,7 +575,7 @@ xagent init
 xagent voice --dir ~/.xagent
 ```
 
-语音链路是本机麦克风 PCM → realtime STT → provider-side endpoint detection → `Agent.chat_events(stream=True)` → realtime TTS → 本机扬声器。默认情况下，播放期间会暂停麦克风流，避免把扬声器声音重新送入 STT。配置 `enable_interruptions: true` 后，播放期间会继续监听麦克风；如果 STT 在当前回复仍在播放时产出新的用户句子，runtime 会取消当前 TTS 和本地播放，并立即处理新的用户输入。
+语音链路是本机麦克风 PCM → realtime STT → provider-side endpoint detection → wake gate（可选）→ `Agent.chat_events(stream=True)` → realtime TTS → 本机扬声器。默认情况下，播放期间会暂停麦克风流，避免把扬声器声音重新送入 STT。配置 `enable_interruptions: true` 后，播放期间会继续监听麦克风；如果 STT 在当前回复仍在播放时产出新的用户句子，runtime 会取消当前 TTS 和本地播放，并立即处理新的用户输入。开启 wake 时，中断只在已唤醒会话内生效；待唤醒状态下的背景语音仍会被忽略。
 
 ### 2.11 文件系统调度器
 

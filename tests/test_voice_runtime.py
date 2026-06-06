@@ -158,6 +158,16 @@ class FakeAgent:
         yield {"type": "done"}
 
 
+class RecordingAgent:
+    def __init__(self):
+        self.messages = []
+
+    async def chat_events(self, **kwargs):
+        self.messages.append(kwargs["user_message"])
+        yield {"type": "message_done", "message_id": kwargs["user_message"], "phase": "final", "content": "ok"}
+        yield {"type": "done"}
+
+
 class ContextCapturingAgent:
     async def chat_events(self, **kwargs):
         self.kwargs = kwargs
@@ -215,6 +225,43 @@ class VoiceRuntimeTests(unittest.TestCase):
         })
 
         self.assertFalse(config.enable_interruptions)
+
+    def test_voice_config_disables_wake_by_default(self):
+        config = VoiceChannelConfig.from_dict({"provider": "qwen", "api_key": "qwen-key"})
+
+        self.assertFalse(config.wake.enabled)
+        self.assertEqual(config.wake.wake_phrases, ["xAgent"])
+        self.assertEqual(config.wake.match_mode, "prefix")
+
+    def test_voice_config_accepts_wake_phrases(self):
+        config = VoiceChannelConfig.from_dict({
+            "provider": "qwen",
+            "api_key": "qwen-key",
+            "wake": {
+                "enabled": True,
+                "wake_phrases": ["小智", "hey xAgent"],
+                "match_mode": "contains",
+                "idle_timeout_seconds": 15,
+                "exit_phrases": ["退下"],
+            },
+        })
+
+        self.assertTrue(config.wake.enabled)
+        self.assertEqual(config.wake.wake_phrases, ["小智", "hey xAgent"])
+        self.assertEqual(config.wake.match_mode, "contains")
+        self.assertEqual(config.wake.idle_timeout_seconds, 15)
+        self.assertEqual(config.wake.exit_phrases, ["退下"])
+
+    def test_voice_config_rejects_enabled_wake_without_phrases(self):
+        with self.assertRaisesRegex(ValueError, "voice.wake.wake_phrases"):
+            VoiceChannelConfig.from_dict({
+                "provider": "qwen",
+                "api_key": "qwen-key",
+                "wake": {
+                    "enabled": True,
+                    "wake_phrases": [],
+                },
+            })
 
     def test_voice_config_accepts_audio_device_preferences(self):
         config = VoiceChannelConfig.from_dict({
@@ -287,6 +334,95 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(synth.calls[0]["language"], "zh")
         self.assertEqual(synth.calls[0]["chunks"], ["hello ", "there."])
         self.assertEqual(player.played, [b"hello ", b"there."])
+
+    def test_runtime_ignores_speech_until_wake_phrase(self):
+        config = VoiceChannelConfig.from_dict({
+            "api_key": "test-key",
+            "wake": {
+                "enabled": True,
+                "wake_phrases": ["小智"],
+            },
+        })
+        agent = FakeAgent()
+        synth = FakeSynthesizer()
+        player = FakePlayer()
+        runtime = VoiceRuntime(
+            agent=agent,
+            config=config,
+            microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([
+                VoiceUtterance(text="今天有人在聊天", language="zh"),
+                VoiceUtterance(text="小智，几点了", language="zh"),
+            ]),
+            synthesizer=synth,
+            player=player,
+            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            output=lambda *args, **kwargs: None,
+        )
+
+        asyncio.run(runtime.run_forever())
+
+        self.assertEqual(agent.kwargs["user_message"], "几点了")
+        self.assertEqual(len(synth.calls), 1)
+        self.assertEqual(player.played, [b"hello ", b"there."])
+
+    def test_runtime_phrase_only_wake_handles_next_utterance(self):
+        config = VoiceChannelConfig.from_dict({
+            "api_key": "test-key",
+            "wake": {
+                "enabled": True,
+                "wake_phrases": ["小智"],
+            },
+        })
+        agent = FakeAgent()
+        runtime = VoiceRuntime(
+            agent=agent,
+            config=config,
+            microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([
+                VoiceUtterance(text="小智", language="zh"),
+                VoiceUtterance(text="明天提醒我喝水", language="zh"),
+            ]),
+            synthesizer=FakeSynthesizer(),
+            player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            output=lambda *args, **kwargs: None,
+        )
+
+        asyncio.run(runtime.run_forever())
+
+        self.assertEqual(agent.kwargs["user_message"], "明天提醒我喝水")
+
+    def test_runtime_exit_phrase_returns_to_wake_waiting(self):
+        config = VoiceChannelConfig.from_dict({
+            "api_key": "test-key",
+            "wake": {
+                "enabled": True,
+                "wake_phrases": ["小智"],
+                "exit_phrases": ["退出"],
+            },
+        })
+        agent = RecordingAgent()
+        runtime = VoiceRuntime(
+            agent=agent,
+            config=config,
+            microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([
+                VoiceUtterance(text="小智", language="zh"),
+                VoiceUtterance(text="打开灯", language="zh"),
+                VoiceUtterance(text="退出", language="zh"),
+                VoiceUtterance(text="打开电视", language="zh"),
+                VoiceUtterance(text="小智，打开空调", language="zh"),
+            ]),
+            synthesizer=FakeSynthesizer(),
+            player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            output=lambda *args, **kwargs: None,
+        )
+
+        asyncio.run(runtime.run_forever())
+
+        self.assertEqual(agent.messages, ["打开灯", "打开空调"])
 
     def test_runtime_sets_voice_delivery_context_for_scheduled_task_creation(self):
         config = VoiceChannelConfig.from_dict({"api_key": "test-key"})

@@ -260,6 +260,31 @@ class VoiceAudioConfig(BaseModel):
         return normalized
 
 
+class VoiceWakeConfig(BaseModel):
+    """Wake phrase gating for the local voice channel."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    wake_phrases: list[str] = Field(default_factory=lambda: ["xAgent"])
+    exit_phrases: list[str] = Field(
+        default_factory=lambda: ["exit", "stop", "goodbye", "that's all", "never mind"]
+    )
+    match_mode: Literal["prefix", "contains"] = "prefix"
+    idle_timeout_seconds: float = Field(default=60.0, ge=0.1, le=3600.0)
+
+    @field_validator("wake_phrases", "exit_phrases")
+    @classmethod
+    def _validate_phrases(cls, value: list[str]) -> list[str]:
+        return [item.strip() for item in value if item.strip()]
+
+    @model_validator(mode="after")
+    def _validate_enabled_phrases(self) -> "VoiceWakeConfig":
+        if self.enabled and not self.wake_phrases:
+            raise ValueError("voice.wake.wake_phrases must include at least one phrase when enabled")
+        return self
+
+
 class VoiceChannelConfig(BaseModel):
     """User-facing configuration for `channels.voice`."""
 
@@ -270,6 +295,7 @@ class VoiceChannelConfig(BaseModel):
     websocket_base_url: str | None = None
     enable_interruptions: bool = False
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
+    wake: VoiceWakeConfig = Field(default_factory=VoiceWakeConfig)
     stt: VoiceSTTConfig = Field(default_factory=VoiceSTTConfig)
     tts: VoiceTTSConfig = Field(default_factory=VoiceTTSConfig)
 

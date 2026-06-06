@@ -708,6 +708,13 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
                 "input": "auto",
                 "output": "auto",
             },
+            "wake": {
+                "enabled": False,
+                "wake_phrases": ["xAgent"],
+                "exit_phrases": ["exit", "stop", "goodbye", "that's all", "never mind"],
+                "match_mode": "prefix",
+                "idle_timeout_seconds": 60,
+            },
         }
         if voice_provider == "custom":
             stt_provider = selection.voice_stt_provider or "soniox"
