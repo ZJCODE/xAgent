@@ -120,15 +120,25 @@ class CLICommandTests(unittest.TestCase):
     def test_inspect_launcher_message_list_accepts_custom_count(self):
         class FakeUI:
             def __init__(self):
-                self.menu_choices = iter([
-                    SimpleNamespace(key="messages_list"),
+                self.inspect_choices = iter([
+                    SimpleNamespace(key="message"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.message_choices = iter([
+                    SimpleNamespace(key="list"),
                     SimpleNamespace(key="back"),
                 ])
                 self.count_option_keys = []
+                self.inspect_option_titles = []
 
             def select_menu(self, *, title, subtitle, options, footer):
-                del title, subtitle, options, footer
-                return next(self.menu_choices)
+                del subtitle, footer
+                if title == "xAgent Inspect":
+                    self.inspect_option_titles = [option.title for option in options]
+                    return next(self.inspect_choices)
+                if title == "xAgent Inspect / Message":
+                    return next(self.message_choices)
+                raise AssertionError(f"Unexpected menu: {title}")
 
             def select(self, *, label, subtitle="", options, default_index=0):
                 del subtitle, default_index
@@ -161,7 +171,11 @@ class CLICommandTests(unittest.TestCase):
                     exit_code = _run_inspect_launcher(Path(tmpdir))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_ui.count_option_keys, ["5", "10", "20", "50", "custom"])
+        self.assertEqual(
+            fake_ui.inspect_option_titles,
+            ["Config", "Identity", "Memory", "Message", "Skills", "Tasks", "Back"],
+        )
+        self.assertEqual(fake_ui.count_option_keys, ["2", "5", "10", "custom"])
         handle_messages.assert_called_once()
         args = handle_messages.call_args.args[0]
         self.assertEqual(args.messages_command, "list")
@@ -591,7 +605,10 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(initial_options[0].title, "Setup")
         self.assertEqual(reset_options[0].title, "Resetup")
         self.assertIn("force", reset_options[0].description.lower())
-        self.assertIn("Help", [option.title for option in reset_options])
+        reset_titles = [option.title for option in reset_options]
+        self.assertIn("Help", reset_titles)
+        self.assertNotIn("Doctor", reset_titles)
+        self.assertNotIn("Version", reset_titles)
 
     def test_launcher_channel_all_label_is_simple(self):
         options = _launcher_channel_options()
@@ -719,6 +736,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(fake_ui.panels[0][0], "xAgent Help")
         self.assertIn("xagent init --force", fake_ui.panels[0][1])
         self.assertIn("xagent service start api", fake_ui.panels[0][1])
+        self.assertNotIn("xagent doctor", fake_ui.panels[0][1])
 
     def test_launcher_help_content_switches_setup_command_by_state(self):
         config_dir = Path("/tmp/xagent")
@@ -842,7 +860,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn(f"xagent service start api --dir {resolved_dir}", output)
         self.assertIn(f"xagent init feishu --dir {resolved_dir}", output)
         self.assertIn(f"xagent service start feishu --dir {resolved_dir}", output)
-        self.assertIn(f"xagent doctor --dir {resolved_dir}", output)
+        self.assertNotIn("xagent doctor", output)
         self.assertNotIn(f"xagent voice --dir {resolved_dir}", output)
 
     def test_init_prints_voice_entry_when_voice_is_configured(self):

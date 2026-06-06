@@ -554,9 +554,9 @@ MINIMAX_MODELS = (
     "MiniMax-M2.7-highspeed",
 )
 QWEN_MODELS = (
-    "qwen3.6-plus",
+    "qwen3.7-max",
     "qwen3.6-flash",
-    "qwen3.6-max-preview",
+    "qwen3.6-plus",
     "Decide later",
 )
 SEARCH_PROVIDERS = (
@@ -1735,7 +1735,6 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
 
     feishu_init = _format_init_command("xagent init feishu", config_dir=config_dir)
     feishu_start = _format_init_command("xagent service start feishu", config_dir=config_dir)
-    doctor_command = _format_init_command("xagent doctor", config_dir=config_dir)
     
     content = Text()
     content.append("Pick how you want to use it next.\n\n")
@@ -1749,11 +1748,7 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
     content.append(feishu_init, style="cyan")
     content.append(f"\n        Create a Feishu bot config, then start it with ")
     content.append(feishu_start, style="cyan")
-    content.append(".\n\n")
-    content.append("Check:\n")
-    content.append("doctor  ", style="")
-    content.append(doctor_command, style="cyan")
-    content.append("\n        Verify local config, files, and channel readiness.")
+    content.append(".")
     
     TerminalUI().print_panel(content, title="Next Steps")
 
@@ -2918,7 +2913,6 @@ def _print_feishu_post_setup(config_path: Path, selection: FeishuInitSelection) 
     start_all = _format_init_command("xagent service start all", config_dir=config_dir)
     status = _format_init_command("xagent service status feishu", config_dir=config_dir)
     logs = _format_init_command("xagent service logs feishu -f", config_dir=config_dir)
-    doctor = _format_init_command("xagent doctor", config_dir=config_dir)
 
     next_steps = Text()
     next_steps.append("Run next:\n")
@@ -2934,9 +2928,6 @@ def _print_feishu_post_setup(config_path: Path, selection: FeishuInitSelection) 
     next_steps.append("logs    ")
     next_steps.append(logs, style="cyan")
     next_steps.append("\n        Follow the Feishu channel log live.\n")
-    next_steps.append("doctor  ")
-    next_steps.append(doctor, style="cyan")
-    next_steps.append("\n        Verify config, files, and channel readiness.\n")
 
     next_steps.append("\nOptional before group rollout:\n")
     next_steps.append("- im:message.group_msg\n")
@@ -3354,13 +3345,11 @@ def print_quick_start() -> None:
         print("  xagent chat")
         print("  xagent web")
         print("  xagent service")
-        print("  xagent doctor")
     else:
         print("Quick start:")
         print("  xagent chat")
         print("  xagent web")
         print("  xagent service")
-        print("  xagent doctor")
     print("")
     print("Use 'xagent --help' to see all commands.")
 
@@ -3380,9 +3369,9 @@ def _launcher_args(**kwargs: Any) -> argparse.Namespace:
 def _launcher_options(*, initialized: bool) -> list[MenuOption]:
     setup_title = "Resetup" if initialized else "Setup"
     setup_description = (
-        "Re-create config and identity settings."
+        "Re-run setup with --force; runtime data is kept unless you choose to clear it."
         if initialized
-        else "Create config and identity settings."
+        else "Create config, identity, workspace, memory, and tasks."
     )
     return [
         MenuOption(
@@ -3421,19 +3410,9 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
             disabled=not initialized,
         ),
         MenuOption(
-            key="doctor",
-            title="Doctor",
-            description="Validate local files, config, and enabled channels.",
-        ),
-        MenuOption(
             key="help",
             title="Help",
             description="Learn the common xAgent commands and when to use them.",
-        ),
-        MenuOption(
-            key="version",
-            title="Version",
-            description="Show xAgent and Python versions.",
         ),
         MenuOption(
             key="exit",
@@ -3502,9 +3481,6 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append("inspect  ")
     content.append(_format_init_command("xagent inspect config show", config_dir=config_dir), style="cyan")
     content.append("\n         Read config, identity, memory, and message state.\n")
-    content.append("doctor   ")
-    content.append(_format_init_command("xagent doctor", config_dir=config_dir), style="cyan")
-    content.append("\n         Check local config, files, and channel readiness.\n")
     return content
 
 
@@ -3591,24 +3567,329 @@ def _run_service_launcher(config_dir: Path) -> int:
         ui.pause("Press Enter to return to Services")
 
 
+def _print_skills_summary(config_dir: Path) -> int:
+    root = config_dir / BaseAgentConfig.SKILLS_DIRNAME
+    if not root.exists():
+        print(f"Skills root: {root}")
+        print("Skills: not found")
+        return 0
+
+    from ..components.skills import SkillsStorageLocal
+
+    storage = SkillsStorageLocal(root, seed_builtins=False)
+    info = storage.info()
+    print(f"Skills root: {info['root']}")
+    print(f"Total: {info['count']}")
+    print(f"Enabled: {info['enabled_count']}")
+    print(f"Disabled: {info['disabled_count']}")
+    print(f"Invalid: {info['invalid_count']}")
+    return 0
+
+
+def _print_skills_list(config_dir: Path) -> int:
+    root = config_dir / BaseAgentConfig.SKILLS_DIRNAME
+    if not root.exists():
+        print(f"Skills root: {root}")
+        print("No skills found.")
+        return 0
+
+    from ..components.skills import SkillsStorageLocal
+
+    storage = SkillsStorageLocal(root, seed_builtins=False)
+    skills = storage.list_skills(include_disabled=True, include_invalid=True)
+    if not skills:
+        print("No skills found.")
+        return 0
+    for skill in skills:
+        state = "enabled" if skill.enabled else "disabled"
+        validity = "valid" if skill.valid else "invalid"
+        print(f"{skill.name} [{state}, {validity}]")
+        print(f"  file: {skill.skill_file}")
+        if skill.description:
+            print(f"  description: {skill.description}")
+    return 0
+
+
+def _print_skills_search(config_dir: Path, query: str) -> int:
+    query = query.strip()
+    if not query:
+        print("Search query is required.")
+        return 1
+    root = config_dir / BaseAgentConfig.SKILLS_DIRNAME
+    if not root.exists():
+        print("No skills found.")
+        return 0
+
+    from ..components.skills import SkillsStorageLocal
+
+    storage = SkillsStorageLocal(root, seed_builtins=False)
+    results = storage.search(query).get("results", [])
+    if not results:
+        print("No matching skill files.")
+        return 0
+    for item in results:
+        print(item.get("path", ""))
+        snippet = str(item.get("snippet") or "").strip()
+        if snippet:
+            print(f"  {snippet}")
+    return 0
+
+
+def _print_skills_validation(config_dir: Path) -> int:
+    root = config_dir / BaseAgentConfig.SKILLS_DIRNAME
+    if not root.exists():
+        print(f"Skills root: {root}")
+        print("No skills found.")
+        return 0
+
+    from ..components.skills import SkillsStorageLocal
+
+    storage = SkillsStorageLocal(root, seed_builtins=False)
+    validation = storage.validate_all()
+    if validation.get("valid"):
+        print("Skills OK")
+        return 0
+    print("Skills validation failed:")
+    for item in validation.get("skills", []):
+        if item.get("valid"):
+            continue
+        print(f"- {item.get('name') or item.get('path')}")
+        for error in item.get("errors", []):
+            print(f"  {error.get('path')}: {error.get('message')}")
+    return 1
+
+
+def _task_summary(records: list[Any]) -> tuple[int, int, int]:
+    active = sum(1 for record in records if record.status == "active")
+    failed = sum(1 for record in records if record.state == "failed")
+    return len(records), active, failed
+
+
+def _print_tasks_summary(config_dir: Path) -> int:
+    root = config_dir / BaseAgentConfig.TASKS_DIRNAME
+    if not root.exists():
+        print(f"Tasks root: {root}")
+        print("Tasks: not found")
+        return 0
+
+    from ..core.runtime import list_task_records
+
+    records = list_task_records(root)
+    total, active, failed = _task_summary(records)
+    print(f"Tasks root: {root}")
+    print(f"Total: {total}")
+    print(f"Active: {active}")
+    print(f"Failed: {failed}")
+    return 0
+
+
+def _format_task_record(record: Any) -> str:
+    label = record.title or record.content or record.task_id
+    if len(label) > 96:
+        label = label[:93] + "..."
+    channel = record.delivery_channel or "local"
+    return (
+        f"{record.task_id} [{record.state}] "
+        f"{record.run_at.isoformat(sep=' ')} "
+        f"{record.task_type or 'task'} via {channel} - {label}"
+    )
+
+
+def _print_tasks_list(config_dir: Path, *, include_failed: bool) -> int:
+    root = config_dir / BaseAgentConfig.TASKS_DIRNAME
+    if not root.exists():
+        print(f"Tasks root: {root}")
+        print("No tasks found.")
+        return 0
+
+    from ..core.runtime import list_task_records
+
+    records = list_task_records(root, include_failed=include_failed)
+    if not records:
+        print("No tasks found.")
+        return 0
+    for record in records:
+        print(_format_task_record(record))
+    return 0
+
+
+def _run_inspect_section(
+    ui: TerminalUI,
+    config_dir: Path,
+    title: str,
+    actions: Sequence[MenuOption],
+    run_action: Callable[[str], Optional[int]],
+) -> None:
+    while True:
+        option = ui.select_menu(
+            title=f"xAgent Inspect / {title}",
+            subtitle=f"Runtime: {config_dir}",
+            options=actions,
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            ui.clear()
+            return
+
+        ui.clear()
+        exit_code = run_action(option.key)
+        if exit_code is None:
+            continue
+        if exit_code != 0:
+            ui.print_panel(f"{title} action exited with status {exit_code}.", title="Inspect")
+        ui.pause(f"Press Enter to return to {title}")
+
+
+def _run_config_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    actions = [
+        MenuOption("show", "Show", "Print config.yaml."),
+        MenuOption("validate", "Validate", "Parse and validate config.yaml."),
+        MenuOption("path", "Path", "Print the config file path."),
+        MenuOption("back", "Back", "Return to Inspect."),
+    ]
+    _run_inspect_section(
+        ui,
+        config_dir,
+        "Config",
+        actions,
+        lambda key: handle_config(_launcher_args(config_dir=str(config_dir), config_command=key)),
+    )
+
+
+def _run_identity_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    actions = [
+        MenuOption("show", "Show", "Print identity.md."),
+        MenuOption("path", "Path", "Print the identity file path."),
+        MenuOption("back", "Back", "Return to Inspect."),
+    ]
+    _run_inspect_section(
+        ui,
+        config_dir,
+        "Identity",
+        actions,
+        lambda key: handle_identity(_launcher_args(config_dir=str(config_dir), identity_command=key)),
+    )
+
+
+def _run_memory_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    actions = [
+        MenuOption("stats", "Stats", "Show memory file counts and bytes."),
+        MenuOption("list", "List", "List memory markdown files."),
+        MenuOption("search", "Search", "Search memory markdown files."),
+        MenuOption("show", "Show File", "Print one memory file by relative path."),
+        MenuOption("back", "Back", "Return to Inspect."),
+    ]
+
+    def run_action(key: str) -> Optional[int]:
+        if key == "stats":
+            return handle_memory(
+                _launcher_args(config_dir=str(config_dir), memory_command="stats", scope="all", yes=False)
+            )
+        if key == "list":
+            return handle_memory(
+                _launcher_args(config_dir=str(config_dir), memory_command="list", scope="all", yes=False)
+            )
+        if key == "search":
+            query = ui.ask_text("Memory search query").strip()
+            if not query:
+                return None
+            return handle_memory(
+                _launcher_args(config_dir=str(config_dir), memory_command="search", query=query, scope="all")
+            )
+        path = ui.ask_text("Memory file path", subtitle="Use a relative path under memory/.").strip()
+        if not path:
+            return None
+        return handle_memory(_launcher_args(config_dir=str(config_dir), memory_command="show", path=path, scope="all"))
+
+    _run_inspect_section(ui, config_dir, "Memory", actions, run_action)
+
+
+def _run_message_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    actions = [
+        MenuOption("stats", "Stats", "Show message stream storage stats."),
+        MenuOption("list", "List", "Choose how many recent stored messages to print."),
+        MenuOption("back", "Back", "Return to Inspect."),
+    ]
+
+    def run_action(key: str) -> Optional[int]:
+        if key == "stats":
+            return handle_messages(_launcher_args(config_dir=str(config_dir), messages_command="stats"))
+        count = _prompt_message_list_count_terminal_ui(ui)
+        if count is None:
+            return None
+        return handle_messages(_launcher_args(config_dir=str(config_dir), messages_command="list", count=count, offset=0))
+
+    _run_inspect_section(ui, config_dir, "Message", actions, run_action)
+
+
+def _run_skills_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    actions = [
+        MenuOption("summary", "Summary", "Show skill counts and validation totals."),
+        MenuOption("list", "List", "List skill packages."),
+        MenuOption("search", "Search", "Search skill files."),
+        MenuOption("validate", "Validate", "Validate all skills."),
+        MenuOption("back", "Back", "Return to Inspect."),
+    ]
+
+    def run_action(key: str) -> Optional[int]:
+        if key == "summary":
+            return _print_skills_summary(config_dir)
+        if key == "list":
+            return _print_skills_list(config_dir)
+        if key == "search":
+            query = ui.ask_text("Skill search query").strip()
+            if not query:
+                return None
+            return _print_skills_search(config_dir, query)
+        return _print_skills_validation(config_dir)
+
+    _run_inspect_section(ui, config_dir, "Skills", actions, run_action)
+
+
+def _run_tasks_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    actions = [
+        MenuOption("summary", "Summary", "Show scheduled task counts."),
+        MenuOption("active", "Active", "List pending active tasks."),
+        MenuOption("all", "All", "List active and failed task files."),
+        MenuOption("back", "Back", "Return to Inspect."),
+    ]
+    _run_inspect_section(
+        ui,
+        config_dir,
+        "Tasks",
+        actions,
+        lambda key: _print_tasks_summary(config_dir)
+        if key == "summary"
+        else _print_tasks_list(config_dir, include_failed=key == "all"),
+    )
+
+
 def _run_inspect_launcher(config_dir: Path) -> int:
     ui = TerminalUI()
-    actions = [
-        MenuOption("config_show", "Config", "Show the current config.yaml."),
-        MenuOption("config_validate", "Validate Config", "Parse and validate config.yaml."),
-        MenuOption("identity_show", "Identity", "Show the current identity.md."),
-        MenuOption("memory_stats", "Memory Stats", "Show long-term memory file counts and bytes."),
-        MenuOption("memory_list", "Memory List", "List memory markdown files."),
-        MenuOption("messages_stats", "Message Stats", "Show message stream storage stats."),
-        MenuOption("messages_list", "Message List", "Choose how many recent stored messages to print."),
+    sections = [
+        MenuOption("config", "Config", "Inspect config.yaml."),
+        MenuOption("identity", "Identity", "Inspect identity.md."),
+        MenuOption("memory", "Memory", "Inspect long-term memory files."),
+        MenuOption("message", "Message", "Inspect stored conversation messages."),
+        MenuOption("skills", "Skills", "Inspect Agent Skills packages."),
+        MenuOption("tasks", "Tasks", "Inspect scheduled task files."),
         MenuOption("back", "Back", "Return to the main launcher."),
     ]
+
+    launchers = {
+        "config": _run_config_inspect_launcher,
+        "identity": _run_identity_inspect_launcher,
+        "memory": _run_memory_inspect_launcher,
+        "message": _run_message_inspect_launcher,
+        "skills": _run_skills_inspect_launcher,
+        "tasks": _run_tasks_inspect_launcher,
+    }
 
     while True:
         option = ui.select_menu(
             title="xAgent Inspect",
             subtitle=f"Runtime: {config_dir}",
-            options=actions,
+            options=sections,
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
         if option is None or option.key == "back":
@@ -3616,38 +3897,7 @@ def _run_inspect_launcher(config_dir: Path) -> int:
             return 0
 
         ui.clear()
-        if option.key == "config_show":
-            exit_code = handle_config(_launcher_args(config_dir=str(config_dir), config_command="show"))
-        elif option.key == "config_validate":
-            exit_code = handle_config(_launcher_args(config_dir=str(config_dir), config_command="validate"))
-        elif option.key == "identity_show":
-            exit_code = handle_identity(_launcher_args(config_dir=str(config_dir), identity_command="show"))
-        elif option.key == "memory_stats":
-            exit_code = handle_memory(
-                _launcher_args(config_dir=str(config_dir), memory_command="stats", scope="all", yes=False)
-            )
-        elif option.key == "memory_list":
-            exit_code = handle_memory(
-                _launcher_args(config_dir=str(config_dir), memory_command="list", scope="all", yes=False)
-            )
-        elif option.key == "messages_stats":
-            exit_code = handle_messages(_launcher_args(config_dir=str(config_dir), messages_command="stats"))
-        else:
-            count = _prompt_message_list_count_terminal_ui(ui)
-            if count is None:
-                continue
-            exit_code = handle_messages(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    messages_command="list",
-                    count=count,
-                    offset=0,
-                )
-            )
-
-        if exit_code != 0:
-            ui.print_panel(f"Inspect action exited with status {exit_code}.", title="Inspect")
-        ui.pause("Press Enter to return to Inspect")
+        launchers[option.key](ui, config_dir)
 
 
 def _run_interactive_launcher() -> int:
@@ -3680,9 +3930,9 @@ def _run_interactive_launcher() -> int:
 
         ui.clear()
         if option.key == "init":
-            exit_code = handle_init(_launcher_args(config_dir=str(config_dir), force=initialized, schema=False))
+            handle_init(_launcher_args(config_dir=str(config_dir), force=initialized, schema=False))
         elif option.key == "chat":
-            exit_code = handle_chat(
+            handle_chat(
                 _launcher_args(
                     message=None,
                     config_dir=str(config_dir),
@@ -3694,7 +3944,7 @@ def _run_interactive_launcher() -> int:
                 )
             )
         elif option.key == "web":
-            exit_code = handle_web(
+            handle_web(
                 _launcher_args(
                     config_dir=str(config_dir),
                     host=None,
@@ -3706,7 +3956,7 @@ def _run_interactive_launcher() -> int:
                 )
             )
         elif option.key == "voice":
-            exit_code = handle_voice(
+            handle_voice(
                 _launcher_args(
                     config_dir=str(config_dir),
                     user_id="local_voice",
@@ -3723,25 +3973,11 @@ def _run_interactive_launcher() -> int:
         elif option.key == "inspect":
             _run_inspect_launcher(config_dir)
             continue
-        elif option.key == "doctor":
-            exit_code = handle_doctor(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    channels=None,
-                    online=False,
-                )
-            )
         elif option.key == "help":
             ui.print_panel(_launcher_help_content(config_dir=config_dir, initialized=initialized), title="xAgent Help")
-            exit_code = 0
         else:
-            exit_code = handle_version(_launcher_args())
+            continue
 
-        # if exit_code != 0:
-        #     ui.print_panel(
-        #         f"The selected workflow exited with status {exit_code}.",
-        #         title="Command Finished",
-        #     )
         ui.pause("Press Enter to return to the launcher")
 
 
