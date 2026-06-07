@@ -773,7 +773,25 @@ class CLICommandTests(unittest.TestCase):
 
         search = next(item for item in overview.items if item.name == "Search")
         self.assertEqual(search.status, STATUS_ERROR)
-        self.assertEqual(search.detail, "missing api_key")
+        self.assertEqual(search.detail, "Set search.api_key")
+
+    def test_runtime_overview_uses_friendly_idle_copy_for_stopped_web_ui(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+
+            overview = build_runtime_overview(Path(tmpdir))
+
+        self.assertEqual(overview.headline, "Ready")
+        web_ui = next(item for item in overview.items if item.name == "Web UI")
+        self.assertEqual(web_ui.status, "idle")
+        self.assertEqual(web_ui.value, "ready to start")
+        self.assertEqual(web_ui.detail, "Open at http://127.0.0.1:8010 after launch")
+        image = next(item for item in overview.items if item.name == "Image")
+        self.assertEqual(image.value, "not enabled")
+        self.assertEqual(image.detail, "Set image_generation.provider to enable")
+        voice = next(item for item in overview.items if item.name == "Voice")
+        self.assertEqual(voice.value, "not enabled")
+        self.assertEqual(voice.detail, "Set channels.voice to enable voice mode")
 
     def test_runtime_overview_shows_web_ui_url_when_running(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -784,7 +802,7 @@ class CLICommandTests(unittest.TestCase):
         web_ui = next(item for item in overview.items if item.name == "Web UI")
         self.assertEqual(web_ui.status, "ok")
         self.assertEqual(web_ui.value, "running")
-        self.assertEqual(web_ui.detail, "http://127.0.0.1:8010  pid 26807")
+        self.assertEqual(web_ui.detail, "Open http://127.0.0.1:8010  pid 26807")
 
     def test_config_editor_updates_search_provider_with_validation(self):
         with tempfile.TemporaryDirectory() as tmpdir:

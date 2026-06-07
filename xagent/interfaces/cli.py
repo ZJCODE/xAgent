@@ -65,6 +65,7 @@ from .config_editor import (
 from .overview import (
     STATUS_DISABLED,
     STATUS_ERROR,
+    STATUS_IDLE,
     STATUS_OK,
     STATUS_WARNING,
     RuntimeOverview,
@@ -3568,9 +3569,10 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
 def _overview_status_label(status: str) -> str:
     labels = {
         STATUS_OK: "ok",
+        STATUS_IDLE: "available",
         STATUS_WARNING: "warning",
         STATUS_ERROR: "error",
-        STATUS_DISABLED: "disabled",
+        STATUS_DISABLED: "off",
     }
     return labels.get(status, status)
 

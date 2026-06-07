@@ -16,6 +16,7 @@ from .processes import managed_paths, running_pid
 
 
 STATUS_OK = "ok"
+STATUS_IDLE = "idle"
 STATUS_WARNING = "warning"
 STATUS_ERROR = "error"
 STATUS_DISABLED = "disabled"
@@ -58,20 +59,20 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
     config: dict[str, Any] = {}
     config_error = ""
     if not config_path.is_file():
-        items.append(OverviewItem("Config", "missing", STATUS_ERROR, str(config_path)))
+        items.append(OverviewItem("Config", "missing", STATUS_ERROR, f"Expected {config_path}"))
     else:
         try:
             config = load_config_file(config_dir)
             _validate_config(config)
-            items.append(OverviewItem("Config", "valid", STATUS_OK, "identity valid" if initialized else "identity missing"))
+            items.append(OverviewItem("Config", "valid", STATUS_OK, "identity ready" if initialized else "identity missing"))
         except Exception as exc:
             config_error = str(exc)
             items.append(OverviewItem("Config", "invalid", STATUS_ERROR, config_error))
 
     if not identity_path.is_file():
-        items.append(OverviewItem("Identity", "missing", STATUS_ERROR, str(identity_path)))
+        items.append(OverviewItem("Identity", "missing", STATUS_ERROR, f"Expected {identity_path}"))
     elif not _identity_valid(identity_path):
-        items.append(OverviewItem("Identity", "empty", STATUS_ERROR, str(identity_path)))
+        items.append(OverviewItem("Identity", "empty", STATUS_ERROR, f"Add content to {identity_path}"))
 
     if config:
         items.extend(
@@ -120,9 +121,9 @@ def _model_item(config: dict[str, Any]) -> OverviewItem:
     model = str(provider.get("model") or "").strip() or "(missing model)"
     api_key = str(provider.get("api_key") or "").strip()
     status = STATUS_ERROR if is_placeholder_api_key(api_key) else STATUS_OK
-    detail = provider_model_api(provider)
+    detail = f"API {provider_model_api(provider)}"
     if status == STATUS_ERROR:
-        detail = "missing api_key"
+        detail = "Set provider.api_key"
     return OverviewItem("Model", f"{provider_name} / {model}", status, detail)
 
 
@@ -138,11 +139,11 @@ def _search_item(config: dict[str, Any]) -> OverviewItem:
     except ValueError as exc:
         return OverviewItem("Search", "invalid", STATUS_ERROR, str(exc))
     if provider == "none":
-        return OverviewItem("Search", "none", STATUS_DISABLED, "disabled")
+        return OverviewItem("Search", "not enabled", STATUS_DISABLED, "Set search.provider to enable web search")
     api_key = str(search.get("api_key") or "").strip() if isinstance(search, dict) else ""
     if _feature_needs_key(config, provider) and is_placeholder_api_key(api_key):
-        return OverviewItem("Search", provider, STATUS_ERROR, "missing api_key")
-    detail = "own api_key" if api_key and not is_placeholder_api_key(api_key) else "inherited from model provider"
+        return OverviewItem("Search", provider, STATUS_ERROR, "Set search.api_key")
+    detail = "Uses its own API key" if api_key and not is_placeholder_api_key(api_key) else "Uses the model provider API key"
     return OverviewItem("Search", provider, STATUS_OK, detail)
 
 
@@ -150,18 +151,18 @@ def _image_item(config: dict[str, Any]) -> OverviewItem:
     image = config.get("image_generation") if isinstance(config.get("image_generation"), dict) else {}
     provider = str(image.get("provider") or "none").strip().lower() if isinstance(image, dict) else "none"
     if provider == "none":
-        return OverviewItem("Image", "none", STATUS_DISABLED, "disabled")
+        return OverviewItem("Image", "not enabled", STATUS_DISABLED, "Set image_generation.provider to enable")
     api_key = str(image.get("api_key") or "").strip() if isinstance(image, dict) else ""
     if _feature_needs_key(config, provider) and is_placeholder_api_key(api_key):
-        return OverviewItem("Image", provider, STATUS_ERROR, "missing api_key")
-    detail = "own api_key" if api_key and not is_placeholder_api_key(api_key) else "inherited from model provider"
+        return OverviewItem("Image", provider, STATUS_ERROR, "Set image_generation.api_key")
+    detail = "Uses its own API key" if api_key and not is_placeholder_api_key(api_key) else "Uses the model provider API key"
     return OverviewItem("Image", provider, STATUS_OK, detail)
 
 
 def _voice_item(config: dict[str, Any]) -> OverviewItem:
     raw_voice = voice_config(config)
     if not raw_voice:
-        return OverviewItem("Voice", "none", STATUS_DISABLED, "disabled")
+        return OverviewItem("Voice", "not enabled", STATUS_DISABLED, "Set channels.voice to enable voice mode")
     try:
         voice = VoiceChannelConfig.from_dict(raw_voice)
     except Exception as exc:
@@ -190,20 +191,20 @@ def _api_service_url(config: dict[str, Any]) -> str:
 
 def _service_item(config_dir: Path, channel: str, config: dict[str, Any]) -> OverviewItem:
     if channel == CHANNEL_FEISHU and not (config.get("app_id") and config.get("app_secret")):
-        return OverviewItem("Feishu", "disabled", STATUS_DISABLED, "not configured")
+        return OverviewItem("Feishu", "not set up", STATUS_DISABLED, "Set app_id and app_secret to enable")
     if channel == CHANNEL_API and config.get("enabled", True) is False:
-        return OverviewItem("Web UI", "disabled", STATUS_DISABLED, "api channel disabled")
+        return OverviewItem("Web UI", "not enabled", STATUS_DISABLED, "Set channels.api.enabled to true")
     paths = managed_paths(config_dir, channel)
     pid = running_pid(paths.pid_path)
     title = "Web UI" if channel == CHANNEL_API else "Feishu"
     if pid is None:
-        detail = "stopped"
+        detail = "Configured but not running"
         if channel == CHANNEL_API:
-            detail = _api_service_url(config)
-        return OverviewItem(title, "stopped", STATUS_WARNING, detail)
+            detail = f"Open at {_api_service_url(config)} after launch"
+        return OverviewItem(title, "ready to start", STATUS_IDLE, detail)
     if channel == CHANNEL_API:
-        return OverviewItem(title, "running", STATUS_OK, f"{_api_service_url(config)}  pid {pid}")
-    return OverviewItem(title, "running", STATUS_OK, f"pid {pid}")
+        return OverviewItem(title, "running", STATUS_OK, f"Open {_api_service_url(config)}  pid {pid}")
+    return OverviewItem(title, "running", STATUS_OK, f"Process pid {pid}")
 
 
 def _data_item(config_dir: Path) -> OverviewItem:
@@ -212,10 +213,15 @@ def _data_item(config_dir: Path) -> OverviewItem:
     active_tasks, failed_tasks = _task_counts(config_dir / BaseAgentConfig.TASKS_DIRNAME)
     status = STATUS_WARNING if failed_tasks else STATUS_OK
     value = f"{memory_count} memory / {message_count} messages"
-    detail = f"{active_tasks} active tasks"
+    detail = "no active tasks" if active_tasks == 0 else _count_phrase(active_tasks, "active task")
     if failed_tasks:
-        detail += f", {failed_tasks} failed"
+        detail += f", {_count_phrase(failed_tasks, 'failed task')}"
     return OverviewItem("Data", value, status, detail)
+
+
+def _count_phrase(count: int, singular: str, plural: str | None = None) -> str:
+    plural_form = plural or f"{singular}s"
+    return f"{count} {singular if count == 1 else plural_form}"
 
 
 def _memory_count(root: Path) -> int:
