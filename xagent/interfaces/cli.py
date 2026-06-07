@@ -37,6 +37,7 @@ from ..core.providers import (
 from ..core.runtime import create_runtime_heartbeat
 from ..utils.image_utils import workspace_blob_relative_path
 from ..schemas.attachment import dedupe_attachments
+from ..tools.search_tool import is_placeholder_api_key
 from .base import BaseAgentConfig, BaseAgentRunner
 from .channels import (
     CHANNEL_API,
@@ -48,6 +49,26 @@ from .channels import (
     load_config_file,
     normalize_channel_values,
     voice_config,
+)
+from .config_editor import (
+    SEARCH_PROVIDERS,
+    VOICE_NESTED_PROVIDERS,
+    VOICE_PRESETS,
+    ConfigUpdate,
+    load_config,
+    prepare_search_provider_update,
+    prepare_voice_nested_provider_update,
+    prepare_voice_preset_update,
+    provider_needs_feature_key,
+    write_config,
+)
+from .overview import (
+    STATUS_DISABLED,
+    STATUS_ERROR,
+    STATUS_OK,
+    STATUS_WARNING,
+    RuntimeOverview,
+    build_runtime_overview,
 )
 from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
 from .terminal_ui import MenuOption, TerminalUI, rich_terminal_available
@@ -102,7 +123,8 @@ def _format_cli_attachments(attachments: Any, workspace_dir: str | Path | None) 
 
     if not paths:
         return ""
-    return "\n".join(f"- {path}" for path in paths)
+    return "Attachments:\n" + "\n".join(f"- {path}" for path in paths)
+
 
 class AgentCLI(BaseAgentRunner):
     """CLI Agent for xAgent."""
@@ -162,7 +184,7 @@ class AgentCLI(BaseAgentRunner):
 
         while True:
             try:
-                user_input = ui.input("[cyan]You:[/cyan] ").strip()
+                user_input = ui.input("[bold cyan]You:[/bold cyan] ").strip()
 
                 if user_input.lower() in ["exit", "quit", "bye"]:
                     ui.print_panel(
@@ -3416,6 +3438,12 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
             disabled=not initialized,
         ),
         MenuOption(
+            key="configure",
+            title="Configure",
+            description="Update model-adjacent features without editing YAML.",
+            disabled=not initialized,
+        ),
+        MenuOption(
             key="inspect",
             title="Inspect",
             description="Read config, identity, memory, and message state.",
@@ -3459,6 +3487,45 @@ def _launcher_channel_options(*, include_all: bool = True) -> list[MenuOption]:
     return options
 
 
+def _feishu_channel_is_configured(config_dir: Path) -> bool:
+    try:
+        config = load_config_file(config_dir)
+    except (ChannelSelectionError, OSError, yaml.YAMLError):
+        return False
+    data = feishu_config(config)
+    return bool(data.get("app_id") and data.get("app_secret"))
+
+
+def _service_launcher_actions(config_dir: Path, channel: str) -> list[MenuOption]:
+    actions: list[MenuOption] = []
+    if channel == CHANNEL_FEISHU:
+        if _feishu_channel_is_configured(config_dir):
+            actions.append(
+                MenuOption(
+                    "setup",
+                    "Resetup",
+                    "Re-run Feishu setup and replace channels.feishu.",
+                )
+            )
+        else:
+            actions.append(
+                MenuOption(
+                    "setup",
+                    "Setup",
+                    "Configure channels.feishu before starting this channel.",
+                )
+            )
+    actions.extend([
+        MenuOption("start", "Start", "Start this channel."),
+        MenuOption("stop", "Stop", "Stop this channel."),
+        MenuOption("restart", "Restart", "Restart this channel."),
+        MenuOption("status", "Status", "Show pid and log paths."),
+        MenuOption("logs", "Logs", "Print the latest log output."),
+        MenuOption("back", "Back", "Return to channel selection."),
+    ])
+    return actions
+
+
 def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     setup_command = "xagent init --force" if initialized else "xagent init"
     content = Text()
@@ -3481,6 +3548,8 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append("service  ")
     content.append(_format_init_command("xagent service start api", config_dir=config_dir), style="cyan")
     content.append("\n         Run API, Feishu, or all enabled channels in the background.\n")
+    content.append("configure\n")
+    content.append("         Use the launcher Configure menu to update search and voice providers safely.\n")
     content.append("status   ")
     content.append(_format_init_command("xagent service status all", config_dir=config_dir), style="cyan")
     content.append("\n         Show PID files and log paths for managed services.\n")
@@ -3496,39 +3565,72 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     return content
 
 
+def _overview_status_label(status: str) -> str:
+    labels = {
+        STATUS_OK: "ok",
+        STATUS_WARNING: "warning",
+        STATUS_ERROR: "error",
+        STATUS_DISABLED: "disabled",
+    }
+    return labels.get(status, status)
+
+
+def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
+    lines = [
+        f"Runtime: {overview.config_dir}",
+        f"Status: {overview.headline}",
+    ]
+    if overview.items:
+        lines.append("")
+    for item in overview.items:
+        detail = f"  {item.detail}" if item.detail else ""
+        lines.append(
+            f"{item.name:<10} {item.value:<28} {_overview_status_label(item.status)}{detail}"
+        )
+    return "\n".join(lines)
+
+
 def _run_service_launcher(config_dir: Path) -> int:
     ui = TerminalUI()
-    actions = [
-        MenuOption("start", "Start", "Start one channel or all enabled channels."),
-        MenuOption("stop", "Stop", "Stop one channel or all enabled channels."),
-        MenuOption("restart", "Restart", "Restart one channel or all enabled channels."),
-        MenuOption("status", "Status", "Show pid and log paths for running services."),
-        MenuOption("logs", "Logs", "Print the latest log output for a channel."),
-        MenuOption("back", "Back", "Return to the main launcher."),
-    ]
 
     while True:
-        option = ui.select_menu(
-            title="xAgent Services",
-            subtitle=f"Runtime: {config_dir}",
-            options=actions,
-            footer="↑/↓ Move • Enter Select  •  q Back",
-        )
-        if option is None or option.key == "back":
-            ui.clear()
-            return 0
-
         channel_option = ui.select_menu(
-            title="Choose Channel",
-            subtitle="Select which runtime slice to manage.",
+            title="xAgent Services",
+            subtitle="Choose the runtime slice first, then the operation.",
             options=_launcher_channel_options(),
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
         if channel_option is None or channel_option.key == "back":
+            ui.clear()
+            return 0
+
+        channel_title = getattr(channel_option, "title", str(channel_option.key).title())
+        option = ui.select_menu(
+            title=f"xAgent Services / {channel_title}",
+            subtitle=f"Runtime: {config_dir}",
+            options=_service_launcher_actions(config_dir, str(channel_option.key)),
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
             continue
         ui.clear()
         channels = [channel_option.key]
-        if option.key == "start":
+        if option.key == "setup":
+            exit_code = handle_init_feishu(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    app_id=None,
+                    app_secret=None,
+                    manual=False,
+                    force=_feishu_channel_is_configured(config_dir),
+                    stream=None,
+                    enable_memory=None,
+                    group_history_count=None,
+                    show_sender_ids=None,
+                    group_reply_without_mention=None,
+                )
+            )
+        elif option.key == "start":
             exit_code = handle_start(
                 _launcher_args(
                     config_dir=str(config_dir),
@@ -3577,6 +3679,230 @@ def _run_service_launcher(config_dir: Path) -> int:
         if exit_code != 0:
             ui.print_panel(f"Service action exited with status {exit_code}.", title="Services")
         ui.pause("Press Enter to return to Services")
+
+
+def _current_search_provider(config: dict[str, Any]) -> str:
+    search = config.get("search")
+    if not isinstance(search, dict):
+        return "none"
+    return str(search.get("provider") or "none").strip().lower()
+
+
+def _current_voice_provider(config: dict[str, Any]) -> str:
+    voice = voice_config(config)
+    if not voice:
+        return "none"
+    return str(voice.get("provider") or "custom").strip().lower()
+
+
+def _current_voice_nested_provider(config: dict[str, Any], section: str) -> str:
+    voice = voice_config(config)
+    nested = voice.get(section) if isinstance(voice, dict) else None
+    if isinstance(nested, dict):
+        provider = str(nested.get("provider") or "").strip().lower()
+        if provider:
+            return provider
+    provider = str(voice.get("provider") or "").strip().lower() if isinstance(voice, dict) else ""
+    return provider if provider in VOICE_NESTED_PROVIDERS else VOICE_NESTED_PROVIDERS[0]
+
+
+def _provider_option_descriptions(kind: str) -> dict[str, str]:
+    return {
+        "none": f"Disable {kind}.",
+        "openai": "Use OpenAI.",
+        "qwen": "Use Qwen / DashScope.",
+        "minimax": "Use MiniMax.",
+        "soniox": "Use Soniox realtime voice.",
+        "custom": "Choose STT and TTS providers separately.",
+    }
+
+
+def _config_update_content(update: ConfigUpdate) -> Text:
+    content = Text()
+    content.append("Apply these changes?\n\n")
+    if not update.changes:
+        content.append("No config values will change.\n")
+        return content
+    for change in update.changes:
+        content.append(f"{change.path}\n", style="bold")
+        content.append(f"  {change.before} -> {change.after}\n")
+    return content
+
+
+def _apply_config_update(ui: TerminalUI, config_dir: Path, update: ConfigUpdate) -> bool:
+    if not update.changes:
+        ui.print_panel("No config values changed.", title="Configure")
+        return False
+    ui.print_panel(_config_update_content(update), title="Config Preview")
+    if ui.confirm("Apply changes?", default=True) is not True:
+        ui.print_panel("Config was not changed.", title="Configure")
+        return False
+    try:
+        write_config(config_dir, update.data)
+    except Exception as exc:
+        ui.print_panel(f"Config save failed: {exc}", title="Configure", border_style="red")
+        return False
+    ui.print_panel("Config saved. Validation passed.", title="Configure", border_style="green")
+    return True
+
+
+def _required_feature_api_key(ui: TerminalUI, *, provider: str, feature: str) -> Optional[str]:
+    value = ui.ask_text(
+        f"{provider.title()} API key",
+        secret=True,
+        subtitle=f"{provider.title()} {feature} needs its own API key for the current model provider.",
+    ).strip()
+    if not value:
+        ui.print_panel("API key is required for this change.", title="Configure")
+        return None
+    return value
+
+
+def _run_search_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    try:
+        config = load_config(config_dir)
+    except Exception as exc:
+        ui.print_panel(f"Cannot load config: {exc}", title="Configure", border_style="red")
+        return
+    current = _current_search_provider(config)
+    options = _menu_option_rows(
+        SEARCH_PROVIDERS + ("back",),
+        _provider_option_descriptions("search"),
+    )
+    choice = ui.select_menu(
+        title="xAgent Configure / Search",
+        subtitle=f"Current provider: {current}",
+        options=options,
+        footer="↑/↓ Move • Enter Select  •  q Back",
+    )
+    if choice is None or choice.key == "back":
+        return
+    api_key = None
+    if provider_needs_feature_key(config, choice.key):
+        current_key = str((config.get("search") or {}).get("api_key") or "") if isinstance(config.get("search"), dict) else ""
+        if choice.key != current or is_placeholder_api_key(current_key):
+            api_key = _required_feature_api_key(ui, provider=choice.key, feature="search")
+            if api_key is None:
+                return
+    try:
+        update = prepare_search_provider_update(config, provider=choice.key, api_key=api_key)
+    except Exception as exc:
+        ui.print_panel(f"Search update is invalid: {exc}", title="Configure", border_style="red")
+        return
+    _apply_config_update(ui, config_dir, update)
+
+
+def _run_voice_preset_config(ui: TerminalUI, config_dir: Path, config: dict[str, Any]) -> None:
+    current = _current_voice_provider(config)
+    choice = ui.select_menu(
+        title="xAgent Configure / Voice Preset",
+        subtitle=f"Current mode: {current}",
+        options=_menu_option_rows(VOICE_PRESETS + ("back",), _provider_option_descriptions("voice")),
+        footer="↑/↓ Move • Enter Select  •  q Back",
+    )
+    if choice is None or choice.key == "back":
+        return
+    api_key = None
+    if choice.key in VOICE_NESTED_PROVIDERS and choice.key != current:
+        api_key = _required_feature_api_key(ui, provider=choice.key, feature="voice")
+        if api_key is None:
+            return
+    try:
+        update = prepare_voice_preset_update(config, provider=choice.key, api_key=api_key)
+    except Exception as exc:
+        ui.print_panel(f"Voice update is invalid: {exc}", title="Configure", border_style="red")
+        return
+    _apply_config_update(ui, config_dir, update)
+
+
+def _run_voice_nested_config(ui: TerminalUI, config_dir: Path, config: dict[str, Any], section: str) -> None:
+    current = _current_voice_nested_provider(config, section)
+    title = "STT Provider" if section == "stt" else "TTS Provider"
+    choice = ui.select_menu(
+        title=f"xAgent Configure / Voice {title}",
+        subtitle=f"Current {section.upper()}: {current}",
+        options=_menu_option_rows(VOICE_NESTED_PROVIDERS + ("back",), _provider_option_descriptions("voice")),
+        footer="↑/↓ Move • Enter Select  •  q Back",
+    )
+    if choice is None or choice.key == "back":
+        return
+    api_key = None
+    if choice.key != current:
+        api_key = _required_feature_api_key(ui, provider=choice.key, feature=f"voice {section.upper()}")
+        if api_key is None:
+            return
+    try:
+        update = prepare_voice_nested_provider_update(config, section=section, provider=choice.key, api_key=api_key)
+    except Exception as exc:
+        ui.print_panel(f"Voice update is invalid: {exc}", title="Configure", border_style="red")
+        return
+    _apply_config_update(ui, config_dir, update)
+
+
+def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    while True:
+        try:
+            config = load_config(config_dir)
+        except Exception as exc:
+            ui.print_panel(f"Cannot load config: {exc}", title="Configure", border_style="red")
+            return
+        voice = voice_config(config)
+        provider = _current_voice_provider(config)
+        stt_provider = _current_voice_nested_provider(config, "stt") if voice else "none"
+        tts_provider = _current_voice_nested_provider(config, "tts") if voice else "none"
+        option = ui.select_menu(
+            title="xAgent Configure / Voice",
+            subtitle=f"Mode: {provider}\nSTT: {stt_provider}\nTTS: {tts_provider}",
+            options=[
+                MenuOption("preset", "Preset Mode", "Use none, Soniox, Qwen, or custom mode."),
+                MenuOption("stt", "STT Provider", "Choose the speech-to-text provider."),
+                MenuOption("tts", "TTS Provider", "Choose the text-to-speech provider."),
+                MenuOption("disable", "Disable Voice", "Remove channels.voice from config."),
+                MenuOption("back", "Back", "Return to Configure."),
+            ],
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            return
+        if option.key == "preset":
+            _run_voice_preset_config(ui, config_dir, config)
+        elif option.key in {"stt", "tts"}:
+            _run_voice_nested_config(ui, config_dir, config, option.key)
+        elif option.key == "disable":
+            try:
+                update = prepare_voice_preset_update(config, provider="none")
+            except Exception as exc:
+                ui.print_panel(f"Voice update is invalid: {exc}", title="Configure", border_style="red")
+                continue
+            _apply_config_update(ui, config_dir, update)
+
+
+def _run_configure_launcher(config_dir: Path) -> int:
+    ui = TerminalUI()
+    while True:
+        overview = build_runtime_overview(config_dir)
+        option = ui.select_menu(
+            title="xAgent Configure",
+            subtitle=_launcher_overview_subtitle(overview),
+            options=[
+                MenuOption("search", "Search", "Change provider-native web search."),
+                MenuOption("voice", "Voice", "Enable or update STT/TTS providers."),
+                MenuOption("config_path", "Config Path", "Print the active config.yaml path."),
+                MenuOption("back", "Back", "Return to the main launcher."),
+            ],
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            ui.clear()
+            return 0
+        ui.clear()
+        if option.key == "search":
+            _run_search_config_launcher(ui, config_dir)
+        elif option.key == "voice":
+            _run_voice_config_launcher(ui, config_dir)
+        elif option.key == "config_path":
+            ui.print_panel(str(config_dir / BaseAgentConfig.CONFIG_FILENAME), title="Config Path")
+        ui.pause("Press Enter to return to Configure")
 
 
 def _print_skills_summary(config_dir: Path) -> int:
@@ -3917,13 +4243,11 @@ def _run_interactive_launcher() -> int:
     ui = TerminalUI()
 
     while True:
-        initialized = _runtime_is_initialized(config_dir)
+        overview = build_runtime_overview(config_dir)
+        initialized = overview.initialized
         option = ui.select_menu(
             title=f"xAgent {_xagent_version_text()}",
-            subtitle=(
-                f"Runtime: {config_dir}\n"
-                f"Status: {'ready' if initialized else 'setup required'}"
-            ),
+            subtitle=_launcher_overview_subtitle(overview),
             options=_launcher_options(initialized=initialized),
             footer="↑/↓ Move • Enter Select  •  q Exit",
         )
@@ -3981,6 +4305,9 @@ def _run_interactive_launcher() -> int:
             )
         elif option.key == "service":
             _run_service_launcher(config_dir)
+            continue
+        elif option.key == "configure":
+            _run_configure_launcher(config_dir)
             continue
         elif option.key == "inspect":
             _run_inspect_launcher(config_dir)

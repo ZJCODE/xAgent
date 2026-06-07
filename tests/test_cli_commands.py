@@ -39,6 +39,8 @@ from xagent.interfaces.cli import (
     handle_web,
     main,
 )
+from xagent.interfaces.config_editor import prepare_search_provider_update, write_config
+from xagent.interfaces.overview import STATUS_ERROR, build_runtime_overview
 from xagent.interfaces.processes import StartResult
 
 
@@ -335,7 +337,15 @@ class CLICommandTests(unittest.TestCase):
             self.config = {
                 "channels": {
                     "voice": {
-                        "api_key": "soniox-key",
+                        "provider": "soniox",
+                        "stt": {
+                            "provider": "soniox",
+                            "api_key": "soniox-key",
+                        },
+                        "tts": {
+                            "provider": "soniox",
+                            "api_key": "soniox-key",
+                        },
                     }
                 }
             }
@@ -620,22 +630,22 @@ class CLICommandTests(unittest.TestCase):
     def test_service_launcher_start_chooses_channel_before_starting(self):
         class FakeUI:
             def __init__(self):
-                self.service_choices = iter([
-                    SimpleNamespace(key="start"),
+                self.channel_choices = iter([
+                    SimpleNamespace(key="api", title="API"),
                     SimpleNamespace(key="back"),
                 ])
-                self.channel_choices = iter([SimpleNamespace(key="api")])
-                self.service_option_titles = []
                 self.channel_option_titles = []
+                self.action_choices = iter([SimpleNamespace(key="start")])
+                self.action_option_titles = []
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
                 if title == "xAgent Services":
-                    self.service_option_titles = [option.title for option in options]
-                    return next(self.service_choices)
-                if title == "Choose Channel":
                     self.channel_option_titles = [option.title for option in options]
                     return next(self.channel_choices)
+                if title == "xAgent Services / API":
+                    self.action_option_titles = [option.title for option in options]
+                    return next(self.action_choices)
                 raise AssertionError(f"Unexpected menu: {title}")
 
             def clear(self):
@@ -655,13 +665,140 @@ class CLICommandTests(unittest.TestCase):
                 exit_code = _run_service_launcher(Path("/tmp/xagent"))
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("Start", fake_ui.service_option_titles)
-        self.assertNotIn("Start API", fake_ui.service_option_titles)
         self.assertEqual(fake_ui.channel_option_titles[:3], ["API", "Feishu", "All"])
+        self.assertIn("Start", fake_ui.action_option_titles)
+        self.assertNotIn("Start API", fake_ui.action_option_titles)
         starter.assert_called_once()
         args = starter.call_args.args[0]
         self.assertEqual(args.channels, ["api"])
         self.assertEqual(args.config_dir, "/tmp/xagent")
+
+    def test_service_launcher_feishu_setup_runs_init_feishu(self):
+        class FakeUI:
+            def __init__(self):
+                self.channel_choices = iter([
+                    SimpleNamespace(key="feishu", title="Feishu"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.action_choices = iter([SimpleNamespace(key="setup")])
+                self.action_option_titles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title == "xAgent Services":
+                    return next(self.channel_choices)
+                if title == "xAgent Services / Feishu":
+                    self.action_option_titles = [option.title for option in options]
+                    return next(self.action_choices)
+                raise AssertionError(f"Unexpected menu: {title}")
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            fake_ui = FakeUI()
+
+            with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
+                with patch("xagent.interfaces.cli.handle_init_feishu", return_value=0) as init_feishu:
+                    exit_code = _run_service_launcher(Path(tmpdir))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_ui.action_option_titles[0], "Setup")
+        init_feishu.assert_called_once()
+        args = init_feishu.call_args.args[0]
+        self.assertEqual(args.config_dir, tmpdir)
+        self.assertFalse(args.force)
+
+    def test_service_launcher_feishu_resetup_uses_force(self):
+        class FakeUI:
+            def __init__(self):
+                self.channel_choices = iter([
+                    SimpleNamespace(key="feishu", title="Feishu"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.action_choices = iter([SimpleNamespace(key="setup")])
+                self.action_option_titles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title == "xAgent Services":
+                    return next(self.channel_choices)
+                if title == "xAgent Services / Feishu":
+                    self.action_option_titles = [option.title for option in options]
+                    return next(self.action_choices)
+                raise AssertionError(f"Unexpected menu: {title}")
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+            fake_ui = FakeUI()
+
+            with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
+                with patch("xagent.interfaces.cli.handle_init_feishu", return_value=0) as init_feishu:
+                    exit_code = _run_service_launcher(Path(tmpdir))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_ui.action_option_titles[0], "Resetup")
+        init_feishu.assert_called_once()
+        args = init_feishu.call_args.args[0]
+        self.assertEqual(args.config_dir, tmpdir)
+        self.assertTrue(args.force)
+
+    def test_runtime_overview_flags_search_missing_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_path = Path(tmpdir) / "config.yaml"
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            config["search"] = {"provider": "qwen"}
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+            overview = build_runtime_overview(Path(tmpdir))
+
+        search = next(item for item in overview.items if item.name == "Search")
+        self.assertEqual(search.status, STATUS_ERROR)
+        self.assertEqual(search.detail, "missing api_key")
+
+    def test_runtime_overview_shows_web_ui_url_when_running(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            with patch("xagent.interfaces.overview.running_pid", return_value=26807):
+                overview = build_runtime_overview(Path(tmpdir))
+
+        web_ui = next(item for item in overview.items if item.name == "Web UI")
+        self.assertEqual(web_ui.status, "ok")
+        self.assertEqual(web_ui.value, "running")
+        self.assertEqual(web_ui.detail, "http://127.0.0.1:8010  pid 26807")
+
+    def test_config_editor_updates_search_provider_with_validation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            root = Path(tmpdir)
+            config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+
+            update = prepare_search_provider_update(config, provider="qwen", api_key="qwen-key")
+            write_config(root, update.data)
+            saved = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["search"]["provider"], "qwen")
+        self.assertEqual(saved["search"]["api_key"], "qwen-key")
+        self.assertIn("search.provider", [change.path for change in update.changes])
 
     def test_interactive_launcher_resetup_runs_force_init(self):
         class FakeUI:
@@ -938,7 +1075,7 @@ class CLICommandTests(unittest.TestCase):
 
             with patch("builtins.input", return_value="cli_test") as input_mock:
                 with patch("xagent.interfaces.cli.getpass.getpass", return_value="secret") as getpass_mock:
-                    with patch("sys.stdout") as stdout:
+                    with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                         exit_code = handle_init_feishu(args)
 
             config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
@@ -953,7 +1090,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], False)
         self.assertNotIn("show_sender_ids", config["channels"]["feishu"])
         self.assertNotIn("runtime", config)
-        output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
+        output = stdout.getvalue()
         self.assertIn("xagent service start feishu", output)
 
     def test_init_feishu_wizard_selection_writes_runtime_options(self):
