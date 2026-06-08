@@ -79,7 +79,27 @@ def pid_is_running(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    if _pid_looks_defunct(pid):
+        return False
     return True
+
+
+def _pid_looks_defunct(pid: int) -> bool:
+    if os.name != "posix":
+        return False
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    if result.returncode != 0:
+        return False
+    state = "".join((result.stdout or "").split())
+    return state.startswith("Z")
 
 
 def running_pid(pid_path: Path) -> Optional[int]:

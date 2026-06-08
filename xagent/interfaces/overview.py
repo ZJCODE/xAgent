@@ -31,6 +31,23 @@ STATUS_ERROR = "error"
 STATUS_DISABLED = "disabled"
 
 
+def _api_key_detail() -> str:
+    return "API key"
+
+
+def _friendly_overview_error(message: str, *, fallback: str = "Check settings") -> str:
+    normalized = " ".join(str(message).split()).lower()
+    if "api key" in normalized or "api_key" in normalized:
+        return _api_key_detail()
+    if "provider is required" in normalized:
+        return "Provider"
+    return fallback
+
+
+def _api_service_target(config: dict[str, Any]) -> str:
+    return _api_service_url(config).removeprefix("http://")
+
+
 @dataclass(frozen=True)
 class OverviewItem:
     """One row in the launcher overview."""
@@ -93,7 +110,6 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
                 _service_item(config_dir, CHANNEL_API, api_config(config)),
                 _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config)),
                 _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config)),
-                _data_item(config_dir),
             )
         )
 
@@ -133,7 +149,7 @@ def _model_item(config: dict[str, Any]) -> OverviewItem:
     status = STATUS_ERROR if is_placeholder_api_key(api_key) else STATUS_OK
     detail = f"API {provider_model_api(provider)}"
     if status == STATUS_ERROR:
-        detail = "Set provider.api_key"
+        detail = _api_key_detail()
     return OverviewItem("Model", f"{provider_name} / {model}", status, detail)
 
 
@@ -149,11 +165,11 @@ def _search_item(config: dict[str, Any]) -> OverviewItem:
     except ValueError as exc:
         return OverviewItem("Search", "invalid", STATUS_ERROR, str(exc))
     if provider == "none":
-        return OverviewItem("Search", "not enabled", STATUS_DISABLED, "Set search.provider to enable web search")
+        return OverviewItem("Search", "not set", STATUS_DISABLED)
     api_key = str(search.get("api_key") or "").strip() if isinstance(search, dict) else ""
     if _feature_needs_key(config, provider) and is_placeholder_api_key(api_key):
-        return OverviewItem("Search", provider, STATUS_ERROR, "Set search.api_key")
-    detail = "Uses its own API key" if api_key and not is_placeholder_api_key(api_key) else "Uses the model provider API key"
+        return OverviewItem("Search", provider, STATUS_ERROR, _api_key_detail())
+    detail = "Own key" if api_key and not is_placeholder_api_key(api_key) else "Model key"
     return OverviewItem("Search", provider, STATUS_OK, detail)
 
 
@@ -161,30 +177,32 @@ def _image_item(config: dict[str, Any]) -> OverviewItem:
     image = config.get("image_generation") if isinstance(config.get("image_generation"), dict) else {}
     provider = str(image.get("provider") or "none").strip().lower() if isinstance(image, dict) else "none"
     if provider == "none":
-        return OverviewItem("Image", "not enabled", STATUS_DISABLED, "Set image_generation.provider to enable")
+        return OverviewItem("Image", "not set", STATUS_DISABLED)
     api_key = str(image.get("api_key") or "").strip() if isinstance(image, dict) else ""
     if _feature_needs_key(config, provider) and is_placeholder_api_key(api_key):
-        return OverviewItem("Image", provider, STATUS_ERROR, "Set image_generation.api_key")
-    detail = "Uses its own API key" if api_key and not is_placeholder_api_key(api_key) else "Uses the model provider API key"
+        return OverviewItem("Image", provider, STATUS_ERROR, _api_key_detail())
+    detail = "Own key" if api_key and not is_placeholder_api_key(api_key) else "Model key"
     return OverviewItem("Image", provider, STATUS_OK, detail)
 
 
 def _voice_item(config: dict[str, Any]) -> OverviewItem:
     raw_voice = voice_config(config)
     if not raw_voice:
-        return OverviewItem("Voice", "not enabled", STATUS_DISABLED, "Set channels.voice to enable voice mode")
+        return OverviewItem("Voice", "not set", STATUS_DISABLED)
     try:
         voice = VoiceChannelConfig.from_dict(raw_voice)
     except Exception as exc:
-        return OverviewItem("Voice", "invalid", STATUS_ERROR, str(exc))
+        return OverviewItem("Voice", "invalid", STATUS_ERROR, _friendly_overview_error(str(exc)))
     provider = voice.provider or "custom"
     value = provider
-    detail = f"STT {voice.stt.provider} / TTS {voice.tts.provider}"
+    detail = ""
+    if voice.stt.provider != voice.tts.provider or provider == "custom":
+        detail = f"{voice.stt.provider} / {voice.tts.provider}"
     try:
         voice.resolved_stt_api_key()
         voice.resolved_tts_api_key()
     except ValueError as exc:
-        return OverviewItem("Voice", value, STATUS_ERROR, str(exc))
+        return OverviewItem("Voice", value, STATUS_ERROR, _friendly_overview_error(str(exc), fallback="Setup"))
     return OverviewItem("Voice", value, STATUS_OK, detail)
 
 
@@ -201,22 +219,22 @@ def _api_service_url(config: dict[str, Any]) -> str:
 
 def _service_item(config_dir: Path, channel: str, config: dict[str, Any]) -> OverviewItem:
     if channel == CHANNEL_FEISHU and not (config.get("app_id") and config.get("app_secret")):
-        return OverviewItem("Feishu", "not set up", STATUS_DISABLED, "Set app_id and app_secret to enable")
+        return OverviewItem("Feishu", "not set", STATUS_DISABLED, "Setup")
     if channel == CHANNEL_WEIXIN and not config.get("account_id"):
-        return OverviewItem("Weixin", "not set up", STATUS_DISABLED, "Run channel weixin setup to enable")
+        return OverviewItem("Weixin", "not set", STATUS_DISABLED, "Setup")
     if channel == CHANNEL_API and config.get("enabled", True) is False:
-        return OverviewItem("Web UI", "not enabled", STATUS_DISABLED, "Set channels.api.enabled to true")
+        return OverviewItem("Web UI", "off", STATUS_DISABLED, "Resetup")
     paths = managed_paths(config_dir, channel)
     pid = running_pid(paths.pid_path)
     title = {CHANNEL_API: "Web UI", CHANNEL_FEISHU: "Feishu", CHANNEL_WEIXIN: "Weixin"}.get(channel, channel)
     if pid is None:
-        detail = "Configured but not running"
+        detail = ""
         if channel == CHANNEL_API:
-            detail = f"Open at {_api_service_url(config)} after launch"
-        return OverviewItem(title, "ready to start", STATUS_IDLE, detail)
+            detail = _api_service_target(config)
+        return OverviewItem(title, "stopped", STATUS_IDLE, detail)
     if channel == CHANNEL_API:
-        return OverviewItem(title, "running", STATUS_OK, f"Open {_api_service_url(config)}  pid {pid}")
-    return OverviewItem(title, "running", STATUS_OK, f"Process pid {pid}")
+        return OverviewItem(title, "running", STATUS_OK, f"{_api_service_target(config)} pid {pid}")
+    return OverviewItem(title, "running", STATUS_OK, f"pid {pid}")
 
 
 def _data_item(config_dir: Path) -> OverviewItem:

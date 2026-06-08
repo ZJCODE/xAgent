@@ -24,6 +24,7 @@ from xagent.interfaces.cli import (
     _format_cli_workspace_links,
     _launcher_channel_options,
     _launcher_help_content,
+    _launcher_overview_subtitle,
     _launcher_options,
     build_parser,
     collect_feishu_init_selection_terminal_ui,
@@ -714,11 +715,36 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(initial_options[0].title, "Setup")
         self.assertEqual(reset_options[0].title, "Resetup")
-        self.assertIn("force", reset_options[0].description.lower())
+        self.assertEqual(reset_options[0].description, "Review and update your current setup.")
         reset_titles = [option.title for option in reset_options]
         self.assertIn("Help", reset_titles)
         self.assertNotIn("Doctor", reset_titles)
         self.assertNotIn("Version", reset_titles)
+
+    def test_launcher_overview_subtitle_keeps_only_name_and_value(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+
+            subtitle = _launcher_overview_subtitle(build_runtime_overview(Path(tmpdir)))
+
+        self.assertNotIn("Config     valid", subtitle)
+        self.assertNotIn("Identity", subtitle)
+        self.assertIn("Model      openai / gpt-5.4-mini", subtitle)
+        self.assertIn("Web UI     stopped", subtitle)
+        self.assertNotIn("identity ready", subtitle)
+        self.assertNotIn("127.0.0.1:8010", subtitle)
+        self.assertNotIn("Data", subtitle)
+
+    def test_launcher_overview_subtitle_shows_running_channel_details_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+
+            with patch("xagent.interfaces.overview.running_pid", side_effect=[26807, 72069, None]):
+                subtitle = _launcher_overview_subtitle(build_runtime_overview(Path(tmpdir)))
+
+        self.assertIn("Web UI     running  127.0.0.1:8010 pid 26807", subtitle)
+        self.assertIn("Feishu     running  pid 72069", subtitle)
+        self.assertIn("Weixin     not set", subtitle)
 
     def test_launcher_channel_options_are_entry_points(self):
         options = _launcher_channel_options()
@@ -874,7 +900,7 @@ class CLICommandTests(unittest.TestCase):
 
         search = next(item for item in overview.items if item.name == "Search")
         self.assertEqual(search.status, STATUS_ERROR)
-        self.assertEqual(search.detail, "Set search.api_key")
+        self.assertEqual(search.detail, "API key")
 
     def test_runtime_overview_uses_friendly_idle_copy_for_stopped_web_ui(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -885,14 +911,14 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(overview.headline, "Ready")
         web_ui = next(item for item in overview.items if item.name == "Web UI")
         self.assertEqual(web_ui.status, "idle")
-        self.assertEqual(web_ui.value, "ready to start")
-        self.assertEqual(web_ui.detail, "Open at http://127.0.0.1:8010 after launch")
+        self.assertEqual(web_ui.value, "stopped")
+        self.assertEqual(web_ui.detail, "127.0.0.1:8010")
         image = next(item for item in overview.items if item.name == "Image")
-        self.assertEqual(image.value, "not enabled")
-        self.assertEqual(image.detail, "Set image_generation.provider to enable")
+        self.assertEqual(image.value, "not set")
+        self.assertEqual(image.detail, "")
         voice = next(item for item in overview.items if item.name == "Voice")
-        self.assertEqual(voice.value, "not enabled")
-        self.assertEqual(voice.detail, "Set channels.voice to enable voice mode")
+        self.assertEqual(voice.value, "not set")
+        self.assertEqual(voice.detail, "")
 
     def test_runtime_overview_shows_web_ui_url_when_running(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -903,7 +929,7 @@ class CLICommandTests(unittest.TestCase):
         web_ui = next(item for item in overview.items if item.name == "Web UI")
         self.assertEqual(web_ui.status, "ok")
         self.assertEqual(web_ui.value, "running")
-        self.assertEqual(web_ui.detail, "Open http://127.0.0.1:8010  pid 26807")
+        self.assertEqual(web_ui.detail, "127.0.0.1:8010 pid 26807")
 
     def test_config_editor_updates_search_provider_with_validation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1074,9 +1100,78 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(
             fake_ui.option_titles,
-            ["Model", "Search", "Voice", "Image Generation", "Feishu", "Weixin", "Observability", "Back"],
+            ["Model", "Search", "Voice", "Image", "Feishu", "Weixin", "Observability", "Back"],
         )
         observability_launcher.assert_called_once_with(fake_ui, config_dir)
+
+    def test_partial_update_launcher_disables_observability_for_incompatible_model_api(self):
+        class FakeUI:
+            def __init__(self):
+                self.options_by_key = {}
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title != "xAgent Resetup / Partial Update":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                self.options_by_key = {option.key: option for option in options}
+                return SimpleNamespace(key="back")
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+            config_path = config_dir / "config.yaml"
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            config["provider"] = {
+                "name": "anthropic",
+                "base_url": "https://api.anthropic.com",
+                "api_key": "anthropic-key",
+                "model": "claude-sonnet-4-20250514",
+            }
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+            _run_partial_update_launcher(fake_ui, config_dir)
+
+        self.assertTrue(fake_ui.options_by_key["observability"].disabled)
+
+    def test_observability_launcher_disables_disable_when_already_off(self):
+        class FakeUI:
+            def __init__(self):
+                self.options_by_key = {}
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title != "xAgent Resetup / Observability":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                self.options_by_key = {option.key: option for option in options}
+                return SimpleNamespace(key="back")
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+
+            from xagent.interfaces.cli import _run_observability_config_launcher
+
+            result = _run_observability_config_launcher(fake_ui, config_dir)
+
+        self.assertFalse(result)
+        self.assertTrue(fake_ui.options_by_key["disable"].disabled)
 
     def test_partial_update_launcher_skips_pause_when_submenu_returns_back(self):
         class FakeUI:
@@ -1250,9 +1345,109 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(
             fake_ui.option_titles,
-            ["Provider Mode", "Interruptions", "Wake", "Disable", "Back"],
+            ["Providers", "Interruptions", "Wake", "Disable", "Back"],
         )
         provider_mode_launcher.assert_called_once_with(fake_ui, config_dir, unittest.mock.ANY)
+
+    def test_voice_config_launcher_disables_dependent_actions_when_voice_not_enabled(self):
+        class FakeUI:
+            def __init__(self):
+                self.options_by_key = {}
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title != "xAgent Resetup / Voice":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                self.options_by_key = {option.key: option for option in options}
+                return SimpleNamespace(key="back")
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+
+            from xagent.interfaces.cli import _run_voice_config_launcher
+
+            _run_voice_config_launcher(fake_ui, config_dir)
+
+        self.assertFalse(fake_ui.options_by_key["provider_mode"].disabled)
+        self.assertTrue(fake_ui.options_by_key["interruptions"].disabled)
+        self.assertTrue(fake_ui.options_by_key["wake"].disabled)
+        self.assertTrue(fake_ui.options_by_key["disable"].disabled)
+
+    def test_voice_channel_launcher_shows_setup_when_voice_not_enabled(self):
+        class FakeUI:
+            def __init__(self):
+                self.options_by_key = {}
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title != "xAgent Channel / Voice":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                self.options_by_key = {option.key: option for option in options}
+                return SimpleNamespace(key="back")
+
+            def clear(self):
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+
+            from xagent.interfaces.cli import _run_voice_channel_launcher
+
+            _run_voice_channel_launcher(fake_ui, Path(tmpdir))
+
+        self.assertFalse(fake_ui.options_by_key["setup"].disabled)
+        self.assertTrue(fake_ui.options_by_key["start"].disabled)
+        self.assertFalse(fake_ui.options_by_key["devices"].disabled)
+
+    def test_voice_channel_launcher_setup_routes_to_provider_mode(self):
+        class FakeUI:
+            def __init__(self):
+                self.choices = iter([
+                    SimpleNamespace(key="setup"),
+                    SimpleNamespace(key="back"),
+                ])
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, options, footer
+                if title != "xAgent Channel / Voice":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                return next(self.choices)
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+
+            from xagent.interfaces.cli import _run_voice_channel_launcher
+
+            with patch("xagent.interfaces.cli._run_voice_provider_mode_launcher") as provider_mode_launcher:
+                with patch("xagent.interfaces.cli.handle_voice") as handle_voice:
+                    _run_voice_channel_launcher(fake_ui, config_dir)
+
+        provider_mode_launcher.assert_called_once_with(fake_ui, config_dir, unittest.mock.ANY)
+        handle_voice.assert_not_called()
 
     def test_voice_provider_mode_launcher_offers_single_and_custom_paths(self):
         class FakeUI:
@@ -1284,6 +1479,89 @@ class CLICommandTests(unittest.TestCase):
             _run_voice_provider_mode_launcher(fake_ui, config_dir, config)
 
         self.assertEqual(fake_ui.option_titles, ["Single Provider", "Custom Providers", "Back"])
+
+    def test_voice_nested_config_prompts_for_placeholder_api_key_when_provider_is_reselected(self):
+        class FakeUI:
+            def __init__(self):
+                self.ask_text_calls = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, options, footer
+                if title != "xAgent Resetup / Voice STT Provider":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                return SimpleNamespace(key="qwen")
+
+            def ask_text(self, label, *, default=None, secret=False, subtitle=""):
+                del default
+                self.ask_text_calls.append((label, secret, subtitle))
+                return "fresh-qwen-key"
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+            config = yaml.safe_load((config_dir / "config.yaml").read_text(encoding="utf-8"))
+            config["channels"]["voice"] = {
+                "provider": "custom",
+                "stt": {
+                    "provider": "qwen",
+                    "api_key": "your_qwen_api_key_here",
+                    "model": "qwen3-asr-flash-realtime",
+                },
+                "tts": {
+                    "provider": "soniox",
+                    "api_key": "soniox-key",
+                    "model": "tts-rt-v1",
+                    "voice": "Owen",
+                },
+            }
+
+            from xagent.interfaces.cli import _run_voice_nested_config
+
+            with patch("xagent.interfaces.cli._apply_config_update", return_value=True) as apply_update:
+                _run_voice_nested_config(fake_ui, config_dir, config, "stt")
+
+        self.assertEqual(
+            fake_ui.ask_text_calls,
+            [("Qwen API key", True, "Qwen voice STT needs its own API key for the current model provider.")],
+        )
+        apply_update.assert_called_once()
+        update = apply_update.call_args.args[2]
+        self.assertEqual(update.data["channels"]["voice"]["stt"]["api_key"], "fresh-qwen-key")
+
+    def test_managed_channel_actions_disable_start_until_channel_is_configured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+
+            from xagent.interfaces.cli import _managed_channel_actions
+
+            actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "feishu")}
+
+        self.assertFalse(actions["setup"].disabled)
+        self.assertTrue(actions["start"].disabled)
+        self.assertTrue(actions["restart"].disabled)
+        self.assertFalse(actions["status"].disabled)
+
+    def test_managed_channel_actions_disable_web_start_when_web_ui_is_off(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_path = Path(tmpdir) / "config.yaml"
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            config["channels"]["api"]["enabled"] = False
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+            from xagent.interfaces.cli import _managed_channel_actions
+
+            actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "api")}
+
+        self.assertTrue(actions["open"].disabled)
+        self.assertTrue(actions["start"].disabled)
+        self.assertTrue(actions["restart"].disabled)
+        self.assertFalse(actions["logs"].disabled)
 
     def test_interactive_launcher_resetup_opens_resetup_menu(self):
         class FakeUI:
@@ -2093,6 +2371,28 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(stopper.call_count, 1)
         self.assertEqual(starter.call_count, 1)
         self.assertEqual(stopper.call_args.args[0], Path(tmpdir).resolve() / "run" / "api.pid")
+
+    def test_restart_skips_start_when_channel_does_not_stop(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                channels=["api"],
+                host=None,
+                port=None,
+                open_browser=False,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+
+            with patch("xagent.interfaces.cli.stop_managed_process", return_value=(False, "timed out")) as stopper:
+                with patch("xagent.interfaces.cli.start_background") as starter:
+                    exit_code = handle_restart(args)
+
+        self.assertEqual(exit_code, 1)
+        stopper.assert_called_once()
+        starter.assert_not_called()
 
     def test_status_reports_running_process(self):
         with tempfile.TemporaryDirectory() as tmpdir:

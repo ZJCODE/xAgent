@@ -2812,22 +2812,28 @@ def _start_background_channels(args: argparse.Namespace, channels: list[str]) ->
     ok = True
     config_dir = _runtime_dir(args)
     for channel in channels:
-        paths = managed_paths(config_dir, channel)
-        result = start_background(
-            _channel_command(channel, args),
-            pid_path=paths.pid_path,
-            log_path=paths.log_path,
-        )
-        if result.ok:
-            print(f"Started {channel} channel in background (pid={result.pid}).")
-            print(f"Logs: {paths.log_path}")
-            continue
-
-        ok = False
-        print(f"Failed to start {channel} channel: {result.error}")
-        if result.recent_output:
-            print(result.recent_output)
+        if not _start_background_channel(args, channel=channel, config_dir=config_dir):
+            ok = False
     return 0 if ok else 1
+
+
+def _start_background_channel(args: argparse.Namespace, *, channel: str, config_dir: Path | None = None) -> bool:
+    runtime_dir = config_dir or _runtime_dir(args)
+    paths = managed_paths(runtime_dir, channel)
+    result = start_background(
+        _channel_command(channel, args),
+        pid_path=paths.pid_path,
+        log_path=paths.log_path,
+    )
+    if result.ok:
+        print(f"Started {channel} channel in background (pid={result.pid}).")
+        print(f"Logs: {paths.log_path}")
+        return True
+
+    print(f"Failed to start {channel} channel: {result.error}")
+    if result.recent_output:
+        print(result.recent_output)
+    return False
 
 
 def handle_start(args: argparse.Namespace) -> int:
@@ -2861,12 +2867,23 @@ def handle_restart(args: argparse.Namespace) -> int:
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
+    ok = True
+    config_dir = _runtime_dir(args)
     restart_values = dict(vars(args))
-    restart_values["channels"] = channels
-    restart_args = argparse.Namespace(**restart_values)
-    stop_code = handle_stop(restart_args)
-    start_code = _start_background_channels(restart_args, channels)
-    return 0 if stop_code == 0 and start_code == 0 else 1
+
+    for channel in channels:
+        paths = managed_paths(config_dir, channel)
+        stopped, message = stop_managed_process(paths.pid_path)
+        print(f"{channel}: {message}")
+        if not stopped:
+            ok = False
+            continue
+        restart_values["channels"] = [channel]
+        restart_args = argparse.Namespace(**restart_values)
+        if not _start_background_channel(restart_args, channel=channel, config_dir=config_dir):
+            ok = False
+
+    return 0 if ok else 1
 
 
 def handle_status(args: argparse.Namespace) -> int:
@@ -3830,7 +3847,7 @@ def _launcher_args(**kwargs: Any) -> argparse.Namespace:
 def _launcher_options(*, initialized: bool) -> list[MenuOption]:
     setup_title = "Resetup" if initialized else "Setup"
     setup_description = (
-        "Re-run setup with --force; runtime data is kept unless you choose to clear it."
+        "Review and update your current setup."
         if initialized
         else "Create config, identity, workspace, memory, and tasks."
     )
@@ -3896,29 +3913,143 @@ def _launcher_channel_options() -> list[MenuOption]:
     ]
 
 
-def _feishu_channel_is_configured(config_dir: Path) -> bool:
+def _launcher_config_snapshot(config_dir: Path) -> dict[str, Any]:
     try:
-        config = load_config_file(config_dir)
+        return load_config_file(config_dir)
     except (ChannelSelectionError, OSError, yaml.YAMLError):
-        return False
+        return {}
+
+
+def _feishu_channel_is_configured(config_dir: Path) -> bool:
+    config = _launcher_config_snapshot(config_dir)
     data = feishu_config(config)
     return bool(data.get("app_id") and data.get("app_secret"))
 
 
 def _weixin_channel_is_configured(config_dir: Path) -> bool:
-    try:
-        config = load_config_file(config_dir)
-    except (ChannelSelectionError, OSError, yaml.YAMLError):
-        return False
+    config = _launcher_config_snapshot(config_dir)
     data = weixin_config(config)
     return bool(data.get("account_id"))
 
 
+def _api_channel_is_enabled(config_dir: Path) -> bool:
+    config = _launcher_config_snapshot(config_dir)
+    if not config:
+        return False
+    data = api_config(config)
+    return bool(data.get("enabled", True))
+
+
+def _voice_is_configured(config: dict[str, Any]) -> bool:
+    return bool(voice_config(config))
+
+
+def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
+    voice_enabled = _voice_is_configured(config)
+    options: list[MenuOption] = []
+    if not voice_enabled:
+        options.append(MenuOption("setup", "Setup", "Configure voice mode."))
+    start_description = (
+        "Start microphone mode with the configured runtime."
+        if voice_enabled
+        else "Set up voice first."
+    )
+    options.extend([
+        MenuOption("start", "Start Voice", start_description, disabled=not voice_enabled),
+        MenuOption("devices", "List Devices", "Print available local audio input/output devices."),
+        MenuOption("back", "Back", "Return to Channel."),
+    ])
+    return options
+
+
+def _voice_resetup_options(config: dict[str, Any]) -> list[MenuOption]:
+    voice_enabled = _voice_is_configured(config)
+    interruptions_description = (
+        "Enable or disable barge-in interruptions."
+        if voice_enabled
+        else "Enable voice first to update barge-in interruptions."
+    )
+    wake_description = (
+        "Update wake mode, phrases, match, and idle timeout."
+        if voice_enabled
+        else "Enable voice first to update wake mode and phrases."
+    )
+    disable_description = (
+        "Remove channels.voice from config."
+        if voice_enabled
+        else "Voice is already disabled."
+    )
+    return [
+        MenuOption(
+            "provider_mode",
+            "Providers",
+            "Use one provider for both STT and TTS, or configure separately.",
+        ),
+        MenuOption("interruptions", "Interruptions", interruptions_description, disabled=not voice_enabled),
+        MenuOption("wake", "Wake", wake_description, disabled=not voice_enabled),
+        MenuOption("disable", "Disable", disable_description, disabled=not voice_enabled),
+        MenuOption("back", "Back", "Return to Partial Update."),
+    ]
+
+
+def _observability_supported(config: dict[str, Any]) -> bool:
+    return model_api_uses_openai_client(_current_model_api(config))
+
+
+def _observability_resetup_options(config: dict[str, Any]) -> list[MenuOption]:
+    enabled = bool(_current_observability(config).get("enabled", False))
+    disable_description = (
+        "Turn off Langfuse without deleting saved keys."
+        if enabled
+        else "Langfuse is already disabled."
+    )
+    return [
+        MenuOption("enable", "Enable / Update", "Enable Langfuse and update its credentials."),
+        MenuOption("disable", "Disable", disable_description, disabled=not enabled),
+        MenuOption("back", "Back", "Return to Partial Update."),
+    ]
+
+
+def _partial_update_options(config_dir: Path) -> list[MenuOption]:
+    config = _launcher_config_snapshot(config_dir)
+    observability_available = _observability_supported(config)
+    observability_description = (
+        "Enable or update Langfuse observability for OpenAI-compatible model APIs."
+        if observability_available
+        else "Requires an OpenAI-compatible model API. Update Model first."
+    )
+    return [
+        MenuOption("model", "Model", "Update the main model provider, model, API key, or custom endpoint."),
+        MenuOption("search", "Search", "Change provider-native web search."),
+        MenuOption("voice", "Voice", "Enable or update STT/TTS, interruptions, and wake settings."),
+        MenuOption("image", "Image", "Enable or update image generation provider settings."),
+        MenuOption("feishu", "Feishu", "Re-run Feishu setup and replace channels.feishu."),
+        MenuOption("weixin", "Weixin", "Re-run Weixin QR setup and replace channels.weixin."),
+        MenuOption(
+            "observability",
+            "Observability",
+            observability_description,
+            disabled=not observability_available,
+        ),
+        MenuOption("back", "Back", "Return to Resetup."),
+    ]
+
+
 def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]:
     actions: list[MenuOption] = []
+    channel_ready = True
+    unavailable_description = "Complete setup before starting this channel."
     if channel == CHANNEL_API:
-        actions.append(MenuOption("open", "Open Web UI", "Run the API channel in the foreground and open the browser."))
+        channel_ready = _api_channel_is_enabled(config_dir)
+        open_description = (
+            "Run the API channel in the foreground and open the browser."
+            if channel_ready
+            else "Enable Web UI in Resetup before starting this channel."
+        )
+        actions.append(MenuOption("open", "Open Web UI", open_description, disabled=not channel_ready))
     if channel == CHANNEL_FEISHU and not _feishu_channel_is_configured(config_dir):
+        channel_ready = False
+        unavailable_description = "Configure channels.feishu before starting this channel."
         actions.append(
             MenuOption(
                 "setup",
@@ -3927,6 +4058,8 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
             )
         )
     if channel == CHANNEL_WEIXIN and not _weixin_channel_is_configured(config_dir):
+        channel_ready = False
+        unavailable_description = "Configure channels.weixin before starting this channel."
         actions.append(
             MenuOption(
                 "setup",
@@ -3935,9 +4068,19 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
             )
         )
     actions.extend([
-        MenuOption("start", "Start Background", "Start this channel in the background."),
+        MenuOption(
+            "start",
+            "Start Background",
+            "Start this channel in the background." if channel_ready else unavailable_description,
+            disabled=not channel_ready,
+        ),
         MenuOption("stop", "Stop", "Stop the background channel."),
-        MenuOption("restart", "Restart", "Restart the background channel."),
+        MenuOption(
+            "restart",
+            "Restart",
+            "Restart the background channel." if channel_ready else unavailable_description,
+            disabled=not channel_ready,
+        ),
         MenuOption("status", "Status", "Show PID and log paths."),
         MenuOption("logs", "Logs", "Print the latest log output."),
         MenuOption("back", "Back", "Return to Channel."),
@@ -3992,29 +4135,19 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     return content
 
 
-def _overview_status_label(status: str) -> str:
-    labels = {
-        STATUS_OK: "ok",
-        STATUS_IDLE: "available",
-        STATUS_WARNING: "warning",
-        STATUS_ERROR: "error",
-        STATUS_DISABLED: "off",
-    }
-    return labels.get(status, status)
-
-
 def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
     lines = [
         f"Runtime: {overview.config_dir}",
         f"Status: {overview.headline}",
     ]
-    if overview.items:
+    visible_items = [item for item in overview.items if item.name not in {"Config", "Identity", "Data"}]
+    if visible_items:
         lines.append("")
-    for item in overview.items:
-        detail = f"  {item.detail}" if item.detail else ""
-        lines.append(
-            f"{item.name:<10} {item.value:<28} {_overview_status_label(item.status)}{detail}"
-        )
+    for item in visible_items:
+        line = f"{item.name:<10} {item.value}"
+        if item.name in {"Web UI", "Feishu", "Weixin"} and item.value == "running" and item.detail:
+            line += f"  {item.detail}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -4108,20 +4241,20 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
 
 def _run_voice_channel_launcher(ui: TerminalUI, config_dir: Path) -> None:
     while True:
+        config = _launcher_config_snapshot(config_dir)
         option = ui.select_menu(
             title="xAgent Channel / Voice",
             subtitle=f"Runtime: {config_dir}",
-            options=[
-                MenuOption("start", "Start Voice", "Start microphone mode with the configured runtime."),
-                MenuOption("devices", "List Devices", "Print available local audio input/output devices."),
-                MenuOption("back", "Back", "Return to Channel."),
-            ],
+            options=_voice_channel_options(config),
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
         if option is None or option.key == "back":
             ui.clear()
             return
         ui.clear()
+        if option.key == "setup":
+            _run_voice_provider_mode_launcher(ui, config_dir, config)
+            continue
         exit_code = handle_voice(
             _launcher_args(
                 config_dir=str(config_dir),
@@ -4219,6 +4352,14 @@ def _current_voice_nested_provider(config: dict[str, Any], section: str) -> str:
             return provider
     provider = str(voice.get("provider") or "").strip().lower() if isinstance(voice, dict) else ""
     return provider if provider in VOICE_NESTED_PROVIDERS else VOICE_NESTED_PROVIDERS[0]
+
+
+def _current_voice_nested_api_key(config: dict[str, Any], section: str) -> str:
+    voice = voice_config(config)
+    nested = voice.get(section) if isinstance(voice, dict) else None
+    if not isinstance(nested, dict):
+        return ""
+    return str(nested.get("api_key") or "").strip()
 
 
 def _current_model_provider(config: dict[str, Any]) -> str:
@@ -4569,11 +4710,7 @@ def _run_observability_config_launcher(ui: TerminalUI, config_dir: Path) -> bool
     choice = ui.select_menu(
         title="xAgent Resetup / Observability",
         subtitle=f"Status: {'enabled' if enabled else 'not enabled'}\nProvider: {provider}\nBase URL: {current_base_url}",
-        options=[
-            MenuOption("enable", "Enable / Update", "Enable Langfuse and update its credentials."),
-            MenuOption("disable", "Disable", "Turn off Langfuse without deleting saved keys."),
-            MenuOption("back", "Back", "Return to Partial Update."),
-        ],
+        options=_observability_resetup_options(config),
         footer="↑/↓ Move • Enter Select  •  q Back",
     )
     if choice is None or choice.key == "back":
@@ -4716,7 +4853,8 @@ def _run_voice_nested_config(ui: TerminalUI, config_dir: Path, config: dict[str,
     if choice is None or choice.key == "back":
         return
     api_key = None
-    if choice.key != current:
+    current_key = _current_voice_nested_api_key(config, section)
+    if choice.key != current or is_placeholder_api_key(current_key):
         api_key = _required_feature_api_key(ui, provider=choice.key, feature=f"voice {section.upper()}")
         if api_key is None:
             return
@@ -4833,13 +4971,7 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
         option = ui.select_menu(
             title="xAgent Resetup / Voice",
             subtitle=_voice_summary_subtitle(config),
-            options=[
-                MenuOption("provider_mode", "Provider Mode", "Use one provider for both STT and TTS, or configure separately."),
-                MenuOption("interruptions", "Interruptions", "Enable or disable barge-in interruptions."),
-                MenuOption("wake", "Wake", "Update wake mode, phrases, match, and idle timeout."),
-                MenuOption("disable", "Disable", "Remove channels.voice from config."),
-                MenuOption("back", "Back", "Return to Partial Update."),
-            ],
+            options=_voice_resetup_options(config),
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
         if option is None or option.key == "back":
@@ -4866,20 +4998,7 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
         option = ui.select_menu(
             title="xAgent Resetup / Partial Update",
             subtitle=_launcher_overview_subtitle(overview),
-            options=[
-                MenuOption("model", "Model", "Update the main model provider, model, API key, or custom endpoint."),
-                MenuOption("search", "Search", "Change provider-native web search."),
-                MenuOption("voice", "Voice", "Enable or update STT/TTS, interruptions, and wake settings."),
-                MenuOption("image", "Image Generation", "Enable or update image generation provider settings."),
-                MenuOption("feishu", "Feishu", "Re-run Feishu setup and replace channels.feishu."),
-                MenuOption("weixin", "Weixin", "Re-run Weixin QR setup and replace channels.weixin."),
-                MenuOption(
-                    "observability",
-                    "Observability",
-                    "Enable or update Langfuse observability for OpenAI-compatible model APIs.",
-                ),
-                MenuOption("back", "Back", "Return to Resetup."),
-            ],
+            options=_partial_update_options(config_dir),
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
         if option is None or option.key == "back":
@@ -4937,7 +5056,7 @@ def _run_resetup_launcher(config_dir: Path) -> int:
             title="xAgent Resetup",
             subtitle=_launcher_overview_subtitle(overview),
             options=[
-                MenuOption("full", "Full Resetup", "Re-run the full setup wizard with --force."),
+                MenuOption("full", "Full Resetup", "Run the full setup flow again."),
                 MenuOption("partial", "Partial Update", "Update one configured feature without editing YAML."),
                 MenuOption("back", "Back", "Return to the main launcher."),
             ],
