@@ -577,7 +577,7 @@ CUSTOM_MODEL_OPTION = "Custom"
 DEFAULT_MESSAGE_LIST_COUNT = 5
 MESSAGE_LIST_COUNT_CHOICES = (2, 5, 10)
 DEFAULT_MEMORY_LIST_DAYS = 7
-MEMORY_LIST_DAY_CHOICES = (1, 3, 7, 14)
+MEMORY_LIST_DAY_CHOICES = (1, 3, 7)
 
 OPENAI_MODELS = (
     "gpt-5.4",
@@ -1171,7 +1171,7 @@ def _prompt_memory_list_days_terminal_ui(ui: TerminalUI) -> Optional[int]:
             for days in MEMORY_LIST_DAY_CHOICES
         ]
         + [MenuOption("custom", "Custom", "Enter a custom number of days.")],
-        default_index=2,
+        default_index=1,
     )
     if choice is None:
         return None
