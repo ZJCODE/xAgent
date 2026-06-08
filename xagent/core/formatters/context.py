@@ -47,7 +47,7 @@ def format_room_context_body(entries: Iterable[RoomContextEntry]) -> str:
 
 def format_room_context_entry(entry: RoomContextEntry) -> Optional[str]:
     """Render a single structured room-context entry."""
-    speaker = "you" if entry.is_self else sanitize_room_context_field(entry.speaker_label)
+    speaker = "ME" if entry.is_self else sanitize_room_context_field(entry.speaker_label)
     text = " ".join((entry.text or "").split())
     if not speaker or not text:
         return None

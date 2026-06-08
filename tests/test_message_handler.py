@@ -450,7 +450,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIsInstance(transcript_message["content"], str)
         self.assertIn("[speaker=alice][timestamp=", transcript_message["content"])
         self.assertIn("First answer", transcript_message["content"])
-        self.assertIn("[speaker=you][timestamp=", transcript_message["content"])
+        self.assertIn("[speaker=ME][timestamp=", transcript_message["content"])
         self.assertIn("[speaker=bob][timestamp=", transcript_message["content"])
         self.assertNotIn("Tool output preview", transcript_message["content"])
         self.assertIn("what bob most recently said", transcript_message["content"])

@@ -30,7 +30,7 @@ class RoomContextFormatterTests(unittest.TestCase):
             "room_name: Team Sync\n"
             "room_id: room-1\n\n"
             "Alice 2024-01-02 09:30: Can you review this?\n"
-            "you 2024-01-02 09:31: I can help with that\n"
+            "ME 2024-01-02 09:31: I can help with that\n"
             "[/room context]",
         )
 

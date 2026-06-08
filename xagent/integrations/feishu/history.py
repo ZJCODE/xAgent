@@ -440,7 +440,7 @@ def _build_room_context_entries(
         if not text.strip():
             continue
         is_self = record.sender_id in bot_ids or record.sender_name in bot_ids
-        speaker_label = "you"
+        speaker_label = "ME"
         if not is_self:
             speaker_label = format_sender_label(
                 record.sender_name,

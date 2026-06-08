@@ -84,7 +84,8 @@ TARGET JOURNAL DATE: {journal_date}
 
 Source meaning:
 - The transcript is my experience stream: direct conversations, my replies, observations, overheard speech, notifications, reminders, and other received context.
-- Speakers named "agent", "assistant", or "AI" are me; rewrite them as what I did, said, or noticed.
+- Speakers named "ME", "agent", "assistant", or "AI" are me; rewrite them as what I did, said, or noticed.
+- First-person words ("I", "me", "my", "我") inside another speaker's line belong to that speaker, not to me; never adopt another person's "I" as my own.
 
 Writing rules:
 - Use "I" and a natural, restrained diary tone.

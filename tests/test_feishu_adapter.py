@@ -1911,7 +1911,7 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
             bot_open_id="ou_bot",
         )
 
-        self.assertEqual(text, f"you {format_feishu_timestamp(1)}: previous answer")
+        self.assertEqual(text, f"ME {format_feishu_timestamp(1)}: previous answer")
 
     def test_format_room_context_wraps_group_history(self):
         from xagent.integrations.feishu.history import FeishuMessageRecord, format_feishu_timestamp, format_room_context
@@ -1962,7 +1962,7 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
             bot_app_id="cli_aa8be4ff193b9cdd",
         )
 
-        self.assertEqual(text, f"you {format_feishu_timestamp(1)}: hey")
+        self.assertEqual(text, f"ME {format_feishu_timestamp(1)}: hey")
 
     def test_format_group_history_marks_bot_app_id_name_as_you(self):
         from xagent.integrations.feishu.history import FeishuMessageRecord, format_feishu_timestamp, format_group_history
@@ -1972,7 +1972,7 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
             bot_app_id="cli_aa8be4ff193b9cdd",
         )
 
-        self.assertEqual(text, f"you {format_feishu_timestamp(1)}: where")
+        self.assertEqual(text, f"ME {format_feishu_timestamp(1)}: where")
 
 
 if __name__ == "__main__":

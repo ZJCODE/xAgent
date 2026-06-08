@@ -578,7 +578,7 @@ class MessageHandler:
     @staticmethod
     def _format_transcript_speaker(message: Message) -> str:
         if message.role == RoleType.ASSISTANT:
-            return "you"
+            return "ME"
         return message.sender_id or message.role.value
 
     @staticmethod
