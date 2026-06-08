@@ -11,7 +11,6 @@ import signal
 import subprocess
 import sys
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Tuple
@@ -169,7 +168,7 @@ class AgentCLI(BaseAgentRunner):
             stream = not (logging.getLogger().level <= logging.INFO)
 
         verbose_mode = logging.getLogger().level <= logging.INFO
-        user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
+        user_id = user_id or _default_cli_user_id()
         await self._chat_interactive_terminal_ui(
             user_id=user_id,
             stream=stream,
@@ -284,7 +283,7 @@ class AgentCLI(BaseAgentRunner):
         user_id: Optional[str] = None,
         memory: bool = True,
     ):
-        user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
+        user_id = user_id or _default_cli_user_id()
         response = await self.agent(
             user_message=message,
             user_id=user_id,
@@ -305,7 +304,7 @@ class AgentCLI(BaseAgentRunner):
         stream: bool = False,
         memory: bool = True,
     ) -> None:
-        user_id = user_id or f"cli_user_{uuid.uuid4().hex[:8]}"
+        user_id = user_id or _default_cli_user_id()
         await self._print_chat_events(
             user_message=message,
             user_id=user_id,
@@ -2807,8 +2806,8 @@ def collect_feishu_init_selection_terminal_ui(
         if interactive:
             wizard_ui.record("App Access", "Use existing App ID / App Secret")
     elif interactive:
-        choice = wizard_ui.select(
-            label="App Access",
+        choice = wizard_ui.select_menu(
+            title="App Access",
             subtitle="Choose how xAgent should get the Feishu credentials.",
             options=[
                 MenuOption(
@@ -2821,12 +2820,18 @@ def collect_feishu_init_selection_terminal_ui(
                     "Use existing App ID / App Secret",
                     "Paste credentials from an app you already created in the Feishu developer console.",
                 ),
+                MenuOption(
+                    "back",
+                    "Back",
+                    "Cancel Feishu setup and return.",
+                ),
             ],
-            default_index=0,
+            footer="↑/↓ Move • Enter Select  •  q Back",
         )
-        if choice is None:
+        if choice is None or choice.key == "back":
             raise KeyboardInterrupt()
         credential_mode = choice.key
+        wizard_ui.record("App Access", choice.title)
     else:
         credential_mode = "one_click"
 
@@ -3795,6 +3800,10 @@ def _current_voice_provider(config: dict[str, Any]) -> str:
     return str(voice.get("provider") or "custom").strip().lower()
 
 
+def _voice_provider_mode_label(config: dict[str, Any]) -> str:
+    return "Custom Providers" if _current_voice_provider(config) == "custom" else "Single Provider"
+
+
 def _current_voice_nested_provider(config: dict[str, Any], section: str) -> str:
     voice = voice_config(config)
     nested = voice.get(section) if isinstance(voice, dict) else None
@@ -3860,6 +3869,48 @@ def _phrase_list(raw_value: str) -> list[str]:
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
+def _phrase_summary(value: Any) -> str:
+    if not isinstance(value, (list, tuple)):
+        return "(none)"
+    items = [str(item).strip() for item in value if str(item).strip()]
+    return ", ".join(items) if items else "(none)"
+
+
+def _voice_wake_subtitle(wake: dict[str, Any]) -> str:
+    return (
+        f"Enabled: {bool(wake.get('enabled', False))}\n"
+        f"Match: {wake.get('match_mode', 'prefix')}\n"
+        f"Idle timeout: {wake.get('idle_timeout_seconds', 60)}s\n"
+        f"Wake phrases: {_phrase_summary(wake.get('wake_phrases'))}\n"
+        f"Exit phrases: {_phrase_summary(wake.get('exit_phrases'))}"
+    )
+
+
+def _voice_summary_subtitle(config: dict[str, Any]) -> str:
+    mode = _voice_provider_mode_label(config)
+    if mode == "Custom Providers":
+        voice = voice_config(config)
+        stt_provider = _current_voice_nested_provider(config, "stt") if voice else "none"
+        tts_provider = _current_voice_nested_provider(config, "tts") if voice else "none"
+        return f"Provider mode: {mode}\nSTT: {stt_provider}\nTTS: {tts_provider}"
+    return f"Provider mode: {mode}\nProvider: {_current_voice_provider(config)}"
+
+
+def _existing_voice_provider_api_key(config: dict[str, Any], provider: str) -> Optional[str]:
+    voice = voice_config(config)
+    if not voice:
+        return None
+    for section in ("stt", "tts"):
+        nested = voice.get(section)
+        if not isinstance(nested, dict):
+            continue
+        nested_provider = str(nested.get("provider") or voice.get("provider") or "").strip().lower()
+        api_key = str(nested.get("api_key") or "").strip()
+        if nested_provider == provider and api_key and not is_placeholder_api_key(api_key):
+            return api_key
+    return None
+
+
 def _feature_api_key_missing(config: dict[str, Any], section: str) -> bool:
     feature = config.get(section)
     if not isinstance(feature, dict):
@@ -3878,6 +3929,10 @@ def _provider_option_descriptions(kind: str) -> dict[str, str]:
         "soniox": "Use Soniox realtime voice.",
         "custom": "Choose STT and TTS providers separately.",
     }
+
+
+def _default_cli_user_id() -> str:
+    return "cli_user"
 
 
 def _config_update_content(update: ConfigUpdate) -> Text:
@@ -3921,12 +3976,12 @@ def _required_feature_api_key(ui: TerminalUI, *, provider: str, feature: str) ->
     return value
 
 
-def _run_search_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+def _run_search_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
     try:
         config = load_config(config_dir)
     except Exception as exc:
         ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
-        return
+        return True
     current = _current_search_provider(config)
     options = _menu_option_rows(
         SEARCH_PROVIDERS + ("back",),
@@ -3939,28 +3994,28 @@ def _run_search_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
         footer="↑/↓ Move • Enter Select  •  q Back",
     )
     if choice is None or choice.key == "back":
-        return
+        return False
     api_key = None
     if provider_needs_feature_key(config, choice.key):
         current_key = str((config.get("search") or {}).get("api_key") or "") if isinstance(config.get("search"), dict) else ""
         if choice.key != current or is_placeholder_api_key(current_key):
             api_key = _required_feature_api_key(ui, provider=choice.key, feature="search")
             if api_key is None:
-                return
+                return True
     try:
         update = prepare_search_provider_update(config, provider=choice.key, api_key=api_key)
     except Exception as exc:
         ui.print_panel(f"Search update is invalid: {exc}", title="Resetup", border_style="red")
-        return
-    _apply_config_update(ui, config_dir, update)
+        return True
+    return _apply_config_update(ui, config_dir, update)
 
 
-def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
     try:
         config = load_config(config_dir)
     except Exception as exc:
         ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
-        return
+        return True
 
     current_provider = _current_model_provider(config)
     provider_choice = ui.select_menu(
@@ -3970,7 +4025,7 @@ def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
         footer="↑/↓ Move • Enter Select  •  q Back",
     )
     if provider_choice is None or provider_choice.key == "back":
-        return
+        return False
     provider = str(provider_choice.key)
     provider_config = config.get("provider") if isinstance(config.get("provider"), dict) else {}
     current_model = str(provider_config.get("model") or "").strip()
@@ -3986,26 +4041,31 @@ def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
         if api_choice is None or api_choice.key == "back":
-            return
+            return False
         model_api = str(api_choice.key)
         default_base_url = str(provider_config.get("base_url") or provider_base_url(PROVIDER_CUSTOM, model_api))
+        ui.clear()
         base_url = ui.ask_text("Custom provider base URL", default=default_base_url).strip() or default_base_url
         supports_vision = ui.confirm(
             "Does this custom provider support image URL input?",
             default=bool(provider_config.get("supports_vision", False)),
         )
         if supports_vision is None:
-            return
+            return False
         model = ui.ask_text("Model", default=current_model or MODEL_PLACEHOLDER).strip() or MODEL_PLACEHOLDER
     else:
         model_options = _model_options_for_provider(provider)
-        model = _terminal_select_model_option(
-            ui,
-            "Model",
-            model_options,
-            default_index=_default_model_index(model_options, current_model),
-            subtitle=f"Choose a {provider} model.",
-        )
+        try:
+            ui.clear()
+            model = _terminal_select_model_option(
+                ui,
+                "Model",
+                model_options,
+                default_index=_default_model_index(model_options, current_model),
+                subtitle=f"Choose a {provider} model.",
+            )
+        except KeyboardInterrupt:
+            return False
         base_url = provider_base_url(provider)
 
     api_key = ui.ask_text(
@@ -4019,14 +4079,14 @@ def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
     if search_provider != "none" and search_provider != provider and _feature_api_key_missing(config, "search"):
         search_api_key = _required_feature_api_key(ui, provider=search_provider, feature="search")
         if search_api_key is None:
-            return
+            return True
 
     image_generation_api_key = None
     image_provider = _current_image_generation_provider(config)
     if image_provider != "none" and image_provider != provider and _feature_api_key_missing(config, "image_generation"):
         image_generation_api_key = _required_feature_api_key(ui, provider=image_provider, feature="image generation")
         if image_generation_api_key is None:
-            return
+            return True
 
     try:
         update = prepare_model_provider_update(
@@ -4042,16 +4102,16 @@ def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
         )
     except Exception as exc:
         ui.print_panel(f"Model update is invalid: {exc}", title="Resetup", border_style="red")
-        return
-    _apply_config_update(ui, config_dir, update)
+        return True
+    return _apply_config_update(ui, config_dir, update)
 
 
-def _run_image_generation_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+def _run_image_generation_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
     try:
         config = load_config(config_dir)
     except Exception as exc:
         ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
-        return
+        return True
     current = _current_image_generation_provider(config)
     choice = ui.select_menu(
         title="xAgent Resetup / Image Generation",
@@ -4060,7 +4120,7 @@ def _run_image_generation_config_launcher(ui: TerminalUI, config_dir: Path) -> N
         footer="↑/↓ Move • Enter Select  •  q Back",
     )
     if choice is None or choice.key == "back":
-        return
+        return False
     api_key = None
     if image_generation_provider_needs_feature_key(config, choice.key):
         current_key = ""
@@ -4070,21 +4130,21 @@ def _run_image_generation_config_launcher(ui: TerminalUI, config_dir: Path) -> N
         if choice.key != current or is_placeholder_api_key(current_key):
             api_key = _required_feature_api_key(ui, provider=choice.key, feature="image generation")
             if api_key is None:
-                return
+                return True
     try:
         update = prepare_image_generation_provider_update(config, provider=choice.key, api_key=api_key)
     except Exception as exc:
         ui.print_panel(f"Image generation update is invalid: {exc}", title="Resetup", border_style="red")
-        return
-    _apply_config_update(ui, config_dir, update)
+        return True
+    return _apply_config_update(ui, config_dir, update)
 
 
-def _run_observability_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+def _run_observability_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
     try:
         config = load_config(config_dir)
     except Exception as exc:
         ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
-        return
+        return True
 
     model_api = _current_model_api(config)
     if not model_api_uses_openai_client(model_api):
@@ -4093,7 +4153,7 @@ def _run_observability_config_launcher(ui: TerminalUI, config_dir: Path) -> None
             "Update Model to OpenAI, Responses, or a compatible custom endpoint first.",
             title="Resetup",
         )
-        return
+        return True
 
     observability = _current_observability(config)
     enabled = bool(observability.get("enabled", False))
@@ -4111,7 +4171,7 @@ def _run_observability_config_launcher(ui: TerminalUI, config_dir: Path) -> None
         footer="↑/↓ Move • Enter Select  •  q Back",
     )
     if choice is None or choice.key == "back":
-        return
+        return False
 
     try:
         if choice.key == "disable":
@@ -4145,23 +4205,35 @@ def _run_observability_config_launcher(ui: TerminalUI, config_dir: Path) -> None
             )
     except Exception as exc:
         ui.print_panel(f"Observability update is invalid: {exc}", title="Resetup", border_style="red")
+        return True
+
+    return _apply_config_update(ui, config_dir, update)
+
+
+def _run_voice_single_provider_config(ui: TerminalUI, config_dir: Path) -> None:
+    try:
+        config = load_config(config_dir)
+    except Exception as exc:
+        ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
         return
-
-    _apply_config_update(ui, config_dir, update)
-
-
-def _run_voice_preset_config(ui: TerminalUI, config_dir: Path, config: dict[str, Any]) -> None:
     current = _current_voice_provider(config)
+    subtitle = f"Current provider: {current}"
+    if current == "custom":
+        subtitle = "Current mode: Custom Providers\nChoose one provider for both STT and TTS."
     choice = ui.select_menu(
-        title="xAgent Resetup / Voice Preset",
-        subtitle=f"Current mode: {current}",
-        options=_menu_option_rows(VOICE_PRESETS + ("back",), _provider_option_descriptions("voice")),
+        title="xAgent Resetup / Voice Single Provider",
+        subtitle=subtitle,
+        options=_menu_option_rows(
+            tuple(provider for provider in VOICE_PRESETS if provider != "custom") + ("back",),
+            _provider_option_descriptions("voice"),
+        ),
         footer="↑/↓ Move • Enter Select  •  q Back",
     )
     if choice is None or choice.key == "back":
         return
     api_key = None
-    if choice.key in VOICE_NESTED_PROVIDERS and choice.key != current:
+    existing_key = _existing_voice_provider_api_key(config, choice.key)
+    if choice.key in VOICE_NESTED_PROVIDERS and (choice.key != current or not existing_key):
         api_key = _required_feature_api_key(ui, provider=choice.key, feature="voice")
         if api_key is None:
             return
@@ -4171,6 +4243,59 @@ def _run_voice_preset_config(ui: TerminalUI, config_dir: Path, config: dict[str,
         ui.print_panel(f"Voice update is invalid: {exc}", title="Resetup", border_style="red")
         return
     _apply_config_update(ui, config_dir, update)
+
+
+def _run_voice_custom_provider_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    while True:
+        try:
+            config = load_config(config_dir)
+        except Exception as exc:
+            ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
+            return
+        voice = voice_config(config)
+        stt_provider = _current_voice_nested_provider(config, "stt") if voice else "none"
+        tts_provider = _current_voice_nested_provider(config, "tts") if voice else "none"
+        option = ui.select_menu(
+            title="xAgent Resetup / Voice Custom Providers",
+            subtitle=f"STT: {stt_provider}\nTTS: {tts_provider}",
+            options=[
+                MenuOption("stt", "STT Provider", "Choose the speech-to-text provider."),
+                MenuOption("tts", "TTS Provider", "Choose the text-to-speech provider."),
+                MenuOption("back", "Back", "Return to Provider Mode."),
+            ],
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            return
+        ui.clear()
+        _run_voice_nested_config(ui, config_dir, config, option.key)
+
+
+def _run_voice_provider_mode_launcher(ui: TerminalUI, config_dir: Path, config: dict[str, Any]) -> None:
+    del config
+    while True:
+        try:
+            current_config = load_config(config_dir)
+        except Exception as exc:
+            ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
+            return
+        option = ui.select_menu(
+            title="xAgent Resetup / Voice Provider Mode",
+            subtitle=_voice_summary_subtitle(current_config),
+            options=[
+                MenuOption("single", "Single Provider", "Use the same provider for STT and TTS."),
+                MenuOption("custom", "Custom Providers", "Configure STT and TTS independently."),
+                MenuOption("back", "Back", "Return to Voice."),
+            ],
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            return
+        ui.clear()
+        if option.key == "single":
+            _run_voice_single_provider_config(ui, config_dir)
+        else:
+            _run_voice_custom_provider_launcher(ui, config_dir)
 
 
 def _run_voice_nested_config(ui: TerminalUI, config_dir: Path, config: dict[str, Any], section: str) -> None:
@@ -4228,11 +4353,7 @@ def _run_voice_wake_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
         wake = voice.get("wake") if isinstance(voice.get("wake"), dict) else {}
         option = ui.select_menu(
             title="xAgent Resetup / Voice Wake",
-            subtitle=(
-                f"Enabled: {bool(wake.get('enabled', False))}\n"
-                f"Match: {wake.get('match_mode', 'prefix')}\n"
-                f"Idle timeout: {wake.get('idle_timeout_seconds', 60)}s"
-            ),
+            subtitle=_voice_wake_subtitle(wake),
             options=[
                 MenuOption("enabled", "Wake Mode", "Enable or disable wake phrase gating."),
                 MenuOption("wake_phrases", "Wake Phrases", "Comma-separated phrases that start listening."),
@@ -4245,6 +4366,7 @@ def _run_voice_wake_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
         )
         if option is None or option.key == "back":
             return
+        ui.clear()
 
         try:
             if option.key == "enabled":
@@ -4302,30 +4424,23 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
         except Exception as exc:
             ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
             return
-        voice = voice_config(config)
-        provider = _current_voice_provider(config)
-        stt_provider = _current_voice_nested_provider(config, "stt") if voice else "none"
-        tts_provider = _current_voice_nested_provider(config, "tts") if voice else "none"
         option = ui.select_menu(
             title="xAgent Resetup / Voice",
-            subtitle=f"Mode: {provider}\nSTT: {stt_provider}\nTTS: {tts_provider}",
+            subtitle=_voice_summary_subtitle(config),
             options=[
-                MenuOption("preset", "Preset Mode", "Use none, Soniox, Qwen, or custom mode."),
-                MenuOption("stt", "STT Provider", "Choose the speech-to-text provider."),
-                MenuOption("tts", "TTS Provider", "Choose the text-to-speech provider."),
+                MenuOption("provider_mode", "Provider Mode", "Use one provider for both STT and TTS, or configure separately."),
                 MenuOption("interruptions", "Interruptions", "Enable or disable barge-in interruptions."),
                 MenuOption("wake", "Wake", "Update wake mode, phrases, match, and idle timeout."),
-                MenuOption("disable", "Disable Voice", "Remove channels.voice from config."),
+                MenuOption("disable", "Disable", "Remove channels.voice from config."),
                 MenuOption("back", "Back", "Return to Partial Update."),
             ],
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
         if option is None or option.key == "back":
             return
-        if option.key == "preset":
-            _run_voice_preset_config(ui, config_dir, config)
-        elif option.key in {"stt", "tts"}:
-            _run_voice_nested_config(ui, config_dir, config, option.key)
+        ui.clear()
+        if option.key == "provider_mode":
+            _run_voice_provider_mode_launcher(ui, config_dir, config)
         elif option.key == "interruptions":
             _run_voice_interruptions_config(ui, config_dir, config)
         elif option.key == "wake":
@@ -4364,14 +4479,15 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
             ui.clear()
             return
         ui.clear()
+        should_pause = False
         if option.key == "model":
-            _run_model_config_launcher(ui, config_dir)
+            should_pause = _run_model_config_launcher(ui, config_dir)
         elif option.key == "observability":
-            _run_observability_config_launcher(ui, config_dir)
+            should_pause = _run_observability_config_launcher(ui, config_dir)
         elif option.key == "search":
-            _run_search_config_launcher(ui, config_dir)
+            should_pause = _run_search_config_launcher(ui, config_dir)
         elif option.key == "feishu":
-            handle_init_feishu(
+            should_pause = handle_init_feishu(
                 _launcher_args(
                     config_dir=str(config_dir),
                     app_id=None,
@@ -4384,12 +4500,13 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     show_sender_ids=None,
                     group_reply_without_mention=None,
                 )
-            )
+            ) == 0
         elif option.key == "voice":
             _run_voice_config_launcher(ui, config_dir)
         elif option.key == "image":
-            _run_image_generation_config_launcher(ui, config_dir)
-        ui.pause("Press Enter to return to Partial Update")
+            should_pause = _run_image_generation_config_launcher(ui, config_dir)
+        if should_pause is True:
+            ui.pause("Press Enter to return to Partial Update")
 
 
 def _run_resetup_launcher(config_dir: Path) -> int:

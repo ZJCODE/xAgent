@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import io
+import logging
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -444,6 +445,22 @@ class CLICommandTests(unittest.TestCase):
             ))
 
         fake_ui.input.assert_called_once_with("[bold cyan]You:[/bold cyan] ")
+
+    def test_interactive_chat_defaults_to_stable_cli_user_id(self):
+        cli = AgentCLI.__new__(AgentCLI)
+        cli.agent = SimpleNamespace()
+        cli.message_storage = SimpleNamespace()
+        cli.config_dir = Path("/tmp/xagent")
+        cli.config_path = cli.config_dir / "config.yaml"
+
+        with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", return_value=None):
+            with patch("xagent.interfaces.cli.logging.getLogger") as get_logger:
+                with patch.object(cli, "_chat_interactive_terminal_ui", new_callable=AsyncMock) as interactive:
+                    get_logger.return_value.level = logging.CRITICAL
+                    asyncio.run(cli.chat_interactive())
+
+        interactive.assert_awaited_once()
+        self.assertEqual(interactive.await_args.kwargs["user_id"], "cli_user")
 
     def test_single_chat_does_not_flush_memory(self):
         class FakeAgent:
@@ -1030,6 +1047,213 @@ class CLICommandTests(unittest.TestCase):
         )
         observability_launcher.assert_called_once_with(fake_ui, config_dir)
 
+    def test_partial_update_launcher_skips_pause_when_submenu_returns_back(self):
+        class FakeUI:
+            def __init__(self):
+                self.choices = iter([
+                    SimpleNamespace(key="model"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.pause_calls = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, options, footer
+                if title != "xAgent Resetup / Partial Update":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                return next(self.choices)
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                self.pause_calls.append(message)
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+
+            with patch("xagent.interfaces.cli._run_model_config_launcher", return_value=False) as model_launcher:
+                _run_partial_update_launcher(fake_ui, config_dir)
+
+        model_launcher.assert_called_once_with(fake_ui, config_dir)
+        self.assertEqual(fake_ui.pause_calls, [])
+
+    def test_voice_wake_launcher_clears_before_inline_prompt(self):
+        class FakeUI:
+            def __init__(self):
+                self.menu_choices = iter([
+                    SimpleNamespace(key="idle_timeout"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.clear_calls = 0
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, options, footer
+                if title != "xAgent Resetup / Voice Wake":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                return next(self.menu_choices)
+
+            def ask_text(self, label, *, default=None, secret=False, subtitle=""):
+                del default, secret, subtitle
+                if label != "Idle timeout seconds":
+                    raise AssertionError(f"Unexpected text prompt: {label}")
+                if self.clear_calls == 0:
+                    raise AssertionError("Expected clear() before inline prompt")
+                return "120"
+
+            def clear(self):
+                self.clear_calls += 1
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+            config = yaml.safe_load((config_dir / "config.yaml").read_text(encoding="utf-8"))
+            config["channels"]["voice"] = {
+                "provider": "qwen",
+                "wake": {
+                    "enabled": False,
+                    "wake_phrases": ["xAgent"],
+                    "exit_phrases": ["exit"],
+                    "match_mode": "prefix",
+                    "idle_timeout_seconds": 90,
+                },
+                "stt": {"api_key": "qwen-key"},
+                "tts": {"api_key": "qwen-key"},
+            }
+            (config_dir / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+
+            with patch("xagent.interfaces.cli._apply_config_update", return_value=False) as apply_update:
+                from xagent.interfaces.cli import _run_voice_wake_config_launcher
+
+                _run_voice_wake_config_launcher(fake_ui, config_dir)
+
+        apply_update.assert_called_once()
+        self.assertGreaterEqual(fake_ui.clear_calls, 1)
+
+    def test_voice_wake_launcher_subtitle_includes_phrase_lists(self):
+        class FakeUI:
+            def __init__(self):
+                self.subtitle = ""
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del options, footer
+                if title != "xAgent Resetup / Voice Wake":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                self.subtitle = subtitle
+                return SimpleNamespace(key="back")
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+            config = yaml.safe_load((config_dir / "config.yaml").read_text(encoding="utf-8"))
+            config["channels"]["voice"] = {
+                "provider": "qwen",
+                "wake": {
+                    "enabled": True,
+                    "wake_phrases": ["xAgent", "hey agent"],
+                    "exit_phrases": ["stop", "goodbye"],
+                    "match_mode": "prefix",
+                    "idle_timeout_seconds": 90,
+                },
+                "stt": {"api_key": "qwen-key"},
+                "tts": {"api_key": "qwen-key"},
+            }
+            (config_dir / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+
+            from xagent.interfaces.cli import _run_voice_wake_config_launcher
+
+            _run_voice_wake_config_launcher(fake_ui, config_dir)
+
+        self.assertIn("Wake phrases: xAgent, hey agent", fake_ui.subtitle)
+        self.assertIn("Exit phrases: stop, goodbye", fake_ui.subtitle)
+
+    def test_voice_config_launcher_uses_provider_mode_menu(self):
+        class FakeUI:
+            def __init__(self):
+                self.choices = iter([
+                    SimpleNamespace(key="provider_mode"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.option_titles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title != "xAgent Resetup / Voice":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                self.option_titles = [option.title for option in options]
+                return next(self.choices)
+
+            def clear(self):
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+
+            from xagent.interfaces.cli import _run_voice_config_launcher
+
+            with patch("xagent.interfaces.cli._run_voice_provider_mode_launcher") as provider_mode_launcher:
+                _run_voice_config_launcher(fake_ui, config_dir)
+
+        self.assertEqual(
+            fake_ui.option_titles,
+            ["Provider Mode", "Interruptions", "Wake", "Disable", "Back"],
+        )
+        provider_mode_launcher.assert_called_once_with(fake_ui, config_dir, unittest.mock.ANY)
+
+    def test_voice_provider_mode_launcher_offers_single_and_custom_paths(self):
+        class FakeUI:
+            def __init__(self):
+                self.option_titles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title != "xAgent Resetup / Voice Provider Mode":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                self.option_titles = [option.title for option in options]
+                return SimpleNamespace(key="back")
+
+            def clear(self):
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+            config = yaml.safe_load((config_dir / "config.yaml").read_text(encoding="utf-8"))
+
+            from xagent.interfaces.cli import _run_voice_provider_mode_launcher
+
+            _run_voice_provider_mode_launcher(fake_ui, config_dir, config)
+
+        self.assertEqual(fake_ui.option_titles, ["Single Provider", "Custom Providers", "Back"])
+
     def test_interactive_launcher_resetup_opens_resetup_menu(self):
         class FakeUI:
             def __init__(self):
@@ -1409,12 +1633,23 @@ class CLICommandTests(unittest.TestCase):
 
             def __init__(self):
                 self.select_labels = []
+                self.menu_titles = []
                 self.records = []
+                self.app_access_titles = []
+                self.app_access_footer = ""
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle
+                self.menu_titles.append(title)
+                if title == "App Access":
+                    self.app_access_titles = [option.title for option in options]
+                    self.app_access_footer = footer
+                    return SimpleNamespace(key="one_click", title="Create new Feishu app")
+                raise AssertionError(f"Unexpected menu step: {title}")
 
             def select(self, *, label, subtitle="", options, default_index=0):
+                del subtitle, options, default_index
                 self.select_labels.append(label)
-                if label == "App Access":
-                    return SimpleNamespace(key="one_click")
                 if label == "Group Routing":
                     return SimpleNamespace(key="mentions")
                 raise AssertionError(f"Unexpected wizard step: {label}")
@@ -1451,7 +1686,10 @@ class CLICommandTests(unittest.TestCase):
         with patch("xagent.interfaces.cli._register_feishu_app_via_qr", return_value=("cli_qr_app", "qr_secret")):
             selection = collect_feishu_init_selection_terminal_ui(args=args, ui=ui)
 
-        self.assertEqual(ui.select_labels, ["App Access", "Group Routing"])
+        self.assertEqual(ui.menu_titles, ["App Access"])
+        self.assertEqual(ui.select_labels, ["Group Routing"])
+        self.assertEqual(ui.app_access_titles, ["Create new Feishu app", "Use existing App ID / App Secret", "Back"])
+        self.assertEqual(ui.app_access_footer, "↑/↓ Move • Enter Select  •  q Back")
         self.assertEqual(selection.app_id, "cli_qr_app")
         self.assertEqual(selection.app_secret, "qr_secret")
         self.assertIs(selection.stream, False)
@@ -1460,6 +1698,35 @@ class CLICommandTests(unittest.TestCase):
         self.assertIs(selection.show_sender_ids, False)
         self.assertIs(selection.group_reply_without_mention, False)
         self.assertEqual(selection.credential_mode, "one_click")
+
+    def test_feishu_wizard_app_access_back_cancels_setup(self):
+        class FakeUI:
+            interactive = True
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, options, footer
+                if title != "App Access":
+                    raise AssertionError(f"Unexpected menu step: {title}")
+                return SimpleNamespace(key="back", title="Back")
+
+            def record(self, *args, **kwargs):
+                raise AssertionError("No record expected")
+
+        args = argparse.Namespace(
+            config_dir=".",
+            app_id=None,
+            app_secret=None,
+            manual=False,
+            force=False,
+            stream=None,
+            enable_memory=None,
+            group_history_count=None,
+            show_sender_ids=None,
+            group_reply_without_mention=None,
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            collect_feishu_init_selection_terminal_ui(args=args, ui=FakeUI())
 
     def test_init_feishu_one_click_cancelled_leaves_config_untouched(self):
         with tempfile.TemporaryDirectory() as tmpdir:
