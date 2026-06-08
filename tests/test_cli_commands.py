@@ -280,6 +280,30 @@ class CLICommandTests(unittest.TestCase):
         self.assertTrue(args.show_sender_ids)
         self.assertTrue(args.group_reply_without_mention)
 
+    def test_parser_supports_init_weixin_command(self):
+        args = build_parser().parse_args([
+            "init",
+            "weixin",
+            "--dir",
+            "./agent-dir",
+            "--base-url",
+            "https://ilink.example",
+            "--allow-user",
+            "friend@im.wechat",
+            "--no-owner-only",
+            "--no-media",
+            "--force",
+        ])
+
+        self.assertEqual(args.command, "init")
+        self.assertEqual(args.init_target, "weixin")
+        self.assertEqual(args.config_dir, "./agent-dir")
+        self.assertEqual(args.base_url, "https://ilink.example")
+        self.assertEqual(args.allow_users, ["friend@im.wechat"])
+        self.assertFalse(args.owner_only)
+        self.assertFalse(args.media_enabled)
+        self.assertTrue(args.force)
+
     def test_parser_supports_chat_message_command(self):
         args = build_parser().parse_args([
             "chat",
@@ -564,6 +588,13 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(feishu.channels, ["feishu"])
         self.assertTrue(feishu.follow)
 
+        weixin = build_parser().parse_args(["channel", "weixin", "logs", "--follow"])
+        self.assertEqual(weixin.command, "channel")
+        self.assertEqual(weixin.channel_target, "weixin")
+        self.assertEqual(weixin.channel_action, "logs")
+        self.assertEqual(weixin.channels, ["weixin"])
+        self.assertTrue(weixin.follow)
+
     def test_service_command_is_removed(self):
         with self.assertRaises(SystemExit):
             build_parser().parse_args(["service", "start", "api"])
@@ -693,7 +724,7 @@ class CLICommandTests(unittest.TestCase):
         options = _launcher_channel_options()
         titles = [option.title for option in options]
 
-        self.assertEqual(titles, ["Chat", "Voice", "Web", "Feishu", "Back"])
+        self.assertEqual(titles, ["Chat", "Voice", "Web", "Feishu", "Weixin", "Back"])
         self.assertNotIn("All", titles)
 
     def test_channel_launcher_start_chooses_channel_before_action(self):
@@ -734,7 +765,7 @@ class CLICommandTests(unittest.TestCase):
                 exit_code = _run_channel_launcher(Path("/tmp/xagent"))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_ui.channel_option_titles[:4], ["Chat", "Voice", "Web", "Feishu"])
+        self.assertEqual(fake_ui.channel_option_titles[:5], ["Chat", "Voice", "Web", "Feishu", "Weixin"])
         self.assertIn("Start Background", fake_ui.action_option_titles)
         self.assertIn("Open Web UI", fake_ui.action_option_titles)
         self.assertNotIn("Start API", fake_ui.action_option_titles)
@@ -1043,7 +1074,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(
             fake_ui.option_titles,
-            ["Model", "Observability", "Search", "Feishu", "Voice", "Image Generation", "Back"],
+            ["Model", "Search", "Voice", "Image Generation", "Feishu", "Weixin", "Observability", "Back"],
         )
         observability_launcher.assert_called_once_with(fake_ui, config_dir)
 
@@ -1850,6 +1881,16 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(enabled_channels_from_config(config), ["api", "feishu"])
 
+    def test_start_all_includes_weixin_when_account_exists_without_enabled(self):
+        config = {
+            "channels": {
+                "api": {"host": "127.0.0.1", "port": 8010},
+                "weixin": {"account_id": "bot@im.bot"},
+            }
+        }
+
+        self.assertEqual(enabled_channels_from_config(config), ["api", "weixin"])
+
     def test_enabled_channels_do_not_implicitly_add_api_when_channels_are_explicit(self):
         config = {
             "channels": {
@@ -1861,6 +1902,11 @@ class CLICommandTests(unittest.TestCase):
         }
 
         self.assertEqual(enabled_channels_from_config(config), ["feishu"])
+
+    def test_enabled_channels_can_select_weixin_without_api(self):
+        config = {"channels": {"weixin": {"account_id": "bot@im.bot"}}}
+
+        self.assertEqual(enabled_channels_from_config(config), ["weixin"])
 
     def test_web_runs_api_channel_and_opens_browser_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:

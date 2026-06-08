@@ -42,6 +42,7 @@ from .base import BaseAgentConfig, BaseAgentRunner
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
+    CHANNEL_WEIXIN,
     ChannelSelectionError,
     api_config,
     default_start_channel_from_config,
@@ -49,6 +50,7 @@ from .channels import (
     feishu_config,
     load_config_file,
     normalize_channel_values,
+    weixin_config,
     voice_config,
 )
 from .config_editor import (
@@ -537,6 +539,19 @@ class FeishuInitSelection:
     show_sender_ids: bool = False
     group_reply_without_mention: bool = False
     credential_mode: str = "one_click"
+
+
+@dataclass(frozen=True)
+class WeixinInitSelection:
+    """Interactive choices used to configure the Weixin channel."""
+
+    account_id: str
+    owner_user_id: str
+    base_url: str
+    cdn_base_url: str
+    owner_only: bool = True
+    allow_users: tuple[str, ...] = ()
+    media_enabled: bool = True
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -1808,6 +1823,8 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
 
     feishu_init = _format_init_command("xagent channel feishu setup", config_dir=config_dir)
     feishu_start = _format_init_command("xagent channel feishu start", config_dir=config_dir)
+    weixin_init = _format_init_command("xagent channel weixin setup", config_dir=config_dir)
+    weixin_start = _format_init_command("xagent channel weixin start", config_dir=config_dir)
     
     content = Text()
     content.append("Pick how you want to use it next.\n\n")
@@ -1821,6 +1838,12 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
     content.append(feishu_init, style="cyan")
     content.append(f"\n        Create a Feishu bot config, then start it with ")
     content.append(feishu_start, style="cyan")
+    content.append(".")
+    content.append("\n")
+    content.append("weixin  ", style="")
+    content.append(weixin_init, style="cyan")
+    content.append(f"\n        Scan WeChat to configure the DM channel, then start it with ")
+    content.append(weixin_start, style="cyan")
     content.append(".")
     
     TerminalUI().print_panel(content, title="Next Steps")
@@ -1861,6 +1884,17 @@ def _feishu_sender_label(*, group_history_count: int, show_sender_ids: bool) -> 
     return "Display names only"
 
 
+def _weixin_access_label(selection: WeixinInitSelection) -> str:
+    if selection.owner_only:
+        extra = len(selection.allow_users)
+        if extra:
+            return f"Owner + {extra} allowlisted user(s)"
+        return "Owner only"
+    if selection.allow_users:
+        return "Allowlist only"
+    return "All direct messages"
+
+
 def _add_dir_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dir",
@@ -1881,7 +1915,7 @@ def _add_channel_argument(
         action="append",
         default=None,
         metavar="CHANNELS",
-        help=f"Channel(s) to use: api, feishu, or comma-separated values (default: {default_label})",
+        help=f"Channel(s) to use: api, feishu, weixin, or comma-separated values (default: {default_label})",
     )
 
 
@@ -1965,6 +1999,34 @@ def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force", action="store_true", help="Overwrite existing channels.feishu config")
 
 
+def _add_weixin_setup_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_dir_argument(parser)
+    parser.add_argument("--base-url", default=None, help="Weixin iLink API base URL")
+    parser.add_argument("--cdn-base-url", default=None, help="Weixin iLink CDN base URL")
+    parser.add_argument("--bot-type", default="3", help="iLink bot_type for QR login (default: 3)")
+    parser.add_argument(
+        "--owner-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Only allow the QR-authorizing Weixin user to trigger xAgent",
+    )
+    parser.add_argument(
+        "--allow-user",
+        action="append",
+        default=None,
+        dest="allow_users",
+        help="Additional Weixin user id allowed to trigger the DM channel; can be repeated or comma-separated",
+    )
+    parser.add_argument(
+        "--media",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        dest="media_enabled",
+        help="Enable inbound/outbound Weixin media download and upload",
+    )
+    parser.add_argument("--force", action="store_true", help="Overwrite existing channels.weixin config and refresh QR login")
+
+
 def _hide_subparser_choice(subparsers: argparse._SubParsersAction, name: str) -> None:
     subparsers._choices_actions = [
         action for action in subparsers._choices_actions if action.dest != name
@@ -2033,6 +2095,9 @@ def build_parser() -> argparse.ArgumentParser:
     init_feishu = init_sub.add_parser("feishu", help="Enable and configure the Feishu channel")
     _add_feishu_setup_arguments(init_feishu)
     init_feishu.set_defaults(handler=handle_init_feishu)
+    init_weixin = init_sub.add_parser("weixin", help="Enable and configure the Weixin channel")
+    _add_weixin_setup_arguments(init_weixin)
+    init_weixin.set_defaults(handler=handle_init_weixin)
 
     chat_parser = subparsers.add_parser("chat", help="Chat with the configured agent")
     chat_parser.add_argument("message", nargs="?", help="Single message to send; omit for interactive chat")
@@ -2155,6 +2220,31 @@ def build_parser() -> argparse.ArgumentParser:
     feishu_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
     feishu_logs.set_defaults(handler=handle_logs, channels=[CHANNEL_FEISHU])
 
+    weixin_channel = channel_sub.add_parser("weixin", help="Configure or manage the Weixin DM channel")
+    weixin_sub = weixin_channel.add_subparsers(dest="channel_action", metavar="<action>")
+    weixin_sub.required = True
+    weixin_setup = weixin_sub.add_parser("setup", help="Enable or reconfigure the Weixin DM channel")
+    _add_weixin_setup_arguments(weixin_setup)
+    weixin_setup.set_defaults(handler=handle_init_weixin)
+    weixin_start = weixin_sub.add_parser("start", help="Start the Weixin channel in the background")
+    _add_dir_argument(weixin_start)
+    weixin_start.set_defaults(handler=handle_start, channels=[CHANNEL_WEIXIN])
+    weixin_stop = weixin_sub.add_parser("stop", help="Stop the background Weixin channel")
+    _add_dir_argument(weixin_stop)
+    weixin_stop.set_defaults(handler=handle_stop, channels=[CHANNEL_WEIXIN])
+    weixin_restart = weixin_sub.add_parser("restart", help="Restart the background Weixin channel")
+    _add_dir_argument(weixin_restart)
+    weixin_restart.set_defaults(handler=handle_restart, channels=[CHANNEL_WEIXIN])
+    weixin_status = weixin_sub.add_parser("status", help="Show Weixin channel status")
+    _add_dir_argument(weixin_status)
+    weixin_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    weixin_status.set_defaults(handler=handle_status, channels=[CHANNEL_WEIXIN])
+    weixin_logs = weixin_sub.add_parser("logs", help="Show Weixin channel logs")
+    _add_dir_argument(weixin_logs)
+    weixin_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
+    weixin_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
+    weixin_logs.set_defaults(handler=handle_logs, channels=[CHANNEL_WEIXIN])
+
     doctor_parser = subparsers.add_parser("doctor", help="Check local xAgent readiness")
     _add_dir_argument(doctor_parser)
     _add_channel_argument(doctor_parser, default_label="enabled channels")
@@ -2220,7 +2310,7 @@ def build_parser() -> argparse.ArgumentParser:
     version_parser.set_defaults(handler=handle_version)
 
     internal_run = subparsers.add_parser("_run-channel", help=argparse.SUPPRESS)
-    internal_run.add_argument("channel", choices=(CHANNEL_API, CHANNEL_FEISHU))
+    internal_run.add_argument("channel", choices=(CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN))
     _add_dir_argument(internal_run)
     _add_api_runtime_arguments(internal_run)
     internal_run.set_defaults(handler=handle_run_channel_internal)
@@ -2573,11 +2663,102 @@ def _run_feishu_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
     return 0
 
 
+def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    try:
+        from ..integrations.weixin import WeixinAdapter, WeixinAdapterConfig
+    except ImportError as exc:  # pragma: no cover - defensive
+        print(f"Failed to import Weixin adapter: {exc}")
+        return 1
+
+    weixin_data = weixin_config(config)
+    if not weixin_data:
+        print("Weixin channel is not configured. Run: xagent channel weixin setup")
+        return 1
+
+    try:
+        weixin_runtime_config = WeixinAdapterConfig.from_dict(weixin_data)
+    except Exception as exc:
+        print(f"Invalid Weixin channel config: {exc}")
+        return 1
+
+    runner = BaseAgentRunner(config_dir=getattr(args, "config_dir", None))
+    adapter = WeixinAdapter(
+        agent=runner.agent,
+        config=weixin_runtime_config,
+        runtime_dir=runner.config_dir,
+    )
+
+    async def _run_daemon() -> bool:
+        heartbeat = create_runtime_heartbeat(
+            runner.agent,
+            config.get("runtime") if isinstance(config, dict) else None,
+            logger_=logging.getLogger(__name__),
+        )
+        stop_requested = False
+        loop = asyncio.get_running_loop()
+        old_handlers: dict[int, object] = {}
+        signal_handlers: list[int] = []
+
+        def _request_stop() -> None:
+            nonlocal stop_requested
+            stop_requested = True
+            adapter._stop_event.set()
+
+        def _handle_stop(_signum: int, _frame) -> None:
+            loop.call_soon_threadsafe(_request_stop)
+
+        for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+            if signum is None:
+                continue
+            try:
+                loop.add_signal_handler(signum, _request_stop)
+                signal_handlers.append(signum)
+            except (NotImplementedError, RuntimeError):
+                old_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, _handle_stop)
+
+        try:
+            if heartbeat is not None:
+                await heartbeat.start()
+            await adapter.run()
+        finally:
+            for signum in signal_handlers:
+                try:
+                    loop.remove_signal_handler(signum)
+                except (NotImplementedError, RuntimeError):
+                    pass
+            for signum, previous_handler in old_handlers.items():
+                signal.signal(signum, previous_handler)
+            if heartbeat is not None:
+                await heartbeat.stop()
+        return stop_requested
+
+    print(f"xAgent Weixin channel ready (model={runner.agent.model}).")
+    print(f"Connecting to Weixin iLink (account_id={weixin_runtime_config.account_id})...")
+    try:
+        stop_requested = asyncio.run(_run_daemon())
+    except KeyboardInterrupt:
+        stop_requested = True
+    except RuntimeError as exc:
+        print(f"{exc}")
+        return 1
+
+    if stop_requested:
+        print("Weixin channel stopped.")
+    return 0
+
+
 def _run_channel(channel: str, args: argparse.Namespace, config: dict[str, Any]) -> int:
     if channel == CHANNEL_API:
         return _run_api_channel(args, config)
     if channel == CHANNEL_FEISHU:
         return _run_feishu_channel(args, config)
+    if channel == CHANNEL_WEIXIN:
+        return _run_weixin_channel(args, config)
     print(f"Unknown channel: {channel}")
     return 1
 
@@ -2740,7 +2921,7 @@ def handle_logs(args: argparse.Namespace) -> int:
             for token in str(raw_channel).split(",")
             if token.strip()
         ]
-        if len(explicit_tokens) != 1 or explicit_tokens[0] not in {CHANNEL_API, CHANNEL_FEISHU}:
+        if len(explicit_tokens) != 1 or explicit_tokens[0] not in {CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN}:
             print("--follow requires an explicit single channel")
             return 1
 
@@ -3187,6 +3368,184 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
     return 0
 
 
+def _normalize_repeated_values(values: Optional[Sequence[str]]) -> tuple[str, ...]:
+    result: list[str] = []
+    for raw_value in values or []:
+        for item in str(raw_value).split(","):
+            normalized = item.strip()
+            if normalized and normalized not in result:
+                result.append(normalized)
+    return tuple(result)
+
+
+def _try_print_weixin_qr_ascii(url: str) -> bool:
+    try:
+        import qrcode
+    except ImportError:
+        return False
+    try:
+        qr = qrcode.QRCode()
+        qr.add_data(url)
+        qr.make(fit=True)
+        print("\nScan this QR code with WeChat:\n")
+        qr.print_ascii(invert=True)
+        return True
+    except Exception:
+        return False
+
+
+def collect_weixin_init_selection_terminal_ui(
+    *,
+    args: argparse.Namespace,
+    ui: Optional[TerminalUI] = None,
+) -> Optional[WeixinInitSelection]:
+    del ui
+    from ..integrations.weixin.client import qr_login
+    from ..integrations.weixin.config import ILINK_BASE_URL, WEIXIN_CDN_BASE_URL
+    from ..integrations.weixin.state import WeixinStateStore
+
+    config_dir = _runtime_dir(args)
+    base_url = str(getattr(args, "base_url", None) or ILINK_BASE_URL).strip().rstrip("/")
+    cdn_base_url = str(getattr(args, "cdn_base_url", None) or WEIXIN_CDN_BASE_URL).strip().rstrip("/")
+    bot_type = str(getattr(args, "bot_type", None) or "3").strip() or "3"
+    owner_only = bool(getattr(args, "owner_only", True))
+    allow_users = _normalize_repeated_values(getattr(args, "allow_users", None))
+    media_enabled = bool(getattr(args, "media_enabled", True))
+
+    def log(message: str) -> None:
+        print(message)
+
+    def render_qr(url: str) -> None:
+        print(url)
+        if not _try_print_weixin_qr_ascii(url):
+            print("Install qrcode[pil] for terminal QR rendering, or open the URL above.")
+
+    try:
+        credentials = asyncio.run(qr_login(
+            base_url=base_url,
+            bot_type=bot_type,
+            log=log,
+            render_qr_url=render_qr,
+        ))
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        print(f"Weixin QR login failed: {exc}")
+        return None
+
+    store = WeixinStateStore(config_dir)
+    store.save_credentials(credentials)
+    return WeixinInitSelection(
+        account_id=credentials.account_id,
+        owner_user_id=credentials.user_id,
+        base_url=credentials.base_url or base_url,
+        cdn_base_url=cdn_base_url,
+        owner_only=owner_only,
+        allow_users=allow_users,
+        media_enabled=media_enabled,
+    )
+
+
+def _weixin_channel_config(selection: WeixinInitSelection) -> dict[str, Any]:
+    from ..integrations.weixin.config import weixin_channel_config_from_selection
+
+    return weixin_channel_config_from_selection(
+        account_id=selection.account_id,
+        owner_user_id=selection.owner_user_id,
+        base_url=selection.base_url,
+        cdn_base_url=selection.cdn_base_url,
+        owner_only=selection.owner_only,
+        allow_users=list(selection.allow_users),
+        media_enabled=selection.media_enabled,
+    )
+
+
+def _print_weixin_post_setup(config_path: Path, selection: WeixinInitSelection) -> None:
+    config_dir = config_path.parent
+    ui = TerminalUI()
+    summary = Text()
+    summary.append(f"Weixin channel updated in {config_path}\n\n")
+    summary.append("Configured behavior:\n")
+    summary.append(f"- Account ID: {selection.account_id}\n")
+    summary.append(f"- Owner User ID: {selection.owner_user_id}\n")
+    summary.append(f"- Access: {_weixin_access_label(selection)}\n")
+    summary.append(f"- Media: {'Enabled' if selection.media_enabled else 'Disabled'}\n")
+    ui.print_panel(summary, title="Weixin Ready", leading_blank_line=True)
+
+    start = _format_init_command("xagent channel weixin start", config_dir=config_dir)
+    status = _format_init_command("xagent channel weixin status", config_dir=config_dir)
+    logs = _format_init_command("xagent channel weixin logs -f", config_dir=config_dir)
+    next_steps = Text()
+    next_steps.append("Run next:\n")
+    next_steps.append("start   ")
+    next_steps.append(start, style="cyan")
+    next_steps.append("\n        Start only the Weixin DM channel.\n")
+    next_steps.append("status  ")
+    next_steps.append(status, style="cyan")
+    next_steps.append("\n        Check PID, logs, and whether the channel is running.\n")
+    next_steps.append("logs    ")
+    next_steps.append(logs, style="cyan")
+    next_steps.append("\n        Follow the Weixin channel log live.\n")
+    next_steps.append("\nOnly direct messages are supported. Group messages are ignored.")
+    ui.print_panel(next_steps, title="Next Steps")
+
+
+def handle_init_weixin(args: argparse.Namespace) -> int:
+    ui = TerminalUI()
+    config_path = _config_path(args)
+    init_command = _format_init_command("xagent init", config_dir=config_path.parent)
+    if not config_path.is_file():
+        ui.print_panel(
+            f"Config not found: {config_path}\nRun {init_command} first, then return to Weixin setup.",
+            title="Weixin Setup Stopped",
+        )
+        return 1
+
+    try:
+        with config_path.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+    except yaml.YAMLError as exc:
+        ui.print_panel(f"Invalid YAML in {config_path}: {exc}", title="Weixin Setup Stopped", border_style="red")
+        return 1
+    if not isinstance(config, dict):
+        ui.print_panel(f"Configuration must be a mapping: {config_path}", title="Weixin Setup Stopped", border_style="red")
+        return 1
+
+    channels_cfg = config.setdefault("channels", {})
+    if not isinstance(channels_cfg, dict):
+        ui.print_panel("channels must be a dictionary", title="Weixin Setup Stopped", border_style="red")
+        return 1
+    if "weixin" in channels_cfg and not getattr(args, "force", False):
+        force_command = _format_init_command("xagent channel weixin setup --force", config_dir=config_path.parent)
+        ui.print_panel(
+            f"channels.weixin already exists in {config_path}.\nRun {force_command} to refresh the Weixin login and overwrite settings.",
+            title="Weixin Setup Stopped",
+        )
+        return 1
+
+    ui.print_panel(
+        f"Runtime: {config_path.parent}\nConfig: {config_path}\nThis will open a Weixin iLink QR login.",
+        title="Weixin Setup",
+        leading_blank_line=True,
+    )
+    try:
+        selection = collect_weixin_init_selection_terminal_ui(args=args, ui=ui)
+    except KeyboardInterrupt:
+        ui.print_panel("Weixin setup cancelled before writing config.", title="Weixin Setup Cancelled")
+        return 1
+    if selection is None:
+        return 1
+
+    api_cfg = channels_cfg.setdefault("api", {})
+    if isinstance(api_cfg, dict):
+        api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
+        api_cfg.setdefault("port", BaseAgentConfig.DEFAULT_PORT)
+    channels_cfg["weixin"] = _weixin_channel_config(selection)
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
+    _print_weixin_post_setup(config_path, selection)
+    return 0
+
+
 def handle_observe(args: argparse.Namespace) -> int:
     metadata = None
     if args.metadata:
@@ -3399,6 +3758,13 @@ def handle_doctor(args: argparse.Namespace) -> int:
         else:
             print("Feishu: missing app_id/app_secret")
             ok = False
+    if CHANNEL_WEIXIN in channels:
+        data = weixin_config(config)
+        if data.get("account_id"):
+            print("Weixin: configured")
+        else:
+            print("Weixin: missing account_id")
+            ok = False
     if args.online:
         print("Online checks are not implemented yet.")
     return 0 if ok else 1
@@ -3521,6 +3887,11 @@ def _launcher_channel_options() -> list[MenuOption]:
             title="Feishu",
             description="Configure or manage the Feishu bot channel.",
         ),
+        MenuOption(
+            key=CHANNEL_WEIXIN,
+            title="Weixin",
+            description="Configure or manage the Weixin DM channel.",
+        ),
         MenuOption(key="back", title="Back", description="Return to the main launcher."),
     ]
 
@@ -3534,6 +3905,15 @@ def _feishu_channel_is_configured(config_dir: Path) -> bool:
     return bool(data.get("app_id") and data.get("app_secret"))
 
 
+def _weixin_channel_is_configured(config_dir: Path) -> bool:
+    try:
+        config = load_config_file(config_dir)
+    except (ChannelSelectionError, OSError, yaml.YAMLError):
+        return False
+    data = weixin_config(config)
+    return bool(data.get("account_id"))
+
+
 def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]:
     actions: list[MenuOption] = []
     if channel == CHANNEL_API:
@@ -3544,6 +3924,14 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
                 "setup",
                 "Setup",
                 "Configure channels.feishu before starting this channel.",
+            )
+        )
+    if channel == CHANNEL_WEIXIN and not _weixin_channel_is_configured(config_dir):
+        actions.append(
+            MenuOption(
+                "setup",
+                "Setup",
+                "Configure channels.weixin before starting this channel.",
             )
         )
     actions.extend([
@@ -3583,6 +3971,11 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command("xagent channel feishu setup", config_dir=config_dir), style="cyan")
     content.append("\n         Configure the Feishu bot, then start it with ")
     content.append(_format_init_command("xagent channel feishu start", config_dir=config_dir), style="cyan")
+    content.append(".\n")
+    content.append("weixin   ")
+    content.append(_format_init_command("xagent channel weixin setup", config_dir=config_dir), style="cyan")
+    content.append("\n         Configure the Weixin DM channel, then start it with ")
+    content.append(_format_init_command("xagent channel weixin start", config_dir=config_dir), style="cyan")
     content.append(".\n")
     content.append("status   ")
     content.append(_format_init_command("xagent channel api status", config_dir=config_dir), style="cyan")
@@ -3628,6 +4021,19 @@ def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
 def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> int:
     channels = [channel]
     if action == "setup":
+        if channel == CHANNEL_WEIXIN:
+            return handle_init_weixin(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    base_url=None,
+                    cdn_base_url=None,
+                    bot_type="3",
+                    owner_only=True,
+                    allow_users=None,
+                    media_enabled=True,
+                    force=False,
+                )
+            )
         return handle_init_feishu(
             _launcher_args(
                 config_dir=str(config_dir),
@@ -4466,6 +4872,7 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
                 MenuOption("voice", "Voice", "Enable or update STT/TTS, interruptions, and wake settings."),
                 MenuOption("image", "Image Generation", "Enable or update image generation provider settings."),
                 MenuOption("feishu", "Feishu", "Re-run Feishu setup and replace channels.feishu."),
+                MenuOption("weixin", "Weixin", "Re-run Weixin QR setup and replace channels.weixin."),
                 MenuOption(
                     "observability",
                     "Observability",
@@ -4499,6 +4906,19 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     group_history_count=None,
                     show_sender_ids=None,
                     group_reply_without_mention=None,
+                )
+            ) == 0
+        elif option.key == "weixin":
+            should_pause = handle_init_weixin(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    base_url=None,
+                    cdn_base_url=None,
+                    bot_type="3",
+                    owner_only=True,
+                    allow_users=None,
+                    media_enabled=True,
+                    force=_weixin_channel_is_configured(config_dir),
                 )
             ) == 0
         elif option.key == "voice":

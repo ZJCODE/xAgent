@@ -30,6 +30,7 @@ dependencies = [
     "openai>=1.98.0",
     "anthropic>=0.64.0",
     "langfuse>=3.0.0",
+    "cryptography>=42.0.0",
     
     # HTTP clients
     "httpx>=0.28.0",

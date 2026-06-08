@@ -11,7 +11,16 @@ from ..core.runtime import list_task_records
 from ..tools.search_tool import is_placeholder_api_key, normalize_search_provider
 from ..voice.config import VoiceChannelConfig
 from .base import BaseAgentConfig, BaseAgentRunner
-from .channels import CHANNEL_API, CHANNEL_FEISHU, api_config, feishu_config, load_config_file, voice_config
+from .channels import (
+    CHANNEL_API,
+    CHANNEL_FEISHU,
+    CHANNEL_WEIXIN,
+    api_config,
+    feishu_config,
+    load_config_file,
+    voice_config,
+    weixin_config,
+)
 from .processes import managed_paths, running_pid
 
 
@@ -83,6 +92,7 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
                 _voice_item(config),
                 _service_item(config_dir, CHANNEL_API, api_config(config)),
                 _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config)),
+                _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config)),
                 _data_item(config_dir),
             )
         )
@@ -192,11 +202,13 @@ def _api_service_url(config: dict[str, Any]) -> str:
 def _service_item(config_dir: Path, channel: str, config: dict[str, Any]) -> OverviewItem:
     if channel == CHANNEL_FEISHU and not (config.get("app_id") and config.get("app_secret")):
         return OverviewItem("Feishu", "not set up", STATUS_DISABLED, "Set app_id and app_secret to enable")
+    if channel == CHANNEL_WEIXIN and not config.get("account_id"):
+        return OverviewItem("Weixin", "not set up", STATUS_DISABLED, "Run channel weixin setup to enable")
     if channel == CHANNEL_API and config.get("enabled", True) is False:
         return OverviewItem("Web UI", "not enabled", STATUS_DISABLED, "Set channels.api.enabled to true")
     paths = managed_paths(config_dir, channel)
     pid = running_pid(paths.pid_path)
-    title = "Web UI" if channel == CHANNEL_API else "Feishu"
+    title = {CHANNEL_API: "Web UI", CHANNEL_FEISHU: "Feishu", CHANNEL_WEIXIN: "Weixin"}.get(channel, channel)
     if pid is None:
         detail = "Configured but not running"
         if channel == CHANNEL_API:

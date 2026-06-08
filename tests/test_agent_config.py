@@ -2457,6 +2457,29 @@ runtime:
             with self.assertRaisesRegex(ValueError, r"Unsupported channels key\(s\): custom"):
                 BaseAgentRunner(config_dir=tmpdir)
 
+    def test_config_accepts_weixin_channel_and_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+channels:
+    weixin:
+        account_id: bot@im.bot
+runtime:
+    default_channel: weixin
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertEqual(runner.config["channels"]["weixin"]["account_id"], "bot@im.bot")
+            self.assertEqual(runner.config["runtime"]["default_channel"], "weixin")
+
 
 if __name__ == "__main__":
     unittest.main()
