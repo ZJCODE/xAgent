@@ -18,6 +18,7 @@ from xagent.interfaces.cli import (
     _run_inspect_launcher,
     _run_interactive_launcher,
     _run_channel_launcher,
+    _run_partial_update_launcher,
     _format_cli_attachments,
     _format_cli_workspace_links,
     _launcher_channel_options,
@@ -44,6 +45,7 @@ from xagent.interfaces.cli import (
 from xagent.interfaces.config_editor import (
     prepare_image_generation_provider_update,
     prepare_model_provider_update,
+    prepare_observability_update,
     prepare_search_provider_update,
     prepare_voice_interruptions_update,
     prepare_voice_wake_update,
@@ -906,6 +908,54 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(saved["image_generation"]["api_key"], "qwen-image-key")
         self.assertEqual(saved["image_generation"]["model"], "qwen-image-2.0-pro")
 
+    def test_config_editor_updates_observability(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            root = Path(tmpdir)
+            config_path = root / "config.yaml"
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+            update = prepare_observability_update(
+                config,
+                enabled=True,
+                public_key="pk-lf-test",
+                secret_key="sk-lf-test",
+                base_url="https://us.cloud.langfuse.com",
+            )
+            write_config(root, update.data)
+            saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            saved["observability"],
+            {
+                "enabled": True,
+                "provider": "langfuse",
+                "public_key": "pk-lf-test",
+                "secret_key": "sk-lf-test",
+                "base_url": "https://us.cloud.langfuse.com",
+            },
+        )
+        self.assertIn("observability.enabled", [change.path for change in update.changes])
+        change_map = {change.path: change for change in update.changes}
+        self.assertEqual(change_map["observability.secret_key"].after, "(secret)")
+
+    def test_config_editor_rejects_observability_for_anthropic_model_api(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            root = Path(tmpdir)
+            config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+            config["provider"]["name"] = "anthropic"
+            config["provider"]["base_url"] = "https://api.anthropic.com"
+            config["provider"]["model"] = "claude-sonnet-4-20250514"
+
+            with self.assertRaisesRegex(ValueError, "OpenAI-compatible model API"):
+                prepare_observability_update(
+                    config,
+                    enabled=True,
+                    public_key="pk-lf-test",
+                    secret_key="sk-lf-test",
+                )
+
     def test_config_editor_updates_voice_wake_and_interruptions(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
@@ -938,6 +988,47 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(saved["channels"]["voice"]["wake"]["exit_phrases"], ["stop", "done"])
         self.assertEqual(saved["channels"]["voice"]["wake"]["match_mode"], "contains")
         self.assertEqual(saved["channels"]["voice"]["wake"]["idle_timeout_seconds"], 120.0)
+
+    def test_partial_update_launcher_includes_observability_and_routes(self):
+        class FakeUI:
+            def __init__(self):
+                self.choices = iter([
+                    SimpleNamespace(key="observability"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.option_titles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title != "xAgent Resetup / Partial Update":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                self.option_titles = [option.title for option in options]
+                return next(self.choices)
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+
+            with patch("xagent.interfaces.cli._run_observability_config_launcher") as observability_launcher:
+                _run_partial_update_launcher(fake_ui, config_dir)
+
+        self.assertEqual(
+            fake_ui.option_titles,
+            ["Model", "Observability", "Search", "Feishu", "Voice", "Image Generation", "Back"],
+        )
+        observability_launcher.assert_called_once_with(fake_ui, config_dir)
 
     def test_interactive_launcher_resetup_opens_resetup_menu(self):
         class FakeUI:

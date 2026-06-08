@@ -17,9 +17,11 @@ from ..core.providers import (
     PROVIDER_MINIMAX,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
+    model_api_uses_openai_client,
     normalize_model_api,
     normalize_provider_name,
     provider_base_url,
+    provider_model_api,
 )
 from ..tools.image_generation_tool import (
     DEFAULT_IMAGE_GENERATION_MODEL,
@@ -149,6 +151,10 @@ def _get_path(data: dict[str, Any], dotted_path: str) -> Any:
     return current
 
 
+def _path_uses_secret_display(path: str) -> bool:
+    return path.rsplit(".", 1)[-1] in {"api_key", "secret_key", "app_secret"}
+
+
 def _changed(before: dict[str, Any], after: dict[str, Any], paths: tuple[str, ...]) -> tuple[ConfigChange, ...]:
     changes: list[ConfigChange] = []
     for path in paths:
@@ -156,8 +162,8 @@ def _changed(before: dict[str, Any], after: dict[str, Any], paths: tuple[str, ..
         new = _get_path(after, path)
         if old == new:
             continue
-        old_display = _secret_display(old) if path.endswith("api_key") else _display(old)
-        new_display = _secret_display(new) if path.endswith("api_key") else _display(new)
+        old_display = _secret_display(old) if _path_uses_secret_display(path) else _display(old)
+        new_display = _secret_display(new) if _path_uses_secret_display(path) else _display(new)
         changes.append(ConfigChange(path=path, before=old_display, after=new_display))
     return tuple(changes)
 
@@ -347,6 +353,58 @@ def prepare_image_generation_provider_update(
             "image_generation.size",
             "image_generation.quality",
             "image_generation.aspect_ratio",
+        ),
+    )
+
+
+def prepare_observability_update(
+    config: dict[str, Any],
+    *,
+    enabled: bool,
+    public_key: str | None = None,
+    secret_key: str | None = None,
+    base_url: str | None = None,
+) -> ConfigUpdate:
+    provider_cfg = config.get("provider") if isinstance(config.get("provider"), dict) else {}
+    if enabled and not model_api_uses_openai_client(provider_model_api(provider_cfg)):
+        raise ValueError("Observability requires an OpenAI-compatible model API")
+
+    def mutate(data: dict[str, Any]) -> None:
+        current = data.get("observability") if isinstance(data.get("observability"), dict) else {}
+        if not enabled:
+            if not current:
+                data.pop("observability", None)
+                return
+            observability = dict(current)
+            observability["enabled"] = False
+            data["observability"] = observability
+            return
+
+        observability = dict(current)
+        observability["enabled"] = True
+        observability["provider"] = "langfuse"
+
+        resolved_public_key = (public_key or "").strip() or str(current.get("public_key") or "").strip()
+        resolved_secret_key = (secret_key or "").strip() or str(current.get("secret_key") or "").strip()
+        resolved_base_url = (base_url or "").strip() or str(current.get("base_url") or "").strip()
+
+        observability["public_key"] = resolved_public_key
+        observability["secret_key"] = resolved_secret_key
+        if resolved_base_url:
+            observability["base_url"] = resolved_base_url
+        else:
+            observability.pop("base_url", None)
+        data["observability"] = observability
+
+    return prepare_update(
+        config,
+        mutate,
+        (
+            "observability.enabled",
+            "observability.provider",
+            "observability.public_key",
+            "observability.secret_key",
+            "observability.base_url",
         ),
     )
 

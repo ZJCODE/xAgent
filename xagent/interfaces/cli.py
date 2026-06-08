@@ -63,6 +63,7 @@ from .config_editor import (
     load_config,
     prepare_image_generation_provider_update,
     prepare_model_provider_update,
+    prepare_observability_update,
     prepare_search_provider_update,
     prepare_voice_interruptions_update,
     prepare_voice_nested_provider_update,
@@ -3829,6 +3830,11 @@ def _current_image_generation_provider(config: dict[str, Any]) -> str:
     return str(image_generation.get("provider") or "none").strip().lower()
 
 
+def _current_observability(config: dict[str, Any]) -> dict[str, Any]:
+    observability = config.get("observability")
+    return dict(observability) if isinstance(observability, dict) else {}
+
+
 def _model_options_for_provider(provider: str) -> tuple[str, ...]:
     if provider == PROVIDER_OPENAI:
         return OPENAI_MODELS
@@ -4073,6 +4079,77 @@ def _run_image_generation_config_launcher(ui: TerminalUI, config_dir: Path) -> N
     _apply_config_update(ui, config_dir, update)
 
 
+def _run_observability_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    try:
+        config = load_config(config_dir)
+    except Exception as exc:
+        ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
+        return
+
+    model_api = _current_model_api(config)
+    if not model_api_uses_openai_client(model_api):
+        ui.print_panel(
+            "Langfuse observability requires an OpenAI-compatible model API.\n"
+            "Update Model to OpenAI, Responses, or a compatible custom endpoint first.",
+            title="Resetup",
+        )
+        return
+
+    observability = _current_observability(config)
+    enabled = bool(observability.get("enabled", False))
+    provider = str(observability.get("provider") or "langfuse").strip().lower() if enabled else "none"
+    current_base_url = str(observability.get("base_url") or LANGFUSE_BASE_URL).strip() or LANGFUSE_BASE_URL
+
+    choice = ui.select_menu(
+        title="xAgent Resetup / Observability",
+        subtitle=f"Status: {'enabled' if enabled else 'not enabled'}\nProvider: {provider}\nBase URL: {current_base_url}",
+        options=[
+            MenuOption("enable", "Enable / Update", "Enable Langfuse and update its credentials."),
+            MenuOption("disable", "Disable", "Turn off Langfuse without deleting saved keys."),
+            MenuOption("back", "Back", "Return to Partial Update."),
+        ],
+        footer="↑/↓ Move • Enter Select  •  q Back",
+    )
+    if choice is None or choice.key == "back":
+        return
+
+    try:
+        if choice.key == "disable":
+            update = prepare_observability_update(config, enabled=False)
+        else:
+            current_public_key = str(observability.get("public_key") or "").strip()
+            current_secret_key = str(observability.get("secret_key") or "").strip()
+            public_key = (
+                ui.ask_text(
+                    "Langfuse public key",
+                    default=current_public_key or LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
+                    subtitle="Leave the placeholder if you want to fill this in later.",
+                ).strip()
+                or current_public_key
+                or LANGFUSE_PUBLIC_KEY_PLACEHOLDER
+            )
+            secret_key = ui.ask_secret("Langfuse secret key").strip() or current_secret_key or LANGFUSE_SECRET_KEY_PLACEHOLDER
+            base_url = (
+                ui.ask_text(
+                    "Langfuse base URL",
+                    default=current_base_url,
+                ).strip()
+                or current_base_url
+            )
+            update = prepare_observability_update(
+                config,
+                enabled=True,
+                public_key=public_key,
+                secret_key=secret_key,
+                base_url=base_url,
+            )
+    except Exception as exc:
+        ui.print_panel(f"Observability update is invalid: {exc}", title="Resetup", border_style="red")
+        return
+
+    _apply_config_update(ui, config_dir, update)
+
+
 def _run_voice_preset_config(ui: TerminalUI, config_dir: Path, config: dict[str, Any]) -> None:
     current = _current_voice_provider(config)
     choice = ui.select_menu(
@@ -4270,6 +4347,11 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
             subtitle=_launcher_overview_subtitle(overview),
             options=[
                 MenuOption("model", "Model", "Update the main model provider, model, API key, or custom endpoint."),
+                MenuOption(
+                    "observability",
+                    "Observability",
+                    "Enable or update Langfuse observability for OpenAI-compatible model APIs.",
+                ),
                 MenuOption("search", "Search", "Change provider-native web search."),
                 MenuOption("feishu", "Feishu", "Re-run Feishu setup and replace channels.feishu."),
                 MenuOption("voice", "Voice", "Enable or update STT/TTS, interruptions, and wake settings."),
@@ -4284,6 +4366,8 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
         ui.clear()
         if option.key == "model":
             _run_model_config_launcher(ui, config_dir)
+        elif option.key == "observability":
+            _run_observability_config_launcher(ui, config_dir)
         elif option.key == "search":
             _run_search_config_launcher(ui, config_dir)
         elif option.key == "feishu":
