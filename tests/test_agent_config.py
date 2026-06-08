@@ -5,7 +5,7 @@ import unittest
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import yaml
 
@@ -215,6 +215,21 @@ search:
             self.assertEqual(runner.agent.model_api, MODEL_API_ANTHROPIC_MESSAGES)
             self.assertEqual(runner.agent.model_client.model_api, MODEL_API_ANTHROPIC_MESSAGES)
             self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.minimaxi.com/anthropic")
+
+    def test_qwen_search_prefers_explicit_feature_key_even_for_qwen_provider(self):
+        runner = BaseAgentRunner.__new__(BaseAgentRunner)
+        runner.observability = SimpleNamespace(create_client=MagicMock(return_value="search-client"))
+
+        client = runner._initialize_qwen_search_client(
+            {"provider": "qwen", "api_key": "qwen-search-key"},
+            {"name": "qwen", "base_url": "https://proxy.example.com/v1"},
+            model_client="model-client",
+        )
+
+        self.assertEqual(client, "search-client")
+        runner.observability.create_client.assert_called_once_with(
+            {"api_key": "qwen-search-key", "base_url": "https://proxy.example.com/v1"}
+        )
 
     def test_provider_config_rejects_backend_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -531,7 +546,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["search"], {"provider": "qwen"})
+            self.assertEqual(config["search"], {"provider": "qwen", "api_key": "qwen-key"})
 
     def test_init_writes_qwen_search_key_for_non_qwen_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -565,7 +580,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["search"], {"provider": "minimax"})
+            self.assertEqual(config["search"], {"provider": "minimax", "api_key": "minimax-key"})
 
     def test_init_writes_minimax_search_key_for_non_minimax_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -639,7 +654,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["image_generation"], {"provider": "minimax"})
+            self.assertEqual(config["image_generation"], {"provider": "minimax", "api_key": "minimax-key"})
 
     def test_init_writes_qwen_image_generation_for_qwen_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -655,7 +670,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["image_generation"], {"provider": "qwen"})
+            self.assertEqual(config["image_generation"], {"provider": "qwen", "api_key": "qwen-key"})
 
     def test_init_writes_model_api_only_for_custom_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -873,6 +888,31 @@ provider:
                 },
             )
 
+    def test_init_writes_voice_wake_and_interruptions_from_selection(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                api_key="openai-key",
+                model="gpt-5.4-mini",
+                identity="# Identity\n\nYou talk.\n",
+                voice_enabled=True,
+                voice_provider="soniox",
+                voice_api_key="soniox-key",
+                voice_enable_interruptions=True,
+                voice_wake_enabled=True,
+                voice_wake_phrases=("hey xagent", "assistant"),
+                voice_exit_phrases=("stop", "done"),
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertTrue(config["channels"]["voice"]["enable_interruptions"])
+            self.assertTrue(config["channels"]["voice"]["wake"]["enabled"])
+            self.assertEqual(config["channels"]["voice"]["wake"]["wake_phrases"], ["hey xagent", "assistant"])
+            self.assertEqual(config["channels"]["voice"]["wake"]["exit_phrases"], ["stop", "done"])
+
     def test_init_omits_voice_config_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
@@ -896,6 +936,7 @@ provider:
             "",
             "",
             "",
+            "",
             "You investigate codebases.",
             ".",
         ])
@@ -912,9 +953,9 @@ provider:
         self.assertEqual(selection.api_key, "openai-key")
         self.assertEqual(selection.model, "gpt-5.5")
         self.assertEqual(selection.search_provider, "none")
-        self.assertEqual(selection.image_generation_provider, "openai")
+        self.assertEqual(selection.image_generation_provider, "none")
         self.assertEqual(selection.identity, "# Identity\n\nYou investigate codebases.\n")
-        self.assertNotIn("Image generation provider", stdout.getvalue())
+        self.assertIn("Image generation provider", stdout.getvalue())
 
     def test_collect_init_selection_supports_soniox_voice(self):
         answers = iter([
@@ -922,8 +963,11 @@ provider:
             "",
             "",
             "",
+            "",
             "y",
             "2",
+            "",
+            "",
             ".",
         ])
         secrets = iter(["openai-key", "soniox-key"])
@@ -943,8 +987,11 @@ provider:
             "",
             "",
             "",
+            "",
             "y",
             "2",
+            "",
+            "",
             ".",
         ])
         secrets = iter(["openai-key", ""])
@@ -967,6 +1014,8 @@ provider:
             "",
             "y",
             "3",
+            "",
+            "",
             ".",
         ])
         secrets = iter(["deepseek-key", "qwen-voice-key"])
@@ -986,8 +1035,11 @@ provider:
             "",
             "",
             "",
+            "",
             "y",
             "3",
+            "",
+            "",
             ".",
         ])
 
@@ -1007,10 +1059,13 @@ provider:
             "",
             "",
             "",
+            "",
             "y",
             "4",
             "1",
             "2",
+            "",
+            "",
             ".",
         ])
         secrets = iter(["openai-key", "soniox-stt-key", "qwen-tts-key"])
@@ -1031,6 +1086,34 @@ provider:
             events.index(("secret", "Qwen API key for TTS (leave blank to fill in later): ")),
         )
 
+    def test_collect_init_selection_supports_voice_wake_and_interruptions(self):
+        answers = iter([
+            "1",
+            "",
+            "",
+            "",
+            "",
+            "y",
+            "2",
+            "y",
+            "hey xagent, assistant",
+            "stop, done",
+            "y",
+            ".",
+        ])
+        secrets = iter(["openai-key", "soniox-key"])
+
+        selection = collect_init_selection(
+            input_func=lambda prompt: next(answers),
+            secret_input_func=lambda prompt: next(secrets),
+        )
+
+        self.assertTrue(selection.voice_enabled)
+        self.assertTrue(selection.voice_wake_enabled)
+        self.assertEqual(selection.voice_wake_phrases, ("hey xagent", "assistant"))
+        self.assertEqual(selection.voice_exit_phrases, ("stop", "done"))
+        self.assertTrue(selection.voice_enable_interruptions)
+
     def test_collect_init_selection_supports_langfuse_observability(self):
         answers = iter([
             "1",
@@ -1038,6 +1121,7 @@ provider:
             "y",
             "pk-lf-test",
             "https://jp.cloud.langfuse.com",
+            "",
             "",
             "",
             ".",
@@ -1155,6 +1239,7 @@ provider:
             "",
             "",
             "",
+            "",
             ".",
         ])
 
@@ -1221,6 +1306,7 @@ provider:
             "",
             "",
             "",
+            "",
             ".",
         ])
 
@@ -1234,11 +1320,11 @@ provider:
         self.assertEqual(selection.model_api, "")
         self.assertEqual(selection.base_url, "https://dashscope.aliyuncs.com/compatible-mode/v1")
         self.assertEqual(selection.api_key, "qwen-key")
-        self.assertEqual(selection.model, "qwen3.6-max-preview")
+        self.assertEqual(selection.model, "qwen3.6-plus")
         self.assertEqual(selection.search_provider, "none")
-        self.assertEqual(selection.image_generation_provider, "qwen")
+        self.assertEqual(selection.image_generation_provider, "none")
         self.assertIn("Search provider", stdout.getvalue())
-        self.assertNotIn("Image generation provider", stdout.getvalue())
+        self.assertIn("Image generation provider", stdout.getvalue())
 
     def test_collect_init_selection_supports_qwen_search_for_non_qwen_provider(self):
         answers = iter([
@@ -1291,6 +1377,7 @@ provider:
             "",
             "",
             "",
+            "",
             ".",
         ])
 
@@ -1306,8 +1393,8 @@ provider:
         self.assertEqual(selection.api_key, "minimax-key")
         self.assertEqual(selection.model, "MiniMax-M3")
         self.assertEqual(selection.search_provider, "none")
-        self.assertEqual(selection.image_generation_provider, "minimax")
-        self.assertNotIn("Image generation provider", stdout.getvalue())
+        self.assertEqual(selection.image_generation_provider, "none")
+        self.assertIn("Image generation provider", stdout.getvalue())
 
     def test_collect_init_selection_supports_anthropic_provider(self):
         answers = iter([
@@ -1414,6 +1501,7 @@ provider:
             "",
             "",
             "",
+            "",
             ".",
         ])
 
@@ -1426,10 +1514,10 @@ provider:
         self.assertEqual(selection.provider, "openai")
         self.assertEqual(selection.model, "gpt-5.4-mini")
         self.assertEqual(selection.search_provider, "none")
-        self.assertEqual(selection.image_generation_provider, "openai")
+        self.assertEqual(selection.image_generation_provider, "none")
         self.assertIn("Describe this agent's role", selection.identity)
         self.assertNotIn("(default)", stdout.getvalue())
-        self.assertNotIn("Image generation provider", stdout.getvalue())
+        self.assertIn("Image generation provider", stdout.getvalue())
 
     def test_config_rejects_unknown_search_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:

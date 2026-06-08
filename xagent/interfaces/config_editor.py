@@ -220,6 +220,41 @@ def _existing_feature_key(config: dict[str, Any], section: str, provider: str) -
     return None
 
 
+def _provider_api_key(provider_cfg: Any, provider: str) -> str | None:
+    if not isinstance(provider_cfg, dict):
+        return None
+    if normalize_provider_name(provider_cfg.get("name")) != provider:
+        return None
+    api_key = str(provider_cfg.get("api_key") or "").strip()
+    if api_key and not is_placeholder_api_key(api_key):
+        return api_key
+    return None
+
+
+def _resolve_feature_api_key(
+    config: dict[str, Any],
+    *,
+    section: str,
+    provider: str,
+    explicit_api_key: str | None = None,
+    provider_fallbacks: tuple[Any, ...] = (),
+) -> str:
+    configured_key = str(explicit_api_key or "").strip()
+    if configured_key:
+        return configured_key
+
+    existing_key = _existing_feature_key(config, section, provider)
+    if existing_key:
+        return existing_key
+
+    for provider_cfg in provider_fallbacks:
+        provider_key = _provider_api_key(provider_cfg, provider)
+        if provider_key:
+            return provider_key
+
+    return API_KEY_PLACEHOLDER
+
+
 def prepare_model_provider_update(
     config: dict[str, Any],
     *,
@@ -262,21 +297,34 @@ def prepare_model_provider_update(
         if normalized_provider == PROVIDER_CUSTOM:
             provider_config["model_api"] = selected_model_api or MODEL_API_OPENAI_CHAT_COMPLETIONS
             provider_config["supports_vision"] = bool(supports_vision)
-        data["provider"] = provider_config
 
         search = data.get("search")
         if isinstance(search, dict):
             search_provider = normalize_search_provider(search.get("provider"))
-            if provider_needs_feature_key(data, search_provider):
-                feature_key = (search_api_key or "").strip() or str(search.get("api_key") or "").strip()
+            if search_provider != SEARCH_PROVIDER_NONE:
+                feature_key = _resolve_feature_api_key(
+                    data,
+                    section="search",
+                    provider=search_provider,
+                    explicit_api_key=search_api_key,
+                    provider_fallbacks=(provider_config, current_provider),
+                )
                 search["api_key"] = feature_key
 
         image_generation = data.get("image_generation")
         if isinstance(image_generation, dict):
             image_provider = normalize_image_generation_provider(image_generation.get("provider"))
-            if image_generation_provider_needs_feature_key(data, image_provider):
-                feature_key = (image_generation_api_key or "").strip() or str(image_generation.get("api_key") or "").strip()
+            if image_provider != IMAGE_GENERATION_PROVIDER_NONE:
+                feature_key = _resolve_feature_api_key(
+                    data,
+                    section="image_generation",
+                    provider=image_provider,
+                    explicit_api_key=image_generation_api_key,
+                    provider_fallbacks=(provider_config, current_provider),
+                )
                 image_generation["api_key"] = feature_key
+
+        data["provider"] = provider_config
 
     return prepare_update(
         config,
@@ -307,10 +355,14 @@ def prepare_search_provider_update(
     def mutate(data: dict[str, Any]) -> None:
         search = {"provider": normalized_provider}
         if normalized_provider != SEARCH_PROVIDER_NONE:
-            if provider_needs_feature_key(data, normalized_provider):
-                search["api_key"] = (api_key or "").strip()
-            elif api_key:
-                search["api_key"] = api_key.strip()
+            current_provider = data.get("provider") if isinstance(data.get("provider"), dict) else {}
+            search["api_key"] = _resolve_feature_api_key(
+                data,
+                section="search",
+                provider=normalized_provider,
+                explicit_api_key=api_key,
+                provider_fallbacks=(current_provider,),
+            )
         data["search"] = search
 
     return prepare_update(config, mutate, ("search.provider", "search.api_key"))
@@ -334,13 +386,14 @@ def prepare_image_generation_provider_update(
         else:
             image_generation = _image_generation_defaults(normalized_provider)
         if normalized_provider != IMAGE_GENERATION_PROVIDER_NONE:
-            resolved_key = (api_key or "").strip() or _existing_feature_key(data, "image_generation", normalized_provider)
-            if image_generation_provider_needs_feature_key(data, normalized_provider):
-                image_generation["api_key"] = resolved_key or ""
-            elif resolved_key:
-                image_generation["api_key"] = resolved_key
-            else:
-                image_generation.pop("api_key", None)
+            current_provider = data.get("provider") if isinstance(data.get("provider"), dict) else {}
+            image_generation["api_key"] = _resolve_feature_api_key(
+                data,
+                section="image_generation",
+                provider=normalized_provider,
+                explicit_api_key=api_key,
+                provider_fallbacks=(current_provider,),
+            )
         data["image_generation"] = image_generation
 
     return prepare_update(

@@ -714,18 +714,24 @@ class BaseAgentRunner:
         *,
         model_client: Optional[Any],
     ) -> Optional[Any]:
+        api_key = str(search_cfg.get("api_key") or "").strip()
+        if api_key and not is_placeholder_api_key(api_key):
+            base_url = str(search_cfg.get("base_url") or "").strip()
+            if not base_url and isinstance(provider_cfg, dict) and self._is_qwen_provider(provider_cfg):
+                base_url = str(provider_cfg.get("base_url") or "").strip()
+            if not base_url:
+                base_url = provider_base_url(PROVIDER_QWEN)
+
+            client_kwargs: Dict[str, Any] = {
+                "api_key": api_key,
+                "base_url": base_url,
+            }
+            return self.observability.create_client(client_kwargs)
+
         if isinstance(provider_cfg, dict) and self._is_qwen_provider(provider_cfg):
             return model_client
 
-        api_key = str(search_cfg.get("api_key") or "").strip()
-        if not api_key or is_placeholder_api_key(api_key):
-            return None
-
-        client_kwargs: Dict[str, Any] = {
-            "api_key": api_key,
-            "base_url": str(search_cfg.get("base_url") or provider_base_url(PROVIDER_QWEN)).strip(),
-        }
-        return self.observability.create_client(client_kwargs)
+        return None
 
     def _initialize_image_generation_client(
         self,

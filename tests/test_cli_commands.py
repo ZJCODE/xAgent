@@ -16,16 +16,19 @@ from xagent.interfaces.cli import (
     AgentCLI,
     FeishuInitSelection,
     InitSelection,
+    ReturnToLauncherHome,
     _run_inspect_launcher,
     _run_interactive_launcher,
     _run_channel_launcher,
     _run_partial_update_launcher,
+    _run_resetup_launcher,
     _format_cli_attachments,
     _format_cli_workspace_links,
     _launcher_channel_options,
     _launcher_help_content,
     _launcher_overview_subtitle,
     _launcher_options,
+    _run_model_config_launcher,
     build_parser,
     collect_feishu_init_selection_terminal_ui,
     handle_config,
@@ -709,12 +712,12 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         launcher.assert_called_once_with()
 
-    def test_launcher_options_use_resetup_after_initial_setup(self):
+    def test_launcher_options_use_setup_after_initial_setup(self):
         initial_options = _launcher_options(initialized=False)
         reset_options = _launcher_options(initialized=True)
 
         self.assertEqual(initial_options[0].title, "Setup")
-        self.assertEqual(reset_options[0].title, "Resetup")
+        self.assertEqual(reset_options[0].title, "Setup")
         self.assertEqual(reset_options[0].description, "Review and update your current setup.")
         reset_titles = [option.title for option in reset_options]
         self.assertIn("Help", reset_titles)
@@ -968,6 +971,72 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(saved["search"]["api_key"], "openai-search-key")
         self.assertEqual(saved["image_generation"]["api_key"], "openai-image-key")
 
+    def test_config_editor_copies_same_provider_feature_keys(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            root = Path(tmpdir)
+            config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+
+            search_update = prepare_search_provider_update(config, provider="openai")
+            image_update = prepare_image_generation_provider_update(config, provider="openai")
+
+        self.assertEqual(search_update.data["search"]["api_key"], "test-key")
+        self.assertEqual(image_update.data["image_generation"]["api_key"], "test-key")
+
+    def test_model_launcher_preserves_copyable_feature_keys_without_extra_prompt(self):
+        class FakeUI:
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, options, footer
+                if title == "xAgent Setup / Model":
+                    return SimpleNamespace(key="qwen")
+                raise AssertionError(f"Unexpected menu: {title}")
+
+            def ask_text(self, label, *, default=None, secret=False, subtitle=""):
+                del default, subtitle
+                if label == "Qwen API key" and secret:
+                    return "qwen-key"
+                raise AssertionError(f"Unexpected text prompt: {label}")
+
+            def confirm(self, label, *, default=False):
+                del default
+                if label == "Apply changes?":
+                    return True
+                raise AssertionError(f"Unexpected confirm prompt: {label}")
+
+            def print_panel(self, *args, **kwargs):
+                return None
+
+            def clear(self):
+                return None
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = {
+                "provider": {
+                    "name": "openai",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_key": "openai-key",
+                    "model": "gpt-5.4-mini",
+                },
+                "search": {"provider": "openai"},
+                "image_generation": {"provider": "openai"},
+            }
+            (root / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+
+            with patch("xagent.interfaces.cli._terminal_select_model_option", return_value="qwen3.6-flash"):
+                with patch("xagent.interfaces.cli._required_feature_api_key", side_effect=AssertionError("unexpected feature key prompt")):
+                    with self.assertRaises(ReturnToLauncherHome):
+                        _run_model_config_launcher(fake_ui, root)
+
+            saved = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["provider"]["name"], "qwen")
+        self.assertEqual(saved["provider"]["api_key"], "qwen-key")
+        self.assertEqual(saved["search"]["api_key"], "openai-key")
+        self.assertEqual(saved["image_generation"]["api_key"], "openai-key")
+
     def test_config_editor_updates_image_generation_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
@@ -1074,7 +1143,7 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
-                if title != "xAgent Resetup / Partial Update":
+                if title != "xAgent Setup / Edit Setup":
                     raise AssertionError(f"Unexpected menu: {title}")
                 self.option_titles = [option.title for option in options]
                 return next(self.choices)
@@ -1111,7 +1180,7 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
-                if title != "xAgent Resetup / Partial Update":
+                if title != "xAgent Setup / Edit Setup":
                     raise AssertionError(f"Unexpected menu: {title}")
                 self.options_by_key = {option.key: option for option in options}
                 return SimpleNamespace(key="back")
@@ -1152,7 +1221,7 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
-                if title != "xAgent Resetup / Observability":
+                if title != "xAgent Setup / Observability":
                     raise AssertionError(f"Unexpected menu: {title}")
                 self.options_by_key = {option.key: option for option in options}
                 return SimpleNamespace(key="back")
@@ -1184,7 +1253,7 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, options, footer
-                if title != "xAgent Resetup / Partial Update":
+                if title != "xAgent Setup / Edit Setup":
                     raise AssertionError(f"Unexpected menu: {title}")
                 return next(self.choices)
 
@@ -1210,6 +1279,75 @@ class CLICommandTests(unittest.TestCase):
         model_launcher.assert_called_once_with(fake_ui, config_dir)
         self.assertEqual(fake_ui.pause_calls, [])
 
+    def test_resetup_partial_update_success_returns_to_home(self):
+        class FakeUI:
+            def __init__(self):
+                self.choices = iter([
+                    SimpleNamespace(key="partial"),
+                ])
+                self.pause_calls = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, options, footer
+                if title != "xAgent Setup":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                return next(self.choices)
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                self.pause_calls.append(message)
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+
+            with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
+                with patch("xagent.interfaces.cli._run_partial_update_launcher", side_effect=ReturnToLauncherHome):
+                    exit_code = _run_resetup_launcher(config_dir)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_ui.pause_calls, [])
+
+    def test_partial_update_feishu_success_returns_to_home(self):
+        class FakeUI:
+            def __init__(self):
+                self.choices = iter([
+                    SimpleNamespace(key="feishu"),
+                ])
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, options, footer
+                if title != "xAgent Setup / Edit Setup":
+                    raise AssertionError(f"Unexpected menu: {title}")
+                return next(self.choices)
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                raise AssertionError(f"Unexpected pause: {message}")
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+            config_dir = Path(tmpdir)
+
+            with patch("xagent.interfaces.cli.handle_init_feishu", return_value=0):
+                with self.assertRaises(ReturnToLauncherHome):
+                    _run_partial_update_launcher(fake_ui, config_dir)
+
     def test_voice_wake_launcher_clears_before_inline_prompt(self):
         class FakeUI:
             def __init__(self):
@@ -1221,7 +1359,7 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, options, footer
-                if title != "xAgent Resetup / Voice Wake":
+                if title != "xAgent Setup / Voice Wake":
                     raise AssertionError(f"Unexpected menu: {title}")
                 return next(self.menu_choices)
 
@@ -1275,7 +1413,7 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del options, footer
-                if title != "xAgent Resetup / Voice Wake":
+                if title != "xAgent Setup / Voice Wake":
                     raise AssertionError(f"Unexpected menu: {title}")
                 self.subtitle = subtitle
                 return SimpleNamespace(key="back")
@@ -1321,7 +1459,7 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
-                if title != "xAgent Resetup / Voice":
+                if title != "xAgent Setup / Voice":
                     raise AssertionError(f"Unexpected menu: {title}")
                 self.option_titles = [option.title for option in options]
                 return next(self.choices)
@@ -1356,7 +1494,7 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
-                if title != "xAgent Resetup / Voice":
+                if title != "xAgent Setup / Voice":
                     raise AssertionError(f"Unexpected menu: {title}")
                 self.options_by_key = {option.key: option for option in options}
                 return SimpleNamespace(key="back")
@@ -1456,7 +1594,7 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
-                if title != "xAgent Resetup / Voice Provider Mode":
+                if title != "xAgent Setup / Voice Provider Mode":
                     raise AssertionError(f"Unexpected menu: {title}")
                 self.option_titles = [option.title for option in options]
                 return SimpleNamespace(key="back")
@@ -1487,7 +1625,7 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, options, footer
-                if title != "xAgent Resetup / Voice STT Provider":
+                if title != "xAgent Setup / Voice STT Provider":
                     raise AssertionError(f"Unexpected menu: {title}")
                 return SimpleNamespace(key="qwen")
 
@@ -1563,7 +1701,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertTrue(actions["restart"].disabled)
         self.assertFalse(actions["logs"].disabled)
 
-    def test_interactive_launcher_resetup_opens_resetup_menu(self):
+    def test_interactive_launcher_setup_opens_setup_menu(self):
         class FakeUI:
             def __init__(self):
                 self.choices = iter([
@@ -1591,12 +1729,13 @@ class CLICommandTests(unittest.TestCase):
         fake_ui = FakeUI()
 
         with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
-            with patch("xagent.interfaces.cli._runtime_is_initialized", return_value=True):
-                with patch("xagent.interfaces.cli._run_resetup_launcher", return_value=0) as resetup_launcher:
-                    exit_code = _run_interactive_launcher()
+            with patch("xagent.interfaces.cli.build_runtime_overview", return_value=SimpleNamespace(initialized=True)):
+                with patch("xagent.interfaces.cli._launcher_overview_subtitle", return_value=""):
+                    with patch("xagent.interfaces.cli._run_resetup_launcher", return_value=0) as resetup_launcher:
+                        exit_code = _run_interactive_launcher()
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("Resetup", fake_ui.option_titles)
+        self.assertIn("Setup", fake_ui.option_titles)
         resetup_launcher.assert_called_once()
 
     def test_interactive_launcher_help_prints_command_guide(self):
@@ -1635,6 +1774,41 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("xagent channel api start", fake_ui.panels[0][1])
         self.assertIn("xagent inspect memory list --days 7", fake_ui.panels[0][1])
         self.assertNotIn("xagent doctor", fake_ui.panels[0][1])
+
+    def test_interactive_launcher_setup_success_returns_home_without_pause(self):
+        class FakeUI:
+            def __init__(self):
+                self.choices = iter([
+                    SimpleNamespace(key="init", disabled=False),
+                    SimpleNamespace(key="exit", disabled=False),
+                ])
+                self.pause_calls = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del title, subtitle, options, footer
+                return next(self.choices)
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                self.pause_calls.append(message)
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
+            with patch("xagent.interfaces.cli.build_runtime_overview", return_value=SimpleNamespace(initialized=False)):
+                with patch("xagent.interfaces.cli._launcher_overview_subtitle", return_value=""):
+                    with patch("xagent.interfaces.cli.handle_init", return_value=0) as handle_init_mock:
+                        exit_code = _run_interactive_launcher()
+
+        self.assertEqual(exit_code, 0)
+        handle_init_mock.assert_called_once()
+        self.assertEqual(fake_ui.pause_calls, [])
 
     def test_launcher_help_content_switches_setup_command_by_state(self):
         config_dir = Path("/tmp/xagent")

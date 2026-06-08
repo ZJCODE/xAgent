@@ -22,6 +22,10 @@ class MenuOption:
     disabled: bool = False
 
 
+class ReturnToLauncherHome(Exception):
+    """Raised when a launcher menu requests a jump back to the main home screen."""
+
+
 def rich_terminal_available(*, stdin=None, stdout=None) -> bool:
     """Return whether the process can use the Rich/readchar interactive UI."""
     stdin_stream = stdin or sys.stdin
@@ -147,12 +151,14 @@ class TerminalUI:
         footer: str,
         default_index: int,
         screen: bool,
+        home_shortcut: bool,
     ) -> Optional[MenuOption]:
         selected = max(0, min(default_index, len(options) - 1))
         up_keys = {readchar.key.UP, "k"}
         down_keys = {readchar.key.DOWN, "j"}
         enter_keys = {readchar.key.ENTER, "\r", "\n"}
         quit_keys = {"q", "Q", "\x03", "\x1b"}
+        home_keys = {"h", "H"}
 
         def render() -> Text:
             return self._render_menu_text(
@@ -183,6 +189,8 @@ class TerminalUI:
                     if option.disabled:
                         continue
                     return option
+                if home_shortcut and key in home_keys:
+                    raise ReturnToLauncherHome()
                 if key in quit_keys:
                     return None
 
@@ -229,6 +237,7 @@ class TerminalUI:
         options: Sequence[MenuOption],
         subtitle: str,
         default_index: int,
+        home_shortcut: bool,
     ) -> Optional[MenuOption]:
         self.console.print(f"\n{title}")
         if subtitle:
@@ -244,9 +253,16 @@ class TerminalUI:
                 self.console.print(f"     {option.description}", style="dim")
 
         while True:
-            raw_choice = self.input("Choose an option number (or q to go back): ").strip()
+            prompt = "Choose an option number"
+            if home_shortcut:
+                prompt += " (or h for home, q to go back): "
+            else:
+                prompt += " (or q to go back): "
+            raw_choice = self.input(prompt).strip()
             if not raw_choice:
                 return visible_options[default_choice] if visible_options else None
+            if home_shortcut and raw_choice.lower() in {"h", "home"}:
+                raise ReturnToLauncherHome()
             if raw_choice.lower() in {"q", "quit", "exit"}:
                 return None
             if raw_choice.isdigit():
@@ -267,10 +283,16 @@ class TerminalUI:
         subtitle: str = "",
         footer: str = "↑/↓ Move · Enter Select · q Back",
         default_index: int = 0,
+        home_shortcut: bool = False,
     ) -> Optional[MenuOption]:
         """Navigation-style menu (stable full screen) used by launcher hubs."""
         if not options:
             return None
+
+        home_shortcut = home_shortcut or "q Back" in footer
+        rendered_footer = footer
+        if home_shortcut and "h Home" not in rendered_footer:
+            rendered_footer = f"{rendered_footer}  •  h Home"
 
         if not self.interactive:
             return self._fallback_select_menu(
@@ -278,15 +300,17 @@ class TerminalUI:
                 options=options,
                 subtitle=subtitle,
                 default_index=max(0, min(default_index, len(options) - 1)),
+                home_shortcut=home_shortcut,
             )
 
         return self._run_menu(
             title=title,
             options=options,
             subtitle=subtitle,
-            footer=footer,
+            footer=rendered_footer,
             default_index=default_index,
             screen=True,
+            home_shortcut=home_shortcut,
         )
 
     def select(
@@ -308,6 +332,7 @@ class TerminalUI:
                 options=options,
                 subtitle=subtitle,
                 default_index=default_index,
+                home_shortcut=False,
             )
         else:
             choice = self._run_menu(
@@ -317,6 +342,7 @@ class TerminalUI:
                 footer="↑/↓ Move · Enter Select · q Cancel",
                 default_index=default_index,
                 screen=False,
+                home_shortcut=False,
             )
         if choice is not None:
             self._print_choice(label, choice.title)

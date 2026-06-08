@@ -5,7 +5,7 @@ from unittest.mock import patch
 import readchar
 from rich.console import Console
 
-from xagent.interfaces.terminal_ui import MenuOption, TerminalUI
+from xagent.interfaces.terminal_ui import MenuOption, ReturnToLauncherHome, TerminalUI
 
 
 def _interactive_ui() -> tuple[TerminalUI, io.StringIO]:
@@ -89,6 +89,22 @@ class TerminalUITests(unittest.TestCase):
             result = ui.confirm("Write project files?", default=True)
 
         self.assertIsNone(result)
+
+    def test_select_menu_h_shortcut_returns_to_launcher_home(self):
+        ui, _stream = _interactive_ui()
+        keys = iter(["h"])
+
+        with patch("xagent.interfaces.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
+            with self.assertRaises(ReturnToLauncherHome):
+                ui.select_menu(
+                    title="xAgent Setup",
+                    subtitle="Runtime ready",
+                    options=[
+                        MenuOption("partial", "Edit Setup", "Update one feature."),
+                        MenuOption("back", "Back", "Return to launcher."),
+                    ],
+                    footer="↑/↓ Move • Enter Select  •  q Back",
+                )
 
     def test_ask_text_masks_secret_and_records(self):
         ui, stream = _interactive_ui()
