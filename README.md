@@ -54,7 +54,7 @@ xagent voice --list-devices
 xagent voice --input-device "MacBook Pro麦克风" --output-device "MacBook Pro扬声器"
 ```
 
-Voice mode supports Soniox and Qwen in this version. `xagent init` writes the selected voice provider plus separate `stt.api_key` and `tts.api_key` entries into `config.yaml`; selecting `custom` lets STT and TTS use different Soniox/Qwen providers and API keys. No separate voice extra or environment variable setup is required. `auto` keeps the built-in best-device selection. To pin local devices, set `channels.voice.audio.input` and `channels.voice.audio.output` to a device name, `#index`, or `auto`; CLI `--input-device` and `--output-device` override the config for one run. For shared rooms, enable `channels.voice.wake.enabled` and set `wake.wake_phrases` so background speech is ignored until a configured wake phrase is heard. It streams microphone audio to the selected realtime STT service, uses provider-side endpoint detection to decide when a user turn ends, calls the existing xAgent text runtime, and streams the assistant reply through the selected realtime TTS service. It is not part of `xagent service start all` yet.
+Voice mode supports Soniox and Qwen in this version. `xagent init` writes the selected voice provider plus separate `stt.api_key` and `tts.api_key` entries into `config.yaml`; selecting `custom` lets STT and TTS use different Soniox/Qwen providers and API keys. No separate voice extra or environment variable setup is required. `auto` keeps the built-in best-device selection. To pin local devices, set `channels.voice.audio.input` and `channels.voice.audio.output` to a device name, `#index`, or `auto`; CLI `--input-device` and `--output-device` override the config for one run. For shared rooms, enable `channels.voice.wake.enabled` and set `wake.wake_phrases` so background speech is ignored until a configured wake phrase is heard. It streams microphone audio to the selected realtime STT service, uses provider-side endpoint detection to decide when a user turn ends, calls the existing xAgent text runtime, and streams the assistant reply through the selected realtime TTS service. Voice stays foreground-only; use `xagent voice` to start it.
 
 ## Use From The Web Page
 
@@ -67,16 +67,16 @@ xagent web
 The web page is best for longer conversations, segmented replies, and file or image attachments.
 Use the Transport selector when you need to compare final-only HTTP with WebSocket event delivery. WebSocket is an API transport, not a separate channel.
 
-Run it as a managed background service instead:
+Run it as a managed background channel instead:
 
 ```bash
-xagent service start api
-xagent service status
-xagent service logs api
-xagent service stop api
+xagent channel api start
+xagent channel api status
+xagent channel api logs
+xagent channel api stop
 ```
 
-Use `api` for HTTP JSON, WebSocket, and the built-in web page. Use `feishu` for the Feishu bot, and `all` when you want every enabled managed channel. The local `voice` command is foreground-only and is not managed by `service` in this version. Without a channel, `service start` chooses one enabled channel, preferring `api`; other service actions default to `all`.
+Use `api` for HTTP JSON, WebSocket, and the built-in web page. Use `feishu` for the Feishu bot. The local `voice` command is foreground-only; start it with `xagent voice`.
 
 ## Scheduled Tasks
 
@@ -90,13 +90,11 @@ Configure the Feishu channel after the base init:
 
 ```bash
 # One-click: creates the Feishu app and writes the config (admin authorization required)
-xagent init feishu
+xagent channel feishu setup
 # Or paste an existing App ID/Secret instead:
-xagent init feishu --manual
-xagent service start feishu
+xagent channel feishu setup --manual
+xagent channel feishu start
 ```
-
-`xagent service start all` starts every enabled channel in `config.yaml`.
 
 ## Chat And Observe
 

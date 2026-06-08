@@ -10,7 +10,6 @@ import yaml
 CHANNEL_API = "api"
 CHANNEL_FEISHU = "feishu"
 CHANNEL_VOICE = "voice"
-CHANNEL_ALL = "all"
 VALID_CHANNELS = {CHANNEL_API, CHANNEL_FEISHU}
 
 
@@ -37,7 +36,7 @@ def load_config_file(config_dir: Path) -> dict[str, Any]:
 
 
 def enabled_channels_from_config(config: Optional[Mapping[str, Any]]) -> list[str]:
-    """Return public channels enabled by config for the `all` selector."""
+    """Return public managed channels enabled by config."""
     channels = config.get("channels") if isinstance(config, Mapping) else None
     if not isinstance(channels, Mapping):
         return [CHANNEL_API]
@@ -77,6 +76,7 @@ def normalize_channel_values(
     config: Optional[Mapping[str, Any]] = None,
 ) -> list[str]:
     """Normalize comma-separated/repeated channel values into public channels."""
+    del config
     raw_values: Iterable[str] = values if values else (default,)
     selected: list[str] = []
     for raw_value in raw_values:
@@ -84,13 +84,8 @@ def normalize_channel_values(
             channel = token.strip().lower()
             if not channel:
                 continue
-            if channel == CHANNEL_ALL:
-                for enabled in enabled_channels_from_config(config):
-                    if enabled not in selected:
-                        selected.append(enabled)
-                continue
             if channel not in VALID_CHANNELS:
-                valid = ", ".join(sorted(VALID_CHANNELS | {CHANNEL_ALL}))
+                valid = ", ".join(sorted(VALID_CHANNELS))
                 raise ChannelSelectionError(f"Unknown channel {channel!r}. Expected one of: {valid}.")
             if channel not in selected:
                 selected.append(channel)

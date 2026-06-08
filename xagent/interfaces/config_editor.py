@@ -8,7 +8,33 @@ from typing import Any, Callable
 
 import yaml
 
-from ..core.providers import PROVIDER_MINIMAX, PROVIDER_OPENAI, PROVIDER_QWEN, normalize_provider_name
+from ..core.providers import (
+    KNOWN_PROVIDERS,
+    MODEL_API_ANTHROPIC_MESSAGES,
+    MODEL_API_OPENAI_CHAT_COMPLETIONS,
+    MODEL_API_OPENAI_RESPONSES,
+    PROVIDER_CUSTOM,
+    PROVIDER_MINIMAX,
+    PROVIDER_OPENAI,
+    PROVIDER_QWEN,
+    normalize_model_api,
+    normalize_provider_name,
+    provider_base_url,
+)
+from ..tools.image_generation_tool import (
+    DEFAULT_IMAGE_GENERATION_MODEL,
+    DEFAULT_IMAGE_GENERATION_QUALITY,
+    DEFAULT_IMAGE_GENERATION_SIZE,
+    DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO,
+    DEFAULT_MINIMAX_IMAGE_GENERATION_MODEL,
+    DEFAULT_QWEN_IMAGE_GENERATION_MODEL,
+    DEFAULT_QWEN_IMAGE_GENERATION_SIZE,
+    IMAGE_GENERATION_PROVIDER_MINIMAX,
+    IMAGE_GENERATION_PROVIDER_NONE,
+    IMAGE_GENERATION_PROVIDER_OPENAI,
+    IMAGE_GENERATION_PROVIDER_QWEN,
+    normalize_image_generation_provider,
+)
 from ..tools.search_tool import is_placeholder_api_key, normalize_search_provider
 from ..voice.config import (
     QWEN_KEY_PLACEHOLDER,
@@ -23,8 +49,21 @@ from .base import BaseAgentConfig, BaseAgentRunner
 
 SEARCH_PROVIDER_NONE = "none"
 SEARCH_PROVIDERS = (SEARCH_PROVIDER_NONE, PROVIDER_OPENAI, PROVIDER_QWEN, PROVIDER_MINIMAX)
+IMAGE_GENERATION_PROVIDERS = (
+    IMAGE_GENERATION_PROVIDER_NONE,
+    IMAGE_GENERATION_PROVIDER_OPENAI,
+    IMAGE_GENERATION_PROVIDER_MINIMAX,
+    IMAGE_GENERATION_PROVIDER_QWEN,
+)
+MODEL_APIS = (
+    MODEL_API_OPENAI_CHAT_COMPLETIONS,
+    MODEL_API_OPENAI_RESPONSES,
+    MODEL_API_ANTHROPIC_MESSAGES,
+)
 VOICE_PRESETS = ("none", VOICE_PROVIDER_SONIOX, VOICE_PROVIDER_QWEN, VOICE_PROVIDER_CUSTOM)
 VOICE_NESTED_PROVIDERS = (VOICE_PROVIDER_SONIOX, VOICE_PROVIDER_QWEN)
+MODEL_PLACEHOLDER = "your_model_here"
+API_KEY_PLACEHOLDER = "your_api_key_here"
 
 
 @dataclass(frozen=True)
@@ -136,6 +175,119 @@ def provider_needs_feature_key(config: dict[str, Any], provider: str) -> bool:
     return provider != SEARCH_PROVIDER_NONE and provider != model_provider
 
 
+def image_generation_provider_needs_feature_key(config: dict[str, Any], provider: str) -> bool:
+    model_provider = normalize_provider_name((config.get("provider") or {}).get("name"))
+    return provider != IMAGE_GENERATION_PROVIDER_NONE and provider != model_provider
+
+
+def _image_generation_defaults(provider: str) -> dict[str, Any]:
+    if provider == IMAGE_GENERATION_PROVIDER_OPENAI:
+        return {
+            "provider": provider,
+            "model": DEFAULT_IMAGE_GENERATION_MODEL,
+            "size": DEFAULT_IMAGE_GENERATION_SIZE,
+            "quality": DEFAULT_IMAGE_GENERATION_QUALITY,
+        }
+    if provider == IMAGE_GENERATION_PROVIDER_MINIMAX:
+        return {
+            "provider": provider,
+            "model": DEFAULT_MINIMAX_IMAGE_GENERATION_MODEL,
+            "aspect_ratio": DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO,
+        }
+    if provider == IMAGE_GENERATION_PROVIDER_QWEN:
+        return {
+            "provider": provider,
+            "model": DEFAULT_QWEN_IMAGE_GENERATION_MODEL,
+            "size": DEFAULT_QWEN_IMAGE_GENERATION_SIZE,
+        }
+    return {"provider": IMAGE_GENERATION_PROVIDER_NONE}
+
+
+def _existing_feature_key(config: dict[str, Any], section: str, provider: str) -> str | None:
+    current = config.get(section)
+    if not isinstance(current, dict):
+        return None
+    current_provider = normalize_provider_name(current.get("provider"))
+    api_key = str(current.get("api_key") or "").strip()
+    if current_provider == provider and api_key and not is_placeholder_api_key(api_key):
+        return api_key
+    return None
+
+
+def prepare_model_provider_update(
+    config: dict[str, Any],
+    *,
+    provider: str,
+    model: str,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model_api: str | None = None,
+    supports_vision: bool | None = None,
+    search_api_key: str | None = None,
+    image_generation_api_key: str | None = None,
+) -> ConfigUpdate:
+    normalized_provider = normalize_provider_name(provider)
+    if normalized_provider not in KNOWN_PROVIDERS:
+        allowed = ", ".join(KNOWN_PROVIDERS)
+        raise ValueError(f"Unsupported model provider: {provider}. Expected one of: {allowed}")
+
+    selected_model = model.strip() or MODEL_PLACEHOLDER
+    selected_model_api = (
+        normalize_model_api(model_api or MODEL_API_OPENAI_CHAT_COMPLETIONS)
+        if normalized_provider == PROVIDER_CUSTOM
+        else None
+    )
+
+    def mutate(data: dict[str, Any]) -> None:
+        current_provider = data.get("provider") if isinstance(data.get("provider"), dict) else {}
+        provider_config: dict[str, Any] = {
+            "name": normalized_provider,
+            "base_url": (base_url or provider_base_url(normalized_provider, selected_model_api)).strip(),
+            "api_key": (api_key or "").strip()
+            or (
+                str(current_provider.get("api_key") or "").strip()
+                if normalize_provider_name(current_provider.get("name")) == normalized_provider
+                else API_KEY_PLACEHOLDER
+            ),
+            "model": selected_model,
+        }
+        if "max_tokens" in current_provider:
+            provider_config["max_tokens"] = current_provider["max_tokens"]
+        if normalized_provider == PROVIDER_CUSTOM:
+            provider_config["model_api"] = selected_model_api or MODEL_API_OPENAI_CHAT_COMPLETIONS
+            provider_config["supports_vision"] = bool(supports_vision)
+        data["provider"] = provider_config
+
+        search = data.get("search")
+        if isinstance(search, dict):
+            search_provider = normalize_search_provider(search.get("provider"))
+            if provider_needs_feature_key(data, search_provider):
+                feature_key = (search_api_key or "").strip() or str(search.get("api_key") or "").strip()
+                search["api_key"] = feature_key
+
+        image_generation = data.get("image_generation")
+        if isinstance(image_generation, dict):
+            image_provider = normalize_image_generation_provider(image_generation.get("provider"))
+            if image_generation_provider_needs_feature_key(data, image_provider):
+                feature_key = (image_generation_api_key or "").strip() or str(image_generation.get("api_key") or "").strip()
+                image_generation["api_key"] = feature_key
+
+    return prepare_update(
+        config,
+        mutate,
+        (
+            "provider.name",
+            "provider.model_api",
+            "provider.base_url",
+            "provider.api_key",
+            "provider.model",
+            "provider.supports_vision",
+            "search.api_key",
+            "image_generation.api_key",
+        ),
+    )
+
+
 def prepare_search_provider_update(
     config: dict[str, Any],
     *,
@@ -156,6 +308,47 @@ def prepare_search_provider_update(
         data["search"] = search
 
     return prepare_update(config, mutate, ("search.provider", "search.api_key"))
+
+
+def prepare_image_generation_provider_update(
+    config: dict[str, Any],
+    *,
+    provider: str,
+    api_key: str | None = None,
+) -> ConfigUpdate:
+    normalized_provider = normalize_image_generation_provider(provider)
+    if normalized_provider not in IMAGE_GENERATION_PROVIDERS:
+        raise ValueError(f"Unsupported image generation provider: {provider}")
+
+    def mutate(data: dict[str, Any]) -> None:
+        current = data.get("image_generation") if isinstance(data.get("image_generation"), dict) else {}
+        if normalize_image_generation_provider(current.get("provider")) == normalized_provider:
+            image_generation = dict(current)
+            image_generation["provider"] = normalized_provider
+        else:
+            image_generation = _image_generation_defaults(normalized_provider)
+        if normalized_provider != IMAGE_GENERATION_PROVIDER_NONE:
+            resolved_key = (api_key or "").strip() or _existing_feature_key(data, "image_generation", normalized_provider)
+            if image_generation_provider_needs_feature_key(data, normalized_provider):
+                image_generation["api_key"] = resolved_key or ""
+            elif resolved_key:
+                image_generation["api_key"] = resolved_key
+            else:
+                image_generation.pop("api_key", None)
+        data["image_generation"] = image_generation
+
+    return prepare_update(
+        config,
+        mutate,
+        (
+            "image_generation.provider",
+            "image_generation.api_key",
+            "image_generation.model",
+            "image_generation.size",
+            "image_generation.quality",
+            "image_generation.aspect_ratio",
+        ),
+    )
 
 
 def _voice_key_placeholder(provider: str) -> str:
@@ -353,6 +546,62 @@ def prepare_voice_nested_provider_update(
             f"channels.voice.{section}.api_key",
             f"channels.voice.{section}.model",
             "channels.voice.tts.voice",
+        ),
+    )
+
+
+def _require_voice(data: dict[str, Any]) -> dict[str, Any]:
+    channels = data.setdefault("channels", {})
+    if not isinstance(channels, dict):
+        raise ValueError("channels must be a dictionary")
+    voice = channels.get("voice")
+    if not isinstance(voice, dict):
+        raise ValueError("channels.voice must be configured before updating voice options")
+    return voice
+
+
+def prepare_voice_interruptions_update(config: dict[str, Any], *, enabled: bool) -> ConfigUpdate:
+    def mutate(data: dict[str, Any]) -> None:
+        voice = _require_voice(data)
+        voice["enable_interruptions"] = bool(enabled)
+
+    return prepare_update(config, mutate, ("channels.voice.enable_interruptions",))
+
+
+def prepare_voice_wake_update(
+    config: dict[str, Any],
+    *,
+    enabled: bool | None = None,
+    wake_phrases: list[str] | None = None,
+    exit_phrases: list[str] | None = None,
+    match_mode: str | None = None,
+    idle_timeout_seconds: float | None = None,
+) -> ConfigUpdate:
+    def mutate(data: dict[str, Any]) -> None:
+        voice = _require_voice(data)
+        wake = voice.setdefault("wake", {})
+        if not isinstance(wake, dict):
+            raise ValueError("channels.voice.wake must be a dictionary")
+        if enabled is not None:
+            wake["enabled"] = bool(enabled)
+        if wake_phrases is not None:
+            wake["wake_phrases"] = [item.strip() for item in wake_phrases if item.strip()]
+        if exit_phrases is not None:
+            wake["exit_phrases"] = [item.strip() for item in exit_phrases if item.strip()]
+        if match_mode is not None:
+            wake["match_mode"] = match_mode.strip().lower()
+        if idle_timeout_seconds is not None:
+            wake["idle_timeout_seconds"] = float(idle_timeout_seconds)
+
+    return prepare_update(
+        config,
+        mutate,
+        (
+            "channels.voice.wake.enabled",
+            "channels.voice.wake.wake_phrases",
+            "channels.voice.wake.exit_phrases",
+            "channels.voice.wake.match_mode",
+            "channels.voice.wake.idle_timeout_seconds",
         ),
     )
 

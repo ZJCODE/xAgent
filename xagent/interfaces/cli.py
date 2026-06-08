@@ -33,6 +33,7 @@ from ..core.providers import (
     model_api_uses_openai_client,
     provider_base_url,
     provider_model_api,
+    normalize_provider_name,
 )
 from ..core.runtime import create_runtime_heartbeat
 from ..utils.image_utils import workspace_blob_relative_path
@@ -45,20 +46,28 @@ from .channels import (
     ChannelSelectionError,
     api_config,
     default_start_channel_from_config,
+    enabled_channels_from_config,
     feishu_config,
     load_config_file,
     normalize_channel_values,
     voice_config,
 )
 from .config_editor import (
+    IMAGE_GENERATION_PROVIDERS,
+    MODEL_APIS,
     SEARCH_PROVIDERS,
     VOICE_NESTED_PROVIDERS,
     VOICE_PRESETS,
     ConfigUpdate,
+    image_generation_provider_needs_feature_key,
     load_config,
+    prepare_image_generation_provider_update,
+    prepare_model_provider_update,
     prepare_search_provider_update,
+    prepare_voice_interruptions_update,
     prepare_voice_nested_provider_update,
     prepare_voice_preset_update,
+    prepare_voice_wake_update,
     provider_needs_feature_key,
     write_config,
 )
@@ -552,6 +561,8 @@ LANGFUSE_SECRET_KEY_PLACEHOLDER = "sk-lf-..."
 CUSTOM_MODEL_OPTION = "Custom"
 DEFAULT_MESSAGE_LIST_COUNT = 5
 MESSAGE_LIST_COUNT_CHOICES = (2, 5, 10)
+DEFAULT_MEMORY_LIST_DAYS = 7
+MEMORY_LIST_DAY_CHOICES = (1, 3, 7, 14)
 
 OPENAI_MODELS = (
     "gpt-5.4",
@@ -1129,6 +1140,33 @@ def _prompt_message_list_count_terminal_ui(ui: TerminalUI) -> Optional[int]:
         raw_value = ui.ask_text(
             "Recent message count",
             default=str(DEFAULT_MESSAGE_LIST_COUNT),
+            subtitle="Enter a positive whole number.",
+        ).strip()
+        if raw_value.isdigit() and int(raw_value) > 0:
+            return int(raw_value)
+        ui.print_panel("Please enter a positive whole number.", title="Input Required")
+
+
+def _prompt_memory_list_days_terminal_ui(ui: TerminalUI) -> Optional[int]:
+    choice = ui.select(
+        label="Recent daily journal days",
+        subtitle="Choose how many natural days to scan for daily journals.",
+        options=[
+            MenuOption(str(days), str(days), f"Show existing daily journals from the last {days} day(s).")
+            for days in MEMORY_LIST_DAY_CHOICES
+        ]
+        + [MenuOption("custom", "Custom", "Enter a custom number of days.")],
+        default_index=2,
+    )
+    if choice is None:
+        return None
+    if choice.key != "custom":
+        return int(choice.key)
+
+    while True:
+        raw_value = ui.ask_text(
+            "Recent daily journal days",
+            default=str(DEFAULT_MEMORY_LIST_DAYS),
             subtitle="Enter a positive whole number.",
         ).strip()
         if raw_value.isdigit() and int(raw_value) > 0:
@@ -1754,8 +1792,8 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
         ),
         (
             "api",
-            _format_init_command("xagent service start api", config_dir=config_dir),
-            "Run the HTTP / SSE / WebSocket service in the background.",
+            _format_init_command("xagent channel api start", config_dir=config_dir),
+            "Run the HTTP / SSE / WebSocket channel in the background.",
         ),
     ]
     if selection.voice_enabled:
@@ -1768,8 +1806,8 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
             ),
         )
 
-    feishu_init = _format_init_command("xagent init feishu", config_dir=config_dir)
-    feishu_start = _format_init_command("xagent service start feishu", config_dir=config_dir)
+    feishu_init = _format_init_command("xagent channel feishu setup", config_dir=config_dir)
+    feishu_start = _format_init_command("xagent channel feishu start", config_dir=config_dir)
     
     content = Text()
     content.append("Pick how you want to use it next.\n\n")
@@ -1843,18 +1881,7 @@ def _add_channel_argument(
         action="append",
         default=None,
         metavar="CHANNELS",
-        help=f"Channel(s) to use: api, feishu, all, or comma-separated values (default: {default_label})",
-    )
-
-
-def _add_service_channel_argument(parser: argparse.ArgumentParser, *, default_label: str) -> None:
-    parser.add_argument(
-        "channels",
-        nargs="?",
-        default=None,
-        metavar="channel",
-        choices=(CHANNEL_API, CHANNEL_FEISHU, "all"),
-        help=f"Channel to manage: api, feishu, or all (default: {default_label})",
+        help=f"Channel(s) to use: api, feishu, or comma-separated values (default: {default_label})",
     )
 
 
@@ -1895,6 +1922,49 @@ def _add_api_runtime_arguments(
     )
 
 
+def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_dir_argument(parser)
+    parser.add_argument("--app-id", dest="app_id", default=None, help="Feishu app id (cli_xxx)")
+    parser.add_argument("--app-secret", dest="app_secret", default=None, help="Feishu app secret")
+    parser.add_argument(
+        "--manual",
+        action="store_true",
+        help="Enter App ID/Secret manually instead of the one-click QR code flow",
+    )
+    parser.add_argument(
+        "--stream",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Use Feishu streaming cards for in-progress replies",
+    )
+    parser.add_argument(
+        "--memory",
+        dest="enable_memory",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable long-term memory for Feishu chats",
+    )
+    parser.add_argument(
+        "--group-history-count",
+        type=int,
+        default=None,
+        help="How many recent group/topic messages to fetch before replying (default: 10)",
+    )
+    parser.add_argument(
+        "--show-sender-ids",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Include Feishu sender IDs in fetched room context",
+    )
+    parser.add_argument(
+        "--group-reply-without-mention",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Route every group/topic message, even without an @mention",
+    )
+    parser.add_argument("--force", action="store_true", help="Overwrite existing channels.feishu config")
+
+
 def _hide_subparser_choice(subparsers: argparse._SubParsersAction, name: str) -> None:
     subparsers._choices_actions = [
         action for action in subparsers._choices_actions if action.dest != name
@@ -1926,7 +1996,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "",
             "Runtime:",
             "  observe   Ingest context without generating a reply",
-            "  service   Manage background channels",
+            "  channel   Open, start, stop, inspect, and tail channels",
             "  doctor    Check local xAgent readiness",
             "",
             "Advanced:",
@@ -1938,8 +2008,8 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent chat \"Help me plan today\"",
             "  xagent voice",
             "  xagent web",
-            "  xagent service start api",
-            "  xagent service logs feishu -f",
+            "  xagent channel api start",
+            "  xagent channel feishu logs -f",
             "",
             "Use 'xagent <command> --help' for command-specific help.",
             "",
@@ -1961,46 +2031,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_sub = init_parser.add_subparsers(dest="init_target", metavar="[target]")
     init_feishu = init_sub.add_parser("feishu", help="Enable and configure the Feishu channel")
-    _add_dir_argument(init_feishu)
-    init_feishu.add_argument("--app-id", dest="app_id", default=None, help="Feishu app id (cli_xxx)")
-    init_feishu.add_argument("--app-secret", dest="app_secret", default=None, help="Feishu app secret")
-    init_feishu.add_argument(
-        "--manual",
-        action="store_true",
-        help="Enter App ID/Secret manually instead of the one-click QR code flow",
-    )
-    init_feishu.add_argument(
-        "--stream",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Use Feishu streaming cards for in-progress replies",
-    )
-    init_feishu.add_argument(
-        "--memory",
-        dest="enable_memory",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable or disable long-term memory for Feishu chats",
-    )
-    init_feishu.add_argument(
-        "--group-history-count",
-        type=int,
-        default=None,
-        help="How many recent group/topic messages to fetch before replying (default: 10)",
-    )
-    init_feishu.add_argument(
-        "--show-sender-ids",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Include Feishu sender IDs in fetched room context",
-    )
-    init_feishu.add_argument(
-        "--group-reply-without-mention",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Route every group/topic message, even without an @mention",
-    )
-    init_feishu.add_argument("--force", action="store_true", help="Overwrite existing channels.feishu config")
+    _add_feishu_setup_arguments(init_feishu)
     init_feishu.set_defaults(handler=handle_init_feishu)
 
     chat_parser = subparsers.add_parser("chat", help="Chat with the configured agent")
@@ -2067,43 +2098,66 @@ def build_parser() -> argparse.ArgumentParser:
     observe_parser.add_argument("--metadata", default=None, help="JSON object with observation metadata")
     observe_parser.set_defaults(handler=handle_observe)
 
-    service_parser = subparsers.add_parser("service", help="Manage background channels")
-    service_sub = service_parser.add_subparsers(dest="service_command", metavar="<action>")
-    service_sub.required = True
+    channel_parser = subparsers.add_parser("channel", help="Open and manage runtime channels")
+    channel_sub = channel_parser.add_subparsers(dest="channel_target", metavar="<channel>")
+    channel_sub.required = True
 
-    service_start = service_sub.add_parser("start", help="Start a background channel")
-    _add_dir_argument(service_start)
-    _add_service_channel_argument(service_start, default_label="auto")
-    _add_api_runtime_arguments(service_start)
-    service_start.set_defaults(handler=handle_start)
+    api_channel = channel_sub.add_parser("api", help="Open or manage the API / Web UI channel")
+    api_sub = api_channel.add_subparsers(dest="channel_action", metavar="<action>")
+    api_sub.required = True
+    api_open = api_sub.add_parser("open", help="Open the API channel and browser UI in the foreground")
+    _add_dir_argument(api_open)
+    _add_api_runtime_arguments(api_open, open_by_default=True)
+    api_open.set_defaults(handler=handle_web)
+    api_start = api_sub.add_parser("start", help="Start the API channel in the background")
+    _add_dir_argument(api_start)
+    _add_api_runtime_arguments(api_start)
+    api_start.set_defaults(handler=handle_start, channels=[CHANNEL_API])
+    api_stop = api_sub.add_parser("stop", help="Stop the background API channel")
+    _add_dir_argument(api_stop)
+    api_stop.set_defaults(handler=handle_stop, channels=[CHANNEL_API])
+    api_restart = api_sub.add_parser("restart", help="Restart the background API channel")
+    _add_dir_argument(api_restart)
+    _add_api_runtime_arguments(api_restart)
+    api_restart.set_defaults(handler=handle_restart, channels=[CHANNEL_API])
+    api_status = api_sub.add_parser("status", help="Show API channel status")
+    _add_dir_argument(api_status)
+    api_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    api_status.set_defaults(handler=handle_status, channels=[CHANNEL_API])
+    api_logs = api_sub.add_parser("logs", help="Show API channel logs")
+    _add_dir_argument(api_logs)
+    api_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
+    api_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
+    api_logs.set_defaults(handler=handle_logs, channels=[CHANNEL_API])
 
-    service_stop = service_sub.add_parser("stop", help="Stop background channels")
-    _add_dir_argument(service_stop)
-    _add_service_channel_argument(service_stop, default_label="all")
-    service_stop.set_defaults(handler=handle_stop)
-
-    service_restart = service_sub.add_parser("restart", help="Restart background channels")
-    _add_dir_argument(service_restart)
-    _add_service_channel_argument(service_restart, default_label="all")
-    _add_api_runtime_arguments(service_restart)
-    service_restart.set_defaults(handler=handle_restart)
-
-    service_status = service_sub.add_parser("status", help="Show background channel status")
-    _add_dir_argument(service_status)
-    _add_service_channel_argument(service_status, default_label="all")
-    service_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    service_status.set_defaults(handler=handle_status)
-
-    service_logs = service_sub.add_parser("logs", help="Show background channel logs")
-    _add_dir_argument(service_logs)
-    _add_service_channel_argument(service_logs, default_label="all")
-    service_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    service_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    service_logs.set_defaults(handler=handle_logs)
+    feishu_channel = channel_sub.add_parser("feishu", help="Configure or manage the Feishu channel")
+    feishu_sub = feishu_channel.add_subparsers(dest="channel_action", metavar="<action>")
+    feishu_sub.required = True
+    feishu_setup = feishu_sub.add_parser("setup", help="Enable or reconfigure the Feishu channel")
+    _add_feishu_setup_arguments(feishu_setup)
+    feishu_setup.set_defaults(handler=handle_init_feishu)
+    feishu_start = feishu_sub.add_parser("start", help="Start the Feishu channel in the background")
+    _add_dir_argument(feishu_start)
+    feishu_start.set_defaults(handler=handle_start, channels=[CHANNEL_FEISHU])
+    feishu_stop = feishu_sub.add_parser("stop", help="Stop the background Feishu channel")
+    _add_dir_argument(feishu_stop)
+    feishu_stop.set_defaults(handler=handle_stop, channels=[CHANNEL_FEISHU])
+    feishu_restart = feishu_sub.add_parser("restart", help="Restart the background Feishu channel")
+    _add_dir_argument(feishu_restart)
+    feishu_restart.set_defaults(handler=handle_restart, channels=[CHANNEL_FEISHU])
+    feishu_status = feishu_sub.add_parser("status", help="Show Feishu channel status")
+    _add_dir_argument(feishu_status)
+    feishu_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    feishu_status.set_defaults(handler=handle_status, channels=[CHANNEL_FEISHU])
+    feishu_logs = feishu_sub.add_parser("logs", help="Show Feishu channel logs")
+    _add_dir_argument(feishu_logs)
+    feishu_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
+    feishu_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
+    feishu_logs.set_defaults(handler=handle_logs, channels=[CHANNEL_FEISHU])
 
     doctor_parser = subparsers.add_parser("doctor", help="Check local xAgent readiness")
     _add_dir_argument(doctor_parser)
-    _add_channel_argument(doctor_parser, default_label="all")
+    _add_channel_argument(doctor_parser, default_label="enabled channels")
     doctor_parser.add_argument("--online", action="store_true", help="Include network/model checks")
     doctor_parser.set_defaults(handler=handle_doctor)
 
@@ -2127,19 +2181,19 @@ def build_parser() -> argparse.ArgumentParser:
         _add_dir_argument(identity_cmd)
         identity_cmd.set_defaults(handler=handle_identity)
 
-    memory_parser = inspect_sub.add_parser("memory", help="Inspect or clear long-term memory files")
+    memory_parser = inspect_sub.add_parser("memory", help="Inspect or clear long-term daily memory")
     memory_sub = memory_parser.add_subparsers(dest="memory_command", metavar="<subcommand>")
     memory_sub.required = True
-    for command_name in ("stats", "list", "clear"):
+    for command_name in ("stats", "clear"):
         memory_cmd = memory_sub.add_parser(command_name, help=f"{command_name} memory")
         _add_dir_argument(memory_cmd)
         memory_cmd.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
         memory_cmd.add_argument("--yes", action="store_true", help="Confirm destructive operations")
         memory_cmd.set_defaults(handler=handle_memory)
-    memory_show = memory_sub.add_parser("show", help="Show a memory markdown file by relative path")
-    _add_dir_argument(memory_show)
-    memory_show.add_argument("path", help="Relative path inside memory/")
-    memory_show.set_defaults(handler=handle_memory)
+    memory_list = memory_sub.add_parser("list", help="Show recent daily journals")
+    _add_dir_argument(memory_list)
+    memory_list.add_argument("--days", type=int, default=DEFAULT_MEMORY_LIST_DAYS, help="Recent natural days to scan")
+    memory_list.set_defaults(handler=handle_memory)
     memory_search = memory_sub.add_parser("search", help="Search memory markdown files")
     _add_dir_argument(memory_search)
     memory_search.add_argument("query", help="Search query")
@@ -2446,7 +2500,7 @@ def _run_feishu_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
 
     feishu_data = feishu_config(config)
     if not feishu_data:
-        print("Feishu channel is not configured. Run: xagent init feishu")
+        print("Feishu channel is not configured. Run: xagent channel feishu setup")
         return 1
 
     try:
@@ -2606,7 +2660,7 @@ def handle_start(args: argparse.Namespace) -> int:
 
 def handle_stop(args: argparse.Namespace) -> int:
     try:
-        channels, _config = _select_channels(args, default="all")
+        channels, _config = _select_channels(args, default="auto")
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
@@ -2622,7 +2676,7 @@ def handle_stop(args: argparse.Namespace) -> int:
 
 def handle_restart(args: argparse.Namespace) -> int:
     try:
-        channels, _config = _select_channels(args, default="all")
+        channels, _config = _select_channels(args, default="auto")
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
@@ -2636,7 +2690,7 @@ def handle_restart(args: argparse.Namespace) -> int:
 
 def handle_status(args: argparse.Namespace) -> int:
     try:
-        channels, _config = _select_channels(args, default="all")
+        channels, _config = _select_channels(args, default="auto")
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
@@ -2691,7 +2745,7 @@ def handle_logs(args: argparse.Namespace) -> int:
             return 1
 
     try:
-        channels, _config = _select_channels(args, default="all")
+        channels, _config = _select_channels(args, default="auto")
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
@@ -2944,19 +2998,15 @@ def _print_feishu_post_setup(config_path: Path, selection: FeishuInitSelection) 
     summary.append(f"- Routing: {_feishu_routing_label(selection.group_reply_without_mention)}\n")
     ui.print_panel(summary, title="Feishu Ready", leading_blank_line=True)
 
-    feishu_start = _format_init_command("xagent service start feishu", config_dir=config_dir)
-    start_all = _format_init_command("xagent service start all", config_dir=config_dir)
-    status = _format_init_command("xagent service status feishu", config_dir=config_dir)
-    logs = _format_init_command("xagent service logs feishu -f", config_dir=config_dir)
+    feishu_start = _format_init_command("xagent channel feishu start", config_dir=config_dir)
+    status = _format_init_command("xagent channel feishu status", config_dir=config_dir)
+    logs = _format_init_command("xagent channel feishu logs -f", config_dir=config_dir)
 
     next_steps = Text()
     next_steps.append("Run next:\n")
     next_steps.append("start   ")
     next_steps.append(feishu_start, style="cyan")
     next_steps.append("\n        Start only the Feishu channel.\n")
-    next_steps.append("all     ")
-    next_steps.append(start_all, style="cyan")
-    next_steps.append("\n        Start every configured channel for this runtime.\n")
     next_steps.append("status  ")
     next_steps.append(status, style="cyan")
     next_steps.append("\n        Check PID, logs, and whether the bot is already running.\n")
@@ -3205,14 +3255,6 @@ def _memory_scope_root(args: argparse.Namespace) -> Path:
     return root if scope == "all" else root / scope
 
 
-def _safe_memory_path(args: argparse.Namespace, relative_path: str) -> Optional[Path]:
-    root = _memory_root(args).resolve()
-    requested = (root / relative_path).resolve()
-    if not requested.is_relative_to(root):
-        return None
-    return requested
-
-
 def handle_memory(args: argparse.Namespace) -> int:
     root = _memory_root(args)
     scope_root = _memory_scope_root(args)
@@ -3227,21 +3269,28 @@ def handle_memory(args: argparse.Namespace) -> int:
         return 0
 
     if args.memory_command == "list":
-        files = sorted(path for path in scope_root.rglob("*.md") if path.is_file()) if scope_root.exists() else []
-        for path in files:
-            print(path.relative_to(root))
-        return 0
+        from ..components.memory import MarkdownMemory
 
-    if args.memory_command == "show":
-        path = _safe_memory_path(args, args.path)
-        if path is None:
-            print("Access denied: memory path escapes memory root")
+        days = int(getattr(args, "days", DEFAULT_MEMORY_LIST_DAYS) or DEFAULT_MEMORY_LIST_DAYS)
+        if days <= 0:
+            print("--days must be a positive whole number")
             return 1
-        if not path.is_file() or path.suffix != ".md":
-            print(f"Memory file not found: {path}")
-            return 1
-        print(path.read_text(encoding="utf-8", errors="replace"), end="")
-        return 0
+
+        async def _run_memory_list() -> int:
+            memory = MarkdownMemory(str(root))
+            entries = await memory.read_recent_dailies(days=days)
+            if not entries:
+                unit = "day" if days == 1 else "days"
+                print(f"No daily journals found in the last {days} {unit}.")
+                return 0
+            for index, (date_label, text) in enumerate(entries):
+                if index:
+                    print("\n---\n")
+                print(f"# {date_label}\n")
+                print(text.strip())
+            return 0
+
+        return asyncio.run(_run_memory_list())
 
     if args.memory_command == "search":
         if not scope_root.exists():
@@ -3326,7 +3375,12 @@ def handle_doctor(args: argparse.Namespace) -> int:
 
     try:
         config = load_config_file(config_dir)
-        channels = normalize_channel_values(getattr(args, "channels", None), default="all", config=config)
+        raw_channels = getattr(args, "channels", None)
+        channels = (
+            normalize_channel_values(raw_channels, default=CHANNEL_API, config=config)
+            if raw_channels
+            else enabled_channels_from_config(config)
+        )
     except ChannelSelectionError as exc:
         print(f"Channels: {exc}")
         return 1
@@ -3379,12 +3433,12 @@ def print_quick_start() -> None:
         print("After setup:")
         print("  xagent chat")
         print("  xagent web")
-        print("  xagent service")
+        print("  xagent channel")
     else:
         print("Quick start:")
         print("  xagent chat")
         print("  xagent web")
-        print("  xagent service")
+        print("  xagent channel")
     print("")
     print("Use 'xagent --help' to see all commands.")
 
@@ -3415,33 +3469,9 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
             description=setup_description,
         ),
         MenuOption(
-            key="chat",
-            title="Chat",
-            description="Talk with the configured agent in the terminal.",
-            disabled=not initialized,
-        ),
-        MenuOption(
-            key="web",
-            title="Web UI",
-            description="Start the built-in browser workspace.",
-            disabled=not initialized,
-        ),
-        MenuOption(
-            key="voice",
-            title="Voice",
-            description="Start microphone mode with the configured runtime.",
-            disabled=not initialized,
-        ),
-        MenuOption(
-            key="service",
-            title="Services",
-            description="Start, stop, inspect, and tail background channels.",
-            disabled=not initialized,
-        ),
-        MenuOption(
-            key="configure",
-            title="Configure",
-            description="Update model-adjacent features without editing YAML.",
+            key="channel",
+            title="Channel",
+            description="Open chat, Web UI, Feishu, and voice entry points.",
             disabled=not initialized,
         ),
         MenuOption(
@@ -3463,29 +3493,30 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
     ]
 
 
-def _launcher_channel_options(*, include_all: bool = True) -> list[MenuOption]:
-    options = [
+def _launcher_channel_options() -> list[MenuOption]:
+    return [
         MenuOption(
             key=CHANNEL_API,
-            title="API",
-            description="HTTP, SSE, WebSocket, and browser UI runtime.",
+            title="API / Web UI",
+            description="Open or manage the HTTP, WebSocket, and browser workspace.",
         ),
         MenuOption(
             key=CHANNEL_FEISHU,
             title="Feishu",
-            description="Feishu bot channel using the configured app credentials.",
+            description="Configure or manage the Feishu bot channel.",
         ),
+        MenuOption(
+            key="chat",
+            title="Terminal Chat",
+            description="Talk with the configured agent in the terminal.",
+        ),
+        MenuOption(
+            key="voice",
+            title="Voice",
+            description="Start microphone mode or list local audio devices.",
+        ),
+        MenuOption(key="back", title="Back", description="Return to the main launcher."),
     ]
-    if include_all:
-        options.append(
-            MenuOption(
-                key="all",
-                title="All",
-                description="Use all enabled channels.",
-            )
-        )
-    options.append(MenuOption(key="back", title="Back", description="Return to the previous menu."))
-    return options
 
 
 def _feishu_channel_is_configured(config_dir: Path) -> bool:
@@ -3497,32 +3528,25 @@ def _feishu_channel_is_configured(config_dir: Path) -> bool:
     return bool(data.get("app_id") and data.get("app_secret"))
 
 
-def _service_launcher_actions(config_dir: Path, channel: str) -> list[MenuOption]:
+def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]:
     actions: list[MenuOption] = []
-    if channel == CHANNEL_FEISHU:
-        if _feishu_channel_is_configured(config_dir):
-            actions.append(
-                MenuOption(
-                    "setup",
-                    "Resetup",
-                    "Re-run Feishu setup and replace channels.feishu.",
-                )
+    if channel == CHANNEL_API:
+        actions.append(MenuOption("open", "Open Web UI", "Run the API channel in the foreground and open the browser."))
+    if channel == CHANNEL_FEISHU and not _feishu_channel_is_configured(config_dir):
+        actions.append(
+            MenuOption(
+                "setup",
+                "Setup",
+                "Configure channels.feishu before starting this channel.",
             )
-        else:
-            actions.append(
-                MenuOption(
-                    "setup",
-                    "Setup",
-                    "Configure channels.feishu before starting this channel.",
-                )
-            )
+        )
     actions.extend([
-        MenuOption("start", "Start", "Start this channel."),
-        MenuOption("stop", "Stop", "Stop this channel."),
-        MenuOption("restart", "Restart", "Restart this channel."),
-        MenuOption("status", "Status", "Show pid and log paths."),
+        MenuOption("start", "Start Background", "Start this channel in the background."),
+        MenuOption("stop", "Stop", "Stop the background channel."),
+        MenuOption("restart", "Restart", "Restart the background channel."),
+        MenuOption("status", "Status", "Show PID and log paths."),
         MenuOption("logs", "Logs", "Print the latest log output."),
-        MenuOption("back", "Back", "Return to channel selection."),
+        MenuOption("back", "Back", "Return to Channel."),
     ])
     return actions
 
@@ -3546,20 +3570,23 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append("voice    ")
     content.append(_format_init_command("xagent voice", config_dir=config_dir), style="cyan")
     content.append("\n         Start local microphone/speaker mode when voice is configured.\n")
-    content.append("service  ")
-    content.append(_format_init_command("xagent service start api", config_dir=config_dir), style="cyan")
-    content.append("\n         Run API, Feishu, or all enabled channels in the background.\n")
-    content.append("configure\n")
-    content.append("         Use the launcher Configure menu to update search and voice providers safely.\n")
-    content.append("status   ")
-    content.append(_format_init_command("xagent service status all", config_dir=config_dir), style="cyan")
-    content.append("\n         Show PID files and log paths for managed services.\n")
-    content.append("logs     ")
-    content.append(_format_init_command("xagent service logs feishu -f", config_dir=config_dir), style="cyan")
-    content.append("\n         Follow a single channel log; omit -f to print recent lines.\n")
+    content.append("api      ")
+    content.append(_format_init_command("xagent channel api start", config_dir=config_dir), style="cyan")
+    content.append("\n         Run the API / Web UI channel in the background.\n")
     content.append("feishu   ")
-    content.append(_format_init_command("xagent init feishu", config_dir=config_dir), style="cyan")
-    content.append("\n         Configure the Feishu bot after base setup.\n")
+    content.append(_format_init_command("xagent channel feishu setup", config_dir=config_dir), style="cyan")
+    content.append("\n         Configure the Feishu bot, then start it with ")
+    content.append(_format_init_command("xagent channel feishu start", config_dir=config_dir), style="cyan")
+    content.append(".\n")
+    content.append("status   ")
+    content.append(_format_init_command("xagent channel api status", config_dir=config_dir), style="cyan")
+    content.append("\n         Show PID files and log paths for a channel.\n")
+    content.append("logs     ")
+    content.append(_format_init_command("xagent channel feishu logs -f", config_dir=config_dir), style="cyan")
+    content.append("\n         Follow a single channel log; omit -f to print recent lines.\n")
+    content.append("memory   ")
+    content.append(_format_init_command("xagent inspect memory list --days 7", config_dir=config_dir), style="cyan")
+    content.append("\n         Show existing daily journals from the last seven natural days.\n")
     content.append("inspect  ")
     content.append(_format_init_command("xagent inspect config show", config_dir=config_dir), style="cyan")
     content.append("\n         Read config, identity, memory, and message state.\n")
@@ -3592,13 +3619,120 @@ def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
     return "\n".join(lines)
 
 
-def _run_service_launcher(config_dir: Path) -> int:
+def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> int:
+    channels = [channel]
+    if action == "setup":
+        return handle_init_feishu(
+            _launcher_args(
+                config_dir=str(config_dir),
+                app_id=None,
+                app_secret=None,
+                manual=False,
+                force=False,
+                stream=None,
+                enable_memory=None,
+                group_history_count=None,
+                show_sender_ids=None,
+                group_reply_without_mention=None,
+            )
+        )
+    if action == "open":
+        return handle_web(
+            _launcher_args(
+                config_dir=str(config_dir),
+                host=None,
+                port=None,
+                open_browser=True,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+        )
+    if action == "start":
+        return handle_start(
+            _launcher_args(
+                config_dir=str(config_dir),
+                channels=channels,
+                host=None,
+                port=None,
+                open_browser=False,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+        )
+    if action == "stop":
+        return handle_stop(_launcher_args(config_dir=str(config_dir), channels=channels))
+    if action == "restart":
+        return handle_restart(
+            _launcher_args(
+                config_dir=str(config_dir),
+                channels=channels,
+                host=None,
+                port=None,
+                open_browser=False,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+        )
+    if action == "status":
+        return handle_status(
+            _launcher_args(
+                config_dir=str(config_dir),
+                channels=channels,
+                json_output=False,
+            )
+        )
+    return handle_logs(
+        _launcher_args(
+            config_dir=str(config_dir),
+            channels=channels,
+            lines=80,
+            follow=False,
+        )
+    )
+
+
+def _run_voice_channel_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    while True:
+        option = ui.select_menu(
+            title="xAgent Channel / Voice",
+            subtitle=f"Runtime: {config_dir}",
+            options=[
+                MenuOption("start", "Start Voice", "Start microphone mode with the configured runtime."),
+                MenuOption("devices", "List Devices", "Print available local audio input/output devices."),
+                MenuOption("back", "Back", "Return to Channel."),
+            ],
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            ui.clear()
+            return
+        ui.clear()
+        exit_code = handle_voice(
+            _launcher_args(
+                config_dir=str(config_dir),
+                user_id="local_voice",
+                verbose=False,
+                list_devices=option.key == "devices",
+                input_device=None,
+                output_device=None,
+                memory=True,
+            )
+        )
+        if exit_code != 0:
+            ui.print_panel(f"Voice action exited with status {exit_code}.", title="Channel")
+        ui.pause("Press Enter to return to Voice")
+
+
+def _run_channel_launcher(config_dir: Path) -> int:
     ui = TerminalUI()
 
     while True:
         channel_option = ui.select_menu(
-            title="xAgent Services",
-            subtitle="Choose the runtime slice first, then the operation.",
+            title="xAgent Channel",
+            subtitle="Choose how you want to enter or manage the runtime.",
             options=_launcher_channel_options(),
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
@@ -3606,81 +3740,44 @@ def _run_service_launcher(config_dir: Path) -> int:
             ui.clear()
             return 0
 
+        if channel_option.key == "chat":
+            ui.clear()
+            exit_code = handle_chat(
+                _launcher_args(
+                    message=None,
+                    config_dir=str(config_dir),
+                    user_id=None,
+                    verbose=False,
+                    stream=None,
+                    events=False,
+                    memory=True,
+                )
+            )
+            if exit_code != 0:
+                ui.print_panel(f"Chat exited with status {exit_code}.", title="Channel")
+            ui.pause("Press Enter to return to Channel")
+            continue
+
+        if channel_option.key == "voice":
+            ui.clear()
+            _run_voice_channel_launcher(ui, config_dir)
+            continue
+
         channel_title = getattr(channel_option, "title", str(channel_option.key).title())
         option = ui.select_menu(
-            title=f"xAgent Services / {channel_title}",
+            title=f"xAgent Channel / {channel_title}",
             subtitle=f"Runtime: {config_dir}",
-            options=_service_launcher_actions(config_dir, str(channel_option.key)),
+            options=_managed_channel_actions(config_dir, str(channel_option.key)),
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
         if option is None or option.key == "back":
             continue
         ui.clear()
-        channels = [channel_option.key]
-        if option.key == "setup":
-            exit_code = handle_init_feishu(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    app_id=None,
-                    app_secret=None,
-                    manual=False,
-                    force=_feishu_channel_is_configured(config_dir),
-                    stream=None,
-                    enable_memory=None,
-                    group_history_count=None,
-                    show_sender_ids=None,
-                    group_reply_without_mention=None,
-                )
-            )
-        elif option.key == "start":
-            exit_code = handle_start(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    channels=channels,
-                    host=None,
-                    port=None,
-                    open_browser=False,
-                    max_concurrent_chats=None,
-                    queue_timeout=None,
-                    chat_timeout=None,
-                )
-            )
-        elif option.key == "stop":
-            exit_code = handle_stop(_launcher_args(config_dir=str(config_dir), channels=channels))
-        elif option.key == "restart":
-            exit_code = handle_restart(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    channels=channels,
-                    host=None,
-                    port=None,
-                    open_browser=False,
-                    max_concurrent_chats=None,
-                    queue_timeout=None,
-                    chat_timeout=None,
-                )
-            )
-        elif option.key == "status":
-            exit_code = handle_status(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    channels=channels,
-                    json_output=False,
-                )
-            )
-        else:
-            exit_code = handle_logs(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    channels=channels,
-                    lines=80,
-                    follow=False,
-                )
-            )
+        exit_code = _run_managed_channel_action(config_dir, str(channel_option.key), str(option.key))
 
         if exit_code != 0:
-            ui.print_panel(f"Service action exited with status {exit_code}.", title="Services")
-        ui.pause("Press Enter to return to Services")
+            ui.print_panel(f"Channel action exited with status {exit_code}.", title="Channel")
+        ui.pause("Press Enter to return to Channel")
 
 
 def _current_search_provider(config: dict[str, Any]) -> str:
@@ -3708,10 +3805,68 @@ def _current_voice_nested_provider(config: dict[str, Any], section: str) -> str:
     return provider if provider in VOICE_NESTED_PROVIDERS else VOICE_NESTED_PROVIDERS[0]
 
 
+def _current_model_provider(config: dict[str, Any]) -> str:
+    provider = config.get("provider")
+    if not isinstance(provider, dict):
+        return PROVIDER_OPENAI
+    return normalize_provider_name(provider.get("name")) or PROVIDER_OPENAI
+
+
+def _current_model_api(config: dict[str, Any]) -> str:
+    provider = config.get("provider")
+    if not isinstance(provider, dict):
+        return MODEL_API_OPENAI_CHAT_COMPLETIONS
+    try:
+        return provider_model_api(provider)
+    except Exception:
+        return MODEL_API_OPENAI_CHAT_COMPLETIONS
+
+
+def _current_image_generation_provider(config: dict[str, Any]) -> str:
+    image_generation = config.get("image_generation")
+    if not isinstance(image_generation, dict):
+        return "none"
+    return str(image_generation.get("provider") or "none").strip().lower()
+
+
+def _model_options_for_provider(provider: str) -> tuple[str, ...]:
+    if provider == PROVIDER_OPENAI:
+        return OPENAI_MODELS
+    if provider == PROVIDER_ANTHROPIC:
+        return ANTHROPIC_MODELS
+    if provider == PROVIDER_DEEPSEEK:
+        return DEEPSEEK_MODELS
+    if provider == PROVIDER_MINIMAX:
+        return MINIMAX_MODELS
+    if provider == PROVIDER_QWEN:
+        return QWEN_MODELS
+    return (MODEL_PLACEHOLDER,)
+
+
+def _default_model_index(options: Sequence[str], current_model: str) -> int:
+    try:
+        return list(options).index(current_model)
+    except ValueError:
+        return 0
+
+
+def _phrase_list(raw_value: str) -> list[str]:
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+def _feature_api_key_missing(config: dict[str, Any], section: str) -> bool:
+    feature = config.get(section)
+    if not isinstance(feature, dict):
+        return True
+    return is_placeholder_api_key(str(feature.get("api_key") or ""))
+
+
 def _provider_option_descriptions(kind: str) -> dict[str, str]:
     return {
         "none": f"Disable {kind}.",
         "openai": "Use OpenAI.",
+        "anthropic": "Use Anthropic.",
+        "deepseek": "Use DeepSeek.",
         "qwen": "Use Qwen / DashScope.",
         "minimax": "Use MiniMax.",
         "soniox": "Use Soniox realtime voice.",
@@ -3733,18 +3888,18 @@ def _config_update_content(update: ConfigUpdate) -> Text:
 
 def _apply_config_update(ui: TerminalUI, config_dir: Path, update: ConfigUpdate) -> bool:
     if not update.changes:
-        ui.print_panel("No config values changed.", title="Configure")
+        ui.print_panel("No config values changed.", title="Resetup")
         return False
     ui.print_panel(_config_update_content(update), title="Config Preview")
     if ui.confirm("Apply changes?", default=True) is not True:
-        ui.print_panel("Config was not changed.", title="Configure")
+        ui.print_panel("Config was not changed.", title="Resetup")
         return False
     try:
         write_config(config_dir, update.data)
     except Exception as exc:
-        ui.print_panel(f"Config save failed: {exc}", title="Configure", border_style="red")
+        ui.print_panel(f"Config save failed: {exc}", title="Resetup", border_style="red")
         return False
-    ui.print_panel("Config saved. Validation passed.", title="Configure", border_style="green")
+    ui.print_panel("Config saved. Validation passed.", title="Resetup", border_style="green")
     return True
 
 
@@ -3755,7 +3910,7 @@ def _required_feature_api_key(ui: TerminalUI, *, provider: str, feature: str) ->
         subtitle=f"{provider.title()} {feature} needs its own API key for the current model provider.",
     ).strip()
     if not value:
-        ui.print_panel("API key is required for this change.", title="Configure")
+        ui.print_panel("API key is required for this change.", title="Resetup")
         return None
     return value
 
@@ -3764,7 +3919,7 @@ def _run_search_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
     try:
         config = load_config(config_dir)
     except Exception as exc:
-        ui.print_panel(f"Cannot load config: {exc}", title="Configure", border_style="red")
+        ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
         return
     current = _current_search_provider(config)
     options = _menu_option_rows(
@@ -3772,7 +3927,7 @@ def _run_search_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
         _provider_option_descriptions("search"),
     )
     choice = ui.select_menu(
-        title="xAgent Configure / Search",
+        title="xAgent Resetup / Search",
         subtitle=f"Current provider: {current}",
         options=options,
         footer="↑/↓ Move • Enter Select  •  q Back",
@@ -3789,7 +3944,131 @@ def _run_search_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
     try:
         update = prepare_search_provider_update(config, provider=choice.key, api_key=api_key)
     except Exception as exc:
-        ui.print_panel(f"Search update is invalid: {exc}", title="Configure", border_style="red")
+        ui.print_panel(f"Search update is invalid: {exc}", title="Resetup", border_style="red")
+        return
+    _apply_config_update(ui, config_dir, update)
+
+
+def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    try:
+        config = load_config(config_dir)
+    except Exception as exc:
+        ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
+        return
+
+    current_provider = _current_model_provider(config)
+    provider_choice = ui.select_menu(
+        title="xAgent Resetup / Model",
+        subtitle=f"Current provider: {current_provider}",
+        options=_menu_option_rows(KNOWN_PROVIDERS + ("back",), _provider_option_descriptions("model")),
+        footer="↑/↓ Move • Enter Select  •  q Back",
+    )
+    if provider_choice is None or provider_choice.key == "back":
+        return
+    provider = str(provider_choice.key)
+    provider_config = config.get("provider") if isinstance(config.get("provider"), dict) else {}
+    current_model = str(provider_config.get("model") or "").strip()
+
+    model_api = None
+    base_url = None
+    supports_vision = None
+    if provider == PROVIDER_CUSTOM:
+        api_choice = ui.select_menu(
+            title="xAgent Resetup / Model API",
+            subtitle=f"Current API: {_current_model_api(config)}",
+            options=_menu_option_rows(MODEL_APIS + ("back",)),
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if api_choice is None or api_choice.key == "back":
+            return
+        model_api = str(api_choice.key)
+        default_base_url = str(provider_config.get("base_url") or provider_base_url(PROVIDER_CUSTOM, model_api))
+        base_url = ui.ask_text("Custom provider base URL", default=default_base_url).strip() or default_base_url
+        supports_vision = ui.confirm(
+            "Does this custom provider support image URL input?",
+            default=bool(provider_config.get("supports_vision", False)),
+        )
+        if supports_vision is None:
+            return
+        model = ui.ask_text("Model", default=current_model or MODEL_PLACEHOLDER).strip() or MODEL_PLACEHOLDER
+    else:
+        model_options = _model_options_for_provider(provider)
+        model = _terminal_select_model_option(
+            ui,
+            "Model",
+            model_options,
+            default_index=_default_model_index(model_options, current_model),
+            subtitle=f"Choose a {provider} model.",
+        )
+        base_url = provider_base_url(provider)
+
+    api_key = ui.ask_text(
+        f"{provider.title()} API key",
+        secret=True,
+        subtitle="Leave blank to keep the existing key or fill it later.",
+    ).strip() or None
+
+    search_api_key = None
+    search_provider = _current_search_provider(config)
+    if search_provider != "none" and search_provider != provider and _feature_api_key_missing(config, "search"):
+        search_api_key = _required_feature_api_key(ui, provider=search_provider, feature="search")
+        if search_api_key is None:
+            return
+
+    image_generation_api_key = None
+    image_provider = _current_image_generation_provider(config)
+    if image_provider != "none" and image_provider != provider and _feature_api_key_missing(config, "image_generation"):
+        image_generation_api_key = _required_feature_api_key(ui, provider=image_provider, feature="image generation")
+        if image_generation_api_key is None:
+            return
+
+    try:
+        update = prepare_model_provider_update(
+            config,
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            model_api=model_api,
+            supports_vision=supports_vision,
+            search_api_key=search_api_key,
+            image_generation_api_key=image_generation_api_key,
+        )
+    except Exception as exc:
+        ui.print_panel(f"Model update is invalid: {exc}", title="Resetup", border_style="red")
+        return
+    _apply_config_update(ui, config_dir, update)
+
+
+def _run_image_generation_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    try:
+        config = load_config(config_dir)
+    except Exception as exc:
+        ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
+        return
+    current = _current_image_generation_provider(config)
+    choice = ui.select_menu(
+        title="xAgent Resetup / Image Generation",
+        subtitle=f"Current provider: {current}",
+        options=_menu_option_rows(IMAGE_GENERATION_PROVIDERS + ("back",), _provider_option_descriptions("image generation")),
+        footer="↑/↓ Move • Enter Select  •  q Back",
+    )
+    if choice is None or choice.key == "back":
+        return
+    api_key = None
+    if image_generation_provider_needs_feature_key(config, choice.key):
+        current_key = ""
+        image_generation = config.get("image_generation")
+        if isinstance(image_generation, dict):
+            current_key = str(image_generation.get("api_key") or "")
+        if choice.key != current or is_placeholder_api_key(current_key):
+            api_key = _required_feature_api_key(ui, provider=choice.key, feature="image generation")
+            if api_key is None:
+                return
+    try:
+        update = prepare_image_generation_provider_update(config, provider=choice.key, api_key=api_key)
+    except Exception as exc:
+        ui.print_panel(f"Image generation update is invalid: {exc}", title="Resetup", border_style="red")
         return
     _apply_config_update(ui, config_dir, update)
 
@@ -3797,7 +4076,7 @@ def _run_search_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
 def _run_voice_preset_config(ui: TerminalUI, config_dir: Path, config: dict[str, Any]) -> None:
     current = _current_voice_provider(config)
     choice = ui.select_menu(
-        title="xAgent Configure / Voice Preset",
+        title="xAgent Resetup / Voice Preset",
         subtitle=f"Current mode: {current}",
         options=_menu_option_rows(VOICE_PRESETS + ("back",), _provider_option_descriptions("voice")),
         footer="↑/↓ Move • Enter Select  •  q Back",
@@ -3812,7 +4091,7 @@ def _run_voice_preset_config(ui: TerminalUI, config_dir: Path, config: dict[str,
     try:
         update = prepare_voice_preset_update(config, provider=choice.key, api_key=api_key)
     except Exception as exc:
-        ui.print_panel(f"Voice update is invalid: {exc}", title="Configure", border_style="red")
+        ui.print_panel(f"Voice update is invalid: {exc}", title="Resetup", border_style="red")
         return
     _apply_config_update(ui, config_dir, update)
 
@@ -3821,7 +4100,7 @@ def _run_voice_nested_config(ui: TerminalUI, config_dir: Path, config: dict[str,
     current = _current_voice_nested_provider(config, section)
     title = "STT Provider" if section == "stt" else "TTS Provider"
     choice = ui.select_menu(
-        title=f"xAgent Configure / Voice {title}",
+        title=f"xAgent Resetup / Voice {title}",
         subtitle=f"Current {section.upper()}: {current}",
         options=_menu_option_rows(VOICE_NESTED_PROVIDERS + ("back",), _provider_option_descriptions("voice")),
         footer="↑/↓ Move • Enter Select  •  q Back",
@@ -3836,9 +4115,107 @@ def _run_voice_nested_config(ui: TerminalUI, config_dir: Path, config: dict[str,
     try:
         update = prepare_voice_nested_provider_update(config, section=section, provider=choice.key, api_key=api_key)
     except Exception as exc:
-        ui.print_panel(f"Voice update is invalid: {exc}", title="Configure", border_style="red")
+        ui.print_panel(f"Voice update is invalid: {exc}", title="Resetup", border_style="red")
         return
     _apply_config_update(ui, config_dir, update)
+
+
+def _run_voice_interruptions_config(ui: TerminalUI, config_dir: Path, config: dict[str, Any]) -> None:
+    voice = voice_config(config)
+    if not voice:
+        ui.print_panel("Enable voice before updating interruptions.", title="Resetup")
+        return
+    current = bool(voice.get("enable_interruptions", False))
+    enabled = ui.confirm("Enable voice interruptions?", default=current)
+    if enabled is None:
+        return
+    try:
+        update = prepare_voice_interruptions_update(config, enabled=enabled)
+    except Exception as exc:
+        ui.print_panel(f"Voice update is invalid: {exc}", title="Resetup", border_style="red")
+        return
+    _apply_config_update(ui, config_dir, update)
+
+
+def _run_voice_wake_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    while True:
+        try:
+            config = load_config(config_dir)
+        except Exception as exc:
+            ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
+            return
+        voice = voice_config(config)
+        if not voice:
+            ui.print_panel("Enable voice before updating wake settings.", title="Resetup")
+            return
+        wake = voice.get("wake") if isinstance(voice.get("wake"), dict) else {}
+        option = ui.select_menu(
+            title="xAgent Resetup / Voice Wake",
+            subtitle=(
+                f"Enabled: {bool(wake.get('enabled', False))}\n"
+                f"Match: {wake.get('match_mode', 'prefix')}\n"
+                f"Idle timeout: {wake.get('idle_timeout_seconds', 60)}s"
+            ),
+            options=[
+                MenuOption("enabled", "Wake Mode", "Enable or disable wake phrase gating."),
+                MenuOption("wake_phrases", "Wake Phrases", "Comma-separated phrases that start listening."),
+                MenuOption("exit_phrases", "Exit Phrases", "Comma-separated phrases that stop the session."),
+                MenuOption("match_mode", "Match Mode", "Choose prefix or contains matching."),
+                MenuOption("idle_timeout", "Idle Timeout", "Seconds before an idle wake session closes."),
+                MenuOption("back", "Back", "Return to Voice."),
+            ],
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            return
+
+        try:
+            if option.key == "enabled":
+                enabled = ui.confirm("Enable wake phrase gating?", default=bool(wake.get("enabled", False)))
+                if enabled is None:
+                    continue
+                update = prepare_voice_wake_update(config, enabled=enabled)
+            elif option.key == "wake_phrases":
+                raw_value = ui.ask_text(
+                    "Wake phrases",
+                    default=", ".join(wake.get("wake_phrases") or ["xAgent"]),
+                    subtitle="Separate phrases with commas.",
+                )
+                update = prepare_voice_wake_update(config, wake_phrases=_phrase_list(raw_value))
+            elif option.key == "exit_phrases":
+                raw_value = ui.ask_text(
+                    "Exit phrases",
+                    default=", ".join(wake.get("exit_phrases") or ["exit", "stop"]),
+                    subtitle="Separate phrases with commas.",
+                )
+                update = prepare_voice_wake_update(config, exit_phrases=_phrase_list(raw_value))
+            elif option.key == "match_mode":
+                current = str(wake.get("match_mode") or "prefix")
+                mode_choice = ui.select_menu(
+                    title="xAgent Resetup / Voice Wake Match",
+                    subtitle=f"Current match mode: {current}",
+                    options=_menu_option_rows(("prefix", "contains", "back")),
+                    footer="↑/↓ Move • Enter Select  •  q Back",
+                )
+                if mode_choice is None or mode_choice.key == "back":
+                    continue
+                update = prepare_voice_wake_update(config, match_mode=mode_choice.key)
+            else:
+                raw_value = ui.ask_text(
+                    "Idle timeout seconds",
+                    default=str(wake.get("idle_timeout_seconds") or 60),
+                    subtitle="Enter a number between 0.1 and 3600.",
+                ).strip()
+                try:
+                    idle_timeout_seconds = float(raw_value)
+                except ValueError:
+                    ui.print_panel("Please enter a valid number.", title="Input Required")
+                    continue
+                update = prepare_voice_wake_update(config, idle_timeout_seconds=idle_timeout_seconds)
+        except Exception as exc:
+            ui.print_panel(f"Voice wake update is invalid: {exc}", title="Resetup", border_style="red")
+            continue
+        _apply_config_update(ui, config_dir, update)
 
 
 def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
@@ -3846,21 +4223,23 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
         try:
             config = load_config(config_dir)
         except Exception as exc:
-            ui.print_panel(f"Cannot load config: {exc}", title="Configure", border_style="red")
+            ui.print_panel(f"Cannot load config: {exc}", title="Resetup", border_style="red")
             return
         voice = voice_config(config)
         provider = _current_voice_provider(config)
         stt_provider = _current_voice_nested_provider(config, "stt") if voice else "none"
         tts_provider = _current_voice_nested_provider(config, "tts") if voice else "none"
         option = ui.select_menu(
-            title="xAgent Configure / Voice",
+            title="xAgent Resetup / Voice",
             subtitle=f"Mode: {provider}\nSTT: {stt_provider}\nTTS: {tts_provider}",
             options=[
                 MenuOption("preset", "Preset Mode", "Use none, Soniox, Qwen, or custom mode."),
                 MenuOption("stt", "STT Provider", "Choose the speech-to-text provider."),
                 MenuOption("tts", "TTS Provider", "Choose the text-to-speech provider."),
+                MenuOption("interruptions", "Interruptions", "Enable or disable barge-in interruptions."),
+                MenuOption("wake", "Wake", "Update wake mode, phrases, match, and idle timeout."),
                 MenuOption("disable", "Disable Voice", "Remove channels.voice from config."),
-                MenuOption("back", "Back", "Return to Configure."),
+                MenuOption("back", "Back", "Return to Partial Update."),
             ],
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
@@ -3870,26 +4249,75 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
             _run_voice_preset_config(ui, config_dir, config)
         elif option.key in {"stt", "tts"}:
             _run_voice_nested_config(ui, config_dir, config, option.key)
+        elif option.key == "interruptions":
+            _run_voice_interruptions_config(ui, config_dir, config)
+        elif option.key == "wake":
+            _run_voice_wake_config_launcher(ui, config_dir)
         elif option.key == "disable":
             try:
                 update = prepare_voice_preset_update(config, provider="none")
             except Exception as exc:
-                ui.print_panel(f"Voice update is invalid: {exc}", title="Configure", border_style="red")
+                ui.print_panel(f"Voice update is invalid: {exc}", title="Resetup", border_style="red")
                 continue
             _apply_config_update(ui, config_dir, update)
 
 
-def _run_configure_launcher(config_dir: Path) -> int:
+def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    while True:
+        overview = build_runtime_overview(config_dir)
+        option = ui.select_menu(
+            title="xAgent Resetup / Partial Update",
+            subtitle=_launcher_overview_subtitle(overview),
+            options=[
+                MenuOption("model", "Model", "Update the main model provider, model, API key, or custom endpoint."),
+                MenuOption("search", "Search", "Change provider-native web search."),
+                MenuOption("feishu", "Feishu", "Re-run Feishu setup and replace channels.feishu."),
+                MenuOption("voice", "Voice", "Enable or update STT/TTS, interruptions, and wake settings."),
+                MenuOption("image", "Image Generation", "Enable or update image generation provider settings."),
+                MenuOption("back", "Back", "Return to Resetup."),
+            ],
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            ui.clear()
+            return
+        ui.clear()
+        if option.key == "model":
+            _run_model_config_launcher(ui, config_dir)
+        elif option.key == "search":
+            _run_search_config_launcher(ui, config_dir)
+        elif option.key == "feishu":
+            handle_init_feishu(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    app_id=None,
+                    app_secret=None,
+                    manual=False,
+                    force=_feishu_channel_is_configured(config_dir),
+                    stream=None,
+                    enable_memory=None,
+                    group_history_count=None,
+                    show_sender_ids=None,
+                    group_reply_without_mention=None,
+                )
+            )
+        elif option.key == "voice":
+            _run_voice_config_launcher(ui, config_dir)
+        elif option.key == "image":
+            _run_image_generation_config_launcher(ui, config_dir)
+        ui.pause("Press Enter to return to Partial Update")
+
+
+def _run_resetup_launcher(config_dir: Path) -> int:
     ui = TerminalUI()
     while True:
         overview = build_runtime_overview(config_dir)
         option = ui.select_menu(
-            title="xAgent Configure",
+            title="xAgent Resetup",
             subtitle=_launcher_overview_subtitle(overview),
             options=[
-                MenuOption("search", "Search", "Change provider-native web search."),
-                MenuOption("voice", "Voice", "Enable or update STT/TTS providers."),
-                MenuOption("config_path", "Config Path", "Print the active config.yaml path."),
+                MenuOption("full", "Full Resetup", "Re-run the full setup wizard with --force."),
+                MenuOption("partial", "Partial Update", "Update one configured feature without editing YAML."),
                 MenuOption("back", "Back", "Return to the main launcher."),
             ],
             footer="↑/↓ Move • Enter Select  •  q Back",
@@ -3898,13 +4326,11 @@ def _run_configure_launcher(config_dir: Path) -> int:
             ui.clear()
             return 0
         ui.clear()
-        if option.key == "search":
-            _run_search_config_launcher(ui, config_dir)
-        elif option.key == "voice":
-            _run_voice_config_launcher(ui, config_dir)
-        elif option.key == "config_path":
-            ui.print_panel(str(config_dir / BaseAgentConfig.CONFIG_FILENAME), title="Config Path")
-        ui.pause("Press Enter to return to Configure")
+        if option.key == "full":
+            handle_init(_launcher_args(config_dir=str(config_dir), force=True, schema=False))
+            ui.pause("Press Enter to return to Resetup")
+        elif option.key == "partial":
+            _run_partial_update_launcher(ui, config_dir)
 
 
 def _print_skills_summary(config_dir: Path) -> int:
@@ -4114,9 +4540,8 @@ def _run_identity_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
 def _run_memory_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
     actions = [
         MenuOption("stats", "Stats", "Show memory file counts and bytes."),
-        MenuOption("list", "List", "List memory markdown files."),
+        MenuOption("list", "List", "Choose how many recent daily journal days to print."),
         MenuOption("search", "Search", "Search memory markdown files."),
-        MenuOption("show", "Show File", "Print one memory file by relative path."),
         MenuOption("back", "Back", "Return to Inspect."),
     ]
 
@@ -4126,8 +4551,11 @@ def _run_memory_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
                 _launcher_args(config_dir=str(config_dir), memory_command="stats", scope="all", yes=False)
             )
         if key == "list":
+            days = _prompt_memory_list_days_terminal_ui(ui)
+            if days is None:
+                return None
             return handle_memory(
-                _launcher_args(config_dir=str(config_dir), memory_command="list", scope="all", yes=False)
+                _launcher_args(config_dir=str(config_dir), memory_command="list", days=days)
             )
         if key == "search":
             query = ui.ask_text("Memory search query").strip()
@@ -4136,10 +4564,7 @@ def _run_memory_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
             return handle_memory(
                 _launcher_args(config_dir=str(config_dir), memory_command="search", query=query, scope="all")
             )
-        path = ui.ask_text("Memory file path", subtitle="Use a relative path under memory/.").strip()
-        if not path:
-            return None
-        return handle_memory(_launcher_args(config_dir=str(config_dir), memory_command="show", path=path, scope="all"))
+        return None
 
     _run_inspect_section(ui, config_dir, "Memory", actions, run_action)
 
@@ -4268,48 +4693,12 @@ def _run_interactive_launcher() -> int:
 
         ui.clear()
         if option.key == "init":
-            handle_init(_launcher_args(config_dir=str(config_dir), force=initialized, schema=False))
-        elif option.key == "chat":
-            handle_chat(
-                _launcher_args(
-                    message=None,
-                    config_dir=str(config_dir),
-                    user_id=None,
-                    verbose=False,
-                    stream=None,
-                    events=False,
-                    memory=True,
-                )
-            )
-        elif option.key == "web":
-            handle_web(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    host=None,
-                    port=None,
-                    open_browser=True,
-                    max_concurrent_chats=None,
-                    queue_timeout=None,
-                    chat_timeout=None,
-                )
-            )
-        elif option.key == "voice":
-            handle_voice(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    user_id="local_voice",
-                    verbose=False,
-                    list_devices=False,
-                    input_device=None,
-                    output_device=None,
-                    memory=True,
-                )
-            )
-        elif option.key == "service":
-            _run_service_launcher(config_dir)
-            continue
-        elif option.key == "configure":
-            _run_configure_launcher(config_dir)
+            if initialized:
+                _run_resetup_launcher(config_dir)
+                continue
+            handle_init(_launcher_args(config_dir=str(config_dir), force=False, schema=False))
+        elif option.key == "channel":
+            _run_channel_launcher(config_dir)
             continue
         elif option.key == "inspect":
             _run_inspect_launcher(config_dir)

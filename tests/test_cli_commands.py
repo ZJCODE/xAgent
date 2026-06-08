@@ -3,6 +3,7 @@ import asyncio
 import io
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +17,7 @@ from xagent.interfaces.cli import (
     InitSelection,
     _run_inspect_launcher,
     _run_interactive_launcher,
-    _run_service_launcher,
+    _run_channel_launcher,
     _format_cli_attachments,
     _format_cli_workspace_links,
     _launcher_channel_options,
@@ -29,6 +30,7 @@ from xagent.interfaces.cli import (
     handle_init,
     handle_init_feishu,
     handle_logs,
+    handle_memory,
     handle_observe,
     handle_restart,
     handle_run_channel_internal,
@@ -39,7 +41,14 @@ from xagent.interfaces.cli import (
     handle_web,
     main,
 )
-from xagent.interfaces.config_editor import prepare_search_provider_update, write_config
+from xagent.interfaces.config_editor import (
+    prepare_image_generation_provider_update,
+    prepare_model_provider_update,
+    prepare_search_provider_update,
+    prepare_voice_interruptions_update,
+    prepare_voice_wake_update,
+    write_config,
+)
 from xagent.interfaces.overview import STATUS_ERROR, build_runtime_overview
 from xagent.interfaces.processes import StartResult
 
@@ -508,11 +517,11 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.queue_timeout, 3.5)
         self.assertEqual(args.chat_timeout, 9.5)
 
-    def test_parser_supports_service_lifecycle_commands(self):
+    def test_parser_supports_channel_lifecycle_commands(self):
         args = build_parser().parse_args([
-            "service",
-            "start",
+            "channel",
             "api",
+            "start",
             "--dir",
             "./agent-dir",
             "--host",
@@ -521,12 +530,24 @@ class CLICommandTests(unittest.TestCase):
             "8010",
         ])
 
-        self.assertEqual(args.command, "service")
-        self.assertEqual(args.service_command, "start")
-        self.assertEqual(args.channels, "api")
+        self.assertEqual(args.command, "channel")
+        self.assertEqual(args.channel_target, "api")
+        self.assertEqual(args.channel_action, "start")
+        self.assertEqual(args.channels, ["api"])
         self.assertEqual(args.config_dir, "./agent-dir")
         self.assertEqual(args.host, "127.0.0.1")
         self.assertEqual(args.port, 8010)
+
+        feishu = build_parser().parse_args(["channel", "feishu", "logs", "--follow"])
+        self.assertEqual(feishu.command, "channel")
+        self.assertEqual(feishu.channel_target, "feishu")
+        self.assertEqual(feishu.channel_action, "logs")
+        self.assertEqual(feishu.channels, ["feishu"])
+        self.assertTrue(feishu.follow)
+
+    def test_service_command_is_removed(self):
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["service", "start", "api"])
 
     def test_parser_supports_observe_and_inspect_commands(self):
         observe = build_parser().parse_args([
@@ -547,9 +568,38 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(memory.memory_command, "search")
         self.assertEqual(memory.query, "project")
 
+        memory_list = build_parser().parse_args(["inspect", "memory", "list", "--days", "7"])
+        self.assertEqual(memory_list.memory_command, "list")
+        self.assertEqual(memory_list.days, 7)
+
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["inspect", "memory", "show", "daily/2026/2026-06/2026-06-07.md"])
+
         messages = build_parser().parse_args(["inspect", "messages", "list", "--count", "5"])
         self.assertEqual(messages.messages_command, "list")
         self.assertEqual(messages.count, 5)
+
+    def test_memory_list_prints_recent_daily_journals(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            memory_root = root / "memory"
+            today = date.today()
+            recent = memory_root / "daily" / str(today.year) / f"{today.year}-{today.month:02d}" / f"{today.isoformat()}.md"
+            recent.parent.mkdir(parents=True, exist_ok=True)
+            recent.write_text("## 09:00\n\nRecent note\n", encoding="utf-8")
+            old_day = today - timedelta(days=9)
+            old = memory_root / "daily" / str(old_day.year) / f"{old_day.year}-{old_day.month:02d}" / f"{old_day.isoformat()}.md"
+            old.parent.mkdir(parents=True, exist_ok=True)
+            old.write_text("## 09:00\n\nOld note\n", encoding="utf-8")
+
+            args = argparse.Namespace(config_dir=tmpdir, memory_command="list", days=7)
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = handle_memory(args)
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("Recent note", output)
+        self.assertNotIn("Old note", output)
 
     def test_observe_does_not_flush_memory_on_exit(self):
         class FakeAgent:
@@ -620,18 +670,18 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("Doctor", reset_titles)
         self.assertNotIn("Version", reset_titles)
 
-    def test_launcher_channel_all_label_is_simple(self):
+    def test_launcher_channel_options_are_entry_points(self):
         options = _launcher_channel_options()
-        all_option = next(option for option in options if option.key == "all")
+        titles = [option.title for option in options]
 
-        self.assertEqual(all_option.title, "All")
-        self.assertEqual(all_option.description, "Use all enabled channels.")
+        self.assertEqual(titles, ["API / Web UI", "Feishu", "Terminal Chat", "Voice", "Back"])
+        self.assertNotIn("All", titles)
 
-    def test_service_launcher_start_chooses_channel_before_starting(self):
+    def test_channel_launcher_start_chooses_channel_before_action(self):
         class FakeUI:
             def __init__(self):
                 self.channel_choices = iter([
-                    SimpleNamespace(key="api", title="API"),
+                    SimpleNamespace(key="api", title="API / Web UI"),
                     SimpleNamespace(key="back"),
                 ])
                 self.channel_option_titles = []
@@ -640,10 +690,10 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
-                if title == "xAgent Services":
+                if title == "xAgent Channel":
                     self.channel_option_titles = [option.title for option in options]
                     return next(self.channel_choices)
-                if title == "xAgent Services / API":
+                if title == "xAgent Channel / API / Web UI":
                     self.action_option_titles = [option.title for option in options]
                     return next(self.action_choices)
                 raise AssertionError(f"Unexpected menu: {title}")
@@ -662,18 +712,19 @@ class CLICommandTests(unittest.TestCase):
 
         with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
             with patch("xagent.interfaces.cli.handle_start", return_value=0) as starter:
-                exit_code = _run_service_launcher(Path("/tmp/xagent"))
+                exit_code = _run_channel_launcher(Path("/tmp/xagent"))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_ui.channel_option_titles[:3], ["API", "Feishu", "All"])
-        self.assertIn("Start", fake_ui.action_option_titles)
+        self.assertEqual(fake_ui.channel_option_titles[:4], ["API / Web UI", "Feishu", "Terminal Chat", "Voice"])
+        self.assertIn("Start Background", fake_ui.action_option_titles)
+        self.assertIn("Open Web UI", fake_ui.action_option_titles)
         self.assertNotIn("Start API", fake_ui.action_option_titles)
         starter.assert_called_once()
         args = starter.call_args.args[0]
         self.assertEqual(args.channels, ["api"])
         self.assertEqual(args.config_dir, "/tmp/xagent")
 
-    def test_service_launcher_feishu_setup_runs_init_feishu(self):
+    def test_channel_launcher_feishu_setup_runs_init_feishu_when_missing(self):
         class FakeUI:
             def __init__(self):
                 self.channel_choices = iter([
@@ -685,9 +736,9 @@ class CLICommandTests(unittest.TestCase):
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
-                if title == "xAgent Services":
+                if title == "xAgent Channel":
                     return next(self.channel_choices)
-                if title == "xAgent Services / Feishu":
+                if title == "xAgent Channel / Feishu":
                     self.action_option_titles = [option.title for option in options]
                     return next(self.action_choices)
                 raise AssertionError(f"Unexpected menu: {title}")
@@ -708,7 +759,7 @@ class CLICommandTests(unittest.TestCase):
 
             with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
                 with patch("xagent.interfaces.cli.handle_init_feishu", return_value=0) as init_feishu:
-                    exit_code = _run_service_launcher(Path(tmpdir))
+                    exit_code = _run_channel_launcher(Path(tmpdir))
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_ui.action_option_titles[0], "Setup")
@@ -717,21 +768,21 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.config_dir, tmpdir)
         self.assertFalse(args.force)
 
-    def test_service_launcher_feishu_resetup_uses_force(self):
+    def test_channel_launcher_feishu_hides_setup_when_configured(self):
         class FakeUI:
             def __init__(self):
                 self.channel_choices = iter([
                     SimpleNamespace(key="feishu", title="Feishu"),
                     SimpleNamespace(key="back"),
                 ])
-                self.action_choices = iter([SimpleNamespace(key="setup")])
+                self.action_choices = iter([SimpleNamespace(key="status")])
                 self.action_option_titles = []
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
-                if title == "xAgent Services":
+                if title == "xAgent Channel":
                     return next(self.channel_choices)
-                if title == "xAgent Services / Feishu":
+                if title == "xAgent Channel / Feishu":
                     self.action_option_titles = [option.title for option in options]
                     return next(self.action_choices)
                 raise AssertionError(f"Unexpected menu: {title}")
@@ -751,15 +802,15 @@ class CLICommandTests(unittest.TestCase):
             fake_ui = FakeUI()
 
             with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
-                with patch("xagent.interfaces.cli.handle_init_feishu", return_value=0) as init_feishu:
-                    exit_code = _run_service_launcher(Path(tmpdir))
+                with patch("xagent.interfaces.cli.handle_status", return_value=0) as status:
+                    exit_code = _run_channel_launcher(Path(tmpdir))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_ui.action_option_titles[0], "Resetup")
-        init_feishu.assert_called_once()
-        args = init_feishu.call_args.args[0]
+        self.assertNotIn("Setup", fake_ui.action_option_titles)
+        status.assert_called_once()
+        args = status.call_args.args[0]
         self.assertEqual(args.config_dir, tmpdir)
-        self.assertTrue(args.force)
+        self.assertEqual(args.channels, ["feishu"])
 
     def test_runtime_overview_flags_search_missing_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -818,7 +869,77 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(saved["search"]["api_key"], "qwen-key")
         self.assertIn("search.provider", [change.path for change in update.changes])
 
-    def test_interactive_launcher_resetup_runs_force_init(self):
+    def test_config_editor_updates_model_provider_and_feature_keys(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            root = Path(tmpdir)
+            config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+            config["image_generation"] = {"provider": "openai"}
+
+            update = prepare_model_provider_update(
+                config,
+                provider="qwen",
+                model="qwen3.6-flash",
+                api_key="qwen-key",
+                search_api_key="openai-search-key",
+                image_generation_api_key="openai-image-key",
+            )
+            write_config(root, update.data)
+            saved = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["provider"]["name"], "qwen")
+        self.assertEqual(saved["provider"]["model"], "qwen3.6-flash")
+        self.assertEqual(saved["search"]["api_key"], "openai-search-key")
+        self.assertEqual(saved["image_generation"]["api_key"], "openai-image-key")
+
+    def test_config_editor_updates_image_generation_provider(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            root = Path(tmpdir)
+            config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+
+            update = prepare_image_generation_provider_update(config, provider="qwen", api_key="qwen-image-key")
+            write_config(root, update.data)
+            saved = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["image_generation"]["provider"], "qwen")
+        self.assertEqual(saved["image_generation"]["api_key"], "qwen-image-key")
+        self.assertEqual(saved["image_generation"]["model"], "qwen-image-2.0-pro")
+
+    def test_config_editor_updates_voice_wake_and_interruptions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            root = Path(tmpdir)
+            config_path = root / "config.yaml"
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            config["channels"]["voice"] = {
+                "provider": "qwen",
+                "enable_interruptions": False,
+                "stt": {"api_key": "qwen-key"},
+                "tts": {"api_key": "qwen-key"},
+                "wake": {"enabled": False, "wake_phrases": ["xAgent"], "exit_phrases": ["exit"]},
+            }
+
+            update = prepare_voice_interruptions_update(config, enabled=True)
+            update = prepare_voice_wake_update(
+                update.data,
+                enabled=True,
+                wake_phrases=["hey xagent", "assistant"],
+                exit_phrases=["stop", "done"],
+                match_mode="contains",
+                idle_timeout_seconds=120,
+            )
+            write_config(root, update.data)
+            saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(saved["channels"]["voice"]["enable_interruptions"])
+        self.assertTrue(saved["channels"]["voice"]["wake"]["enabled"])
+        self.assertEqual(saved["channels"]["voice"]["wake"]["wake_phrases"], ["hey xagent", "assistant"])
+        self.assertEqual(saved["channels"]["voice"]["wake"]["exit_phrases"], ["stop", "done"])
+        self.assertEqual(saved["channels"]["voice"]["wake"]["match_mode"], "contains")
+        self.assertEqual(saved["channels"]["voice"]["wake"]["idle_timeout_seconds"], 120.0)
+
+    def test_interactive_launcher_resetup_opens_resetup_menu(self):
         class FakeUI:
             def __init__(self):
                 self.choices = iter([
@@ -847,15 +968,12 @@ class CLICommandTests(unittest.TestCase):
 
         with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
             with patch("xagent.interfaces.cli._runtime_is_initialized", return_value=True):
-                with patch("xagent.interfaces.cli.handle_init", return_value=0) as init_handler:
+                with patch("xagent.interfaces.cli._run_resetup_launcher", return_value=0) as resetup_launcher:
                     exit_code = _run_interactive_launcher()
 
         self.assertEqual(exit_code, 0)
         self.assertIn("Resetup", fake_ui.option_titles)
-        init_handler.assert_called_once()
-        args = init_handler.call_args.args[0]
-        self.assertTrue(args.force)
-        self.assertFalse(args.schema)
+        resetup_launcher.assert_called_once()
 
     def test_interactive_launcher_help_prints_command_guide(self):
         class FakeUI:
@@ -890,7 +1008,8 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_ui.panels[0][0], "xAgent Help")
         self.assertIn("xagent init --force", fake_ui.panels[0][1])
-        self.assertIn("xagent service start api", fake_ui.panels[0][1])
+        self.assertIn("xagent channel api start", fake_ui.panels[0][1])
+        self.assertIn("xagent inspect memory list --days 7", fake_ui.panels[0][1])
         self.assertNotIn("xagent doctor", fake_ui.panels[0][1])
 
     def test_launcher_help_content_switches_setup_command_by_state(self):
@@ -909,7 +1028,8 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Runtime:", help_text)
         self.assertIn("Advanced:", help_text)
         self.assertIn("  web", help_text)
-        self.assertIn("  service", help_text)
+        self.assertIn("  channel", help_text)
+        self.assertNotIn("  service", help_text)
         self.assertNotIn("  run", help_text)
         self.assertNotIn("  start", help_text)
 
@@ -1012,9 +1132,9 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Pick how you want to use it next", output)
         self.assertIn(f"xagent chat --dir {resolved_dir}", output)
         self.assertIn(f"xagent web --dir {resolved_dir}", output)
-        self.assertIn(f"xagent service start api --dir {resolved_dir}", output)
-        self.assertIn(f"xagent init feishu --dir {resolved_dir}", output)
-        self.assertIn(f"xagent service start feishu --dir {resolved_dir}", output)
+        self.assertIn(f"xagent channel api start --dir {resolved_dir}", output)
+        self.assertIn(f"xagent channel feishu setup --dir {resolved_dir}", output)
+        self.assertIn(f"xagent channel feishu start --dir {resolved_dir}", output)
         self.assertNotIn("xagent doctor", output)
         self.assertNotIn(f"xagent voice --dir {resolved_dir}", output)
 
@@ -1109,7 +1229,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("show_sender_ids", config["channels"]["feishu"])
         self.assertNotIn("runtime", config)
         output = stdout.getvalue()
-        self.assertIn("xagent service start feishu", output)
+        self.assertIn("xagent channel feishu start", output)
 
     def test_init_feishu_wizard_selection_writes_runtime_options(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1190,7 +1310,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Feishu Ready", output)
         self.assertIn("Optional before group rollout", output)
         self.assertIn("If you only need direct chats right now", output)
-        self.assertIn("xagent service start feishu", output)
+        self.assertIn("xagent channel feishu start", output)
 
     def test_feishu_wizard_interactive_defaults_skip_optional_questions(self):
         class FakeUI:
@@ -1547,7 +1667,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(stopper.call_args.args[0], Path(tmpdir).resolve() / "run" / "api.pid")
 
-    def test_restart_defaults_to_all_enabled_channels(self):
+    def test_restart_defaults_to_auto_channel(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True)
             args = argparse.Namespace(
@@ -1566,8 +1686,9 @@ class CLICommandTests(unittest.TestCase):
                     exit_code = handle_restart(args)
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(stopper.call_count, 2)
-        self.assertEqual(starter.call_count, 2)
+        self.assertEqual(stopper.call_count, 1)
+        self.assertEqual(starter.call_count, 1)
+        self.assertEqual(stopper.call_args.args[0], Path(tmpdir).resolve() / "run" / "api.pid")
 
     def test_status_reports_running_process(self):
         with tempfile.TemporaryDirectory() as tmpdir:

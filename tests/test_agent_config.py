@@ -1957,7 +1957,7 @@ runtime:
             self.assertNotIn("enabled", runner.config["channels"]["api"])
             self.assertEqual(enabled_channels_from_config(runner.config), ["api"])
 
-    def test_config_accepts_soniox_voice_channel_without_enabling_service_all(self):
+    def test_config_accepts_soniox_voice_channel_without_managed_channel_entry(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
