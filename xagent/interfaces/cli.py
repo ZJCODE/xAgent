@@ -3566,10 +3566,10 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command(setup_command, config_dir=config_dir), style="cyan")
     content.append("\n         Create or reconfigure config.yaml and identity.md.\n")
     content.append("chat     ")
-    content.append(_format_init_command('xagent chat "Help me plan today"', config_dir=config_dir), style="cyan")
-    content.append("\n         Send one message, or run ")
     content.append(_format_init_command("xagent chat", config_dir=config_dir), style="cyan")
-    content.append(" for an interactive terminal chat.\n")
+    content.append("\n         Start an interactive terminal chat, or run ")
+    content.append(_format_init_command('xagent chat "Hey"', config_dir=config_dir), style="cyan")
+    content.append(" to send a single message.\n")
     content.append("web      ")
     content.append(_format_init_command("xagent web", config_dir=config_dir), style="cyan")
     content.append("\n         Start the API channel in the foreground and open the Web UI.\n")
@@ -4462,15 +4462,15 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
             subtitle=_launcher_overview_subtitle(overview),
             options=[
                 MenuOption("model", "Model", "Update the main model provider, model, API key, or custom endpoint."),
+                MenuOption("search", "Search", "Change provider-native web search."),
+                MenuOption("voice", "Voice", "Enable or update STT/TTS, interruptions, and wake settings."),
+                MenuOption("image", "Image Generation", "Enable or update image generation provider settings."),
+                MenuOption("feishu", "Feishu", "Re-run Feishu setup and replace channels.feishu."),
                 MenuOption(
                     "observability",
                     "Observability",
                     "Enable or update Langfuse observability for OpenAI-compatible model APIs.",
                 ),
-                MenuOption("search", "Search", "Change provider-native web search."),
-                MenuOption("feishu", "Feishu", "Re-run Feishu setup and replace channels.feishu."),
-                MenuOption("voice", "Voice", "Enable or update STT/TTS, interruptions, and wake settings."),
-                MenuOption("image", "Image Generation", "Enable or update image generation provider settings."),
                 MenuOption("back", "Back", "Return to Resetup."),
             ],
             footer="↑/↓ Move • Enter Select  •  q Back",
