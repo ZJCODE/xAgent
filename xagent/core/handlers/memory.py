@@ -149,6 +149,7 @@ class MemoryHandler:
             "type": message.type.value,
             "sender_id": message.sender_id,
             "content": message.content,
+            "timestamp": message.timestamp,
             "metadata": metadata,
         }
 

@@ -7,6 +7,7 @@ from datetime import date
 
 from xagent.components.memory import MarkdownMemory
 from xagent.core.handlers.memory import MemoryHandler
+from xagent.schemas import Message, RoleType
 
 
 class _FakeLLMService:
@@ -45,6 +46,18 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         ctx = await self.handler.get_recent_context(days=1)
         self.assertIn(today.isoformat(), ctx)
         self.assertIn("Today's diary entry", ctx)
+
+    def test_experience_record_preserves_timestamp(self):
+        message = Message(
+            role=RoleType.ASSISTANT,
+            sender_id=None,
+            content="I followed up on the task.",
+            timestamp=1710000000.0,
+        )
+
+        record = MemoryHandler._experience_record(message)
+
+        self.assertEqual(record["timestamp"], 1710000000.0)
 
     async def test_schedule_diary_write_threshold_trigger(self):
         """Messages accumulate and trigger when threshold + interval are met."""

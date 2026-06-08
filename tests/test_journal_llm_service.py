@@ -16,11 +16,15 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("first-person perspective", prompt)
         self.assertIn("observations, overheard speech, notifications, reminders", prompt)
+        self.assertIn("[speaker=Name][timestamp=Time]", prompt)
+        self.assertIn("[speaker=ME][timestamp=Time]", prompt)
+        self.assertIn("[ambient context][timestamp=Time]", prompt)
         self.assertIn("Keep the source language and do not translate", prompt)
         self.assertIn("Synthesize important points instead of replaying the transcript line by line", prompt)
         self.assertIn("Keep different people separate", prompt)
         self.assertIn("Attribute important facts to the speaker or source", prompt)
         self.assertIn("I overheard", prompt)
+        self.assertIn("Use timestamps to understand ordering and attribution", prompt)
         self.assertIn("If attribution is uncertain, keep the uncertainty visible", prompt)
         self.assertIn("do not give advice, proposals, recommendations, next steps", prompt)
         self.assertIn("Return only the diary entry text", prompt)
@@ -34,10 +38,15 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("first-person perspective", prompt)
         self.assertIn("keep the source language and do not translate", prompt)
+        self.assertIn("[speaker=Name][timestamp=Time]", prompt)
+        self.assertIn("[speaker=ME][timestamp=Time]", prompt)
+        self.assertIn("[ambient context][timestamp=Time]", prompt)
         self.assertIn("Preserve speaker attribution", prompt)
         self.assertIn("Do not flatten multiple people into one undifferentiated narrative", prompt)
         self.assertIn("Keep each person's preferences, plans, commitments, and experiences attached to that person", prompt)
         self.assertIn('generic labels such as "User A", "User B", "用户A", or "用户B"', prompt)
+        self.assertIn("# YYYY-MM-DD", prompt)
+        self.assertIn("## HH:MM", prompt)
         self.assertIn("If attribution is uncertain, keep the uncertainty visible", prompt)
         self.assertIn("Weekly: main arc, key people", prompt)
         self.assertIn("Monthly: broader themes", prompt)
@@ -47,27 +56,42 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Return JSON only", prompt)
 
     def test_format_transcript_distinguishes_context_events(self):
-        event = Message.create_context_event(
-            "Bob 说活动可能要提前开始。",
-            source="microphone",
-            event_type="overheard_speech",
-            metadata={"speaker_id": "bob", "addressed_to_agent": False},
-        )
-
         transcript = JournalLLMService._format_transcript([
             {
-                "role": event.role.value,
-                "type": event.type.value,
-                "sender_id": event.sender_id,
-                "content": event.content,
-                "metadata": event.metadata,
+                "role": "environment",
+                "type": "context_event",
+                "sender_id": None,
+                "content": "Bob 说活动可能要提前开始。",
+                "timestamp": "2026-03-19 08:30:00",
+                "metadata": {"speaker_id": "bob", "addressed_to_agent": False},
             }
         ])
 
-        self.assertIn("[ambient context]: Bob 说活动可能要提前开始。", transcript)
+        self.assertIn("[ambient context][timestamp=2026-03-19 08:30:00]", transcript)
         self.assertNotIn("[observation ", transcript)
         self.assertIn("Bob 说活动可能要提前开始。", transcript)
-        self.assertIsNone(event.sender_id)
+
+    def test_format_transcript_uses_structured_speaker_headers(self):
+        transcript = JournalLLMService._format_transcript([
+            {
+                "role": "assistant",
+                "sender_id": "assistant",
+                "content": "我确认了今天的安排。",
+                "timestamp": "2026-06-08 13:41:58",
+            },
+            {
+                "role": "user",
+                "sender_id": "o9cq80_w4Ka1lFvfZNLbR9yBgiFQ@im.wechat",
+                "content": "我稍后给你发材料。",
+                "timestamp": "2026-06-08 13:42:21",
+            },
+        ])
+
+        self.assertIn("[speaker=ME][timestamp=2026-06-08 13:41:58]\n我确认了今天的安排。", transcript)
+        self.assertIn(
+            "[speaker=o9cq80_w4Ka1lFvfZNLbR9yBgiFQ@im.wechat][timestamp=2026-06-08 13:42:21]\n我稍后给你发材料。",
+            transcript,
+        )
 
     async def test_format_diary_entry_uses_plain_text_and_forwards_model_api(self):
         class FakeModelClient:
@@ -90,7 +114,20 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("xagent.core.handlers.model.ModelClient", FakeModelClient):
             result = await service.format_diary_entry(
-                messages=[{"role": "user", "sender_id": "alice", "content": "hello"}],
+                messages=[
+                    {
+                        "role": "assistant",
+                        "sender_id": "assistant",
+                        "content": "I captured the plan.",
+                        "timestamp": "2026-05-17 09:00:00",
+                    },
+                    {
+                        "role": "user",
+                        "sender_id": "alice",
+                        "content": "I'll send the document.",
+                        "timestamp": "2026-05-17 09:01:00",
+                    },
+                ],
                 journal_date="2026-05-17",
             )
 
@@ -98,6 +135,12 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         instance = FakeModelClient.instances[0]
         self.assertEqual(instance.kwargs["model_api"], MODEL_API_OPENAI_RESPONSES)
         self.assertIsNone(instance.calls[0]["output_type"])
+        self.assertIn("[speaker=ME][timestamp=2026-05-17 09:00:00]\nI captured the plan.", instance.calls[0]["messages"][0]["content"])
+        self.assertIn(
+            "[speaker=alice][timestamp=2026-05-17 09:01:00]\nI'll send the document.",
+            instance.calls[0]["messages"][0]["content"],
+        )
+        self.assertIn("[speaker=ME][timestamp=Time]", instance.calls[0]["instructions"])
 
     async def test_generate_summary_uses_plain_text_output(self):
         class FakeModelClient:

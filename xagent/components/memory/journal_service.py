@@ -82,8 +82,16 @@ class JournalLLMService:
 CURRENT DATE: {current_date}
 TARGET JOURNAL DATE: {journal_date}
 
+Structured history format:
+- `[speaker=Name][timestamp=Time]` followed by text means that Name said or wrote that text at that time.
+- `[speaker=ME][timestamp=Time]` means I said or wrote that text at that time.
+- `[ambient context][timestamp=Time]` followed by text means nearby situational context I noticed, overheard, or received at that time.
+- First-person words inside a speaker entry belong to that speaker.
+- Use timestamps to understand ordering and attribution, but do not repeat transcript markers, timestamps, or metadata in the diary entry.
+
 Source meaning:
 - The transcript is my experience stream: direct conversations, my replies, observations, overheard speech, notifications, reminders, and other received context.
+- Entries marked `[speaker=ME]` are my own previous words, actions, or observations.
 - Speakers named "ME", "agent", "assistant", or "AI" are me; rewrite them as what I did, said, or noticed.
 - First-person words ("I", "me", "my", "我") inside another speaker's line belong to that speaker, not to me; never adopt another person's "I" as my own.
 
@@ -107,7 +115,7 @@ Output rules:
 
     @staticmethod
     def build_diary_user_prompt(journal_date: str, transcript: str) -> str:
-        return f"""For {journal_date}, write a diary entry based on this conversation transcript:
+        return f"""For {journal_date}, write a diary entry based on this structured conversation transcript:
 
 {transcript}"""
 
@@ -116,6 +124,13 @@ Output rules:
         return f"""Write a concise {period_type} summary of diary entries from my first-person perspective.
 
 PERIOD: {period_label}
+
+Structured history format:
+- `[speaker=Name][timestamp=Time]` followed by text means that Name said or wrote that text at that time.
+- `[speaker=ME][timestamp=Time]` means I said or wrote that text at that time.
+- `[ambient context][timestamp=Time]` followed by text means nearby situational context I noticed, overheard, or received at that time.
+- First-person words inside a speaker entry belong to that speaker.
+- Source material may also contain `# YYYY-MM-DD` and `## HH:MM` headings; treat them as date and time boundaries for chronology, not as output text.
 
 Summary rules:
 - Use "I"; keep the source language and do not translate.
@@ -166,18 +181,87 @@ Output rules:
 
     @staticmethod
     def _format_transcript(messages: List[dict]) -> str:
-        lines: List[str] = []
+        blocks: List[str] = []
         for message in messages:
-            message_type = str(message.get("type", "message"))
-            role = message.get("role", "unknown")
-            sender = message.get("sender_id", role)
             content = str(message.get("content", "")).strip()
-            if content:
-                if message_type == "context_event":
-                    lines.append(f"[ambient context]: {content}")
-                else:
-                    lines.append(f"[{sender}]: {content}")
-        return "\n".join(lines)
+            if not content:
+                continue
+            header = JournalLLMService._format_transcript_header(message)
+            blocks.append(f"{header}\n{content}" if header else content)
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _format_transcript_header(message: dict) -> str:
+        message_type = str(message.get("type", "message")).strip().lower()
+        timestamp = JournalLLMService._normalize_timestamp(message.get("timestamp"))
+        if message_type == "context_event":
+            return JournalLLMService._append_timestamp_marker("[ambient context]", timestamp)
+
+        speaker = JournalLLMService._normalize_transcript_speaker(message)
+        if speaker:
+            return JournalLLMService._append_timestamp_marker(f"[speaker={speaker}]", timestamp)
+        if timestamp:
+            return f"[timestamp={timestamp}]"
+        return ""
+
+    @staticmethod
+    def _normalize_transcript_speaker(message: dict) -> str:
+        sender = JournalLLMService._sanitize_marker_field(message.get("sender_id"))
+        role = str(message.get("role", "unknown")).strip().lower()
+        if JournalLLMService._is_self_speaker(sender=sender, role=role):
+            return "ME"
+        if sender:
+            return sender
+        fallback = JournalLLMService._sanitize_marker_field(role)
+        return fallback or "unknown"
+
+    @staticmethod
+    def _is_self_speaker(sender: str | None, role: str) -> bool:
+        if role == "assistant":
+            return True
+        return bool(sender and sender.lower() in {"me", "agent", "assistant", "ai"})
+
+    @staticmethod
+    def _append_timestamp_marker(prefix: str, timestamp: str | None) -> str:
+        if not timestamp:
+            return prefix
+        return f"{prefix}[timestamp={timestamp}]"
+
+    @staticmethod
+    def _normalize_timestamp(raw_timestamp: Any) -> str | None:
+        if raw_timestamp is None:
+            return None
+        if isinstance(raw_timestamp, datetime):
+            return raw_timestamp.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(raw_timestamp, (int, float)):
+            try:
+                return datetime.fromtimestamp(raw_timestamp).strftime("%Y-%m-%d %H:%M:%S")
+            except (OverflowError, OSError, ValueError):
+                return None
+
+        text = str(raw_timestamp).strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromtimestamp(float(text)).strftime("%Y-%m-%d %H:%M:%S")
+        except (OverflowError, OSError, ValueError):
+            pass
+
+        iso_candidate = text.replace("Z", "+00:00") if text.endswith("Z") else text
+        try:
+            parsed = datetime.fromisoformat(iso_candidate)
+        except ValueError:
+            return JournalLLMService._sanitize_marker_field(text)
+        return parsed.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
+    def _sanitize_marker_field(value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+        return normalized.replace("\n", " ").replace("]", "")
 
     @staticmethod
     def _normalize_content(content: str) -> str:
@@ -200,10 +284,4 @@ Output rules:
 
     @staticmethod
     def _fallback_entry(messages: List[dict]) -> str:
-        parts: List[str] = []
-        for message in messages:
-            content = str(message.get("content", "")).strip()
-            sender = message.get("sender_id", message.get("role", ""))
-            if content:
-                parts.append(f"{sender}: {content}")
-        return "\n".join(parts)
+        return JournalLLMService._format_transcript(messages)
