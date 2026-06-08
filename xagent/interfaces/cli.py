@@ -3497,24 +3497,24 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
 def _launcher_channel_options() -> list[MenuOption]:
     return [
         MenuOption(
-            key=CHANNEL_API,
-            title="API / Web UI",
-            description="Open or manage the HTTP, WebSocket, and browser workspace.",
-        ),
-        MenuOption(
-            key=CHANNEL_FEISHU,
-            title="Feishu",
-            description="Configure or manage the Feishu bot channel.",
-        ),
-        MenuOption(
             key="chat",
-            title="Terminal Chat",
+            title="Chat",
             description="Talk with the configured agent in the terminal.",
         ),
         MenuOption(
             key="voice",
             title="Voice",
             description="Start microphone mode or list local audio devices.",
+        ),
+        MenuOption(
+            key=CHANNEL_API,
+            title="Web",
+            description="Open or manage the HTTP, WebSocket, and browser workspace.",
+        ),
+        MenuOption(
+            key=CHANNEL_FEISHU,
+            title="Feishu",
+            description="Configure or manage the Feishu bot channel.",
         ),
         MenuOption(key="back", title="Back", description="Return to the main launcher."),
     ]

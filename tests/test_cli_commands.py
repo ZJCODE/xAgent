@@ -676,14 +676,14 @@ class CLICommandTests(unittest.TestCase):
         options = _launcher_channel_options()
         titles = [option.title for option in options]
 
-        self.assertEqual(titles, ["API / Web UI", "Feishu", "Terminal Chat", "Voice", "Back"])
+        self.assertEqual(titles, ["Chat", "Voice", "Web", "Feishu", "Back"])
         self.assertNotIn("All", titles)
 
     def test_channel_launcher_start_chooses_channel_before_action(self):
         class FakeUI:
             def __init__(self):
                 self.channel_choices = iter([
-                    SimpleNamespace(key="api", title="API / Web UI"),
+                    SimpleNamespace(key="api", title="Web"),
                     SimpleNamespace(key="back"),
                 ])
                 self.channel_option_titles = []
@@ -695,7 +695,7 @@ class CLICommandTests(unittest.TestCase):
                 if title == "xAgent Channel":
                     self.channel_option_titles = [option.title for option in options]
                     return next(self.channel_choices)
-                if title == "xAgent Channel / API / Web UI":
+                if title == "xAgent Channel / Web":
                     self.action_option_titles = [option.title for option in options]
                     return next(self.action_choices)
                 raise AssertionError(f"Unexpected menu: {title}")
@@ -717,7 +717,7 @@ class CLICommandTests(unittest.TestCase):
                 exit_code = _run_channel_launcher(Path("/tmp/xagent"))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_ui.channel_option_titles[:4], ["API / Web UI", "Feishu", "Terminal Chat", "Voice"])
+        self.assertEqual(fake_ui.channel_option_titles[:4], ["Chat", "Voice", "Web", "Feishu"])
         self.assertIn("Start Background", fake_ui.action_option_titles)
         self.assertIn("Open Web UI", fake_ui.action_option_titles)
         self.assertNotIn("Start API", fake_ui.action_option_titles)
