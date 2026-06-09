@@ -103,6 +103,7 @@ class Agent:
         self.memory_handler = MemoryHandler(
             memory=self.markdown_memory,
             llm_service=self.llm_service,
+            message_storage=self.message_storage,
         )
 
         bound_tools = list(tools or [])
@@ -174,10 +175,8 @@ class Agent:
             return ""
         return AgentConfig.build_workspace_context(str(self.workspace_dir))
 
-    async def flush_memory(self) -> None:
-        flusher = getattr(self.memory_handler, "flush_pending", None)
-        if flusher is not None:
-            await flusher()
+    async def run_memory_maintenance(self) -> None:
+        await self.memory_handler.run_maintenance()
         observability_flusher = getattr(self._observability_runtime(), "flush", None)
         if observability_flusher is not None:
             try:
@@ -361,7 +360,6 @@ class Agent:
                         self._assistant_sender_id,
                     )
                     self._schedule_experience_write(
-                        msg_handler=msg_handler,
                         memory_mode=memory_mode,
                         messages=[user_msg, assistant_msg],
                     )
@@ -373,7 +371,6 @@ class Agent:
                         self._assistant_sender_id,
                     )
                     self._schedule_experience_write(
-                        msg_handler=msg_handler,
                         memory_mode=memory_mode,
                         messages=[user_msg, assistant_msg],
                     )
@@ -392,7 +389,6 @@ class Agent:
                             attachments=tool_result.attachments,
                         )
                         self._schedule_experience_write(
-                            msg_handler=msg_handler,
                             memory_mode=memory_mode,
                             messages=[user_msg, assistant_msg],
                         )
@@ -621,7 +617,6 @@ class Agent:
                             attachments=tool_result.attachments,
                         )
                         self._schedule_experience_write(
-                            msg_handler=msg_handler,
                             memory_mode=memory_mode,
                             messages=[user_msg, assistant_msg],
                         )
@@ -649,7 +644,6 @@ class Agent:
                         metadata={"turn_phase": "final"},
                     )
                     self._schedule_experience_write(
-                        msg_handler=msg_handler,
                         memory_mode=memory_mode,
                         messages=[user_msg, assistant_msg],
                     )
@@ -698,7 +692,6 @@ class Agent:
             metadata=metadata,
         )
         self._schedule_experience_write(
-            msg_handler=self.message_handler,
             memory_mode=MemoryMode.FULL,
             messages=[event_msg],
         )
@@ -731,31 +724,19 @@ class Agent:
             self._assistant_sender_id,
         )
         self._schedule_experience_write(
-            msg_handler=msg_handler,
             memory_mode=memory_mode,
             messages=[*triggering_messages, assistant_msg],
         )
 
     def _schedule_experience_write(
         self,
-        msg_handler: MessageHandler,
         memory_mode: MemoryMode,
         messages: List[Message],
-        caused_reply: bool = False,
     ) -> None:
         if not memory_mode.can_write or not messages:
             return
 
-        scheduler = getattr(self.memory_handler, "schedule_experience_write", None)
-        if scheduler is not None:
-            scheduler(messages, caused_reply=caused_reply)
-            return
-
-        conversation_messages = msg_handler.filter_conversation_messages(messages)
-        if conversation_messages:
-            self.memory_handler.schedule_diary_write(
-                msg_handler.to_model_input(conversation_messages)
-            )
+        self.memory_handler.schedule_experience_write(messages)
 
     def _excluded_memory_tools(
         self,

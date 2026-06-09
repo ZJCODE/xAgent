@@ -60,6 +60,51 @@ class MessageStorageBase(ABC):
             return 0
         return len(messages)
 
+    async def get_latest_message_cursor(self) -> int:
+        """Return a stable cursor for the newest persisted message.
+
+        Backends with stable row identifiers should override this method.
+        The default fallback uses the current message count as an ordinal
+        cursor so maintenance code can still snapshot and replay a bounded
+        window without drifting when newer messages arrive.
+        """
+        return await self.get_message_count()
+
+    async def get_messages_in_cursor_range(
+        self,
+        start_exclusive: int = 0,
+        end_inclusive: Optional[int] = None,
+    ) -> List[Message]:
+        """Return messages in the bounded cursor window, oldest to newest."""
+        try:
+            normalized_start = max(0, int(start_exclusive))
+        except (TypeError, ValueError):
+            normalized_start = 0
+
+        if end_inclusive is None:
+            normalized_end = await self.get_latest_message_cursor()
+        else:
+            try:
+                normalized_end = max(0, int(end_inclusive))
+            except (TypeError, ValueError):
+                normalized_end = 0
+
+        if normalized_end <= normalized_start:
+            return []
+
+        total_messages = await self.get_message_count()
+        offset = max(0, total_messages - normalized_end)
+        count = normalized_end - normalized_start
+        return await self.get_messages(count=count, offset=offset)
+
+    async def cursor_for_message_count(self, message_count: int) -> int:
+        """Translate a legacy ordinal message count into the backend cursor."""
+        try:
+            normalized_count = max(0, int(message_count))
+        except (TypeError, ValueError):
+            normalized_count = 0
+        return normalized_count
+
     async def has_messages(self) -> bool:
         """Return whether the stream contains at least one message."""
         return await self.get_message_count() > 0

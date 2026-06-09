@@ -75,7 +75,7 @@ def _selection(**overrides) -> InitSelection:
     )
 
 
-def _write_runtime(directory: str, *, feishu: bool = False) -> None:
+def _write_runtime(directory: str, *, feishu: bool = False, weixin: bool = False) -> None:
     config = {
         "provider": {
             "name": "openai",
@@ -95,6 +95,10 @@ def _write_runtime(directory: str, *, feishu: bool = False) -> None:
         config["channels"]["feishu"] = {
             "app_id": "cli_test",
             "app_secret": "secret",
+        }
+    if weixin:
+        config["channels"]["weixin"] = {
+            "account_id": "bot@im.bot",
         }
     root = Path(directory)
     root.mkdir(parents=True, exist_ok=True)
@@ -2309,21 +2313,82 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir, feishu=True)
             args = argparse.Namespace(channel="feishu", config_dir=tmpdir)
 
+            class _Heartbeat:
+                def __init__(self):
+                    self.started = False
+                    self.stopped = False
+
+                async def start(self):
+                    self.started = True
+
+                async def stop(self):
+                    self.stopped = True
+
             class _Runner:
                 def __init__(self):
-                    self.agent = SimpleNamespace(model="gpt-5.4-mini", flush_memory=self.flush_memory)
+                    self.agent = SimpleNamespace(
+                        model="gpt-5.4-mini",
+                        run_memory_maintenance=self.run_memory_maintenance,
+                    )
 
-                async def flush_memory(self):
+                async def run_memory_maintenance(self):
                     return None
 
             adapter_instance = MagicMock()
             adapter_instance.run = AsyncMock()
+            heartbeat = _Heartbeat()
 
             with patch("xagent.interfaces.cli.BaseAgentRunner", return_value=_Runner()):
                 with patch("xagent.integrations.feishu.FeishuAdapter", return_value=adapter_instance):
-                    exit_code = handle_run_channel_internal(args)
+                    with patch("xagent.interfaces.cli.create_runtime_heartbeat", return_value=heartbeat) as factory:
+                        exit_code = handle_run_channel_internal(args)
 
         self.assertEqual(exit_code, 0)
+        factory.assert_called_once()
+        self.assertTrue(heartbeat.started)
+        self.assertTrue(heartbeat.stopped)
+        adapter_instance.run.assert_awaited_once_with()
+
+    def test_run_channel_weixin_starts_runtime_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, weixin=True)
+            args = argparse.Namespace(channel="weixin", config_dir=tmpdir)
+
+            class _Heartbeat:
+                def __init__(self):
+                    self.started = False
+                    self.stopped = False
+
+                async def start(self):
+                    self.started = True
+
+                async def stop(self):
+                    self.stopped = True
+
+            class _Runner:
+                def __init__(self):
+                    self.config_dir = Path(tmpdir)
+                    self.agent = SimpleNamespace(
+                        model="gpt-5.4-mini",
+                        run_memory_maintenance=self.run_memory_maintenance,
+                    )
+
+                async def run_memory_maintenance(self):
+                    return None
+
+            adapter_instance = MagicMock()
+            adapter_instance.run = AsyncMock()
+            heartbeat = _Heartbeat()
+
+            with patch("xagent.interfaces.cli.BaseAgentRunner", return_value=_Runner()):
+                with patch("xagent.integrations.weixin.WeixinAdapter", return_value=adapter_instance):
+                    with patch("xagent.interfaces.cli.create_runtime_heartbeat", return_value=heartbeat) as factory:
+                        exit_code = handle_run_channel_internal(args)
+
+        self.assertEqual(exit_code, 0)
+        factory.assert_called_once()
+        self.assertTrue(heartbeat.started)
+        self.assertTrue(heartbeat.stopped)
         adapter_instance.run.assert_awaited_once_with()
 
     def test_start_all_includes_feishu_when_credentials_exist_without_enabled(self):

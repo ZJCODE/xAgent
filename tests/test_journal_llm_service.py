@@ -21,6 +21,8 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[ambient context][timestamp=Time]", prompt)
         self.assertIn("Keep the source language and do not translate", prompt)
         self.assertIn("Synthesize important points instead of replaying the transcript line by line", prompt)
+        self.assertIn("newly observed period since the previous diary write", prompt)
+        self.assertIn("Focus on the arc of this period", prompt)
         self.assertIn("Keep different people separate", prompt)
         self.assertIn("Attribute important facts to the speaker or source", prompt)
         self.assertIn("I overheard", prompt)
@@ -92,6 +94,15 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
             "[speaker=o9cq80_w4Ka1lFvfZNLbR9yBgiFQ@im.wechat][timestamp=2026-06-08 13:42:21]\n我稍后给你发材料。",
             transcript,
         )
+
+    def test_build_diary_user_prompt_uses_single_period_transcript(self):
+        prompt = JournalLLMService.build_diary_user_prompt(
+            journal_date="2026-06-09",
+            transcript="[speaker=ME][timestamp=2026-06-09 09:00:00]\nNew period content.",
+        )
+
+        self.assertIn("write a diary entry based on this structured conversation transcript", prompt)
+        self.assertIn("New period content.", prompt)
 
     async def test_format_diary_entry_uses_plain_text_and_forwards_model_api(self):
         class FakeModelClient:

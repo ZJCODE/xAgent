@@ -1,61 +1,78 @@
-"""Memory handler: recent context injection and background diary writing."""
+"""Memory handler: recent context injection and time-based diary writing."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from contextlib import asynccontextmanager
 from datetime import date, timedelta
-from typing import TYPE_CHECKING, List, Optional
+from pathlib import Path
+from typing import IO, TYPE_CHECKING, List, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX platforms
+    msvcrt = None
 
 from ..config import AgentConfig
 from ...schemas import Message, MessageType
 
 if TYPE_CHECKING:
     from ...components.memory import JournalLLMService, MarkdownMemory
+    from ...components.message import MessageStorageBase
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryHandler:
-    """Manages diary context injection and background diary persistence.
-
-    Replaces the old ``MemoryManager`` with a simple markdown-file-backed
-    implementation.  No SQLite, no FTS — just files + shell commands.
-    """
+    """Manages recent diary context and time-based journal maintenance."""
 
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
-    MESSAGE_THRESHOLD = AgentConfig.MEMORY_MESSAGE_THRESHOLD
-    MIN_INTERVAL_SECONDS = AgentConfig.MEMORY_MIN_INTERVAL_SECONDS
-    STALE_FLUSH_SECONDS = AgentConfig.MEMORY_STALE_FLUSH_SECONDS
+    IDLE_JOURNAL_DELAY_SECONDS = AgentConfig.MEMORY_IDLE_JOURNAL_DELAY_SECONDS
+    MAX_ACTIVE_JOURNAL_DELAY_SECONDS = AgentConfig.MEMORY_MAX_ACTIVE_JOURNAL_DELAY_SECONDS
+    MAX_JOURNAL_SOURCE_CHARS = AgentConfig.MAX_TRANSCRIPT_CHARS
 
     def __init__(
         self,
         memory: MarkdownMemory,
         llm_service: JournalLLMService,
+        message_storage: MessageStorageBase,
         *,
         recent_days: Optional[int] = None,
-        message_threshold: Optional[int] = None,
-        min_interval_seconds: Optional[float] = None,
-        stale_flush_seconds: Optional[float] = None,
+        idle_journal_delay_seconds: Optional[float] = None,
+        max_active_journal_delay_seconds: Optional[float] = None,
+        max_journal_source_chars: Optional[int] = None,
     ) -> None:
         self.memory = memory
         self.llm_service = llm_service
+        self.message_storage = message_storage
         self.recent_days = self._positive_int(recent_days, self.RECENT_DAYS)
-        self.message_threshold = self._positive_int(message_threshold, self.MESSAGE_THRESHOLD)
-        self.min_interval_seconds = self._non_negative_float(
-            min_interval_seconds,
-            self.MIN_INTERVAL_SECONDS,
+        self.idle_journal_delay_seconds = self._non_negative_float(
+            idle_journal_delay_seconds,
+            self.IDLE_JOURNAL_DELAY_SECONDS,
         )
-        self.stale_flush_seconds = self._positive_float(
-            stale_flush_seconds,
-            self.STALE_FLUSH_SECONDS,
+        self.max_active_journal_delay_seconds = self._non_negative_float(
+            max_active_journal_delay_seconds,
+            self.MAX_ACTIVE_JOURNAL_DELAY_SECONDS,
         )
-        self._background_tasks: set[asyncio.Task] = set()
-        self._pending_messages: List[dict] = []
-        self._last_activity_time: Optional[float] = None
-        self._last_write_time: float = 0.0
-        self._flush_timer_task: Optional[asyncio.Task] = None
+        self.max_journal_source_chars = self._positive_int(
+            max_journal_source_chars,
+            self.MAX_JOURNAL_SOURCE_CHARS,
+        )
+        self._maintenance_lock = asyncio.Lock()
+        self._maintenance_task: Optional[asyncio.Task[bool]] = None
+        state = self._read_state_sync()
+        self._last_processed_message_id = self._non_negative_int(
+            state.get("last_processed_message_id"),
+            0,
+        )
 
     # ------------------------------------------------------------------
     # Context retrieval (injected into system prompt every turn)
@@ -78,68 +95,78 @@ class MemoryHandler:
         return "\n\n".join(sections)
 
     # ------------------------------------------------------------------
-    # Background diary write
+    # Journal maintenance
     # ------------------------------------------------------------------
-
-    def schedule_diary_write(self, messages: List[dict]) -> None:
-        """Accumulate messages and schedule a background diary write when appropriate.
-
-        Flushes immediately for regular batches when the threshold and write
-        interval allow it, and always schedules an idle fallback so short
-        conversations cannot sit only in RAM indefinitely.
-        """
-        if not messages:
-            return
-
-        self._pending_messages.extend(messages)
-
-        now = time.time()
-        self._last_activity_time = now
-
-        threshold_met = len(self._pending_messages) >= self.message_threshold
-        interval_met = (now - self._last_write_time) >= self.min_interval_seconds
-
-        if threshold_met and interval_met:
-            self._flush_diary_write()
-            return
-
-        self._schedule_flush_timer(now)
-
-    async def flush_pending(self) -> None:
-        """Write pending messages now and wait for in-flight memory tasks."""
-        self._cancel_flush_timer()
-
-        if self._pending_messages:
-            batch = list(self._pending_messages)
-            self._pending_messages.clear()
-            self._last_activity_time = None
-            self._last_write_time = time.time()
-            await self._do_diary_write(batch)
-
-        if self._background_tasks:
-            tasks = list(self._background_tasks)
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.error("Background memory task failed during flush: %s", result)
 
     def schedule_experience_write(
         self,
         messages: List[Message],
-        caused_reply: bool = False,
     ) -> None:
-        """Accumulate agent experiences for diary memory.
+        """Schedule a journal maintenance check after meaningful new experience."""
+        if not messages:
+            return
+        if any(self._is_memory_worthy_experience(message) for message in messages):
+            self._schedule_maintenance()
 
-        The experience stream includes direct conversations and meaningful
-        observations. Tool messages remain transient and are intentionally not
-        written as diary source material.
-        """
-        records = [
+    async def run_maintenance(self, force: bool = False) -> bool:
+        """Run journal maintenance using persisted message history only."""
+        current_task = asyncio.current_task()
+        maintenance_task = self._maintenance_task
+        if maintenance_task is not None and maintenance_task is not current_task and not maintenance_task.done():
+            try:
+                existing_result = await maintenance_task
+            except Exception as exc:
+                logger.error("Background memory maintenance failed: %s", exc)
+                existing_result = False
+            if not force:
+                return bool(existing_result)
+
+        async with self._maintenance_guard(refresh_state=True):
+            return await self._run_maintenance_locked(force=force)
+
+    async def _run_maintenance_locked(self, force: bool = False) -> bool:
+        latest_message_id = await self.message_storage.get_latest_message_cursor()
+        if latest_message_id <= 0:
+            return False
+        if latest_message_id < self._last_processed_message_id:
+            self._last_processed_message_id = 0
+
+        pending_messages = await self.message_storage.get_messages_in_cursor_range(
+            start_exclusive=self._last_processed_message_id,
+            end_inclusive=latest_message_id,
+        )
+        if not pending_messages:
+            return False
+
+        new_records = [
             self._experience_record(message)
-            for message in messages[-AgentConfig.MAX_EXPERIENCE_MEMORY_EVENTS:]
-            if self._is_memory_worthy_experience(message, caused_reply=caused_reply)
+            for message in pending_messages
+            if self._is_memory_worthy_experience(message)
         ]
-        self.schedule_diary_write(records)
+        if not new_records:
+            await self._commit_processed_message_id(latest_message_id)
+            return False
+
+        batches = self._split_records_for_source_budget(new_records)
+        if not batches:
+            return False
+
+        now = time.time()
+        idle_due = self._is_idle_due(now, new_records)
+        active_due = self._is_max_active_due(now, new_records)
+        if not force and not idle_due and not active_due:
+            return False
+
+        for batch in batches:
+            if not await self._write_journal_entry(batch):
+                return False
+
+        if not await self._commit_processed_message_id(latest_message_id):
+            logger.warning(
+                "Diary write completed but checkpoint was not advanced; retry will replay pending messages."
+            )
+            return False
+        return True
 
     @staticmethod
     def _experience_record(message: Message) -> dict:
@@ -154,10 +181,7 @@ class MemoryHandler:
         }
 
     @staticmethod
-    def _is_memory_worthy_experience(
-        message: Message,
-        caused_reply: bool = False,
-    ) -> bool:
+    def _is_memory_worthy_experience(message: Message) -> bool:
         if message.type == MessageType.Message:
             return bool(message.content.strip())
         if message.type != MessageType.CONTEXT_EVENT:
@@ -169,30 +193,12 @@ class MemoryHandler:
             return False
         if policy == "always" or metadata.get("memory_worthy") is True:
             return True
-        if caused_reply:
-            return True
 
         event_type = str(metadata.get("event_type", "observation")).lower()
         routine_types = {"heartbeat", "ping", "sensor_tick", "presence_tick"}
         return event_type not in routine_types and bool(message.content.strip())
 
-    def _flush_diary_write(self) -> None:
-        """Spawn a background task to format and append pending messages."""
-        if not self._pending_messages:
-            return
-
-        self._cancel_flush_timer()
-
-        batch = list(self._pending_messages)
-        self._pending_messages.clear()
-        self._last_activity_time = None
-        self._last_write_time = time.time()
-
-        task = asyncio.create_task(self._do_diary_write(batch))
-        self._background_tasks.add(task)
-        task.add_done_callback(self._on_task_done)
-
-    async def _do_diary_write(self, messages: List[dict]) -> None:
+    async def _write_journal_entry(self, messages: List[dict]) -> bool:
         """LLM-format messages and append to today's daily file."""
         today_str = date.today().isoformat()
         try:
@@ -203,8 +209,73 @@ class MemoryHandler:
             if content.strip():
                 await self.memory.append_daily(content)
                 logger.debug("Background diary write: %d msgs → %d chars", len(messages), len(content))
+                return True
         except Exception as exc:
             logger.error("Background diary write failed: %s", exc)
+        return False
+
+    def _is_idle_due(self, now: float, records: List[dict]) -> bool:
+        latest_activity_time = self._latest_record_timestamp(records)
+        return (
+            latest_activity_time > 0
+            and (now - latest_activity_time) >= self.idle_journal_delay_seconds
+        )
+
+    def _is_max_active_due(self, now: float, records: List[dict]) -> bool:
+        earliest_activity_time = self._earliest_record_timestamp(records)
+        return (
+            earliest_activity_time > 0
+            and (now - earliest_activity_time) >= self.max_active_journal_delay_seconds
+        )
+
+    def _split_records_for_source_budget(self, records: List[dict]) -> List[List[dict]]:
+        batches: list[list[dict]] = []
+        current_batch: list[dict] = []
+        current_chars = 0
+
+        for record in records:
+            estimated_chars = self._estimate_record_chars(record)
+            if current_batch and current_chars + estimated_chars > self.max_journal_source_chars:
+                batches.append(current_batch)
+                current_batch = [record]
+                current_chars = estimated_chars
+                continue
+            current_batch.append(record)
+            current_chars += estimated_chars
+
+        if current_batch:
+            batches.append(current_batch)
+        return batches
+
+    @staticmethod
+    def _estimate_record_chars(record: dict) -> int:
+        return (
+            len(str(record.get("content", "")))
+            + len(str(record.get("sender_id", "")))
+            + len(str(record.get("role", "")))
+            + len(str(record.get("type", "")))
+            + 80
+        )
+
+    @staticmethod
+    def _latest_record_timestamp(records: List[dict]) -> float:
+        timestamps: list[float] = []
+        for record in records:
+            try:
+                timestamps.append(float(record.get("timestamp")))
+            except (TypeError, ValueError):
+                continue
+        return max(timestamps) if timestamps else 0.0
+
+    @staticmethod
+    def _earliest_record_timestamp(records: List[dict]) -> float:
+        timestamps: list[float] = []
+        for record in records:
+            try:
+                timestamps.append(float(record.get("timestamp")))
+            except (TypeError, ValueError):
+                continue
+        return min(timestamps) if timestamps else 0.0
 
     # ------------------------------------------------------------------
     # Summary auto-generation
@@ -216,9 +287,13 @@ class MemoryHandler:
         Only generates summaries for periods that are fully in the past and
         whose summary file does not yet exist.
         """
+        async with self._maintenance_guard():
+            await self._check_and_generate_summaries_locked()
+
+    async def _check_and_generate_summaries_locked(self) -> None:
         today = date.today()
 
-        await self.generate_previous_weekly_summary_if_missing(today=today)
+        await self._generate_previous_weekly_summary_if_missing_locked(today=today)
 
         # Monthly: check last month
         if today.month == 1:
@@ -240,6 +315,13 @@ class MemoryHandler:
         today: Optional[date] = None,
     ) -> bool:
         """Generate the previous completed week's summary if it is missing."""
+        async with self._maintenance_guard():
+            return await self._generate_previous_weekly_summary_if_missing_locked(today=today)
+
+    async def _generate_previous_weekly_summary_if_missing_locked(
+        self,
+        today: Optional[date] = None,
+    ) -> bool:
         current_day = today or date.today()
         last_week_day = current_day - timedelta(days=7)
         week_start, week_end = self.memory.week_range_for(last_week_day)
@@ -269,6 +351,7 @@ class MemoryHandler:
 
     async def _generate_monthly(self, year: int, month: int) -> None:
         import calendar
+
         first = date(year, month, 1)
         last = date(year, month, calendar.monthrange(year, month)[1])
         source = await self.memory.search_date_range(
@@ -285,10 +368,10 @@ class MemoryHandler:
 
     async def _generate_yearly(self, year: int) -> None:
         parts: list[str] = []
-        for m in range(1, 13):
-            text = await self.memory.read_file(self.memory.monthly_path(year, m))
+        for month in range(1, 13):
+            text = await self.memory.read_file(self.memory.monthly_path(year, month))
             if text.strip():
-                parts.append(f"# {year}-{m:02d}\n\n{text}")
+                parts.append(f"# {year}-{month:02d}\n\n{text}")
         source = "\n\n".join(parts)
         if not source.strip():
             return
@@ -302,57 +385,143 @@ class MemoryHandler:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _on_task_done(self, task: asyncio.Task) -> None:
-        self._background_tasks.discard(task)
+    def _on_maintenance_done(self, task: asyncio.Task[bool]) -> None:
+        if self._maintenance_task is task:
+            self._maintenance_task = None
         try:
-            exc = task.exception()
+            task.result()
         except asyncio.CancelledError:
             return
-        if exc is not None:
-            logger.error("Background memory task failed: %s", exc)
+        except Exception as exc:
+            logger.error("Background memory maintenance failed: %s", exc)
 
-    def _schedule_flush_timer(self, now: Optional[float] = None) -> None:
-        if not self._pending_messages or self._last_activity_time is None:
+    def _schedule_maintenance(self) -> None:
+        task = self._maintenance_task
+        if task is not None and not task.done():
             return
 
-        now = now or time.time()
-        next_deadline = self._last_activity_time + self.stale_flush_seconds
-        if len(self._pending_messages) >= self.message_threshold:
-            next_deadline = min(next_deadline, self._last_write_time + self.min_interval_seconds)
-        delay = max(0.0, next_deadline - now)
+        maintenance_task = asyncio.create_task(self.run_maintenance())
+        self._maintenance_task = maintenance_task
+        maintenance_task.add_done_callback(self._on_maintenance_done)
 
-        self._cancel_flush_timer()
-        task = asyncio.create_task(self._run_flush_timer(delay))
-        self._flush_timer_task = task
-        task.add_done_callback(self._on_flush_timer_done)
+    @asynccontextmanager
+    async def _maintenance_guard(self, refresh_state: bool = False):
+        async with self._maintenance_lock:
+            async with self._maintenance_process_lock():
+                if refresh_state:
+                    await self._refresh_state_from_disk()
+                yield
 
-    async def _run_flush_timer(self, delay: float) -> None:
-        await asyncio.sleep(delay)
-        self._flush_timer_task = None
-        self._flush_diary_write()
-
-    def _on_flush_timer_done(self, task: asyncio.Task) -> None:
-        if self._flush_timer_task is task:
-            self._flush_timer_task = None
+    @asynccontextmanager
+    async def _maintenance_process_lock(self):
+        lock_handle = await asyncio.to_thread(self._acquire_process_lock_sync)
         try:
-            exc = task.exception()
-        except asyncio.CancelledError:
-            return
-        if exc is not None:
-            logger.error("Memory flush timer failed: %s", exc)
+            yield
+        finally:
+            await asyncio.to_thread(self._release_process_lock_sync, lock_handle)
 
-    def _cancel_flush_timer(self) -> None:
-        task = self._flush_timer_task
-        if task is None:
+    async def _refresh_state_from_disk(self) -> None:
+        state = await asyncio.to_thread(self._read_state_sync)
+        if "last_processed_message_id" in state:
+            self._last_processed_message_id = self._non_negative_int(
+                state.get("last_processed_message_id"),
+                0,
+            )
             return
+
+        legacy_count = self._non_negative_int(state.get("last_processed_message_count"), 0)
+        if legacy_count <= 0:
+            self._last_processed_message_id = 0
+            return
+
         try:
-            current_task = asyncio.current_task()
-        except RuntimeError:
-            current_task = None
-        if task is not current_task and not task.done():
-            task.cancel()
-        if task is not current_task:
-            self._flush_timer_task = None
+            migrated_cursor = await self.message_storage.cursor_for_message_count(legacy_count)
+        except Exception as exc:
+            logger.warning("Failed to migrate legacy journal checkpoint: %s", exc)
+            migrated_cursor = 0
+        self._last_processed_message_id = self._non_negative_int(migrated_cursor, 0)
+
+    async def _commit_processed_message_id(self, processed_message_id: int) -> bool:
+        normalized_id = self._non_negative_int(processed_message_id, 0)
+        try:
+            await self._write_state(normalized_id)
+        except Exception as exc:
+            logger.error("Failed to persist journal state: %s", exc)
+            return False
+        self._last_processed_message_id = normalized_id
+        return True
+
+    async def _write_state(self, processed_message_id: int) -> None:
+        payload = {
+            "last_processed_message_id": self._non_negative_int(processed_message_id, 0),
+        }
+        await asyncio.to_thread(self._write_state_sync, payload)
+
+    def _read_state_sync(self) -> dict:
+        path = self._state_path()
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}
+        except OSError as exc:
+            logger.warning("Failed to read journal state: %s", exc)
+            return {}
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("Failed to decode journal state: %s", exc)
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _write_state_sync(self, payload: dict) -> None:
+        path = self._state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f".{path.name}.tmp")
+        temp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        temp_path.replace(path)
+
+    def _acquire_process_lock_sync(self) -> IO[str]:
+        path = self._lock_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = path.open("a+", encoding="utf-8")
+        try:
+            self._lock_file(lock_file)
+        except Exception:
+            lock_file.close()
+            raise
+        return lock_file
+
+    @staticmethod
+    def _lock_file(lock_file: IO[str]) -> None:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            return
+        if msvcrt is not None:
+            lock_file.seek(0)
+            if not lock_file.read(1):
+                lock_file.write("\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            return
+        raise RuntimeError("No supported file locking implementation is available")
+
+    def _release_process_lock_sync(self, lock_file: IO[str]) -> None:
+        try:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            elif msvcrt is not None:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        finally:
+            lock_file.close()
+
+    def _state_path(self) -> Path:
+        return self.memory.root / "journal_state.json"
+
+    def _lock_path(self) -> Path:
+        return self.memory.root / ".journal_maintenance.lock"
 
     @staticmethod
     def _positive_int(value: Optional[int], default: int) -> int:
@@ -365,16 +534,6 @@ class MemoryHandler:
         return parsed if parsed > 0 else default
 
     @staticmethod
-    def _positive_float(value: Optional[float], default: float) -> float:
-        if value is None:
-            return float(default)
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError):
-            return float(default)
-        return parsed if parsed > 0 else float(default)
-
-    @staticmethod
     def _non_negative_float(value: Optional[float], default: float) -> float:
         if value is None:
             return float(default)
@@ -383,3 +542,13 @@ class MemoryHandler:
         except (TypeError, ValueError):
             return float(default)
         return parsed if parsed >= 0 else float(default)
+
+    @staticmethod
+    def _non_negative_int(value: Optional[int], default: int) -> int:
+        if value is None:
+            return int(default)
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return int(default)
+        return parsed if parsed >= 0 else int(default)

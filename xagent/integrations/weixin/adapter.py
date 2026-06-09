@@ -163,7 +163,7 @@ class WeixinAdapter:
             await self._cancel_processing_tasks()
             if self._owns_client and self.client is not None:
                 await self.client.aclose()
-            flusher = getattr(self.agent, "flush_memory", None)
+            flusher = getattr(self.agent, "run_memory_maintenance", None)
             if callable(flusher):
                 await flusher()
 

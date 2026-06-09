@@ -80,7 +80,7 @@ class RuntimeHeartbeat:
             self._logger.warning("Runtime heartbeat stopped after failure: %s", exc)
 
     async def run_once(self) -> None:
-        await self._flush_pending()
+        await self._run_memory_maintenance()
         today = self._today_provider()
         if today.weekday() == 0:
             await self._generate_previous_weekly_summary(today)
@@ -95,14 +95,14 @@ class RuntimeHeartbeat:
                 self._logger.warning("Runtime heartbeat tick failed: %s", exc)
             await asyncio.sleep(self.interval_seconds)
 
-    async def _flush_pending(self) -> None:
-        flusher = getattr(self.agent, "flush_memory", None)
+    async def _run_memory_maintenance(self) -> None:
+        flusher = getattr(self.agent, "run_memory_maintenance", None)
         if flusher is None:
             return
         try:
             await flusher()
         except Exception as exc:
-            self._logger.warning("Runtime heartbeat flush failed: %s", exc)
+            self._logger.warning("Runtime heartbeat memory maintenance failed: %s", exc)
 
     async def _generate_previous_weekly_summary(self, today: date) -> None:
         memory_handler = getattr(self.agent, "memory_handler", None)

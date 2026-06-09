@@ -16,7 +16,7 @@ class _FakeAgent:
     def __init__(self, reply="agent reply"):
         self.reply = reply
         self.chat_calls = []
-        self.flush_count = 0
+        self.maintenance_count = 0
         self.workspace_dir = None
 
     async def chat_events(self, **kwargs):
@@ -24,8 +24,8 @@ class _FakeAgent:
         yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": self.reply}
         yield {"type": "done"}
 
-    async def flush_memory(self):
-        self.flush_count += 1
+    async def run_memory_maintenance(self):
+        self.maintenance_count += 1
 
 
 class _FakeWeixinClient:

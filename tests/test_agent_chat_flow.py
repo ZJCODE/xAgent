@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from pydantic import BaseModel
 
@@ -57,19 +58,18 @@ class FakeToolManager:
 
 class FakeMemoryHandler:
     def __init__(self):
-        self.scheduled_messages = None
         self.experience_messages = None
-        self.caused_reply = None
+        self.maintenance_calls = 0
 
     async def get_recent_context(self):
         return ""
 
-    def schedule_diary_write(self, messages):
-        self.scheduled_messages = messages
-
-    def schedule_experience_write(self, messages, caused_reply=False):
+    def schedule_experience_write(self, messages):
         self.experience_messages = messages
-        self.caused_reply = caused_reply
+
+    async def run_maintenance(self):
+        self.maintenance_calls += 1
+        return False
 
 
 class FakeObservabilityRuntime:
@@ -961,6 +961,25 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         agent._reset_memory_mode(token)
 
+    def test_agent_init_passes_message_storage_to_memory_handler(self):
+        captured = {}
+
+        class CapturingMemoryHandler:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            async def get_recent_context(self):
+                return ""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("xagent.core.agent.MemoryHandler", CapturingMemoryHandler):
+                agent = Agent(
+                    client=object(),
+                    workspace=tmpdir,
+                )
+
+        self.assertIs(captured["message_storage"], agent.message_storage)
+
     async def test_chat_keeps_tool_messages_transient_inside_loop(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([
@@ -1291,7 +1310,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observability.turn_kwargs["memory_mode"], "full")
         self.assertFalse(observability.turn_kwargs["stream"])
 
-    async def test_flush_memory_flushes_observability(self):
+    async def test_run_memory_maintenance_flushes_observability(self):
         storage = InMemoryMessageStorage()
         observability = FakeObservabilityRuntime()
         agent = self._build_agent(
@@ -1300,7 +1319,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             observability=observability,
         )
 
-        await Agent.flush_memory(agent)
+        await Agent.run_memory_maintenance(agent)
 
         self.assertTrue(observability.flushed)
 
@@ -1424,7 +1443,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.messages[0].metadata["event_type"], "presence")
         self.assertEqual(model_client.calls, [])
         self.assertEqual(memory_handler.experience_messages, [storage.messages[0]])
-        self.assertFalse(memory_handler.caused_reply)
 
     async def test_observe_stores_ingested_history_recap(self):
         storage = InMemoryMessageStorage()
@@ -1449,7 +1467,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.messages[0].type, MessageType.CONTEXT_EVENT)
         self.assertEqual(model_client.calls, [])
         self.assertEqual(memory_handler.experience_messages, [storage.messages[0]])
-        self.assertFalse(memory_handler.caused_reply)
 
     async def test_observe_preserves_overheard_attribution_in_metadata(self):
         storage = InMemoryMessageStorage()
@@ -1476,7 +1493,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.messages[0].metadata["speaker_id"], "bob")
         self.assertEqual(model_client.calls, [])
         self.assertEqual(memory_handler.experience_messages, storage.messages)
-        self.assertFalse(memory_handler.caused_reply)
 
 
 class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):

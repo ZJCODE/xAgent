@@ -189,6 +189,93 @@ class MessageStorageLocal(MessageStorageBase):
             ).fetchone()
         return int(row["message_count"]) if row is not None else 0
 
+    async def get_latest_message_cursor(self) -> int:
+        return await asyncio.to_thread(self._get_latest_message_cursor_sync)
+
+    def _get_latest_message_cursor_sync(self) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT COALESCE(MAX(id), 0) AS latest_id
+                FROM {MessageStorageLocalConfig.TABLE_NAME}
+                """
+            ).fetchone()
+        return int(row["latest_id"]) if row is not None else 0
+
+    async def get_messages_in_cursor_range(
+        self,
+        start_exclusive: int = 0,
+        end_inclusive: Optional[int] = None,
+    ) -> List[Message]:
+        try:
+            normalized_start = max(0, int(start_exclusive))
+        except (TypeError, ValueError):
+            normalized_start = 0
+
+        if end_inclusive is None:
+            normalized_end = await self.get_latest_message_cursor()
+        else:
+            try:
+                normalized_end = max(0, int(end_inclusive))
+            except (TypeError, ValueError):
+                normalized_end = 0
+
+        if normalized_end <= normalized_start:
+            return []
+
+        return await asyncio.to_thread(
+            self._get_messages_in_cursor_range_sync,
+            normalized_start,
+            normalized_end,
+        )
+
+    def _get_messages_in_cursor_range_sync(
+        self,
+        start_exclusive: int,
+        end_inclusive: int,
+    ) -> List[Message]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT message_json
+                FROM {MessageStorageLocalConfig.TABLE_NAME}
+                WHERE id > ? AND id <= ?
+                ORDER BY id ASC
+                """,
+                (start_exclusive, end_inclusive),
+            ).fetchall()
+
+        messages: List[Message] = []
+        for row in rows:
+            try:
+                messages.append(Message.model_validate_json(row["message_json"]))
+            except Exception as exception:
+                self.logger.warning("Skipping invalid local message: %s", exception)
+        return messages
+
+    async def cursor_for_message_count(self, message_count: int) -> int:
+        try:
+            normalized_count = max(0, int(message_count))
+        except (TypeError, ValueError):
+            normalized_count = 0
+
+        if normalized_count <= 0:
+            return 0
+        return await asyncio.to_thread(self._cursor_for_message_count_sync, normalized_count)
+
+    def _cursor_for_message_count_sync(self, message_count: int) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT id
+                FROM {MessageStorageLocalConfig.TABLE_NAME}
+                ORDER BY id ASC
+                LIMIT 1 OFFSET ?
+                """,
+                (message_count - 1,),
+            ).fetchone()
+        return int(row["id"]) if row is not None else 0
+
     def get_stream_info(self) -> Dict[str, str]:
         return {
             "stream": "local",

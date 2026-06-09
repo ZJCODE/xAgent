@@ -22,16 +22,16 @@ class _FakeMemoryHandler:
 
 class _FakeAgent:
     def __init__(self):
-        self.flush_count = 0
-        self.flush_event = asyncio.Event()
-        self.raise_on_flush = False
+        self.maintenance_count = 0
+        self.maintenance_event = asyncio.Event()
+        self.raise_on_maintenance = False
         self.memory_handler = _FakeMemoryHandler()
 
-    async def flush_memory(self):
-        if self.raise_on_flush:
-            raise RuntimeError("flush failed")
-        self.flush_count += 1
-        self.flush_event.set()
+    async def run_memory_maintenance(self):
+        if self.raise_on_maintenance:
+            raise RuntimeError("maintenance failed")
+        self.maintenance_count += 1
+        self.maintenance_event.set()
 
 
 class RuntimeHeartbeatConfigTests(unittest.TestCase):
@@ -60,13 +60,13 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
 
 
 class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):
-    async def test_run_once_flushes_without_weekly_on_non_monday(self):
+    async def test_run_once_runs_memory_maintenance_without_weekly_on_non_monday(self):
         agent = _FakeAgent()
         heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: date(2026, 5, 14))
 
         await heartbeat.run_once()
 
-        self.assertEqual(agent.flush_count, 1)
+        self.assertEqual(agent.maintenance_count, 1)
         self.assertEqual(agent.memory_handler.weekly_calls, [])
 
     async def test_run_once_generates_previous_weekly_summary_on_monday(self):
@@ -76,18 +76,18 @@ class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):
 
         await heartbeat.run_once()
 
-        self.assertEqual(agent.flush_count, 1)
+        self.assertEqual(agent.maintenance_count, 1)
         self.assertEqual(agent.memory_handler.weekly_calls, [today])
 
     async def test_run_once_isolates_maintenance_errors(self):
         agent = _FakeAgent()
-        agent.raise_on_flush = True
+        agent.raise_on_maintenance = True
         agent.memory_handler.raise_on_weekly = True
         heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: date(2026, 5, 18))
 
         await heartbeat.run_once()
 
-        self.assertEqual(agent.flush_count, 0)
+        self.assertEqual(agent.maintenance_count, 0)
         self.assertEqual(agent.memory_handler.weekly_calls, [])
 
     async def test_start_runs_immediate_tick_and_stop_is_idempotent(self):
@@ -99,7 +99,7 @@ class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):
         )
 
         await heartbeat.start()
-        await asyncio.wait_for(agent.flush_event.wait(), timeout=1)
+        await asyncio.wait_for(agent.maintenance_event.wait(), timeout=1)
         self.assertTrue(heartbeat.is_running)
 
         await heartbeat.stop()
@@ -117,10 +117,10 @@ class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):
         await heartbeat.start()
         try:
             for _ in range(50):
-                if agent.flush_count >= 2:
+                if agent.maintenance_count >= 2:
                     break
                 await asyncio.sleep(0.01)
-            self.assertGreaterEqual(agent.flush_count, 2)
+            self.assertGreaterEqual(agent.maintenance_count, 2)
         finally:
             await heartbeat.stop()
 

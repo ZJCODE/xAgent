@@ -276,16 +276,16 @@ runtime:
   heartbeat_interval_seconds: 300  # 可选，正数，默认 300
 ```
 
-- `heartbeat_enabled` / `heartbeat_interval_seconds`：控制 runtime heartbeat。默认开启，默认间隔 `300` 秒。heartbeat 只做长期记忆维护：定期 flush 待写入记忆，并在每周一为上一周生成 weekly summary（详见 2.5）。
+- `heartbeat_enabled` / `heartbeat_interval_seconds`：控制 runtime heartbeat。默认开启，默认间隔 `300` 秒。heartbeat 只做长期记忆维护：定期检查是否到达日记写入周期，并在每周一为上一周生成 weekly summary（详见 2.5）。
 - `default_channel`：被校验为 `api` 或 `feishu` 之一，作为保留配置项。当前 `xagent channel <channel> <action>` 使用显式 channel，不读取该字段。
 
 ### 2.5 memory
 
 长期记忆默认自动管理，不需要在 `config.yaml` 中配置。每轮对话会自动注入最近 `2` 天的长期记忆上下文；完整原始记录以 `messages/` 为准，长期记忆是基于消息流异步整理出的派生数据。
 
-后台写入按内部批量策略执行：累计待写入消息达到 `20` 条且距上次写入超过 `600` 秒（10 分钟）时立即整理写入；否则在待写入超过 `900` 秒（15 分钟）后兜底 flush。退出 CLI 单次/交互 chat、API server 或 Feishu channel 时不会强制 flush 记忆，未写入的内容仍保留在 `messages/`，后续由批量写入、idle fallback、长驻 runtime heartbeat 或显式 `write_memory` 工具整理进长期记忆。
+后台写入按时间策略执行：完整原始消息先写入 `messages/`，长期记忆优先在静默时整理。只要存在尚未整理的 memory-worthy 消息，并且最近一批这类消息已经静默 `1800` 秒（30 分钟），系统就会生成新日记。生成时不会只看 RAM 中的待写队列，而是从持久化消息流中重建自上次 journal checkpoint 以来的新 memory-worthy 时段。退出 CLI 单次/交互 chat、API server、Feishu daemon 或 Weixin daemon 时都不会强制写日记；其中 Weixin adapter 会在退出前额外跑一次普通 maintenance due-check，但不会绕过这个静默门槛。未整理的内容仍保留在 `messages/`，后续可由下一次对话中的后台维护、长驻 runtime heartbeat 或显式 `write_memory` 工具补入长期记忆。
 
-API server lifespan 和 Feishu daemon 会启动 runtime heartbeat；CLI 单次/交互 chat 不启动。heartbeat 每 `300` 秒执行一次：flush 待写入记忆，并在每周一（`weekday()==0`）为上一周生成尚未存在的 weekly summary。summary 生成是后台维护，不是模型可见工具。
+API server lifespan、Feishu daemon 和 Weixin daemon 都会启动 runtime heartbeat；CLI 单次/交互 chat 不启动。heartbeat 每 `300` 秒执行一次：检查最近一批 memory-worthy 消息是否已经静默 30 分钟，并在每周一（`weekday()==0`）为上一周生成尚未存在的 weekly summary。summary 生成是后台维护，不是模型可见工具。
 
 长期记忆是纯时间维度存储，只包含 `daily/`、`weekly/`、`monthly/` 和 `yearly/`。旧版本可能遗留的 `memory/people/` 文件不会被自动删除，但当前记忆 API 和搜索不会再创建、列出或检索它们。
 
@@ -1228,7 +1228,7 @@ memory/
 | `enable_memory=true` | 是 | 是 | 是 |
 | `enable_memory=false` | 否 | 否 | 是 |
 
-后台写入按 `20` 条消息 + `600` 秒最小间隔、或 `900` 秒兜底策略整理。退出时不会强制 flush；短对话至少保存在 `messages/` 中，后续由批量写入、idle fallback、长驻 runtime heartbeat 或显式 `write_memory` 工具整理进长期记忆。长驻 API/Feishu 运行时通过 heartbeat（默认每 `300` 秒）执行相同维护，并在每周一生成上一周 weekly summary。
+后台写入按时间策略整理：原始内容先进入 `messages/`，长期记忆默认等待最近一批 memory-worthy 消息静默 `1800` 秒（30 分钟）后，再从持久化消息流重建自上次 journal checkpoint 以来的新 memory-worthy 时段并生成日记。退出时不会强制写日记；短对话至少保存在 `messages/` 中，后续由下一次对话中的后台维护、长驻 runtime heartbeat 或显式 `write_memory` 工具整理进长期记忆。长驻 API、Feishu 和 Weixin 运行时通过 heartbeat（默认每 `300` 秒）做相同的静默检查，并在每周一生成上一周 weekly summary。Weixin adapter 退出前还会额外跑一次普通 maintenance due-check，但不会跳过这个静默门槛。
 
 `/observe` 总是写入主消息流；是否值得进入长期日记由事件内容、`event_type` 和 `metadata.memory_policy` 等元数据决定。常见值为 `memory_policy: "never"`、`"auto"` 或 `"always"`。
 

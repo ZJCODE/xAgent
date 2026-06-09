@@ -98,6 +98,8 @@ Source meaning:
 Writing rules:
 - Use "I" and a natural, restrained diary tone.
 - Synthesize important points instead of replaying the transcript line by line.
+- The transcript covers the newly observed period since the previous diary write or journal checkpoint.
+- Focus on the arc of this period rather than writing a line-by-line log.
 - Keep the source language and do not translate.
 - Preserve distinctive wording, commitments, preferences, emotional tone, and other durable details.
 - Aim for 100-300 characters for brief sources, 200-500 for substantial sources.

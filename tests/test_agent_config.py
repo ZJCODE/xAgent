@@ -64,9 +64,8 @@ class AgentConfigPromptTests(unittest.TestCase):
 
     def test_memory_defaults_are_internal_balanced_values(self):
         self.assertEqual(AgentConfig.MEMORY_RECENT_DAYS, 2)
-        self.assertEqual(AgentConfig.MEMORY_STALE_FLUSH_SECONDS, 900)
-        self.assertEqual(AgentConfig.MEMORY_MESSAGE_THRESHOLD, 20)
-        self.assertEqual(AgentConfig.MEMORY_MIN_INTERVAL_SECONDS, 600)
+        self.assertEqual(AgentConfig.MEMORY_IDLE_JOURNAL_DELAY_SECONDS, 1800)
+        self.assertEqual(AgentConfig.MEMORY_MAX_ACTIVE_JOURNAL_DELAY_SECONDS, 21600)
 
 
 class ProviderConfigTests(unittest.TestCase):
