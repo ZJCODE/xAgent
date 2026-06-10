@@ -55,8 +55,6 @@ class FeishuAdapterConfig:
             pull for each routed group/topic message. ``0`` disables history
             pulls.
         history_fetch_timeout: Maximum seconds to wait for Feishu history.
-        show_sender_ids: Include Feishu sender IDs such as ``ou_xxx`` or
-            ``cli_xxx`` in room-context speaker labels.
         group_reply_without_mention: Route all group/topic messages to chat,
             even when the bot was not @mentioned. Defaults to false.
         advanced: Raw pass-through kwargs for ``FeishuChannel`` (policy,
@@ -76,7 +74,6 @@ class FeishuAdapterConfig:
 
     group_history_count: int = 10
     history_fetch_timeout: float = 5.0
-    show_sender_ids: bool = False
     group_reply_without_mention: bool = False
 
     advanced: Dict[str, Any] = field(default_factory=dict)

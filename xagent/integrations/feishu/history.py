@@ -69,7 +69,6 @@ class FeishuHistoryFetcher:
         current_message_id: Optional[str],
         thread_id: Optional[str] = None,
         history_count: int = 0,
-        show_sender_ids: bool = False,
     ) -> list[FeishuMessageRecord]:
         """Return recent group/topic messages ordered oldest -> newest.
 
@@ -88,7 +87,6 @@ class FeishuHistoryFetcher:
             container_id,
             history_count,
             source=container_id_type,
-            show_sender_ids=show_sender_ids,
         )
         if current_message_id:
             records = [rec for rec in records if rec.message_id != current_message_id]
@@ -105,7 +103,6 @@ class FeishuHistoryFetcher:
         page_size: int,
         *,
         source: str,
-        show_sender_ids: bool = False,
     ) -> list[FeishuMessageRecord]:
         client = getattr(self._channel, "client", None)
         if client is None:
@@ -148,7 +145,7 @@ class FeishuHistoryFetcher:
         items = getattr(getattr(response, "data", None), "items", None) or []
         normalized: list[FeishuMessageRecord] = []
         for item in items:
-            rec = self._normalize_item(item, source=source, show_sender_ids=show_sender_ids)
+            rec = self._normalize_item(item, source=source)
             if rec is not None:
                 normalized.append(rec)
         return await self._resolve_record_names(normalized)
@@ -177,7 +174,6 @@ class FeishuHistoryFetcher:
         item: Any,
         *,
         source: str,
-        show_sender_ids: bool = False,
     ) -> Optional[FeishuMessageRecord]:
         get = cls._attr_getter(item)
         message_id = get("message_id")
@@ -214,7 +210,6 @@ class FeishuHistoryFetcher:
         text = replace_mentions(
             cls._render_content(msg_type, body_content),
             mentions,
-            show_mention_ids=show_sender_ids,
         ).strip()
         if not text:
             return None
@@ -303,14 +298,12 @@ def format_group_history(
     *,
     bot_open_id: Optional[str] = None,
     bot_app_id: Optional[str] = None,
-    show_sender_ids: bool = False,
 ) -> str:
     """Render recent Feishu messages as compact room-context lines."""
     entries = _build_room_context_entries(
         records,
         bot_open_id=bot_open_id,
         bot_app_id=bot_app_id,
-        show_sender_ids=show_sender_ids,
     )
     return format_room_context_body(entries)
 
@@ -320,17 +313,16 @@ def format_sender_label(
     sender_id: Optional[str],
     *,
     sender_type: Optional[str] = None,
-    show_sender_ids: bool = False,
 ) -> str:
-    """Render a transcript speaker, optionally appending ``(sender_id)``."""
+    """Render a transcript speaker with sender ID appended when available."""
     safe_name = safe_display_name(sender_name)
     safe_id = sanitize_sender_id(sender_id)
     fallback_name = fallback_sender_label(sender_type)
-    if safe_name and safe_id and show_sender_ids:
+    if safe_name and safe_id:
         return f"{safe_name}({safe_id})"
     if safe_name:
         return safe_name
-    if safe_id and show_sender_ids:
+    if safe_id:
         return f"{fallback_name}({safe_id})"
     return fallback_name
 
@@ -349,14 +341,12 @@ def format_room_context(
     room_name: Optional[str] = None,
     bot_open_id: Optional[str] = None,
     bot_app_id: Optional[str] = None,
-    show_sender_ids: bool = False,
 ) -> str:
     """Render a Feishu group/topic context block for ``agent.chat``."""
     entries = _build_room_context_entries(
         records,
         bot_open_id=bot_open_id,
         bot_app_id=bot_app_id,
-        show_sender_ids=show_sender_ids,
     )
     return format_structured_room_context(room_id, entries, room_name=room_name)
 
@@ -380,8 +370,6 @@ def format_feishu_timestamp(create_time_ms: int) -> str:
 def replace_mentions(
     text: str,
     mentions: Iterable[Any],
-    *,
-    show_mention_ids: bool = False,
 ) -> str:
     """Replace Feishu mention keys such as ``@_user_1`` with display names."""
     rendered = text or ""
@@ -396,13 +384,13 @@ def replace_mentions(
         if not key:
             continue
         if not name:
-            if not show_mention_ids or not mention_id:
+            if not mention_id:
                 continue
             name = mention_id
         replacement = name if name.startswith("@") else f"@{name}"
         safe_mention_id = sanitize_sender_id(mention_id)
         normalized_name = name[1:] if name.startswith("@") else name
-        if show_mention_ids and safe_mention_id and safe_mention_id != normalized_name:
+        if safe_mention_id and safe_mention_id != normalized_name:
             replacement = f"{replacement}({safe_mention_id})"
         rendered = rendered.replace(key, replacement)
     return rendered
@@ -431,7 +419,6 @@ def _build_room_context_entries(
     *,
     bot_open_id: Optional[str] = None,
     bot_app_id: Optional[str] = None,
-    show_sender_ids: bool = False,
 ) -> list[RoomContextEntry]:
     bot_ids = {value for value in (bot_open_id, bot_app_id) if value}
     entries: list[RoomContextEntry] = []
@@ -446,7 +433,6 @@ def _build_room_context_entries(
                 record.sender_name,
                 record.sender_id,
                 sender_type=record.sender_type,
-                show_sender_ids=show_sender_ids,
             )
         entries.append(
             RoomContextEntry(

@@ -73,7 +73,6 @@ xagent init feishu \
   --app-secret your_secret \
   --stream \
   --group-history-count 20 \
-  --show-sender-ids \
   --group-reply-without-mention
 ```
 

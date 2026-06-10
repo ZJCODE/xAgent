@@ -410,7 +410,7 @@ channels:
 | `max_concurrent_tools` | `None` | 每轮工具并发上限 |
 | `group_history_count` | `10` | 群/话题群每轮拉取的最近消息条数（`0` 关闭） |
 | `history_fetch_timeout` | `5.0` | 等待飞书历史的最长秒数 |
-| `show_sender_ids` | `false` | 在房间上下文里包含飞书 sender ID |
+
 | `group_reply_without_mention` | `false` | 未 @ 的群/话题群消息也进入 chat |
 | `advanced` | `{}` | 透传给 `FeishuChannel` 的高级 kwargs（policy、safety 等） |
 
@@ -627,7 +627,7 @@ observability:
 xagent init [--dir DIR] [--force] [--schema]
 xagent init feishu [--dir DIR] [--app-id ...] [--app-secret ...] [--manual]
                     [--stream/--no-stream]
-                    [--group-history-count N] [--show-sender-ids/--no-show-sender-ids]
+                    [--group-history-count N]
                     [--group-reply-without-mention/--no-...] [--force]
 xagent chat [MESSAGE] [--dir DIR] [--user-id ID] [--verbose]
             [--events] [--stream/--no-stream]

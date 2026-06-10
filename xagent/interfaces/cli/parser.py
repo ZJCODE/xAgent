@@ -138,12 +138,6 @@ def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:
         help="How many recent group/topic messages to fetch before replying (default: 10)",
     )
     parser.add_argument(
-        "--show-sender-ids",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Include Feishu sender IDs in fetched room context",
-    )
-    parser.add_argument(
         "--group-reply-without-mention",
         action=argparse.BooleanOptionalAction,
         default=None,

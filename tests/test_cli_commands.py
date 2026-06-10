@@ -277,13 +277,11 @@ class CLICommandTests(unittest.TestCase):
             "--stream",
             "--group-history-count",
             "20",
-            "--show-sender-ids",
             "--group-reply-without-mention",
         ])
 
         self.assertTrue(args.stream)
         self.assertEqual(args.group_history_count, 20)
-        self.assertTrue(args.show_sender_ids)
         self.assertTrue(args.group_reply_without_mention)
 
     def test_parser_supports_init_weixin_command(self):
@@ -1998,7 +1996,7 @@ class CLICommandTests(unittest.TestCase):
                 stream=None,
 
                 group_history_count=None,
-                show_sender_ids=None,
+
                 group_reply_without_mention=None,
             )
 
@@ -2017,7 +2015,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("log_level", config["channels"]["feishu"])
         self.assertIs(config["channels"]["feishu"]["stream"], False)
         self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], False)
-        self.assertNotIn("show_sender_ids", config["channels"]["feishu"])
+
         self.assertNotIn("runtime", config)
         output = stdout.getvalue()
         self.assertIn("xagent channel feishu start", output)
@@ -2034,7 +2032,7 @@ class CLICommandTests(unittest.TestCase):
                 stream=None,
 
                 group_history_count=None,
-                show_sender_ids=None,
+
                 group_reply_without_mention=None,
             )
             selection = FeishuInitSelection(
@@ -2042,7 +2040,7 @@ class CLICommandTests(unittest.TestCase):
                 app_secret="room_secret",
                 stream=True,
                 group_history_count=20,
-                show_sender_ids=True,
+
                 group_reply_without_mention=True,
                 credential_mode="manual",
             )
@@ -2061,7 +2059,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["feishu"]["app_secret"], "room_secret")
         self.assertIs(config["channels"]["feishu"]["stream"], True)
         self.assertEqual(config["channels"]["feishu"]["group_history_count"], 20)
-        self.assertIs(config["channels"]["feishu"]["show_sender_ids"], True)
+
         self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], True)
 
     def test_init_feishu_one_click_writes_registered_credentials(self):
@@ -2076,7 +2074,7 @@ class CLICommandTests(unittest.TestCase):
                 stream=None,
 
                 group_history_count=None,
-                show_sender_ids=None,
+
                 group_reply_without_mention=None,
             )
 
@@ -2151,7 +2149,7 @@ class CLICommandTests(unittest.TestCase):
             force=False,
             stream=None,
             group_history_count=None,
-            show_sender_ids=None,
+
             group_reply_without_mention=None,
         )
         ui = FakeUI()
@@ -2167,7 +2165,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(selection.app_secret, "qr_secret")
         self.assertIs(selection.stream, False)
         self.assertEqual(selection.group_history_count, 10)
-        self.assertIs(selection.show_sender_ids, False)
+
         self.assertIs(selection.group_reply_without_mention, False)
         self.assertEqual(selection.credential_mode, "one_click")
 
@@ -2192,7 +2190,7 @@ class CLICommandTests(unittest.TestCase):
             force=False,
             stream=None,
             group_history_count=None,
-            show_sender_ids=None,
+
             group_reply_without_mention=None,
         )
 
@@ -2211,7 +2209,7 @@ class CLICommandTests(unittest.TestCase):
                 stream=None,
 
                 group_history_count=None,
-                show_sender_ids=None,
+
                 group_reply_without_mention=None,
             )
 
@@ -2236,7 +2234,7 @@ class CLICommandTests(unittest.TestCase):
                 stream=None,
 
                 group_history_count=None,
-                show_sender_ids=None,
+
                 group_reply_without_mention=None,
             )
 

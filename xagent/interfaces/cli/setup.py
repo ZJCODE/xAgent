@@ -92,7 +92,6 @@ class FeishuInitSelection:
     app_secret: str
     stream: bool = False
     group_history_count: int = 10
-    show_sender_ids: bool = False
     group_reply_without_mention: bool = False
     credential_mode: str = "one_click"
 
@@ -1478,8 +1477,6 @@ def _feishu_channel_config(selection: FeishuInitSelection) -> dict[str, Any]:
         "group_history_count": selection.group_history_count,
         "group_reply_without_mention": selection.group_reply_without_mention,
     }
-    if selection.show_sender_ids:
-        config["show_sender_ids"] = True
     return config
 
 
@@ -1616,15 +1613,11 @@ def collect_feishu_init_selection_terminal_ui(
         return None
     group_history_count = int(group_history_arg) if group_history_arg is not None else 10
 
-    show_sender_ids_arg = getattr(args, "show_sender_ids", None)
-    show_sender_ids = bool(show_sender_ids_arg) if show_sender_ids_arg is not None else False
-
     selection = FeishuInitSelection(
         app_id=app_id,
         app_secret=app_secret,
         stream=stream,
         group_history_count=group_history_count,
-        show_sender_ids=show_sender_ids,
         group_reply_without_mention=group_reply_without_mention,
         credential_mode=credential_mode,
     )

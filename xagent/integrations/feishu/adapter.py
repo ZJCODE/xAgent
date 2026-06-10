@@ -12,8 +12,8 @@ Routing is intentionally small:
 Before a Feishu message reaches the agent, the sender ID is resolved to a
 display name through the official contact API. By default, internal
 ``ou_`` / ``on_`` IDs stay inside this adapter and are not passed into
-``agent.chat``. When ``show_sender_ids`` is enabled, group room context can
-render speakers as ``name(id)``.
+``agent.chat``. Group room context renders speakers as ``name(id)``
+when an ID is available.
 
 Group replies are sent as plain replies anchored to the source message
 (``reply_to``); never as Feishu topic/thread replies. p2p replies are sent
@@ -193,12 +193,10 @@ class FeishuAdapter:
         config: FeishuAdapterConfig,
         *,
         logger: Optional[logging.Logger] = None,
-        show_sender_ids: Optional[bool] = None,
     ) -> None:
         self.agent = agent
         self.config = config
         self.logger = logger or logging.getLogger(self.__class__.__name__)
-        self.show_sender_ids = config.show_sender_ids if show_sender_ids is None else show_sender_ids
         self._channel = None  # type: ignore[var-annotated]
         self._history_fetcher: Optional[FeishuHistoryFetcher] = None
         self._user_resolver: Optional[FeishuUserResolver] = None
@@ -424,7 +422,7 @@ class FeishuAdapter:
         sender_fallback_name = self._sender_name(msg)
         sender_type = self._sender_type(msg)
         sender_id_type = self._sender_id_type(msg)
-        text = self._message_text(msg, show_mention_ids=self.show_sender_ids)
+        text = self._message_text(msg)
 
         self.logger.debug(
             "Feishu inbound: chat_type=%s chat_id=%s message_id=%s sender_id=%s text=%r",
@@ -588,12 +586,12 @@ class FeishuAdapter:
         self.logger.debug("Ignoring chat_type=%s", chat_type)
 
     @staticmethod
-    def _message_text(msg: Any, *, show_mention_ids: bool = False) -> str:
+    def _message_text(msg: Any) -> str:
         mentions = FeishuAdapter._message_mentions(msg)
         content_text = FeishuAdapter._object_field(FeishuAdapter._message_object(msg) or msg, "content_text") or ""
         content_text = content_text.strip()
         if content_text:
-            return replace_mentions(content_text, mentions, show_mention_ids=show_mention_ids)
+            return replace_mentions(content_text, mentions)
         content = FeishuAdapter._message_field(msg, "content")
         if isinstance(content, str):
             try:
@@ -603,7 +601,7 @@ class FeishuAdapter:
         for field_name in ("text", "title"):
             value = FeishuAdapter._raw_field(content, field_name)
             if isinstance(value, str) and value.strip():
-                return replace_mentions(value.strip(), mentions, show_mention_ids=show_mention_ids)
+                return replace_mentions(value.strip(), mentions)
         return ""
 
     async def _download_message_image_assets(
@@ -1715,7 +1713,6 @@ class FeishuAdapter:
                     current_message_id=current_message_id,
                     thread_id=self._thread_id(raw_msg),
                     history_count=history_count,
-                    show_sender_ids=self.show_sender_ids,
                 ),
                 timeout=self.config.history_fetch_timeout,
             )
@@ -1759,7 +1756,6 @@ class FeishuAdapter:
             room_name=room_name,
             bot_open_id=self._bot_open_id(),
             bot_app_id=self.config.app_id,
-            show_sender_ids=self.show_sender_ids,
         )
 
     async def _resolve_room_name(self, chat_id: str, raw_msg: Any) -> Optional[str]:
