@@ -380,7 +380,6 @@ class AgentCLI(BaseAgentRunner):
                 "exit, quit, bye    Exit the chat session",
                 "clear              Clear the agent message stream",
                 "stream on/off      Toggle streamed delta printing",
-                "memory on/off      Toggle memory storage mode",
                 "help               Show this help message",
                 "",
                 "Built-in tools:",

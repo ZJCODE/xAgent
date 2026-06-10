@@ -634,11 +634,7 @@ class WeixinAdapter:
         if not callable(chat_events):
             raise RuntimeError("Agent does not support chat_events().")
         execution = task.execution
-        prompt = (
-            "This scheduled task is now due. Execute it now and return the final message "
-            "that should be delivered to the user.\n\n"
-            f"Task: {task.content.strip()}"
-        )
+        prompt = AgentConfig.scheduled_agent_prompt(task.content)
         context = ScheduledDeliveryContext(
             channel="weixin",
             user_id=user_id,
@@ -651,9 +647,9 @@ class WeixinAdapter:
             async for event in chat_events(
                 user_message=prompt,
                 user_id=user_id,
-                history_count=_positive_int(execution.get("history_count"), AgentConfig.DEFAULT_HISTORY_COUNT),
-                max_iter=_positive_int(execution.get("max_iter"), AgentConfig.DEFAULT_MAX_ITER),
-                max_concurrent_tools=_positive_int(execution.get("max_concurrent_tools"), AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
+                history_count=AgentConfig._scheduled_positive_int(execution.get("history_count"), AgentConfig.DEFAULT_HISTORY_COUNT),
+                max_iter=AgentConfig._scheduled_positive_int(execution.get("max_iter"), AgentConfig.DEFAULT_MAX_ITER),
+                max_concurrent_tools=AgentConfig._scheduled_positive_int(execution.get("max_concurrent_tools"), AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
                 stream=False,
             ):
                 if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":
@@ -840,9 +836,3 @@ def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
     return re.sub(r"\n{3,}", "\n\n", "".join(pieces)).strip()
 
 
-def _positive_int(value: Any, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default

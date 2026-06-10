@@ -2023,14 +2023,14 @@ class FeishuAdapter:
             if callable(chat_events):
                 return await self._scheduled_task_event_result(
                     chat_events,
-                    prompt=self._scheduled_agent_prompt(task.content),
+                    prompt=AgentConfig.scheduled_agent_prompt(task.content),
                     user_id=user_id,
                     execution=execution,
                 )
 
             assert callable(chat)
             response = await chat(
-                user_message=self._scheduled_agent_prompt(task.content),
+                user_message=AgentConfig.scheduled_agent_prompt(task.content),
                 user_id=user_id,
                 history_count=execution["history_count"],
                 max_iter=execution["max_iter"],
@@ -2068,38 +2068,10 @@ class FeishuAdapter:
         return _FeishuScheduledTaskResult(last_error)
 
     @staticmethod
-    def _scheduled_agent_prompt(content: str) -> str:
-        return (
-            "This scheduled task is now due. Execute it now and return the final message "
-            "that should be delivered to the user.\n\n"
-            f"Task: {content.strip()}"
-        )
-
     @staticmethod
     def _scheduled_execution_options(task) -> dict[str, Any]:
-        execution = task.execution
-        return {
-            "history_count": FeishuAdapter._positive_int(
-                execution.get("history_count"),
-                AgentConfig.DEFAULT_HISTORY_COUNT,
-            ),
-            "max_iter": FeishuAdapter._positive_int(
-                execution.get("max_iter"),
-                AgentConfig.DEFAULT_MAX_ITER,
-            ),
-            "max_concurrent_tools": FeishuAdapter._positive_int(
-                execution.get("max_concurrent_tools"),
-                AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-            ),
-        }
+        return AgentConfig.scheduled_execution_options(task.execution)
 
-    @staticmethod
-    def _positive_int(value: Any, default: int) -> int:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return default
-        return parsed if parsed > 0 else default
 
     @staticmethod
     def _stringify_scheduled_agent_response(response: Any) -> str:

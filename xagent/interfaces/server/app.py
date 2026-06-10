@@ -309,7 +309,7 @@ class AgentHTTPServer(BaseAgentRunner):
 
         execution = self._scheduled_execution_options(task)
         user_id = task.delivery_user_id or str(task.target.get("user_id") or AgentConfig.DEFAULT_USER_ID)
-        prompt = self._scheduled_agent_prompt(task.content)
+        prompt = AgentConfig.scheduled_agent_prompt(task.content)
         context = ScheduledDeliveryContext(
             channel=task.delivery_channel,
             user_id=user_id,
@@ -394,38 +394,9 @@ class AgentHTTPServer(BaseAgentRunner):
         return _ScheduledTaskResult(json.dumps(result, ensure_ascii=False).strip())
 
     @staticmethod
-    def _scheduled_agent_prompt(content: str) -> str:
-        return (
-            "This scheduled task is now due. Execute it now and return the final message "
-            "that should be delivered to the user.\n\n"
-            f"Task: {content.strip()}"
-        )
-
     @staticmethod
     def _scheduled_execution_options(task) -> Dict[str, Any]:
-        execution = task.execution
-        return {
-            "history_count": AgentHTTPServer._positive_int(
-                execution.get("history_count"),
-                AgentConfig.DEFAULT_HISTORY_COUNT,
-            ),
-            "max_iter": AgentHTTPServer._positive_int(
-                execution.get("max_iter"),
-                AgentConfig.DEFAULT_MAX_ITER,
-            ),
-            "max_concurrent_tools": AgentHTTPServer._positive_int(
-                execution.get("max_concurrent_tools"),
-                AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-            ),
-        }
-
-    @staticmethod
-    def _positive_int(value: Any, default: int) -> int:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return default
-        return parsed if parsed > 0 else default
+        return AgentConfig.scheduled_execution_options(task.execution)
 
     async def _broadcast_scheduled_message(
         self,

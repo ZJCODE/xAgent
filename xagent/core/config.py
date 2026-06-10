@@ -36,31 +36,24 @@ class AgentConfig:
     MAX_CONTEXT_EVENTS = 12
     DEFAULT_MAX_ITER = 50
     DEFAULT_MAX_CONCURRENT_TOOLS = 4  # Maximum concurrent tool calls
-    HTTP_TIMEOUT = 600.0  # 10 minutes
     DEFAULT_HTTP_MAX_CONCURRENT_CHATS = 4
     DEFAULT_HTTP_QUEUE_TIMEOUT = 30.0
-    DEFAULT_HTTP_CHAT_TIMEOUT = HTTP_TIMEOUT
+    DEFAULT_HTTP_CHAT_TIMEOUT = 600.0  # 10 minutes
     RUNTIME_HEARTBEAT_ENABLED = True
     RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 300
     TOOL_RESULT_PREVIEW_LENGTH = 20
-    ERROR_RESPONSE_PREVIEW_LENGTH = 200
     DEFAULT_MAX_TOKENS = 4096
 
     # Retry configuration
     RETRY_ATTEMPTS = 3
     RETRY_MIN_WAIT = 1
     RETRY_MAX_WAIT = 60
-    BACKGROUND_TASK_ATTEMPTS = 3
-    BACKGROUND_TASK_BASE_DELAY = 0.5
-    DEFAULT_MAX_BACKGROUND_TASKS = 4
 
     # Shell tool configuration
-    DEFAULT_COMMAND_TIMEOUT = 30  # seconds
     MAX_COMMAND_TIMEOUT = 300  # hard upper bound for timeout parameter
     MAX_COMMAND_OUTPUT_SIZE = 51200  # 50 KB per stream
     MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled instructions (chars)
     MAX_SKILLS_CATALOG_CHARS = 8000
-    SEARCH_HTTP_TIMEOUT = 15.0
     DEFAULT_SEARCH_RESULTS = 5
     MAX_SEARCH_RESULTS = 20
 
@@ -300,6 +293,41 @@ class AgentConfig:
             current_time=resolved_current_time,
             reply_prompt=AgentConfig.build_turn_reply_prompt(current_user_id),
         )
+
+    @staticmethod
+    def scheduled_agent_prompt(content: str) -> str:
+        """Shared prompt wrapper for scheduled agent tasks across all channels."""
+        return (
+            "This scheduled task is now due. Execute it now and return the final message "
+            "that should be delivered to the user.\n\n"
+            f"Task: {content.strip()}"
+        )
+
+    @staticmethod
+    def scheduled_execution_options(execution: dict):
+        """Shared execution option extraction for scheduled tasks across all channels."""
+        return {
+            "history_count": AgentConfig._scheduled_positive_int(
+                execution.get("history_count"),
+                AgentConfig.DEFAULT_HISTORY_COUNT,
+            ),
+            "max_iter": AgentConfig._scheduled_positive_int(
+                execution.get("max_iter"),
+                AgentConfig.DEFAULT_MAX_ITER,
+            ),
+            "max_concurrent_tools": AgentConfig._scheduled_positive_int(
+                execution.get("max_concurrent_tools"),
+                AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+            ),
+        }
+
+    @staticmethod
+    def _scheduled_positive_int(value, default: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
 
 
 class ReplyType(Enum):

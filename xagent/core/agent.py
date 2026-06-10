@@ -168,6 +168,41 @@ class Agent:
             return ""
         return AgentConfig.build_workspace_context(str(self.workspace_dir))
 
+    async def _build_turn_context(
+        self,
+        msg_handler: MessageHandler,
+        user_msg: Message,
+        user_id: str,
+        history_count: int,
+    ):
+        """Build the shared turn preparation context for both chat and chat_events."""
+        effective_history_count = self._effective_history_count(history_count)
+        recent_messages = await msg_handler.get_recent_messages(
+            history_count=effective_history_count,
+        )
+        memory_context = await self.memory_handler.get_recent_context()
+        tool_names = list(self.tool_manager._tools)
+        tool_specs = self.tool_manager.cached_tool_specs
+        workspace_context = self._workspace_context(tool_names)
+        skills_catalog = self._skills_catalog_context()
+        instructions = msg_handler.build_instruction_messages(
+            tool_names=tool_names,
+            skills_catalog=skills_catalog,
+            supports_vision=getattr(self, "supports_vision", True),
+            workspace_context=workspace_context,
+        )
+        iteration_messages = msg_handler.build_turn_context_messages(
+            recent_messages,
+            current_user_id=user_id,
+            memory_context=memory_context,
+            max_messages=effective_history_count,
+            include_images=getattr(self, "supports_vision", True),
+            workspace_dir=getattr(self, "workspace_dir", None),
+            current_message=user_msg,
+        )
+        input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+        return tool_specs, instructions, iteration_messages, input_messages
+
     async def run_memory_maintenance(self) -> None:
         await self.memory_handler.run_maintenance()
         observability_flusher = getattr(self._observability_runtime(), "flush", None)
@@ -291,33 +326,12 @@ class Agent:
                 logger.warning("Invalid image input from %s: %s", user_id, exc)
                 return str(exc)
 
-            effective_history_count = self._effective_history_count(history_count)
-            recent_messages = await msg_handler.get_recent_messages(
-                history_count=effective_history_count,
+            tool_specs, instructions, iteration_messages, input_messages = await self._build_turn_context(
+                msg_handler=msg_handler,
+                user_msg=user_msg,
+                user_id=user_id,
+                history_count=history_count,
             )
-
-            memory_context = await self.memory_handler.get_recent_context()
-            tool_names = list(self.tool_manager._tools)
-            tool_specs = self.tool_manager.cached_tool_specs
-            workspace_context = self._workspace_context(tool_names)
-            skills_catalog = self._skills_catalog_context()
-
-            instructions = msg_handler.build_instruction_messages(
-                tool_names=tool_names,
-                skills_catalog=skills_catalog,
-                supports_vision=getattr(self, "supports_vision", True),
-                workspace_context=workspace_context,
-            )
-            iteration_messages = msg_handler.build_turn_context_messages(
-                recent_messages,
-                current_user_id=user_id,
-                memory_context=memory_context,
-                max_messages=effective_history_count,
-                include_images=getattr(self, "supports_vision", True),
-                workspace_dir=getattr(self, "workspace_dir", None),
-                current_message=user_msg,
-            )
-            input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 
             for _ in range(max_iter):
                 logger.debug("Agent iteration with input messages: %s", input_messages)
@@ -462,33 +476,12 @@ class Agent:
                 yield {"type": "done"}
                 return
 
-            effective_history_count = self._effective_history_count(history_count)
-            recent_messages = await msg_handler.get_recent_messages(
-                history_count=effective_history_count,
+            tool_specs, instructions, iteration_messages, input_messages = await self._build_turn_context(
+                msg_handler=msg_handler,
+                user_msg=user_msg,
+                user_id=user_id,
+                history_count=history_count,
             )
-
-            memory_context = await self.memory_handler.get_recent_context()
-            tool_names = list(self.tool_manager._tools)
-            tool_specs = self.tool_manager.cached_tool_specs
-            workspace_context = self._workspace_context(tool_names)
-            skills_catalog = self._skills_catalog_context()
-
-            instructions = msg_handler.build_instruction_messages(
-                tool_names=tool_names,
-                skills_catalog=skills_catalog,
-                supports_vision=getattr(self, "supports_vision", True),
-                workspace_context=workspace_context,
-            )
-            iteration_messages = msg_handler.build_turn_context_messages(
-                recent_messages,
-                current_user_id=user_id,
-                memory_context=memory_context,
-                max_messages=effective_history_count,
-                include_images=getattr(self, "supports_vision", True),
-                workspace_dir=getattr(self, "workspace_dir", None),
-                current_message=user_msg,
-            )
-            input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
 
             for iteration_index in range(max_iter):
                 message_id = self._turn_message_id(user_msg, iteration_index)
