@@ -37,7 +37,7 @@ class MemoryHandler:
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
     IDLE_JOURNAL_DELAY_SECONDS = AgentConfig.MEMORY_IDLE_JOURNAL_DELAY_SECONDS
     MAX_ACTIVE_JOURNAL_DELAY_SECONDS = AgentConfig.MEMORY_MAX_ACTIVE_JOURNAL_DELAY_SECONDS
-    DEFAULT_JOURNAL_SOURCE_CHARS = 24000
+    DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
 
     def __init__(
         self,
@@ -249,13 +249,9 @@ class MemoryHandler:
 
     @staticmethod
     def _estimate_record_chars(record: dict) -> int:
-        return (
-            len(str(record.get("content", "")))
-            + len(str(record.get("sender_id", "")))
-            + len(str(record.get("role", "")))
-            + len(str(record.get("type", "")))
-            + 80
-        )
+        from ...components.memory import JournalLLMService
+
+        return len(JournalLLMService._format_transcript([record]))
 
     @staticmethod
     def _latest_record_timestamp(records: List[dict]) -> float:

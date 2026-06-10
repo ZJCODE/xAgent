@@ -160,7 +160,6 @@ class MessageHandler:
         context_events: Optional[List[Message]] = None,
         max_messages: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
-        max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
         include_images: bool = True,
         workspace_dir: Optional[Union[str, Path]] = None,
     ) -> dict:
@@ -185,7 +184,6 @@ class MessageHandler:
         budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
             observation_messages,
             max_events=max_context_events,
-            max_event_chars=max_context_event_chars,
         )
         experience_entries = MessageHandler._merge_experience_entries(
             budgeted_entries,
@@ -251,7 +249,6 @@ class MessageHandler:
         current_date: Optional[str] = None,
         max_messages: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
-        max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
         include_images: bool = True,
         workspace_dir: Optional[Union[str, Path]] = None,
         current_message: Optional[Message] = None,
@@ -271,7 +268,6 @@ class MessageHandler:
         budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
             observation_messages,
             max_events=max_context_events,
-            max_event_chars=max_context_event_chars,
         )
         experience_entries = MessageHandler._merge_experience_entries(
             budgeted_entries,
@@ -425,22 +421,17 @@ class MessageHandler:
     def _budget_context_events(
         messages: List[Message],
         max_events: int,
-        max_event_chars: int,
     ) -> tuple[List[tuple[Message, str]], int]:
         if not messages:
             return [], 0
 
         event_limit = max(1, int(max_events or AgentConfig.MAX_CONTEXT_EVENTS))
-        per_event_limit = max(1, int(max_event_chars or AgentConfig.MAX_CONTEXT_EVENT_CHARS))
         omitted_count = max(0, len(messages) - event_limit)
         selected = messages[-event_limit:]
         return [
             (
                 msg,
-                MessageHandler._truncate_transcript_content(
-                    msg.content.strip() or "[Empty observation]",
-                    per_event_limit,
-                ),
+                msg.content.strip() or "[Empty observation]",
             )
             for msg in selected
         ], omitted_count
@@ -474,14 +465,6 @@ class MessageHandler:
             (msg, msg.content.strip() or "[Empty message]")
             for msg in candidates
         ], omitted_count
-
-    @staticmethod
-    def _truncate_transcript_content(content: str, limit: int) -> str:
-        if len(content) <= limit:
-            return content
-        omitted_chars = len(content) - limit
-        clipped = content[:limit].rstrip()
-        return f"{clipped}\n[Content truncated: {omitted_chars} chars omitted]"
 
     @staticmethod
     def _count_message_images(message: Message) -> int:

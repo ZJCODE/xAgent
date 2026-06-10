@@ -34,7 +34,6 @@ class AgentConfig:
     DEFAULT_USER_ID = "default_user"
     DEFAULT_HISTORY_COUNT = 20
     MAX_CONTEXT_EVENTS = 12
-    MAX_CONTEXT_EVENT_CHARS = 1000
     DEFAULT_MAX_ITER = 50
     DEFAULT_MAX_CONCURRENT_TOOLS = 4  # Maximum concurrent tool calls
     HTTP_TIMEOUT = 600.0  # 10 minutes

@@ -560,6 +560,28 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         self.assertIn("what alice most recently said", transcript)
 
+    def test_long_observation_is_not_truncated_in_recent_experience(self):
+        long_observation = "sensor log: " + ("x" * 1800)
+        observation = Message.create_context_event(
+            long_observation,
+            source="sensor",
+            event_type="observation",
+        )
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            [observation],
+            current_user_id="alice",
+            current_time="2026-06-10 12:00",
+        )
+        recent_experience = next(
+            message["content"]
+            for message in context_messages
+            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
+        )
+
+        self.assertIn(long_observation, recent_experience)
+        self.assertNotIn("[Content truncated:", recent_experience)
+
 
 if __name__ == "__main__":
     unittest.main()
