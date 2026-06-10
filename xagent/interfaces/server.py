@@ -1,8 +1,6 @@
 import asyncio
 import json
 import logging
-import mimetypes
-import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -10,15 +8,28 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from posthog import host
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .base import BaseAgentConfig, BaseAgentRunner
+from .server_files import WorkspaceFileService
+from .server_admin_routes import register_admin_routes
+from .server_models import (
+    AgentInput,
+    ChatInput,
+    ChatAttachmentInput,
+    ChatImageInput,
+    IdentityInput,
+    ObserveInput,
+    SkillCreateInput,
+    SkillStateInput,
+    SkillWriteInput,
+    WorkspaceWriteInput,
+)
+from .server_runtime_routes import register_runtime_routes
+from .server_serializers import message_item, message_search_result, response_payload
+from .server_web import register_spa_routes
 from ..components.skills import SkillsStorageLocal
 from ..core.agent import Agent
 from ..core.config import AgentConfig
@@ -26,15 +37,10 @@ from ..core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     create_runtime_heartbeat,
-    delete_scheduled_task,
-    delete_task_file,
     list_active_task_views,
-    list_task_records,
     scheduled_delivery_context,
 )
-from ..schemas import Message
 from ..schemas.attachment import (
-    ATTACHMENT_METADATA_KEY,
     MAX_ATTACHMENT_BYTES,
     MAX_MESSAGE_ATTACHMENT_BYTES,
     attachment_image_sources,
@@ -46,8 +52,6 @@ from ..utils.image_utils import (
     MAX_IMAGES_PER_MESSAGE,
     SUPPORTED_UPLOAD_IMAGE_MIME_TYPES,
     data_uri_to_bytes,
-    detect_image_mime,
-    workspace_blob_relative_path,
     workspace_blob_url,
 )
 
@@ -60,121 +64,6 @@ _WORKSPACE_SEARCH_TEXT_LIMIT = 2_000_000
 class _ScheduledTaskResult:
     content: str
     attachments: List[Dict[str, Any]] = field(default_factory=list)
-
-
-class ChatImageInput(BaseModel):
-    """Optional image metadata accepted by API clients."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    workspace_path: Optional[str] = None
-    external_url: Optional[str] = None
-    mime_type: Optional[str] = None
-    size_bytes: Optional[int] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
-    blob_url: Optional[str] = None
-    original_name: Optional[str] = None
-
-
-class ChatAttachmentInput(BaseModel):
-    """Optional workspace-backed attachment metadata accepted by API clients."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    kind: Optional[str] = None
-    path: Optional[str] = None
-    workspace_path: Optional[str] = None
-    blob_url: Optional[str] = None
-    mime_type: Optional[str] = None
-    file_name: Optional[str] = None
-    original_name: Optional[str] = None
-    caption: Optional[str] = None
-    size_bytes: Optional[int] = None
-    source_channel: Optional[str] = None
-    source_message_id: Optional[str] = None
-    source_resource_id: Optional[str] = None
-    source_resource_type: Optional[str] = None
-
-
-class ChatInput(BaseModel):
-    """Final-only request body for the HTTP chat endpoint."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    user_id: str
-    user_message: str
-    image_source: Optional[Union[str, List[str]]] = None
-    images: Optional[List[ChatImageInput]] = None
-    attachments: Optional[List[ChatAttachmentInput]] = None
-    history_count: Optional[int] = AgentConfig.DEFAULT_HISTORY_COUNT
-    max_iter: Optional[int] = AgentConfig.DEFAULT_MAX_ITER
-    max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
-    enable_memory: Optional[bool] = True
-
-
-class AgentInput(ChatInput):
-    """Event request body for WebSocket chat."""
-
-    stream: Optional[bool] = False
-
-
-class ObserveInput(BaseModel):
-    """Request body for observation endpoint."""
-
-    context: str
-    source: Optional[str] = "environment"
-    event_type: Optional[str] = "observation"
-    metadata: Optional[Dict[str, Any]] = None
-
-
-class IdentityInput(BaseModel):
-    """Request body for updating identity.md."""
-
-    identity: str
-
-
-class WorkspaceWriteInput(BaseModel):
-    """Request body for writing a text file in workspace/."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    path: str
-    content: str
-    create_parents: bool = True
-
-
-class SkillCreateInput(BaseModel):
-    """Request body for creating a new Agent Skill package."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    description: str
-    body: str = ""
-    license: Optional[str] = None
-    compatibility: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
-    allowed_tools: Optional[str] = None
-
-
-class SkillWriteInput(BaseModel):
-    """Request body for writing a text file in skills/."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    path: str
-    content: str
-    create_parents: bool = True
-
-
-class SkillStateInput(BaseModel):
-    """Request body for enabling or disabling a skill."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    enabled: bool
 
 
 class AgentHTTPServer(BaseAgentRunner):
@@ -339,7 +228,7 @@ class AgentHTTPServer(BaseAgentRunner):
             response = await self._run_observe_with_limits(input_data)
             await websocket.send_json({
                 "type": "result",
-                "result": self._response_payload(response),
+                "result": response_payload(response),
             })
         except HTTPException as exc:
             self.logger.warning(
@@ -503,7 +392,7 @@ class AgentHTTPServer(BaseAgentRunner):
 
     @staticmethod
     def _scheduled_response_result(response: Any) -> _ScheduledTaskResult:
-        result = AgentHTTPServer._response_payload(response)
+        result = response_payload(response)
         if isinstance(result, str):
             return _ScheduledTaskResult(result.strip())
         return _ScheduledTaskResult(json.dumps(result, ensure_ascii=False).strip())
@@ -564,7 +453,7 @@ class AgentHTTPServer(BaseAgentRunner):
         if normalized_attachments:
             payload["attachments"] = normalized_attachments
         if stored_message is not None:
-            payload["message"] = self._message_item(stored_message)
+            payload["message"] = message_item(stored_message)
 
         async with self._task_subscribers_lock:
             subscribers = list(self._task_subscribers.get(user_id, set()))
@@ -625,12 +514,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 )
             except StopAsyncIteration:
                 break
-
-    @staticmethod
-    def _response_payload(response):
-        if hasattr(response, "model_dump"):
-            return response.model_dump()
-        return str(response)
 
     @staticmethod
     def _input_image_sources(
@@ -725,6 +608,9 @@ class AgentHTTPServer(BaseAgentRunner):
         root.mkdir(parents=True, exist_ok=True)
         return root
 
+    def _workspace_files(self) -> WorkspaceFileService:
+        return WorkspaceFileService(self._get_workspace_root())
+
     def _get_skills_root(self) -> Path:
         skills_storage = getattr(self, "skills_storage", None)
         if skills_storage is not None:
@@ -764,250 +650,9 @@ class AgentHTTPServer(BaseAgentRunner):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         raise HTTPException(status_code=500, detail=f"Skills error: {str(exc)}") from exc
 
-    def _resolve_workspace_path(self, relative_path: str = "") -> Path:
-        workspace_root = self._get_workspace_root()
-        requested = (workspace_root / (relative_path or "")).expanduser().resolve()
-        if not requested.is_relative_to(workspace_root):
-            raise HTTPException(status_code=403, detail="Access denied")
-        return requested
-
     @staticmethod
     def _memory_scope_roots(memory_dir: Path) -> List[Path]:
         return [memory_dir / scope for scope in ("daily", "weekly", "monthly", "yearly")]
-
-    @staticmethod
-    def _safe_child(path: Path, root: Path) -> Optional[Path]:
-        try:
-            resolved = path.resolve()
-        except OSError:
-            return None
-        if not resolved.is_relative_to(root):
-            return None
-        return resolved
-
-    def _workspace_metadata(self, path: Path, root: Optional[Path] = None) -> Dict[str, Any]:
-        workspace_root = root or self._get_workspace_root()
-        resolved = path.resolve()
-        stat = resolved.stat()
-        is_dir = resolved.is_dir()
-        mime_type, _ = mimetypes.guess_type(resolved.name)
-        return {
-            "name": resolved.name,
-            "path": str(resolved.relative_to(workspace_root)),
-            "type": "dir" if is_dir else "file",
-            "size": stat.st_size,
-            "modified": stat.st_mtime,
-            "mime_type": mime_type or "application/octet-stream",
-            "binary": False if is_dir else self._is_binary_file(resolved),
-        }
-
-    def _scan_workspace_tree(self, directory: Path, root: Path) -> List[Dict[str, Any]]:
-        entries: List[Dict[str, Any]] = []
-        try:
-            children = sorted(directory.iterdir(), key=lambda path: (not path.is_dir(), path.name.lower()))
-        except (OSError, PermissionError):
-            return entries
-
-        for child in children:
-            resolved = self._safe_child(child, root)
-            if resolved is None:
-                continue
-            try:
-                item = self._workspace_metadata(resolved, root)
-            except OSError:
-                continue
-            if item["type"] == "dir" and not child.is_symlink():
-                item["children"] = self._scan_workspace_tree(resolved, root)
-            entries.append(item)
-        return entries
-
-    @staticmethod
-    def _is_binary_file(path: Path) -> bool:
-        try:
-            chunk = path.read_bytes()[:4096]
-        except OSError:
-            return True
-        if b"\0" in chunk:
-            return True
-        try:
-            chunk.decode("utf-8")
-        except UnicodeDecodeError:
-            return True
-        return False
-
-    @staticmethod
-    def _read_text_file(path: Path, limit: int) -> str:
-        if path.stat().st_size > limit:
-            raise HTTPException(status_code=413, detail="File is too large to read as text")
-        try:
-            return path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            raise HTTPException(status_code=415, detail="File is not UTF-8 text") from exc
-
-    @staticmethod
-    def _message_item(message: Message) -> Dict[str, Any]:
-        images = AgentHTTPServer._message_images(message)
-        attachments = AgentHTTPServer._message_attachments(message)
-        item = {
-            "role": message.role.value if hasattr(message.role, "value") else str(message.role),
-            "type": message.type.value if hasattr(message.type, "value") else str(message.type),
-            "content": message.content,
-            "sender_id": message.sender_id,
-            "timestamp": message.timestamp,
-            "metadata": message.metadata,
-            "images": images,
-            "image_count": len(images),
-            "attachments": attachments,
-            "attachment_count": len(attachments),
-        }
-        if message.tool_call:
-            item["tool_call"] = {
-                "name": message.tool_call.name,
-                "arguments": message.tool_call.arguments,
-                "output": message.tool_call.output,
-            }
-        return item
-
-    @staticmethod
-    def _message_attachments(message: Message) -> List[Dict[str, Any]]:
-        metadata_attachments = message.metadata.get(ATTACHMENT_METADATA_KEY) if isinstance(message.metadata, dict) else None
-        if not isinstance(metadata_attachments, list):
-            return []
-        return dedupe_attachments(metadata_attachments)
-
-    @staticmethod
-    def _message_images(message: Message) -> List[Dict[str, Any]]:
-        attachment_images: List[Dict[str, Any]] = []
-        for attachment in AgentHTTPServer._message_attachments(message):
-            if attachment.get("kind") != "image":
-                continue
-            item = {
-                "workspace_path": attachment.get("path"),
-                "blob_url": attachment.get("blob_url"),
-                "mime_type": attachment.get("mime_type"),
-                "size_bytes": attachment.get("size_bytes"),
-                "original_name": attachment.get("file_name"),
-            }
-            attachment_images.append({key: value for key, value in item.items() if value not in (None, "")})
-        metadata_images = message.metadata.get("images") if isinstance(message.metadata, dict) else None
-        if isinstance(metadata_images, list):
-            images = [
-                {key: value for key, value in dict(image).items() if value not in (None, "")}
-                for image in metadata_images
-                if isinstance(image, dict)
-            ]
-            return AgentHTTPServer._dedupe_image_items([*images, *attachment_images])
-        if not message.multimodal or not message.multimodal.image:
-            return attachment_images
-
-        images = message.multimodal.image if isinstance(message.multimodal.image, list) else [message.multimodal.image]
-        result: List[Dict[str, Any]] = []
-        for image in images:
-            source = str(getattr(image, "source", "") or "")
-            if not source:
-                continue
-            item: Dict[str, Any] = {"mime_type": AgentHTTPServer._image_mime_type(source, getattr(image, "format", ""))}
-            relative_path = workspace_blob_relative_path(source)
-            if relative_path:
-                item["workspace_path"] = relative_path
-                item["blob_url"] = workspace_blob_url(relative_path)
-            elif source.startswith(("http://", "https://")):
-                item["external_url"] = source
-            result.append({key: value for key, value in item.items() if value not in (None, "")})
-        return AgentHTTPServer._dedupe_image_items([*result, *attachment_images])
-
-    @staticmethod
-    def _dedupe_image_items(images: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        deduped: List[Dict[str, Any]] = []
-        seen: set[str] = set()
-        for image in images:
-            key = str(image.get("blob_url") or image.get("workspace_path") or image.get("external_url") or "")
-            if key and key in seen:
-                continue
-            if key:
-                seen.add(key)
-            deduped.append(image)
-        return deduped
-
-    @staticmethod
-    def _image_mime_type(source: str, image_format: str = "") -> str:
-        if source.startswith("data:image/"):
-            return source.split(";", 1)[0].removeprefix("data:").lower()
-        normalized_format = str(image_format or "").strip().lower()
-        if normalized_format == "jpeg":
-            return "image/jpeg"
-        if normalized_format == "webp":
-            return "image/webp"
-        if normalized_format == "gif":
-            return "image/gif"
-        return "image/png"
-
-    @staticmethod
-    def _message_search_fields(message: Message) -> List[tuple[str, str]]:
-        role = message.role.value if hasattr(message.role, "value") else str(message.role)
-        message_type = message.type.value if hasattr(message.type, "value") else str(message.type)
-        fields: List[tuple[str, str]] = [
-            ("content", message.content or ""),
-            ("sender", message.sender_id or ""),
-            ("role", role),
-            ("type", message_type),
-        ]
-
-        if message.tool_call:
-            tool_parts = [
-                str(message.tool_call.name or ""),
-                str(message.tool_call.arguments or ""),
-                str(message.tool_call.output or ""),
-            ]
-            tool_text = " ".join(part for part in tool_parts if part)
-            if tool_text:
-                fields.append(("tool", tool_text))
-
-        if message.metadata:
-            metadata_text = json.dumps(message.metadata, ensure_ascii=False, sort_keys=True, default=str)
-            fields.append(("metadata", metadata_text))
-
-        return fields
-
-    @staticmethod
-    def _build_search_snippet(text: str, query: str) -> str:
-        if not text:
-            return ""
-
-        normalized_query = query.strip().lower()
-        lower_text = text.lower()
-        match_index = lower_text.find(normalized_query)
-        if match_index == -1:
-            return text[:200].replace("\n", " ").strip()
-
-        start = max(0, match_index - 80)
-        end = min(len(text), match_index + len(query) + 120)
-        return text[start:end].replace("\n", " ").strip()
-
-    def _message_search_result(self, message: Message, query: str) -> Optional[Dict[str, Any]]:
-        normalized_query = query.strip().lower()
-        if not normalized_query:
-            return None
-
-        matched_in: List[str] = []
-        snippet = ""
-        for field, text in self._message_search_fields(message):
-            if not text:
-                continue
-            if normalized_query not in text.lower():
-                continue
-            matched_in.append(field)
-            if not snippet:
-                snippet = self._build_search_snippet(text, query)
-
-        if not matched_in:
-            return None
-
-        return {
-            **self._message_item(message),
-            "matched_in": matched_in,
-            "snippet": snippet,
-        }
 
     def _get_identity_path(self) -> Path:
         identity_path = getattr(self, "identity_path", None)
@@ -1076,775 +721,16 @@ class AgentHTTPServer(BaseAgentRunner):
                 self.logger.info("Runtime heartbeat stopped")
 
     def _add_web_ui(self, app: FastAPI) -> None:
-        if _STATIC_DIR.is_dir():
-            async def serve_spa_index():
-                index = _STATIC_DIR / "index.html"
-                if index.exists():
-                    return FileResponse(str(index), media_type="text/html")
-                raise HTTPException(status_code=404, detail="Web UI not found")
-
-            @app.get("/", include_in_schema=False)
-            async def serve_index():
-                return await serve_spa_index()
-
-            @app.get("/memory", include_in_schema=False)
-            async def serve_memory():
-                return await serve_spa_index()
-
-            @app.get("/workspace", include_in_schema=False)
-            async def serve_workspace():
-                return await serve_spa_index()
-
-            @app.get("/message", include_in_schema=False)
-            async def serve_message():
-                return await serve_spa_index()
-
-            @app.get("/agent", include_in_schema=False)
-            async def serve_agent():
-                return await serve_spa_index()
-
-            @app.get("/skills", include_in_schema=False)
-            async def serve_skills():
-                return await serve_spa_index()
-
-            @app.get("/tasks", include_in_schema=False)
-            async def serve_tasks():
-                return await serve_spa_index()
-
-            app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-            self.logger.info("Web UI available at /")
-        else:
-            self.logger.warning("Static directory not found at %s — web UI disabled", _STATIC_DIR)
+        register_spa_routes(app, static_dir=_STATIC_DIR, logger=self.logger)
 
     def _add_routes(self, app: FastAPI) -> None:
-        @app.get("/i/health", tags=["Health"])
-        async def health_check():
-            return "ok"
-
-        @app.get("/health")
-        async def health():
-            return {"status": "healthy", "service": "xAgent HTTP Server"}
-
-        @app.post("/chat")
-        async def chat(input_data: ChatInput):
-            self.logger.info(
-                "Chat request from %s",
-                input_data.user_id,
-            )
-            try:
-                response = await self._run_chat_with_limits(input_data)
-                return {"reply": self._response_payload(response)}
-            except HTTPException:
-                raise
-            except Exception as exc:
-                self.logger.error("Agent processing error for %s: %s", input_data.user_id, exc)
-                raise HTTPException(status_code=500, detail=f"Agent processing error: {str(exc)}")
-
-        @app.websocket("/ws/chat")
-        async def websocket_chat(websocket: WebSocket):
-            await websocket.accept()
-            self.logger.info("WebSocket chat connected")
-
-            while True:
-                try:
-                    raw_payload = await websocket.receive_json()
-                    input_data = AgentInput.model_validate(raw_payload)
-                    self.logger.info(
-                        "WebSocket chat request from %s, stream=%s",
-                        input_data.user_id,
-                        input_data.stream,
-                    )
-                    await self._send_websocket_chat_events(websocket, input_data)
-                except WebSocketDisconnect:
-                    self.logger.info("WebSocket chat disconnected")
-                    break
-                except json.JSONDecodeError as exc:
-                    self.logger.warning("Invalid WebSocket chat JSON: %s", exc)
-                    await self._send_websocket_error(
-                        websocket,
-                        "Invalid JSON payload.",
-                        status_code=400,
-                        details=str(exc),
-                    )
-                except ValidationError as exc:
-                    self.logger.warning("Invalid WebSocket chat payload: %s", exc)
-                    await self._send_websocket_error(
-                        websocket,
-                        "Invalid chat payload.",
-                        status_code=422,
-                        details=exc.errors(),
-                    )
-                except Exception as exc:
-                    self.logger.error("Unexpected WebSocket chat error: %s", exc)
-                    await self._send_websocket_error(
-                        websocket,
-                        f"Agent processing error: {str(exc)}",
-                    )
-
-        @app.websocket("/ws/observe")
-        async def websocket_observe(websocket: WebSocket):
-            await websocket.accept()
-            self.logger.info("WebSocket observe connected")
-
-            while True:
-                try:
-                    raw_payload = await websocket.receive_json()
-                    input_data = ObserveInput.model_validate(raw_payload)
-                    self.logger.info(
-                        "WebSocket observe request: source=%s, type=%s",
-                        input_data.source,
-                        input_data.event_type,
-                    )
-                    await self._send_websocket_observe_events(websocket, input_data)
-                except WebSocketDisconnect:
-                    self.logger.info("WebSocket observe disconnected")
-                    break
-                except json.JSONDecodeError as exc:
-                    self.logger.warning("Invalid WebSocket observe JSON: %s", exc)
-                    await self._send_websocket_error(
-                        websocket,
-                        "Invalid JSON payload.",
-                        status_code=400,
-                        details=str(exc),
-                    )
-                except ValidationError as exc:
-                    self.logger.warning("Invalid WebSocket observe payload: %s", exc)
-                    await self._send_websocket_error(
-                        websocket,
-                        "Invalid observe payload.",
-                        status_code=422,
-                        details=exc.errors(),
-                    )
-                except Exception as exc:
-                    self.logger.error("Unexpected WebSocket observe error: %s", exc)
-                    await self._send_websocket_error(
-                        websocket,
-                        f"Agent observe error: {str(exc)}",
-                    )
-
-        @app.websocket("/ws/tasks")
-        async def websocket_tasks(websocket: WebSocket):
-            user_id = (websocket.query_params.get("user_id") or "web_user").strip() or "web_user"
-            await websocket.accept()
-            await self._register_task_subscriber(user_id, websocket)
-            self.logger.info("Scheduled task WebSocket connected for %s", user_id)
-            try:
-                while True:
-                    await websocket.receive_text()
-            except WebSocketDisconnect:
-                self.logger.info("Scheduled task WebSocket disconnected for %s", user_id)
-            finally:
-                await self._unregister_task_subscriber(user_id, websocket)
-
-        @app.post("/observe")
-        async def observe(input_data: ObserveInput):
-            self.logger.info(
-                "Observation request: source=%s, type=%s",
-                input_data.source,
-                input_data.event_type,
-            )
-            try:
-                response = await self._run_observe_with_limits(input_data)
-                return self._response_payload(response)
-            except HTTPException:
-                raise
-            except Exception as exc:
-                self.logger.error(
-                    "Agent observe error: source=%s type=%s error=%s",
-                    input_data.source,
-                    input_data.event_type,
-                    exc,
-                )
-                raise HTTPException(status_code=500, detail=f"Agent observe error: {str(exc)}")
-
-        @app.post("/clear_messages")
-        async def clear_messages():
-            self.logger.info("Clear messages request")
-            try:
-                await self.message_storage.clear_messages()
-                return {
-                    "status": "success",
-                    "message": "Message stream cleared",
-                }
-            except Exception as exc:
-                self.logger.error("Failed to clear messages: %s", exc)
-                raise HTTPException(status_code=500, detail=f"Failed to clear messages: {str(exc)}")
-
-        # ── Monitoring API endpoints ─────────────────────────────────
-
-        @app.get("/api/agent/info", tags=["Monitoring"])
-        async def agent_info():
-            """Return agent metadata for monitoring pages."""
-            memory_dir = str(self._get_memory_root())
-            storage_info = self.message_storage.get_stream_info() if hasattr(self.message_storage, "get_stream_info") else {}
-            identity = self._get_agent_identity()
-            try:
-                identity_path = self._get_identity_path()
-                identity_path_value = str(identity_path)
-                identity_editable = True
-            except HTTPException:
-                identity_path_value = ""
-                identity_editable = False
-            provider_cfg = self.config.get("provider") if isinstance(self.config, dict) else {}
-            provider_name = provider_cfg.get("name") if isinstance(provider_cfg, dict) else None
-            image_generation_cfg = self.config.get("image_generation") if isinstance(self.config, dict) else {}
-            image_generation_provider = "none"
-            if isinstance(image_generation_cfg, dict):
-                try:
-                    image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
-                except ValueError:
-                    image_generation_provider = str(image_generation_cfg.get("provider") or "none")
-            tool_names = list(self.agent.tools.keys())
-            supports_vision = bool(getattr(self.agent, "supports_vision", True))
-            skills_root = self._get_skills_root()
-            return {
-                "provider": provider_name or "",
-                "model": self.agent.model,
-                "workspace": str(getattr(self, "workspace", "")),
-                "workspace_dir": str(self._get_workspace_root()),
-                "skills_dir": str(skills_root),
-                "memory_dir": memory_dir,
-                "message_storage": storage_info,
-                "tools": tool_names,
-                "capabilities": {
-                    "vision": supports_vision,
-                    "vision_input": supports_vision,
-                    "web_search": "web_search" in tool_names,
-                    "image_generation": "generate_image" in tool_names,
-                    "image_generation_provider": image_generation_provider if "generate_image" in tool_names else "none",
-                    "image_editing": False,
-                },
-                "identity": identity,
-                "identity_file": BaseAgentConfig.IDENTITY_FILENAME,
-                "identity_path": identity_path_value,
-                "identity_editable": identity_editable,
-                "system_prompt": identity,
-            }
-
-        @app.get("/api/tasks", tags=["Monitoring"])
-        async def tasks_list():
-            tasks = list_active_task_views(self.tasks_dir)
-            return {
-                "root": str(self.tasks_dir),
-                "tasks": tasks,
-                "total": len(tasks),
-            }
-
-        @app.delete("/api/tasks/delete", tags=["Monitoring"])
-        async def tasks_delete(task_id: str = Query(..., description="Stable scheduled task id")):
-            try:
-                task = delete_scheduled_task(self.tasks_dir, task_id)
-            except FileNotFoundError as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {"status": "ok", "deleted": task.to_task_view()}
-
-        @app.get("/api/agent/identity", tags=["Monitoring"])
-        async def agent_identity():
-            """Return identity.md content."""
-            identity_path = self._get_identity_path()
-            if not identity_path.is_file():
-                raise HTTPException(status_code=404, detail="identity.md not found")
-            content = identity_path.read_text(encoding="utf-8")
-            return {
-                "identity": content,
-                "path": str(identity_path),
-                "filename": identity_path.name,
-                "modified": identity_path.stat().st_mtime,
-            }
-
-        @app.put("/api/agent/identity", tags=["Monitoring"])
-        async def update_agent_identity(input_data: IdentityInput):
-            """Persist identity.md and update the running agent."""
-            identity = input_data.identity.strip()
-            if not identity:
-                raise HTTPException(status_code=400, detail="Identity cannot be empty")
-
-            identity_path = self._get_identity_path()
-            identity_path.parent.mkdir(parents=True, exist_ok=True)
-            file_content = f"{identity}\n"
-            identity_path.write_text(file_content, encoding="utf-8")
-            self._set_agent_identity(identity)
-
-            return {
-                "status": "ok",
-                "identity": file_content,
-                "path": str(identity_path),
-                "filename": identity_path.name,
-                "modified": identity_path.stat().st_mtime,
-            }
-
-        @app.get("/api/memory/tree", tags=["Monitoring"])
-        async def memory_tree():
-            """Return the memory directory tree as JSON."""
-            memory_dir = self._get_memory_root()
-            if not memory_dir.is_dir():
-                return {"tree": []}
-
-            def _scan(directory: Path, rel_root: Path) -> List[Dict[str, Any]]:
-                entries: List[Dict[str, Any]] = []
-                try:
-                    children = sorted(directory.iterdir(), key=lambda p: p.name)
-                except PermissionError:
-                    return entries
-                for child in children:
-                    rel = child.relative_to(rel_root)
-                    if child.is_dir():
-                        entries.append({
-                            "name": child.name,
-                            "path": str(rel),
-                            "type": "dir",
-                            "children": _scan(child, rel_root),
-                        })
-                    elif child.suffix == ".md":
-                        entries.append({
-                            "name": child.name,
-                            "path": str(rel),
-                            "type": "file",
-                            "modified": child.stat().st_mtime,
-                        })
-                return entries
-
-            tree: List[Dict[str, Any]] = []
-            for scope_root in self._memory_scope_roots(memory_dir):
-                if scope_root.is_dir():
-                    tree.append({
-                        "name": scope_root.name,
-                        "path": scope_root.name,
-                        "type": "dir",
-                        "children": _scan(scope_root, memory_dir),
-                    })
-            return {"tree": tree}
-
-        @app.get("/api/memory/read", tags=["Monitoring"])
-        async def memory_read(path: str = Query(..., description="Relative path inside memory directory")):
-            """Read a specific memory markdown file."""
-            memory_dir = self._get_memory_root()
-            requested = (memory_dir / path).resolve()
-
-            # Path traversal protection
-            if not requested.is_relative_to(memory_dir):
-                raise HTTPException(status_code=403, detail="Access denied")
-            if not requested.is_file():
-                raise HTTPException(status_code=404, detail="File not found")
-            if requested.suffix != ".md":
-                raise HTTPException(status_code=403, detail="Only markdown files can be read")
-
-            content = requested.read_text(encoding="utf-8")
-            return {
-                "path": path,
-                "content": content,
-                "modified": requested.stat().st_mtime,
-            }
-
-        @app.get("/api/memory/search", tags=["Monitoring"])
-        async def memory_search(
-            query: str = Query(..., min_length=1, description="Search text for memory file names or file content"),
-            limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
-        ):
-            """Search memory files by file name and content."""
-            memory_dir = self._get_memory_root()
-            needle = query.strip().lower()
-            results: List[Dict[str, Any]] = []
-
-            memory_files: List[Path] = []
-            for scope_root in self._memory_scope_roots(memory_dir):
-                if scope_root.is_dir():
-                    memory_files.extend(sorted(scope_root.rglob("*.md")))
-
-            for file_path in memory_files:
-                if len(results) >= limit:
-                    break
-
-                relative_path = str(file_path.relative_to(memory_dir))
-                file_name = file_path.name
-                match_kind: List[str] = []
-                snippet = ""
-
-                if needle in file_name.lower() or needle in relative_path.lower():
-                    match_kind.append("filename")
-
-                try:
-                    content = file_path.read_text(encoding="utf-8")
-                except OSError:
-                    continue
-
-                lower_content = content.lower()
-                content_index = lower_content.find(needle)
-                if content_index != -1:
-                    match_kind.append("content")
-                    start = max(0, content_index - 80)
-                    end = min(len(content), content_index + len(query) + 120)
-                    snippet = content[start:end].replace("\n", " ").strip()
-
-                if match_kind:
-                    results.append({
-                        "path": relative_path,
-                        "name": file_name,
-                        "matched_in": match_kind,
-                        "snippet": snippet,
-                        "modified": file_path.stat().st_mtime,
-                    })
-
-            return {
-                "query": query,
-                "results": results,
-            }
-
-        @app.get("/api/workspace/tree", tags=["Monitoring"])
-        async def workspace_tree():
-            """Return the workspace directory tree as JSON."""
-            workspace_root = self._get_workspace_root()
-            return {
-                "root": str(workspace_root),
-                "tree": self._scan_workspace_tree(workspace_root, workspace_root),
-            }
-
-        @app.get("/api/workspace/read", tags=["Monitoring"])
-        async def workspace_read(path: str = Query(..., description="Relative path inside workspace directory")):
-            """Read a workspace file as UTF-8 text or return binary metadata."""
-            workspace_root = self._get_workspace_root()
-            requested = self._resolve_workspace_path(path)
-            if not requested.is_file():
-                raise HTTPException(status_code=404, detail="File not found")
-
-            metadata = self._workspace_metadata(requested, workspace_root)
-            if metadata["binary"]:
-                return {**metadata, "content": "", "text": False, "blob_url": workspace_blob_url(path)}
-            content = self._read_text_file(requested, _WORKSPACE_TEXT_READ_LIMIT)
-            return {**metadata, "content": content, "text": True, "blob_url": workspace_blob_url(path)}
-
-        @app.get("/api/workspace/blob", tags=["Monitoring"])
-        async def workspace_blob(path: str = Query(..., description="Relative path inside workspace directory")):
-            """Serve a workspace file as a binary response."""
-            requested = self._resolve_workspace_path(path)
-            if not requested.is_file():
-                raise HTTPException(status_code=404, detail="File not found")
-            mime_type, _ = mimetypes.guess_type(requested.name)
-            return FileResponse(str(requested), media_type=mime_type or "application/octet-stream", filename=requested.name)
-
-        @app.get("/api/workspace/search", tags=["Monitoring"])
-        async def workspace_search(
-            query: str = Query(..., min_length=1, description="Search text for workspace file names or file content"),
-            limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
-        ):
-            """Search workspace files by path/name and text content."""
-            workspace_root = self._get_workspace_root()
-            needle = query.strip().lower()
-            results: List[Dict[str, Any]] = []
-
-            for file_path in sorted(workspace_root.rglob("*")):
-                if len(results) >= limit:
-                    break
-                resolved = self._safe_child(file_path, workspace_root)
-                if resolved is None or not resolved.is_file():
-                    continue
-                relative_path = str(resolved.relative_to(workspace_root))
-                match_kind: List[str] = []
-                snippet = ""
-
-                if needle in resolved.name.lower() or needle in relative_path.lower():
-                    match_kind.append("filename")
-
-                is_binary = self._is_binary_file(resolved)
-                if not is_binary and resolved.stat().st_size <= _WORKSPACE_SEARCH_TEXT_LIMIT:
-                    try:
-                        content = resolved.read_text(encoding="utf-8")
-                    except (OSError, UnicodeDecodeError):
-                        content = ""
-                    lower_content = content.lower()
-                    content_index = lower_content.find(needle)
-                    if content_index != -1:
-                        match_kind.append("content")
-                        start = max(0, content_index - 80)
-                        end = min(len(content), content_index + len(query) + 120)
-                        snippet = content[start:end].replace("\n", " ").strip()
-
-                if match_kind:
-                    metadata = self._workspace_metadata(resolved, workspace_root)
-                    results.append({
-                        **metadata,
-                        "matched_in": match_kind,
-                        "snippet": snippet,
-                    })
-
-            return {"query": query, "results": results}
-
-        @app.post("/api/workspace/clear", tags=["Monitoring"])
-        async def workspace_clear():
-            """Delete all files and directories inside workspace/ without deleting the root."""
-            workspace_root = self._get_workspace_root()
-            deleted_count = 0
-            try:
-                for child in workspace_root.iterdir():
-                    if child.is_symlink() or child.is_file():
-                        child.unlink()
-                    elif child.is_dir():
-                        resolved = self._safe_child(child, workspace_root)
-                        if resolved is None:
-                            continue
-                        shutil.rmtree(resolved)
-                    else:
-                        child.unlink(missing_ok=True)
-                    deleted_count += 1
-            except Exception as exc:
-                self.logger.error("Failed to clear workspace: %s", exc)
-                raise HTTPException(status_code=500, detail=f"Failed to clear workspace: {str(exc)}")
-            return {
-                "status": "ok",
-                "message": "Workspace cleared",
-                "deleted": deleted_count,
-            }
-
-        @app.put("/api/workspace/write", tags=["Monitoring"])
-        async def workspace_write(input_data: WorkspaceWriteInput):
-            """Write a UTF-8 text file in workspace/."""
-            workspace_root = self._get_workspace_root()
-            requested = self._resolve_workspace_path(input_data.path)
-            if requested.exists() and requested.is_dir():
-                raise HTTPException(status_code=400, detail="Path is a directory")
-            if input_data.create_parents:
-                requested.parent.mkdir(parents=True, exist_ok=True)
-            elif not requested.parent.is_dir():
-                raise HTTPException(status_code=404, detail="Parent directory not found")
-            requested.write_text(input_data.content, encoding="utf-8")
-            return {"status": "ok", **self._workspace_metadata(requested, workspace_root)}
-
-        @app.delete("/api/workspace/delete", tags=["Monitoring"])
-        async def workspace_delete(
-            path: str = Query(..., description="Relative path inside workspace directory"),
-            recursive: bool = Query(False, description="Allow deleting non-empty directories"),
-        ):
-            """Delete a workspace file or directory."""
-            workspace_root = self._get_workspace_root()
-            requested = self._resolve_workspace_path(path)
-            if requested == workspace_root:
-                raise HTTPException(status_code=400, detail="Cannot delete workspace root")
-            if not requested.exists():
-                raise HTTPException(status_code=404, detail="Path not found")
-            metadata = self._workspace_metadata(requested, workspace_root)
-            if requested.is_dir():
-                if recursive:
-                    shutil.rmtree(requested)
-                else:
-                    requested.rmdir()
-            else:
-                requested.unlink()
-            return {"status": "ok", "deleted": metadata}
-
-        @app.post("/api/workspace/upload", tags=["Monitoring"])
-        async def workspace_upload(
-            file: UploadFile = File(...),
-            path: str = Form("", description="Optional relative target path or directory inside workspace"),
-        ):
-            """Upload a file into workspace/."""
-            workspace_root = self._get_workspace_root()
-            raw_target = path.strip()
-            target_is_directory = raw_target.endswith("/")
-            target_relative = raw_target.strip("/")
-            filename = Path(file.filename or "upload.bin").name
-            if not target_relative:
-                requested = self._resolve_workspace_path(filename)
-            else:
-                target = self._resolve_workspace_path(target_relative)
-                requested = target / filename if target_is_directory or target.is_dir() else target
-                requested = requested.resolve()
-                if not requested.is_relative_to(workspace_root):
-                    raise HTTPException(status_code=403, detail="Access denied")
-            requested.parent.mkdir(parents=True, exist_ok=True)
-            content = await file.read()
-            content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
-            detected_mime_type = detect_image_mime(content)
-            guessed_mime_type, _ = mimetypes.guess_type(filename)
-            looks_like_image = bool(
-                detected_mime_type
-                or content_type.startswith("image/")
-                or (guessed_mime_type and guessed_mime_type.startswith("image/"))
-            )
-            if looks_like_image:
-                if not detected_mime_type:
-                    raise HTTPException(status_code=415, detail="Uploaded image data is not a supported PNG, JPEG, or WebP file")
-                if len(content) > MAX_IMAGE_BYTES:
-                    raise HTTPException(status_code=413, detail="Image upload exceeds 10MB")
-                if detected_mime_type not in SUPPORTED_UPLOAD_IMAGE_MIME_TYPES:
-                    allowed = ", ".join(sorted(SUPPORTED_UPLOAD_IMAGE_MIME_TYPES))
-                    raise HTTPException(status_code=415, detail=f"Unsupported image MIME type; allowed: {allowed}")
-            elif len(content) > MAX_ATTACHMENT_BYTES:
-                raise HTTPException(status_code=413, detail="File upload exceeds 50MB")
-            requested.write_bytes(content)
-            metadata = self._workspace_metadata(requested, workspace_root)
-            return {"status": "ok", **metadata, "blob_url": workspace_blob_url(metadata["path"])}
-
-        @app.get("/api/skills/info", tags=["Monitoring"])
-        async def skills_info():
-            """Return skills root metadata and validation summary."""
-            try:
-                return self._get_skills_storage().info()
-            except Exception as exc:
-                self._raise_skills_http_error(exc)
-
-        @app.get("/api/skills/tree", tags=["Monitoring"])
-        async def skills_tree():
-            """Return the skills directory tree as JSON."""
-            storage = self._get_skills_storage()
-            return {
-                "root": str(storage.root),
-                "tree": storage.tree(),
-                "skills": [skill.to_dict() for skill in storage.list_skills(include_disabled=True, include_invalid=True)],
-            }
-
-        @app.get("/api/skills/read", tags=["Monitoring"])
-        async def skills_read(path: str = Query(..., description="Relative path inside skills directory")):
-            """Read a skills file as UTF-8 text or return binary metadata."""
-            try:
-                return self._get_skills_storage().read_file(path)
-            except Exception as exc:
-                self._raise_skills_http_error(exc)
-
-        @app.get("/api/skills/search", tags=["Monitoring"])
-        async def skills_search(
-            query: str = Query(..., min_length=1, description="Search text for skill file names or file content"),
-            limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
-        ):
-            """Search skill packages by path/name and text content."""
-            try:
-                return self._get_skills_storage().search(query, limit=limit)
-            except Exception as exc:
-                self._raise_skills_http_error(exc)
-
-        @app.post("/api/skills/create", tags=["Monitoring"])
-        async def skills_create(input_data: SkillCreateInput):
-            """Create a new skill directory with SKILL.md."""
-            try:
-                skill = self._get_skills_storage().create_skill(
-                    name=input_data.name.strip(),
-                    description=input_data.description.strip(),
-                    body=input_data.body,
-                    license=input_data.license,
-                    compatibility=input_data.compatibility,
-                    metadata=input_data.metadata,
-                    allowed_tools=input_data.allowed_tools,
-                )
-                return {"status": "ok", "skill": skill.to_dict()}
-            except Exception as exc:
-                self._raise_skills_http_error(exc)
-
-        @app.put("/api/skills/write", tags=["Monitoring"])
-        async def skills_write(input_data: SkillWriteInput):
-            """Write a UTF-8 text file in skills/."""
-            try:
-                result = self._get_skills_storage().write_file(
-                    input_data.path,
-                    input_data.content,
-                    create_parents=input_data.create_parents,
-                )
-                return {"status": "ok", **result}
-            except Exception as exc:
-                self._raise_skills_http_error(exc)
-
-        @app.delete("/api/skills/delete", tags=["Monitoring"])
-        async def skills_delete(
-            path: str = Query(..., description="Relative path inside skills directory"),
-            recursive: bool = Query(False, description="Allow deleting directories recursively"),
-        ):
-            """Delete a skills file or directory."""
-            try:
-                deleted = self._get_skills_storage().delete_path(path, recursive=recursive)
-                return {"status": "ok", "deleted": deleted}
-            except Exception as exc:
-                self._raise_skills_http_error(exc)
-
-        @app.put("/api/skills/state", tags=["Monitoring"])
-        async def skills_state(input_data: SkillStateInput):
-            """Enable or disable one valid skill."""
-            try:
-                skill = self._get_skills_storage().set_enabled(input_data.name, input_data.enabled)
-                return {"status": "ok", "skill": skill.to_dict()}
-            except Exception as exc:
-                self._raise_skills_http_error(exc)
-
-        @app.get("/api/skills/validate", tags=["Monitoring"])
-        async def skills_validate(name: Optional[str] = Query(None, description="Optional skill name to validate")):
-            """Validate one skill or all discovered skills."""
-            try:
-                storage = self._get_skills_storage()
-                if name:
-                    return storage.validate_skill(name)
-                return storage.validate_all()
-            except Exception as exc:
-                self._raise_skills_http_error(exc)
-
-        @app.get("/api/messages", tags=["Monitoring"])
-        async def get_messages(
-            count: int = Query(50, ge=1, le=500, description="Number of messages to retrieve"),
-            offset: int = Query(0, ge=0, description="Number of recent messages to skip"),
-        ):
-            """Paginated message retrieval for the monitoring page.
-
-            Returns messages in newest-first order so the UI can append older
-            pages at the end without reordering previously rendered items.
-            """
-            total = await self.message_storage.get_message_count()
-            messages = await self.message_storage.get_messages(count=count, offset=offset)
-            items = [self._message_item(msg) for msg in messages]
-            items.reverse()
-            return {
-                "messages": items,
-                "total": total,
-                "count": count,
-                "offset": offset,
-                "has_more": offset + count < total,
-            }
-
-        @app.get("/api/messages/search", tags=["Monitoring"])
-        async def search_messages(
-            query: str = Query(..., min_length=1, description="Search text for message content and metadata"),
-            limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
-        ):
-            """Search stored messages in newest-first order."""
-            total = await self.message_storage.get_message_count()
-            if total <= 0 or not hasattr(self.message_storage, "get_messages"):
-                return {"query": query, "results": []}
-
-            messages = await self.message_storage.get_messages(count=total, offset=0)
-            results: List[Dict[str, Any]] = []
-            for message in reversed(messages):
-                match = self._message_search_result(message, query)
-                if match is None:
-                    continue
-                results.append(match)
-                if len(results) >= limit:
-                    break
-
-            return {"query": query, "results": results}
-
-        @app.post("/api/memory/clear", tags=["Monitoring"])
-        async def memory_clear():
-            """Delete the entire memory directory and recreate it empty."""
-            import shutil
-            memory_dir = self._get_memory_root()
-            try:
-                shutil.rmtree(memory_dir)
-            except OSError:
-                pass
-            memory_dir.mkdir(parents=True, exist_ok=True)
-            return {"status": "ok"}
-
-        @app.get("/api/messages/stats", tags=["Monitoring"])
-        async def messages_stats():
-            """Return message storage statistics."""
-            total = await self.message_storage.get_message_count()
-            storage_info = self.message_storage.get_stream_info() if hasattr(self.message_storage, "get_stream_info") else {}
-            result: Dict[str, Any] = {"total": total, "storage": storage_info}
-            if total > 0:
-                oldest = await self.message_storage.get_messages(count=1, offset=total - 1)
-                newest = await self.message_storage.get_messages(count=1, offset=0)
-                if oldest:
-                    result["earliest_timestamp"] = oldest[0].timestamp
-                if newest:
-                    result["latest_timestamp"] = newest[0].timestamp
-            return result
+        register_runtime_routes(app, self)
+        register_admin_routes(
+            app,
+            self,
+            workspace_text_limit=_WORKSPACE_TEXT_READ_LIMIT,
+            workspace_search_text_limit=_WORKSPACE_SEARCH_TEXT_LIMIT,
+        )
 
     def run(self, host: str = None, port: int = None, open_browser: bool = False) -> None:
         host = host if host is not None else BaseAgentConfig.DEFAULT_HOST
