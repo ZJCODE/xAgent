@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
-from .server_models import AgentInput, ChatInput, ObserveInput
-from .server_serializers import response_payload
+from .models import AgentInput, ChatInput, ObserveInput
+from .serializers import response_payload
 
 if TYPE_CHECKING:
-    from .server import AgentHTTPServer
+    from .app import AgentHTTPServer
 
 
 def register_runtime_routes(app: FastAPI, server: "AgentHTTPServer") -> None:

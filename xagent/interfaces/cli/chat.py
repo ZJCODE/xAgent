@@ -6,13 +6,13 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from ..schemas.attachment import dedupe_attachments
-from ..utils.image_utils import workspace_blob_relative_path
-from .base import BaseAgentRunner
+from ...schemas.attachment import dedupe_attachments
+from ...utils.image_utils import workspace_blob_relative_path
+from ..base import BaseAgentRunner
 
 
 def _terminal_ui_class():
-    from . import cli as cli_facade
+    from .. import cli as cli_facade
 
     return cli_facade.TerminalUI
 

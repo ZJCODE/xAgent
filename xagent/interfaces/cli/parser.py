@@ -6,6 +6,7 @@ import argparse
 import sys
 
 from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN
+from . import runtime, setup
 
 
 class XAgentArgumentParser(argparse.ArgumentParser):
@@ -191,7 +192,7 @@ def _hide_subparser_choice(subparsers: argparse._SubParsersAction, name: str) ->
     ]
 
 
-def build_parser(facade) -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
     parser = XAgentArgumentParser(
         prog="xagent",
         description="xAgent command line interface",
@@ -202,15 +203,15 @@ def build_parser(facade) -> argparse.ArgumentParser:
     _add_dir_argument(init_parser)
     init_parser.add_argument("--force", action="store_true", help="Overwrite init-managed files")
     init_parser.add_argument("--schema", action="store_true", help="Include a starter output_schema example")
-    init_parser.set_defaults(handler=facade.handle_init)
+    init_parser.set_defaults(handler=setup.handle_init)
 
     init_sub = init_parser.add_subparsers(dest="init_target", metavar="[target]")
     init_feishu = init_sub.add_parser("feishu", help="Enable and configure the Feishu channel")
     _add_feishu_setup_arguments(init_feishu)
-    init_feishu.set_defaults(handler=facade.handle_init_feishu)
+    init_feishu.set_defaults(handler=setup.handle_init_feishu)
     init_weixin = init_sub.add_parser("weixin", help="Enable and configure the Weixin channel")
     _add_weixin_setup_arguments(init_weixin)
-    init_weixin.set_defaults(handler=facade.handle_init_weixin)
+    init_weixin.set_defaults(handler=setup.handle_init_weixin)
 
     chat_parser = subparsers.add_parser("chat", help="Chat with the configured agent")
     chat_parser.add_argument("message", nargs="?", help="Single message to send; omit for interactive chat")
@@ -234,7 +235,7 @@ def build_parser(facade) -> argparse.ArgumentParser:
         default=True,
         help="Enable or disable memory tools",
     )
-    chat_parser.set_defaults(handler=facade.handle_chat)
+    chat_parser.set_defaults(handler=runtime.handle_chat)
 
     voice_parser = subparsers.add_parser("voice", help="Talk with the configured agent by microphone")
     _add_dir_argument(voice_parser)
@@ -261,12 +262,12 @@ def build_parser(facade) -> argparse.ArgumentParser:
         default=True,
         help="Enable or disable memory tools",
     )
-    voice_parser.set_defaults(handler=facade.handle_voice)
+    voice_parser.set_defaults(handler=runtime.handle_voice)
 
     web_parser = subparsers.add_parser("web", help="Open the built-in web UI")
     _add_dir_argument(web_parser)
     _add_api_runtime_arguments(web_parser, open_by_default=True)
-    web_parser.set_defaults(handler=facade.handle_web)
+    web_parser.set_defaults(handler=runtime.handle_web)
 
     observe_parser = subparsers.add_parser("observe", help="Ingest context without generating a reply")
     observe_parser.add_argument("text", help="Observation text to store")
@@ -274,7 +275,7 @@ def build_parser(facade) -> argparse.ArgumentParser:
     observe_parser.add_argument("--source", default="cli", help="Observation source label")
     observe_parser.add_argument("--event-type", default="observation", help="Observation event type")
     observe_parser.add_argument("--metadata", default=None, help="JSON object with observation metadata")
-    observe_parser.set_defaults(handler=facade.handle_observe)
+    observe_parser.set_defaults(handler=runtime.handle_observe)
 
     channel_parser = subparsers.add_parser("channel", help="Open and manage runtime channels")
     channel_sub = channel_parser.add_subparsers(dest="channel_target", metavar="<channel>")
@@ -286,83 +287,83 @@ def build_parser(facade) -> argparse.ArgumentParser:
     api_open = api_sub.add_parser("open", help="Open the API channel and browser UI in the foreground")
     _add_dir_argument(api_open)
     _add_api_runtime_arguments(api_open, open_by_default=True)
-    api_open.set_defaults(handler=facade.handle_web)
+    api_open.set_defaults(handler=runtime.handle_web)
     api_start = api_sub.add_parser("start", help="Start the API channel in the background")
     _add_dir_argument(api_start)
     _add_api_runtime_arguments(api_start)
-    api_start.set_defaults(handler=facade.handle_start, channels=[CHANNEL_API])
+    api_start.set_defaults(handler=runtime.handle_start, channels=[CHANNEL_API])
     api_stop = api_sub.add_parser("stop", help="Stop the background API channel")
     _add_dir_argument(api_stop)
-    api_stop.set_defaults(handler=facade.handle_stop, channels=[CHANNEL_API])
+    api_stop.set_defaults(handler=runtime.handle_stop, channels=[CHANNEL_API])
     api_restart = api_sub.add_parser("restart", help="Restart the background API channel")
     _add_dir_argument(api_restart)
     _add_api_runtime_arguments(api_restart)
-    api_restart.set_defaults(handler=facade.handle_restart, channels=[CHANNEL_API])
+    api_restart.set_defaults(handler=runtime.handle_restart, channels=[CHANNEL_API])
     api_status = api_sub.add_parser("status", help="Show API channel status")
     _add_dir_argument(api_status)
     api_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    api_status.set_defaults(handler=facade.handle_status, channels=[CHANNEL_API])
+    api_status.set_defaults(handler=runtime.handle_status, channels=[CHANNEL_API])
     api_logs = api_sub.add_parser("logs", help="Show API channel logs")
     _add_dir_argument(api_logs)
     api_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
     api_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    api_logs.set_defaults(handler=facade.handle_logs, channels=[CHANNEL_API])
+    api_logs.set_defaults(handler=runtime.handle_logs, channels=[CHANNEL_API])
 
     feishu_channel = channel_sub.add_parser("feishu", help="Configure or manage the Feishu channel")
     feishu_sub = feishu_channel.add_subparsers(dest="channel_action", metavar="<action>")
     feishu_sub.required = True
     feishu_setup = feishu_sub.add_parser("setup", help="Enable or reconfigure the Feishu channel")
     _add_feishu_setup_arguments(feishu_setup)
-    feishu_setup.set_defaults(handler=facade.handle_init_feishu)
+    feishu_setup.set_defaults(handler=setup.handle_init_feishu)
     feishu_start = feishu_sub.add_parser("start", help="Start the Feishu channel in the background")
     _add_dir_argument(feishu_start)
-    feishu_start.set_defaults(handler=facade.handle_start, channels=[CHANNEL_FEISHU])
+    feishu_start.set_defaults(handler=runtime.handle_start, channels=[CHANNEL_FEISHU])
     feishu_stop = feishu_sub.add_parser("stop", help="Stop the background Feishu channel")
     _add_dir_argument(feishu_stop)
-    feishu_stop.set_defaults(handler=facade.handle_stop, channels=[CHANNEL_FEISHU])
+    feishu_stop.set_defaults(handler=runtime.handle_stop, channels=[CHANNEL_FEISHU])
     feishu_restart = feishu_sub.add_parser("restart", help="Restart the background Feishu channel")
     _add_dir_argument(feishu_restart)
-    feishu_restart.set_defaults(handler=facade.handle_restart, channels=[CHANNEL_FEISHU])
+    feishu_restart.set_defaults(handler=runtime.handle_restart, channels=[CHANNEL_FEISHU])
     feishu_status = feishu_sub.add_parser("status", help="Show Feishu channel status")
     _add_dir_argument(feishu_status)
     feishu_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    feishu_status.set_defaults(handler=facade.handle_status, channels=[CHANNEL_FEISHU])
+    feishu_status.set_defaults(handler=runtime.handle_status, channels=[CHANNEL_FEISHU])
     feishu_logs = feishu_sub.add_parser("logs", help="Show Feishu channel logs")
     _add_dir_argument(feishu_logs)
     feishu_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
     feishu_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    feishu_logs.set_defaults(handler=facade.handle_logs, channels=[CHANNEL_FEISHU])
+    feishu_logs.set_defaults(handler=runtime.handle_logs, channels=[CHANNEL_FEISHU])
 
     weixin_channel = channel_sub.add_parser("weixin", help="Configure or manage the Weixin DM channel")
     weixin_sub = weixin_channel.add_subparsers(dest="channel_action", metavar="<action>")
     weixin_sub.required = True
     weixin_setup = weixin_sub.add_parser("setup", help="Enable or reconfigure the Weixin DM channel")
     _add_weixin_setup_arguments(weixin_setup)
-    weixin_setup.set_defaults(handler=facade.handle_init_weixin)
+    weixin_setup.set_defaults(handler=setup.handle_init_weixin)
     weixin_start = weixin_sub.add_parser("start", help="Start the Weixin channel in the background")
     _add_dir_argument(weixin_start)
-    weixin_start.set_defaults(handler=facade.handle_start, channels=[CHANNEL_WEIXIN])
+    weixin_start.set_defaults(handler=runtime.handle_start, channels=[CHANNEL_WEIXIN])
     weixin_stop = weixin_sub.add_parser("stop", help="Stop the background Weixin channel")
     _add_dir_argument(weixin_stop)
-    weixin_stop.set_defaults(handler=facade.handle_stop, channels=[CHANNEL_WEIXIN])
+    weixin_stop.set_defaults(handler=runtime.handle_stop, channels=[CHANNEL_WEIXIN])
     weixin_restart = weixin_sub.add_parser("restart", help="Restart the background Weixin channel")
     _add_dir_argument(weixin_restart)
-    weixin_restart.set_defaults(handler=facade.handle_restart, channels=[CHANNEL_WEIXIN])
+    weixin_restart.set_defaults(handler=runtime.handle_restart, channels=[CHANNEL_WEIXIN])
     weixin_status = weixin_sub.add_parser("status", help="Show Weixin channel status")
     _add_dir_argument(weixin_status)
     weixin_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    weixin_status.set_defaults(handler=facade.handle_status, channels=[CHANNEL_WEIXIN])
+    weixin_status.set_defaults(handler=runtime.handle_status, channels=[CHANNEL_WEIXIN])
     weixin_logs = weixin_sub.add_parser("logs", help="Show Weixin channel logs")
     _add_dir_argument(weixin_logs)
     weixin_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
     weixin_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    weixin_logs.set_defaults(handler=facade.handle_logs, channels=[CHANNEL_WEIXIN])
+    weixin_logs.set_defaults(handler=runtime.handle_logs, channels=[CHANNEL_WEIXIN])
 
     doctor_parser = subparsers.add_parser("doctor", help="Check local xAgent readiness")
     _add_dir_argument(doctor_parser)
     _add_channel_argument(doctor_parser, default_label="enabled channels")
     doctor_parser.add_argument("--online", action="store_true", help="Include network/model checks")
-    doctor_parser.set_defaults(handler=facade.handle_doctor)
+    doctor_parser.set_defaults(handler=runtime.handle_doctor)
 
     inspect_parser = subparsers.add_parser("inspect", help="Inspect configuration, identity, memory, or messages")
     inspect_sub = inspect_parser.add_subparsers(dest="inspect_target", metavar="<target>")
@@ -374,7 +375,7 @@ def build_parser(facade) -> argparse.ArgumentParser:
     for command_name in ("show", "validate", "path"):
         config_cmd = config_sub.add_parser(command_name, help=f"{command_name} config.yaml")
         _add_dir_argument(config_cmd)
-        config_cmd.set_defaults(handler=facade.handle_config)
+        config_cmd.set_defaults(handler=runtime.handle_config)
 
     identity_parser = inspect_sub.add_parser("identity", help="Show identity.md information")
     identity_sub = identity_parser.add_subparsers(dest="identity_command", metavar="<subcommand>")
@@ -382,7 +383,7 @@ def build_parser(facade) -> argparse.ArgumentParser:
     for command_name in ("show", "path"):
         identity_cmd = identity_sub.add_parser(command_name, help=f"{command_name} identity.md")
         _add_dir_argument(identity_cmd)
-        identity_cmd.set_defaults(handler=facade.handle_identity)
+        identity_cmd.set_defaults(handler=runtime.handle_identity)
 
     memory_parser = inspect_sub.add_parser("memory", help="Inspect or clear long-term daily memory")
     memory_sub = memory_parser.add_subparsers(dest="memory_command", metavar="<subcommand>")
@@ -392,41 +393,41 @@ def build_parser(facade) -> argparse.ArgumentParser:
         _add_dir_argument(memory_cmd)
         memory_cmd.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
         memory_cmd.add_argument("--yes", action="store_true", help="Confirm destructive operations")
-        memory_cmd.set_defaults(handler=facade.handle_memory)
+        memory_cmd.set_defaults(handler=runtime.handle_memory)
     memory_list = memory_sub.add_parser("list", help="Show recent daily journals")
     _add_dir_argument(memory_list)
-    memory_list.add_argument("--days", type=int, default=facade.DEFAULT_MEMORY_LIST_DAYS, help="Recent natural days to scan")
-    memory_list.set_defaults(handler=facade.handle_memory)
+    memory_list.add_argument("--days", type=int, default=setup.DEFAULT_MEMORY_LIST_DAYS, help="Recent natural days to scan")
+    memory_list.set_defaults(handler=runtime.handle_memory)
     memory_search = memory_sub.add_parser("search", help="Search memory markdown files")
     _add_dir_argument(memory_search)
     memory_search.add_argument("query", help="Search query")
     memory_search.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
-    memory_search.set_defaults(handler=facade.handle_memory)
+    memory_search.set_defaults(handler=runtime.handle_memory)
 
     messages_parser = inspect_sub.add_parser("messages", help="Inspect or clear the message stream")
     messages_sub = messages_parser.add_subparsers(dest="messages_command", metavar="<subcommand>")
     messages_sub.required = True
     messages_stats = messages_sub.add_parser("stats", help="Show message stream statistics")
     _add_dir_argument(messages_stats)
-    messages_stats.set_defaults(handler=facade.handle_messages)
+    messages_stats.set_defaults(handler=runtime.handle_messages)
     messages_list = messages_sub.add_parser("list", help="List recent messages")
     _add_dir_argument(messages_list)
     messages_list.add_argument("--count", type=int, default=20, help="Number of recent messages")
     messages_list.add_argument("--offset", type=int, default=0, help="Number of recent messages to skip")
-    messages_list.set_defaults(handler=facade.handle_messages)
+    messages_list.set_defaults(handler=runtime.handle_messages)
     messages_clear = messages_sub.add_parser("clear", help="Clear all stored messages")
     _add_dir_argument(messages_clear)
     messages_clear.add_argument("--yes", action="store_true", help="Confirm clearing the message stream")
-    messages_clear.set_defaults(handler=facade.handle_messages)
+    messages_clear.set_defaults(handler=runtime.handle_messages)
 
     version_parser = subparsers.add_parser("version", help="Show xAgent version")
-    version_parser.set_defaults(handler=facade.handle_version)
+    version_parser.set_defaults(handler=runtime.handle_version)
 
     internal_run = subparsers.add_parser("_run-channel", help=argparse.SUPPRESS)
     internal_run.add_argument("channel", choices=(CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN))
     _add_dir_argument(internal_run)
     _add_api_runtime_arguments(internal_run)
-    internal_run.set_defaults(handler=facade.handle_run_channel_internal)
+    internal_run.set_defaults(handler=runtime.handle_run_channel_internal)
     _hide_subparser_choice(subparsers, "_run-channel")
 
     return parser

@@ -5,7 +5,7 @@ from unittest.mock import patch
 import readchar
 from rich.console import Console
 
-from xagent.interfaces.terminal_ui import MenuOption, ReturnToLauncherHome, TerminalUI
+from xagent.interfaces.cli.terminal_ui import MenuOption, ReturnToLauncherHome, TerminalUI
 
 
 def _interactive_ui() -> tuple[TerminalUI, io.StringIO]:
@@ -57,7 +57,7 @@ class TerminalUITests(unittest.TestCase):
         ui, stream = _interactive_ui()
         keys = iter([readchar.key.DOWN, readchar.key.ENTER])
 
-        with patch("xagent.interfaces.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
+        with patch("xagent.interfaces.cli.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
             choice = ui.select(
                 label="Provider",
                 options=[
@@ -76,7 +76,7 @@ class TerminalUITests(unittest.TestCase):
         ui, _stream = _interactive_ui()
         keys = iter([readchar.key.ENTER])
 
-        with patch("xagent.interfaces.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
+        with patch("xagent.interfaces.cli.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
             result = ui.confirm("Enable voice mode?", default=True)
 
         self.assertTrue(result)
@@ -85,7 +85,7 @@ class TerminalUITests(unittest.TestCase):
         ui, _stream = _interactive_ui()
         keys = iter(["\x1b"])
 
-        with patch("xagent.interfaces.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
+        with patch("xagent.interfaces.cli.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
             result = ui.confirm("Write project files?", default=True)
 
         self.assertIsNone(result)
@@ -94,7 +94,7 @@ class TerminalUITests(unittest.TestCase):
         ui, _stream = _interactive_ui()
         keys = iter(["h"])
 
-        with patch("xagent.interfaces.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
+        with patch("xagent.interfaces.cli.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
             with self.assertRaises(ReturnToLauncherHome):
                 ui.select_menu(
                     title="xAgent Setup",
@@ -110,7 +110,7 @@ class TerminalUITests(unittest.TestCase):
         ui, stream = _interactive_ui()
         keys = iter(["s", "e", "c", readchar.key.ENTER])
 
-        with patch("xagent.interfaces.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
+        with patch("xagent.interfaces.cli.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
             value = ui.ask_secret("API key (leave blank to fill in later): ")
 
         self.assertEqual(value, "sec")
@@ -122,7 +122,7 @@ class TerminalUITests(unittest.TestCase):
         ui, _stream = _interactive_ui()
         keys = iter([readchar.key.ENTER])
 
-        with patch("xagent.interfaces.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
+        with patch("xagent.interfaces.cli.terminal_ui.readchar.readkey", side_effect=lambda: next(keys)):
             value = ui.ask_text("Base URL", default="https://example.com")
 
         self.assertEqual(value, "https://example.com")

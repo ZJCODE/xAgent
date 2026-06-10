@@ -14,8 +14,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from ..core.runtime import create_runtime_heartbeat
-from .base import BaseAgentConfig, BaseAgentRunner
+from ...core.runtime import create_runtime_heartbeat
+from ..base import BaseAgentConfig, BaseAgentRunner
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
@@ -29,8 +29,8 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .cli_chat import AgentCLI
-from .cli_paths import config_path, identity_path, load_runtime_config, runtime_dir
+from .chat import AgentCLI
+from .paths import config_path, identity_path, load_runtime_config, runtime_dir
 from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
 
 
@@ -82,15 +82,15 @@ def handle_voice(args: argparse.Namespace) -> int:
 
     try:
         if getattr(args, "list_devices", False):
-            from ..voice.audio import list_audio_devices_text
+            from ...voice.audio import list_audio_devices_text
 
             print(list_audio_devices_text())
             return 0
 
         runner = BaseAgentRunner(config_dir=args.config_dir)
-        from ..voice.config import VoiceChannelConfig
-        from ..voice.factory import create_local_voice_runtime
-        from ..voice.runtime import VoiceRuntimeOptions
+        from ...voice.config import VoiceChannelConfig
+        from ...voice.factory import create_local_voice_runtime
+        from ...voice.runtime import VoiceRuntimeOptions
 
         runtime_config = VoiceChannelConfig.from_dict(voice_config(runner.config))
         runtime = create_local_voice_runtime(
@@ -120,7 +120,7 @@ def handle_voice(args: argparse.Namespace) -> int:
 
 
 def handle_server(args: argparse.Namespace) -> int:
-    from .server import AgentHTTPServer
+    from ..server import AgentHTTPServer
 
     server_kwargs = {
         "config_dir": args.config_dir,
@@ -221,7 +221,7 @@ def _api_runtime_values(
 
 
 def _run_api_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    from .server import AgentHTTPServer
+    from ..server import AgentHTTPServer
 
     server_kwargs, host, port, open_browser = _api_runtime_values(args, config)
     server = AgentHTTPServer(**server_kwargs)
@@ -236,7 +236,7 @@ def _run_feishu_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     try:
-        from ..integrations.feishu import FeishuAdapter, FeishuAdapterConfig
+        from ...integrations.feishu import FeishuAdapter, FeishuAdapterConfig
     except ImportError as exc:  # pragma: no cover - defensive
         print(f"Failed to import Feishu adapter: {exc}")
         return 1
@@ -322,7 +322,7 @@ def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     try:
-        from ..integrations.weixin import WeixinAdapter, WeixinAdapterConfig
+        from ...integrations.weixin import WeixinAdapter, WeixinAdapterConfig
     except ImportError as exc:  # pragma: no cover - defensive
         print(f"Failed to import Weixin adapter: {exc}")
         return 1
@@ -710,7 +710,7 @@ def handle_memory(args: argparse.Namespace) -> int:
         return 0
 
     if args.memory_command == "list":
-        from ..components.memory import MarkdownMemory
+        from ...components.memory import MarkdownMemory
 
         days = int(getattr(args, "days", 7) or 7)
         if days <= 0:

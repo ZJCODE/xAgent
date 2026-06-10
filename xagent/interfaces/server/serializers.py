@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from ..schemas import Message
-from ..schemas.attachment import ATTACHMENT_METADATA_KEY, dedupe_attachments
-from ..utils.image_utils import workspace_blob_relative_path, workspace_blob_url
+from ...schemas import Message
+from ...schemas.attachment import ATTACHMENT_METADATA_KEY, dedupe_attachments
+from ...utils.image_utils import workspace_blob_relative_path, workspace_blob_url
 
 
 def response_payload(response: Any) -> Any:

@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 
-from .server_models import IdentityInput, SkillCreateInput, SkillStateInput, SkillWriteInput, WorkspaceWriteInput
-from .server_serializers import message_item, message_search_result
-from ..core.runtime import delete_scheduled_task, list_active_task_views
-from ..schemas.attachment import MAX_ATTACHMENT_BYTES
-from ..tools.image_generation_tool import normalize_image_generation_provider
-from ..utils.image_utils import (
+from .models import IdentityInput, SkillCreateInput, SkillStateInput, SkillWriteInput, WorkspaceWriteInput
+from .serializers import message_item, message_search_result
+from ...core.runtime import delete_scheduled_task, list_active_task_views
+from ...schemas.attachment import MAX_ATTACHMENT_BYTES
+from ...tools.image_generation_tool import normalize_image_generation_provider
+from ...utils.image_utils import (
     MAX_IMAGE_BYTES,
     SUPPORTED_UPLOAD_IMAGE_MIME_TYPES,
     detect_image_mime,
@@ -23,7 +23,7 @@ from ..utils.image_utils import (
 )
 
 if TYPE_CHECKING:
-    from .server import AgentHTTPServer
+    from .app import AgentHTTPServer
 
 
 def register_admin_routes(

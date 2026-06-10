@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional, Sequence
 import yaml
 from rich.text import Text  # type: ignore[import-not-found]
 
-from ..core.providers import (
+from ...core.providers import (
     KNOWN_PROVIDERS,
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
     PROVIDER_ANTHROPIC,
@@ -22,8 +22,8 @@ from ..core.providers import (
     provider_base_url,
     provider_model_api,
 )
-from ..tools.search_tool import is_placeholder_api_key
-from .base import BaseAgentConfig
+from ...tools.search_tool import is_placeholder_api_key
+from ..base import BaseAgentConfig
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
@@ -34,7 +34,7 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .cli_runtime import (
+from .runtime import (
     _launcher_args,
     _xagent_version_text,
     handle_chat,
@@ -47,7 +47,7 @@ from .cli_runtime import (
     handle_voice,
     handle_web,
 )
-from .cli_setup import (
+from .setup import (
     ANTHROPIC_MODELS,
     CUSTOM_MODEL_OPTION,
     DEFAULT_MEMORY_LIST_DAYS,
@@ -475,7 +475,7 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                 json_output=False,
             )
         )
-    from .cli_runtime import handle_logs
+    from .runtime import handle_logs
 
     return handle_logs(
         _launcher_args(
@@ -1298,7 +1298,7 @@ def _print_skills_summary(config_dir: Path) -> int:
         print("Skills: not found")
         return 0
 
-    from ..components.skills import SkillsStorageLocal
+    from ...components.skills import SkillsStorageLocal
 
     storage = SkillsStorageLocal(root, seed_builtins=False)
     info = storage.info()
@@ -1317,7 +1317,7 @@ def _print_skills_list(config_dir: Path) -> int:
         print("No skills found.")
         return 0
 
-    from ..components.skills import SkillsStorageLocal
+    from ...components.skills import SkillsStorageLocal
 
     storage = SkillsStorageLocal(root, seed_builtins=False)
     skills = storage.list_skills(include_disabled=True, include_invalid=True)
@@ -1344,7 +1344,7 @@ def _print_skills_search(config_dir: Path, query: str) -> int:
         print("No skills found.")
         return 0
 
-    from ..components.skills import SkillsStorageLocal
+    from ...components.skills import SkillsStorageLocal
 
     storage = SkillsStorageLocal(root, seed_builtins=False)
     results = storage.search(query).get("results", [])
@@ -1366,7 +1366,7 @@ def _print_skills_validation(config_dir: Path) -> int:
         print("No skills found.")
         return 0
 
-    from ..components.skills import SkillsStorageLocal
+    from ...components.skills import SkillsStorageLocal
 
     storage = SkillsStorageLocal(root, seed_builtins=False)
     validation = storage.validate_all()
@@ -1396,7 +1396,7 @@ def _print_tasks_summary(config_dir: Path) -> int:
         print("Tasks: not found")
         return 0
 
-    from ..core.runtime import list_task_records
+    from ...core.runtime import list_task_records
 
     records = list_task_records(root)
     total, active, failed = _task_summary(records)
@@ -1426,7 +1426,7 @@ def _print_tasks_list(config_dir: Path, *, include_failed: bool) -> int:
         print("No tasks found.")
         return 0
 
-    from ..core.runtime import list_task_records
+    from ...core.runtime import list_task_records
 
     records = list_task_records(root, include_failed=include_failed)
     if not records:
@@ -1550,7 +1550,7 @@ def _run_identity_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
 
 
 def _run_memory_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
-    from .cli_runtime import handle_memory
+    from .runtime import handle_memory
 
     actions = [
         MenuOption("stats", "Stats", "Show memory file counts and bytes."),
@@ -1774,7 +1774,7 @@ def _run_channel_launcher(config_dir: Path) -> int:
 
 
 def _run_interactive_launcher() -> int:
-    from .cli_runtime import _runtime_is_initialized, print_quick_start  # noqa: F401
+    from .runtime import _runtime_is_initialized, print_quick_start  # noqa: F401
 
     config_dir = Path(BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
     ui = TerminalUI()

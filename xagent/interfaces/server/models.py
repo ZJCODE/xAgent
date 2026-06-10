@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 
-from ..core.config import AgentConfig
+from ...core.config import AgentConfig
 
 
 class ChatImageInput(BaseModel):

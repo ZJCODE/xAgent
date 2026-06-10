@@ -12,10 +12,10 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-from .base import BaseAgentConfig, BaseAgentRunner
-from .server_files import WorkspaceFileService
-from .server_admin_routes import register_admin_routes
-from .server_models import (
+from ..base import BaseAgentConfig, BaseAgentRunner
+from .files import WorkspaceFileService
+from .admin_routes import register_admin_routes
+from .models import (
     AgentInput,
     ChatInput,
     ChatAttachmentInput,
@@ -27,27 +27,27 @@ from .server_models import (
     SkillWriteInput,
     WorkspaceWriteInput,
 )
-from .server_runtime_routes import register_runtime_routes
-from .server_serializers import message_item, message_search_result, response_payload
-from .server_web import register_spa_routes
-from ..components.skills import SkillsStorageLocal
-from ..core.agent import Agent
-from ..core.config import AgentConfig
-from ..core.runtime import (
+from .runtime_routes import register_runtime_routes
+from .serializers import message_item, message_search_result, response_payload
+from .web import register_spa_routes
+from ...components.skills import SkillsStorageLocal
+from ...core.agent import Agent
+from ...core.config import AgentConfig
+from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     create_runtime_heartbeat,
     list_active_task_views,
     scheduled_delivery_context,
 )
-from ..schemas.attachment import (
+from ...schemas.attachment import (
     MAX_ATTACHMENT_BYTES,
     MAX_MESSAGE_ATTACHMENT_BYTES,
     attachment_image_sources,
     dedupe_attachments,
 )
-from ..tools.image_generation_tool import normalize_image_generation_provider
-from ..utils.image_utils import (
+from ...tools.image_generation_tool import normalize_image_generation_provider
+from ...utils.image_utils import (
     MAX_IMAGE_BYTES,
     MAX_IMAGES_PER_MESSAGE,
     SUPPORTED_UPLOAD_IMAGE_MIME_TYPES,
@@ -55,7 +55,7 @@ from ..utils.image_utils import (
     workspace_blob_url,
 )
 
-_STATIC_DIR = Path(__file__).parent / "static"
+_STATIC_DIR = Path(__file__).parent.parent / "static"
 _WORKSPACE_TEXT_READ_LIMIT = 1_000_000
 _WORKSPACE_SEARCH_TEXT_LIMIT = 2_000_000
 
@@ -760,20 +760,3 @@ class AgentHTTPServer(BaseAgentRunner):
             threading.Timer(1.5, lambda: webbrowser.open(url)).start()
 
         uvicorn.run(self.app, host=host, port=port)
-
-
-_server_instance = None
-
-
-def get_app() -> FastAPI:
-    global _server_instance
-    if _server_instance is None:
-        _server_instance = AgentHTTPServer()
-    return _server_instance.app
-
-
-def get_app_lazy() -> FastAPI:
-    return get_app()
-
-
-app = None

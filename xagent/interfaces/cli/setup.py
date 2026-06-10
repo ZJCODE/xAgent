@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 import yaml
 from rich.text import Text  # type: ignore[import-not-found]
 
-from ..core.providers import (
+from ...core.providers import (
     KNOWN_PROVIDERS,
     MODEL_API_ANTHROPIC_MESSAGES,
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
@@ -31,9 +31,9 @@ from ..core.providers import (
     provider_base_url,
     provider_model_api,
 )
-from ..tools.search_tool import is_placeholder_api_key
-from .base import BaseAgentConfig
-from .cli_paths import config_path as _config_path, runtime_dir as _runtime_dir
+from ...tools.search_tool import is_placeholder_api_key
+from ..base import BaseAgentConfig
+from .paths import config_path as _config_path, runtime_dir as _runtime_dir
 from .terminal_ui import MenuOption, ReturnToLauncherHome, TerminalUI
 
 
@@ -1909,9 +1909,9 @@ def collect_weixin_init_selection_terminal_ui(
     ui: Optional[TerminalUI] = None,
 ) -> Optional[WeixinInitSelection]:
     del ui
-    from ..integrations.weixin.client import qr_login
-    from ..integrations.weixin.config import ILINK_BASE_URL, WEIXIN_CDN_BASE_URL
-    from ..integrations.weixin.state import WeixinStateStore
+    from ...integrations.weixin.client import qr_login
+    from ...integrations.weixin.config import ILINK_BASE_URL, WEIXIN_CDN_BASE_URL
+    from ...integrations.weixin.state import WeixinStateStore
 
     config_dir = _runtime_dir(args)
     base_url = str(getattr(args, "base_url", None) or ILINK_BASE_URL).strip().rstrip("/")
@@ -1956,7 +1956,7 @@ def collect_weixin_init_selection_terminal_ui(
 
 
 def _weixin_channel_config(selection: WeixinInitSelection) -> dict[str, Any]:
-    from ..integrations.weixin.config import weixin_channel_config_from_selection
+    from ...integrations.weixin.config import weixin_channel_config_from_selection
 
     return weixin_channel_config_from_selection(
         account_id=selection.account_id,

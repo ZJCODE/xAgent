@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
 
-from xagent.interfaces.channels import enabled_channels_from_config
+from xagent.interfaces.cli.channels import enabled_channels_from_config
 from xagent.interfaces.cli import (
     AgentCLI,
     FeishuInitSelection,
@@ -47,7 +47,7 @@ from xagent.interfaces.cli import (
     handle_web,
     main,
 )
-from xagent.interfaces.config_editor import (
+from xagent.interfaces.cli.config_editor import (
     prepare_image_generation_provider_update,
     prepare_model_provider_update,
     prepare_observability_update,
@@ -56,8 +56,8 @@ from xagent.interfaces.config_editor import (
     prepare_voice_wake_update,
     write_config,
 )
-from xagent.interfaces.overview import STATUS_ERROR, build_runtime_overview
-from xagent.interfaces.processes import StartResult
+from xagent.interfaces.cli.overview import STATUS_ERROR, build_runtime_overview
+from xagent.interfaces.cli.processes import StartResult
 
 
 def _selection(**overrides) -> InitSelection:
@@ -188,8 +188,8 @@ class CLICommandTests(unittest.TestCase):
         fake_ui = FakeUI()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
-                with patch("xagent.interfaces.cli.handle_messages", return_value=0) as handle_messages:
+            with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+                with patch("xagent.interfaces.cli.launcher.handle_messages", return_value=0) as handle_messages:
                     exit_code = _run_inspect_launcher(Path(tmpdir))
 
         self.assertEqual(exit_code, 0)
@@ -402,7 +402,7 @@ class CLICommandTests(unittest.TestCase):
                 memory=False,
             )
 
-            with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", init_runner):
+            with patch("xagent.interfaces.cli.runtime.BaseAgentRunner.__init__", init_runner):
                 with patch("xagent.voice.factory.create_local_voice_runtime", return_value=fake_runtime) as factory:
                     with patch("sys.stdout", new_callable=io.StringIO):
                         exit_code = handle_voice(args)
@@ -443,7 +443,7 @@ class CLICommandTests(unittest.TestCase):
                 memory=True,
             )
 
-            with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", init_runner):
+            with patch("xagent.interfaces.cli.runtime.BaseAgentRunner.__init__", init_runner):
                 with patch("builtins.input", return_value="bye"):
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                         exit_code = handle_chat(args)
@@ -485,8 +485,8 @@ class CLICommandTests(unittest.TestCase):
         cli.config_dir = Path("/tmp/xagent")
         cli.config_path = cli.config_dir / "config.yaml"
 
-        with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", return_value=None):
-            with patch("xagent.interfaces.cli.logging.getLogger") as get_logger:
+        with patch("xagent.interfaces.cli.chat.BaseAgentRunner.__init__", return_value=None):
+            with patch("xagent.interfaces.cli.chat.logging.getLogger") as get_logger:
                 with patch.object(cli, "_chat_interactive_terminal_ui", new_callable=AsyncMock) as interactive:
                     get_logger.return_value.level = logging.CRITICAL
                     asyncio.run(cli.chat_interactive())
@@ -529,7 +529,7 @@ class CLICommandTests(unittest.TestCase):
                 memory=True,
             )
 
-            with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", init_runner):
+            with patch("xagent.interfaces.cli.runtime.BaseAgentRunner.__init__", init_runner):
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     exit_code = handle_chat(args)
 
@@ -686,7 +686,7 @@ class CLICommandTests(unittest.TestCase):
                 config_dir=tmpdir,
             )
 
-            with patch("xagent.interfaces.cli.BaseAgentRunner.__init__", init_runner):
+            with patch("xagent.interfaces.cli.runtime.BaseAgentRunner.__init__", init_runner):
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     exit_code = handle_observe(args)
 
@@ -697,7 +697,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("observed", stdout.getvalue())
 
     def test_main_without_subcommand_prints_quick_start(self):
-        with patch("xagent.interfaces.cli._runtime_is_initialized", return_value=False):
+        with patch("xagent.interfaces.cli.runtime._runtime_is_initialized", return_value=False):
             with patch("sys.stdout") as stdout:
                 exit_code = main([])
 
@@ -746,7 +746,7 @@ class CLICommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True)
 
-            with patch("xagent.interfaces.overview.running_pid", side_effect=[26807, 72069, None]):
+            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[26807, 72069, None]):
                 subtitle = _launcher_overview_subtitle(build_runtime_overview(Path(tmpdir)))
 
         self.assertIn("Web UI     running  127.0.0.1:8010 pid 26807", subtitle)
@@ -793,8 +793,8 @@ class CLICommandTests(unittest.TestCase):
 
         fake_ui = FakeUI()
 
-        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
-            with patch("xagent.interfaces.cli.handle_start", return_value=0) as starter:
+        with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+            with patch("xagent.interfaces.cli.launcher.handle_start", return_value=0) as starter:
                 exit_code = _run_channel_launcher(Path("/tmp/xagent"))
 
         self.assertEqual(exit_code, 0)
@@ -840,8 +840,8 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             fake_ui = FakeUI()
 
-            with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
-                with patch("xagent.interfaces.cli.handle_init_feishu", return_value=0) as init_feishu:
+            with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+                with patch("xagent.interfaces.cli.launcher.handle_init_feishu", return_value=0) as init_feishu:
                     exit_code = _run_channel_launcher(Path(tmpdir))
 
         self.assertEqual(exit_code, 0)
@@ -884,8 +884,8 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir, feishu=True)
             fake_ui = FakeUI()
 
-            with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
-                with patch("xagent.interfaces.cli.handle_status", return_value=0) as status:
+            with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+                with patch("xagent.interfaces.cli.launcher.handle_status", return_value=0) as status:
                     exit_code = _run_channel_launcher(Path(tmpdir))
 
         self.assertEqual(exit_code, 0)
@@ -930,7 +930,7 @@ class CLICommandTests(unittest.TestCase):
     def test_runtime_overview_shows_web_ui_url_when_running(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
-            with patch("xagent.interfaces.overview.running_pid", return_value=26807):
+            with patch("xagent.interfaces.cli.overview.running_pid", return_value=26807):
                 overview = build_runtime_overview(Path(tmpdir))
 
         web_ui = next(item for item in overview.items if item.name == "Web UI")
@@ -1029,8 +1029,8 @@ class CLICommandTests(unittest.TestCase):
             }
             (root / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
 
-            with patch("xagent.interfaces.cli._terminal_select_model_option", return_value="qwen3.6-flash"):
-                with patch("xagent.interfaces.cli._required_feature_api_key", side_effect=AssertionError("unexpected feature key prompt")):
+            with patch("xagent.interfaces.cli.launcher._terminal_select_model_option", return_value="qwen3.6-flash"):
+                with patch("xagent.interfaces.cli.launcher._required_feature_api_key", side_effect=AssertionError("unexpected feature key prompt")):
                     with self.assertRaises(ReturnToLauncherHome):
                         _run_model_config_launcher(fake_ui, root)
 
@@ -1168,7 +1168,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             config_dir = Path(tmpdir)
 
-            with patch("xagent.interfaces.cli._run_observability_config_launcher") as observability_launcher:
+            with patch("xagent.interfaces.cli.launcher._run_observability_config_launcher") as observability_launcher:
                 _run_partial_update_launcher(fake_ui, config_dir)
 
         self.assertEqual(
@@ -1239,7 +1239,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             config_dir = Path(tmpdir)
 
-            from xagent.interfaces.cli import _run_observability_config_launcher
+            from xagent.interfaces.cli.launcher import _run_observability_config_launcher
 
             result = _run_observability_config_launcher(fake_ui, config_dir)
 
@@ -1277,7 +1277,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             config_dir = Path(tmpdir)
 
-            with patch("xagent.interfaces.cli._run_model_config_launcher", return_value=False) as model_launcher:
+            with patch("xagent.interfaces.cli.launcher._run_model_config_launcher", return_value=False) as model_launcher:
                 _run_partial_update_launcher(fake_ui, config_dir)
 
         model_launcher.assert_called_once_with(fake_ui, config_dir)
@@ -1313,8 +1313,8 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             config_dir = Path(tmpdir)
 
-            with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
-                with patch("xagent.interfaces.cli._run_partial_update_launcher", side_effect=ReturnToLauncherHome):
+            with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+                with patch("xagent.interfaces.cli.launcher._run_partial_update_launcher", side_effect=ReturnToLauncherHome):
                     exit_code = _run_resetup_launcher(config_dir)
 
         self.assertEqual(exit_code, 0)
@@ -1348,7 +1348,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir, feishu=True)
             config_dir = Path(tmpdir)
 
-            with patch("xagent.interfaces.cli.handle_init_feishu", return_value=0):
+            with patch("xagent.interfaces.cli.launcher.handle_init_feishu", return_value=0):
                 with self.assertRaises(ReturnToLauncherHome):
                     _run_partial_update_launcher(fake_ui, config_dir)
 
@@ -1402,8 +1402,8 @@ class CLICommandTests(unittest.TestCase):
             }
             (config_dir / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
 
-            with patch("xagent.interfaces.cli._apply_config_update", return_value=False) as apply_update:
-                from xagent.interfaces.cli import _run_voice_wake_config_launcher
+            with patch("xagent.interfaces.cli.launcher._apply_config_update", return_value=False) as apply_update:
+                from xagent.interfaces.cli.launcher import _run_voice_wake_config_launcher
 
                 _run_voice_wake_config_launcher(fake_ui, config_dir)
 
@@ -1445,7 +1445,7 @@ class CLICommandTests(unittest.TestCase):
             }
             (config_dir / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
 
-            from xagent.interfaces.cli import _run_voice_wake_config_launcher
+            from xagent.interfaces.cli.launcher import _run_voice_wake_config_launcher
 
             _run_voice_wake_config_launcher(fake_ui, config_dir)
 
@@ -1480,9 +1480,9 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             config_dir = Path(tmpdir)
 
-            from xagent.interfaces.cli import _run_voice_config_launcher
+            from xagent.interfaces.cli.launcher import _run_voice_config_launcher
 
-            with patch("xagent.interfaces.cli._run_voice_provider_mode_launcher") as provider_mode_launcher:
+            with patch("xagent.interfaces.cli.launcher._run_voice_provider_mode_launcher") as provider_mode_launcher:
                 _run_voice_config_launcher(fake_ui, config_dir)
 
         self.assertEqual(
@@ -1512,7 +1512,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             config_dir = Path(tmpdir)
 
-            from xagent.interfaces.cli import _run_voice_config_launcher
+            from xagent.interfaces.cli.launcher import _run_voice_config_launcher
 
             _run_voice_config_launcher(fake_ui, config_dir)
 
@@ -1544,7 +1544,7 @@ class CLICommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
 
-            from xagent.interfaces.cli import _run_voice_channel_launcher
+            from xagent.interfaces.cli.launcher import _run_voice_channel_launcher
 
             _run_voice_channel_launcher(fake_ui, Path(tmpdir))
 
@@ -1582,10 +1582,10 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             config_dir = Path(tmpdir)
 
-            from xagent.interfaces.cli import _run_voice_channel_launcher
+            from xagent.interfaces.cli.launcher import _run_voice_channel_launcher
 
-            with patch("xagent.interfaces.cli._run_voice_provider_mode_launcher") as provider_mode_launcher:
-                with patch("xagent.interfaces.cli.handle_voice") as handle_voice:
+            with patch("xagent.interfaces.cli.launcher._run_voice_provider_mode_launcher") as provider_mode_launcher:
+                with patch("xagent.interfaces.cli.launcher.handle_voice") as handle_voice:
                     _run_voice_channel_launcher(fake_ui, config_dir)
 
         provider_mode_launcher.assert_called_once_with(fake_ui, config_dir, unittest.mock.ANY)
@@ -1616,7 +1616,7 @@ class CLICommandTests(unittest.TestCase):
             config_dir = Path(tmpdir)
             config = yaml.safe_load((config_dir / "config.yaml").read_text(encoding="utf-8"))
 
-            from xagent.interfaces.cli import _run_voice_provider_mode_launcher
+            from xagent.interfaces.cli.launcher import _run_voice_provider_mode_launcher
 
             _run_voice_provider_mode_launcher(fake_ui, config_dir, config)
 
@@ -1662,9 +1662,9 @@ class CLICommandTests(unittest.TestCase):
                 },
             }
 
-            from xagent.interfaces.cli import _run_voice_nested_config
+            from xagent.interfaces.cli.launcher import _run_voice_nested_config
 
-            with patch("xagent.interfaces.cli._apply_config_update", return_value=True) as apply_update:
+            with patch("xagent.interfaces.cli.launcher._apply_config_update", return_value=True) as apply_update:
                 _run_voice_nested_config(fake_ui, config_dir, config, "stt")
 
         self.assertEqual(
@@ -1679,7 +1679,7 @@ class CLICommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
 
-            from xagent.interfaces.cli import _managed_channel_actions
+            from xagent.interfaces.cli.launcher import _managed_channel_actions
 
             actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "feishu")}
 
@@ -1696,7 +1696,7 @@ class CLICommandTests(unittest.TestCase):
             config["channels"]["api"]["enabled"] = False
             config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
-            from xagent.interfaces.cli import _managed_channel_actions
+            from xagent.interfaces.cli.launcher import _managed_channel_actions
 
             actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "api")}
 
@@ -1732,10 +1732,10 @@ class CLICommandTests(unittest.TestCase):
 
         fake_ui = FakeUI()
 
-        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
-            with patch("xagent.interfaces.cli.build_runtime_overview", return_value=SimpleNamespace(initialized=True)):
-                with patch("xagent.interfaces.cli._launcher_overview_subtitle", return_value=""):
-                    with patch("xagent.interfaces.cli._run_resetup_launcher", return_value=0) as resetup_launcher:
+        with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+            with patch("xagent.interfaces.cli.launcher.build_runtime_overview", return_value=SimpleNamespace(initialized=True)):
+                with patch("xagent.interfaces.cli.launcher._launcher_overview_subtitle", return_value=""):
+                    with patch("xagent.interfaces.cli.launcher._run_resetup_launcher", return_value=0) as resetup_launcher:
                         exit_code = _run_interactive_launcher()
 
         self.assertEqual(exit_code, 0)
@@ -1768,8 +1768,8 @@ class CLICommandTests(unittest.TestCase):
 
         fake_ui = FakeUI()
 
-        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
-            with patch("xagent.interfaces.cli._runtime_is_initialized", return_value=True):
+        with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+            with patch("xagent.interfaces.cli.runtime._runtime_is_initialized", return_value=True):
                 exit_code = _run_interactive_launcher()
 
         self.assertEqual(exit_code, 0)
@@ -1804,10 +1804,10 @@ class CLICommandTests(unittest.TestCase):
 
         fake_ui = FakeUI()
 
-        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
-            with patch("xagent.interfaces.cli.build_runtime_overview", return_value=SimpleNamespace(initialized=False)):
-                with patch("xagent.interfaces.cli._launcher_overview_subtitle", return_value=""):
-                    with patch("xagent.interfaces.cli.handle_init", return_value=0) as handle_init_mock:
+        with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+            with patch("xagent.interfaces.cli.launcher.build_runtime_overview", return_value=SimpleNamespace(initialized=False)):
+                with patch("xagent.interfaces.cli.launcher._launcher_overview_subtitle", return_value=""):
+                    with patch("xagent.interfaces.cli.launcher.handle_init", return_value=0) as handle_init_mock:
                         exit_code = _run_interactive_launcher()
 
         self.assertEqual(exit_code, 0)
@@ -1861,8 +1861,8 @@ class CLICommandTests(unittest.TestCase):
             skills_marker.write_text("keep-skill", encoding="utf-8")
             args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
 
-            with patch("xagent.interfaces.cli._terminal_prompt_yes_no", return_value=False) as prompt:
-                with patch("xagent.interfaces.cli.collect_init_selection_terminal_ui", return_value=_selection()):
+            with patch("xagent.interfaces.cli.setup._terminal_prompt_yes_no", return_value=False) as prompt:
+                with patch("xagent.interfaces.cli.setup.collect_init_selection_terminal_ui", return_value=_selection()):
                     exit_code = handle_init(args)
 
             self.assertEqual(exit_code, 0)
@@ -1899,8 +1899,8 @@ class CLICommandTests(unittest.TestCase):
             skills_marker.write_text("clear-skill", encoding="utf-8")
             args = argparse.Namespace(config_dir=tmpdir, force=True, schema=False)
 
-            with patch("xagent.interfaces.cli._terminal_prompt_yes_no", return_value=True) as prompt:
-                with patch("xagent.interfaces.cli.collect_init_selection_terminal_ui", return_value=_selection()):
+            with patch("xagent.interfaces.cli.setup._terminal_prompt_yes_no", return_value=True) as prompt:
+                with patch("xagent.interfaces.cli.setup.collect_init_selection_terminal_ui", return_value=_selection()):
                     exit_code = handle_init(args)
 
             self.assertEqual(exit_code, 0)
@@ -1925,7 +1925,7 @@ class CLICommandTests(unittest.TestCase):
             args = argparse.Namespace(config_dir=tmpdir, force=False, schema=False)
             resolved_dir = str(Path(tmpdir).resolve())
 
-            with patch("xagent.interfaces.cli.collect_init_selection_terminal_ui", return_value=_selection()):
+            with patch("xagent.interfaces.cli.setup.collect_init_selection_terminal_ui", return_value=_selection()):
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     exit_code = handle_init(args)
 
@@ -1946,7 +1946,7 @@ class CLICommandTests(unittest.TestCase):
             resolved_dir = str(Path(tmpdir).resolve())
 
             with patch(
-                "xagent.interfaces.cli.collect_init_selection_terminal_ui",
+                "xagent.interfaces.cli.setup.collect_init_selection_terminal_ui",
                 return_value=_selection(
                     voice_enabled=True,
                     voice_provider="qwen",
@@ -1964,9 +1964,9 @@ class CLICommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             args = argparse.Namespace(config_dir=tmpdir, force=False, schema=False)
 
-            with patch("xagent.interfaces.cli.TerminalUI") as terminal_ui:
+            with patch("xagent.interfaces.cli.setup.TerminalUI") as terminal_ui:
                 with patch(
-                    "xagent.interfaces.cli.collect_init_selection_terminal_ui",
+                    "xagent.interfaces.cli.setup.collect_init_selection_terminal_ui",
                     return_value=_selection(),
                 ) as wizard:
                     exit_code = handle_init(args)
@@ -1986,12 +1986,12 @@ class CLICommandTests(unittest.TestCase):
             )
             selection = FeishuInitSelection(app_id="cli_test", app_secret="secret")
 
-            with patch("xagent.interfaces.cli.TerminalUI") as terminal_ui:
+            with patch("xagent.interfaces.cli.setup.TerminalUI") as terminal_ui:
                 with patch(
-                    "xagent.interfaces.cli.collect_feishu_init_selection_terminal_ui",
+                    "xagent.interfaces.cli.setup.collect_feishu_init_selection_terminal_ui",
                     return_value=selection,
                 ) as wizard:
-                    with patch("xagent.interfaces.cli._print_feishu_post_setup"):
+                    with patch("xagent.interfaces.cli.setup._print_feishu_post_setup"):
                         exit_code = handle_init_feishu(args)
 
         self.assertEqual(exit_code, 0)
@@ -2014,7 +2014,7 @@ class CLICommandTests(unittest.TestCase):
             )
 
             with patch("builtins.input", return_value="cli_test") as input_mock:
-                with patch("xagent.interfaces.cli.getpass.getpass", return_value="secret") as getpass_mock:
+                with patch("xagent.interfaces.cli.setup.getpass.getpass", return_value="secret") as getpass_mock:
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                         exit_code = handle_init_feishu(args)
 
@@ -2060,10 +2060,10 @@ class CLICommandTests(unittest.TestCase):
             )
 
             with patch(
-                "xagent.interfaces.cli.collect_feishu_init_selection_terminal_ui",
+                "xagent.interfaces.cli.setup.collect_feishu_init_selection_terminal_ui",
                 return_value=selection,
             ):
-                with patch("xagent.interfaces.cli._print_feishu_post_setup"):
+                with patch("xagent.interfaces.cli.setup._print_feishu_post_setup"):
                     exit_code = handle_init_feishu(args)
 
             config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
@@ -2094,7 +2094,7 @@ class CLICommandTests(unittest.TestCase):
             )
 
             with patch(
-                "xagent.interfaces.cli._register_feishu_app_via_qr",
+                "xagent.interfaces.cli.setup._register_feishu_app_via_qr",
                 return_value=("cli_qr_app", "qr_secret"),
             ) as register_mock:
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -2170,7 +2170,7 @@ class CLICommandTests(unittest.TestCase):
         )
         ui = FakeUI()
 
-        with patch("xagent.interfaces.cli._register_feishu_app_via_qr", return_value=("cli_qr_app", "qr_secret")):
+        with patch("xagent.interfaces.cli.setup._register_feishu_app_via_qr", return_value=("cli_qr_app", "qr_secret")):
             selection = collect_feishu_init_selection_terminal_ui(args=args, ui=ui)
 
         self.assertEqual(ui.menu_titles, ["App Access"])
@@ -2231,7 +2231,7 @@ class CLICommandTests(unittest.TestCase):
                 group_reply_without_mention=None,
             )
 
-            with patch("xagent.interfaces.cli._register_feishu_app_via_qr", return_value=None):
+            with patch("xagent.interfaces.cli.setup._register_feishu_app_via_qr", return_value=None):
                 with patch("sys.stdout"):
                     exit_code = handle_init_feishu(args)
 
@@ -2256,7 +2256,7 @@ class CLICommandTests(unittest.TestCase):
                 group_reply_without_mention=None,
             )
 
-            with patch("xagent.interfaces.cli._register_feishu_app_via_qr") as register_mock:
+            with patch("xagent.interfaces.cli.setup._register_feishu_app_via_qr") as register_mock:
                 with patch("sys.stdout"):
                     exit_code = handle_init_feishu(args)
 
@@ -2268,7 +2268,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["feishu"]["app_secret"], "explicit_secret")
 
     def test_register_feishu_app_via_qr_formats_link_payload_and_returns_credentials(self):
-        from xagent.interfaces.cli import _register_feishu_app_via_qr
+        from xagent.interfaces.cli.setup import _register_feishu_app_via_qr
 
         def fake_register_app(*, on_qr_code, on_status_change, source, cancel_event):
             on_qr_code({
@@ -2296,7 +2296,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertTrue(qr_or_tip, "Should display either QR code or installation tip")
 
     def test_register_feishu_app_via_qr_handles_access_denied(self):
-        from xagent.interfaces.cli import _register_feishu_app_via_qr
+        from xagent.interfaces.cli.setup import _register_feishu_app_via_qr
         from lark_oapi.scene.registration import AppAccessDeniedError
 
         def fake_register_app(**_kwargs):
@@ -2338,9 +2338,9 @@ class CLICommandTests(unittest.TestCase):
             adapter_instance.run = AsyncMock()
             heartbeat = _Heartbeat()
 
-            with patch("xagent.interfaces.cli.BaseAgentRunner", return_value=_Runner()):
+            with patch("xagent.interfaces.cli.runtime.BaseAgentRunner", return_value=_Runner()):
                 with patch("xagent.integrations.feishu.FeishuAdapter", return_value=adapter_instance):
-                    with patch("xagent.interfaces.cli.create_runtime_heartbeat", return_value=heartbeat) as factory:
+                    with patch("xagent.interfaces.cli.runtime.create_runtime_heartbeat", return_value=heartbeat) as factory:
                         exit_code = handle_run_channel_internal(args)
 
         self.assertEqual(exit_code, 0)
@@ -2380,9 +2380,9 @@ class CLICommandTests(unittest.TestCase):
             adapter_instance.run = AsyncMock()
             heartbeat = _Heartbeat()
 
-            with patch("xagent.interfaces.cli.BaseAgentRunner", return_value=_Runner()):
+            with patch("xagent.interfaces.cli.runtime.BaseAgentRunner", return_value=_Runner()):
                 with patch("xagent.integrations.weixin.WeixinAdapter", return_value=adapter_instance):
-                    with patch("xagent.interfaces.cli.create_runtime_heartbeat", return_value=heartbeat) as factory:
+                    with patch("xagent.interfaces.cli.runtime.create_runtime_heartbeat", return_value=heartbeat) as factory:
                         exit_code = handle_run_channel_internal(args)
 
         self.assertEqual(exit_code, 0)
@@ -2438,7 +2438,7 @@ class CLICommandTests(unittest.TestCase):
                 chat_timeout=None,
             )
 
-            with patch("xagent.interfaces.cli._run_api_channel", return_value=0) as runner:
+            with patch("xagent.interfaces.cli.runtime._run_api_channel", return_value=0) as runner:
                 exit_code = handle_web(args)
 
         self.assertEqual(exit_code, 0)
@@ -2463,7 +2463,7 @@ class CLICommandTests(unittest.TestCase):
                 chat_timeout=None,
             )
 
-            with patch("xagent.interfaces.cli.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
+            with patch("xagent.interfaces.cli.runtime.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
                 exit_code = handle_start(args)
 
         self.assertEqual(exit_code, 0)
@@ -2488,7 +2488,7 @@ class CLICommandTests(unittest.TestCase):
                 chat_timeout=None,
             )
 
-            with patch("xagent.interfaces.cli.start_background") as starter:
+            with patch("xagent.interfaces.cli.runtime.start_background") as starter:
                 exit_code = handle_start(args)
 
         self.assertEqual(exit_code, 1)
@@ -2569,7 +2569,7 @@ class CLICommandTests(unittest.TestCase):
                 chat_timeout=None,
             )
 
-            with patch("xagent.interfaces.cli.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
+            with patch("xagent.interfaces.cli.runtime.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
                 exit_code = handle_start(args)
 
         self.assertEqual(exit_code, 0)
@@ -2582,7 +2582,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir, feishu=True)
             args = argparse.Namespace(config_dir=tmpdir, channels=["api"])
 
-            with patch("xagent.interfaces.cli.stop_managed_process", return_value=(True, "stopped")) as stopper:
+            with patch("xagent.interfaces.cli.runtime.stop_managed_process", return_value=(True, "stopped")) as stopper:
                 exit_code = handle_stop(args)
 
         self.assertEqual(exit_code, 0)
@@ -2602,8 +2602,8 @@ class CLICommandTests(unittest.TestCase):
                 chat_timeout=None,
             )
 
-            with patch("xagent.interfaces.cli.stop_managed_process", return_value=(True, "stopped")) as stopper:
-                with patch("xagent.interfaces.cli.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
+            with patch("xagent.interfaces.cli.runtime.stop_managed_process", return_value=(True, "stopped")) as stopper:
+                with patch("xagent.interfaces.cli.runtime.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
                     exit_code = handle_restart(args)
 
         self.assertEqual(exit_code, 0)
@@ -2625,8 +2625,8 @@ class CLICommandTests(unittest.TestCase):
                 chat_timeout=None,
             )
 
-            with patch("xagent.interfaces.cli.stop_managed_process", return_value=(False, "timed out")) as stopper:
-                with patch("xagent.interfaces.cli.start_background") as starter:
+            with patch("xagent.interfaces.cli.runtime.stop_managed_process", return_value=(False, "timed out")) as stopper:
+                with patch("xagent.interfaces.cli.runtime.start_background") as starter:
                     exit_code = handle_restart(args)
 
         self.assertEqual(exit_code, 1)
@@ -2638,7 +2638,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir, feishu=True)
             args = argparse.Namespace(config_dir=tmpdir, channels=["feishu"], json_output=False)
 
-            with patch("xagent.interfaces.cli.running_pid", return_value=4321):
+            with patch("xagent.interfaces.cli.runtime.running_pid", return_value=4321):
                 with patch("sys.stdout") as stdout:
                     exit_code = handle_status(args)
 

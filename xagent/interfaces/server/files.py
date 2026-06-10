@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from ..utils.image_utils import workspace_blob_url
+from ...utils.image_utils import workspace_blob_url
 
 
 class WorkspaceFileService:

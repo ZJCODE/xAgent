@@ -20,7 +20,7 @@ from xagent.core.providers import (
     provider_supports_vision,
     provider_model_api,
 )
-from xagent.interfaces.channels import enabled_channels_from_config
+from xagent.interfaces.cli.channels import enabled_channels_from_config
 from xagent.interfaces.cli import (
     InitSelection,
     collect_init_selection,

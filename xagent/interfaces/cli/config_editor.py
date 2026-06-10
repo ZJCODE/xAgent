@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 import yaml
 
-from ..core.providers import (
+from ...core.providers import (
     KNOWN_PROVIDERS,
     MODEL_API_ANTHROPIC_MESSAGES,
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
@@ -23,7 +23,7 @@ from ..core.providers import (
     provider_base_url,
     provider_model_api,
 )
-from ..tools.image_generation_tool import (
+from ...tools.image_generation_tool import (
     DEFAULT_IMAGE_GENERATION_MODEL,
     DEFAULT_IMAGE_GENERATION_QUALITY,
     DEFAULT_IMAGE_GENERATION_SIZE,
@@ -37,8 +37,8 @@ from ..tools.image_generation_tool import (
     IMAGE_GENERATION_PROVIDER_QWEN,
     normalize_image_generation_provider,
 )
-from ..tools.search_tool import is_placeholder_api_key, normalize_search_provider
-from ..voice.config import (
+from ...tools.search_tool import is_placeholder_api_key, normalize_search_provider
+from ...voice.config import (
     QWEN_KEY_PLACEHOLDER,
     SONIOX_KEY_PLACEHOLDER,
     VOICE_PROVIDER_CUSTOM,
@@ -46,7 +46,7 @@ from ..voice.config import (
     VOICE_PROVIDER_SONIOX,
     VoiceChannelConfig,
 )
-from .base import BaseAgentConfig, BaseAgentRunner
+from ..base import BaseAgentConfig, BaseAgentRunner
 
 
 SEARCH_PROVIDER_NONE = "none"
