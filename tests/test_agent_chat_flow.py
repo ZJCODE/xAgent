@@ -1352,6 +1352,36 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("old-49", transcript)
         self.assertIn("latest request", transcript)
 
+    async def test_chat_uses_explicit_history_count_without_inner_cap(self):
+        storage = InMemoryMessageStorage([
+            Message.create(f"old-{index:02d}", role=RoleType.USER, sender_id="alice")
+            for index in range(50)
+        ])
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "Final answer"),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        result = await Agent.chat(
+            agent,
+            user_message="latest request",
+            user_id="alice",
+            history_count=40,
+            max_iter=2,
+            enable_memory=False,
+        )
+
+        self.assertEqual(result, "Final answer")
+        self.assertEqual(storage.last_count, 40)
+        transcript = next(
+            message for message in model_client.calls[0]
+            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
+        )["content"]
+        self.assertIn("old-11", transcript)
+        self.assertNotIn("old-10", transcript)
+        self.assertIn("old-49", transcript)
+        self.assertIn("latest request", transcript)
+
     async def test_chat_hides_model_error_event_from_user(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([
@@ -1378,7 +1408,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(stored_messages), 1)
         self.assertEqual(stored_messages[0].content, "hello")
 
-    async def test_transcript_budget_omits_older_messages_and_truncates_content(self):
+    async def test_transcript_history_window_omits_older_messages_without_truncation(self):
         messages = [
             Message.create(f"message-{index}", role=RoleType.USER, sender_id="alice")
             for index in range(3)
@@ -1391,14 +1421,12 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             messages,
             current_user_id="alice",
             max_messages=2,
-            max_total_chars=200,
-            max_message_chars=10,
         )["content"]
 
         self.assertIn("[Earlier experience omitted: 2 conversation messages]", transcript)
         self.assertNotIn("message-0", transcript)
         self.assertIn("message-2", transcript)
-        self.assertIn("[Content truncated: 20 chars omitted]", transcript)
+        self.assertIn("x" * 30, transcript)
 
     async def test_transcript_budget_records_images_without_attaching_them(self):
         image_url = "https://example.com/chart.png"
@@ -1411,8 +1439,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             messages,
             current_user_id="alice",
             max_messages=1,
-            max_total_chars=200,
-            max_message_chars=100,
         )
 
         self.assertIsInstance(model_message["content"], str)

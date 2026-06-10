@@ -37,7 +37,7 @@ class MemoryHandler:
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
     IDLE_JOURNAL_DELAY_SECONDS = AgentConfig.MEMORY_IDLE_JOURNAL_DELAY_SECONDS
     MAX_ACTIVE_JOURNAL_DELAY_SECONDS = AgentConfig.MEMORY_MAX_ACTIVE_JOURNAL_DELAY_SECONDS
-    MAX_JOURNAL_SOURCE_CHARS = AgentConfig.MAX_TRANSCRIPT_CHARS
+    DEFAULT_JOURNAL_SOURCE_CHARS = 24000
 
     def __init__(
         self,
@@ -64,7 +64,7 @@ class MemoryHandler:
         )
         self.max_journal_source_chars = self._positive_int(
             max_journal_source_chars,
-            self.MAX_JOURNAL_SOURCE_CHARS,
+            self.DEFAULT_JOURNAL_SOURCE_CHARS,
         )
         self._maintenance_lock = asyncio.Lock()
         self._maintenance_task: Optional[asyncio.Task[bool]] = None

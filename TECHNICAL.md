@@ -753,7 +753,7 @@ GET /health
 - `image_source`：可选，图片来源，支持字符串或字符串数组。可传图片 URL、`data:image/...;base64,...`，或服务端可访问的本地文件路径。文本里的图片 URL 和 Markdown 图片也会被自动识别。
 - `images`：可选，结构化图片输入数组（与 `image_source` 等价的另一种传入方式）。
 - `attachments`：可选，workspace-backed 文件附件数组。每项至少传 `path` 或 `blob_url`；建议同时传 `mime_type`、`file_name` 和 `size_bytes`。服务端会去重并限制单条消息附件总量不超过 `200MB`，单个附件不超过 `50MB`。非图片附件只作为文件引用进入上下文，图片附件在当前 turn 中按 provider vision 能力进入图片输入流程。
-- `history_count`：可选，默认 `20`；实际注入模型前最多使用最近 `30` 条消息。
+- `history_count`：可选，默认 `20`；决定当前 turn 从消息存储中抓取多少条最近历史。显式传入更大的值会按该值抓取；随后 transcript 组装仍会按消息类型过滤出对话消息与环境事件。
 - `max_iter`：可选，默认 `50`，工具调用循环上限。
 - `max_concurrent_tools`：可选，默认 `4`，单轮最多并发执行的工具数。
 - `enable_memory`：可选，默认 `true`。`false` 时不读取记忆，也不写入记忆，也不暴露记忆读写工具；消息仍写入主消息库。

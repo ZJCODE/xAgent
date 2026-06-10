@@ -158,9 +158,7 @@ class MessageHandler:
         current_user_id: str,
         memory_context: str = "",
         context_events: Optional[List[Message]] = None,
-        max_messages: int = AgentConfig.MAX_TRANSCRIPT_MESSAGES,
-        max_total_chars: int = AgentConfig.MAX_TRANSCRIPT_CHARS,
-        max_message_chars: int = AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS,
+        max_messages: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
         include_images: bool = True,
@@ -182,8 +180,6 @@ class MessageHandler:
         budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
             conversation_messages,
             max_messages=max_messages,
-            max_total_chars=max_total_chars,
-            max_message_chars=max_message_chars,
         )
         budgeted_messages = [msg for msg, _ in budgeted_entries]
         budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
@@ -253,9 +249,7 @@ class MessageHandler:
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
         current_date: Optional[str] = None,
-        max_messages: int = AgentConfig.MAX_TRANSCRIPT_MESSAGES,
-        max_total_chars: int = AgentConfig.MAX_TRANSCRIPT_CHARS,
-        max_message_chars: int = AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS,
+        max_messages: int = AgentConfig.DEFAULT_HISTORY_COUNT,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         max_context_event_chars: int = AgentConfig.MAX_CONTEXT_EVENT_CHARS,
         include_images: bool = True,
@@ -272,8 +266,6 @@ class MessageHandler:
         budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
             conversation_messages,
             max_messages=max_messages,
-            max_total_chars=max_total_chars,
-            max_message_chars=max_message_chars,
         )
         budgeted_messages = [msg for msg, _ in budgeted_entries]
         budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
@@ -471,35 +463,17 @@ class MessageHandler:
     def _budget_transcript_entries(
         messages: List[Message],
         max_messages: int,
-        max_total_chars: int,
-        max_message_chars: int,
     ) -> tuple[List[tuple[Message, str]], int]:
         if not messages:
             return [], 0
 
-        message_limit = max(1, int(max_messages or AgentConfig.MAX_TRANSCRIPT_MESSAGES))
-        total_limit = max(1, int(max_total_chars or AgentConfig.MAX_TRANSCRIPT_CHARS))
-        per_message_limit = max(1, int(max_message_chars or AgentConfig.MAX_TRANSCRIPT_MESSAGE_CHARS))
-
+        message_limit = max(1, int(max_messages or AgentConfig.DEFAULT_HISTORY_COUNT))
         omitted_count = max(0, len(messages) - message_limit)
         candidates = messages[-message_limit:]
-        selected_reversed: list[tuple[Message, str]] = []
-        used_chars = 0
-
-        for index in range(len(candidates) - 1, -1, -1):
-            msg = candidates[index]
-            content = MessageHandler._truncate_transcript_content(
-                msg.content.strip() or "[Empty message]",
-                per_message_limit,
-            )
-            estimated_chars = MessageHandler._estimate_transcript_entry_chars(msg, content)
-            if selected_reversed and used_chars + estimated_chars > total_limit:
-                omitted_count += index + 1
-                break
-            selected_reversed.append((msg, content))
-            used_chars += estimated_chars
-
-        return list(reversed(selected_reversed)), omitted_count
+        return [
+            (msg, msg.content.strip() or "[Empty message]")
+            for msg in candidates
+        ], omitted_count
 
     @staticmethod
     def _truncate_transcript_content(content: str, limit: int) -> str:
@@ -508,19 +482,6 @@ class MessageHandler:
         omitted_chars = len(content) - limit
         clipped = content[:limit].rstrip()
         return f"{clipped}\n[Content truncated: {omitted_chars} chars omitted]"
-
-    @staticmethod
-    def _estimate_transcript_entry_chars(message: Message, content: str) -> int:
-        header = MessageHandler._format_transcript_message_header(message)
-        image_note_chars = 0
-        image_count = MessageHandler._count_message_images(message)
-        if image_count:
-            image_note_chars = len(f"[Attached images: {image_count}]")
-        attachment_note_chars = 0
-        attachment_count = MessageHandler._count_message_attachments(message)
-        if attachment_count and attachment_count != image_count:
-            attachment_note_chars = len(f"[Attached files: {attachment_count}]")
-        return len(header) + len(content) + image_note_chars + attachment_note_chars + 4
 
     @staticmethod
     def _count_message_images(message: Message) -> int:

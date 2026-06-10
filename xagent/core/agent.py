@@ -332,6 +332,7 @@ class Agent:
                 recent_messages,
                 current_user_id=user_id,
                 memory_context=memory_context,
+                max_messages=effective_history_count,
                 include_images=getattr(self, "supports_vision", True),
                 workspace_dir=getattr(self, "workspace_dir", None),
                 current_message=user_msg,
@@ -517,6 +518,7 @@ class Agent:
                 recent_messages,
                 current_user_id=user_id,
                 memory_context=memory_context,
+                max_messages=effective_history_count,
                 include_images=getattr(self, "supports_vision", True),
                 workspace_dir=getattr(self, "workspace_dir", None),
                 current_message=user_msg,
@@ -868,8 +870,7 @@ class Agent:
             requested_count = int(requested)
         except (TypeError, ValueError):
             requested_count = AgentConfig.DEFAULT_HISTORY_COUNT
-        capped = min(requested_count, AgentConfig.MAX_TRANSCRIPT_MESSAGES)
-        return max(1, capped)
+        return max(1, requested_count)
 
     @staticmethod
     def _tool_spec_name(tool_spec: dict) -> str:
