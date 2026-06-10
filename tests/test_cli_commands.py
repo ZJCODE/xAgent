@@ -231,7 +231,7 @@ class CLICommandTests(unittest.TestCase):
                     user_message="draw",
                     user_id="alice",
                     stream=False,
-                    enable_memory=True,
+    
                 ))
 
         output = stdout.getvalue()
@@ -275,7 +275,6 @@ class CLICommandTests(unittest.TestCase):
             "init",
             "feishu",
             "--stream",
-            "--no-memory",
             "--group-history-count",
             "20",
             "--show-sender-ids",
@@ -283,7 +282,6 @@ class CLICommandTests(unittest.TestCase):
         ])
 
         self.assertTrue(args.stream)
-        self.assertFalse(args.enable_memory)
         self.assertEqual(args.group_history_count, 20)
         self.assertTrue(args.show_sender_ids)
         self.assertTrue(args.group_reply_without_mention)
@@ -320,14 +318,12 @@ class CLICommandTests(unittest.TestCase):
             "./agent-dir",
             "--user-id",
             "alice",
-            "--no-memory",
         ])
 
         self.assertEqual(args.command, "chat")
         self.assertEqual(args.message, "Hello")
         self.assertEqual(args.config_dir, "./agent-dir")
         self.assertEqual(args.user_id, "alice")
-        self.assertFalse(args.memory)
 
     def test_parser_supports_chat_event_mode(self):
         args = build_parser().parse_args([
@@ -347,13 +343,11 @@ class CLICommandTests(unittest.TestCase):
             "./agent-dir",
             "--user-id",
             "alice",
-            "--no-memory",
         ])
 
         self.assertEqual(args.command, "voice")
         self.assertEqual(args.config_dir, "./agent-dir")
         self.assertEqual(args.user_id, "alice")
-        self.assertFalse(args.memory)
 
     def test_voice_command_runs_foreground_runtime(self):
         class FakeAgent:
@@ -399,7 +393,6 @@ class CLICommandTests(unittest.TestCase):
                 config_dir=tmpdir,
                 user_id="alice",
                 verbose=False,
-                memory=False,
             )
 
             with patch("xagent.interfaces.cli.runtime.BaseAgentRunner.__init__", init_runner):
@@ -410,7 +403,6 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_runtime.run_count, 1)
         self.assertEqual(fake_agent.flush_count, 0)
-        self.assertFalse(factory.call_args.kwargs["options"].enable_memory)
         self.assertEqual(factory.call_args.kwargs["options"].user_id, "alice")
 
     def test_interactive_chat_exit_does_not_flush_memory(self):
@@ -440,7 +432,6 @@ class CLICommandTests(unittest.TestCase):
                 verbose=False,
                 stream=None,
                 events=False,
-                memory=True,
             )
 
             with patch("xagent.interfaces.cli.runtime.BaseAgentRunner.__init__", init_runner):
@@ -472,7 +463,6 @@ class CLICommandTests(unittest.TestCase):
             asyncio.run(cli._chat_interactive_terminal_ui(
                 user_id="alice",
                 stream=False,
-                memory=True,
                 verbose_mode=False,
             ))
 
@@ -526,7 +516,6 @@ class CLICommandTests(unittest.TestCase):
                 verbose=False,
                 stream=None,
                 events=False,
-                memory=True,
             )
 
             with patch("xagent.interfaces.cli.runtime.BaseAgentRunner.__init__", init_runner):
@@ -2007,7 +1996,7 @@ class CLICommandTests(unittest.TestCase):
                 manual=True,
                 force=False,
                 stream=None,
-                enable_memory=None,
+
                 group_history_count=None,
                 show_sender_ids=None,
                 group_reply_without_mention=None,
@@ -2043,7 +2032,7 @@ class CLICommandTests(unittest.TestCase):
                 manual=False,
                 force=False,
                 stream=None,
-                enable_memory=None,
+
                 group_history_count=None,
                 show_sender_ids=None,
                 group_reply_without_mention=None,
@@ -2052,7 +2041,6 @@ class CLICommandTests(unittest.TestCase):
                 app_id="cli_room",
                 app_secret="room_secret",
                 stream=True,
-                enable_memory=False,
                 group_history_count=20,
                 show_sender_ids=True,
                 group_reply_without_mention=True,
@@ -2072,7 +2060,6 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_room")
         self.assertEqual(config["channels"]["feishu"]["app_secret"], "room_secret")
         self.assertIs(config["channels"]["feishu"]["stream"], True)
-        self.assertIs(config["channels"]["feishu"]["enable_memory"], False)
         self.assertEqual(config["channels"]["feishu"]["group_history_count"], 20)
         self.assertIs(config["channels"]["feishu"]["show_sender_ids"], True)
         self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], True)
@@ -2087,7 +2074,7 @@ class CLICommandTests(unittest.TestCase):
                 manual=False,
                 force=False,
                 stream=None,
-                enable_memory=None,
+
                 group_history_count=None,
                 show_sender_ids=None,
                 group_reply_without_mention=None,
@@ -2163,7 +2150,6 @@ class CLICommandTests(unittest.TestCase):
             manual=False,
             force=False,
             stream=None,
-            enable_memory=None,
             group_history_count=None,
             show_sender_ids=None,
             group_reply_without_mention=None,
@@ -2180,7 +2166,6 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(selection.app_id, "cli_qr_app")
         self.assertEqual(selection.app_secret, "qr_secret")
         self.assertIs(selection.stream, False)
-        self.assertIs(selection.enable_memory, True)
         self.assertEqual(selection.group_history_count, 10)
         self.assertIs(selection.show_sender_ids, False)
         self.assertIs(selection.group_reply_without_mention, False)
@@ -2206,7 +2191,6 @@ class CLICommandTests(unittest.TestCase):
             manual=False,
             force=False,
             stream=None,
-            enable_memory=None,
             group_history_count=None,
             show_sender_ids=None,
             group_reply_without_mention=None,
@@ -2225,7 +2209,7 @@ class CLICommandTests(unittest.TestCase):
                 manual=False,
                 force=False,
                 stream=None,
-                enable_memory=None,
+
                 group_history_count=None,
                 show_sender_ids=None,
                 group_reply_without_mention=None,
@@ -2250,7 +2234,7 @@ class CLICommandTests(unittest.TestCase):
                 manual=False,
                 force=False,
                 stream=None,
-                enable_memory=None,
+
                 group_history_count=None,
                 show_sender_ids=None,
                 group_reply_without_mention=None,

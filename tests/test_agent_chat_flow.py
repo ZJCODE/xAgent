@@ -1,5 +1,4 @@
 import asyncio
-import contextvars
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +9,7 @@ from pydantic import BaseModel
 
 from xagent.components.message import MessageStorageBase
 from xagent.core.agent import Agent
-from xagent.core.config import AgentConfig, MemoryMode, ReplyType
+from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.providers import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_OPENAI_RESPONSES
@@ -950,17 +949,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.tool_executor = tool_executor or FakeToolExecutor()
         return agent
 
-    def test_reset_memory_mode_ignores_token_from_different_context(self):
-        agent = self._build_agent(
-            storage=InMemoryMessageStorage(),
-            model_client=CapturingModelClient([]),
-        )
-        memory_mode_var = agent._get_memory_mode_var()
-        other_context = contextvars.Context()
-        token = other_context.run(memory_mode_var.set, MemoryMode.DISABLED)
-
-        agent._reset_memory_mode(token)
-
     def test_agent_init_passes_message_storage_to_memory_handler(self):
         captured = {}
 
@@ -999,7 +987,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             user_id="bob",
             history_count=10,
             max_iter=3,
-            enable_memory=False,
+
         )
 
         self.assertEqual(result, "Done")
@@ -1039,7 +1027,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 user_message="Please rotate this image 90 degrees",
                 user_id="alice",
                 image_source="data:image/png;base64,iVBORw0KGgo=",
-                enable_memory=False,
+    
             )
 
             self.assertEqual(result, "processed")
@@ -1101,7 +1089,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 history_count=10,
                 max_iter=3,
                 stream=True,
-                enable_memory=True,
+
             )
         ]
 
@@ -1149,7 +1137,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             user_message="Stream this",
             user_id="bob",
             stream=True,
-            enable_memory=False,
+
         ).__aiter__()
 
         first_event = await asyncio.wait_for(events.__anext__(), timeout=0.2)
@@ -1190,7 +1178,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             user_message="Stream this",
             user_id="bob",
             stream=True,
-            enable_memory=False,
+
         )
 
         collected = [chunk async for chunk in response]
@@ -1224,7 +1212,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 user_message="Where are we?",
                 user_id="bob",
                 stream=False,
-                enable_memory=True,
+
             )
         ]
 
@@ -1273,7 +1261,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 user_message="send the image",
                 user_id="bob",
                 stream=False,
-                enable_memory=True,
+
             )
         ]
 
@@ -1338,7 +1326,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             user_message="latest request",
             user_id="alice",
             max_iter=2,
-            enable_memory=False,
+
         )
 
         self.assertEqual(result, "Final answer")
@@ -1368,7 +1356,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             user_id="alice",
             history_count=40,
             max_iter=2,
-            enable_memory=False,
+
         )
 
         self.assertEqual(result, "Final answer")

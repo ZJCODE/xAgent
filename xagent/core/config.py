@@ -309,24 +309,3 @@ class ReplyType(Enum):
     STRUCTURED_REPLY = "structured_reply"
     TOOL_CALL = "tool_call"
     ERROR = "error"
-
-
-class MemoryMode(Enum):
-    """Per-turn memory access policy."""
-
-    FULL = "full"
-    DISABLED = "disabled"
-
-    @classmethod
-    def from_flags(cls, enable_memory: bool) -> "MemoryMode":
-        if not enable_memory:
-            return cls.DISABLED
-        return cls.FULL
-
-    @property
-    def can_read(self) -> bool:
-        return self == self.FULL
-
-    @property
-    def can_write(self) -> bool:
-        return self == self.FULL

@@ -98,7 +98,6 @@ class AgentCLI(BaseAgentRunner):
         self,
         user_id: Optional[str] = None,
         stream: Optional[bool] = None,
-        memory: bool = True,
     ):
         if stream is None:
             stream = not (logging.getLogger().level <= logging.INFO)
@@ -108,7 +107,6 @@ class AgentCLI(BaseAgentRunner):
         await self._chat_interactive_terminal_ui(
             user_id=user_id,
             stream=stream,
-            memory=memory,
             verbose_mode=verbose_mode,
         )
 
@@ -117,14 +115,12 @@ class AgentCLI(BaseAgentRunner):
         *,
         user_id: str,
         stream: bool,
-        memory: bool,
         verbose_mode: bool,
     ) -> None:
         ui = _terminal_ui_class()()
         self._print_terminal_banner(
             ui,
             stream=stream,
-            memory=memory,
             verbose_mode=verbose_mode,
         )
 
@@ -159,18 +155,6 @@ class AgentCLI(BaseAgentRunner):
                         ui.print_panel("Usage: stream on/off", title="Chat Status")
                     continue
 
-                if user_input.lower().startswith("memory "):
-                    memory_cmd = user_input.lower().split()
-                    if len(memory_cmd) == 2 and memory_cmd[1] in {"on", "off"}:
-                        memory = memory_cmd[1] == "on"
-                        ui.print_panel(
-                            f"Memory {'enabled' if memory else 'disabled'}.",
-                            title="Chat Status",
-                        )
-                    else:
-                        ui.print_panel("Usage: memory on/off", title="Chat Status")
-                    continue
-
                 if user_input.lower() == "help":
                     self._show_terminal_help(ui)
                     continue
@@ -183,7 +167,6 @@ class AgentCLI(BaseAgentRunner):
                     response = await self.agent(
                         user_message=user_input,
                         user_id=user_id,
-                        enable_memory=memory,
                     )
                     ui.print_panel(
                         self._format_cli_output(response),
@@ -196,7 +179,6 @@ class AgentCLI(BaseAgentRunner):
                     ui=ui,
                     user_message=user_input,
                     user_id=user_id,
-                    enable_memory=memory,
                     stream=stream,
                 )
 
@@ -217,13 +199,11 @@ class AgentCLI(BaseAgentRunner):
         self,
         message: str,
         user_id: Optional[str] = None,
-        memory: bool = True,
     ):
         user_id = user_id or _default_cli_user_id()
         response = await self.agent(
             user_message=message,
             user_id=user_id,
-            enable_memory=memory,
         )
         return self._format_cli_output(response) if isinstance(response, str) else response
 
@@ -238,14 +218,12 @@ class AgentCLI(BaseAgentRunner):
         message: str,
         user_id: Optional[str] = None,
         stream: bool = False,
-        memory: bool = True,
     ) -> None:
         user_id = user_id or _default_cli_user_id()
         await self._print_chat_events(
             user_message=message,
             user_id=user_id,
             stream=stream,
-            enable_memory=memory,
         )
 
     async def _print_chat_events(
@@ -254,7 +232,6 @@ class AgentCLI(BaseAgentRunner):
         user_message: str,
         user_id: str,
         stream: bool,
-        enable_memory: bool,
     ) -> None:
         line_open = False
         line_has_streamed_text = False
@@ -262,7 +239,6 @@ class AgentCLI(BaseAgentRunner):
             user_message=user_message,
             user_id=user_id,
             stream=stream,
-            enable_memory=enable_memory,
         ):
             event_type = event.get("type")
             if event_type == "message_start":
@@ -315,7 +291,6 @@ class AgentCLI(BaseAgentRunner):
         user_message: str,
         user_id: str,
         stream: bool,
-        enable_memory: bool,
     ) -> None:
         console = ui.console
         line_open = False
@@ -325,7 +300,6 @@ class AgentCLI(BaseAgentRunner):
             user_message=user_message,
             user_id=user_id,
             stream=stream,
-            enable_memory=enable_memory,
         ):
             event_type = event.get("type")
             if event_type == "message_start":
@@ -374,7 +348,6 @@ class AgentCLI(BaseAgentRunner):
         ui: TerminalUI,
         *,
         stream: bool,
-        memory: bool,
         verbose_mode: bool,
     ) -> None:
         config_msg = (
@@ -391,8 +364,7 @@ class AgentCLI(BaseAgentRunner):
                 (
                     "Status: "
                     f"verbose={'on' if verbose_mode else 'off'}, "
-                    f"stream={'on' if stream else 'off'}, "
-                    f"memory={'on' if memory else 'off'}"
+                    f"stream={'on' if stream else 'off'}"
                 ),
                 "",
                 "Type a message to chat. Use help for commands or exit to leave.",

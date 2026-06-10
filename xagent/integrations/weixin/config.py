@@ -97,7 +97,6 @@ class WeixinAdapterConfig:
     bot_type: str = "3"
     channel_version: str = "1.0.0"
 
-    enable_memory: bool = True
     history_count: Optional[int] = None
     max_iter: Optional[int] = None
     max_concurrent_tools: Optional[int] = None
@@ -158,7 +157,6 @@ class WeixinAdapterConfig:
         kwargs["bot_type"] = str(kwargs.get("bot_type") or "3").strip() or "3"
         kwargs["channel_version"] = str(kwargs.get("channel_version") or "1.0.0").strip() or "1.0.0"
 
-        kwargs["enable_memory"] = _coerce_bool(kwargs.get("enable_memory"), True)
         kwargs["owner_only"] = _coerce_bool(kwargs.get("owner_only"), True)
         kwargs["send_typing"] = _coerce_bool(kwargs.get("send_typing"), True)
         kwargs["media_enabled"] = _coerce_bool(kwargs.get("media_enabled"), True)
@@ -207,7 +205,6 @@ def weixin_channel_config_from_selection(
         "owner_only": owner_only,
         "media_enabled": media_enabled,
         "send_typing": True,
-        "enable_memory": True,
     }
     if allow_users:
         config["allow_users"] = allow_users

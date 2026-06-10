@@ -452,7 +452,6 @@ class WeixinAdapter:
         kwargs: dict[str, Any] = {
             "user_message": text,
             "user_id": user_id,
-            "enable_memory": self.config.enable_memory,
         }
         if inbound.image_sources and bool(getattr(self.agent, "supports_vision", True)):
             kwargs["image_source"] = inbound.image_sources[0] if len(inbound.image_sources) == 1 else inbound.image_sources
@@ -655,7 +654,6 @@ class WeixinAdapter:
                 history_count=_positive_int(execution.get("history_count"), AgentConfig.DEFAULT_HISTORY_COUNT),
                 max_iter=_positive_int(execution.get("max_iter"), AgentConfig.DEFAULT_MAX_ITER),
                 max_concurrent_tools=_positive_int(execution.get("max_concurrent_tools"), AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
-                enable_memory=bool(execution.get("enable_memory", True)),
                 stream=False,
             ):
                 if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":

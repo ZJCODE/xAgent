@@ -42,7 +42,6 @@ def handle_chat(args: argparse.Namespace) -> int:
             await agent_cli.chat_interactive(
                 user_id=args.user_id,
                 stream=args.stream,
-                memory=args.memory,
             )
 
         asyncio.run(run_interactive_chat())
@@ -57,14 +56,12 @@ def handle_chat(args: argparse.Namespace) -> int:
                 message=args.message,
                 user_id=args.user_id,
                 stream=stream,
-                memory=args.memory,
             )
             return
 
         response = await agent_cli.chat_single(
             message=args.message,
             user_id=args.user_id,
-            memory=args.memory,
         )
         print(response)
 
@@ -98,7 +95,6 @@ def handle_voice(args: argparse.Namespace) -> int:
             config=runtime_config,
             options=VoiceRuntimeOptions(
                 user_id=args.user_id or "local_voice",
-                enable_memory=bool(args.memory),
                 stream=True,
                 tasks_dir=getattr(runner, "tasks_dir", None),
             ),

@@ -21,16 +21,12 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.memory = MarkdownMemory(self._tmpdir.name)
-        self._enabled = True
 
     def tearDown(self):
         self._tmpdir.cleanup()
 
-    def _is_enabled(self):
-        return self._enabled
-
     async def test_write_memory_records_entry(self):
-        tool = create_write_memory_tool(self.memory, self._is_enabled)
+        tool = create_write_memory_tool(self.memory, is_enabled=True)
         result = await tool("This is a test memory note")
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["message"], "Memory recorded.")
@@ -40,32 +36,30 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("test memory note", text)
 
     async def test_write_memory_disabled(self):
-        self._enabled = False
-        tool = create_write_memory_tool(self.memory, self._is_enabled)
+        tool = create_write_memory_tool(self.memory, is_enabled=False)
         result = await tool("Should not be written")
         self.assertEqual(result["status"], "disabled")
 
     async def test_write_memory_empty_content(self):
-        tool = create_write_memory_tool(self.memory, self._is_enabled)
+        tool = create_write_memory_tool(self.memory, is_enabled=True)
         result = await tool("   ")
         self.assertEqual(result["status"], "skipped")
 
     async def test_search_memory_keyword(self):
         await self.memory.append_daily("Meeting with Alice about project X")
-        tool = create_search_memory_tool(self.memory, self._is_enabled)
+        tool = create_search_memory_tool(self.memory, is_enabled=True)
         result = await tool(query="Alice")
         self.assertIn("Alice", result["results"])
 
     async def test_search_memory_disabled(self):
-        self._enabled = False
-        tool = create_search_memory_tool(self.memory, self._is_enabled)
+        tool = create_search_memory_tool(self.memory, is_enabled=False)
         result = await tool(query="anything")
         self.assertFalse(result["enabled"])
 
     async def test_search_memory_date_range(self):
         today = date.today()
         await self.memory.append_daily("Entry for today", target_date=today)
-        tool = create_search_memory_tool(self.memory, self._is_enabled)
+        tool = create_search_memory_tool(self.memory, is_enabled=True)
         result = await tool(date=today.isoformat())
         self.assertIn("Entry for today", result["results"])
 

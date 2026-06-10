@@ -130,13 +130,7 @@ def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Use Feishu streaming cards for in-progress replies",
     )
-    parser.add_argument(
-        "--memory",
-        dest="enable_memory",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable or disable long-term memory for Feishu chats",
-    )
+
     parser.add_argument(
         "--group-history-count",
         type=int,
@@ -229,12 +223,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Print message deltas as they are emitted in event mode",
     )
-    chat_parser.add_argument(
-        "--memory",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable or disable memory tools",
-    )
     chat_parser.set_defaults(handler=runtime.handle_chat)
 
     voice_parser = subparsers.add_parser("voice", help="Talk with the configured agent by microphone")
@@ -255,12 +243,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-device",
         default=None,
         help="Override voice output device by name, #index, index, or auto",
-    )
-    voice_parser.add_argument(
-        "--memory",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable or disable memory tools",
     )
     voice_parser.set_defaults(handler=runtime.handle_voice)
 

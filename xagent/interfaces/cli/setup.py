@@ -91,7 +91,6 @@ class FeishuInitSelection:
     app_id: str
     app_secret: str
     stream: bool = False
-    enable_memory: bool = True
     group_history_count: int = 10
     show_sender_ids: bool = False
     group_reply_without_mention: bool = False
@@ -1476,7 +1475,6 @@ def _feishu_channel_config(selection: FeishuInitSelection) -> dict[str, Any]:
         "app_id": selection.app_id,
         "app_secret": selection.app_secret,
         "stream": selection.stream,
-        "enable_memory": selection.enable_memory,
         "group_history_count": selection.group_history_count,
         "group_reply_without_mention": selection.group_reply_without_mention,
     }
@@ -1609,9 +1607,6 @@ def collect_feishu_init_selection_terminal_ui(
     stream_arg = getattr(args, "stream", None)
     stream = bool(stream_arg) if stream_arg is not None else False
 
-    enable_memory_arg = getattr(args, "enable_memory", None)
-    enable_memory = bool(enable_memory_arg) if enable_memory_arg is not None else True
-
     group_history_arg = getattr(args, "group_history_count", None)
     if group_history_arg is not None and group_history_arg < 0:
         if interactive:
@@ -1628,7 +1623,6 @@ def collect_feishu_init_selection_terminal_ui(
         app_id=app_id,
         app_secret=app_secret,
         stream=stream,
-        enable_memory=enable_memory,
         group_history_count=group_history_count,
         show_sender_ids=show_sender_ids,
         group_reply_without_mention=group_reply_without_mention,

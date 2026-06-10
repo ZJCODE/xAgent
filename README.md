@@ -49,7 +49,7 @@ Enable local voice during first-time setup, then start a foreground voice sessio
 ```bash
 xagent init
 xagent voice
-xagent voice --user-id local_voice --no-memory
+xagent voice --user-id local_voice
 xagent voice --list-devices
 xagent voice --input-device "MacBook Pro麦克风" --output-device "MacBook Pro扬声器"
 ```

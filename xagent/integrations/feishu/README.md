@@ -92,7 +92,6 @@ channels:
     app_id: cli_xxx
     app_secret: your_secret  # or ${LARK_APP_SECRET}
     stream: false
-    enable_memory: true
     group_history_count: 10
     group_reply_without_mention: false
 ```

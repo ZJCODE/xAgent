@@ -138,7 +138,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 max_concurrent_tools=input_data.max_concurrent_tools,
                 image_source=image_sources,
                 attachments=attachments,
-                enable_memory=input_data.enable_memory,
             )
 
     async def _call_observe(self, input_data: ObserveInput):
@@ -198,7 +197,6 @@ class AgentHTTPServer(BaseAgentRunner):
                     image_source=self._input_image_sources(input_data, attachments=attachments),
                     attachments=attachments,
                     stream=bool(input_data.stream),
-                    enable_memory=input_data.enable_memory,
                 )
                 async for event in self._iterate_before_deadline(response, deadline):
                     if event.get("type") == "done":
@@ -347,7 +345,6 @@ class AgentHTTPServer(BaseAgentRunner):
                         history_count=execution["history_count"],
                         max_iter=execution["max_iter"],
                         max_concurrent_tools=execution["max_concurrent_tools"],
-                        enable_memory=execution["enable_memory"],
                     ),
                     deadline,
                 )
@@ -374,7 +371,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 history_count=execution["history_count"],
                 max_iter=execution["max_iter"],
                 max_concurrent_tools=execution["max_concurrent_tools"],
-                enable_memory=execution["enable_memory"],
                 stream=False,
             ),
             deadline,
@@ -421,7 +417,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 execution.get("max_concurrent_tools"),
                 AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
             ),
-            "enable_memory": bool(execution.get("enable_memory", True)),
         }
 
     @staticmethod

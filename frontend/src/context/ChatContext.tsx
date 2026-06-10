@@ -48,7 +48,6 @@ function defaultSettings(panelId: PanelId): ChatSettings {
   return {
     userId: "web_user",
     stream: true,
-    memory: true,
   };
 }
 
@@ -141,7 +140,6 @@ function persistSettings(panel: ChatPanelState) {
     JSON.stringify({
       userId: panel.settings.userId,
       stream: panel.settings.stream,
-      memory: panel.settings.memory,
     }),
   );
 }
@@ -477,7 +475,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         user_id: panel.settings.userId,
         user_message: text,
         stream: panel.settings.stream,
-        enable_memory: panel.settings.memory,
       };
       if (attachments.length) payload.attachments = attachments;
       if (canUseVision(capabilities)) {

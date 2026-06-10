@@ -177,15 +177,6 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
             />
             <span className="toggle-track" />
           </label>
-          <label className="setting-toggle">
-            <span>Memory</span>
-            <input
-              type="checkbox"
-              checked={panel.settings.memory}
-              onChange={(event) => updateSettings(panel.id, { memory: event.target.checked })}
-            />
-            <span className="toggle-track" />
-          </label>
         </div>
       </div>
 

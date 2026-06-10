@@ -57,7 +57,7 @@ class ChatInput(BaseModel):
     history_count: Optional[int] = AgentConfig.DEFAULT_HISTORY_COUNT
     max_iter: Optional[int] = AgentConfig.DEFAULT_MAX_ITER
     max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
-    enable_memory: Optional[bool] = True
+
 
 
 class AgentInput(ChatInput):

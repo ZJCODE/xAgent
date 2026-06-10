@@ -130,7 +130,6 @@ def create_schedule_task_tool(*, tasks_dir: str):
                     "history_count": AgentConfig.DEFAULT_HISTORY_COUNT,
                     "max_iter": AgentConfig.DEFAULT_MAX_ITER,
                     "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-                    "enable_memory": True,
                 },
             )
         except Exception as exc:

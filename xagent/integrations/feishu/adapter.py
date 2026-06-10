@@ -2035,7 +2035,6 @@ class FeishuAdapter:
                 history_count=execution["history_count"],
                 max_iter=execution["max_iter"],
                 max_concurrent_tools=execution["max_concurrent_tools"],
-                enable_memory=execution["enable_memory"],
             )
         return _FeishuScheduledTaskResult(self._stringify_scheduled_agent_response(response).strip())
 
@@ -2056,7 +2055,6 @@ class FeishuAdapter:
             history_count=execution["history_count"],
             max_iter=execution["max_iter"],
             max_concurrent_tools=execution["max_concurrent_tools"],
-            enable_memory=execution["enable_memory"],
             stream=False,
         ):
             event_type = event.get("type")
@@ -2093,7 +2091,6 @@ class FeishuAdapter:
                 execution.get("max_concurrent_tools"),
                 AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
             ),
-            "enable_memory": bool(execution.get("enable_memory", True)),
         }
 
     @staticmethod
@@ -2126,7 +2123,6 @@ class FeishuAdapter:
         kwargs: dict[str, Any] = {
             "user_message": text,
             "user_id": user_id,
-            "enable_memory": self.config.enable_memory,
         }
         if image_sources:
             kwargs["image_source"] = image_sources[0] if len(image_sources) == 1 else image_sources

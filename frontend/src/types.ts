@@ -40,7 +40,6 @@ export interface ImageAsset extends AttachmentAsset {
 export interface ChatSettings {
   userId: string;
   stream: boolean;
-  memory: boolean;
 }
 
 export interface ChatPanelState {

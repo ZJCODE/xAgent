@@ -1,5 +1,4 @@
 import logging
-from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
@@ -13,7 +12,7 @@ from ..components import (
 )
 from ..components.memory import JournalLLMService
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
-from .config import AgentConfig, MemoryMode, ReplyType
+from .config import AgentConfig, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_client, normalize_model_api
 from .tools import ToolExecutor, ToolManager
@@ -24,8 +23,6 @@ logger = logging.getLogger(__name__)
 
 class Agent:
     """AI agent runtime for a continuous agent-level message stream."""
-
-    _MEMORY_TOOL_NAMES = {"write_memory", "search_memory"}
 
     def __init__(
         self,
@@ -60,10 +57,6 @@ class Agent:
         self.output_type = output_type
         self.system_prompt = system_prompt or ""
         self._assistant_sender_id = "agent"
-        self._memory_mode_var: ContextVar[MemoryMode] = ContextVar(
-            f"xagent_memory_mode_{id(self)}",
-            default=MemoryMode.FULL,
-        )
 
         workspace_path: Optional[Path] = None
         if workspace is not None:
@@ -110,11 +103,11 @@ class Agent:
         bound_tools.extend([
             create_write_memory_tool(
                 memory=self.markdown_memory,
-                is_enabled=self._memory_can_write,
+                is_enabled=True,
             ),
             create_search_memory_tool(
                 memory=self.markdown_memory,
-                is_enabled=self._memory_can_read,
+                is_enabled=True,
             ),
         ])
         self.tool_manager = ToolManager(tools=bound_tools)
@@ -195,7 +188,6 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
-        enable_memory: bool = True,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         return await self.chat(
             user_message=user_message,
@@ -207,7 +199,6 @@ class Agent:
             attachments=attachments,
             output_type=output_type,
             stream=stream,
-            enable_memory=enable_memory,
         )
 
     async def chat(
@@ -221,7 +212,6 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
-        enable_memory: bool = True,
     ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message.
 
@@ -244,7 +234,6 @@ class Agent:
                     image_source=image_source,
                     attachments=attachments,
                     stream=True,
-                    enable_memory=enable_memory,
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or "")
@@ -271,7 +260,6 @@ class Agent:
                 image_source=image_source,
                 attachments=attachments,
                 stream=False,
-                enable_memory=enable_memory,
             ):
                 if event.get("type") == "message_done" and event.get("phase") == "final":
                     final_reply = str(event.get("content") or "")
@@ -280,13 +268,11 @@ class Agent:
             return final_reply or last_error
 
         msg_handler = self.message_handler
-        memory_mode = MemoryMode.from_flags(enable_memory=enable_memory)
-        memory_mode_token = self._set_memory_mode(memory_mode)
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         turn_context = self._observability_runtime().agent_turn(
             user_id=user_id,
             model=model_name,
-            memory_mode=memory_mode.value,
+            memory_mode="full",
             stream=False,
         )
         entered_observability = False
@@ -310,15 +296,9 @@ class Agent:
                 history_count=effective_history_count,
             )
 
-            memory_context = ""
-            if memory_mode.can_read:
-                memory_context = await self.memory_handler.get_recent_context()
-
-            excluded = self._excluded_memory_tools(memory_mode=memory_mode)
-            tool_names = [n for n in self.tool_manager._tools if n not in excluded]
+            memory_context = await self.memory_handler.get_recent_context()
+            tool_names = list(self.tool_manager._tools)
             tool_specs = self.tool_manager.cached_tool_specs
-            if excluded and tool_specs:
-                tool_specs = [s for s in tool_specs if self._tool_spec_name(s) not in excluded] or None
             workspace_context = self._workspace_context(tool_names)
             skills_catalog = self._skills_catalog_context()
 
@@ -349,7 +329,6 @@ class Agent:
                     stream=False,
                     store_reply=lambda text: self._store_reply_and_schedule_experience(
                         msg_handler=msg_handler,
-                        memory_mode=memory_mode,
                         triggering_messages=[user_msg],
                         reply_text=text,
                     ),
@@ -361,7 +340,6 @@ class Agent:
                         self._assistant_sender_id,
                     )
                     self._schedule_experience_write(
-                        memory_mode=memory_mode,
                         messages=[user_msg, assistant_msg],
                     )
                     return response
@@ -372,7 +350,6 @@ class Agent:
                         self._assistant_sender_id,
                     )
                     self._schedule_experience_write(
-                        memory_mode=memory_mode,
                         messages=[user_msg, assistant_msg],
                     )
                     return response
@@ -390,7 +367,6 @@ class Agent:
                             attachments=tool_result.attachments,
                         )
                         self._schedule_experience_write(
-                            memory_mode=memory_mode,
                             messages=[user_msg, assistant_msg],
                         )
                         return tool_result.content
@@ -416,7 +392,6 @@ class Agent:
                     turn_context.__exit__(None, None, None)
                 except Exception as exc:
                     logger.warning("Failed to close observability context: %s", exc)
-            self._reset_memory_mode(memory_mode_token)
 
     async def chat_events(
         self,
@@ -429,7 +404,6 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
-        enable_memory: bool = True,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -449,7 +423,6 @@ class Agent:
                 image_source=image_source,
                 attachments=attachments,
                 output_type=output_type,
-                enable_memory=enable_memory,
             )
             content = response.model_dump_json() if hasattr(response, "model_dump_json") else str(response)
             message_id = "structured-0"
@@ -464,13 +437,11 @@ class Agent:
             return
 
         msg_handler = self.message_handler
-        memory_mode = MemoryMode.from_flags(enable_memory=enable_memory)
-        memory_mode_token = self._set_memory_mode(memory_mode)
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         turn_context = self._observability_runtime().agent_turn(
             user_id=user_id,
             model=model_name,
-            memory_mode=memory_mode.value,
+            memory_mode="full",
             stream=stream,
         )
         entered_observability = False
@@ -496,15 +467,9 @@ class Agent:
                 history_count=effective_history_count,
             )
 
-            memory_context = ""
-            if memory_mode.can_read:
-                memory_context = await self.memory_handler.get_recent_context()
-
-            excluded = self._excluded_memory_tools(memory_mode=memory_mode)
-            tool_names = [n for n in self.tool_manager._tools if n not in excluded]
+            memory_context = await self.memory_handler.get_recent_context()
+            tool_names = list(self.tool_manager._tools)
             tool_specs = self.tool_manager.cached_tool_specs
-            if excluded and tool_specs:
-                tool_specs = [s for s in tool_specs if self._tool_spec_name(s) not in excluded] or None
             workspace_context = self._workspace_context(tool_names)
             skills_catalog = self._skills_catalog_context()
 
@@ -619,7 +584,6 @@ class Agent:
                             attachments=tool_result.attachments,
                         )
                         self._schedule_experience_write(
-                            memory_mode=memory_mode,
                             messages=[user_msg, assistant_msg],
                         )
                         yield {"type": "done"}
@@ -646,7 +610,6 @@ class Agent:
                         metadata={"turn_phase": "final"},
                     )
                     self._schedule_experience_write(
-                        memory_mode=memory_mode,
                         messages=[user_msg, assistant_msg],
                     )
                     yield {"type": "done"}
@@ -677,7 +640,6 @@ class Agent:
                     turn_context.__exit__(None, None, None)
                 except Exception as exc:
                     logger.warning("Failed to close observability context: %s", exc)
-            self._reset_memory_mode(memory_mode_token)
 
     async def observe(
         self,
@@ -694,7 +656,6 @@ class Agent:
             metadata=metadata,
         )
         self._schedule_experience_write(
-            memory_mode=MemoryMode.FULL,
             messages=[event_msg],
         )
         event_metadata = event_msg.metadata or {}
@@ -717,7 +678,6 @@ class Agent:
     async def _store_reply_and_schedule_experience(
         self,
         msg_handler: MessageHandler,
-        memory_mode: MemoryMode,
         triggering_messages: List[Message],
         reply_text: str,
     ) -> None:
@@ -726,58 +686,16 @@ class Agent:
             self._assistant_sender_id,
         )
         self._schedule_experience_write(
-            memory_mode=memory_mode,
             messages=[*triggering_messages, assistant_msg],
         )
 
     def _schedule_experience_write(
         self,
-        memory_mode: MemoryMode,
         messages: List[Message],
     ) -> None:
-        if not memory_mode.can_write or not messages:
+        if not messages:
             return
-
         self.memory_handler.schedule_experience_write(messages)
-
-    def _excluded_memory_tools(
-        self,
-        enable_memory: bool = True,
-        memory_mode: Optional[MemoryMode] = None,
-    ) -> set:
-        """Return the set of memory tool names to exclude from this call."""
-        mode = memory_mode or MemoryMode.from_flags(enable_memory=enable_memory)
-        if mode == MemoryMode.DISABLED:
-            return self._MEMORY_TOOL_NAMES
-        return set()
-
-    def _get_memory_mode_var(self) -> ContextVar[MemoryMode]:
-        memory_mode_var = getattr(self, "_memory_mode_var", None)
-        if memory_mode_var is None:
-            memory_mode_var = ContextVar(
-                f"xagent_memory_mode_{id(self)}",
-                default=MemoryMode.FULL,
-            )
-            self._memory_mode_var = memory_mode_var
-        return memory_mode_var
-
-    def _set_memory_mode(self, memory_mode: MemoryMode) -> Token:
-        return self._get_memory_mode_var().set(memory_mode)
-
-    def _reset_memory_mode(self, token: Token) -> None:
-        try:
-            self._get_memory_mode_var().reset(token)
-        except ValueError as exc:
-            logger.debug("Skipping memory mode reset outside original context: %s", exc)
-
-    def _current_memory_mode(self) -> MemoryMode:
-        return self._get_memory_mode_var().get()
-
-    def _memory_can_read(self) -> bool:
-        return self._current_memory_mode().can_read
-
-    def _memory_can_write(self) -> bool:
-        return self._current_memory_mode().can_write
 
     @staticmethod
     def _turn_message_id(user_msg: Message, iteration_index: int, suffix: str = "message") -> str:
@@ -871,7 +789,3 @@ class Agent:
         except (TypeError, ValueError):
             requested_count = AgentConfig.DEFAULT_HISTORY_COUNT
         return max(1, requested_count)
-
-    @staticmethod
-    def _tool_spec_name(tool_spec: dict) -> str:
-        return tool_spec.get("function", {}).get("name") or tool_spec.get("name")

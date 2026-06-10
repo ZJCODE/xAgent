@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 def create_write_memory_tool(
     memory: MarkdownMemory,
-    is_enabled,
+    is_enabled: bool = True,
 ):
     """Create a tool that records long-term useful memory."""
 
@@ -30,7 +30,7 @@ def create_write_memory_tool(
     )
     async def write_memory(content: str) -> dict:
         """Record a long-term memory note."""
-        if not is_enabled():
+        if not is_enabled:
             return {"status": "disabled", "message": "Memory writing is disabled for this turn."}
 
         content = content.strip()
@@ -45,7 +45,7 @@ def create_write_memory_tool(
 
 def create_search_memory_tool(
     memory: MarkdownMemory,
-    is_enabled,
+    is_enabled: bool = True,
 ):
     """Create a tool for searching long-term memory by keyword or date range."""
 
@@ -72,7 +72,7 @@ def create_search_memory_tool(
         context_lines: int = 3,
     ) -> dict:
         """Search memory files by keyword or date. Returns matching text."""
-        if not is_enabled():
+        if not is_enabled:
             return {"results": "", "enabled": False, "message": "Memory reading is disabled for this turn."}
 
         context_lines = max(0, min(int(context_lines), 10))

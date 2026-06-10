@@ -49,7 +49,6 @@ class FeishuAdapterConfig:
         log_level: One of ``debug``, ``info``, ``warn``, ``error``.
         stream: Use Feishu streaming cards to incrementally update the
             current segmented reply message.
-        enable_memory: Pass-through to the agent's long-term memory.
         history_count / max_iter / max_concurrent_tools: Per-turn knobs
             forwarded to ``agent.chat``.
         group_history_count: How many recent Feishu group/topic messages to
@@ -70,7 +69,6 @@ class FeishuAdapterConfig:
     log_level: str = "info"
 
     stream: bool = False
-    enable_memory: bool = True
 
     history_count: Optional[int] = None
     max_iter: Optional[int] = None

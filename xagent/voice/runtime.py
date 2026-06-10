@@ -38,7 +38,6 @@ class VoiceRuntimeOptions:
     """Runtime options controlled by the CLI command."""
 
     user_id: str = "local_voice"
-    enable_memory: bool = True
     stream: bool = True
     tasks_dir: Optional[Path | str] = None
 
@@ -408,7 +407,6 @@ class VoiceRuntime:
                 response = await self.agent(
                     user_message=transcript,
                     user_id=self.options.user_id,
-                    enable_memory=self.options.enable_memory,
                 )
             text = str(response or "")
             if text:
@@ -424,7 +422,6 @@ class VoiceRuntime:
                 user_message=transcript,
                 user_id=self.options.user_id,
                 stream=self.options.stream,
-                enable_memory=self.options.enable_memory,
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
@@ -531,7 +528,6 @@ class VoiceRuntime:
                     user_message=prompt,
                     user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
                     stream=self.options.stream,
-                    enable_memory=self.options.enable_memory,
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or uuid.uuid4().hex)
@@ -551,7 +547,6 @@ class VoiceRuntime:
             response = await self.agent(
                 user_message=prompt,
                 user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
-                enable_memory=self.options.enable_memory,
             )
         return str(response or "").strip()
 

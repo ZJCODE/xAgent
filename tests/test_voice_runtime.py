@@ -296,7 +296,7 @@ class VoiceRuntimeTests(unittest.TestCase):
                 recognizer=recognizer,
                 synthesizer=FakeSynthesizer(),
                 player=FakePlayer(),
-                options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+                options=VoiceRuntimeOptions(user_id="alice"),
                 output=lambda *args, **kwargs: None,
             )
 
@@ -331,14 +331,14 @@ class VoiceRuntimeTests(unittest.TestCase):
             recognizer=FakeRecognizer([VoiceUtterance(text="你好", language="zh")]),
             synthesizer=synth,
             player=player,
-            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: output_lines.append("".join(str(arg) for arg in args)),
         )
 
         asyncio.run(runtime.run_forever())
 
         self.assertEqual(agent.kwargs["user_id"], "alice")
-        self.assertFalse(agent.kwargs["enable_memory"])
+
         self.assertEqual(agent.kwargs["user_message"], "你好")
         self.assertEqual(synth.calls[0]["language"], "zh")
         self.assertEqual(synth.calls[0]["chunks"], ["hello ", "there."])
@@ -365,7 +365,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             ]),
             synthesizer=synth,
             player=player,
-            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: None,
         )
 
@@ -394,7 +394,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             ]),
             synthesizer=FakeSynthesizer(),
             player=FakePlayer(),
-            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: None,
         )
 
@@ -425,7 +425,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             ]),
             synthesizer=FakeSynthesizer(),
             player=FakePlayer(),
-            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: None,
         )
 
@@ -443,7 +443,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             recognizer=FakeRecognizer([VoiceUtterance(text="提醒我", language="zh")]),
             synthesizer=FakeSynthesizer(),
             player=FakePlayer(),
-            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: None,
         )
 
@@ -474,7 +474,7 @@ class VoiceRuntimeTests(unittest.TestCase):
                     recognizer=FakeRecognizer([]),
                     synthesizer=synth,
                     player=player,
-                    options=VoiceRuntimeOptions(user_id="alice", enable_memory=False, tasks_dir=tmpdir),
+                    options=VoiceRuntimeOptions(user_id="alice",tasks_dir=tmpdir),
                     output=lambda *args, **kwargs: None,
                 )
 
@@ -508,7 +508,7 @@ class VoiceRuntimeTests(unittest.TestCase):
                     recognizer=FakeRecognizer([]),
                     synthesizer=synth,
                     player=FakePlayer(),
-                    options=VoiceRuntimeOptions(user_id="fallback", enable_memory=False, tasks_dir=tmpdir),
+                    options=VoiceRuntimeOptions(user_id="fallback",tasks_dir=tmpdir),
                     output=lambda *args, **kwargs: None,
                 )
 
@@ -535,7 +535,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             recognizer=FakeRecognizer([VoiceUtterance(text="你好", language="zh")]),
             synthesizer=synth,
             player=FakePlayer(),
-            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: None,
         )
         player = PauseAwarePlayer(runtime.pause_event)
@@ -560,7 +560,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             recognizer=FakeRecognizer([VoiceUtterance(text="你好", language="zh")]),
             synthesizer=synth,
             player=FakePlayer(),
-            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: None,
         )
         player = PauseAwarePlayer(runtime.pause_event, wait_for_clear=True)
@@ -586,7 +586,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             recognizer=InterruptRecognizer(),
             synthesizer=synth,
             player=player,
-            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: None,
         )
 
@@ -610,7 +610,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             recognizer=InterruptRecognizer(),
             synthesizer=synth,
             player=player,
-            options=VoiceRuntimeOptions(user_id="alice", enable_memory=False),
+            options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: None,
         )
 
