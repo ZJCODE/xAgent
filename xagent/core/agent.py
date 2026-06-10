@@ -188,7 +188,7 @@ class Agent:
         instructions = msg_handler.build_instruction_messages(
             tool_names=tool_names,
             skills_catalog=skills_catalog,
-            supports_vision=getattr(self, "supports_vision", True),
+            supports_vision=self.supports_vision,
             workspace_context=workspace_context,
         )
         iteration_messages = msg_handler.build_turn_context_messages(
@@ -196,7 +196,7 @@ class Agent:
             current_user_id=user_id,
             memory_context=memory_context,
             max_messages=effective_history_count,
-            include_images=getattr(self, "supports_vision", True),
+            include_images=self.supports_vision,
             workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
         )

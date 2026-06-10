@@ -940,6 +940,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.output_type = None
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent"
+        agent.supports_vision = True
         agent.observability = observability or NoopObservabilityRuntime()
         agent.tool_manager = FakeToolManager(tools=tools)
         agent.model_client = model_client
