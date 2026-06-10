@@ -108,6 +108,7 @@ class Agent:
             create_search_memory_tool(
                 memory=self.markdown_memory,
                 is_enabled=True,
+                message_storage=self.message_storage,
             ),
         ])
         self.tool_manager = ToolManager(tools=bound_tools)

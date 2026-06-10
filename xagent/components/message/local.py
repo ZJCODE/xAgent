@@ -276,6 +276,91 @@ class MessageStorageLocal(MessageStorageBase):
             ).fetchone()
         return int(row["id"]) if row is not None else 0
 
+    async def search_messages(
+        self,
+        query: str,
+        date_start: Optional[str] = None,
+        date_end: Optional[str] = None,
+        max_results: int = 500,
+    ) -> str:
+        """Search messages by keyword using SQLite json_extract + LIKE."""
+        if not query:
+            return ""
+        return await asyncio.to_thread(
+            self._search_messages_sync,
+            query,
+            date_start,
+            date_end,
+            max_results,
+        )
+
+    def _search_messages_sync(
+        self,
+        query: str,
+        date_start: Optional[str],
+        date_end: Optional[str],
+        max_results: int,
+    ) -> str:
+        from datetime import datetime, timezone
+
+        conditions = [
+            f"json_extract(message_json, '$.content') LIKE ? ESCAPE '\\'"
+        ]
+        params: list = [f"%{self._escape_like(query)}%"]  # noqa: RUF015
+
+        if date_start:
+            try:
+                start_dt = datetime.strptime(date_start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                conditions.append("json_extract(message_json, '$.timestamp') >= ?")
+                params.append(start_dt.timestamp())
+            except (ValueError, OverflowError):
+                pass
+
+        if date_end:
+            try:
+                end_dt = datetime.strptime(date_end, "%Y-%m-%d").replace(
+                    hour=23, minute=59, second=59, tzinfo=timezone.utc
+                )
+                conditions.append("json_extract(message_json, '$.timestamp') <= ?")
+                params.append(end_dt.timestamp())
+            except (ValueError, OverflowError):
+                pass
+
+        where = " AND ".join(conditions)
+        table = MessageStorageLocalConfig.TABLE_NAME
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT id, message_json
+                FROM {table}
+                WHERE {where}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (*params, max_results),
+            ).fetchall()
+
+        if not rows:
+            return ""
+
+        matched: list[str] = []
+        for row in reversed(rows):
+            try:
+                msg = Message.model_validate_json(row["message_json"])
+            except Exception:
+                continue
+            matched.append(self._format_search_match(msg))
+
+        return "\n---\n".join(matched)
+
+    @staticmethod
+    def _escape_like(query: str) -> str:
+        """Escape special LIKE wildcard characters in user query."""
+        for char in ("%", "_"):
+            query = query.replace(char, f"\\{char}")
+        return query
+
     def get_stream_info(self) -> Dict[str, str]:
         return {
             "stream": "local",

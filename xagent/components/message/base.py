@@ -7,8 +7,10 @@ long-term memory maintenance.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
 from ...schemas import Message
@@ -141,6 +143,65 @@ class MessageStorageBase(ABC):
         if normalized_offset < 0:
             raise ValueError("offset must be a non-negative integer")
         return normalized_count, normalized_offset
+
+    async def search_messages(
+        self,
+        query: str,
+        date_start: Optional[str] = None,
+        date_end: Optional[str] = None,
+        max_results: int = 500,
+    ) -> str:
+        """Search messages by keyword, returning formatted matches.
+
+        Backends may override for efficiency.  The default implementation
+        fetches recent messages and filters in Python.
+        """
+        if not query:
+            return ""
+
+        try:
+            count = await self.get_message_count()
+            if count <= 0:
+                return ""
+            messages = await self.get_messages(min(count, max_results))
+        except Exception:
+            return ""
+
+        needle = query.casefold()
+        start_ts = self._date_str_to_timestamp(date_start) if date_start else None
+        end_ts = self._date_str_to_timestamp(date_end, is_end=True) if date_end else None
+
+        matched: list[str] = []
+        for msg in reversed(messages):
+            content = (msg.content or "").strip()
+            if needle not in content.casefold():
+                continue
+            if start_ts is not None and msg.timestamp < start_ts:
+                continue
+            if end_ts is not None and msg.timestamp > end_ts:
+                continue
+            matched.append(self._format_search_match(msg))
+
+        return "\n---\n".join(matched)
+
+    @staticmethod
+    def _format_search_match(message: Message) -> str:
+        from datetime import datetime
+
+        ts = datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        sender = message.sender_id or message.role.value
+        return f"[{ts}][speaker={sender}]\n{message.content.strip()}"
+
+    @staticmethod
+    def _date_str_to_timestamp(date_str: str, is_end: bool = False) -> float:
+        """Convert YYYY-MM-DD to a UTC timestamp."""
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            if is_end:
+                dt = dt.replace(hour=23, minute=59, second=59)
+            return dt.replace(tzinfo=timezone.utc).timestamp()
+        except (ValueError, OverflowError):
+            return 0.0
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__}()"

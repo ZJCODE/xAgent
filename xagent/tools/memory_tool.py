@@ -8,6 +8,7 @@ from xagent.utils.tool_decorator import function_tool
 
 if TYPE_CHECKING:
     from xagent.components.memory import MarkdownMemory
+    from xagent.components.message import MessageStorageBase
 
 
 def create_write_memory_tool(
@@ -46,6 +47,7 @@ def create_write_memory_tool(
 def create_search_memory_tool(
     memory: MarkdownMemory,
     is_enabled: bool = True,
+    message_storage: Optional[MessageStorageBase] = None,
 ):
     """Create a tool for searching long-term memory by keyword or date range."""
 
@@ -84,6 +86,12 @@ def create_search_memory_tool(
                 scope=scope,
                 context_lines=context_lines,
             )
+            # Also search raw messages in SQLite
+            if message_storage is not None:
+                msg_results = await message_storage.search_messages(query=query)
+                if msg_results:
+                    prefix = "\n\n--- Message Store ---\n" if results else ""
+                    results = results + prefix + msg_results
         elif date and not query:
             if " to " in date:
                 parts = date.split(" to ", 1)
@@ -115,6 +123,23 @@ def create_search_memory_tool(
                         end_idx = min(len(lines), i + context_lines + 1)
                         matched.append("\n".join(lines[start_idx:end_idx]))
                 results = "\n---\n".join(matched)
+            # Also search raw messages in SQLite with date filter
+            if message_storage is not None:
+                if " to " in date:
+                    parts = date.split(" to ", 1)
+                    msg_results = await message_storage.search_messages(
+                        query=query,
+                        date_start=parts[0].strip(),
+                        date_end=parts[1].strip(),
+                    )
+                else:
+                    msg_results = await message_storage.search_messages(
+                        query=query,
+                        date_start=date.strip(),
+                    )
+                if msg_results:
+                    prefix = "\n\n--- Message Store ---\n" if results else ""
+                    results = results + prefix + msg_results
         else:
             # No query and no date — list available files
             files = await memory.list_files(scope=scope)
