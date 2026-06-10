@@ -52,22 +52,22 @@ Configure your Feishu bot
 
 ```bash
 # First time only (creates ~/.xagent/config.yaml + identity.md)
-xagent init
+xagent setup
 
 # One-click: create the Feishu app and write channels.feishu for you.
 # Opens an authorization link; sign in with a Feishu workspace admin account.
-xagent init feishu
+xagent feishu setup
 
 # The wizard asks only for the Feishu-specific decisions that matter most:
 # - whether xAgent should create a new app or use existing credentials
 # - whether the bot should reply only when mentioned, or to every group message
 
 # Prefer to paste an existing App ID/Secret? Use the manual flow instead:
-xagent init feishu --manual
+xagent feishu setup --manual
 # (passing --app-id / --app-secret also switches to manual)
 
 # Prefer to script the setup instead of using the defaults-first wizard?
-xagent init feishu \
+xagent feishu setup \
   --manual \
   --app-id cli_xxx \
   --app-secret your_secret \
@@ -101,24 +101,24 @@ channels:
 
 ```bash
 # background: managed process with PID and log files
-xagent channel feishu start
+xagent feishu start
 
 # stop the managed Feishu process for this runtime dir
-xagent channel feishu stop
+xagent feishu stop
 
 # inspect PID, log path, and running state
-xagent channel feishu status
+xagent feishu status
 
 # follow logs
-xagent channel feishu logs -f
+xagent feishu logs -f
 
 # custom runtime dir:
-xagent channel feishu start --dir ~/.xagent
+xagent feishu start --dir ~/.xagent
 ```
 
-`xagent channel feishu start` starts a detached process, writes its PID to
+`xagent feishu start` starts a detached process, writes its PID to
 `~/.xagent/run/feishu.pid`, and appends logs to `~/.xagent/logs/feishu.log`.
-Use `xagent channel feishu logs -f` when you want to watch logs live.
+Use `xagent feishu logs -f` when you want to watch logs live.
 
 ## Routing rules
 
@@ -256,7 +256,7 @@ asyncio.run(adapter.run())
 ## Operational notes
 
 - xAgent runs **in-process** with the adapter. Nothing listens on a public
-  port. Even when you keep the API channel (`xagent channel api start`) running, it
+  port. Even when you keep the API channel (`xagent api start`) running, it
   stays bound to `127.0.0.1` — the adapter never goes through HTTP.
 - `run_command` is a built-in xAgent tool with shell-execution capability.
   Audit your `identity.md` and consider running the adapter in a container

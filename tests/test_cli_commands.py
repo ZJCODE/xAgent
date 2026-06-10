@@ -239,22 +239,22 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Attachments:", output)
         self.assertNotIn("/api/workspace/blob", output)
 
-    def test_parser_supports_init_schema_command(self):
+    def test_parser_supports_setup_schema_command(self):
         args = build_parser().parse_args([
-            "init",
+            "setup",
             "--dir",
             "./agent-dir",
             "--schema",
         ])
 
-        self.assertEqual(args.command, "init")
+        self.assertEqual(args.command, "setup")
         self.assertEqual(args.config_dir, "./agent-dir")
         self.assertTrue(args.schema)
 
-    def test_parser_supports_init_feishu_command(self):
+    def test_parser_supports_feishu_setup_command(self):
         args = build_parser().parse_args([
-            "init",
             "feishu",
+            "setup",
             "--dir",
             "./agent-dir",
             "--app-id",
@@ -264,16 +264,16 @@ class CLICommandTests(unittest.TestCase):
             "--force",
         ])
 
-        self.assertEqual(args.command, "init")
-        self.assertEqual(args.init_target, "feishu")
+        self.assertEqual(args.command, "feishu")
+        self.assertEqual(args.feishu_action, "setup")
         self.assertEqual(args.config_dir, "./agent-dir")
         self.assertEqual(args.app_id, "cli_test")
         self.assertTrue(args.force)
 
-    def test_parser_supports_init_feishu_runtime_options(self):
+    def test_parser_supports_feishu_setup_runtime_options(self):
         args = build_parser().parse_args([
-            "init",
             "feishu",
+            "setup",
             "--stream",
             "--group-history-count",
             "20",
@@ -284,10 +284,10 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.group_history_count, 20)
         self.assertTrue(args.group_reply_without_mention)
 
-    def test_parser_supports_init_weixin_command(self):
+    def test_parser_supports_weixin_setup_command(self):
         args = build_parser().parse_args([
-            "init",
             "weixin",
+            "setup",
             "--dir",
             "./agent-dir",
             "--base-url",
@@ -299,8 +299,8 @@ class CLICommandTests(unittest.TestCase):
             "--force",
         ])
 
-        self.assertEqual(args.command, "init")
-        self.assertEqual(args.init_target, "weixin")
+        self.assertEqual(args.command, "weixin")
+        self.assertEqual(args.weixin_action, "setup")
         self.assertEqual(args.config_dir, "./agent-dir")
         self.assertEqual(args.base_url, "https://ilink.example")
         self.assertEqual(args.allow_users, ["friend@im.wechat"])
@@ -557,7 +557,6 @@ class CLICommandTests(unittest.TestCase):
 
     def test_parser_supports_channel_lifecycle_commands(self):
         args = build_parser().parse_args([
-            "channel",
             "api",
             "start",
             "--dir",
@@ -568,25 +567,22 @@ class CLICommandTests(unittest.TestCase):
             "8010",
         ])
 
-        self.assertEqual(args.command, "channel")
-        self.assertEqual(args.channel_target, "api")
-        self.assertEqual(args.channel_action, "start")
+        self.assertEqual(args.command, "api")
+        self.assertEqual(args.api_action, "start")
         self.assertEqual(args.channels, ["api"])
         self.assertEqual(args.config_dir, "./agent-dir")
         self.assertEqual(args.host, "127.0.0.1")
         self.assertEqual(args.port, 8010)
 
-        feishu = build_parser().parse_args(["channel", "feishu", "logs", "--follow"])
-        self.assertEqual(feishu.command, "channel")
-        self.assertEqual(feishu.channel_target, "feishu")
-        self.assertEqual(feishu.channel_action, "logs")
+        feishu = build_parser().parse_args(["feishu", "logs", "--follow"])
+        self.assertEqual(feishu.command, "feishu")
+        self.assertEqual(feishu.feishu_action, "logs")
         self.assertEqual(feishu.channels, ["feishu"])
         self.assertTrue(feishu.follow)
 
-        weixin = build_parser().parse_args(["channel", "weixin", "logs", "--follow"])
-        self.assertEqual(weixin.command, "channel")
-        self.assertEqual(weixin.channel_target, "weixin")
-        self.assertEqual(weixin.channel_action, "logs")
+        weixin = build_parser().parse_args(["weixin", "logs", "--follow"])
+        self.assertEqual(weixin.command, "weixin")
+        self.assertEqual(weixin.weixin_action, "logs")
         self.assertEqual(weixin.channels, ["weixin"])
         self.assertTrue(weixin.follow)
 
@@ -606,21 +602,25 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(observe.command, "observe")
         self.assertEqual(observe.source, "sensor")
 
-        config = build_parser().parse_args(["inspect", "config", "validate", "--dir", "./agent-dir"])
+        config = build_parser().parse_args(["config", "validate", "--dir", "./agent-dir"])
+        self.assertEqual(config.command, "config")
         self.assertEqual(config.config_command, "validate")
 
-        memory = build_parser().parse_args(["inspect", "memory", "search", "project", "--scope", "daily"])
+        memory = build_parser().parse_args(["memory", "search", "project", "--scope", "daily"])
+        self.assertEqual(memory.command, "memory")
         self.assertEqual(memory.memory_command, "search")
         self.assertEqual(memory.query, "project")
 
-        memory_list = build_parser().parse_args(["inspect", "memory", "list", "--days", "7"])
+        memory_list = build_parser().parse_args(["memory", "list", "--days", "7"])
+        self.assertEqual(memory_list.command, "memory")
         self.assertEqual(memory_list.memory_command, "list")
         self.assertEqual(memory_list.days, 7)
 
         with self.assertRaises(SystemExit):
-            build_parser().parse_args(["inspect", "memory", "show", "daily/2026/2026-06/2026-06-07.md"])
+            build_parser().parse_args(["memory", "show", "daily/2026/2026-06/2026-06-07.md"])
 
         messages = build_parser().parse_args(["inspect", "messages", "list", "--count", "5"])
+        self.assertEqual(messages.command, "inspect")
         self.assertEqual(messages.messages_command, "list")
         self.assertEqual(messages.count, 5)
 
@@ -690,10 +690,10 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
-        self.assertIn("Quick start", output)
-        self.assertIn("init", output)
-        self.assertIn("chat", output)
-        self.assertIn("web", output)
+        self.assertIn("First time?", output)
+        self.assertIn("xagent setup", output)
+        self.assertIn("xagent chat", output)
+        self.assertIn("xagent web", output)
 
     def test_main_uses_interactive_launcher_when_terminal_ui_is_available(self):
         with patch("xagent.interfaces.cli.rich_terminal_available", return_value=True):
@@ -1696,7 +1696,7 @@ class CLICommandTests(unittest.TestCase):
         class FakeUI:
             def __init__(self):
                 self.choices = iter([
-                    SimpleNamespace(key="init", disabled=False),
+                    SimpleNamespace(key="setup", disabled=False),
                     SimpleNamespace(key="exit", disabled=False),
                 ])
                 self.option_titles = []
@@ -1761,16 +1761,16 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_ui.panels[0][0], "xAgent Help")
-        self.assertIn("xagent init --force", fake_ui.panels[0][1])
-        self.assertIn("xagent channel api start", fake_ui.panels[0][1])
-        self.assertIn("xagent inspect memory list --days 7", fake_ui.panels[0][1])
+        self.assertIn("xagent setup --force", fake_ui.panels[0][1])
+        self.assertIn("xagent api start", fake_ui.panels[0][1])
+        self.assertIn("xagent memory list --days 7", fake_ui.panels[0][1])
         self.assertNotIn("xagent doctor", fake_ui.panels[0][1])
 
     def test_interactive_launcher_setup_success_returns_home_without_pause(self):
         class FakeUI:
             def __init__(self):
                 self.choices = iter([
-                    SimpleNamespace(key="init", disabled=False),
+                    SimpleNamespace(key="setup", disabled=False),
                     SimpleNamespace(key="exit", disabled=False),
                 ])
                 self.pause_calls = []
@@ -1807,17 +1807,21 @@ class CLICommandTests(unittest.TestCase):
         setup_help = str(_launcher_help_content(config_dir=config_dir, initialized=False))
         resetup_help = str(_launcher_help_content(config_dir=config_dir, initialized=True))
 
-        self.assertIn("xagent init --dir /tmp/xagent", setup_help)
-        self.assertIn("xagent init --force --dir /tmp/xagent", resetup_help)
+        self.assertIn("xagent setup --dir /tmp/xagent", setup_help)
+        self.assertIn("xagent setup --force --dir /tmp/xagent", resetup_help)
 
     def test_root_help_groups_public_commands(self):
         help_text = build_parser().format_help()
 
-        self.assertIn("Start here:", help_text)
-        self.assertIn("Runtime:", help_text)
+        self.assertIn("Get Started:", help_text)
+        self.assertIn("Channels:", help_text)
+        self.assertIn("Inspect:", help_text)
         self.assertIn("Advanced:", help_text)
         self.assertIn("  web", help_text)
-        self.assertIn("  channel", help_text)
+        self.assertIn("  api", help_text)
+        self.assertIn("  feishu", help_text)
+        self.assertIn("  weixin", help_text)
+        self.assertIn("  status", help_text)
         self.assertNotIn("  service", help_text)
         self.assertNotIn("  run", help_text)
         self.assertNotIn("  start", help_text)
@@ -1921,9 +1925,9 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Pick how you want to use it next", output)
         self.assertIn(f"xagent chat --dir {resolved_dir}", output)
         self.assertIn(f"xagent web --dir {resolved_dir}", output)
-        self.assertIn(f"xagent channel api start --dir {resolved_dir}", output)
-        self.assertIn(f"xagent channel feishu setup --dir {resolved_dir}", output)
-        self.assertIn(f"xagent channel feishu start --dir {resolved_dir}", output)
+        self.assertIn(f"xagent api start --dir {resolved_dir}", output)
+        self.assertIn(f"xagent feishu setup --dir {resolved_dir}", output)
+        self.assertIn(f"xagent feishu start --dir {resolved_dir}", output)
         self.assertNotIn("xagent doctor", output)
         self.assertNotIn(f"xagent voice --dir {resolved_dir}", output)
 
@@ -2018,7 +2022,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertNotIn("runtime", config)
         output = stdout.getvalue()
-        self.assertIn("xagent channel feishu start", output)
+        self.assertIn("xagent feishu start", output)
 
     def test_init_feishu_wizard_selection_writes_runtime_options(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2097,7 +2101,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Feishu Ready", output)
         self.assertIn("Optional before group rollout", output)
         self.assertIn("If you only need direct chats right now", output)
-        self.assertIn("xagent channel feishu start", output)
+        self.assertIn("xagent feishu start", output)
 
     def test_feishu_wizard_interactive_defaults_skip_optional_questions(self):
         class FakeUI:

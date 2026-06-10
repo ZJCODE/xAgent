@@ -99,7 +99,7 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
     )
     return [
         MenuOption(
-            key="init",
+            key="setup",
             title=setup_title,
             description=setup_description,
         ),
@@ -335,7 +335,7 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
 
 
 def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
-    setup_command = "xagent init --force" if initialized else "xagent init"
+    setup_command = "xagent setup --force" if initialized else "xagent setup"
     content = Text()
     content.append(f"Runtime: {config_dir}\n\n")
     content.append("Common commands:\n")
@@ -354,30 +354,30 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command("xagent voice", config_dir=config_dir), style="cyan")
     content.append("\n         Start local microphone/speaker mode when voice is configured.\n")
     content.append("api      ")
-    content.append(_format_init_command("xagent channel api start", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent api start", config_dir=config_dir), style="cyan")
     content.append("\n         Run the API / Web UI channel in the background.\n")
     content.append("feishu   ")
-    content.append(_format_init_command("xagent channel feishu setup", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent feishu setup", config_dir=config_dir), style="cyan")
     content.append("\n         Configure the Feishu bot, then start it with ")
-    content.append(_format_init_command("xagent channel feishu start", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent feishu start", config_dir=config_dir), style="cyan")
     content.append(".\n")
     content.append("weixin   ")
-    content.append(_format_init_command("xagent channel weixin setup", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent weixin setup", config_dir=config_dir), style="cyan")
     content.append("\n         Configure the Weixin DM channel, then start it with ")
-    content.append(_format_init_command("xagent channel weixin start", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent weixin start", config_dir=config_dir), style="cyan")
     content.append(".\n")
     content.append("status   ")
-    content.append(_format_init_command("xagent channel api status", config_dir=config_dir), style="cyan")
-    content.append("\n         Show PID files and log paths for a channel.\n")
+    content.append(_format_init_command("xagent status", config_dir=config_dir), style="cyan")
+    content.append("\n         Show running status of all channels.\n")
     content.append("logs     ")
-    content.append(_format_init_command("xagent channel feishu logs -f", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent feishu logs -f", config_dir=config_dir), style="cyan")
     content.append("\n         Follow a single channel log; omit -f to print recent lines.\n")
     content.append("memory   ")
-    content.append(_format_init_command("xagent inspect memory list --days 7", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent memory list --days 7", config_dir=config_dir), style="cyan")
     content.append("\n         Show existing daily journals from the last seven natural days.\n")
-    content.append("inspect  ")
-    content.append(_format_init_command("xagent inspect config show", config_dir=config_dir), style="cyan")
-    content.append("\n         Read config, identity, memory, and message state.\n")
+    content.append("config   ")
+    content.append(_format_init_command("xagent config show", config_dir=config_dir), style="cyan")
+    content.append("\n         Print or validate config.yaml.\n")
     return content
 
 
@@ -1800,7 +1800,7 @@ def _run_interactive_launcher() -> int:
             continue
 
         ui.clear()
-        if option.key == "init":
+        if option.key == "setup":
             if initialized:
                 _run_resetup_launcher(config_dir)
                 continue

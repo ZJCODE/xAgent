@@ -6,7 +6,7 @@
 
 xAgent 由四个主要部分组成：
 
-- CLI 入口：`xagent.interfaces.cli`，提供 `xagent init`、`xagent chat`、`xagent voice`、`xagent web`、`xagent observe`、`xagent channel ...`、`xagent doctor`、`xagent inspect ...` 等命令。
+- CLI 入口：`xagent.interfaces.cli`，提供 `xagent setup`、`xagent chat`、`xagent voice`、`xagent web`、`xagent api`、`xagent feishu`、`xagent weixin`、`xagent status`、`xagent config`、`xagent memory`、`xagent inspect`、`xagent doctor`、`xagent observe`、`xagent version` 等命令。
 - Agent 运行时：`xagent.core.agent.Agent`，负责对话、观察事件、工具调用、消息流和长期记忆。
 - HTTP 服务：`xagent.interfaces.server.AgentHTTPServer`，基于 FastAPI，对外提供 final-only HTTP JSON 和 WebSocket 事件接口，并托管内置 Web UI。
 - 后台运行时：文件系统调度器（`tasks/`）和 runtime heartbeat（长期记忆维护），随 API server 和 Feishu daemon 自动启动。
@@ -14,7 +14,7 @@ xAgent 由四个主要部分组成：
 默认运行目录是 `~/.xagent`。也可以通过 CLI 的 `--dir` 指定其他目录。
 
 ```bash
-xagent init --dir ~/.xagent
+xagent setup --dir ~/.xagent
 xagent web --dir ~/.xagent --host 127.0.0.1 --port 8010
 ```
 
@@ -163,7 +163,7 @@ provider:
 
 ### 2.2 search
 
-`xagent init` 会对所有模型 provider 显式询问 `search.provider`，不会根据主 provider 自动启用搜索。`search.provider` 支持：
+`xagent setup` 会对所有模型 provider 显式询问 `search.provider`，不会根据主 provider 自动启用搜索。`search.provider` 支持：
 
 - `openai`：使用 OpenAI Responses API 的内置 `web_search`。任意模型 provider 都可选择；当主 `provider.name` 不是 OpenAI 时，必须额外配置 `search.api_key` 作为 OpenAI API key。可选 `search.model` 指定用于搜索的 OpenAI 模型。OpenAI search 工具参数支持 `query`、`max_results`、`search_context_size`、`country`、`city`、`region`、`timezone`、`allowed_domains`、`blocked_domains`、`external_web_access`、`return_token_budget` 和 `force_search`。
 - `qwen`：使用 DashScope OpenAI-compatible Responses API 的内置 `web_search`，默认搜索模型 `qwen3-max-2026-01-23`。当主 `provider.name` 是 `qwen` 时复用主 Qwen API key；其它 provider 使用 Qwen search 时需要配置 `search.api_key`。Qwen search 工具参数支持 `query`、`max_results`、`enable_thinking`、`web_extractor`、`code_interpreter`。
@@ -238,7 +238,7 @@ provider:
   supports_vision: true
 ```
 
-`provider.supports_vision` 默认不写入；不写时使用内置 provider 默认能力。`xagent init` 选择 custom provider 时会询问该 provider 是否支持 image URL input；已知 provider 也可以手动写入该字段来覆盖默认值。
+`provider.supports_vision` 默认不写入；不写时使用内置 provider 默认能力。`xagent setup` 选择 custom provider 时会询问该 provider 是否支持 image URL input；已知 provider 也可以手动写入该字段来覆盖默认值。
 
 `image_generation.provider` 支持 `none`、`openai`、`minimax`、`qwen`，并加载 `generate_image` 工具：
 
@@ -277,7 +277,7 @@ runtime:
 ```
 
 - `heartbeat_enabled` / `heartbeat_interval_seconds`：控制 runtime heartbeat。默认开启，默认间隔 `300` 秒。heartbeat 只做长期记忆维护：定期检查是否到达日记写入周期，并在每周一为上一周生成 weekly summary（详见 2.5）。
-- `default_channel`：被校验为 `api` 或 `feishu` 之一，作为保留配置项。当前 `xagent channel <channel> <action>` 使用显式 channel，不读取该字段。
+- `default_channel`：被校验为 `api` 或 `feishu` 之一，作为保留配置项。当前 `xagent api`、`xagent feishu`、`xagent weixin` 使用显式 channel，不读取该字段。
 
 ### 2.5 memory
 
@@ -388,13 +388,13 @@ channels:
     port: 8010
 ```
 
-`websocket` 是 API channel 内部的 transport，不是 channel。需要 WebSocket 时运行 `xagent web` 或 `xagent channel api start`，然后连接 `/ws/chat`、`/ws/observe` 或 `/ws/tasks`。
+`websocket` 是 API channel 内部的 transport，不是 channel。需要 WebSocket 时运行 `xagent web` 或 `xagent api start`，然后连接 `/ws/chat`、`/ws/observe` 或 `/ws/tasks`。
 
-后台托管命令使用 channel-first 结构：`xagent channel api start`、`xagent channel feishu start`。不提供 `all` 选择；需要操作多个 channel 时分别执行对应命令。`logs --follow` 作用于当前显式 channel。
+后台托管命令使用 channel-first 结构：`xagent api start`、`xagent feishu start`。不提供 `all` 选择；需要操作多个 channel 时分别执行对应命令。`logs --follow` 作用于当前显式 channel。
 
 #### channels.feishu
 
-`channels.feishu` 由 `xagent init feishu` 写入。默认走一键注册：基于飞书设备授权流程（`lark_oapi.register_app`，需 `lark-oapi>=1.5.5`），打印授权链接/二维码，由飞书管理员授权后自动写入 `app_id`/`app_secret`。需要使用已有应用凭据时用 `xagent init feishu --manual`（或直接传 `--app-id`/`--app-secret`）。`${ENV_VAR}` 形式会在 Feishu adapter 加载配置时展开，也可通过 `LARK_APP_ID` 和 `LARK_APP_SECRET` 提供凭据。
+`channels.feishu` 由 `xagent setup feishu` 写入。默认走一键注册：基于飞书设备授权流程（`lark_oapi.register_app`，需 `lark-oapi>=1.5.5`），打印授权链接/二维码，由飞书管理员授权后自动写入 `app_id`/`app_secret`。需要使用已有应用凭据时用 `xagent setup feishu --manual`（或直接传 `--app-id`/`--app-secret`）。`${ENV_VAR}` 形式会在 Feishu adapter 加载配置时展开，也可通过 `LARK_APP_ID` 和 `LARK_APP_SECRET` 提供凭据。
 
 支持的全部键与默认值：
 
@@ -429,9 +429,9 @@ channels:
 
 #### channels.voice
 
-`channels.voice` 配置本机前台语音模式。当前版本支持 Soniox、Qwen 与混用两者的 `custom`；使用 `xagent voice` 前台启动，不是后台托管 channel，也没有 `/ws/voice`。`enable_interruptions` 默认为 `false`，并由 `xagent init` 写入配置模板。
+`channels.voice` 配置本机前台语音模式。当前版本支持 Soniox、Qwen 与混用两者的 `custom`；使用 `xagent voice` 前台启动，不是后台托管 channel，也没有 `/ws/voice`。`enable_interruptions` 默认为 `false`，并由 `xagent setup` 写入配置模板。
 
-普通用户只需要通过 `xagent init` 选择语音 provider 并写入 API key：
+普通用户只需要通过 `xagent setup` 选择语音 provider 并写入 API key：
 
 ```yaml
 channels:
@@ -475,7 +475,7 @@ channels:
       voice: Owen
 ```
 
-如果需要混用 STT 和 TTS provider，可以在 `xagent init` 的 Voice Provider 里选择 `custom`：
+如果需要混用 STT 和 TTS provider，可以在 `xagent setup` 的 Voice Provider 里选择 `custom`：
 
 ```yaml
 channels:
@@ -583,7 +583,7 @@ channels:
 运行：
 
 ```bash
-xagent init
+xagent setup
 xagent voice --dir ~/.xagent
 ```
 
@@ -591,7 +591,7 @@ xagent voice --dir ~/.xagent
 
 ### 2.11 observability
 
-`observability` 用于启用 Langfuse 对 OpenAI SDK 路径模型调用的观测。默认 `xagent init` 不写这个顶层键，等价于关闭观测；只有在初始化时明确选择启用，或手动添加 `enabled: true` 时才会加载 Langfuse wrapper。
+`observability` 用于启用 Langfuse 对 OpenAI SDK 路径模型调用的观测。默认 `xagent setup` 不写这个顶层键，等价于关闭观测；只有在初始化时明确选择启用，或手动添加 `enabled: true` 时才会加载 Langfuse wrapper。
 
 ```yaml
 observability:
@@ -624,11 +624,7 @@ observability:
 ## 3. CLI 命令
 
 ```text
-xagent init [--dir DIR] [--force] [--schema]
-xagent init feishu [--dir DIR] [--app-id ...] [--app-secret ...] [--manual]
-                    [--stream/--no-stream]
-                    [--group-history-count N]
-                    [--group-reply-without-mention/--no-...] [--force]
+xagent setup [--dir DIR] [--force] [--schema]
 xagent chat [MESSAGE] [--dir DIR] [--user-id ID] [--verbose]
             [--events] [--stream/--no-stream]
 xagent voice [--dir DIR] [--user-id ID] [--verbose] [--list-devices]
@@ -636,47 +632,60 @@ xagent voice [--dir DIR] [--user-id ID] [--verbose] [--list-devices]
 xagent web [--dir DIR] [--host H] [--port P] [--open/--no-open]
            [--max-concurrent-chats N] [--queue-timeout S] [--chat-timeout S]
 xagent observe TEXT [--dir DIR] [--source S] [--event-type T] [--metadata JSON]
-xagent channel api open [--dir DIR] [api runtime args]
-xagent channel api start [--dir DIR] [api runtime args]
-xagent channel api stop [--dir DIR]
-xagent channel api restart [--dir DIR] [api runtime args]
-xagent channel api status [--dir DIR] [--json]
-xagent channel api logs [--dir DIR] [--lines N] [--follow]
-xagent channel feishu setup [--dir DIR] [feishu setup args]
-xagent channel feishu start [--dir DIR]
-xagent channel feishu stop [--dir DIR]
-xagent channel feishu restart [--dir DIR]
-xagent channel feishu status [--dir DIR] [--json]
-xagent channel feishu logs [--dir DIR] [--lines N] [--follow]
+xagent api open [--dir DIR] [api runtime args]
+xagent api start [--dir DIR] [api runtime args]
+xagent api stop [--dir DIR]
+xagent api restart [--dir DIR] [api runtime args]
+xagent api status [--dir DIR] [--json]
+xagent api logs [--dir DIR] [--lines N] [--follow]
+xagent feishu setup [--dir DIR] [--app-id ...] [--app-secret ...] [--manual]
+                      [--stream/--no-stream]
+                      [--group-history-count N]
+                      [--group-reply-without-mention/--no-...] [--force]
+xagent feishu start [--dir DIR]
+xagent feishu stop [--dir DIR]
+xagent feishu restart [--dir DIR]
+xagent feishu status [--dir DIR] [--json]
+xagent feishu logs [--dir DIR] [--lines N] [--follow]
+xagent weixin setup [--dir DIR] [weixin setup args]
+xagent weixin start [--dir DIR]
+xagent weixin stop [--dir DIR]
+xagent weixin restart [--dir DIR]
+xagent weixin status [--dir DIR] [--json]
+xagent weixin logs [--dir DIR] [--lines N] [--follow]
+xagent status [--dir DIR] [--json]
 xagent doctor [--dir DIR] [--channel ...] [--online]
-xagent inspect config [show|validate|path] [--dir DIR]
+xagent config [show|validate|path] [--dir DIR]
 xagent inspect identity [show|path] [--dir DIR]
-xagent inspect memory stats [--dir DIR] [--scope ...]
-xagent inspect memory list [--dir DIR] [--days N]
-xagent inspect memory clear [--dir DIR] [--scope ...] [--yes]
-xagent inspect memory search QUERY [--dir DIR] [--scope ...]
+xagent memory stats [--dir DIR] [--scope ...]
+xagent memory list [--dir DIR] [--days N]
+xagent memory clear [--dir DIR] [--scope ...] [--yes]
+xagent memory search QUERY [--dir DIR] [--scope ...]
 xagent inspect messages [stats|list|clear] [--dir DIR] [--count N] [--offset N] [--yes]
 xagent version
 ```
 
-- `init`：交互式创建 `config.yaml` 和 `identity.md`。`--force` 覆盖 init 管理的文件，并询问是否清空 `memory/`、`messages/`、`workspace/`、`tasks/`、`skills/`；`--schema` 写入一个示例 `output_schema`。
+- `setup`：交互式创建 `config.yaml` 和 `identity.md`。`--force` 覆盖 setup 管理的文件，并询问是否清空 `memory/`、`messages/`、`workspace/`、`tasks/`、`skills/`；`--schema` 写入一个示例 `output_schema`。
 - `chat`：传入 `MESSAGE` 时单次对话，否则进入交互模式。`--events` 使用分段事件输出，`--stream` 在事件模式下打印增量。
 - `voice`：本机前台语音对话；`--list-devices` 列出音频设备后退出。
 - `web`：前台运行 API channel 并默认打开 Web UI，适合本地使用和调试。
 - `observe`：摄入一条观察上下文，不生成回复。
-- `channel`：打开或托管运行 channel。`api open` 前台运行 API 并打开 Web UI；`api|feishu start` 后台运行 channel，PID 写入 `<dir>/run/{channel}.pid`，日志写入 `<dir>/logs/{channel}.log`。
+- `api` / `feishu` / `weixin`：管理各 channel。`start` 后台运行，PID 写入 `<dir>/run/{channel}.pid`，日志写入 `<dir>/logs/{channel}.log`；`stop` 停止；`status` 查看；`logs` 查看/跟踪日志；`restart` 重启。`api open` 前台运行 API 并打开 Web UI；`feishu setup` / `weixin setup` 配置对应 channel。
+- `status`：显示所有 channel 的运行状态。
 - `doctor`：检查本地就绪状态；`--online` 额外做网络/模型检查。
-- `inspect`：只读/管理本地配置、identity、长期记忆和消息流。
+- `config`：查看、校验或打印 config.yaml 路径。
+- `memory`：浏览、搜索或清理长期记忆。
+- `inspect`：查看 identity、消息流、skills 或 tasks。
 
 ```bash
-xagent channel api start
-xagent channel api status --json
-xagent channel feishu setup
-xagent channel feishu start
-xagent channel feishu logs --follow
+xagent api start
+xagent api status --json
+xagent feishu setup
+xagent feishu start
+xagent feishu logs --follow
 ```
 
-`web` / `channel api open|start|restart` 的 API runtime 参数：
+`web` / `api open|start|restart` 的 API runtime 参数：
 
 - `--host`：监听地址，默认 `127.0.0.1`。
 - `--port`：监听端口，默认 `8010`。
@@ -1228,7 +1237,7 @@ memory/
 
 ## 8. 飞书机器人接入建议
 
-建议不要让飞书直接访问 xAgent，而是增加一个“飞书适配服务”，或直接使用内置 `channels.feishu` 适配器（`xagent channel feishu start`）。如果自建适配层：
+建议不要让飞书直接访问 xAgent，而是增加一个“飞书适配服务”，或直接使用内置 `channels.feishu` 适配器（`xagent feishu start`）。如果自建适配层：
 
 ```text
 Feishu Event/Webhook

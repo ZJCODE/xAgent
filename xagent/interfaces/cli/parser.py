@@ -16,6 +16,9 @@ class XAgentArgumentParser(argparse.ArgumentParser):
         if self.prog == "xagent" and "invalid choice" in message:
             self.print_usage(sys.stderr)
             self.exit(2, "xagent: error: unknown command. Use 'xagent --help' to see available commands.\n")
+        if "arguments are required" in message:
+            self.print_help(sys.stderr)
+            self.exit(2)
         super().error(message)
 
     def format_help(self) -> str:
@@ -24,34 +27,62 @@ class XAgentArgumentParser(argparse.ArgumentParser):
         return "\n".join([
             "usage: xagent <command> ...",
             "",
-            "xAgent command line interface",
+            "xAgent — your personal AI agent",
             "",
-            "Start here:",
-            "  init      Create config.yaml and identity.md",
-            "  chat      Chat with the configured agent",
-            "  voice     Talk with the configured agent by microphone",
-            "  web       Open the built-in web UI",
+            "Get Started:",
+            "  setup       Create or reconfigure config.yaml and identity.md",
+            "  chat        Start an interactive chat or send a single message",
+            "  voice       Talk with your agent by microphone",
+            "  web         Open the web UI",
             "",
-            "Runtime:",
-            "  observe   Ingest context without generating a reply",
-            "  channel   Open, start, stop, inspect, and tail channels",
-            "  doctor    Check local xAgent readiness",
+            "Channels:",
+            "  api         Manage the API / Web UI background service",
+            "  feishu      Manage the Feishu bot",
+            "  weixin      Manage the Weixin DM channel",
+            "  status      Show running status of all channels",
+            "",
+            "Inspect:",
+            "  config      View or validate config.yaml",
+            "  memory      Browse, search, or clear long-term memory",
+            "  inspect     Inspect identity, messages, skills, or tasks",
+            "  doctor      Check local xAgent readiness",
             "",
             "Advanced:",
-            "  inspect   Inspect configuration, identity, memory, or messages",
-            "  version   Show xAgent version",
+            "  observe     Ingest context without generating a reply",
+            "  version     Show xAgent version",
             "",
             "Examples:",
-            "  xagent init",
+            "  xagent setup",
             '  xagent chat "Help me plan today"',
-            "  xagent voice",
             "  xagent web",
-            "  xagent channel api start",
-            "  xagent channel feishu logs -f",
+            "  xagent api start",
+            "  xagent api logs -f",
+            "  xagent feishu setup",
+            "  xagent feishu start",
+            "  xagent status",
+            "  xagent config show",
+            "  xagent memory list --days 7",
+            "  xagent doctor",
             "",
-            "Use 'xagent <command> --help' for command-specific help.",
+            "Use 'xagent <command> --help' for detailed options.",
             "",
         ])
+
+
+def _show_help_on_missing_action(parser: argparse.ArgumentParser) -> None:
+    """Make a parser print its help instead of an error when a required
+    sub-action / sub-target is omitted (e.g. ``xagent feishu`` without
+    ``start`` or ``setup``)."""
+
+    _original_error = parser.error
+
+    def _custom_error(message: str) -> None:
+        if "arguments are required" in message:
+            parser.print_help(sys.stderr)
+            parser.exit(2)
+        _original_error(message)
+
+    parser.error = _custom_error  # type: ignore[method-assign]
 
 
 def _add_dir_argument(parser: argparse.ArgumentParser) -> None:
@@ -174,6 +205,63 @@ def _add_weixin_setup_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force", action="store_true", help="Overwrite existing channels.weixin config and refresh QR login")
 
 
+def _add_channel_lifecycle_subparsers(
+    parent_parser: argparse.ArgumentParser,
+    channel: str,
+    *,
+    dest: str,
+    has_setup: bool = False,
+    has_open: bool = False,
+) -> None:
+    """Register start / stop / status / logs / restart (and optionally setup / open)
+    as sub-actions under a top-level channel parser."""
+
+    sub = parent_parser.add_subparsers(dest=dest, metavar="<action>")
+    sub.required = True
+
+    if has_open:
+        open_parser = sub.add_parser("open", help="Start API in foreground and open the browser")
+        _add_dir_argument(open_parser)
+        _add_api_runtime_arguments(open_parser, open_by_default=True)
+        open_parser.set_defaults(handler=runtime.handle_web)
+
+    if has_setup and channel == CHANNEL_FEISHU:
+        setup_parser = sub.add_parser("setup", help="Enable or reconfigure the Feishu channel")
+        _add_feishu_setup_arguments(setup_parser)
+        setup_parser.set_defaults(handler=setup.handle_init_feishu)
+    elif has_setup and channel == CHANNEL_WEIXIN:
+        setup_parser = sub.add_parser("setup", help="Enable or reconfigure the Weixin DM channel")
+        _add_weixin_setup_arguments(setup_parser)
+        setup_parser.set_defaults(handler=setup.handle_init_weixin)
+
+    start_parser = sub.add_parser("start", help=f"Start the {channel} channel in the background")
+    _add_dir_argument(start_parser)
+    if channel == CHANNEL_API:
+        _add_api_runtime_arguments(start_parser)
+    start_parser.set_defaults(handler=runtime.handle_start, channels=[channel])
+
+    stop_parser = sub.add_parser("stop", help=f"Stop the background {channel} channel")
+    _add_dir_argument(stop_parser)
+    stop_parser.set_defaults(handler=runtime.handle_stop, channels=[channel])
+
+    restart_parser = sub.add_parser("restart", help=f"Restart the background {channel} channel")
+    _add_dir_argument(restart_parser)
+    if channel == CHANNEL_API:
+        _add_api_runtime_arguments(restart_parser)
+    restart_parser.set_defaults(handler=runtime.handle_restart, channels=[channel])
+
+    status_parser = sub.add_parser("status", help=f"Show {channel} channel status")
+    _add_dir_argument(status_parser)
+    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    status_parser.set_defaults(handler=runtime.handle_status, channels=[channel])
+
+    logs_parser = sub.add_parser("logs", help=f"Show {channel} channel logs")
+    _add_dir_argument(logs_parser)
+    logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
+    logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
+    logs_parser.set_defaults(handler=runtime.handle_logs, channels=[channel])
+
+
 def _hide_subparser_choice(subparsers: argparse._SubParsersAction, name: str) -> None:
     subparsers._choices_actions = [
         action for action in subparsers._choices_actions if action.dest != name
@@ -187,21 +275,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
 
-    init_parser = subparsers.add_parser("init", help="Create config.yaml and identity.md")
-    _add_dir_argument(init_parser)
-    init_parser.add_argument("--force", action="store_true", help="Overwrite init-managed files")
-    init_parser.add_argument("--schema", action="store_true", help="Include a starter output_schema example")
-    init_parser.set_defaults(handler=setup.handle_init)
+    # ------------------------------------------------------------------
+    # Get Started
+    # ------------------------------------------------------------------
 
-    init_sub = init_parser.add_subparsers(dest="init_target", metavar="[target]")
-    init_feishu = init_sub.add_parser("feishu", help="Enable and configure the Feishu channel")
-    _add_feishu_setup_arguments(init_feishu)
-    init_feishu.set_defaults(handler=setup.handle_init_feishu)
-    init_weixin = init_sub.add_parser("weixin", help="Enable and configure the Weixin channel")
-    _add_weixin_setup_arguments(init_weixin)
-    init_weixin.set_defaults(handler=setup.handle_init_weixin)
+    setup_parser = subparsers.add_parser("setup", help="Create or reconfigure config.yaml and identity.md")
+    _add_dir_argument(setup_parser)
+    setup_parser.add_argument("--force", action="store_true", help="Overwrite setup-managed files")
+    setup_parser.add_argument("--schema", action="store_true", help="Include a starter output_schema example")
+    setup_parser.set_defaults(handler=setup.handle_init)
 
-    chat_parser = subparsers.add_parser("chat", help="Chat with the configured agent")
+    chat_parser = subparsers.add_parser("chat", help="Start an interactive chat or send a single message")
     chat_parser.add_argument("message", nargs="?", help="Single message to send; omit for interactive chat")
     _add_dir_argument(chat_parser)
     chat_parser.add_argument("--user-id", dest="user_id", default=None, help="Speaker identifier")
@@ -219,7 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chat_parser.set_defaults(handler=runtime.handle_chat)
 
-    voice_parser = subparsers.add_parser("voice", help="Talk with the configured agent by microphone")
+    voice_parser = subparsers.add_parser("voice", help="Talk with your agent by microphone")
     _add_dir_argument(voice_parser)
     voice_parser.add_argument("--user-id", dest="user_id", default="local_voice", help="Speaker identifier")
     voice_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
@@ -240,129 +324,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     voice_parser.set_defaults(handler=runtime.handle_voice)
 
-    web_parser = subparsers.add_parser("web", help="Open the built-in web UI")
+    web_parser = subparsers.add_parser("web", help="Open the web UI")
     _add_dir_argument(web_parser)
     _add_api_runtime_arguments(web_parser, open_by_default=True)
     web_parser.set_defaults(handler=runtime.handle_web)
 
-    observe_parser = subparsers.add_parser("observe", help="Ingest context without generating a reply")
-    observe_parser.add_argument("text", help="Observation text to store")
-    _add_dir_argument(observe_parser)
-    observe_parser.add_argument("--source", default="cli", help="Observation source label")
-    observe_parser.add_argument("--event-type", default="observation", help="Observation event type")
-    observe_parser.add_argument("--metadata", default=None, help="JSON object with observation metadata")
-    observe_parser.set_defaults(handler=runtime.handle_observe)
+    # ------------------------------------------------------------------
+    # Channels
+    # ------------------------------------------------------------------
 
-    channel_parser = subparsers.add_parser("channel", help="Open and manage runtime channels")
-    channel_sub = channel_parser.add_subparsers(dest="channel_target", metavar="<channel>")
-    channel_sub.required = True
+    api_parser = subparsers.add_parser("api", help="Manage the API / Web UI background service")
+    _add_channel_lifecycle_subparsers(api_parser, CHANNEL_API, dest="api_action", has_open=True)
+    _show_help_on_missing_action(api_parser)
 
-    api_channel = channel_sub.add_parser("api", help="Open or manage the API / Web UI channel")
-    api_sub = api_channel.add_subparsers(dest="channel_action", metavar="<action>")
-    api_sub.required = True
-    api_open = api_sub.add_parser("open", help="Open the API channel and browser UI in the foreground")
-    _add_dir_argument(api_open)
-    _add_api_runtime_arguments(api_open, open_by_default=True)
-    api_open.set_defaults(handler=runtime.handle_web)
-    api_start = api_sub.add_parser("start", help="Start the API channel in the background")
-    _add_dir_argument(api_start)
-    _add_api_runtime_arguments(api_start)
-    api_start.set_defaults(handler=runtime.handle_start, channels=[CHANNEL_API])
-    api_stop = api_sub.add_parser("stop", help="Stop the background API channel")
-    _add_dir_argument(api_stop)
-    api_stop.set_defaults(handler=runtime.handle_stop, channels=[CHANNEL_API])
-    api_restart = api_sub.add_parser("restart", help="Restart the background API channel")
-    _add_dir_argument(api_restart)
-    _add_api_runtime_arguments(api_restart)
-    api_restart.set_defaults(handler=runtime.handle_restart, channels=[CHANNEL_API])
-    api_status = api_sub.add_parser("status", help="Show API channel status")
-    _add_dir_argument(api_status)
-    api_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    api_status.set_defaults(handler=runtime.handle_status, channels=[CHANNEL_API])
-    api_logs = api_sub.add_parser("logs", help="Show API channel logs")
-    _add_dir_argument(api_logs)
-    api_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    api_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    api_logs.set_defaults(handler=runtime.handle_logs, channels=[CHANNEL_API])
+    feishu_parser = subparsers.add_parser("feishu", help="Manage the Feishu bot")
+    _add_channel_lifecycle_subparsers(feishu_parser, CHANNEL_FEISHU, dest="feishu_action", has_setup=True)
+    _show_help_on_missing_action(feishu_parser)
 
-    feishu_channel = channel_sub.add_parser("feishu", help="Configure or manage the Feishu channel")
-    feishu_sub = feishu_channel.add_subparsers(dest="channel_action", metavar="<action>")
-    feishu_sub.required = True
-    feishu_setup = feishu_sub.add_parser("setup", help="Enable or reconfigure the Feishu channel")
-    _add_feishu_setup_arguments(feishu_setup)
-    feishu_setup.set_defaults(handler=setup.handle_init_feishu)
-    feishu_start = feishu_sub.add_parser("start", help="Start the Feishu channel in the background")
-    _add_dir_argument(feishu_start)
-    feishu_start.set_defaults(handler=runtime.handle_start, channels=[CHANNEL_FEISHU])
-    feishu_stop = feishu_sub.add_parser("stop", help="Stop the background Feishu channel")
-    _add_dir_argument(feishu_stop)
-    feishu_stop.set_defaults(handler=runtime.handle_stop, channels=[CHANNEL_FEISHU])
-    feishu_restart = feishu_sub.add_parser("restart", help="Restart the background Feishu channel")
-    _add_dir_argument(feishu_restart)
-    feishu_restart.set_defaults(handler=runtime.handle_restart, channels=[CHANNEL_FEISHU])
-    feishu_status = feishu_sub.add_parser("status", help="Show Feishu channel status")
-    _add_dir_argument(feishu_status)
-    feishu_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    feishu_status.set_defaults(handler=runtime.handle_status, channels=[CHANNEL_FEISHU])
-    feishu_logs = feishu_sub.add_parser("logs", help="Show Feishu channel logs")
-    _add_dir_argument(feishu_logs)
-    feishu_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    feishu_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    feishu_logs.set_defaults(handler=runtime.handle_logs, channels=[CHANNEL_FEISHU])
+    weixin_parser = subparsers.add_parser("weixin", help="Manage the Weixin DM channel")
+    _add_channel_lifecycle_subparsers(weixin_parser, CHANNEL_WEIXIN, dest="weixin_action", has_setup=True)
+    _show_help_on_missing_action(weixin_parser)
 
-    weixin_channel = channel_sub.add_parser("weixin", help="Configure or manage the Weixin DM channel")
-    weixin_sub = weixin_channel.add_subparsers(dest="channel_action", metavar="<action>")
-    weixin_sub.required = True
-    weixin_setup = weixin_sub.add_parser("setup", help="Enable or reconfigure the Weixin DM channel")
-    _add_weixin_setup_arguments(weixin_setup)
-    weixin_setup.set_defaults(handler=setup.handle_init_weixin)
-    weixin_start = weixin_sub.add_parser("start", help="Start the Weixin channel in the background")
-    _add_dir_argument(weixin_start)
-    weixin_start.set_defaults(handler=runtime.handle_start, channels=[CHANNEL_WEIXIN])
-    weixin_stop = weixin_sub.add_parser("stop", help="Stop the background Weixin channel")
-    _add_dir_argument(weixin_stop)
-    weixin_stop.set_defaults(handler=runtime.handle_stop, channels=[CHANNEL_WEIXIN])
-    weixin_restart = weixin_sub.add_parser("restart", help="Restart the background Weixin channel")
-    _add_dir_argument(weixin_restart)
-    weixin_restart.set_defaults(handler=runtime.handle_restart, channels=[CHANNEL_WEIXIN])
-    weixin_status = weixin_sub.add_parser("status", help="Show Weixin channel status")
-    _add_dir_argument(weixin_status)
-    weixin_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    weixin_status.set_defaults(handler=runtime.handle_status, channels=[CHANNEL_WEIXIN])
-    weixin_logs = weixin_sub.add_parser("logs", help="Show Weixin channel logs")
-    _add_dir_argument(weixin_logs)
-    weixin_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    weixin_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    weixin_logs.set_defaults(handler=runtime.handle_logs, channels=[CHANNEL_WEIXIN])
+    status_parser = subparsers.add_parser("status", help="Show running status of all channels")
+    _add_dir_argument(status_parser)
+    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    status_parser.set_defaults(handler=runtime.handle_status_all)
 
-    doctor_parser = subparsers.add_parser("doctor", help="Check local xAgent readiness")
-    _add_dir_argument(doctor_parser)
-    _add_channel_argument(doctor_parser, default_label="enabled channels")
-    doctor_parser.add_argument("--online", action="store_true", help="Include network/model checks")
-    doctor_parser.set_defaults(handler=runtime.handle_doctor)
+    # ------------------------------------------------------------------
+    # Inspect
+    # ------------------------------------------------------------------
 
-    inspect_parser = subparsers.add_parser("inspect", help="Inspect configuration, identity, memory, or messages")
-    inspect_sub = inspect_parser.add_subparsers(dest="inspect_target", metavar="<target>")
-    inspect_sub.required = True
-
-    config_parser = inspect_sub.add_parser("config", help="Show or validate config.yaml")
-    config_sub = config_parser.add_subparsers(dest="config_command", metavar="<subcommand>")
+    config_parser = subparsers.add_parser("config", help="View or validate config.yaml")
+    config_sub = config_parser.add_subparsers(dest="config_command", metavar="<action>")
     config_sub.required = True
     for command_name in ("show", "validate", "path"):
         config_cmd = config_sub.add_parser(command_name, help=f"{command_name} config.yaml")
         _add_dir_argument(config_cmd)
         config_cmd.set_defaults(handler=runtime.handle_config)
+    _show_help_on_missing_action(config_parser)
 
-    identity_parser = inspect_sub.add_parser("identity", help="Show identity.md information")
-    identity_sub = identity_parser.add_subparsers(dest="identity_command", metavar="<subcommand>")
-    identity_sub.required = True
-    for command_name in ("show", "path"):
-        identity_cmd = identity_sub.add_parser(command_name, help=f"{command_name} identity.md")
-        _add_dir_argument(identity_cmd)
-        identity_cmd.set_defaults(handler=runtime.handle_identity)
-
-    memory_parser = inspect_sub.add_parser("memory", help="Inspect or clear long-term daily memory")
-    memory_sub = memory_parser.add_subparsers(dest="memory_command", metavar="<subcommand>")
+    memory_parser = subparsers.add_parser("memory", help="Browse, search, or clear long-term memory")
+    memory_sub = memory_parser.add_subparsers(dest="memory_command", metavar="<action>")
     memory_sub.required = True
     for command_name in ("stats", "clear"):
         memory_cmd = memory_sub.add_parser(command_name, help=f"{command_name} memory")
@@ -379,9 +381,23 @@ def build_parser() -> argparse.ArgumentParser:
     memory_search.add_argument("query", help="Search query")
     memory_search.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
     memory_search.set_defaults(handler=runtime.handle_memory)
+    _show_help_on_missing_action(memory_parser)
+
+    inspect_parser = subparsers.add_parser("inspect", help="Inspect identity, messages, skills, or tasks")
+    inspect_sub = inspect_parser.add_subparsers(dest="inspect_target", metavar="<target>")
+    inspect_sub.required = True
+
+    identity_parser = inspect_sub.add_parser("identity", help="Show identity.md information")
+    identity_sub = identity_parser.add_subparsers(dest="identity_command", metavar="<action>")
+    identity_sub.required = True
+    for command_name in ("show", "path"):
+        identity_cmd = identity_sub.add_parser(command_name, help=f"{command_name} identity.md")
+        _add_dir_argument(identity_cmd)
+        identity_cmd.set_defaults(handler=runtime.handle_identity)
+    _show_help_on_missing_action(identity_parser)
 
     messages_parser = inspect_sub.add_parser("messages", help="Inspect or clear the message stream")
-    messages_sub = messages_parser.add_subparsers(dest="messages_command", metavar="<subcommand>")
+    messages_sub = messages_parser.add_subparsers(dest="messages_command", metavar="<action>")
     messages_sub.required = True
     messages_stats = messages_sub.add_parser("stats", help="Show message stream statistics")
     _add_dir_argument(messages_stats)
@@ -395,9 +411,33 @@ def build_parser() -> argparse.ArgumentParser:
     _add_dir_argument(messages_clear)
     messages_clear.add_argument("--yes", action="store_true", help="Confirm clearing the message stream")
     messages_clear.set_defaults(handler=runtime.handle_messages)
+    _show_help_on_missing_action(messages_parser)
+    _show_help_on_missing_action(inspect_parser)
+
+    # ------------------------------------------------------------------
+    # Other
+    # ------------------------------------------------------------------
+
+    doctor_parser = subparsers.add_parser("doctor", help="Check local xAgent readiness")
+    _add_dir_argument(doctor_parser)
+    _add_channel_argument(doctor_parser, default_label="enabled channels")
+    doctor_parser.add_argument("--online", action="store_true", help="Include network/model checks")
+    doctor_parser.set_defaults(handler=runtime.handle_doctor)
+
+    observe_parser = subparsers.add_parser("observe", help="Ingest context without generating a reply")
+    observe_parser.add_argument("text", help="Observation text to store")
+    _add_dir_argument(observe_parser)
+    observe_parser.add_argument("--source", default="cli", help="Observation source label")
+    observe_parser.add_argument("--event-type", default="observation", help="Observation event type")
+    observe_parser.add_argument("--metadata", default=None, help="JSON object with observation metadata")
+    observe_parser.set_defaults(handler=runtime.handle_observe)
 
     version_parser = subparsers.add_parser("version", help="Show xAgent version")
     version_parser.set_defaults(handler=runtime.handle_version)
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
 
     internal_run = subparsers.add_parser("_run-channel", help=argparse.SUPPRESS)
     internal_run.add_argument("channel", choices=(CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN))

@@ -15,16 +15,16 @@ pip install myxagent
 Run the first-time setup:
 
 ```bash
-xagent init
+xagent setup
 ```
 
-Follow the prompts to choose your provider, model, API key, optional tools, local voice, and identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. Search is always an explicit init choice and supports `none`, OpenAI, Qwen, and MiniMax; matching search providers reuse the main API key. For a custom provider, `xagent init` asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
+Follow the prompts to choose your provider, model, API key, optional tools, local voice, and identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. Search is always an explicit init choice and supports `none`, OpenAI, Qwen, and MiniMax; matching search providers reuse the main API key. For a custom provider, `xagent setup` asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
 
 OpenAI runtimes default to OpenAI built-in web search and recommend OpenAI image generation during init, while Qwen runtimes default to DashScope/Qwen built-in web search and Qwen image generation. Other providers can choose OpenAI search, Qwen search, or no search during init. OpenAI and Qwen native search reuse the main API key when the main provider matches; cross-provider OpenAI or Qwen search must set the matching key in `search.api_key`.
 
 Image input is supported by OpenAI and Qwen by default, with the known provider list kept in `VISION_CAPABLE_PROVIDERS`. Other built-in providers reject image input clearly instead of sending unsupported image payloads to the model; the Web UI keeps generic file upload available but only sends image bytes into the model when the active provider supports vision. Any provider can explicitly override vision support with `provider.supports_vision: true` or `false` when its selected model differs from the provider default. Image generation is a separate optional tool: OpenAI and MiniMax providers recommend their native image generation provider during init, but can choose `none`; other providers default to `none` and do not load cross-provider image generation. Web/API/Feishu inbound files are saved as workspace attachments under `workspace/temp/attachments/...`, images remain previewable through `workspace/temp/images/...`, and both use `/api/workspace/blob?path=...` links. Generated images and artifact files are returned as structured attachments: Web previews images or shows downloadable file chips, CLI prints local file paths, and Feishu sends native image/file attachments. Feishu compresses large images at the channel boundary before model input or native upload.
 
-Langfuse observability is included for teams that need LLM tracing, latency, usage, and error monitoring. It is disabled by default; `xagent init` can write an `observability` block only when you choose to enable it.
+Langfuse observability is included for teams that need LLM tracing, latency, usage, and error monitoring. It is disabled by default; `xagent setup` can write an `observability` block only when you choose to enable it.
 
 ## Use From The CLI
 
@@ -47,14 +47,14 @@ The CLI is best for quick questions, terminal work, and short back-and-forth ses
 Enable local voice during first-time setup, then start a foreground voice session:
 
 ```bash
-xagent init
+xagent setup
 xagent voice
 xagent voice --user-id local_voice
 xagent voice --list-devices
 xagent voice --input-device "MacBook Pro麦克风" --output-device "MacBook Pro扬声器"
 ```
 
-Voice mode supports Soniox and Qwen in this version. `xagent init` writes the selected voice provider plus separate `stt.api_key` and `tts.api_key` entries into `config.yaml`; selecting `custom` lets STT and TTS use different Soniox/Qwen providers and API keys. No separate voice extra or environment variable setup is required. `auto` keeps the built-in best-device selection. To pin local devices, set `channels.voice.audio.input` and `channels.voice.audio.output` to a device name, `#index`, or `auto`; CLI `--input-device` and `--output-device` override the config for one run. For shared rooms, enable `channels.voice.wake.enabled` and set `wake.wake_phrases` so background speech is ignored until a configured wake phrase is heard. It streams microphone audio to the selected realtime STT service, uses provider-side endpoint detection to decide when a user turn ends, calls the existing xAgent text runtime, and streams the assistant reply through the selected realtime TTS service. Voice stays foreground-only; use `xagent voice` to start it.
+Voice mode supports Soniox and Qwen in this version. `xagent setup` writes the selected voice provider plus separate `stt.api_key` and `tts.api_key` entries into `config.yaml`; selecting `custom` lets STT and TTS use different Soniox/Qwen providers and API keys. No separate voice extra or environment variable setup is required. `auto` keeps the built-in best-device selection. To pin local devices, set `channels.voice.audio.input` and `channels.voice.audio.output` to a device name, `#index`, or `auto`; CLI `--input-device` and `--output-device` override the config for one run. For shared rooms, enable `channels.voice.wake.enabled` and set `wake.wake_phrases` so background speech is ignored until a configured wake phrase is heard. It streams microphone audio to the selected realtime STT service, uses provider-side endpoint detection to decide when a user turn ends, calls the existing xAgent text runtime, and streams the assistant reply through the selected realtime TTS service. Voice stays foreground-only; use `xagent voice` to start it.
 
 ## Use From The Web Page
 
@@ -70,10 +70,10 @@ Use the Transport selector when you need to compare final-only HTTP with WebSock
 Run it as a managed background channel instead:
 
 ```bash
-xagent channel api start
-xagent channel api status
-xagent channel api logs
-xagent channel api stop
+xagent api start
+xagent api status
+xagent api logs
+xagent api stop
 ```
 
 Use `api` for HTTP JSON, WebSocket, and the built-in web page. Use `feishu` for the Feishu bot. The local `voice` command is foreground-only; start it with `xagent voice`.
@@ -90,10 +90,10 @@ Configure the Feishu channel after the base init:
 
 ```bash
 # One-click: creates the Feishu app and writes the config (admin authorization required)
-xagent channel feishu setup
+xagent feishu setup
 # Or paste an existing App ID/Secret instead:
-xagent channel feishu setup --manual
-xagent channel feishu start
+xagent feishu setup --manual
+xagent feishu start
 ```
 
 ## Chat And Observe
@@ -128,7 +128,7 @@ For external integrations, configuration details, and full HTTP/WebSocket payloa
 
 ## Best Practices
 
-- Run `xagent init` before your first chat.
+- Run `xagent setup` before your first chat.
 - Keep your API key in the generated local configuration.
 - Use the CLI for quick tasks and the web page when you want more room to work.
 - Give the agent a concise identity so it knows how it should help.

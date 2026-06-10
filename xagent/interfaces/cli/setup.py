@@ -1366,7 +1366,7 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
         ),
         (
             "api",
-            _format_init_command("xagent channel api start", config_dir=config_dir),
+            _format_init_command("xagent api start", config_dir=config_dir),
             "Run the HTTP / SSE / WebSocket channel in the background.",
         ),
     ]
@@ -1380,10 +1380,10 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection) -> Non
             ),
         )
 
-    feishu_init = _format_init_command("xagent channel feishu setup", config_dir=config_dir)
-    feishu_start = _format_init_command("xagent channel feishu start", config_dir=config_dir)
-    weixin_init = _format_init_command("xagent channel weixin setup", config_dir=config_dir)
-    weixin_start = _format_init_command("xagent channel weixin start", config_dir=config_dir)
+    feishu_init = _format_init_command("xagent feishu setup", config_dir=config_dir)
+    feishu_start = _format_init_command("xagent feishu start", config_dir=config_dir)
+    weixin_init = _format_init_command("xagent weixin setup", config_dir=config_dir)
+    weixin_start = _format_init_command("xagent weixin start", config_dir=config_dir)
 
     content = Text()
     content.append("Pick how you want to use it next.\n\n")
@@ -1690,9 +1690,9 @@ def _print_feishu_post_setup(config_path: Path, selection: FeishuInitSelection) 
     summary.append(f"- Routing: {_feishu_routing_label(selection.group_reply_without_mention)}\n")
     ui.print_panel(summary, title="Feishu Ready", leading_blank_line=True)
 
-    feishu_start = _format_init_command("xagent channel feishu start", config_dir=config_dir)
-    status = _format_init_command("xagent channel feishu status", config_dir=config_dir)
-    logs = _format_init_command("xagent channel feishu logs -f", config_dir=config_dir)
+    feishu_start = _format_init_command("xagent feishu start", config_dir=config_dir)
+    status = _format_init_command("xagent feishu status", config_dir=config_dir)
+    logs = _format_init_command("xagent feishu logs -f", config_dir=config_dir)
 
     next_steps = Text()
     next_steps.append("Run next:\n")
@@ -1748,7 +1748,7 @@ def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
 
         if not url:
             print("\nFeishu returned an authorization step, but no browser link was included.")
-            print("Please retry `xagent init feishu`, or use `--manual` if the problem persists.")
+            print("Please retry `xagent feishu setup`, or use `--manual` if the problem persists.")
             print("\nWaiting for authorization... (press Ctrl+C to cancel)\n")
             return
 
@@ -1782,7 +1782,7 @@ def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
         print("\nAuthorization was denied. Ask a Feishu admin to approve the app, then retry.")
         return None
     except AppExpiredError:
-        print("\nThe authorization request expired. Rerun `xagent init feishu` to try again.")
+        print("\nThe authorization request expired. Rerun `xagent feishu setup` to try again.")
         return None
     except RegisterAppError as exc:
         error, description = (exc.args + ("", ""))[:2]
@@ -1806,7 +1806,7 @@ def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
 def handle_init_feishu(args: argparse.Namespace) -> int:
     ui = TerminalUI()
     config_file = _config_path(args)
-    init_command = _format_init_command("xagent init", config_dir=config_file.parent)
+    init_command = _format_init_command("xagent setup", config_dir=config_file.parent)
     if not config_file.is_file():
         ui.print_panel(
             f"Config not found: {config_file}\nRun {init_command} first, then return to Feishu setup.",
@@ -1829,7 +1829,7 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
         ui.print_panel("channels must be a dictionary", title="Feishu Setup Stopped", border_style="red")
         return 1
     if "feishu" in channels_cfg and not args.force:
-        force_command = _format_init_command("xagent init feishu --force", config_dir=config_file.parent)
+        force_command = _format_init_command("xagent feishu setup --force", config_dir=config_file.parent)
         ui.print_panel(
             f"channels.feishu already exists in {config_file}.\nRun {force_command} to overwrite the Feishu channel settings.",
             title="Feishu Setup Stopped",
@@ -1968,9 +1968,9 @@ def _print_weixin_post_setup(config_path: Path, selection: WeixinInitSelection) 
     summary.append(f"- Media: {'Enabled' if selection.media_enabled else 'Disabled'}\n")
     ui.print_panel(summary, title="Weixin Ready", leading_blank_line=True)
 
-    start = _format_init_command("xagent channel weixin start", config_dir=config_dir)
-    status = _format_init_command("xagent channel weixin status", config_dir=config_dir)
-    logs = _format_init_command("xagent channel weixin logs -f", config_dir=config_dir)
+    start = _format_init_command("xagent weixin start", config_dir=config_dir)
+    status = _format_init_command("xagent weixin status", config_dir=config_dir)
+    logs = _format_init_command("xagent weixin logs -f", config_dir=config_dir)
     next_steps = Text()
     next_steps.append("Run next:\n")
     next_steps.append("start   ")
@@ -1989,7 +1989,7 @@ def _print_weixin_post_setup(config_path: Path, selection: WeixinInitSelection) 
 def handle_init_weixin(args: argparse.Namespace) -> int:
     ui = TerminalUI()
     config_file = _config_path(args)
-    init_command = _format_init_command("xagent init", config_dir=config_file.parent)
+    init_command = _format_init_command("xagent setup", config_dir=config_file.parent)
     if not config_file.is_file():
         ui.print_panel(
             f"Config not found: {config_file}\nRun {init_command} first, then return to Weixin setup.",
@@ -2012,7 +2012,7 @@ def handle_init_weixin(args: argparse.Namespace) -> int:
         ui.print_panel("channels must be a dictionary", title="Weixin Setup Stopped", border_style="red")
         return 1
     if "weixin" in channels_cfg and not getattr(args, "force", False):
-        force_command = _format_init_command("xagent channel weixin setup --force", config_dir=config_file.parent)
+        force_command = _format_init_command("xagent weixin setup --force", config_dir=config_file.parent)
         ui.print_panel(
             f"channels.weixin already exists in {config_file}.\nRun {force_command} to refresh the Weixin login and overwrite settings.",
             title="Weixin Setup Stopped",

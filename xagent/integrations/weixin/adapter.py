@@ -134,7 +134,7 @@ class WeixinAdapter:
     async def run(self) -> None:
         credentials = self.state_store.load_credentials(self.config.account_id)
         if credentials is None:
-            raise RuntimeError("Weixin channel credentials are missing. Run: xagent channel weixin setup")
+            raise RuntimeError("Weixin channel credentials are missing. Run: xagent weixin setup")
         self._credentials = credentials
         self._context_tokens = self.state_store.load_context_tokens(credentials.account_id)
         if self.client is None:

@@ -145,7 +145,7 @@ class WeixinAdapterConfig:
 
         account_id = str(expanded.get("account_id") or os.environ.get("WEIXIN_ACCOUNT_ID") or "").strip()
         if not account_id:
-            raise ValueError("Weixin config requires 'account_id'. Run: xagent channel weixin setup")
+            raise ValueError("Weixin config requires 'account_id'. Run: xagent weixin setup")
 
         kwargs: Dict[str, Any] = dict(expanded)
         kwargs["account_id"] = account_id

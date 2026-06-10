@@ -239,7 +239,7 @@ def _run_feishu_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
 
     feishu_data = feishu_config(config)
     if not feishu_data:
-        print("Feishu channel is not configured. Run: xagent channel feishu setup")
+        print("Feishu channel is not configured. Run: xagent feishu setup")
         return 1
 
     try:
@@ -325,7 +325,7 @@ def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
 
     weixin_data = weixin_config(config)
     if not weixin_data:
-        print("Weixin channel is not configured. Run: xagent channel weixin setup")
+        print("Weixin channel is not configured. Run: xagent weixin setup")
         return 1
 
     try:
@@ -558,6 +558,45 @@ def handle_status(args: argparse.Namespace) -> int:
         print(json.dumps({"channels": rows}, indent=2, sort_keys=True))
         return 0
 
+    for row in rows:
+        pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
+        print(f"{row['channel']}: {row['status']}{pid_text}")
+        print(f"  pid: {row['pid_path']}")
+        print(f"  log: {row['log_path']}")
+    return 0
+
+
+def handle_status_all(args: argparse.Namespace) -> int:
+    """Show status of all configured channels at a glance."""
+    try:
+        config = load_runtime_config(args)
+        channels = enabled_channels_from_config(config)
+    except ChannelSelectionError as exc:
+        return _handle_channel_error(exc)
+
+    if not channels:
+        print("No channels are enabled.")
+        return 0
+
+    config_dir = runtime_dir(args)
+    rows: list[dict[str, Any]] = []
+    for channel in channels:
+        paths = managed_paths(config_dir, channel)
+        pid = running_pid(paths.pid_path)
+        rows.append({
+            "channel": channel,
+            "status": "running" if pid is not None else "stopped",
+            "pid": pid,
+            "pid_path": str(paths.pid_path),
+            "log_path": str(paths.log_path),
+        })
+
+    if getattr(args, "json_output", False):
+        print(json.dumps({"channels": rows}, indent=2, sort_keys=True))
+        return 0
+
+    print(f"Runtime: {config_dir}")
+    print()
     for row in rows:
         pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
         print(f"{row['channel']}: {row['status']}{pid_text}")
@@ -870,23 +909,23 @@ def print_quick_start() -> None:
     initialized = _runtime_is_initialized(config_dir)
 
     print("xAgent")
-    print(f"Runtime dir: {config_dir}")
+    print(f"Runtime: {config_dir}")
     print("")
     if not initialized:
-        print("Quick start:")
-        print("  xagent init")
+        print("First time? Run:  xagent setup")
         print("")
-        print("After setup:")
-        print("  xagent chat")
-        print("  xagent web")
-        print("  xagent channel")
-    else:
-        print("Quick start:")
-        print("  xagent chat")
-        print("  xagent web")
-        print("  xagent channel")
+    print("Common commands:")
+    print("  xagent chat                     Interactive terminal chat")
+    print("  xagent web                      Open the web UI")
+    print("  xagent voice                    Microphone / speaker mode")
+    print("  xagent api start                Run API / Web UI in background")
+    print("  xagent feishu setup             Configure the Feishu bot")
+    print("  xagent status                   Show channel status")
+    print("  xagent config show              Print config.yaml")
+    print("  xagent memory list --days 7     Show recent daily journals")
+    print("  xagent doctor                   Check readiness")
     print("")
-    print("Use 'xagent --help' to see all commands.")
+    print("Full help: xagent --help")
 
 
 def _xagent_version_text() -> str:

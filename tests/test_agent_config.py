@@ -2356,7 +2356,7 @@ channels:
         readme = Path("README.md").read_text(encoding="utf-8")
 
         self.assertIn("pip install myxagent", readme)
-        self.assertIn("xagent init", readme)
+        self.assertIn("xagent setup", readme)
         self.assertIn("xagent voice", readme)
         self.assertNotIn("myxagent[voice]", readme)
         self.assertNotIn("SONIOX_API_KEY", readme)
