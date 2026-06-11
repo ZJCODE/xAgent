@@ -25,6 +25,14 @@ _VOICE_KEY_PLACEHOLDERS = {
     GENERIC_KEY_PLACEHOLDER,
 }
 
+
+def _validate_optional_key(value: str | None) -> str | None:
+    """Shared api_key validator for STT/TTS config — strip or None."""
+    if value is None:
+        return None
+    return value.strip() or None
+
+
 _DEFAULT_STT_MODELS = {
     VOICE_PROVIDER_SONIOX: "stt-rt-v4",
     VOICE_PROVIDER_QWEN: "qwen3-asr-flash-realtime",
@@ -39,28 +47,20 @@ _DEFAULT_TTS_VOICES = {
 }
 
 
-def _channel_voice_provider(value: str | None) -> str | None:
+def _resolve_voice_provider(value: str | None, *, allow_custom: bool = True) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip().lower()
     if not normalized or normalized == "none":
         return None
-    if normalized not in VOICE_CHANNEL_PROVIDERS:
-        allowed = ", ".join(sorted(VOICE_CHANNEL_PROVIDERS))
-        raise ValueError(f"voice provider must be one of: {allowed}")
-    return normalized
-
-
-def _nested_voice_provider(value: str | None) -> str | None:
-    normalized = _channel_voice_provider(value)
-    if normalized == VOICE_PROVIDER_CUSTOM:
-        allowed = ", ".join(sorted(VOICE_PROVIDERS))
-        raise ValueError(f"voice provider must be one of: {allowed}")
+    allowed = VOICE_CHANNEL_PROVIDERS if allow_custom else VOICE_PROVIDERS
+    if normalized not in allowed:
+        raise ValueError(f"voice provider must be one of: {', '.join(sorted(allowed))}")
     return normalized
 
 
 def _voice_provider(value: str | None) -> str:
-    normalized = _nested_voice_provider(value)
+    normalized = _resolve_voice_provider(value, allow_custom=False)
     if normalized is None:
         return VOICE_PROVIDER_SONIOX
     return normalized
@@ -105,9 +105,7 @@ class VoiceSTTConfig(BaseModel):
     @field_validator("api_key")
     @classmethod
     def _validate_api_key(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return value.strip() or None
+        return _validate_optional_key(value)
 
     @field_validator("model")
     @classmethod
@@ -188,9 +186,7 @@ class VoiceTTSConfig(BaseModel):
     @field_validator("api_key")
     @classmethod
     def _validate_api_key(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return value.strip() or None
+        return _validate_optional_key(value)
 
     @field_validator("model", "voice", "fallback_language", "language_type")
     @classmethod
@@ -301,7 +297,7 @@ class VoiceChannelConfig(BaseModel):
     @field_validator("provider")
     @classmethod
     def _validate_provider(cls, value: str | None) -> str | None:
-        return _channel_voice_provider(value)
+        return _resolve_voice_provider(value)
 
     @field_validator("websocket_base_url")
     @classmethod
@@ -371,10 +367,10 @@ class VoiceChannelConfig(BaseModel):
 
 def _normalize_voice_config(data: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(data)
-    declared_provider = _channel_voice_provider(normalized.get("provider"))
+    declared_provider = _resolve_voice_provider(normalized.get("provider"))
 
     stt = dict(normalized.get("stt") or {})
-    stt_provider = _nested_voice_provider(stt.get("provider")) if "provider" in stt else None
+    stt_provider = _resolve_voice_provider(stt.get("provider"), allow_custom=False) if "provider" in stt else None
     if "provider" in stt:
         if stt_provider is None:
             stt.pop("provider", None)
@@ -383,7 +379,7 @@ def _normalize_voice_config(data: dict[str, Any]) -> dict[str, Any]:
     normalized["stt"] = stt
 
     tts = dict(normalized.get("tts") or {})
-    tts_provider = _nested_voice_provider(tts.get("provider")) if "provider" in tts else None
+    tts_provider = _resolve_voice_provider(tts.get("provider"), allow_custom=False) if "provider" in tts else None
     if "provider" in tts:
         if tts_provider is None:
             tts.pop("provider", None)

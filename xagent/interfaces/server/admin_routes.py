@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import mimetypes
 import shutil
@@ -478,8 +479,9 @@ def register_admin_routes(
         storage_info = server.message_storage.get_stream_info() if hasattr(server.message_storage, "get_stream_info") else {}
         result: Dict[str, Any] = {"total": total, "storage": storage_info}
         if total > 0:
-            oldest = await server.message_storage.get_messages(count=1, offset=total - 1)
-            newest = await server.message_storage.get_messages(count=1, offset=0)
+            oldest_task = server.message_storage.get_messages(count=1, offset=total - 1)
+            newest_task = server.message_storage.get_messages(count=1, offset=0)
+            oldest, newest = await asyncio.gather(oldest_task, newest_task)
             if oldest:
                 result["earliest_timestamp"] = oldest[0].timestamp
             if newest:

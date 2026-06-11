@@ -28,7 +28,7 @@ from ...utils.image_utils import (
     compress_image_bytes_for_transport,
     workspace_blob_url,
 )
-from .client import SESSION_EXPIRED_ERRCODE, WeixinClient, raise_for_api_error
+from .client import SESSION_EXPIRED_ERRCODE, WeixinClient, _error_code, raise_for_api_error
 from .config import WeixinAdapterConfig
 from .media import ITEM_FILE, ITEM_IMAGE, ITEM_VIDEO, ITEM_VOICE, InboundMedia, download_inbound_media, upload_outbound_media
 from .send import extract_text, make_client_id, split_text
@@ -186,8 +186,9 @@ class WeixinAdapter:
 
                 ret = response.get("ret", 0)
                 errcode = response.get("errcode", 0)
-                if _is_error(ret, errcode):
-                    if _error_code(ret, errcode) == SESSION_EXPIRED_ERRCODE:
+                code = _error_code(ret, errcode)
+                if code is not None:
+                    if code == SESSION_EXPIRED_ERRCODE:
                         self.logger.error("Weixin session expired. Stop the channel and rerun: xagent channel weixin setup --force")
                         self.state_store.clear_sync_buf(self._credentials.account_id)
                         self.state_store.clear_context_tokens(self._credentials.account_id)
@@ -633,7 +634,7 @@ class WeixinAdapter:
         chat_events = getattr(self.agent, "chat_events", None)
         if not callable(chat_events):
             raise RuntimeError("Agent does not support chat_events().")
-        execution = task.execution
+        execution = AgentConfig.scheduled_execution_options(task.execution)
         prompt = AgentConfig.scheduled_agent_prompt(task.content)
         context = ScheduledDeliveryContext(
             channel="weixin",
@@ -647,9 +648,9 @@ class WeixinAdapter:
             async for event in chat_events(
                 user_message=prompt,
                 user_id=user_id,
-                history_count=AgentConfig._scheduled_positive_int(execution.get("history_count"), AgentConfig.DEFAULT_HISTORY_COUNT),
-                max_iter=AgentConfig._scheduled_positive_int(execution.get("max_iter"), AgentConfig.DEFAULT_MAX_ITER),
-                max_concurrent_tools=AgentConfig._scheduled_positive_int(execution.get("max_concurrent_tools"), AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
+                history_count=execution["history_count"],
+                max_iter=execution["max_iter"],
+                max_concurrent_tools=execution["max_concurrent_tools"],
                 stream=False,
             ):
                 if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":
@@ -766,21 +767,6 @@ class WeixinAdapter:
     @staticmethod
     def _format_message(content: str) -> str:
         return str(content or "").strip()
-
-
-def _is_error(ret: Any, errcode: Any) -> bool:
-    return ret not in (None, 0, "0") or errcode not in (None, 0, "0")
-
-
-def _error_code(ret: Any, errcode: Any) -> Optional[int]:
-    for value in (errcode, ret):
-        if value in (None, 0, "0"):
-            continue
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-    return None
 
 
 def _safe_id(value: Any, keep: int = 8) -> str:

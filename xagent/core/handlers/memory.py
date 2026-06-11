@@ -152,8 +152,8 @@ class MemoryHandler:
             return False
 
         now = time.time()
-        idle_due = self._is_idle_due(now, new_records)
-        active_due = self._is_max_active_due(now, new_records)
+        idle_due = self._is_due(now, new_records, use_earliest=False)
+        active_due = self._is_due(now, new_records, use_earliest=True)
         if not force and not idle_due and not active_due:
             return False
 
@@ -214,19 +214,13 @@ class MemoryHandler:
             logger.error("Background diary write failed: %s", exc)
         return False
 
-    def _is_idle_due(self, now: float, records: List[dict]) -> bool:
-        latest_activity_time = self._latest_record_timestamp(records)
-        return (
-            latest_activity_time > 0
-            and (now - latest_activity_time) >= self.idle_journal_delay_seconds
-        )
-
-    def _is_max_active_due(self, now: float, records: List[dict]) -> bool:
-        earliest_activity_time = self._earliest_record_timestamp(records)
-        return (
-            earliest_activity_time > 0
-            and (now - earliest_activity_time) >= self.max_active_journal_delay_seconds
-        )
+    def _is_due(self, now: float, records: List[dict], *, use_earliest: bool) -> bool:
+        timestamps = self._record_timestamps(records)
+        if not timestamps:
+            return False
+        activity_time = timestamps[0] if use_earliest else timestamps[-1]
+        threshold = self.max_active_journal_delay_seconds if use_earliest else self.idle_journal_delay_seconds
+        return activity_time > 0 and (now - activity_time) >= threshold
 
     def _split_records_for_source_budget(self, records: List[dict]) -> List[List[dict]]:
         batches: list[list[dict]] = []
@@ -249,29 +243,19 @@ class MemoryHandler:
 
     @staticmethod
     def _estimate_record_chars(record: dict) -> int:
-        from ...components.memory import JournalLLMService
-
-        return len(JournalLLMService._format_transcript([record]))
+        # Estimate: content length + header overhead (~120 chars for speaker/timestamp markers).
+        return len(str(record.get("content", ""))) + 120
 
     @staticmethod
-    def _latest_record_timestamp(records: List[dict]) -> float:
+    def _record_timestamps(records: List[dict]) -> List[float]:
         timestamps: list[float] = []
         for record in records:
             try:
                 timestamps.append(float(record.get("timestamp")))
             except (TypeError, ValueError):
                 continue
-        return max(timestamps) if timestamps else 0.0
-
-    @staticmethod
-    def _earliest_record_timestamp(records: List[dict]) -> float:
-        timestamps: list[float] = []
-        for record in records:
-            try:
-                timestamps.append(float(record.get("timestamp")))
-            except (TypeError, ValueError):
-                continue
-        return min(timestamps) if timestamps else 0.0
+        timestamps.sort()
+        return timestamps
 
     # ------------------------------------------------------------------
     # Summary auto-generation
