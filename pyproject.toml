@@ -36,6 +36,7 @@ dependencies = [
     "httpx>=0.28.0",
     "requests>=2.32.0",
     "trafilatura>=2.0.0",
+    "ddgs>=9.0.0",
     
     # Utilities
     "lark-oapi>=1.5.5",

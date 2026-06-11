@@ -64,7 +64,7 @@ class InitSelection:
     identity: str
     model_api: str = ""
     supports_vision: bool = False
-    search_provider: str = "none"
+    search_provider: str = "builtin"
     search_api_key: str = ""
     image_generation_provider: str = "none"
     image_generation_api_key: str = ""
@@ -165,7 +165,7 @@ QWEN_MODELS = (
     "Decide later",
 )
 SEARCH_PROVIDERS = (
-    "none",
+    "builtin",
     "openai",
     "qwen",
     "minimax",
@@ -265,7 +265,7 @@ def _default_init_selection() -> InitSelection:
         api_key=API_KEY_PLACEHOLDER,
         model="gpt-5.4-mini",
         identity=_default_identity_markdown(),
-        search_provider="none",
+        search_provider="builtin",
         image_generation_provider="none",
     )
 
@@ -342,7 +342,7 @@ def _config_yaml(selection: InitSelection) -> str:
                 **voice_defaults["tts"],
             }
         config["channels"]["voice"] = voice_config
-    search_config = {"provider": selection.search_provider or "none"}
+    search_config = {"provider": selection.search_provider or "builtin"}
     if search_config["provider"] in {"openai", "qwen", "minimax"}:
         search_config["api_key"] = _feature_api_key_value(
             feature_provider=search_config["provider"],
@@ -860,7 +860,7 @@ def collect_init_selection_terminal_ui(
         "Search Provider",
         SEARCH_PROVIDERS,
         descriptions={
-            "none": "Do not enable a provider-native web search tool.",
+            "builtin": "Use built-in DuckDuckGo search (no API key needed).",
             "openai": "Use OpenAI web search.",
             "qwen": "Use Qwen web search via DashScope.",
             "minimax": "Use MiniMax web search.",

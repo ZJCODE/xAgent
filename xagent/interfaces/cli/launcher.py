@@ -489,8 +489,8 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
 def _current_search_provider(config: dict[str, Any]) -> str:
     search = config.get("search")
     if not isinstance(search, dict):
-        return "none"
-    return str(search.get("provider") or "none").strip().lower()
+        return "builtin"
+    return str(search.get("provider") or "builtin").strip().lower()
 
 
 def _current_voice_provider(config: dict[str, Any]) -> str:
@@ -638,7 +638,7 @@ def _feature_api_key_available(config: dict[str, Any], section: str, provider: s
 
 def _provider_option_descriptions(kind: str) -> dict[str, str]:
     return {
-        "none": f"Disable {kind}.",
+        "builtin": f"Use built-in {kind} (no API key needed).",
         "openai": "Use OpenAI.",
         "anthropic": "Use Anthropic.",
         "deepseek": "Use DeepSeek.",
@@ -802,7 +802,7 @@ def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
 
     search_api_key = None
     search_provider = _current_search_provider(config)
-    if search_provider != "none" and search_provider != provider and not _feature_api_key_available(config, "search", search_provider):
+    if search_provider != "builtin" and search_provider != provider and not _feature_api_key_available(config, "search", search_provider):
         search_api_key = _required_feature_api_key(ui, provider=search_provider, feature="search")
         if search_api_key is None:
             return True

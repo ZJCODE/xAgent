@@ -52,18 +52,24 @@ class FakeHTTPClient:
 
 class SearchToolTests(unittest.IsolatedAsyncioTestCase):
     def test_normalize_search_provider_aliases(self):
+        self.assertEqual(normalize_search_provider("builtin"), "builtin")
+        self.assertEqual(normalize_search_provider("duckduckgo"), "builtin")
+        self.assertEqual(normalize_search_provider("ddg"), "builtin")
+        self.assertEqual(normalize_search_provider("default"), "builtin")
         self.assertEqual(normalize_search_provider("openai_builtin"), "openai")
         self.assertEqual(normalize_search_provider("dashscope"), "qwen")
         self.assertEqual(normalize_search_provider("qwen_search"), "qwen")
         self.assertEqual(normalize_search_provider("minimax_search"), "minimax")
-        self.assertEqual(normalize_search_provider("off"), "none")
 
     def test_unknown_search_provider_is_unsupported(self):
         with self.assertRaisesRegex(ValueError, "Unsupported search provider"):
             normalize_search_provider("unsupported_search")
 
-    def test_create_web_search_tool_returns_none_when_disabled(self):
-        self.assertIsNone(create_web_search_tool({"provider": "none"}))
+    def test_create_web_search_tool_defaults_to_builtin(self):
+        tool = create_web_search_tool(None)
+        self.assertIsNotNone(tool)
+        tool = create_web_search_tool({})
+        self.assertIsNotNone(tool)
 
     def test_openai_tool_schema_includes_only_openai_parameters(self):
         tool = create_web_search_tool({"provider": "openai"})
@@ -361,6 +367,90 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
             "url": "http://nmc.cn/publish/forecast/AZJ/hangzhou.html",
             "snippet": "20:15更新 杭州 晴",
         }])
+
+
+    def test_builtin_tool_schema_includes_only_query_and_max_results(self):
+        tool = create_web_search_tool({"provider": "builtin"})
+        properties = tool.tool_spec["function"]["parameters"]["properties"]
+
+        self.assertIn("query", properties)
+        self.assertIn("max_results", properties)
+        self.assertNotIn("search_context_size", properties)
+        self.assertNotIn("country", properties)
+        self.assertNotIn("enable_thinking", properties)
+        self.assertNotIn("web_extractor", properties)
+        self.assertNotIn("code_interpreter", properties)
+        self.assertNotIn("freshness", properties)
+
+    async def test_builtin_search_rejects_unsupported_parameters(self):
+        tool = create_web_search_tool({"provider": "builtin"})
+
+        result = await tool(query="python docs", country="US")
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("country", result["message"])
+
+    async def test_builtin_search_returns_results(self):
+        from xagent.tools.search_tool import SearchResult
+
+        mock_results = [
+            SearchResult(
+                title="Python Docs",
+                url="https://docs.python.org",
+                snippet="Official Python docs.",
+            ),
+            SearchResult(
+                title="Python Wiki",
+                url="https://wiki.python.org",
+                snippet="Python community wiki.",
+            ),
+        ]
+
+        tool = create_web_search_tool({"provider": "builtin"})
+
+        with patch(
+            "xagent.tools.search_tool.ConfiguredSearchProvider._duckduckgo_search_sync",
+            return_value=mock_results,
+        ):
+            result = await tool(query="python docs", max_results=5)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["provider"], "builtin")
+        self.assertEqual(len(result["results"]), 2)
+        self.assertEqual(result["results"][0], {
+            "title": "Python Docs",
+            "url": "https://docs.python.org",
+            "snippet": "Official Python docs.",
+        })
+        self.assertEqual(result["results"][1], {
+            "title": "Python Wiki",
+            "url": "https://wiki.python.org",
+            "snippet": "Python community wiki.",
+        })
+
+    async def test_builtin_search_empty_results(self):
+        tool = create_web_search_tool({"provider": "builtin"})
+
+        with patch(
+            "xagent.tools.search_tool.ConfiguredSearchProvider._duckduckgo_search_sync",
+            return_value=[],
+        ):
+            result = await tool(query="asdfghjkl", max_results=5)
+
+        self.assertEqual(result["status"], "empty")
+        self.assertEqual(result["results"], [])
+
+    async def test_builtin_search_handles_general_error(self):
+        tool = create_web_search_tool({"provider": "builtin"})
+
+        with patch(
+            "xagent.tools.search_tool.ConfiguredSearchProvider._duckduckgo_search_sync",
+            side_effect=RuntimeError("Network timeout"),
+        ):
+            result = await tool(query="python docs")
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Network timeout", result["message"])
 
 
 if __name__ == "__main__":
