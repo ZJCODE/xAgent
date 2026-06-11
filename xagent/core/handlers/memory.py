@@ -51,9 +51,10 @@ class MemoryHandler:
         self.memory = memory
         self.llm_service = llm_service
         self.message_storage = message_storage
-        self.max_history = self._positive_int(max_history, 0)
+        self.max_history = self._positive_int(max_history, AgentConfig.DEFAULT_MAX_HISTORY)
         self.recent_days = self._positive_int(recent_days, self.RECENT_DAYS)
-        self.overlap_count = self._positive_int(overlap_count, self.OVERLAP_COUNT)
+        resolved_overlap = self._positive_int(overlap_count, self.OVERLAP_COUNT)
+        self.overlap_count = min(resolved_overlap, max(0, self.max_history - 1))
         self.max_journal_source_chars = self._positive_int(
             max_journal_source_chars,
             self.DEFAULT_JOURNAL_SOURCE_CHARS,
@@ -125,11 +126,11 @@ class MemoryHandler:
             return await self._run_maintenance_locked(force=force)
 
     async def _run_maintenance_locked(self, force: bool = False) -> bool:
-        latest_message_id = await self.message_storage.get_latest_message_cursor()
-        if latest_message_id <= 0:
+        if not force and self._interaction_counter < self.max_history:
             return False
 
-        if not force and self._interaction_counter < self.max_history:
+        latest_message_id = await self.message_storage.get_latest_message_cursor()
+        if latest_message_id <= 0:
             return False
 
         # Read the last max_history messages for compression, ensuring
@@ -426,7 +427,7 @@ class MemoryHandler:
     async def _write_state(self, processed_message_id: int) -> None:
         payload = {
             "last_processed_message_id": self._non_negative_int(processed_message_id, 0),
-            "interaction_counter": self._non_negative_int(getattr(self, "_interaction_counter", 0), 0),
+            "interaction_counter": self._non_negative_int(self._interaction_counter, 0),
         }
         await asyncio.to_thread(self._write_state_sync, payload)
 

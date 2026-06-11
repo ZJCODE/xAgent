@@ -11,6 +11,8 @@ from xagent.components.memory import MarkdownMemory
 from xagent.core.handlers.memory import MemoryHandler
 from xagent.schemas import Message, MessageType, RoleType
 
+_TEST_MAX_HISTORY = 20
+
 
 class _FakeLLMService:
     """Stub that joins message content into a simple diary entry."""
@@ -81,7 +83,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
 
     async def asyncTearDown(self):
@@ -162,7 +164,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
         # Counter is 0, below max_history → no write
         handler._interaction_counter = 5
@@ -183,7 +185,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
         # Counter at threshold → write
         handler._interaction_counter = 20
@@ -218,7 +220,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
         handler._interaction_counter = 20
 
@@ -241,7 +243,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
         handler._interaction_counter = 20
 
@@ -266,7 +268,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -296,7 +298,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -321,7 +323,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -346,7 +348,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=failing_llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
             max_journal_source_chars=150,
         )
 
@@ -360,7 +362,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=retry_llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
             max_journal_source_chars=150,
         )
 
@@ -391,7 +393,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -418,7 +420,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
             max_journal_source_chars=150,
         )
 
@@ -446,14 +448,14 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=first_llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
         stale_llm = _FakeLLMService()
         stale_handler = MemoryHandler(
             memory=self.memory,
             llm_service=stale_llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
 
         first_wrote = await first_handler.run_maintenance(force=True)
@@ -479,13 +481,13 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=blocking_llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
         second_handler = MemoryHandler(
             memory=self.memory,
             llm_service=waiting_llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
 
         first_task = asyncio.create_task(first_handler.run_maintenance(force=True))
@@ -517,7 +519,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
 
         first_wrote = await first_handler.run_maintenance(force=True)
@@ -537,7 +539,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=second_llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
 
         second_wrote = await second_handler.run_maintenance(force=True)
@@ -562,7 +564,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
         first_handler._interaction_counter = 15
         # Trigger a write to persist the counter
@@ -575,7 +577,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=second_llm,
             message_storage=storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
         # After force-write, counter should be reset to overlap_count (6) and persisted
         self.assertEqual(second_handler._interaction_counter, 6)
@@ -592,7 +594,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
         handler._interaction_counter = 20
 
@@ -615,7 +617,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=20,
+            max_history=_TEST_MAX_HISTORY,
         )
 
         # First compression: last 20 messages
