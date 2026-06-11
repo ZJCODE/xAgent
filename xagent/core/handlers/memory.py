@@ -1,11 +1,10 @@
-"""Memory handler: recent context injection and time-based diary writing."""
+"""Memory handler: recent context injection and count-based diary writing."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import time
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -32,11 +31,10 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryHandler:
-    """Manages recent diary context and time-based journal maintenance."""
+    """Manages recent diary context and count-based journal maintenance."""
 
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
-    IDLE_JOURNAL_DELAY_SECONDS = AgentConfig.MEMORY_IDLE_JOURNAL_DELAY_SECONDS
-    MAX_ACTIVE_JOURNAL_DELAY_SECONDS = AgentConfig.MEMORY_MAX_ACTIVE_JOURNAL_DELAY_SECONDS
+    OVERLAP_COUNT = AgentConfig.MEMORY_OVERLAP_COUNT
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
 
     def __init__(
@@ -45,23 +43,17 @@ class MemoryHandler:
         llm_service: JournalLLMService,
         message_storage: MessageStorageBase,
         *,
+        max_history: int,
         recent_days: Optional[int] = None,
-        idle_journal_delay_seconds: Optional[float] = None,
-        max_active_journal_delay_seconds: Optional[float] = None,
+        overlap_count: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
     ) -> None:
         self.memory = memory
         self.llm_service = llm_service
         self.message_storage = message_storage
+        self.max_history = self._positive_int(max_history, 0)
         self.recent_days = self._positive_int(recent_days, self.RECENT_DAYS)
-        self.idle_journal_delay_seconds = self._non_negative_float(
-            idle_journal_delay_seconds,
-            self.IDLE_JOURNAL_DELAY_SECONDS,
-        )
-        self.max_active_journal_delay_seconds = self._non_negative_float(
-            max_active_journal_delay_seconds,
-            self.MAX_ACTIVE_JOURNAL_DELAY_SECONDS,
-        )
+        self.overlap_count = self._positive_int(overlap_count, self.OVERLAP_COUNT)
         self.max_journal_source_chars = self._positive_int(
             max_journal_source_chars,
             self.DEFAULT_JOURNAL_SOURCE_CHARS,
@@ -71,6 +63,10 @@ class MemoryHandler:
         state = self._read_state_sync()
         self._last_processed_message_id = self._non_negative_int(
             state.get("last_processed_message_id"),
+            0,
+        )
+        self._interaction_counter = self._non_negative_int(
+            state.get("interaction_counter"),
             0,
         )
 
@@ -105,7 +101,11 @@ class MemoryHandler:
         """Schedule a journal maintenance check after meaningful new experience."""
         if not messages:
             return
-        if any(self._is_memory_worthy_experience(message) for message in messages):
+        worthy_count = sum(
+            1 for message in messages if self._is_memory_worthy_experience(message)
+        )
+        if worthy_count > 0:
+            self._interaction_counter += worthy_count
             self._schedule_maintenance()
 
     async def run_maintenance(self, force: bool = False) -> bool:
@@ -128,44 +128,44 @@ class MemoryHandler:
         latest_message_id = await self.message_storage.get_latest_message_cursor()
         if latest_message_id <= 0:
             return False
-        if latest_message_id < self._last_processed_message_id:
-            self._last_processed_message_id = 0
 
-        pending_messages = await self.message_storage.get_messages_in_cursor_range(
-            start_exclusive=self._last_processed_message_id,
-            end_inclusive=latest_message_id,
+        if not force and self._interaction_counter < self.max_history:
+            return False
+
+        # Read the last max_history messages for compression, ensuring
+        # overlap_count entries naturally overlap with the previous batch.
+        recent_messages = await self.message_storage.get_messages(
+            count=self.max_history,
         )
-        if not pending_messages:
+        if not recent_messages:
             return False
 
         new_records = [
             self._experience_record(message)
-            for message in pending_messages
+            for message in recent_messages
             if self._is_memory_worthy_experience(message)
         ]
         if not new_records:
             await self._commit_processed_message_id(latest_message_id)
+            self._interaction_counter = self.overlap_count
             return False
 
         batches = self._split_records_for_source_budget(new_records)
         if not batches:
             return False
 
-        now = time.time()
-        idle_due = self._is_due(now, new_records, use_earliest=False)
-        active_due = self._is_due(now, new_records, use_earliest=True)
-        if not force and not idle_due and not active_due:
-            return False
-
         for batch in batches:
             if not await self._write_journal_entry(batch):
                 return False
+
+        self._interaction_counter = self.overlap_count
 
         if not await self._commit_processed_message_id(latest_message_id):
             logger.warning(
                 "Diary write completed but checkpoint was not advanced; retry will replay pending messages."
             )
             return False
+
         return True
 
     @staticmethod
@@ -214,15 +214,6 @@ class MemoryHandler:
             logger.error("Background diary write failed: %s", exc)
         return False
 
-    def _is_due(self, now: float, records: List[dict], *, use_earliest: bool) -> bool:
-        timestamps = self._record_timestamps(records)
-        if not timestamps:
-            return False
-        activity_time = timestamps[0] if use_earliest else timestamps[-1]
-        activity_time = min(activity_time, now)  # clamp future timestamps (clock skew)
-        threshold = self.max_active_journal_delay_seconds if use_earliest else self.idle_journal_delay_seconds
-        return activity_time > 0 and (now - activity_time) >= threshold
-
     def _split_records_for_source_budget(self, records: List[dict]) -> List[List[dict]]:
         batches: list[list[dict]] = []
         current_batch: list[dict] = []
@@ -246,17 +237,6 @@ class MemoryHandler:
     def _estimate_record_chars(record: dict) -> int:
         # Estimate: content length + header overhead (~120 chars for speaker/timestamp markers).
         return len(str(record.get("content", ""))) + 120
-
-    @staticmethod
-    def _record_timestamps(records: List[dict]) -> List[float]:
-        timestamps: list[float] = []
-        for record in records:
-            try:
-                timestamps.append(float(record.get("timestamp")))
-            except (TypeError, ValueError):
-                continue
-        timestamps.sort()
-        return timestamps
 
     # ------------------------------------------------------------------
     # Summary auto-generation
@@ -408,6 +388,10 @@ class MemoryHandler:
                 state.get("last_processed_message_id"),
                 0,
             )
+            self._interaction_counter = self._non_negative_int(
+                state.get("interaction_counter"),
+                0,
+            )
             return
 
         legacy_count = self._non_negative_int(state.get("last_processed_message_count"), 0)
@@ -442,6 +426,7 @@ class MemoryHandler:
     async def _write_state(self, processed_message_id: int) -> None:
         payload = {
             "last_processed_message_id": self._non_negative_int(processed_message_id, 0),
+            "interaction_counter": self._non_negative_int(getattr(self, "_interaction_counter", 0), 0),
         }
         await asyncio.to_thread(self._write_state_sync, payload)
 
@@ -520,16 +505,6 @@ class MemoryHandler:
         except (TypeError, ValueError):
             return default
         return parsed if parsed > 0 else default
-
-    @staticmethod
-    def _non_negative_float(value: Optional[float], default: float) -> float:
-        if value is None:
-            return float(default)
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError):
-            return float(default)
-        return parsed if parsed >= 0 else float(default)
 
     @staticmethod
     def _non_negative_int(value: Optional[int], default: int) -> int:

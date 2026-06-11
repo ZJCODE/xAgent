@@ -64,8 +64,7 @@ class AgentConfigPromptTests(unittest.TestCase):
 
     def test_memory_defaults_are_internal_balanced_values(self):
         self.assertEqual(AgentConfig.MEMORY_RECENT_DAYS, 2)
-        self.assertEqual(AgentConfig.MEMORY_IDLE_JOURNAL_DELAY_SECONDS, 1800)
-        self.assertEqual(AgentConfig.MEMORY_MAX_ACTIVE_JOURNAL_DELAY_SECONDS, 21600)
+        self.assertEqual(AgentConfig.MEMORY_OVERLAP_COUNT, 6)
 
 
 class ProviderConfigTests(unittest.TestCase):

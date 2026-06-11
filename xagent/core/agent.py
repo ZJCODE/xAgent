@@ -99,6 +99,7 @@ class Agent:
             memory=self.markdown_memory,
             llm_service=self.llm_service,
             message_storage=self.message_storage,
+            max_history=self.max_history,
         )
 
         bound_tools = list(tools or [])

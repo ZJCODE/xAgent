@@ -1,9 +1,8 @@
-"""Tests for MemoryHandler (time-based journaling from MessageStorage)."""
+"""Tests for MemoryHandler (count-based journaling from MessageStorage)."""
 
 import asyncio
 import json
 import tempfile
-import time
 import unittest
 from datetime import date
 from pathlib import Path
@@ -82,6 +81,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
+            max_history=20,
         )
 
     async def asyncTearDown(self):
@@ -125,7 +125,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            idle_journal_delay_seconds=0,
+            max_history=1,
         )
 
         handler.schedule_experience_write([message])
@@ -151,40 +151,42 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(self.handler._maintenance_task)
 
-    async def test_run_maintenance_respects_idle_delay(self):
-        current_time = time.time()
+    async def test_run_maintenance_skips_when_counter_below_threshold(self):
         self.storage.append(Message(
             role=RoleType.USER,
             sender_id="alice",
             content="recent note",
-            timestamp=current_time,
+            timestamp=1710000000.0,
         ))
         handler = MemoryHandler(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            idle_journal_delay_seconds=1800,
+            max_history=20,
         )
+        # Counter is 0, below max_history → no write
+        handler._interaction_counter = 5
 
         wrote = await handler.run_maintenance(force=False)
 
         self.assertFalse(wrote)
         self.assertEqual(self.llm.diary_calls, [])
 
-    async def test_run_maintenance_writes_after_idle_delay(self):
-        current_time = time.time()
+    async def test_run_maintenance_writes_when_counter_reaches_threshold(self):
         self.storage.append(Message(
             role=RoleType.USER,
             sender_id="alice",
             content="quiet reflection note",
-            timestamp=current_time - 1900,
+            timestamp=1710000000.0,
         ))
         handler = MemoryHandler(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            idle_journal_delay_seconds=1800,
+            max_history=20,
         )
+        # Counter at threshold → write
+        handler._interaction_counter = 20
 
         wrote = await handler.run_maintenance(force=False)
 
@@ -195,21 +197,20 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             ["quiet reflection note"],
         )
 
-    async def test_run_maintenance_ignores_routine_events_when_checking_idle_delay(self):
-        current_time = time.time()
+    async def test_run_maintenance_filters_routine_events_from_compression(self):
         storage = _FakeMessageStorage([
             Message(
                 role=RoleType.USER,
                 sender_id="alice",
                 content="older reflection",
-                timestamp=current_time - 1900,
+                timestamp=1710000000.0,
             ),
             Message(
                 role=RoleType.ENVIRONMENT,
                 type=MessageType.CONTEXT_EVENT,
                 sender_id=None,
                 content="heartbeat tick",
-                timestamp=current_time - 5,
+                timestamp=1710000005.0,
                 metadata={"event_type": "heartbeat", "source": "runtime"},
             ),
         ])
@@ -217,8 +218,9 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            idle_journal_delay_seconds=1800,
+            max_history=20,
         )
+        handler._interaction_counter = 20
 
         wrote = await handler.run_maintenance(force=False)
 
@@ -228,39 +230,28 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             ["older reflection"],
         )
 
-    async def test_run_maintenance_writes_after_max_active_delay(self):
-        current_time = time.time()
-        storage = _FakeMessageStorage([
-            Message(
-                role=RoleType.USER,
-                sender_id="alice",
-                content="phase start",
-                timestamp=current_time - 21700,
-            ),
-            Message(
-                role=RoleType.USER,
-                sender_id="alice",
-                content="still active",
-                timestamp=current_time - 30,
-            ),
-        ])
+    async def test_counter_resets_to_overlap_after_compression(self):
+        self.storage.append(Message(
+            role=RoleType.USER,
+            sender_id="alice",
+            content="batch message",
+            timestamp=1710000000.0,
+        ))
         handler = MemoryHandler(
             memory=self.memory,
             llm_service=self.llm,
-            message_storage=storage,
-            idle_journal_delay_seconds=1800,
-            max_active_journal_delay_seconds=21600,
+            message_storage=self.storage,
+            max_history=20,
         )
+        handler._interaction_counter = 20
 
         wrote = await handler.run_maintenance(force=False)
 
         self.assertTrue(wrote)
-        self.assertEqual(
-            [message["content"] for message in self.llm.diary_calls[0]["messages"]],
-            ["phase start", "still active"],
-        )
+        self.assertEqual(handler._interaction_counter, handler.overlap_count)
+        self.assertEqual(handler._interaction_counter, 6)
 
-    async def test_run_maintenance_summarizes_all_new_messages_since_checkpoint(self):
+    async def test_run_maintenance_compresses_last_max_history_messages(self):
         stored_messages = [
             Message(
                 role=RoleType.USER,
@@ -275,10 +266,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-        )
-        (self.memory.root / "journal_state.json").write_text(
-            json.dumps({"last_processed_message_id": 1}),
-            encoding="utf-8",
+            max_history=20,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -287,9 +275,11 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.llm.diary_calls), 1)
         self.assertEqual(
             [message["content"] for message in self.llm.diary_calls[0]["messages"]],
-            ["entry 1", "entry 2", "entry 3"],
+            ["entry 0", "entry 1", "entry 2", "entry 3"],
         )
         self.assertEqual(handler._last_processed_message_id, 4)
+        # Counter resets to overlap after forced write
+        self.assertEqual(handler._interaction_counter, 6)
 
     async def test_run_maintenance_skips_non_memory_worthy_events_and_advances_checkpoint(self):
         storage = _FakeMessageStorage([
@@ -306,6 +296,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
+            max_history=20,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -330,6 +321,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=llm,
             message_storage=storage,
+            max_history=20,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -354,6 +346,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=failing_llm,
             message_storage=storage,
+            max_history=20,
             max_journal_source_chars=150,
         )
 
@@ -367,6 +360,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=retry_llm,
             message_storage=storage,
+            max_history=20,
             max_journal_source_chars=150,
         )
 
@@ -397,6 +391,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
+            max_history=20,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -404,7 +399,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(wrote)
         self.assertEqual(
             [message["content"] for message in self.llm.diary_calls[0]["messages"]],
-            ["entry 2", "entry 3"],
+            ["entry 0", "entry 1", "entry 2", "entry 3"],
         )
         state = json.loads(state_path.read_text(encoding="utf-8"))
         self.assertEqual(state["last_processed_message_id"], 4)
@@ -423,6 +418,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
+            max_history=20,
             max_journal_source_chars=150,
         )
 
@@ -450,20 +446,22 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=first_llm,
             message_storage=storage,
+            max_history=20,
         )
         stale_llm = _FakeLLMService()
         stale_handler = MemoryHandler(
             memory=self.memory,
             llm_service=stale_llm,
             message_storage=storage,
+            max_history=20,
         )
 
         first_wrote = await first_handler.run_maintenance(force=True)
         second_wrote = await stale_handler.run_maintenance(force=True)
 
         self.assertTrue(first_wrote)
-        self.assertFalse(second_wrote)
-        self.assertEqual(len(stale_llm.diary_calls), 0)
+        self.assertTrue(second_wrote)
+        self.assertEqual(len(stale_llm.diary_calls), 1)
 
     async def test_run_maintenance_serializes_handlers_with_workspace_lock(self):
         storage = _FakeMessageStorage([
@@ -481,11 +479,13 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=blocking_llm,
             message_storage=storage,
+            max_history=20,
         )
         second_handler = MemoryHandler(
             memory=self.memory,
             llm_service=waiting_llm,
             message_storage=storage,
+            max_history=20,
         )
 
         first_task = asyncio.create_task(first_handler.run_maintenance(force=True))
@@ -499,9 +499,9 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         first_result, second_result = await asyncio.gather(first_task, second_task)
 
         self.assertTrue(first_result)
-        self.assertFalse(second_result)
+        self.assertTrue(second_result)
         self.assertEqual(len(blocking_llm.diary_calls), 1)
-        self.assertEqual(len(waiting_llm.diary_calls), 0)
+        self.assertEqual(len(waiting_llm.diary_calls), 1)
 
     async def test_run_maintenance_recovers_checkpoint_after_restart(self):
         storage = _FakeMessageStorage([
@@ -517,6 +517,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
+            max_history=20,
         )
 
         first_wrote = await first_handler.run_maintenance(force=True)
@@ -536,6 +537,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=second_llm,
             message_storage=storage,
+            max_history=20,
         )
 
         second_wrote = await second_handler.run_maintenance(force=True)
@@ -544,8 +546,117 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(second_llm.diary_calls), 1)
         self.assertEqual(
             [message["content"] for message in second_llm.diary_calls[0]["messages"]],
-            ["new 0", "new 1"],
+            ["old 0", "old 1", "new 0", "new 1"],
         )
+
+    async def test_interaction_counter_persists_and_restores(self):
+        storage = _FakeMessageStorage([
+            Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content="restore test",
+                timestamp=1714000000.0,
+            )
+        ])
+        first_handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=self.llm,
+            message_storage=storage,
+            max_history=20,
+        )
+        first_handler._interaction_counter = 15
+        # Trigger a write to persist the counter
+        wrote = await first_handler.run_maintenance(force=True)
+        self.assertTrue(wrote)
+
+        # Create a new handler that reads the persisted state
+        second_llm = _FakeLLMService()
+        second_handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=second_llm,
+            message_storage=storage,
+            max_history=20,
+        )
+        # After force-write, counter should be reset to overlap_count (6) and persisted
+        self.assertEqual(second_handler._interaction_counter, 6)
+
+    async def test_counter_triggers_at_max_history(self):
+        for i in range(21):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"msg {i}",
+                timestamp=1715000000.0 + i,
+            ))
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=self.llm,
+            message_storage=self.storage,
+            max_history=20,
+        )
+        handler._interaction_counter = 20
+
+        wrote = await handler.run_maintenance(force=False)
+
+        self.assertTrue(wrote)
+        # Counter resets to overlap_count after write
+        self.assertEqual(handler._interaction_counter, 6)
+
+    async def test_overlap_in_consecutive_compressions(self):
+        """Verify consecutive compressions naturally overlap by reading last N."""
+        for i in range(30):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"msg {i}",
+                timestamp=1716000000.0 + i,
+            ))
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=self.llm,
+            message_storage=self.storage,
+            max_history=20,
+        )
+
+        # First compression: last 20 messages
+        handler._interaction_counter = 20
+        wrote1 = await handler.run_maintenance(force=False)
+        self.assertTrue(wrote1)
+        first_contents = [m["content"] for m in self.llm.diary_calls[0]["messages"]]
+        self.assertEqual(len(first_contents), 20)
+        self.assertEqual(handler._interaction_counter, 6)
+
+        # Simulate 14 more interactions (counter 6→20) by updating
+        # the persisted state so the handler picks up the counter naturally.
+        for i in range(30, 44):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"msg {i}",
+                timestamp=1716000000.0 + i,
+            ))
+        # Write state with counter=20 so _refresh_state_from_disk picks it up
+        state_path = self.memory.root / "journal_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["interaction_counter"] = 20
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        # Second compression: last 20 messages (msg 24-43)
+        # Overlaps with first (msg 24-29 = 6 entries)
+        second_llm = _FakeLLMService()
+        handler.llm_service = second_llm
+        wrote2 = await handler.run_maintenance(force=False)
+        self.assertTrue(wrote2)
+        second_contents = [m["content"] for m in second_llm.diary_calls[0]["messages"]]
+        self.assertEqual(len(second_contents), 20)
+
+        # Check overlap: last 6 of first batch should match first 6 of second batch
+        # First batch covers msgs 10-29; second batch covers msgs 24-43
+        # Overlap region: msgs 24-29
+        overlap_first = set(first_contents[-6:])
+        overlap_second = set(second_contents[:6])
+        self.assertEqual(overlap_first, overlap_second,
+                         f"Expected overlap: {sorted(overlap_first)} vs {sorted(overlap_second)}")
 
     async def test_generate_previous_weekly_summary_if_missing_writes_summary(self):
         today = date(2026, 5, 18)  # Monday
