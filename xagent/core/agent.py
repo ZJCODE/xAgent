@@ -129,6 +129,7 @@ class Agent:
             tool_manager=self.tool_manager,
             message_storage=self.message_storage,
             client=self.client,
+            observability=self.observability,
         )
 
     @property
@@ -281,100 +282,140 @@ class Agent:
                     final_reply = str(event.get("content") or "")
                 elif event.get("type") == "error":
                     last_error = str(event.get("error") or "")
+
             return final_reply or last_error
 
         msg_handler = self.message_handler
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
-        turn_context = self._observability_runtime().agent_turn(
+        observability_rt = self._observability_runtime()
+        turn_ctx = observability_rt.agent_turn(
             user_id=user_id,
             model=model_name,
             memory_mode="full",
             stream=False,
         )
-        entered_observability = False
-
         try:
-            turn_context.__enter__()
-            entered_observability = True
-            try:
-                user_msg = await msg_handler.store_user_message(
-                    user_message,
-                    user_id,
-                    image_source,
-                    attachments=attachments,
+            with turn_ctx as turn_obs:
+                try:
+                    user_msg = await msg_handler.store_user_message(
+                        user_message,
+                        user_id,
+                        image_source,
+                        attachments=attachments,
+                    )
+                except ValueError as exc:
+                    logger.warning("Invalid image input from %s: %s", user_id, exc)
+                    turn_obs.set_output(str(exc), tool_results=[{"error": str(exc)}])
+                    return str(exc)
+
+                tool_specs, instructions, iteration_messages, input_messages = await self._build_turn_context(
+                    msg_handler=msg_handler,
+                    user_msg=user_msg,
+                    user_id=user_id,
                 )
-            except ValueError as exc:
-                logger.warning("Invalid image input from %s: %s", user_id, exc)
-                return str(exc)
+                turn_obs.set_input(input_messages)
 
-            tool_specs, instructions, iteration_messages, input_messages = await self._build_turn_context(
-                msg_handler=msg_handler,
-                user_msg=user_msg,
-                user_id=user_id,
-            )
-
-            for _ in range(self.max_iter):
-                logger.debug("Agent iteration with input messages: %s", input_messages)
-                reply_type, response = await self.model_client.call(
-                    messages=input_messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=False,
-                    store_reply=lambda text: self._store_reply_and_schedule_experience(
-                        msg_handler=msg_handler,
-                        triggering_messages=[user_msg],
-                        reply_text=text,
-                    ),
+                anthropic_api = model_api_uses_anthropic_client(
+                    getattr(self, "model_api", MODEL_API_OPENAI_RESPONSES)
                 )
 
-                if reply_type == ReplyType.SIMPLE_REPLY:
-                    assistant_msg = await msg_handler.store_model_reply(
-                        str(response),
-                        self._assistant_sender_id,
-                    )
-                    self._schedule_experience_write(
-                        messages=[user_msg, assistant_msg],
-                    )
-                    return response
+                for _ in range(self.max_iter):
+                    logger.debug("Agent iteration with input messages: %s", input_messages)
 
-                if reply_type == ReplyType.TOOL_CALL:
-                    tool_result = await self.tool_executor.handle_tool_calls(
-                        response,
-                        iteration_messages,
-                        self.max_concurrent_tools,
-                    )
-                    if tool_result is not None:
+                    if anthropic_api:
+                        llm_ctx = observability_rt.trace_llm_call(
+                            model=model_name,
+                            input_summary={
+                                "model": model_name,
+                                "max_tokens": self.model_max_tokens,
+                                "message_count": len(input_messages),
+                            },
+                        )
+                        with llm_ctx as llm_obs:
+                            reply_type, response = await self.model_client.call(
+                                messages=input_messages,
+                                tool_specs=tool_specs,
+                                instructions=instructions,
+                                stream=False,
+                                store_reply=lambda text: self._store_reply_and_schedule_experience(
+                                    msg_handler=msg_handler,
+                                    triggering_messages=[user_msg],
+                                    reply_text=text,
+                                ),
+                                on_usage=llm_obs.set_usage,
+                            )
+                            if reply_type == ReplyType.SIMPLE_REPLY:
+                                llm_obs.set_output(str(response))
+                            elif reply_type == ReplyType.TOOL_CALL:
+                                llm_obs.set_output(None, tool_calls=response)
+                    else:
+                        reply_type, response = await self.model_client.call(
+                            messages=input_messages,
+                            tool_specs=tool_specs,
+                            instructions=instructions,
+                            stream=False,
+                            store_reply=lambda text: self._store_reply_and_schedule_experience(
+                                msg_handler=msg_handler,
+                                triggering_messages=[user_msg],
+                                reply_text=text,
+                            ),
+                        )
+
+                    if reply_type == ReplyType.SIMPLE_REPLY:
                         assistant_msg = await msg_handler.store_model_reply(
-                            tool_result.description,
+                            str(response),
                             self._assistant_sender_id,
-                            attachments=tool_result.attachments,
                         )
                         self._schedule_experience_write(
                             messages=[user_msg, assistant_msg],
                         )
-                        return tool_result.content
-                    input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
-                    continue
+                        turn_obs.set_output(str(response))
+                        return response
 
-                if reply_type == ReplyType.ERROR:
-                    logger.error("Model returned error event: %s", response)
+                    if reply_type == ReplyType.TOOL_CALL:
+                        tool_result = await self.tool_executor.handle_tool_calls(
+                            response,
+                            iteration_messages,
+                            self.max_concurrent_tools,
+                        )
+                        if tool_result is not None:
+                            assistant_msg = await msg_handler.store_model_reply(
+                                tool_result.description,
+                                self._assistant_sender_id,
+                                attachments=tool_result.attachments,
+                            )
+                            self._schedule_experience_write(
+                                messages=[user_msg, assistant_msg],
+                            )
+                            turn_obs.set_output(
+                                tool_result.content,
+                                tool_results=[{"tools_called": len(response), "description": tool_result.description}],
+                            )
+                            return tool_result.content
+                        input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+                        continue
+
+                    if reply_type == ReplyType.ERROR:
+                        logger.error("Model returned error event: %s", response)
+                        turn_obs.set_output("Model error")
+                        return "Sorry, I encountered an error while processing your request."
+
+                    logger.error("Unknown reply type: %s", reply_type)
+                    turn_obs.set_output("Unknown reply type error")
                     return "Sorry, I encountered an error while processing your request."
 
-                logger.error("Unknown reply type: %s", reply_type)
-                return "Sorry, I encountered an error while processing your request."
-
-            logger.error("Failed to generate response after %d attempts", self.max_iter)
-            return "Sorry, I could not generate a response after multiple attempts."
-
+                logger.error("Failed to generate response after %d attempts", self.max_iter)
+                turn_obs.set_output("Max iterations exceeded")
+                return "Sorry, I could not generate a response after multiple attempts."
         except Exception as exc:
             logger.exception("Agent chat error: %s", exc)
             return "Sorry, something went wrong."
         finally:
-            if entered_observability:
-                try:
-                    turn_context.__exit__(None, None, None)
-                except Exception as exc:
-                    logger.warning("Failed to close observability context: %s", exc)
+            # Flush on every exit path
+            try:
+                await observability_rt.flush()
+            except Exception as exc:
+                logger.warning("Failed to flush observability events: %s", exc)
 
     async def chat_events(
         self,
@@ -392,17 +433,14 @@ class Agent:
         """
         msg_handler = self.message_handler
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
-        turn_context = self._observability_runtime().agent_turn(
+        observability_rt = self._observability_runtime()
+        turn_ctx = observability_rt.agent_turn(
             user_id=user_id,
             model=model_name,
             memory_mode="full",
             stream=stream,
         )
-        entered_observability = False
-
-        try:
-            turn_context.__enter__()
-            entered_observability = True
+        with turn_ctx as turn_obs:
             try:
                 user_msg = await msg_handler.store_user_message(
                     user_message,
@@ -414,12 +452,19 @@ class Agent:
                 logger.warning("Invalid image input from %s: %s", user_id, exc)
                 yield {"type": "error", "error": str(exc), "status_code": 400}
                 yield {"type": "done"}
+                turn_obs.set_output("Invalid input", tool_results=[{"error": str(exc)}])
+                await observability_rt.flush()
                 return
 
             tool_specs, instructions, iteration_messages, input_messages = await self._build_turn_context(
                 msg_handler=msg_handler,
                 user_msg=user_msg,
                 user_id=user_id,
+            )
+            turn_obs.set_input(input_messages)
+
+            anthropic_api = model_api_uses_anthropic_client(
+                getattr(self, "model_api", MODEL_API_OPENAI_RESPONSES)
             )
 
             for iteration_index in range(self.max_iter):
@@ -433,36 +478,91 @@ class Agent:
                     message_started = True
                     return self._message_start_event(message_id, "assistant")
 
-                async for model_event in self.model_client.model_turn_events(
-                    messages=input_messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=stream,
-                ):
-                    if model_event.type in {"delta", "text"} and model_event.delta:
-                        text_parts.append(model_event.delta)
-                        if stream:
-                            if not message_started:
-                                yield ensure_live_message_started()
-                            yield self._message_delta_event(
-                                message_id,
-                                "assistant",
-                                model_event.delta,
-                            )
-                        continue
+                # Wrap LLM streaming call with generation observation for Anthropic
+                if anthropic_api:
+                    llm_ctx = observability_rt.trace_llm_call(
+                        model=model_name,
+                        input_summary={
+                            "model": model_name,
+                            "max_tokens": self.model_max_tokens,
+                            "message_count": len(input_messages),
+                        },
+                    )
+                    with llm_ctx as llm_obs:
 
-                    if model_event.type == "tool_calls":
-                        tool_calls = model_event.tool_calls
-                        continue
+                        async for model_event in self.model_client.model_turn_events(
+                            messages=input_messages,
+                            tool_specs=tool_specs,
+                            instructions=instructions,
+                            stream=stream,
+                        ):
+                            if model_event.type in {"delta", "text"} and model_event.delta:
+                                text_parts.append(model_event.delta)
+                                if stream:
+                                    if not message_started:
+                                        yield ensure_live_message_started()
+                                    yield self._message_delta_event(
+                                        message_id,
+                                        "assistant",
+                                        model_event.delta,
+                                    )
+                                continue
 
-                    if model_event.type == "error":
-                        logger.error("Model stream returned error event: %s", model_event.error)
-                        yield {
-                            "type": "error",
-                            "error": "Sorry, I encountered an error while processing your request.",
-                        }
-                        yield {"type": "done"}
-                        return
+                            if model_event.type == "tool_calls":
+                                tool_calls = model_event.tool_calls
+                                continue
+
+                            if model_event.type == "error":
+                                logger.error("Model stream returned error event: %s", model_event.error)
+                                llm_obs.set_output("Model error")
+                                yield {
+                                    "type": "error",
+                                    "error": "Sorry, I encountered an error while processing your request.",
+                                }
+                                yield {"type": "done"}
+                                turn_obs.set_output("Stream error")
+                                await observability_rt.flush()
+                                return
+
+                        # Stream complete — record output
+                        visible_text = "".join(text_parts)
+                        if tool_calls:
+                            llm_obs.set_output(visible_text or None, tool_calls=tool_calls)
+                        else:
+                            llm_obs.set_output(visible_text)
+                else:
+                    async for model_event in self.model_client.model_turn_events(
+                        messages=input_messages,
+                        tool_specs=tool_specs,
+                        instructions=instructions,
+                        stream=stream,
+                    ):
+                        if model_event.type in {"delta", "text"} and model_event.delta:
+                            text_parts.append(model_event.delta)
+                            if stream:
+                                if not message_started:
+                                    yield ensure_live_message_started()
+                                yield self._message_delta_event(
+                                    message_id,
+                                    "assistant",
+                                    model_event.delta,
+                                )
+                            continue
+
+                        if model_event.type == "tool_calls":
+                            tool_calls = model_event.tool_calls
+                            continue
+
+                        if model_event.type == "error":
+                            logger.error("Model stream returned error event: %s", model_event.error)
+                            yield {
+                                "type": "error",
+                                "error": "Sorry, I encountered an error while processing your request.",
+                            }
+                            yield {"type": "done"}
+                            turn_obs.set_output("Stream error")
+                            await observability_rt.flush()
+                            return
 
                 visible_text = "".join(text_parts)
                 if tool_calls:
@@ -515,7 +615,12 @@ class Agent:
                         self._schedule_experience_write(
                             messages=[user_msg, assistant_msg],
                         )
+                        turn_obs.set_output(
+                            tool_result.content,
+                            tool_results=[{"tools_called": len(tool_calls), "description": tool_result.description}],
+                        )
                         yield {"type": "done"}
+                        await observability_rt.flush()
                         return
 
                     input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
@@ -541,7 +646,9 @@ class Agent:
                     self._schedule_experience_write(
                         messages=[user_msg, assistant_msg],
                     )
+                    turn_obs.set_output(visible_text)
                     yield {"type": "done"}
+                    await observability_rt.flush()
                     return
 
                 logger.error("Model stream ended without text or tool calls")
@@ -550,6 +657,8 @@ class Agent:
                     "error": "Sorry, I encountered an error while processing your request.",
                 }
                 yield {"type": "done"}
+                turn_obs.set_output("Empty model stream")
+                await observability_rt.flush()
                 return
 
             logger.error("Failed to generate response after %d attempts", self.max_iter)
@@ -558,17 +667,13 @@ class Agent:
                 "error": "Sorry, I could not generate a response after multiple attempts.",
             }
             yield {"type": "done"}
+            turn_obs.set_output("Max iterations exceeded")
 
+        # Flush at end of turn
+        try:
+            await observability_rt.flush()
         except Exception as exc:
-            logger.exception("Agent chat stream error: %s", exc)
-            yield {"type": "error", "error": "Sorry, something went wrong."}
-            yield {"type": "done"}
-        finally:
-            if entered_observability:
-                try:
-                    turn_context.__exit__(None, None, None)
-                except Exception as exc:
-                    logger.warning("Failed to close observability context: %s", exc)
+            logger.warning("Failed to flush observability events: %s", exc)
 
     async def observe(
         self,
