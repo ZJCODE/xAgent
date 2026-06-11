@@ -38,6 +38,7 @@ from .state import WeixinCredentials, WeixinStateStore
 WEIXIN_INBOUND_IMAGE_DIR = "temp/images/weixin"
 WEIXIN_OUTBOUND_IMAGE_DIR = "temp/images/weixin/outbound"
 WEIXIN_ATTACHMENT_DIR = "temp/attachments/weixin"
+_WECHAT_CHAT_TIMEOUT = 300.0  # seconds — per-message agent call deadline
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 _MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -74,13 +75,13 @@ class _TypingTicketCache:
         if not entry:
             return None
         ticket, created_at = entry
-        if time.time() - created_at >= self.ttl_seconds:
+        if time.monotonic() - created_at >= self.ttl_seconds:
             self._cache.pop(user_id, None)
             return None
         return ticket
 
     def set(self, user_id: str, ticket: str) -> None:
-        self._cache[user_id] = (ticket, time.time())
+        self._cache[user_id] = (ticket, time.monotonic())
 
 
 class _MessageDeduplicator:
@@ -89,7 +90,7 @@ class _MessageDeduplicator:
         self._seen: dict[str, float] = {}
 
     def is_duplicate(self, key: str) -> bool:
-        now = time.time()
+        now = time.monotonic()
         cutoff = now - self.ttl_seconds
         for existing, timestamp in list(self._seen.items()):
             if timestamp < cutoff:
@@ -246,7 +247,13 @@ class WeixinAdapter:
         task = asyncio.create_task(self._process_message_safe(message))
         async with self._processing_tasks_lock:
             self._processing_tasks.add(task)
-        task.add_done_callback(lambda item: asyncio.create_task(self._discard_processing_task(item)))
+        task.add_done_callback(self._on_processing_task_done)
+
+    def _on_processing_task_done(self, task: asyncio.Task[None]) -> None:
+        try:
+            asyncio.create_task(self._discard_processing_task(task))
+        except RuntimeError:
+            pass  # event loop is shutting down; cleanup skipped
 
     async def _discard_processing_task(self, task: asyncio.Task[None]) -> None:
         async with self._processing_tasks_lock:
@@ -283,6 +290,8 @@ class WeixinAdapter:
             self._chat_locks[user_id] = lock
         async with lock:
             await self._handle_dm(message, user_id=user_id)
+        # Evict lock after processing to prevent unbounded dict growth.
+        self._chat_locks.pop(user_id, None)
 
     def _should_route_message(self, message: dict[str, Any]) -> bool:
         if int(message.get("message_type") or 0) != 1:
@@ -471,28 +480,43 @@ class WeixinAdapter:
         if not callable(chat_events):
             raise RuntimeError("Agent does not support chat_events().")
         sent_count = 0
-        async for event in chat_events(**chat_kwargs, stream=False):
-            event_type = event.get("type")
-            if event_type == "message_done":
-                content = str(event.get("content") or "").strip()
-                attachments = self._outbound_attachments_from_event(event)
-                if not content and not attachments:
-                    continue
-                sent_count += 1
-                await self._send_text_and_attachments(
-                    user_id=user_id,
-                    context_token=context_token,
-                    content=content,
-                    attachments=attachments,
-                    stable_key=f"{source_message_id or 'message'}:{sent_count}",
-                )
-            elif event_type == "error":
-                sent_count += 1
+        try:
+            async with asyncio.timeout(_WECHAT_CHAT_TIMEOUT):
+                async for event in chat_events(**chat_kwargs, stream=False):
+                    event_type = event.get("type")
+                    if event_type == "message_done":
+                        content = str(event.get("content") or "").strip()
+                        attachments = self._outbound_attachments_from_event(event)
+                        if not content and not attachments:
+                            continue
+                        sent_count += 1
+                        await self._send_text_and_attachments(
+                            user_id=user_id,
+                            context_token=context_token,
+                            content=content,
+                            attachments=attachments,
+                            stable_key=f"{source_message_id or 'message'}:{sent_count}",
+                        )
+                    elif event_type == "error":
+                        sent_count += 1
+                        await self._send_text(
+                            user_id=user_id,
+                            context_token=context_token,
+                            text=str(event.get("error") or "Agent processing error."),
+                            stable_key=f"{source_message_id or 'message'}:error:{sent_count}",
+                        )
+        except asyncio.TimeoutError:
+            self.logger.error(
+                "Agent call timed out after %ss for user=%s",
+                _WECHAT_CHAT_TIMEOUT,
+                _safe_id(user_id),
+            )
+            if sent_count == 0:
                 await self._send_text(
                     user_id=user_id,
                     context_token=context_token,
-                    text=str(event.get("error") or "Agent processing error."),
-                    stable_key=f"{source_message_id or 'message'}:error:{sent_count}",
+                    text="Agent processing timed out. Please try again.",
+                    stable_key=f"{source_message_id or 'message'}:timeout",
                 )
 
     async def _send_text_and_attachments(

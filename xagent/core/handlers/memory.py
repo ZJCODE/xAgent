@@ -219,6 +219,7 @@ class MemoryHandler:
         if not timestamps:
             return False
         activity_time = timestamps[0] if use_earliest else timestamps[-1]
+        activity_time = min(activity_time, now)  # clamp future timestamps (clock skew)
         threshold = self.max_active_journal_delay_seconds if use_earliest else self.idle_journal_delay_seconds
         return activity_time > 0 and (now - activity_time) >= threshold
 
@@ -419,6 +420,13 @@ class MemoryHandler:
         except Exception as exc:
             logger.warning("Failed to migrate legacy journal checkpoint: %s", exc)
             migrated_cursor = 0
+        if migrated_cursor <= 0:
+            # Legacy count exceeds current row count (stream shrunk) —
+            # fall back to latest cursor instead of 0 to avoid reprocessing all.
+            try:
+                migrated_cursor = await self.message_storage.get_latest_message_cursor()
+            except Exception:
+                migrated_cursor = 0
         self._last_processed_message_id = self._non_negative_int(migrated_cursor, 0)
 
     async def _commit_processed_message_id(self, processed_message_id: int) -> bool:

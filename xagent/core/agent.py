@@ -782,4 +782,4 @@ class Agent:
             requested_count = int(requested)
         except (TypeError, ValueError):
             requested_count = AgentConfig.DEFAULT_HISTORY_COUNT
-        return max(1, requested_count)
+        return max(1, min(requested_count, AgentConfig.DEFAULT_HISTORY_COUNT))

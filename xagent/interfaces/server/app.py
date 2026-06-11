@@ -85,11 +85,27 @@ class AgentHTTPServer(BaseAgentRunner):
 
         if agent is not None:
             self.agent = agent
-            self.config = {}
+            # Resolve config directory from agent, param, or default.
+            config_dir_path = Path(
+                getattr(agent, "config_dir", None) or config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR
+            ).expanduser().resolve()
+            self.config_dir = config_dir_path
+            self.config_path = config_dir_path / BaseAgentConfig.CONFIG_FILENAME
+            self.identity_path = config_dir_path / BaseAgentConfig.IDENTITY_FILENAME
+            # Load config from disk if available; fall back to empty dict.
+            try:
+                self.config = self._load_config(self.config_path)
+            except Exception:
+                self.config = {}
+            # Load identity from disk if available; fall back to agent attribute.
+            try:
+                self.identity = self._load_identity(self.identity_path)
+            except Exception:
+                self.identity = getattr(agent, "system_prompt", "") or getattr(agent, "identity", "")
             self.message_storage = self.agent.message_storage
             self.skills_storage = getattr(self.agent, "skills_storage", None)
             self._temporary_runtime = None
-            runtime_root = getattr(self.agent, "workspace", None) or config_dir
+            runtime_root = getattr(self.agent, "workspace", None) or str(config_dir_path)
             if runtime_root is None:
                 self._temporary_runtime = tempfile.TemporaryDirectory(prefix="xagent-runtime-")
                 runtime_root = self._temporary_runtime.name

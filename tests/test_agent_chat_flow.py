@@ -1341,7 +1341,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("old-49", transcript)
         self.assertIn("latest request", transcript)
 
-    async def test_chat_uses_explicit_history_count_without_inner_cap(self):
+    async def test_chat_respects_explicit_history_count(self):
         storage = InMemoryMessageStorage([
             Message.create(f"old-{index:02d}", role=RoleType.USER, sender_id="alice")
             for index in range(50)
@@ -1355,21 +1355,43 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             agent,
             user_message="latest request",
             user_id="alice",
-            history_count=40,
+            history_count=15,
             max_iter=2,
 
         )
 
         self.assertEqual(result, "Final answer")
-        self.assertEqual(storage.last_count, 40)
+        self.assertEqual(storage.last_count, 15)
         transcript = next(
             message for message in model_client.calls[0]
             if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
         )["content"]
-        self.assertIn("old-11", transcript)
-        self.assertNotIn("old-10", transcript)
+        self.assertIn("old-36", transcript)
+        self.assertNotIn("old-35", transcript)
         self.assertIn("old-49", transcript)
         self.assertIn("latest request", transcript)
+
+    async def test_chat_clamps_history_count_to_default_max(self):
+        storage = InMemoryMessageStorage([
+            Message.create(f"old-{index:02d}", role=RoleType.USER, sender_id="alice")
+            for index in range(50)
+        ])
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "Final answer"),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        result = await Agent.chat(
+            agent,
+            user_message="latest request",
+            user_id="alice",
+            history_count=500,
+            max_iter=2,
+        )
+
+        self.assertEqual(result, "Final answer")
+        # Clamped to DEFAULT_HISTORY_COUNT (20), not the requested 500.
+        self.assertEqual(storage.last_count, AgentConfig.DEFAULT_HISTORY_COUNT)
 
     async def test_chat_hides_model_error_event_from_user(self):
         storage = InMemoryMessageStorage()
