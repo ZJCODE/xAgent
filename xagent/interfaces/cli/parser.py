@@ -163,9 +163,10 @@ def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--group-history-count",
+        "--group-fetch-limit",
         type=int,
         default=None,
+        dest="group_fetch_limit",
         help="How many recent group/topic messages to fetch before replying (default: 10)",
     )
     parser.add_argument(

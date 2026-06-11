@@ -91,7 +91,7 @@ channels:
     app_id: cli_xxx
     app_secret: your_secret  # or ${LARK_APP_SECRET}
     stream: false
-    group_history_count: 10
+    group_fetch_limit: 10
     group_reply_without_mention: false
 ```
 
@@ -143,7 +143,7 @@ channels:
 ```
 
 When this is enabled, xAgent replies to every group/topic message it receives.
-Watch `group_history_count`, provider/API rate limits, and whether other bots in
+Watch `group_fetch_limit`, provider/API rate limits, and whether other bots in
 the same room may create reply loops. The adapter still ignores messages sent by
 the current bot/app itself.
 

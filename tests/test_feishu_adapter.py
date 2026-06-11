@@ -712,7 +712,7 @@ class FeishuAdapterTests(unittest.TestCase):
             client = SimpleNamespace(im=SimpleNamespace(v1=SimpleNamespace(message_resource=resource_api)))
             adapter = FeishuAdapter(
                 agent=agent,
-                config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_history_count=0),
+                config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_fetch_limit=0),
             )
             adapter._channel = _FakeChannel(bot_open_id="ou_bot", client=client)
             msg = SimpleNamespace(
@@ -757,7 +757,7 @@ class FeishuAdapterTests(unittest.TestCase):
         agent = _FakeAgent()
         adapter = FeishuAdapter(
             agent=agent,
-            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_history_count=0),
+            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_fetch_limit=0),
         )
         adapter._channel = _FakeChannel(bot_open_id="ou_bot")
         resolver = _FakeUserResolver({"ou_sender": "Alice"})
@@ -813,7 +813,7 @@ class FeishuAdapterTests(unittest.TestCase):
         agent = _FakeAgent()
         adapter = FeishuAdapter(
             agent=agent,
-            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_history_count=0),
+            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_fetch_limit=0),
         )
         adapter._channel = _FakeChannel(bot_open_id="ou_bot")
         adapter._user_resolver = _FakeUserResolver({"ou_helper_bot": "Helper Bot"})
@@ -963,7 +963,7 @@ class FeishuAdapterTests(unittest.TestCase):
             config=FeishuAdapterConfig(
                 app_id="cli_test",
                 app_secret="secret",
-                group_history_count=0,
+                group_fetch_limit=0,
                 group_reply_without_mention=True,
             ),
             logger=logger,
@@ -996,7 +996,7 @@ class FeishuAdapterTests(unittest.TestCase):
             config=FeishuAdapterConfig(
                 app_id="cli_test",
                 app_secret="secret",
-                group_history_count=0,
+                group_fetch_limit=0,
                 group_reply_without_mention=True,
             ),
         )
@@ -1045,7 +1045,7 @@ class FeishuAdapterTests(unittest.TestCase):
             config=FeishuAdapterConfig(
                 app_id="cli_test",
                 app_secret="secret",
-                group_history_count=0,
+                group_fetch_limit=0,
                 group_reply_without_mention=True,
             ),
         )
@@ -1405,7 +1405,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["chat_id"], "oc_group")
         self.assertEqual(captured["kwargs"]["current_message_id"], "om_at")
         self.assertIsNone(captured["kwargs"]["thread_id"])
-        self.assertEqual(captured["kwargs"]["history_count"], 10)
+        self.assertEqual(captured["kwargs"]["fetch_limit"], 10)
 
     def test_group_mention_includes_sender_ids(self):
         from xagent.integrations.feishu.history import format_feishu_timestamp
@@ -1413,7 +1413,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         agent = _FakeAgent()
         adapter = FeishuAdapter(
             agent=agent,
-            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_history_count=0),
+            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_fetch_limit=0),
         )
         adapter._channel = _FakeChannel(bot_open_id="ou_bot")
         adapter._user_resolver = _FakeUserResolver({"ou_user": "Telos"})
@@ -1458,12 +1458,12 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["thread_id"], "omt_thread_1")
         self.assertEqual(len(agent.chat_calls), 1)
 
-    def test_group_history_count_zero_skips_fetch(self):
+    def test_group_fetch_limit_zero_skips_fetch(self):
         captured = self._patch_fetcher(records=[])
         agent = _FakeAgent()
         adapter = FeishuAdapter(
             agent=agent,
-            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_history_count=0),
+            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_fetch_limit=0),
         )
         adapter._channel = _FakeChannel(bot_open_id="ou_bot")
         msg = SimpleNamespace(
@@ -1500,7 +1500,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         agent = _FakeAgent()
         adapter = FeishuAdapter(
             agent=agent,
-            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_history_count=0),
+            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_fetch_limit=0),
         )
         adapter._channel = _FakeChannel(bot_open_id="ou_bot", client=client)
         adapter._user_resolver = _FakeUserResolver({"ou_user": "Telos"})
@@ -1693,7 +1693,7 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
                 chat_id="oc_x",
                 current_message_id="om_x",
                 thread_id="omt_thread",
-                history_count=5,
+                fetch_limit=5,
             )
         )
 

@@ -97,10 +97,6 @@ class WeixinAdapterConfig:
     bot_type: str = "3"
     channel_version: str = "1.0.0"
 
-    history_count: Optional[int] = None
-    max_iter: Optional[int] = None
-    max_concurrent_tools: Optional[int] = None
-
     owner_only: bool = True
     allow_users: list[str] = field(default_factory=list)
 
@@ -161,10 +157,6 @@ class WeixinAdapterConfig:
         kwargs["send_typing"] = _coerce_bool(kwargs.get("send_typing"), True)
         kwargs["media_enabled"] = _coerce_bool(kwargs.get("media_enabled"), True)
         kwargs["allow_users"] = _coerce_str_list(kwargs.get("allow_users"))
-
-        for key in ("history_count", "max_iter", "max_concurrent_tools"):
-            if kwargs.get(key) is not None:
-                kwargs[key] = _positive_int(kwargs.get(key), 0) or None
 
         kwargs["text_max_chars"] = _positive_int(kwargs.get("text_max_chars"), 2000)
         kwargs["send_retries"] = _non_negative_int(kwargs.get("send_retries"), 2)

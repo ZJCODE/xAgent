@@ -68,13 +68,13 @@ class FeishuHistoryFetcher:
         chat_id: str,
         current_message_id: Optional[str],
         thread_id: Optional[str] = None,
-        history_count: int = 0,
+        fetch_limit: int = 0,
     ) -> list[FeishuMessageRecord]:
         """Return recent group/topic messages ordered oldest -> newest.
 
         The triggering message (``current_message_id``) is always excluded.
         """
-        if history_count <= 0:
+        if fetch_limit <= 0:
             return []
 
         container_id_type = "thread" if thread_id else "chat"
@@ -85,7 +85,7 @@ class FeishuHistoryFetcher:
         records = await self._list_messages(
             container_id_type,
             container_id,
-            history_count,
+            fetch_limit,
             source=container_id_type,
         )
         if current_message_id:

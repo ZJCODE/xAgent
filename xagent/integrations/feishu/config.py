@@ -49,12 +49,10 @@ class FeishuAdapterConfig:
         log_level: One of ``debug``, ``info``, ``warn``, ``error``.
         stream: Use Feishu streaming cards to incrementally update the
             current segmented reply message.
-        history_count / max_iter / max_concurrent_tools: Per-turn knobs
-            forwarded to ``agent.chat``.
-        group_history_count: How many recent Feishu group/topic messages to
+        group_fetch_limit: How many recent Feishu group/topic messages to
             pull for each routed group/topic message. ``0`` disables history
             pulls.
-        history_fetch_timeout: Maximum seconds to wait for Feishu history.
+        group_fetch_timeout: Maximum seconds to wait for Feishu history.
         group_reply_without_mention: Route all group/topic messages to chat,
             even when the bot was not @mentioned. Defaults to false.
         advanced: Raw pass-through kwargs for ``FeishuChannel`` (policy,
@@ -68,12 +66,8 @@ class FeishuAdapterConfig:
 
     stream: bool = False
 
-    history_count: Optional[int] = None
-    max_iter: Optional[int] = None
-    max_concurrent_tools: Optional[int] = None
-
-    group_history_count: int = 10
-    history_fetch_timeout: float = 5.0
+    group_fetch_limit: int = 10
+    group_fetch_timeout: float = 5.0
     group_reply_without_mention: bool = False
 
     advanced: Dict[str, Any] = field(default_factory=dict)

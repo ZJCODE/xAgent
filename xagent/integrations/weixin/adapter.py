@@ -467,12 +467,6 @@ class WeixinAdapter:
             kwargs["image_source"] = inbound.image_sources[0] if len(inbound.image_sources) == 1 else inbound.image_sources
         if inbound.attachments:
             kwargs["attachments"] = inbound.attachments
-        if self.config.history_count is not None:
-            kwargs["history_count"] = self.config.history_count
-        if self.config.max_iter is not None:
-            kwargs["max_iter"] = self.config.max_iter
-        if self.config.max_concurrent_tools is not None:
-            kwargs["max_concurrent_tools"] = self.config.max_concurrent_tools
         return kwargs
 
     async def _send_event_replies(self, *, user_id: str, context_token: str, source_message_id: str, chat_kwargs: dict[str, Any]) -> None:
@@ -658,7 +652,6 @@ class WeixinAdapter:
         chat_events = getattr(self.agent, "chat_events", None)
         if not callable(chat_events):
             raise RuntimeError("Agent does not support chat_events().")
-        execution = AgentConfig.scheduled_execution_options(task.execution)
         prompt = AgentConfig.scheduled_agent_prompt(task.content)
         context = ScheduledDeliveryContext(
             channel="weixin",
@@ -672,9 +665,6 @@ class WeixinAdapter:
             async for event in chat_events(
                 user_message=prompt,
                 user_id=user_id,
-                history_count=execution["history_count"],
-                max_iter=execution["max_iter"],
-                max_concurrent_tools=execution["max_concurrent_tools"],
                 stream=False,
             ):
                 if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":

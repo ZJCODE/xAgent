@@ -32,7 +32,7 @@ class AgentConfig:
     MEMORY_IDLE_JOURNAL_DELAY_SECONDS = 1200
     MEMORY_MAX_ACTIVE_JOURNAL_DELAY_SECONDS = 21600
     DEFAULT_USER_ID = "default_user"
-    DEFAULT_HISTORY_COUNT = 20
+    DEFAULT_MAX_HISTORY = 20
     MAX_CONTEXT_EVENTS = 12
     DEFAULT_MAX_ITER = 50
     DEFAULT_MAX_CONCURRENT_TOOLS = 4  # Maximum concurrent tool calls
@@ -302,33 +302,6 @@ class AgentConfig:
             "that should be delivered to the user.\n\n"
             f"Task: {content.strip()}"
         )
-
-    @staticmethod
-    def scheduled_execution_options(execution: dict):
-        """Shared execution option extraction for scheduled tasks across all channels."""
-        return {
-            "history_count": AgentConfig._scheduled_positive_int(
-                execution.get("history_count"),
-                AgentConfig.DEFAULT_HISTORY_COUNT,
-            ),
-            "max_iter": AgentConfig._scheduled_positive_int(
-                execution.get("max_iter"),
-                AgentConfig.DEFAULT_MAX_ITER,
-            ),
-            "max_concurrent_tools": AgentConfig._scheduled_positive_int(
-                execution.get("max_concurrent_tools"),
-                AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-            ),
-        }
-
-    @staticmethod
-    def _scheduled_positive_int(value, default: int) -> int:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return default
-        return parsed if parsed > 0 else default
-
 
 class ReplyType(Enum):
     """Types of replies the agent can generate."""

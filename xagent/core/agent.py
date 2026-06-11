@@ -38,11 +38,17 @@ class Agent:
         skills_storage: Optional[SkillsStorageBase] = None,
         observability: Optional[ObservabilityRuntime] = None,
         supports_vision: bool = True,
+        max_history: int = AgentConfig.DEFAULT_MAX_HISTORY,
+        max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
+        max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.model_api = normalize_model_api(model_api)
         self.model_max_tokens = model_max_tokens
         self.supports_vision = bool(supports_vision)
+        self.max_history = max_history
+        self.max_iter = max_iter
+        self.max_concurrent_tools = max_concurrent_tools
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client
         if self.client is None:
@@ -174,12 +180,10 @@ class Agent:
         msg_handler: MessageHandler,
         user_msg: Message,
         user_id: str,
-        history_count: int,
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
-        effective_history_count = self._effective_history_count(history_count)
         recent_messages = await msg_handler.get_recent_messages(
-            history_count=effective_history_count,
+            max_history=self.max_history,
         )
         memory_context = await self.memory_handler.get_recent_context()
         tool_names = list(self.tool_manager._tools)
@@ -196,7 +200,7 @@ class Agent:
             recent_messages,
             current_user_id=user_id,
             memory_context=memory_context,
-            max_messages=effective_history_count,
+            max_messages=self.max_history,
             include_images=self.supports_vision,
             workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
@@ -217,9 +221,6 @@ class Agent:
         self,
         user_message: str,
         user_id: str = AgentConfig.DEFAULT_USER_ID,
-        history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
-        max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
-        max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         output_type: Optional[type[BaseModel]] = None,
@@ -228,9 +229,6 @@ class Agent:
         return await self.chat(
             user_message=user_message,
             user_id=user_id,
-            history_count=history_count,
-            max_iter=max_iter,
-            max_concurrent_tools=max_concurrent_tools,
             image_source=image_source,
             attachments=attachments,
             output_type=output_type,
@@ -241,9 +239,6 @@ class Agent:
         self,
         user_message: str,
         user_id: str = AgentConfig.DEFAULT_USER_ID,
-        history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
-        max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
-        max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         output_type: Optional[type[BaseModel]] = None,
@@ -264,9 +259,6 @@ class Agent:
                 async for event in self.chat_events(
                     user_message=user_message,
                     user_id=user_id,
-                    history_count=history_count,
-                    max_iter=max_iter,
-                    max_concurrent_tools=max_concurrent_tools,
                     image_source=image_source,
                     attachments=attachments,
                     stream=True,
@@ -290,9 +282,6 @@ class Agent:
             async for event in self.chat_events(
                 user_message=user_message,
                 user_id=user_id,
-                history_count=history_count,
-                max_iter=max_iter,
-                max_concurrent_tools=max_concurrent_tools,
                 image_source=image_source,
                 attachments=attachments,
                 stream=False,
@@ -331,10 +320,9 @@ class Agent:
                 msg_handler=msg_handler,
                 user_msg=user_msg,
                 user_id=user_id,
-                history_count=history_count,
             )
 
-            for _ in range(max_iter):
+            for _ in range(self.max_iter):
                 logger.debug("Agent iteration with input messages: %s", input_messages)
                 reply_type, response = await self.model_client.call(
                     messages=input_messages,
@@ -373,7 +361,7 @@ class Agent:
                     tool_result = await self.tool_executor.handle_tool_calls(
                         response,
                         iteration_messages,
-                        max_concurrent_tools,
+                        self.max_concurrent_tools,
                     )
                     if tool_result is not None:
                         assistant_msg = await msg_handler.store_model_reply(
@@ -395,7 +383,7 @@ class Agent:
                 logger.error("Unknown reply type: %s", reply_type)
                 return "Sorry, I encountered an error while processing your request."
 
-            logger.error("Failed to generate response after %d attempts", max_iter)
+            logger.error("Failed to generate response after %d attempts", self.max_iter)
             return "Sorry, I could not generate a response after multiple attempts."
 
         except Exception as exc:
@@ -412,9 +400,6 @@ class Agent:
         self,
         user_message: str,
         user_id: str = AgentConfig.DEFAULT_USER_ID,
-        history_count: int = AgentConfig.DEFAULT_HISTORY_COUNT,
-        max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
-        max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         output_type: Optional[type[BaseModel]] = None,
@@ -432,9 +417,6 @@ class Agent:
             response = await self.chat(
                 user_message=user_message,
                 user_id=user_id,
-                history_count=history_count,
-                max_iter=max_iter,
-                max_concurrent_tools=max_concurrent_tools,
                 image_source=image_source,
                 attachments=attachments,
                 output_type=output_type,
@@ -481,10 +463,9 @@ class Agent:
                 msg_handler=msg_handler,
                 user_msg=user_msg,
                 user_id=user_id,
-                history_count=history_count,
             )
 
-            for iteration_index in range(max_iter):
+            for iteration_index in range(self.max_iter):
                 message_id = self._turn_message_id(user_msg, iteration_index)
                 text_parts: list[str] = []
                 tool_calls = []
@@ -555,7 +536,7 @@ class Agent:
                     tool_result = await self.tool_executor.handle_tool_calls(
                         tool_calls,
                         iteration_messages,
-                        max_concurrent_tools,
+                        self.max_concurrent_tools,
                     )
 
                     for tool_call in tool_calls:
@@ -617,7 +598,7 @@ class Agent:
                 yield {"type": "done"}
                 return
 
-            logger.error("Failed to generate response after %d attempts", max_iter)
+            logger.error("Failed to generate response after %d attempts", self.max_iter)
             yield {
                 "type": "error",
                 "error": "Sorry, I could not generate a response after multiple attempts.",
@@ -775,11 +756,3 @@ class Agent:
             "name": name,
         }
 
-    @staticmethod
-    def _effective_history_count(history_count: Optional[int]) -> int:
-        requested = history_count or AgentConfig.DEFAULT_HISTORY_COUNT
-        try:
-            requested_count = int(requested)
-        except (TypeError, ValueError):
-            requested_count = AgentConfig.DEFAULT_HISTORY_COUNT
-        return max(1, min(requested_count, AgentConfig.DEFAULT_HISTORY_COUNT))

@@ -941,6 +941,9 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent"
         agent.supports_vision = True
+        agent.max_history = AgentConfig.DEFAULT_MAX_HISTORY
+        agent.max_iter = AgentConfig.DEFAULT_MAX_ITER
+        agent.max_concurrent_tools = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
         agent.observability = observability or NoopObservabilityRuntime()
         agent.tool_manager = FakeToolManager(tools=tools)
         agent.model_client = model_client
@@ -982,12 +985,12 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             tool_executor=tool_executor,
         )
 
+        agent.max_history = 10
+        agent.max_iter = 3
         result = await Agent.chat(
             agent,
             user_message="Run the lookup and summarize it",
             user_id="bob",
-            history_count=10,
-            max_iter=3,
 
         )
 
@@ -1082,13 +1085,13 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             memory_handler=memory_handler,
         )
 
+        agent.max_history = 10
+        agent.max_iter = 3
         events = [
             event async for event in Agent.chat_events(
                 agent,
                 user_message="Where are we?",
                 user_id="bob",
-                history_count=10,
-                max_iter=3,
                 stream=True,
 
             )
@@ -1322,16 +1325,16 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
+        agent.max_iter = 2
         result = await Agent.chat(
             agent,
             user_message="latest request",
             user_id="alice",
-            max_iter=2,
 
         )
 
         self.assertEqual(result, "Final answer")
-        self.assertEqual(storage.last_count, AgentConfig.DEFAULT_HISTORY_COUNT)
+        self.assertEqual(storage.last_count, AgentConfig.DEFAULT_MAX_HISTORY)
         transcript = next(
             message for message in model_client.calls[0]
             if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
@@ -1341,7 +1344,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("old-49", transcript)
         self.assertIn("latest request", transcript)
 
-    async def test_chat_respects_explicit_history_count(self):
+    async def test_chat_respects_explicit_max_history(self):
         storage = InMemoryMessageStorage([
             Message.create(f"old-{index:02d}", role=RoleType.USER, sender_id="alice")
             for index in range(50)
@@ -1350,13 +1353,13 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             (ReplyType.SIMPLE_REPLY, "Final answer"),
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
+        agent.max_history = 15
+        agent.max_iter = 2
 
         result = await Agent.chat(
             agent,
             user_message="latest request",
             user_id="alice",
-            history_count=15,
-            max_iter=2,
 
         )
 
@@ -1370,28 +1373,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("old-35", transcript)
         self.assertIn("old-49", transcript)
         self.assertIn("latest request", transcript)
-
-    async def test_chat_clamps_history_count_to_default_max(self):
-        storage = InMemoryMessageStorage([
-            Message.create(f"old-{index:02d}", role=RoleType.USER, sender_id="alice")
-            for index in range(50)
-        ])
-        model_client = CapturingModelClient([
-            (ReplyType.SIMPLE_REPLY, "Final answer"),
-        ])
-        agent = self._build_agent(storage=storage, model_client=model_client)
-
-        result = await Agent.chat(
-            agent,
-            user_message="latest request",
-            user_id="alice",
-            history_count=500,
-            max_iter=2,
-        )
-
-        self.assertEqual(result, "Final answer")
-        # Clamped to DEFAULT_HISTORY_COUNT (20), not the requested 500.
-        self.assertEqual(storage.last_count, AgentConfig.DEFAULT_HISTORY_COUNT)
 
     async def test_chat_hides_model_error_event_from_user(self):
         storage = InMemoryMessageStorage()
@@ -1407,11 +1388,12 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
+        agent.max_iter = 1
+
         result = await Agent.chat(
             agent,
             user_message="hello",
             user_id="alice",
-            max_iter=1,
         )
 
         self.assertEqual(result, "Sorry, I encountered an error while processing your request.")

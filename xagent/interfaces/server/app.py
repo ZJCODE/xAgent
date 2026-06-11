@@ -149,9 +149,6 @@ class AgentHTTPServer(BaseAgentRunner):
             return await self.agent(
                 user_message=input_data.user_message,
                 user_id=input_data.user_id,
-                history_count=input_data.history_count,
-                max_iter=input_data.max_iter,
-                max_concurrent_tools=input_data.max_concurrent_tools,
                 image_source=image_sources,
                 attachments=attachments,
             )
@@ -207,9 +204,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 response = chat_events(
                     user_message=input_data.user_message,
                     user_id=input_data.user_id,
-                    history_count=input_data.history_count,
-                    max_iter=input_data.max_iter,
-                    max_concurrent_tools=input_data.max_concurrent_tools,
                     image_source=self._input_image_sources(input_data, attachments=attachments),
                     attachments=attachments,
                     stream=bool(input_data.stream),
@@ -323,7 +317,6 @@ class AgentHTTPServer(BaseAgentRunner):
         if task_type != "agent":
             raise ValueError(f"unsupported scheduled task type: {task_type}")
 
-        execution = self._scheduled_execution_options(task)
         user_id = task.delivery_user_id or str(task.target.get("user_id") or AgentConfig.DEFAULT_USER_ID)
         prompt = AgentConfig.scheduled_agent_prompt(task.content)
         context = ScheduledDeliveryContext(
@@ -347,7 +340,6 @@ class AgentHTTPServer(BaseAgentRunner):
                         chat_events,
                         prompt=prompt,
                         user_id=user_id,
-                        execution=execution,
                         deadline=deadline,
                     )
 
@@ -358,9 +350,6 @@ class AgentHTTPServer(BaseAgentRunner):
                     chat(
                         user_message=prompt,
                         user_id=user_id,
-                        history_count=execution["history_count"],
-                        max_iter=execution["max_iter"],
-                        max_concurrent_tools=execution["max_concurrent_tools"],
                     ),
                     deadline,
                 )
@@ -374,7 +363,6 @@ class AgentHTTPServer(BaseAgentRunner):
         *,
         prompt: str,
         user_id: str,
-        execution: Dict[str, Any],
         deadline: float,
     ) -> _ScheduledTaskResult:
         final_content = ""
@@ -384,9 +372,6 @@ class AgentHTTPServer(BaseAgentRunner):
             chat_events(
                 user_message=prompt,
                 user_id=user_id,
-                history_count=execution["history_count"],
-                max_iter=execution["max_iter"],
-                max_concurrent_tools=execution["max_concurrent_tools"],
                 stream=False,
             ),
             deadline,
@@ -408,11 +393,6 @@ class AgentHTTPServer(BaseAgentRunner):
         if isinstance(result, str):
             return _ScheduledTaskResult(result.strip())
         return _ScheduledTaskResult(json.dumps(result, ensure_ascii=False).strip())
-
-    @staticmethod
-    @staticmethod
-    def _scheduled_execution_options(task) -> Dict[str, Any]:
-        return AgentConfig.scheduled_execution_options(task.execution)
 
     async def _broadcast_scheduled_message(
         self,

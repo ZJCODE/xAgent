@@ -275,13 +275,13 @@ class CLICommandTests(unittest.TestCase):
             "feishu",
             "setup",
             "--stream",
-            "--group-history-count",
+            "--group-fetch-limit",
             "20",
             "--group-reply-without-mention",
         ])
 
         self.assertTrue(args.stream)
-        self.assertEqual(args.group_history_count, 20)
+        self.assertEqual(args.group_fetch_limit, 20)
         self.assertTrue(args.group_reply_without_mention)
 
     def test_parser_supports_weixin_setup_command(self):
@@ -1999,7 +1999,7 @@ class CLICommandTests(unittest.TestCase):
                 force=False,
                 stream=None,
 
-                group_history_count=None,
+                group_fetch_limit=None,
 
                 group_reply_without_mention=None,
             )
@@ -2035,7 +2035,7 @@ class CLICommandTests(unittest.TestCase):
                 force=False,
                 stream=None,
 
-                group_history_count=None,
+                group_fetch_limit=None,
 
                 group_reply_without_mention=None,
             )
@@ -2043,7 +2043,7 @@ class CLICommandTests(unittest.TestCase):
                 app_id="cli_room",
                 app_secret="room_secret",
                 stream=True,
-                group_history_count=20,
+                group_fetch_limit=20,
 
                 group_reply_without_mention=True,
                 credential_mode="manual",
@@ -2062,7 +2062,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_room")
         self.assertEqual(config["channels"]["feishu"]["app_secret"], "room_secret")
         self.assertIs(config["channels"]["feishu"]["stream"], True)
-        self.assertEqual(config["channels"]["feishu"]["group_history_count"], 20)
+        self.assertEqual(config["channels"]["feishu"]["group_fetch_limit"], 20)
 
         self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], True)
 
@@ -2077,7 +2077,7 @@ class CLICommandTests(unittest.TestCase):
                 force=False,
                 stream=None,
 
-                group_history_count=None,
+                group_fetch_limit=None,
 
                 group_reply_without_mention=None,
             )
@@ -2152,7 +2152,7 @@ class CLICommandTests(unittest.TestCase):
             manual=False,
             force=False,
             stream=None,
-            group_history_count=None,
+            group_fetch_limit=None,
 
             group_reply_without_mention=None,
         )
@@ -2168,7 +2168,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(selection.app_id, "cli_qr_app")
         self.assertEqual(selection.app_secret, "qr_secret")
         self.assertIs(selection.stream, False)
-        self.assertEqual(selection.group_history_count, 10)
+        self.assertEqual(selection.group_fetch_limit, 10)
 
         self.assertIs(selection.group_reply_without_mention, False)
         self.assertEqual(selection.credential_mode, "one_click")
@@ -2193,7 +2193,7 @@ class CLICommandTests(unittest.TestCase):
             manual=False,
             force=False,
             stream=None,
-            group_history_count=None,
+            group_fetch_limit=None,
 
             group_reply_without_mention=None,
         )
@@ -2212,7 +2212,7 @@ class CLICommandTests(unittest.TestCase):
                 force=False,
                 stream=None,
 
-                group_history_count=None,
+                group_fetch_limit=None,
 
                 group_reply_without_mention=None,
             )
@@ -2237,7 +2237,7 @@ class CLICommandTests(unittest.TestCase):
                 force=False,
                 stream=None,
 
-                group_history_count=None,
+                group_fetch_limit=None,
 
                 group_reply_without_mention=None,
             )

@@ -165,6 +165,7 @@ class BaseAgentRunner:
             raise ValueError("Configuration must be a dictionary")
         
         allowed_config_keys = {
+            "agent",
             "provider",
             "search",
             "image_generation",
@@ -217,6 +218,19 @@ class BaseAgentRunner:
                     runtime_cfg["heartbeat_interval_seconds"],
                     "runtime.heartbeat_interval_seconds",
                 )
+
+        agent_cfg = config.get("agent")
+        if agent_cfg is not None:
+            if not isinstance(agent_cfg, dict):
+                raise ValueError("agent must be a dictionary")
+            allowed_agent_keys = {"max_history", "max_iter", "max_concurrent_tools"}
+            unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
+            if unsupported_agent_keys:
+                joined_keys = ", ".join(unsupported_agent_keys)
+                raise ValueError(f"Unsupported agent key(s): {joined_keys}")
+            for key in ("max_history", "max_iter", "max_concurrent_tools"):
+                if key in agent_cfg:
+                    self._validate_positive_int(agent_cfg[key], f"agent.{key}")
 
         self._validate_observability_config(config.get("observability"))
 
@@ -630,6 +644,7 @@ class BaseAgentRunner:
         tools = self._load_agent_tools(agent_cfg, client=client)
         output_type = self._get_output_type(agent_cfg)
 
+        agent_section = agent_cfg.get("agent") or {}
         return Agent(
             system_prompt=self.identity,
             model=self._get_agent_model(agent_cfg),
@@ -643,6 +658,9 @@ class BaseAgentRunner:
             skills_storage=self.skills_storage,
             observability=self.observability,
             supports_vision=self._provider_supports_vision(agent_cfg),
+            max_history=agent_section.get("max_history", AgentConfig.DEFAULT_MAX_HISTORY),
+            max_iter=agent_section.get("max_iter", AgentConfig.DEFAULT_MAX_ITER),
+            max_concurrent_tools=agent_section.get("max_concurrent_tools", AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
         )
 
     def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:

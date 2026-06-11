@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 import yaml
 from rich.text import Text  # type: ignore[import-not-found]
 
+from ...core.config import AgentConfig
 from ...core.providers import (
     KNOWN_PROVIDERS,
     MODEL_API_ANTHROPIC_MESSAGES,
@@ -91,7 +92,7 @@ class FeishuInitSelection:
     app_id: str
     app_secret: str
     stream: bool = False
-    group_history_count: int = 10
+    group_fetch_limit: int = 10
     group_reply_without_mention: bool = False
     credential_mode: str = "one_click"
 
@@ -302,6 +303,11 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
 
     config = {
         "provider": provider_config,
+        "agent": {
+            "max_history": AgentConfig.DEFAULT_MAX_HISTORY,
+            "max_iter": AgentConfig.DEFAULT_MAX_ITER,
+            "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+        },
         "channels": {
             "api": {
                 "host": BaseAgentConfig.DEFAULT_HOST,
@@ -1474,7 +1480,7 @@ def _feishu_channel_config(selection: FeishuInitSelection) -> dict[str, Any]:
         "app_id": selection.app_id,
         "app_secret": selection.app_secret,
         "stream": selection.stream,
-        "group_history_count": selection.group_history_count,
+        "group_fetch_limit": selection.group_fetch_limit,
         "group_reply_without_mention": selection.group_reply_without_mention,
     }
     return config
@@ -1604,20 +1610,20 @@ def collect_feishu_init_selection_terminal_ui(
     stream_arg = getattr(args, "stream", None)
     stream = bool(stream_arg) if stream_arg is not None else False
 
-    group_history_arg = getattr(args, "group_history_count", None)
-    if group_history_arg is not None and group_history_arg < 0:
+    group_fetch_arg = getattr(args, "group_fetch_limit", None)
+    if group_fetch_arg is not None and group_fetch_arg < 0:
         if interactive:
-            wizard_ui.print_panel("--group-history-count must be >= 0", title="Feishu Setup Stopped")
+            wizard_ui.print_panel("--group-fetch-limit must be >= 0", title="Feishu Setup Stopped")
         else:
-            print("--group-history-count must be >= 0")
+            print("--group-fetch-limit must be >= 0")
         return None
-    group_history_count = int(group_history_arg) if group_history_arg is not None else 10
+    group_fetch_limit = int(group_fetch_arg) if group_fetch_arg is not None else 10
 
     selection = FeishuInitSelection(
         app_id=app_id,
         app_secret=app_secret,
         stream=stream,
-        group_history_count=group_history_count,
+        group_fetch_limit=group_fetch_limit,
         group_reply_without_mention=group_reply_without_mention,
         credential_mode=credential_mode,
     )

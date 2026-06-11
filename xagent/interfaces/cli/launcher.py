@@ -421,7 +421,7 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                 manual=False,
                 force=False,
                 stream=None,
-                group_history_count=None,
+                group_fetch_limit=None,
 
                 group_reply_without_mention=None,
             )
@@ -1229,7 +1229,7 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     manual=False,
                     force=_feishu_channel_is_configured(config_dir),
                     stream=None,
-                    group_history_count=None,
+                    group_fetch_limit=None,
     
                     group_reply_without_mention=None,
                 )

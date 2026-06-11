@@ -1698,8 +1698,8 @@ class FeishuAdapter:
         current_message_id: Optional[str],
         raw_msg: Any,
     ) -> list[FeishuMessageRecord]:
-        history_count = self.config.group_history_count
-        if history_count <= 0:
+        fetch_limit = self.config.group_fetch_limit
+        if fetch_limit <= 0:
             return []
 
         fetcher = self._get_history_fetcher()
@@ -1712,14 +1712,14 @@ class FeishuAdapter:
                     chat_id=chat_id,
                     current_message_id=current_message_id,
                     thread_id=self._thread_id(raw_msg),
-                    history_count=history_count,
+                    fetch_limit=fetch_limit,
                 ),
-                timeout=self.config.history_fetch_timeout,
+                timeout=self.config.group_fetch_timeout,
             )
         except asyncio.TimeoutError:
             self.logger.warning(
                 "Feishu group history fetch timed out after %.1fs; continuing without it",
-                self.config.history_fetch_timeout,
+                self.config.group_fetch_timeout,
             )
         except Exception:
             self.logger.exception("Feishu group history fetch failed; continuing without it")
@@ -2002,7 +2002,6 @@ class FeishuAdapter:
         chat = getattr(self.agent, "chat", None)
         if not callable(chat_events) and not callable(chat):
             raise RuntimeError("Agent does not support chat_events() or chat().")
-        execution = self._scheduled_execution_options(task)
         user_id = task.delivery_user_id or str(task.target.get("sender_id") or AgentConfig.DEFAULT_USER_ID)
         context = ScheduledDeliveryContext(
             channel="feishu",
@@ -2021,16 +2020,12 @@ class FeishuAdapter:
                     chat_events,
                     prompt=AgentConfig.scheduled_agent_prompt(task.content),
                     user_id=user_id,
-                    execution=execution,
                 )
 
             assert callable(chat)
             response = await chat(
                 user_message=AgentConfig.scheduled_agent_prompt(task.content),
                 user_id=user_id,
-                history_count=execution["history_count"],
-                max_iter=execution["max_iter"],
-                max_concurrent_tools=execution["max_concurrent_tools"],
             )
         return _FeishuScheduledTaskResult(self._stringify_scheduled_agent_response(response).strip())
 
@@ -2040,7 +2035,6 @@ class FeishuAdapter:
         *,
         prompt: str,
         user_id: str,
-        execution: dict[str, Any],
     ) -> _FeishuScheduledTaskResult:
         final_content = ""
         final_attachments: list[_FeishuOutboundAttachment] = []
@@ -2048,9 +2042,6 @@ class FeishuAdapter:
         async for event in chat_events(
             user_message=prompt,
             user_id=user_id,
-            history_count=execution["history_count"],
-            max_iter=execution["max_iter"],
-            max_concurrent_tools=execution["max_concurrent_tools"],
             stream=False,
         ):
             event_type = event.get("type")
@@ -2062,12 +2053,6 @@ class FeishuAdapter:
         if final_content or final_attachments:
             return _FeishuScheduledTaskResult(final_content, final_attachments)
         return _FeishuScheduledTaskResult(last_error)
-
-    @staticmethod
-    @staticmethod
-    def _scheduled_execution_options(task) -> dict[str, Any]:
-        return AgentConfig.scheduled_execution_options(task.execution)
-
 
     @staticmethod
     def _stringify_scheduled_agent_response(response: Any) -> str:
@@ -2096,12 +2081,6 @@ class FeishuAdapter:
             kwargs["image_source"] = image_sources[0] if len(image_sources) == 1 else image_sources
         if attachments:
             kwargs["attachments"] = attachments
-        if self.config.history_count is not None:
-            kwargs["history_count"] = self.config.history_count
-        if self.config.max_iter is not None:
-            kwargs["max_iter"] = self.config.max_iter
-        if self.config.max_concurrent_tools is not None:
-            kwargs["max_concurrent_tools"] = self.config.max_concurrent_tools
         return kwargs
 
     @staticmethod

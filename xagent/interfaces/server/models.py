@@ -6,8 +6,6 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 
-from ...core.config import AgentConfig
-
 
 class ChatImageInput(BaseModel):
     """Optional image metadata accepted by API clients."""
@@ -54,9 +52,6 @@ class ChatInput(BaseModel):
     image_source: Optional[Union[str, List[str]]] = None
     images: Optional[List[ChatImageInput]] = None
     attachments: Optional[List[ChatAttachmentInput]] = None
-    history_count: Optional[int] = AgentConfig.DEFAULT_HISTORY_COUNT
-    max_iter: Optional[int] = AgentConfig.DEFAULT_MAX_ITER
-    max_concurrent_tools: Optional[int] = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
 
 
 

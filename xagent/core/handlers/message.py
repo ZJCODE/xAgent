@@ -122,16 +122,16 @@ class MessageHandler:
 
     async def get_recent_messages(
         self,
-        history_count: int,
+        max_history: int,
     ) -> List[Message]:
-        return await self.message_storage.get_messages(history_count)
+        return await self.message_storage.get_messages(max_history)
 
     async def get_input_messages(
         self,
-        history_count: int,
+        max_history: int,
     ) -> list:
         """Retrieve and serialize recent messages for model input."""
-        messages = await self.get_recent_messages(history_count)
+        messages = await self.get_recent_messages(max_history)
         return [msg.to_model_input() for msg in messages]
 
     @staticmethod
@@ -158,7 +158,7 @@ class MessageHandler:
         current_user_id: str,
         memory_context: str = "",
         context_events: Optional[List[Message]] = None,
-        max_messages: int = AgentConfig.DEFAULT_HISTORY_COUNT,
+        max_messages: int = AgentConfig.DEFAULT_MAX_HISTORY,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         include_images: bool = True,
         workspace_dir: Optional[Union[str, Path]] = None,
@@ -247,7 +247,7 @@ class MessageHandler:
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
         current_date: Optional[str] = None,
-        max_messages: int = AgentConfig.DEFAULT_HISTORY_COUNT,
+        max_messages: int = AgentConfig.DEFAULT_MAX_HISTORY,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         include_images: bool = True,
         workspace_dir: Optional[Union[str, Path]] = None,
@@ -458,7 +458,7 @@ class MessageHandler:
         if not messages:
             return [], 0
 
-        message_limit = max(1, int(max_messages or AgentConfig.DEFAULT_HISTORY_COUNT))
+        message_limit = max(1, int(max_messages or AgentConfig.DEFAULT_MAX_HISTORY))
         omitted_count = max(0, len(messages) - message_limit)
         candidates = messages[-message_limit:]
         return [
