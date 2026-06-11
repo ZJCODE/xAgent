@@ -30,6 +30,7 @@ from ..tools import (
     create_image_generation_tool,
     create_read_skill_tool,
     create_schedule_task_tool,
+    create_web_fetch_tool,
     create_web_search_tool,
     create_workspace_run_command_tool,
 )
@@ -831,6 +832,7 @@ class BaseAgentRunner:
             create_attach_artifact_tool(
                 workspace_dir=str(self.workspace_dir),
             ),
+            create_web_fetch_tool(),
         ]
         search_client = self._initialize_search_client(agent_cfg, model_client=client)
         search_tool = create_web_search_tool(

@@ -121,6 +121,14 @@ class AgentConfig:
             "- Do not use Markdown image embeds or Markdown links as the delivery mechanism for user-visible files; attach the workspace file instead.\n"
             "- If attachment fails, explain the failure and include the workspace path when available.\n"
         ),
+        "web_fetch": (
+            "\n**Web Page Fetching:**\n"
+            "- Use `web_fetch` to read the full content of a specific web page by URL.\n"
+            "- Unlike `web_search` which returns search snippets, `web_fetch` extracts the complete page text using content extraction.\n"
+            "- Use `web_search` first to find relevant pages, then `web_fetch` to read them in depth.\n"
+            "- Always cite the source URL when quoting information obtained via `web_fetch`.\n"
+            "- The tool strips navigation, ads, and boilerplate — JavaScript-heavy SPA pages may return empty content.\n"
+        ),
         "read_skill": (
             "\n**Agent Skills Loading:**\n"
             "- The Available Skills system layer lists enabled skills by name and frontmatter description. Use that layer for discovery; do not call a tool just to list skills.\n"
@@ -138,6 +146,7 @@ class AgentConfig:
         "write_memory",
         "search_memory",
         "web_search",
+        "web_fetch",
         "generate_image",
         "attach_artifact",
         "read_skill",
