@@ -77,32 +77,8 @@ class FakeTurnObservation:
     def set_input(self, messages):
         self.input = messages
 
-    def set_output(self, content, tool_results=None):
+    def set_output(self, content):
         self.output = content
-
-
-class FakeLLMCallObservation:
-    def __init__(self):
-        self.output = None
-        self.usage = None
-
-    def set_output(self, content=None, tool_calls=None):
-        self.output = (content, tool_calls)
-
-    def set_usage(self, usage):
-        self.usage = usage
-
-
-class FakeToolCallObservation:
-    def __init__(self):
-        self.success_result = None
-        self.error_msg = None
-
-    def set_success(self, result):
-        self.success_result = result
-
-    def set_error(self, error):
-        self.error_msg = error
 
 
 class _FakeAgentTurnCtx:
@@ -118,18 +94,6 @@ class _FakeAgentTurnCtx:
         return False
 
 
-class _FakeObsCtx:
-    """Generic context manager for FakeLLMCallObservation / FakeToolCallObservation."""
-    def __init__(self, obs):
-        self._obs = obs
-
-    def __enter__(self):
-        return self._obs
-
-    def __exit__(self, exc_type, exc, traceback):
-        return False
-
-
 class FakeObservabilityRuntime:
     enabled = True
 
@@ -139,9 +103,6 @@ class FakeObservabilityRuntime:
         self.exited = False
         self.flushed = False
         self.turn_obs = FakeTurnObservation()
-        self.llm_obs_list: list = []
-        self.tool_obs_list: list = []
-        self.scores: list = []
 
     def create_client(self, client_kwargs):
         return None
@@ -150,19 +111,6 @@ class FakeObservabilityRuntime:
         self.turn_kwargs = kwargs
         self.turn_obs = FakeTurnObservation()
         return _FakeAgentTurnCtx(self)
-
-    def trace_llm_call(self, **kwargs):
-        obs = FakeLLMCallObservation()
-        self.llm_obs_list.append(obs)
-        return _FakeObsCtx(obs)
-
-    def trace_tool_call(self, **kwargs):
-        obs = FakeToolCallObservation()
-        self.tool_obs_list.append(obs)
-        return _FakeObsCtx(obs)
-
-    def record_score(self, *, name, value, comment=None):
-        self.scores.append({"name": name, "value": value, "comment": comment})
 
     async def flush(self):
         self.flushed = True
@@ -925,7 +873,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     ):
         agent = Agent.__new__(Agent)
         agent.model = AgentConfig.DEFAULT_MODEL
-        agent.model_api = MODEL_API_OPENAI_RESPONSES
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent"
         agent.supports_vision = True
