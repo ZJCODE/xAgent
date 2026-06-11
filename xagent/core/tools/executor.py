@@ -7,7 +7,6 @@ from typing import Any, Optional
 from ..config import AgentConfig
 from .manager import ToolManager
 from ...components import MessageStorageBase
-from ...integrations.langfuse import NoopObservabilityRuntime
 from ...utils.image_utils import is_image_output
 from ...tools.image_generation_tool import (
     generated_image_attachments,
@@ -41,12 +40,10 @@ class ToolExecutor:
         tool_manager: ToolManager,
         message_storage: MessageStorageBase,
         client: Any,
-        observability: Any = None,
     ):
         self.tool_manager = tool_manager
         self.message_storage = message_storage
         self.client = client
-        self._observability = observability or NoopObservabilityRuntime()
 
     async def handle_tool_calls(
         self,
@@ -130,35 +127,26 @@ class ToolExecutor:
         call_id = self._tool_call_id(tool_call)
         raw_arguments = self._tool_arguments(tool_call)
 
-        with self._observability.trace_tool_call(
-            tool_name=name,
-            args=raw_arguments,
-        ) as tool_obs:
-            try:
-                args = json.loads(raw_arguments or "{}")
-            except Exception as e:
-                logger.error("Tool args parse error: %s", e)
-                tool_obs.set_error(f"Tool args parse error: {e}")
-                return self._tool_result_message(call_id, f"Tool args parse error: {e}"), None
+        try:
+            args = json.loads(raw_arguments or "{}")
+        except Exception as e:
+            logger.error("Tool args parse error: %s", e)
+            return self._tool_result_message(call_id, f"Tool args parse error: {e}"), None
 
-            if not isinstance(args, dict):
-                tool_obs.set_error("Tool args must be a JSON object.")
-                return self._tool_result_message(call_id, "Tool args must be a JSON object."), None
+        if not isinstance(args, dict):
+            return self._tool_result_message(call_id, "Tool args must be a JSON object."), None
 
-            func = self.tool_manager.get_tool(name)
-            if not func:
-                tool_obs.set_error(f"Tool `{name}` not found.")
-                return self._tool_result_message(call_id, f"Tool `{name}` not found."), None
+        func = self.tool_manager.get_tool(name)
+        if not func:
+            return self._tool_result_message(call_id, f"Tool `{name}` not found."), None
 
-            logger.info("Calling tool: %s with args: %s", name, args)
+        logger.info("Calling tool: %s with args: %s", name, args)
 
-            try:
-                result = await func(**args)
-                tool_obs.set_success(result)
-            except Exception as e:
-                logger.error("Tool call error: %s", e)
-                tool_obs.set_error(str(e))
-                result = f"Tool error: {e}"
+        try:
+            result = await func(**args)
+        except Exception as e:
+            logger.error("Tool call error: %s", e)
+            result = f"Tool error: {e}"
 
         if is_generated_image_result(result):
             result_str = json.dumps(result, ensure_ascii=False)

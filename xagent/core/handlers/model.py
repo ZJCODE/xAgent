@@ -136,7 +136,6 @@ class ModelClient:
         instructions: Optional[Union[str, list[dict]]] = None,
         stream: bool = False,
         store_reply: Optional[Callable[..., Awaitable]] = None,
-        on_usage: Optional[Callable[..., Any]] = None,
     ) -> tuple[ReplyType, object]:
         """
         Call the AI model with prepared messages.
@@ -147,7 +146,6 @@ class ModelClient:
             instructions: Static behavioural instructions (system prompt).
             stream: Whether to stream the response.
             store_reply: Async callback to store the final reply text.
-            on_usage: Optional callback receiving usage dict for observability.
         Returns:
             Tuple of (ReplyType, response_object).
         """
@@ -161,8 +159,6 @@ class ModelClient:
                         stream=stream,
                     )
                 )
-                if on_usage:
-                    on_usage(self._extract_anthropic_usage(response))
                 if stream:
                     return await self._handle_anthropic_stream(response, store_reply)
                 return self._handle_anthropic_non_stream(response)
@@ -176,8 +172,6 @@ class ModelClient:
                         stream=stream,
                     )
                 )
-                if on_usage:
-                    on_usage(self._extract_responses_usage(response))
                 if stream:
                     return await self._handle_responses_stream(response, store_reply)
                 return self._handle_responses_non_stream(response)
@@ -191,8 +185,6 @@ class ModelClient:
                 )
             )
 
-            if on_usage:
-                on_usage(self._extract_usage(response))
             if stream:
                 return await self._handle_stream(response, store_reply)
             return self._handle_non_stream(response)
@@ -1136,41 +1128,6 @@ class ModelClient:
     def _first_choice(response) -> Any:
         choices = ModelClient._field(response, "choices") or []
         return choices[0] if choices else None
-
-    @staticmethod
-    def _extract_usage(response) -> dict:
-        """Extract token usage from an OpenAI Chat Completions response."""
-        usage = ModelClient._field(response, "usage")
-        if not usage:
-            return {}
-        return {
-            "prompt_tokens": ModelClient._field(usage, "prompt_tokens"),
-            "completion_tokens": ModelClient._field(usage, "completion_tokens"),
-            "total_tokens": ModelClient._field(usage, "total_tokens"),
-        }
-
-    @staticmethod
-    def _extract_anthropic_usage(response) -> dict:
-        """Extract token usage from an Anthropic Messages response."""
-        usage = ModelClient._field(response, "usage")
-        if not usage:
-            return {}
-        return {
-            "input_tokens": ModelClient._field(usage, "input_tokens"),
-            "output_tokens": ModelClient._field(usage, "output_tokens"),
-        }
-
-    @staticmethod
-    def _extract_responses_usage(response) -> dict:
-        """Extract token usage from an OpenAI Responses API response."""
-        usage = ModelClient._field(response, "usage")
-        if not usage:
-            return {}
-        return {
-            "input_tokens": ModelClient._field(usage, "input_tokens"),
-            "output_tokens": ModelClient._field(usage, "output_tokens"),
-            "total_tokens": ModelClient._field(usage, "total_tokens"),
-        }
 
     @staticmethod
     def _extract_tool_calls(response) -> list:
