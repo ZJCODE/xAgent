@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from dataclasses import dataclass
@@ -21,12 +20,12 @@ logger = logging.getLogger(__name__)
 SEARCH_PROVIDER_OPENAI = "openai"
 SEARCH_PROVIDER_QWEN = "qwen"
 SEARCH_PROVIDER_MINIMAX = "minimax"
-SEARCH_PROVIDER_BUILTIN = "builtin"
+SEARCH_PROVIDER_NONE = "none"
 SUPPORTED_SEARCH_PROVIDERS = {
     SEARCH_PROVIDER_OPENAI,
     SEARCH_PROVIDER_QWEN,
     SEARCH_PROVIDER_MINIMAX,
-    SEARCH_PROVIDER_BUILTIN,
+    SEARCH_PROVIDER_NONE,
 }
 
 DEFAULT_QWEN_SEARCH_MODEL = "qwen3-max-2026-01-23"
@@ -73,10 +72,6 @@ SEARCH_TOOL_PARAMETERS = {
         "code_interpreter",
     },
     SEARCH_PROVIDER_MINIMAX: {
-        "query",
-        "max_results",
-    },
-    SEARCH_PROVIDER_BUILTIN: {
         "query",
         "max_results",
     },
@@ -183,8 +178,6 @@ class ConfiguredSearchProvider:
             )
         if self.provider == SEARCH_PROVIDER_MINIMAX:
             return await self._search_minimax(query=query, result_limit=result_limit)
-        if self.provider == SEARCH_PROVIDER_BUILTIN:
-            return await self._search_builtin(query=query, result_limit=result_limit)
         return _error_response(self.provider, query, "search is disabled")
 
     async def _search_openai(
@@ -372,58 +365,6 @@ class ConfiguredSearchProvider:
             "results": [item.to_dict() for item in results],
         }
 
-    async def _search_builtin(self, *, query: str, result_limit: int) -> dict:
-        try:
-            from ddgs import DDGS
-        except ImportError:
-            return _error_response(
-                self.provider,
-                query,
-                "Built-in search requires the ddgs library (pip install ddgs).",
-            )
-
-        try:
-            results = await asyncio.to_thread(
-                self._duckduckgo_search_sync,
-                query=query,
-                result_limit=result_limit,
-            )
-        except Exception as exception:
-            logger.warning("Built-in web search failed: %s", exception)
-            return _error_response(self.provider, query, str(exception))
-
-        if not results:
-            return {
-                "status": "empty",
-                "provider": self.provider,
-                "query": query,
-                "results": [],
-            }
-
-        return {
-            "status": "ok",
-            "provider": self.provider,
-            "query": query,
-            "results": [result.to_dict() for result in results],
-        }
-
-    @staticmethod
-    def _duckduckgo_search_sync(query: str, result_limit: int) -> list[SearchResult]:
-        from ddgs import DDGS
-
-        with DDGS(timeout=15) as ddgs:
-            raw_results = list(ddgs.text(query, max_results=result_limit))
-
-        results: list[SearchResult] = []
-        for item in raw_results:
-            title = _clean_text(item.get("title", "") or "")
-            url = (item.get("href", "") or "").strip()
-            snippet = _clean_text(item.get("body", "") or "")
-            if url:
-                results.append(SearchResult(title=title, url=url, snippet=snippet))
-
-        return _deduplicate_results(results)
-
 
 def create_web_search_tool(
     search_config: Optional[dict],
@@ -431,13 +372,11 @@ def create_web_search_tool(
     client: Optional[AsyncOpenAI] = None,
     model: Optional[str] = None,
 ):
-    """Create the configured web_search tool (always available; defaults to builtin)."""
+    """Create the configured web_search tool, or return None when disabled."""
     config = search_config or {}
-    raw_provider = config.get("provider")
-    if raw_provider is not None:
-        provider = normalize_search_provider(raw_provider)
-    else:
-        provider = SEARCH_PROVIDER_BUILTIN
+    provider = normalize_search_provider(config.get("provider"))
+    if provider == SEARCH_PROVIDER_NONE:
+        return None
 
     search_provider = ConfiguredSearchProvider(
         provider=provider,
@@ -531,12 +470,12 @@ def _limit_tool_schema_to_provider(tool_spec: dict, provider: str) -> None:
 
 
 def normalize_search_provider(provider: Any) -> str:
-    normalized = str(provider or SEARCH_PROVIDER_BUILTIN).strip().lower().replace("-", "_")
+    normalized = str(provider or SEARCH_PROVIDER_NONE).strip().lower().replace("-", "_")
     aliases = {
-        "builtin": SEARCH_PROVIDER_BUILTIN,
-        "default": SEARCH_PROVIDER_BUILTIN,
-        "duckduckgo": SEARCH_PROVIDER_BUILTIN,
-        "ddg": SEARCH_PROVIDER_BUILTIN,
+        "off": SEARCH_PROVIDER_NONE,
+        "disabled": SEARCH_PROVIDER_NONE,
+        "no_search": SEARCH_PROVIDER_NONE,
+        "none": SEARCH_PROVIDER_NONE,
         "openai_builtin": SEARCH_PROVIDER_OPENAI,
         "openai_web_search": SEARCH_PROVIDER_OPENAI,
         "openai": SEARCH_PROVIDER_OPENAI,
