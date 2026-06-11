@@ -74,7 +74,6 @@ class BaseAgentRunner:
     - Load and validate agent configurations from YAML files
     - Initialize agents with tools
     - Manage message databases
-    - Create dynamic Pydantic models from schema definitions
     
     Attributes:
         config: Loaded configuration dictionary

@@ -347,7 +347,11 @@ class ModelClient:
             "store": False,
         }
 
-        instruction_text = self._build_responses_instructions(instructions)
+        if isinstance(instructions, list):
+            parts = [self._content_to_text(message.get("content")) for message in instructions]
+            instruction_text = "\n\n".join(part for part in parts if part)
+        else:
+            instruction_text = instructions or ""
         if instruction_text:
             params["instructions"] = instruction_text
         if tool_specs:
@@ -355,16 +359,6 @@ class ModelClient:
             params["tool_choice"] = "auto"
             params["include"] = ["reasoning.encrypted_content"]
         return params
-
-    @classmethod
-    def _build_responses_instructions(
-        cls,
-        instructions: Optional[Union[str, list[dict]]],
-    ) -> str:
-        if isinstance(instructions, list):
-            parts = [cls._content_to_text(message.get("content")) for message in instructions]
-            return "\n\n".join(part for part in parts if part)
-        return instructions or ""
 
     @classmethod
     def _build_responses_input(cls, messages: list) -> list:
@@ -487,14 +481,7 @@ class ModelClient:
         chat_messages = []
         if isinstance(instructions, list):
             chat_messages.extend(dict(message) for message in instructions)
-            chat_messages.extend(messages)
-            chat_messages = ModelClient._coalesce_leading_system_messages(chat_messages)
-            return ModelClient._strip_message_names(
-                chat_messages,
-                strip_provider_extras=strip_provider_extras,
-            )
-
-        if instructions:
+        elif instructions:
             chat_messages.append({"role": "system", "content": instructions})
         chat_messages.extend(messages)
         chat_messages = ModelClient._coalesce_leading_system_messages(chat_messages)

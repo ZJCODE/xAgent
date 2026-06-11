@@ -123,7 +123,7 @@ class Agent:
         self.message_handler = MessageHandler(
             message_storage=self.message_storage,
             system_prompt=self.system_prompt,
-            workspace_dir=self.workspace_dir,
+            workspace_dir=getattr(self, "workspace_dir", None),
         )
         self.tool_executor = ToolExecutor(
             tool_manager=self.tool_manager,
@@ -428,13 +428,10 @@ class Agent:
                 tool_calls = []
                 message_started = False
 
-                def live_phase() -> str:
-                    return "assistant"
-
                 def ensure_live_message_started() -> dict:
                     nonlocal message_started
                     message_started = True
-                    return self._message_start_event(message_id, live_phase())
+                    return self._message_start_event(message_id, "assistant")
 
                 async for model_event in self.model_client.model_turn_events(
                     messages=input_messages,
@@ -449,7 +446,7 @@ class Agent:
                                 yield ensure_live_message_started()
                             yield self._message_delta_event(
                                 message_id,
-                                live_phase(),
+                                "assistant",
                                 model_event.delta,
                             )
                         continue
