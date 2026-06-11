@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .base import MessageBatch, MessageStorageBase
-from ...schemas import Message, MessageType
+from ...schemas import Message
 
 
 class MessageStorageLocalConfig:
@@ -170,11 +170,7 @@ class MessageStorageLocal(MessageStorageBase):
                     self.logger.warning("Skipping invalid popped local message: %s", exception)
                     continue
 
-                if not self._is_tool_message(message):
-                    return message
-
-    def _is_tool_message(self, message: Message) -> bool:
-        return message.type in {MessageType.FUNCTION_CALL, MessageType.FUNCTION_CALL_OUTPUT}
+                return message
 
     async def get_message_count(self) -> int:
         return await asyncio.to_thread(self._get_message_count_sync)

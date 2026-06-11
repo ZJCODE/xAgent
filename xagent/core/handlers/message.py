@@ -143,7 +143,7 @@ class MessageHandler:
         """Keep only persisted user/assistant natural-language messages."""
         return [
             msg for msg in messages
-            if msg.type == MessageType.Message
+            if msg.type == MessageType.MESSAGE
             and msg.role in (RoleType.USER, RoleType.ASSISTANT)
         ]
 
@@ -776,7 +776,7 @@ class MessageHandler:
         if not supports_vision:
             core_prompt = core_prompt + AgentConfig.NO_VISION_NOTICE.rstrip()
         messages = [{
-            "role": RoleType.SYSTEM.value,
+            "role": "system",
             "name": AgentConfig.CORE_INTERACTION_RULES_NAME,
             "content": core_prompt,
         }]
@@ -784,28 +784,28 @@ class MessageHandler:
         tool_policy = self._build_tool_policy(tool_names=tool_names)
         if tool_policy:
             messages.append({
-                "role": RoleType.SYSTEM.value,
+                "role": "system",
                 "name": AgentConfig.TOOL_POLICY_NAME,
                 "content": tool_policy,
             })
 
         if self.system_prompt.strip():
             messages.append({
-                "role": RoleType.SYSTEM.value,
+                "role": "system",
                 "name": AgentConfig.IDENTITY_CONTEXT_NAME,
                 "content": AgentConfig.build_identity_context(self.system_prompt),
             })
 
         if workspace_context.strip():
             messages.append({
-                "role": RoleType.SYSTEM.value,
+                "role": "system",
                 "name": AgentConfig.WORKSPACE_CONTEXT_NAME,
                 "content": workspace_context.strip(),
             })
 
         if skills_catalog.strip():
             messages.append({
-                "role": RoleType.SYSTEM.value,
+                "role": "system",
                 "name": AgentConfig.SKILLS_CATALOG_NAME,
                 "content": skills_catalog.strip(),
             })
@@ -847,9 +847,8 @@ class MessageHandler:
     def sanitize_input_messages(input_messages: list) -> list:
         """Remove leading tool result messages, which are invalid without a prior assistant tool call."""
         while input_messages and (
-            input_messages[0].get("type") == MessageType.FUNCTION_CALL_OUTPUT
-            or input_messages[0].get("type") == MessageType.FUNCTION_CALL_OUTPUT.value
-            or input_messages[0].get("role") == RoleType.TOOL.value
+            input_messages[0].get("type") == "function_call_output"
+            or input_messages[0].get("role") == "tool"
         ):
             input_messages.pop(0)
         return input_messages

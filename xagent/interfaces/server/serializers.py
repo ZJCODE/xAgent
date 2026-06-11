@@ -31,12 +31,6 @@ def message_item(message: Message) -> Dict[str, Any]:
         "attachments": attachments,
         "attachment_count": len(attachments),
     }
-    if message.tool_call:
-        item["tool_call"] = {
-            "name": message.tool_call.name,
-            "arguments": message.tool_call.arguments,
-            "output": message.tool_call.output,
-        }
     return item
 
 
@@ -151,16 +145,6 @@ def _message_search_fields(message: Message) -> List[tuple[str, str]]:
         ("role", role),
         ("type", message_type),
     ]
-
-    if message.tool_call:
-        tool_parts = [
-            str(message.tool_call.name or ""),
-            str(message.tool_call.arguments or ""),
-            str(message.tool_call.output or ""),
-        ]
-        tool_text = " ".join(part for part in tool_parts if part)
-        if tool_text:
-            fields.append(("tool", tool_text))
 
     if message.metadata:
         metadata_text = json.dumps(message.metadata, ensure_ascii=False, sort_keys=True, default=str)

@@ -182,7 +182,7 @@ class MemoryHandler:
 
     @staticmethod
     def _is_memory_worthy_experience(message: Message) -> bool:
-        if message.type == MessageType.Message:
+        if message.type == MessageType.MESSAGE:
             return bool(message.content.strip())
         if message.type != MessageType.CONTEXT_EVENT:
             return False

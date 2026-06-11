@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import httpx
 
 from xagent.interfaces.server import AgentHTTPServer
-from xagent.schemas import Message, MessageType, RoleType, ToolCall
+from xagent.schemas import Message, MessageType, RoleType
 
 
 class FakeMessageStorage:
@@ -196,39 +196,6 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("people", tree_names)
             self.assertEqual(len(daily_search_response.json()["results"]), 1)
             self.assertEqual(people_search_response.json()["results"], [])
-
-    async def test_message_search_matches_message_content_and_tool_output(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            messages = [
-                Message.create("content marker from alice", role=RoleType.USER, sender_id="alice"),
-                Message(
-                    type=MessageType.FUNCTION_CALL_OUTPUT,
-                    role=RoleType.TOOL,
-                    sender_id="search_workspace",
-                    content="Tool output preview",
-                    tool_call=ToolCall(
-                        call_id="call-1",
-                        name="search_workspace",
-                        output="tool marker",
-                    ),
-                ),
-            ]
-            server = self._server_with_messages(root, messages=messages)
-
-            async with await self._client(server) as client:
-                response = await client.get("/api/messages/search", params={"query": "marker"})
-
-            self.assertEqual(response.status_code, 200)
-            payload = response.json()
-            self.assertEqual(payload["query"], "marker")
-            self.assertEqual(len(payload["results"]), 2)
-            self.assertEqual(payload["results"][0]["type"], "function_call_output")
-            self.assertIn("tool", payload["results"][0]["matched_in"])
-            self.assertIn("tool marker", payload["results"][0]["snippet"])
-            self.assertEqual(payload["results"][1]["sender_id"], "alice")
-            self.assertIn("content", payload["results"][1]["matched_in"])
-            self.assertIn("content marker from alice", payload["results"][1]["snippet"])
 
     async def test_messages_api_returns_image_preview_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:

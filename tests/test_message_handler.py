@@ -8,7 +8,7 @@ import unittest
 
 from xagent.core.config import AgentConfig
 from xagent.core.handlers.message import MessageHandler
-from xagent.schemas import Message, MessageType, RoleType, ToolCall
+from xagent.schemas import Message, MessageType, RoleType
 from xagent.utils.image_utils import data_uri_to_bytes, extract_image_urls_from_text
 
 
@@ -425,36 +425,6 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         content = transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"]
         self.assertIn("Current speaker: alice", content)
         self.assertIn("Date:", content)
-
-    def test_build_recent_transcript_message_collapses_messages(self):
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
-        messages = [
-            Message.create("First question", role=RoleType.USER, sender_id="alice"),
-            Message.create("First answer", role=RoleType.ASSISTANT, sender_id="agent"),
-            Message(
-                type=MessageType.FUNCTION_CALL_OUTPUT,
-                role=RoleType.TOOL,
-                sender_id="search_memory",
-                content="Tool output preview",
-                tool_call=ToolCall(call_id="call-1", output="full tool output"),
-            ),
-            Message.create("Latest question", role=RoleType.USER, sender_id="bob"),
-        ]
-
-        transcript_message = handler.build_recent_transcript_message(messages, current_user_id="bob")
-
-        self.assertEqual(transcript_message["role"], "user")
-        self.assertIsInstance(transcript_message["content"], str)
-        self.assertIn("[speaker=alice][timestamp=", transcript_message["content"])
-        self.assertIn("First answer", transcript_message["content"])
-        self.assertIn("[speaker=ME][timestamp=", transcript_message["content"])
-        self.assertIn("[speaker=bob][timestamp=", transcript_message["content"])
-        self.assertNotIn("Tool output preview", transcript_message["content"])
-        self.assertIn("what bob most recently said", transcript_message["content"])
-        self.assertIn("outcome bob needs now", transcript_message["content"])
 
     def test_build_recent_transcript_message_records_images_without_attaching_them(self):
         handler = MessageHandler(
