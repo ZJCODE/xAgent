@@ -283,7 +283,6 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser = subparsers.add_parser("setup", help="Create or reconfigure config.yaml and identity.md")
     _add_dir_argument(setup_parser)
     setup_parser.add_argument("--force", action="store_true", help="Overwrite setup-managed files")
-    setup_parser.add_argument("--schema", action="store_true", help="Include a starter output_schema example")
     setup_parser.set_defaults(handler=setup.handle_init)
 
     chat_parser = subparsers.add_parser("chat", help="Start an interactive chat or send a single message")

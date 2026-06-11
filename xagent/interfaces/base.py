@@ -1,12 +1,10 @@
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional
 
 # Third-party imports
 import yaml
 from anthropic import AsyncAnthropic
-from pydantic import BaseModel, Field, create_model
-
 # Local imports
 from ..core.agent import Agent
 from ..core.config import AgentConfig
@@ -77,7 +75,6 @@ class BaseAgentRunner:
     - Load and validate agent configurations from YAML files
     - Initialize agents with tools
     - Manage message databases
-    - Create dynamic Pydantic models from schema definitions
     
     Attributes:
         config: Loaded configuration dictionary
@@ -170,7 +167,6 @@ class BaseAgentRunner:
             "provider",
             "search",
             "image_generation",
-            "output_schema",
             "channels",
             "runtime",
             "observability",
@@ -539,95 +535,6 @@ class BaseAgentRunner:
             raise ValueError(f"Identity file is empty: {identity_path}")
         return identity
     
-    def _create_output_model_from_schema(
-        self, 
-        output_schema: Optional[Dict[str, Any]]
-    ) -> Optional[Type[BaseModel]]:
-        """
-        Create a dynamic Pydantic BaseModel from YAML output_schema configuration.
-        
-        Args:
-            output_schema: Dictionary containing class_name and fields configuration
-            
-        Returns:
-            Dynamic Pydantic BaseModel class or None if no schema provided
-            
-        Raises:
-            ValueError: If schema format is invalid
-        """
-        if not output_schema:
-            return None
-        
-        try:
-            class_name = output_schema.get("class_name", "DynamicModel")
-            fields_config = output_schema.get("fields", {})
-            
-            if not fields_config:
-                return None
-            
-            field_definitions = self._build_field_definitions(fields_config)
-            return create_model(class_name, **field_definitions)
-            
-        except Exception as e:
-            self.logger.warning("Failed to create output model from schema: %s", e)
-            return None
-    
-    def _build_field_definitions(self, fields_config: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Build field definitions for create_model from fields configuration.
-        
-        Args:
-            fields_config: Dictionary of field configurations
-            
-        Returns:
-            Dictionary of field definitions suitable for create_model
-        """
-        field_definitions = {}
-        
-        for field_name, field_config in fields_config.items():
-            field_type = field_config.get("type", "str")
-            field_description = field_config.get("description", "")
-            
-            python_type = self._get_python_type(field_type, field_config)
-            field_definitions[field_name] = (
-                python_type, 
-                Field(description=field_description)
-            )
-        
-        return field_definitions
-    
-    def _get_python_type(self, field_type: str, field_config: Dict[str, Any]) -> Type:
-        """
-        Convert string type name to Python type, handling complex types.
-        
-        Args:
-            field_type: String representation of the type
-            field_config: Complete field configuration
-            
-        Returns:
-            Python type for the field
-        """
-
-        # Type mappings for dynamic model creation
-        TYPE_MAPPING = {
-            "str": str,
-            "int": int,
-            "float": float,
-            "bool": bool,
-            "list": list,
-            "dict": dict,
-        }
-
-        python_type = TYPE_MAPPING.get(field_type, str)
-
-        # Handle list types with items specification
-        if field_type == "list" and "items" in field_config:
-            items_type = field_config["items"]
-            items_python_type = TYPE_MAPPING.get(items_type, str)
-            python_type = List[items_python_type]
-        
-        return python_type
-    
     def _initialize_agent(self) -> Agent:
         """
         Initialize the agent with tools and configuration.
@@ -643,7 +550,6 @@ class BaseAgentRunner:
         
         client = self._initialize_client(agent_cfg)
         tools = self._load_agent_tools(agent_cfg, client=client)
-        output_type = self._get_output_type(agent_cfg)
 
         agent_section = agent_cfg.get("agent") or {}
         return Agent(
@@ -653,7 +559,6 @@ class BaseAgentRunner:
             model_max_tokens=self._get_provider_max_tokens(agent_cfg),
             client=client,
             tools=tools,
-            output_type=output_type,
             message_storage=self.message_storage,
             workspace=str(self.workspace),
             skills_storage=self.skills_storage,
@@ -923,13 +828,7 @@ class BaseAgentRunner:
                 merged_config["base_url"] = provider_base_url
 
         return merged_config
-    
-    def _get_output_type(self, agent_cfg: Dict[str, Any]) -> Optional[Type[BaseModel]]:
-        """Get output type from configuration schema."""
-        if "output_schema" in agent_cfg:
-            return self._create_output_model_from_schema(agent_cfg["output_schema"])
-        return None
-    
+
     def _initialize_message_storage(self) -> MessageStorageBase:
         """
         Initialize the default message storage backend.

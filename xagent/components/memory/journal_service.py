@@ -175,7 +175,6 @@ Output rules:
             messages=[{"role": "user", "content": user_prompt}],
             tool_specs=None,
             instructions=system_prompt,
-            output_type=None,
         )
         if getattr(reply_type, "value", None) == "simple_reply":
             return str(payload)

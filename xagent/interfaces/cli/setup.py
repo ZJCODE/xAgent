@@ -270,27 +270,8 @@ def _default_init_selection() -> InitSelection:
     )
 
 
-def _weather_output_schema() -> dict:
-    return {
-        "class_name": "WeatherReport",
-        "fields": {
-            "location": {
-                "type": "str",
-                "description": "Location name",
-            },
-            "temperature_celsius": {
-                "type": "int",
-                "description": "Temperature in degrees Celsius",
-            },
-            "condition": {
-                "type": "str",
-                "description": "Short weather condition summary",
-            },
-        },
-    }
 
-
-def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
+def _config_yaml(selection: InitSelection) -> str:
     provider_config = {
         "name": selection.provider,
         "base_url": selection.base_url,
@@ -390,8 +371,6 @@ def _config_yaml(selection: InitSelection, schema: bool = False) -> str:
             "secret_key": selection.langfuse_secret_key or LANGFUSE_SECRET_KEY_PLACEHOLDER,
             "base_url": selection.langfuse_base_url or LANGFUSE_BASE_URL,
         }
-    if schema:
-        config["output_schema"] = _weather_output_schema()
     return yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
 
 
@@ -1266,7 +1245,6 @@ def init_agent_directory(
     config_dir: Optional[str] = None,
     *,
     force: bool = False,
-    schema: bool = False,
     selection: Optional[InitSelection] = None,
     clear_runtime_data: bool = False,
 ) -> InitResult:
@@ -1314,7 +1292,7 @@ def init_agent_directory(
     tasks_dir.mkdir(parents=True, exist_ok=True)
 
     selection = selection or _default_init_selection()
-    config_file.write_text(_config_yaml(selection, schema=schema), encoding="utf-8")
+    config_file.write_text(_config_yaml(selection), encoding="utf-8")
     identity_file.write_text(selection.identity, encoding="utf-8")
 
     TerminalUI().print_panel(
@@ -1444,7 +1422,6 @@ def handle_init(args: argparse.Namespace) -> int:
         result = init_agent_directory(
             args.config_dir,
             force=args.force,
-            schema=args.schema,
         )
         return 0 if result.wrote_files else 1
 
@@ -1466,7 +1443,6 @@ def handle_init(args: argparse.Namespace) -> int:
     result = init_agent_directory(
         args.config_dir,
         force=args.force,
-        schema=args.schema,
         selection=selection,
         clear_runtime_data=clear_runtime_data,
     )

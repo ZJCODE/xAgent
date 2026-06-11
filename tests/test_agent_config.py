@@ -410,16 +410,6 @@ provider:
             self.assertNotIn("capabilities:", config_text)
             self.assertIn("You are a helpful assistant.", identity_text)
 
-    def test_init_schema_option_adds_output_schema(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = init_agent_directory(tmpdir, schema=True)
-
-            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
-
-            output_schema = config["output_schema"]
-            self.assertEqual(output_schema["class_name"], "WeatherReport")
-            self.assertIn("temperature_celsius", output_schema["fields"])
-
     def test_init_refuses_to_overwrite_managed_files_without_force(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = init_agent_directory(tmpdir)

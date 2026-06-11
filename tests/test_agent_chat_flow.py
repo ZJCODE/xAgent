@@ -5,8 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from pydantic import BaseModel
-
 from xagent.components.message import MessageStorageBase
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
@@ -103,7 +101,7 @@ class CapturingModelClient:
         self.calls = []
         self.instructions_calls = []
 
-    async def call(self, messages, tool_specs, instructions=None, output_type=None, stream=False, store_reply=None):
+    async def call(self, messages, tool_specs, instructions=None, stream=False, store_reply=None):
         self.calls.append(messages)
         self.instructions_calls.append(instructions)
         return self.responses.pop(0)
@@ -262,10 +260,6 @@ def _responses_response(output_text=None, output=None):
     return SimpleNamespace(output_text=output_text, output=output or [])
 
 
-class StructuredAnswer(BaseModel):
-    answer: str
-
-
 class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
     def test_non_stream_response_preserves_text_on_tool_calls(self):
         raw_tool_call = SimpleNamespace(
@@ -381,31 +375,6 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
                 "strict": False,
             }],
         )
-
-    async def test_responses_structured_output_uses_text_format(self):
-        client = FakeOpenAIClient(response_api_responses=[
-            _responses_response(output_text='{"answer": "ok"}')
-        ])
-        model = ModelClient(
-            client=client,
-            model="test-model",
-            model_api=MODEL_API_OPENAI_RESPONSES,
-        )
-
-        reply_type, payload = await model.call(
-            messages=[{"role": "user", "content": "answer as json"}],
-            tool_specs=None,
-            instructions="Return JSON",
-            output_type=StructuredAnswer,
-        )
-
-        self.assertEqual(reply_type, ReplyType.STRUCTURED_REPLY)
-        self.assertEqual(payload.answer, "ok")
-        call = client.responses_api.calls[0]
-        self.assertEqual(call["text"]["format"]["type"], "json_schema")
-        self.assertEqual(call["text"]["format"]["name"], "StructuredAnswer")
-        self.assertFalse(call["text"]["format"]["strict"])
-        self.assertIn("JSON schema", call["instructions"])
 
     async def test_responses_tool_call_preserves_replay_items(self):
         response_items = [
@@ -629,31 +598,6 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all("name" not in message for message in call["messages"]))
 
-    async def test_call_strips_structured_output_message_name(self):
-        client = FakeOpenAIClient([_chat_response(content='{"answer": "ok"}')])
-        model = ModelClient(client=client, model="test-model")
-
-        reply_type, payload = await model.call(
-            messages=[{
-                "role": "user",
-                "name": AgentConfig.CURRENT_TASK_NAME,
-                "content": "answer as json",
-            }],
-            tool_specs=None,
-            instructions=[{
-                "role": "system",
-                "name": AgentConfig.CORE_INTERACTION_RULES_NAME,
-                "content": "Return JSON",
-            }],
-            output_type=StructuredAnswer,
-        )
-
-        self.assertEqual(reply_type, ReplyType.STRUCTURED_REPLY)
-        self.assertEqual(payload.answer, "ok")
-        call = client.chat_completions.calls[0]
-        self.assertTrue(all("name" not in message for message in call["messages"]))
-        self.assertIn("JSON schema", call["messages"][0]["content"])
-
     def test_strip_message_names_preserves_tool_call_function_names(self):
         messages = [{
             "role": "assistant",
@@ -670,23 +614,6 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn("name", stripped[0])
         self.assertEqual(stripped[0]["tool_calls"][0]["function"]["name"], "lookup")
-
-    async def test_structured_output_uses_json_object_and_pydantic_validation(self):
-        client = FakeOpenAIClient([_chat_response(content='{"answer": "ok"}')])
-        model = ModelClient(client=client, model="test-model")
-
-        reply_type, payload = await model.call(
-            messages=[{"role": "user", "content": "answer as json"}],
-            tool_specs=None,
-            instructions="Return JSON",
-            output_type=StructuredAnswer,
-        )
-
-        self.assertEqual(reply_type, ReplyType.STRUCTURED_REPLY)
-        self.assertEqual(payload.answer, "ok")
-        call = client.chat_completions.calls[0]
-        self.assertEqual(call["response_format"], {"type": "json_object"})
-        self.assertIn("JSON schema", call["messages"][0]["content"])
 
     async def test_stream_text_yields_chunks_and_stores_final_text(self):
         chunks = [
@@ -912,18 +839,6 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.message, "Model call failed.")
         self.assertIn("provider rejected messages", payload.details)
 
-    def test_structured_validation_error_returns_error_event(self):
-        response = _chat_response(content='{"wrong": "shape"}')
-
-        reply_type, payload = ModelClient._handle_non_stream(
-            response,
-            output_type=StructuredAnswer,
-        )
-
-        self.assertEqual(reply_type, ReplyType.ERROR)
-        self.assertIsInstance(payload, ModelErrorEvent)
-        self.assertEqual(payload.code, "structured_output_validation_failed")
-
 
 class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     def _build_agent(
@@ -937,7 +852,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     ):
         agent = Agent.__new__(Agent)
         agent.model = AgentConfig.DEFAULT_MODEL
-        agent.output_type = None
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent"
         agent.supports_vision = True
@@ -1726,3 +1640,4 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

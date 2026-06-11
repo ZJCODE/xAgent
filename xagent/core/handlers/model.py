@@ -3,7 +3,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Awaitable, Callable, Optional, Union
 
-from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..config import AgentConfig, ReplyType
@@ -135,7 +134,6 @@ class ModelClient:
         messages: list,
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
-        output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
         store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
@@ -146,29 +144,24 @@ class ModelClient:
             messages: Input message list (user/assistant/tool content only).
             tool_specs: Tool specifications for the model.
             instructions: Static behavioural instructions (system prompt).
-            output_type: Pydantic model for structured output.
             stream: Whether to stream the response.
             store_reply: Async callback to store the final reply text.
         Returns:
             Tuple of (ReplyType, response_object).
         """
         try:
-            if output_type is not None:
-                stream = False
-
             if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
                 response = await self.client.messages.create(
                     **self._build_anthropic_create_params(
                         messages=messages,
                         tool_specs=tool_specs,
                         instructions=instructions,
-                        output_type=output_type,
                         stream=stream,
                     )
                 )
                 if stream:
                     return await self._handle_anthropic_stream(response, store_reply)
-                return self._handle_anthropic_non_stream(response, output_type)
+                return self._handle_anthropic_non_stream(response)
 
             if self.model_api == MODEL_API_OPENAI_RESPONSES:
                 response = await self.client.responses.create(
@@ -176,27 +169,25 @@ class ModelClient:
                         messages=messages,
                         tool_specs=tool_specs,
                         instructions=instructions,
-                        output_type=output_type,
                         stream=stream,
                     )
                 )
                 if stream:
                     return await self._handle_responses_stream(response, store_reply)
-                return self._handle_responses_non_stream(response, output_type)
+                return self._handle_responses_non_stream(response)
 
             response = await self.client.chat.completions.create(
                 **self._build_create_params(
                     messages=messages,
                     tool_specs=tool_specs,
                     instructions=instructions,
-                    output_type=output_type,
                     stream=stream,
                 )
             )
 
             if stream:
                 return await self._handle_stream(response, store_reply)
-            return self._handle_non_stream(response, output_type)
+            return self._handle_non_stream(response)
 
         except Exception as e:
             logger.exception("Model call failed: %s", e)
@@ -244,7 +235,6 @@ class ModelClient:
                         messages=messages,
                         tool_specs=tool_specs,
                         instructions=instructions,
-                        output_type=None,
                         stream=True,
                     )
                 )
@@ -258,7 +248,6 @@ class ModelClient:
                         messages=messages,
                         tool_specs=tool_specs,
                         instructions=instructions,
-                        output_type=None,
                         stream=True,
                     )
                 )
@@ -271,7 +260,6 @@ class ModelClient:
                     messages=messages,
                     tool_specs=tool_specs,
                     instructions=instructions,
-                    output_type=None,
                     stream=True,
                 )
             )
@@ -300,7 +288,6 @@ class ModelClient:
                     messages=messages,
                     tool_specs=tool_specs,
                     instructions=instructions,
-                    output_type=None,
                     stream=False,
                 )
             )
@@ -311,7 +298,6 @@ class ModelClient:
                     messages=messages,
                     tool_specs=tool_specs,
                     instructions=instructions,
-                    output_type=None,
                     stream=False,
                 )
             )
@@ -322,7 +308,6 @@ class ModelClient:
                     messages=messages,
                     tool_specs=tool_specs,
                     instructions=instructions,
-                    output_type=None,
                     stream=False,
                 )
             )
@@ -336,19 +321,16 @@ class ModelClient:
         messages: list,
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]],
-        output_type: Optional[type[BaseModel]],
         stream: bool,
     ) -> dict:
         params = {
             "model": self.model,
-            "messages": self._build_chat_messages(messages, instructions, output_type),
+            "messages": self._build_chat_messages(messages, instructions),
             "stream": stream,
         }
         if tool_specs:
             params["tools"] = tool_specs
             params["tool_choice"] = "auto"
-        if output_type is not None:
-            params["response_format"] = {"type": "json_object"}
         return params
 
     def _build_responses_create_params(
@@ -356,7 +338,6 @@ class ModelClient:
         messages: list,
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]],
-        output_type: Optional[type[BaseModel]],
         stream: bool,
     ) -> dict:
         params = {
@@ -366,30 +347,18 @@ class ModelClient:
             "store": False,
         }
 
-        instruction_text = self._build_responses_instructions(instructions, output_type)
+        if isinstance(instructions, list):
+            parts = [self._content_to_text(message.get("content")) for message in instructions]
+            instruction_text = "\n\n".join(part for part in parts if part)
+        else:
+            instruction_text = instructions or ""
         if instruction_text:
             params["instructions"] = instruction_text
         if tool_specs:
             params["tools"] = self._to_responses_tools(tool_specs)
             params["tool_choice"] = "auto"
             params["include"] = ["reasoning.encrypted_content"]
-        if output_type is not None:
-            params["text"] = {"format": self._responses_text_format(output_type)}
         return params
-
-    @classmethod
-    def _build_responses_instructions(
-        cls,
-        instructions: Optional[Union[str, list[dict]]],
-        output_type: Optional[type[BaseModel]],
-    ) -> str:
-        if isinstance(instructions, list):
-            parts = [cls._content_to_text(message.get("content")) for message in instructions]
-            structured_content = cls._structured_instructions(None, output_type)
-            if structured_content:
-                parts.append(structured_content)
-            return "\n\n".join(part for part in parts if part)
-        return cls._structured_instructions(instructions, output_type)
 
     @classmethod
     def _build_responses_input(cls, messages: list) -> list:
@@ -479,33 +448,16 @@ class ModelClient:
             tools.append(tool)
         return tools
 
-    @staticmethod
-    def _responses_text_format(output_type: type[BaseModel]) -> dict:
-        return {
-            "type": "json_schema",
-            "name": ModelClient._schema_name(output_type),
-            "strict": False,
-            "schema": output_type.model_json_schema(),
-        }
-
-    @staticmethod
-    def _schema_name(output_type: type[BaseModel]) -> str:
-        raw_name = getattr(output_type, "__name__", "StructuredOutput") or "StructuredOutput"
-        cleaned = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in raw_name)
-        return cleaned or "StructuredOutput"
-
     def _build_anthropic_create_params(
         self,
         messages: list,
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]],
-        output_type: Optional[type[BaseModel]],
         stream: bool,
     ) -> dict:
         system, anthropic_messages = self._build_anthropic_messages(
             messages=messages,
             instructions=instructions,
-            output_type=output_type,
         )
         params = {
             "model": self.model,
@@ -524,29 +476,13 @@ class ModelClient:
     def _build_chat_messages(
         messages: list,
         instructions: Optional[Union[str, list[dict]]],
-        output_type: Optional[type[BaseModel]] = None,
         strip_provider_extras: bool = True,
     ) -> list:
         chat_messages = []
         if isinstance(instructions, list):
             chat_messages.extend(dict(message) for message in instructions)
-            structured_content = ModelClient._structured_instructions(None, output_type)
-            if structured_content:
-                chat_messages.append({
-                    "role": "system",
-                    "name": "structured_output",
-                    "content": structured_content,
-                })
-            chat_messages.extend(messages)
-            chat_messages = ModelClient._coalesce_leading_system_messages(chat_messages)
-            return ModelClient._strip_message_names(
-                chat_messages,
-                strip_provider_extras=strip_provider_extras,
-            )
-
-        system_content = ModelClient._structured_instructions(instructions, output_type)
-        if system_content:
-            chat_messages.append({"role": "system", "content": system_content})
+        elif instructions:
+            chat_messages.append({"role": "system", "content": instructions})
         chat_messages.extend(messages)
         chat_messages = ModelClient._coalesce_leading_system_messages(chat_messages)
         return ModelClient._strip_message_names(
@@ -604,12 +540,10 @@ class ModelClient:
         cls,
         messages: list,
         instructions: Optional[Union[str, list[dict]]],
-        output_type: Optional[type[BaseModel]] = None,
     ) -> tuple[str, list[dict]]:
         chat_messages = cls._build_chat_messages(
             messages,
             instructions,
-            output_type,
             strip_provider_extras=False,
         )
         system_parts: list[str] = []
@@ -776,27 +710,8 @@ class ModelClient:
         return tools
 
     @staticmethod
-    def _structured_instructions(
-        instructions: Optional[str],
-        output_type: Optional[type[BaseModel]],
-    ) -> str:
-        if output_type is None:
-            return instructions or ""
-
-        schema = json.dumps(output_type.model_json_schema(), ensure_ascii=False)
-        structured_prompt = (
-            "Structured output: return only one valid JSON object that conforms to this JSON schema. "
-            "Do not wrap the JSON in markdown and do not include any prose before or after it.\n\n"
-            f"JSON schema:\n{schema}"
-        )
-        if not instructions:
-            return structured_prompt
-        return f"{instructions}\n\n{structured_prompt}"
-
-    @staticmethod
     def _handle_non_stream(
         response,
-        output_type: Optional[type[BaseModel]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a non-streaming model response."""
         text = ModelClient._extract_response_text(response)
@@ -804,17 +719,6 @@ class ModelClient:
         if tool_calls:
             ModelClient._set_tool_calls_assistant_content(tool_calls, text or None)
             return ReplyType.TOOL_CALL, tool_calls
-
-        if output_type is not None and text:
-            try:
-                return ReplyType.STRUCTURED_REPLY, output_type.model_validate_json(text)
-            except Exception as exc:
-                logger.exception("Structured output validation failed: %s", exc)
-                return ReplyType.ERROR, ModelErrorEvent(
-                    code="structured_output_validation_failed",
-                    message="Structured output validation failed.",
-                    details=str(exc),
-                )
 
         if text:
             return ReplyType.SIMPLE_REPLY, text
@@ -828,7 +732,6 @@ class ModelClient:
     @staticmethod
     def _handle_responses_non_stream(
         response,
-        output_type: Optional[type[BaseModel]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a non-streaming OpenAI Responses API response."""
         text = ModelClient._extract_responses_text(response)
@@ -836,17 +739,6 @@ class ModelClient:
         if tool_calls:
             ModelClient._set_tool_calls_assistant_content(tool_calls, text or None)
             return ReplyType.TOOL_CALL, tool_calls
-
-        if output_type is not None and text:
-            try:
-                return ReplyType.STRUCTURED_REPLY, output_type.model_validate_json(text)
-            except Exception as exc:
-                logger.exception("Structured output validation failed: %s", exc)
-                return ReplyType.ERROR, ModelErrorEvent(
-                    code="structured_output_validation_failed",
-                    message="Structured output validation failed.",
-                    details=str(exc),
-                )
 
         if text:
             return ReplyType.SIMPLE_REPLY, text
@@ -860,7 +752,6 @@ class ModelClient:
     @staticmethod
     def _handle_anthropic_non_stream(
         response,
-        output_type: Optional[type[BaseModel]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a non-streaming Anthropic Messages response."""
         text = ModelClient._extract_anthropic_response_text(response)
@@ -868,17 +759,6 @@ class ModelClient:
         if tool_calls:
             ModelClient._set_tool_calls_assistant_content(tool_calls, text or None)
             return ReplyType.TOOL_CALL, tool_calls
-
-        if output_type is not None and text:
-            try:
-                return ReplyType.STRUCTURED_REPLY, output_type.model_validate_json(text)
-            except Exception as exc:
-                logger.exception("Structured output validation failed: %s", exc)
-                return ReplyType.ERROR, ModelErrorEvent(
-                    code="structured_output_validation_failed",
-                    message="Structured output validation failed.",
-                    details=str(exc),
-                )
 
         if text:
             return ReplyType.SIMPLE_REPLY, text
