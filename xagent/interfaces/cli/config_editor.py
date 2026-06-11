@@ -37,7 +37,7 @@ from ...tools.image_generation_tool import (
     IMAGE_GENERATION_PROVIDER_QWEN,
     normalize_image_generation_provider,
 )
-from ...tools.search_tool import is_placeholder_api_key, normalize_search_provider, SEARCH_PROVIDER_BUILTIN
+from ...tools.search_tool import is_placeholder_api_key, normalize_search_provider
 from ...voice.config import (
     QWEN_KEY_PLACEHOLDER,
     SONIOX_KEY_PLACEHOLDER,
@@ -49,7 +49,8 @@ from ...voice.config import (
 from ..base import BaseAgentConfig, BaseAgentRunner
 
 
-SEARCH_PROVIDERS = (SEARCH_PROVIDER_BUILTIN, PROVIDER_OPENAI, PROVIDER_QWEN, PROVIDER_MINIMAX)
+SEARCH_PROVIDER_NONE = "none"
+SEARCH_PROVIDERS = (SEARCH_PROVIDER_NONE, PROVIDER_OPENAI, PROVIDER_QWEN, PROVIDER_MINIMAX)
 IMAGE_GENERATION_PROVIDERS = (
     IMAGE_GENERATION_PROVIDER_NONE,
     IMAGE_GENERATION_PROVIDER_OPENAI,
@@ -176,10 +177,8 @@ def prepare_update(config: dict[str, Any], mutator: Callable[[dict[str, Any]], N
 
 
 def provider_needs_feature_key(config: dict[str, Any], provider: str) -> bool:
-    if provider == SEARCH_PROVIDER_BUILTIN:
-        return False
     model_provider = normalize_provider_name((config.get("provider") or {}).get("name"))
-    return provider != model_provider
+    return provider != SEARCH_PROVIDER_NONE and provider != model_provider
 
 
 def image_generation_provider_needs_feature_key(config: dict[str, Any], provider: str) -> bool:
@@ -302,7 +301,7 @@ def prepare_model_provider_update(
         search = data.get("search")
         if isinstance(search, dict):
             search_provider = normalize_search_provider(search.get("provider"))
-            if search_provider != SEARCH_PROVIDER_BUILTIN:
+            if search_provider != SEARCH_PROVIDER_NONE:
                 feature_key = _resolve_feature_api_key(
                     data,
                     section="search",
@@ -355,7 +354,7 @@ def prepare_search_provider_update(
 
     def mutate(data: dict[str, Any]) -> None:
         search = {"provider": normalized_provider}
-        if normalized_provider != SEARCH_PROVIDER_BUILTIN:
+        if normalized_provider != SEARCH_PROVIDER_NONE:
             current_provider = data.get("provider") if isinstance(data.get("provider"), dict) else {}
             search["api_key"] = _resolve_feature_api_key(
                 data,
