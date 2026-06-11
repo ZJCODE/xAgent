@@ -20,13 +20,6 @@ class ImageContent(BaseModel):
     source: Optional[str] = Field(None, description="URL or base64 string of the image")
 
 
-class MultiModalContent(BaseModel):
-    """Represents multi-modal content in a message."""
-    image: Optional[Union[ImageContent, List[ImageContent]]] = Field(
-        None, description="Image content associated with the message"
-    )
-
-
 class MessageType(Enum):
     MESSAGE = "message"
     CONTEXT_EVENT = "context_event"
@@ -57,7 +50,7 @@ class Message(BaseModel):
     sender_id: Optional[str] = Field(None, description="Stable identifier for the speaker in the agent message stream")
     content: str = Field(..., description="The content of the message")
     timestamp: float = Field(default_factory=time.time, description="The timestamp of when the message was sent")
-    multimodal: Optional[MultiModalContent] = Field(None, description="Multi-modal content associated with the message")
+    images: Optional[List[ImageContent]] = Field(None, description="Image content associated with the message")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional message metadata")
 
     @classmethod
@@ -83,7 +76,7 @@ class Message(BaseModel):
         Raises:
             ValueError: If image upload fails or too many images are provided.
         """
-        multimodal = None
+        images = None
         if image_source:
             sources = image_source if isinstance(image_source, list) else [image_source]
             if len(sources) > MAX_IMAGES_PER_MESSAGE:
@@ -103,15 +96,14 @@ class Message(BaseModel):
                 image_contents.append(ImageContent(format=infer_format(processed_source), source=processed_source))
 
             if image_contents:
-                image_content = image_contents[0] if len(image_contents) == 1 else image_contents
-                multimodal = MultiModalContent(image=image_content)
+                images = image_contents
 
         return cls(
             role=role,
             type=MessageType.MESSAGE,
             sender_id=sender_id,
             content=content,
-            multimodal=multimodal,
+            images=images,
         )
 
     @classmethod
@@ -140,11 +132,9 @@ class Message(BaseModel):
             if self.sender_id and self.role == RoleType.USER:
                 text_content = f"[{self.sender_id}] {text_content}"
 
-            if self.multimodal and self.multimodal.image:
+            if self.images:
                 content = [{"type": "text", "text": text_content}]
-
-                images = self.multimodal.image if isinstance(self.multimodal.image, list) else [self.multimodal.image]
-                for image in images:
+                for image in self.images:
                     content.append({
                         "type": "image_url",
                         "image_url": {"url": image.source},

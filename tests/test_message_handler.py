@@ -41,9 +41,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             )
             msg.metadata["images"] = image_metadata
 
-            image = msg.multimodal.image
-            self.assertFalse(isinstance(image, list))
-            self.assertTrue(image.source.startswith("/api/workspace/blob?path=temp%2Fimages%2Finbound%2F"))
+            images = msg.images
+            self.assertEqual(len(images), 1)
+            self.assertTrue(images[0].source.startswith("/api/workspace/blob?path=temp%2Fimages%2Finbound%2F"))
             self.assertEqual(len(msg.metadata["images"]), 1)
             asset = msg.metadata["images"][0]
             self.assertTrue(asset["workspace_path"].startswith("temp/images/inbound/"))

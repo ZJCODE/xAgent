@@ -64,10 +64,10 @@ def message_images(message: Message) -> List[Dict[str, Any]]:
         ]
         return _dedupe_image_items([*images, *attachment_images])
 
-    if not message.multimodal or not message.multimodal.image:
+    if not message.images:
         return attachment_images
 
-    images = message.multimodal.image if isinstance(message.multimodal.image, list) else [message.multimodal.image]
+    images = message.images
     result: List[Dict[str, Any]] = []
     for image in images:
         source = str(getattr(image, "source", "") or "")

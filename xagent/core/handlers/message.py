@@ -471,10 +471,9 @@ class MessageHandler:
         metadata_images = message.metadata.get("images") if isinstance(message.metadata, dict) else None
         if isinstance(metadata_images, list):
             return len(metadata_images)
-        if not message.multimodal or not message.multimodal.image:
+        if not message.images:
             return 0
-        images = message.multimodal.image
-        return len(images) if isinstance(images, list) else 1
+        return len(message.images)
 
     @staticmethod
     def _count_message_attachments(message: Message) -> int:
@@ -546,13 +545,11 @@ class MessageHandler:
     ) -> List[str]:
         if message is None or message.role != RoleType.USER or message.sender_id != current_user_id:
             return []
-        if not message.multimodal or not message.multimodal.image:
+        if not message.images:
             return []
-        images = message.multimodal.image
-        image_items = images if isinstance(images, list) else [images]
         return [
             image_source
-            for image in image_items
+            for image in message.images
             if (image_source := MessageHandler._model_image_source(image, workspace_dir=workspace_dir))
         ]
 
