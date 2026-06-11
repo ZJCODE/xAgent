@@ -10,7 +10,6 @@ from .attachment import (
 	ATTACHMENT_METADATA_KEY,
 	WorkspaceAttachment,
 )
-from .memory import DiaryEntry, SummaryOutput
 
 __all__ = [
 	"ATTACHMENT_METADATA_KEY",
@@ -21,6 +20,4 @@ __all__ = [
 	"RoleType",
 	"MessageType",
 	"WorkspaceAttachment",
-	"DiaryEntry",
-	"SummaryOutput",
 ]

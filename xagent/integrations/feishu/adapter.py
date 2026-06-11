@@ -39,8 +39,6 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, Union
 from urllib.parse import parse_qs, unquote, urlparse
 
-from pydantic import BaseModel
-
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import AsyncTaskScheduler, ScheduledDeliveryContext, scheduled_delivery_context
@@ -2880,12 +2878,10 @@ class FeishuAdapter:
 
     @staticmethod
     def _stringify(
-        reply: Union[str, BaseModel, AsyncGenerator[str, None], Any],
+        reply: Union[str, AsyncGenerator[str, None], Any],
     ) -> str:
         if reply is None:
             return ""
         if isinstance(reply, str):
             return reply.strip()
-        if isinstance(reply, BaseModel):
-            return reply.model_dump_json(indent=2)
         return str(reply).strip()

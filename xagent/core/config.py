@@ -307,6 +307,5 @@ class ReplyType(Enum):
     """Types of replies the agent can generate."""
 
     SIMPLE_REPLY = "simple_reply"
-    STRUCTURED_REPLY = "structured_reply"
     TOOL_CALL = "tool_call"
     ERROR = "error"

@@ -20,7 +20,6 @@ from xagent.core.runtime import enqueue_scheduled_task, list_task_records
 
 
 class _FakeAgent:
-    output_type = None
     supports_vision = True
 
     def __init__(self):

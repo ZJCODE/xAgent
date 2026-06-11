@@ -2,8 +2,6 @@ import logging
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
-from pydantic import BaseModel
-
 from ..components import (
     MarkdownMemory,
     MessageStorageBase,
@@ -32,7 +30,6 @@ class Agent:
         model_api: str = MODEL_API_OPENAI_RESPONSES,
         model_max_tokens: int = AgentConfig.DEFAULT_MAX_TOKENS,
         tools: Optional[List] = None,
-        output_type: Optional[type[BaseModel]] = None,
         message_storage: Optional[MessageStorageBase] = None,
         workspace: Optional[str] = None,
         skills_storage: Optional[SkillsStorageBase] = None,
@@ -60,7 +57,6 @@ class Agent:
                 from openai import AsyncOpenAI
 
                 self.client = self.observability.create_client({}) or AsyncOpenAI()
-        self.output_type = output_type
         self.system_prompt = system_prompt or ""
         self._assistant_sender_id = "agent"
 
@@ -223,15 +219,13 @@ class Agent:
         user_id: str = AgentConfig.DEFAULT_USER_ID,
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
-        output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
-    ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
+    ) -> Union[str, AsyncGenerator[str, None]]:
         return await self.chat(
             user_message=user_message,
             user_id=user_id,
             image_source=image_source,
             attachments=attachments,
-            output_type=output_type,
             stream=stream,
         )
 
@@ -241,9 +235,8 @@ class Agent:
         user_id: str = AgentConfig.DEFAULT_USER_ID,
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
-        output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
-    ) -> Union[str, BaseModel, AsyncGenerator[str, None]]:
+    ) -> Union[str, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message.
 
         Args:
@@ -251,9 +244,7 @@ class Agent:
                 with the legacy Python API. New event consumers should prefer
                 ``chat_events(stream=True)``.
         """
-        if output_type is None:
-            output_type = self.output_type
-        if stream and output_type is None:
+        if stream:
             async def text_stream():
                 streamed_message_ids: set[str] = set()
                 async for event in self.chat_events(
@@ -276,7 +267,7 @@ class Agent:
 
             return text_stream()
 
-        if output_type is None and hasattr(self.model_client, "model_turn_events"):
+        if hasattr(self.model_client, "model_turn_events"):
             final_reply = ""
             last_error = ""
             async for event in self.chat_events(
@@ -328,7 +319,6 @@ class Agent:
                     messages=input_messages,
                     tool_specs=tool_specs,
                     instructions=instructions,
-                    output_type=output_type,
                     stream=False,
                     store_reply=lambda text: self._store_reply_and_schedule_experience(
                         msg_handler=msg_handler,
@@ -340,16 +330,6 @@ class Agent:
                 if reply_type == ReplyType.SIMPLE_REPLY:
                     assistant_msg = await msg_handler.store_model_reply(
                         str(response),
-                        self._assistant_sender_id,
-                    )
-                    self._schedule_experience_write(
-                        messages=[user_msg, assistant_msg],
-                    )
-                    return response
-
-                if reply_type == ReplyType.STRUCTURED_REPLY:
-                    assistant_msg = await msg_handler.store_model_reply(
-                        response.model_dump_json(),
                         self._assistant_sender_id,
                     )
                     self._schedule_experience_write(
@@ -402,7 +382,6 @@ class Agent:
         user_id: str = AgentConfig.DEFAULT_USER_ID,
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
-        output_type: Optional[type[BaseModel]] = None,
         stream: bool = False,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
@@ -411,28 +390,6 @@ class Agent:
         ``message_delta`` events. Message boundaries and tool progress are
         always eventized.
         """
-        if output_type is None:
-            output_type = self.output_type
-        if output_type is not None:
-            response = await self.chat(
-                user_message=user_message,
-                user_id=user_id,
-                image_source=image_source,
-                attachments=attachments,
-                output_type=output_type,
-            )
-            content = response.model_dump_json() if hasattr(response, "model_dump_json") else str(response)
-            message_id = "structured-0"
-            for event in self._message_events(
-                message_id=message_id,
-                phase="final",
-                content=content,
-                stream=stream,
-            ):
-                yield event
-            yield {"type": "done"}
-            return
-
         msg_handler = self.message_handler
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         turn_context = self._observability_runtime().agent_turn(

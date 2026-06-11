@@ -239,18 +239,6 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Attachments:", output)
         self.assertNotIn("/api/workspace/blob", output)
 
-    def test_parser_supports_setup_schema_command(self):
-        args = build_parser().parse_args([
-            "setup",
-            "--dir",
-            "./agent-dir",
-            "--schema",
-        ])
-
-        self.assertEqual(args.command, "setup")
-        self.assertEqual(args.config_dir, "./agent-dir")
-        self.assertTrue(args.schema)
-
     def test_parser_supports_feishu_setup_command(self):
         args = build_parser().parse_args([
             "feishu",

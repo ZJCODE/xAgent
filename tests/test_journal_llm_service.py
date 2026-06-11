@@ -145,7 +145,6 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "Diary entry.")
         instance = FakeModelClient.instances[0]
         self.assertEqual(instance.kwargs["model_api"], MODEL_API_OPENAI_RESPONSES)
-        self.assertIsNone(instance.calls[0]["output_type"])
         self.assertIn("[speaker=ME][timestamp=2026-05-17 09:00:00]\nI captured the plan.", instance.calls[0]["messages"][0]["content"])
         self.assertIn(
             "[speaker=alice][timestamp=2026-05-17 09:01:00]\nI'll send the document.",
@@ -179,7 +178,6 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(result, "Weekly summary.")
-        self.assertIsNone(FakeModelClient.instances[0].calls[0]["output_type"])
 
 
 if __name__ == "__main__":
