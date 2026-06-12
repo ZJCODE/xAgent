@@ -48,7 +48,7 @@ class AgentConfig:
     # parallelism. These are the most frequently tuned knobs.
     # ============================================================
     DEFAULT_MODEL = "gpt-5.4-mini"
-    DEFAULT_MAX_TOKENS = 4096
+    DEFAULT_MAX_TOKENS = 8192
     DEFAULT_USER_ID = "default_user"
     DEFAULT_MAX_CONCURRENT_TOOLS = 4  # Maximum concurrent tool calls
     TOOL_RESULT_PREVIEW_LENGTH = 20  # characters shown in tool-result summaries
