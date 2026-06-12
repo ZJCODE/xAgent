@@ -41,6 +41,7 @@ from .runtime import (
     handle_config,
     handle_identity,
     handle_messages,
+    handle_restart,
     handle_start,
     handle_status,
     handle_stop,
@@ -454,7 +455,7 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
     if action == "stop":
         return handle_stop(_launcher_args(config_dir=str(config_dir), channels=channels))
     if action == "restart":
-        return handle_start(
+        return handle_restart(
             _launcher_args(
                 config_dir=str(config_dir),
                 channels=channels,
