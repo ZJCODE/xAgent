@@ -44,7 +44,6 @@ class MemoryHandler:
         *,
         max_history: int,
         recent_days: Optional[int] = None,
-        window_overlap: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
     ) -> None:
         self.memory = memory
@@ -52,11 +51,10 @@ class MemoryHandler:
         self.message_storage = message_storage
         self.max_history = self._positive_int(max_history, AgentConfig.DEFAULT_MAX_HISTORY)
         self.recent_days = self._positive_int(recent_days, self.RECENT_DAYS)
-        if window_overlap is not None:
-            self.window_overlap = self._positive_int(window_overlap, 1)
-        else:
-            self.window_overlap = max(1, int(self.max_history * AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO))
-        self.window_overlap = min(self.window_overlap, max(0, self.max_history - 1))
+        self.window_overlap = min(
+            max(1, int(self.max_history * AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO)),
+            max(0, self.max_history - 1),
+        )
         self.max_journal_source_chars = self._positive_int(
             max_journal_source_chars,
             self.DEFAULT_JOURNAL_SOURCE_CHARS,
