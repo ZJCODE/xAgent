@@ -66,10 +66,6 @@ class MemoryHandler:
             state.get("last_processed_message_id"),
             0,
         )
-        self._interaction_counter = self._non_negative_int(
-            state.get("interaction_counter"),
-            0,
-        )
 
     # ------------------------------------------------------------------
     # Context retrieval (injected into system prompt every turn)
@@ -102,11 +98,7 @@ class MemoryHandler:
         """Schedule a journal maintenance check after meaningful new experience."""
         if not messages:
             return
-        worthy_count = sum(
-            1 for message in messages if self._is_memory_worthy_experience(message)
-        )
-        if worthy_count > 0:
-            self._interaction_counter += worthy_count
+        if any(self._is_memory_worthy_experience(message) for message in messages):
             self._schedule_maintenance()
 
     async def run_maintenance(self, force: bool = False) -> bool:
@@ -126,12 +118,19 @@ class MemoryHandler:
             return await self._run_maintenance_locked(force=force)
 
     async def _run_maintenance_locked(self, force: bool = False) -> bool:
-        if not force and self._interaction_counter < self.max_history:
-            return False
-
         latest_message_id = await self.message_storage.get_latest_message_cursor()
         if latest_message_id <= 0:
             return False
+
+        # Gate on unprocessed message count: only run when enough new
+        # messages have accumulated since the last checkpoint.  Using
+        # max_history - overlap_count as the effective threshold preserves
+        # the same batch overlap that the old per-process interaction
+        # counter provided, but works correctly across multiple processes.
+        if not force:
+            unprocessed_count = latest_message_id - self._last_processed_message_id
+            if unprocessed_count < self.max_history - self.overlap_count:
+                return False
 
         # Read the last max_history messages for compression, ensuring
         # overlap_count entries naturally overlap with the previous batch.
@@ -148,7 +147,6 @@ class MemoryHandler:
         ]
         if not new_records:
             await self._commit_processed_message_id(latest_message_id)
-            self._interaction_counter = self.overlap_count
             return False
 
         batches = self._split_records_for_source_budget(new_records)
@@ -158,8 +156,6 @@ class MemoryHandler:
         for batch in batches:
             if not await self._write_journal_entry(batch):
                 return False
-
-        self._interaction_counter = self.overlap_count
 
         if not await self._commit_processed_message_id(latest_message_id):
             logger.warning(
@@ -389,10 +385,6 @@ class MemoryHandler:
                 state.get("last_processed_message_id"),
                 0,
             )
-            self._interaction_counter = self._non_negative_int(
-                state.get("interaction_counter"),
-                0,
-            )
             return
 
         legacy_count = self._non_negative_int(state.get("last_processed_message_count"), 0)
@@ -427,7 +419,6 @@ class MemoryHandler:
     async def _write_state(self, processed_message_id: int) -> None:
         payload = {
             "last_processed_message_id": self._non_negative_int(processed_message_id, 0),
-            "interaction_counter": self._non_negative_int(self._interaction_counter, 0),
         }
         await asyncio.to_thread(self._write_state_sync, payload)
 

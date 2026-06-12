@@ -153,7 +153,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(self.handler._maintenance_task)
 
-    async def test_run_maintenance_skips_when_counter_below_threshold(self):
+    async def test_run_maintenance_skips_when_cursor_gap_below_threshold(self):
         self.storage.append(Message(
             role=RoleType.USER,
             sender_id="alice",
@@ -166,53 +166,60 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             message_storage=self.storage,
             max_history=_TEST_MAX_HISTORY,
         )
-        # Counter is 0, below max_history → no write
-        handler._interaction_counter = 5
-
+        # Cursor gap is 0 (last_processed=0, latest=1), below threshold of 14 → no write
         wrote = await handler.run_maintenance(force=False)
 
         self.assertFalse(wrote)
         self.assertEqual(self.llm.diary_calls, [])
 
-    async def test_run_maintenance_writes_when_counter_reaches_threshold(self):
-        self.storage.append(Message(
-            role=RoleType.USER,
-            sender_id="alice",
-            content="quiet reflection note",
-            timestamp=1710000000.0,
-        ))
+    async def test_run_maintenance_writes_when_cursor_gap_meets_threshold(self):
+        # Add 20 messages so cursor gap = 20 >= threshold (max_history - overlap_count = 14)
+        for i in range(20):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content="quiet reflection note" if i == 0 else f"filler {i}",
+                timestamp=1710000000.0 + i,
+            ))
         handler = MemoryHandler(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
             max_history=_TEST_MAX_HISTORY,
         )
-        # Counter at threshold → write
-        handler._interaction_counter = 20
 
         wrote = await handler.run_maintenance(force=False)
 
         self.assertTrue(wrote)
         self.assertEqual(len(self.llm.diary_calls), 1)
-        self.assertEqual(
-            [message["content"] for message in self.llm.diary_calls[0]["messages"]],
-            ["quiet reflection note"],
-        )
+        diary_contents = [m["content"] for m in self.llm.diary_calls[0]["messages"]]
+        self.assertIn("quiet reflection note", diary_contents)
 
     async def test_run_maintenance_filters_routine_events_from_compression(self):
+        # Add enough filler messages to clear the cursor-gap threshold (14).
+        filler_messages = [
+            Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"filler {i}",
+                timestamp=1710000000.0 + i,
+            )
+            for i in range(14)
+        ]
         storage = _FakeMessageStorage([
+            *filler_messages,
             Message(
                 role=RoleType.USER,
                 sender_id="alice",
                 content="older reflection",
-                timestamp=1710000000.0,
+                timestamp=1710000014.0,
             ),
             Message(
                 role=RoleType.ENVIRONMENT,
                 type=MessageType.CONTEXT_EVENT,
                 sender_id=None,
                 content="heartbeat tick",
-                timestamp=1710000005.0,
+                timestamp=1710000015.0,
                 metadata={"event_type": "heartbeat", "source": "runtime"},
             ),
         ])
@@ -222,36 +229,13 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             message_storage=storage,
             max_history=_TEST_MAX_HISTORY,
         )
-        handler._interaction_counter = 20
 
         wrote = await handler.run_maintenance(force=False)
 
         self.assertTrue(wrote)
-        self.assertEqual(
-            [message["content"] for message in self.llm.diary_calls[0]["messages"]],
-            ["older reflection"],
-        )
-
-    async def test_counter_resets_to_overlap_after_compression(self):
-        self.storage.append(Message(
-            role=RoleType.USER,
-            sender_id="alice",
-            content="batch message",
-            timestamp=1710000000.0,
-        ))
-        handler = MemoryHandler(
-            memory=self.memory,
-            llm_service=self.llm,
-            message_storage=self.storage,
-            max_history=_TEST_MAX_HISTORY,
-        )
-        handler._interaction_counter = 20
-
-        wrote = await handler.run_maintenance(force=False)
-
-        self.assertTrue(wrote)
-        self.assertEqual(handler._interaction_counter, handler.overlap_count)
-        self.assertEqual(handler._interaction_counter, 6)
+        diary_contents = [m["content"] for m in self.llm.diary_calls[0]["messages"]]
+        self.assertIn("older reflection", diary_contents)
+        self.assertNotIn("heartbeat tick", diary_contents)
 
     async def test_run_maintenance_compresses_last_max_history_messages(self):
         stored_messages = [
@@ -280,8 +264,6 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             ["entry 0", "entry 1", "entry 2", "entry 3"],
         )
         self.assertEqual(handler._last_processed_message_id, 4)
-        # Counter resets to overlap after forced write
-        self.assertEqual(handler._interaction_counter, 6)
 
     async def test_run_maintenance_skips_non_memory_worthy_events_and_advances_checkpoint(self):
         storage = _FakeMessageStorage([
@@ -551,39 +533,9 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             ["old 0", "old 1", "new 0", "new 1"],
         )
 
-    async def test_interaction_counter_persists_and_restores(self):
-        storage = _FakeMessageStorage([
-            Message(
-                role=RoleType.USER,
-                sender_id="alice",
-                content="restore test",
-                timestamp=1714000000.0,
-            )
-        ])
-        first_handler = MemoryHandler(
-            memory=self.memory,
-            llm_service=self.llm,
-            message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
-        )
-        first_handler._interaction_counter = 15
-        # Trigger a write to persist the counter
-        wrote = await first_handler.run_maintenance(force=True)
-        self.assertTrue(wrote)
-
-        # Create a new handler that reads the persisted state
-        second_llm = _FakeLLMService()
-        second_handler = MemoryHandler(
-            memory=self.memory,
-            llm_service=second_llm,
-            message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
-        )
-        # After force-write, counter should be reset to overlap_count (6) and persisted
-        self.assertEqual(second_handler._interaction_counter, 6)
-
-    async def test_counter_triggers_at_max_history(self):
-        for i in range(21):
+    async def test_cursor_gap_triggers_maintenance(self):
+        # Add exactly max_history (20) messages so cursor gap = 20 >= 14
+        for i in range(20):
             self.storage.append(Message(
                 role=RoleType.USER,
                 sender_id="alice",
@@ -596,13 +548,13 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             message_storage=self.storage,
             max_history=_TEST_MAX_HISTORY,
         )
-        handler._interaction_counter = 20
+        # _last_processed_message_id = 0, latest cursor = 20, unprocessed = 20 >= 14
 
         wrote = await handler.run_maintenance(force=False)
 
         self.assertTrue(wrote)
-        # Counter resets to overlap_count after write
-        self.assertEqual(handler._interaction_counter, 6)
+        # Checkpoint advanced after successful write
+        self.assertGreater(handler._last_processed_message_id, 0)
 
     async def test_overlap_in_consecutive_compressions(self):
         """Verify consecutive compressions naturally overlap by reading last N."""
@@ -620,16 +572,15 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             max_history=_TEST_MAX_HISTORY,
         )
 
-        # First compression: last 20 messages
-        handler._interaction_counter = 20
+        # First compression: last 20 messages (msg 10-29)
         wrote1 = await handler.run_maintenance(force=False)
         self.assertTrue(wrote1)
         first_contents = [m["content"] for m in self.llm.diary_calls[0]["messages"]]
         self.assertEqual(len(first_contents), 20)
-        self.assertEqual(handler._interaction_counter, 6)
 
-        # Simulate 14 more interactions (counter 6→20) by updating
-        # the persisted state so the handler picks up the counter naturally.
+        # Add 14 more messages so the cursor gap reaches threshold naturally.
+        # After first compression: _last_processed_message_id = 30.
+        # New messages 30-43 → latest = 44, unprocessed = 44-30 = 14 ≥ threshold.
         for i in range(30, 44):
             self.storage.append(Message(
                 role=RoleType.USER,
@@ -637,11 +588,6 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 content=f"msg {i}",
                 timestamp=1716000000.0 + i,
             ))
-        # Write state with counter=20 so _refresh_state_from_disk picks it up
-        state_path = self.memory.root / "journal_state.json"
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        state["interaction_counter"] = 20
-        state_path.write_text(json.dumps(state), encoding="utf-8")
 
         # Second compression: last 20 messages (msg 24-43)
         # Overlaps with first (msg 24-29 = 6 entries)
