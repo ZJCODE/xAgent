@@ -58,14 +58,16 @@ def _is_private_or_reserved_ip(host: str) -> bool:
     return False
 
 
-def _resolve_to_private(hostname: str) -> Optional[str]:
+async def _resolve_to_private(hostname: str) -> Optional[str]:
     """Resolve hostname and return the first private/reserved IP found, or None.
 
     Returns the private IP string if the hostname resolves to any address that
     is not safe to fetch, otherwise None.
     """
     try:
-        addrinfo = socket.getaddrinfo(hostname, 80, proto=socket.IPPROTO_TCP)
+        addrinfo = await asyncio.to_thread(
+            socket.getaddrinfo, hostname, 80, 0, 0, socket.IPPROTO_TCP
+        )
     except socket.gaierror:
         return None  # DNS failure — let the HTTP client report the real error
 
@@ -76,7 +78,7 @@ def _resolve_to_private(hostname: str) -> Optional[str]:
     return None
 
 
-def _validate_url(url: str) -> str:
+async def _validate_url(url: str) -> str:
     """Validate a URL for safety. Returns the stripped URL or raises ValueError."""
     url = url.strip()
     if not url:
@@ -96,7 +98,7 @@ def _validate_url(url: str) -> str:
         raise ValueError("URL must include a valid hostname")
 
     # SSRF check — reject URLs that resolve to private/reserved IPs
-    private_ip = _resolve_to_private(parsed.hostname)
+    private_ip = await _resolve_to_private(parsed.hostname)
     if private_ip is not None:
         raise ValueError(
             f"URL hostname resolves to a private/reserved IP address "
@@ -137,7 +139,7 @@ def create_web_fetch_tool():
     async def web_fetch(url: str) -> dict:
         # 1. Validate URL (scheme, length, SSRF)
         try:
-            url = _validate_url(url)
+            url = await _validate_url(url)
         except ValueError as e:
             return _error_response(url, str(e))
 
