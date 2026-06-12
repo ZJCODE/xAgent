@@ -110,6 +110,11 @@ class AgentConfig:
     RUNTIME_HEARTBEAT_ENABLED = True
     RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 300
 
+    # Idle diary timeout: when the agent has been idle (no conversation)
+    # for this many seconds, the heartbeat forces a diary write regardless
+    # of accumulated message count. Set to 0 to disable.
+    IDLE_DIARY_TIMEOUT_SECONDS = 1800  # 30 minutes
+
     # ============================================================
     # 11. Tool System Prompts
     # Instruction segments injected into the system prompt when the

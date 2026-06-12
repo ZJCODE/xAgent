@@ -1,4 +1,5 @@
 import logging
+import time
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
@@ -206,7 +207,20 @@ class Agent:
         return tool_specs, instructions, iteration_messages, input_messages
 
     async def run_memory_maintenance(self) -> None:
-        await self.memory_handler.run_maintenance()
+        idle_timeout = AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS
+        force = False
+        if idle_timeout > 0:
+            memory = getattr(self, "markdown_memory", None)
+            if memory is not None:
+                path = memory.root / ".last_interaction"
+                try:
+                    last = float(path.read_text(encoding="utf-8").strip())
+                except (FileNotFoundError, ValueError):
+                    last = time.time()
+                if time.time() - last >= idle_timeout:
+                    force = True
+
+        await self.memory_handler.run_maintenance(force=force)
         observability_flusher = getattr(self._observability_runtime(), "flush", None)
         if observability_flusher is not None:
             try:
@@ -245,6 +259,7 @@ class Agent:
                 with the legacy Python API. New event consumers should prefer
                 ``chat_events(stream=True)``.
         """
+        self._record_last_interaction()
         if stream:
             async def text_stream():
                 streamed_message_ids: set[str] = set()
@@ -389,6 +404,7 @@ class Agent:
         ``message_delta`` events. Message boundaries and tool progress are
         always eventized.
         """
+        self._record_last_interaction()
         msg_handler = self.message_handler
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         turn_ctx = self._observability_runtime().agent_turn(
@@ -596,6 +612,17 @@ class Agent:
             observability = NoopObservabilityRuntime()
             self.observability = observability
         return observability
+
+    def _record_last_interaction(self) -> None:
+        """Write the current timestamp to the shared idle-tracking file."""
+        memory = getattr(self, "markdown_memory", None)
+        if memory is None:
+            return
+        path = memory.root / ".last_interaction"
+        try:
+            path.write_text(str(time.time()), encoding="utf-8")
+        except OSError:
+            pass
 
     async def _store_reply_and_schedule_experience(
         self,

@@ -450,9 +450,7 @@ class MemoryHandler:
     def _write_state_sync(self, payload: dict) -> None:
         path = self._state_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_name(f".{path.name}.tmp")
-        temp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-        temp_path.replace(path)
+        path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
     def _acquire_process_lock_sync(self) -> IO[str]:
         path = self._lock_path()
