@@ -74,7 +74,7 @@ class AgentConfig:
     # limit. Prevent infinite loops and unbounded prompt growth.
     # ============================================================
     DEFAULT_MAX_ITER = 50
-    DEFAULT_MAX_HISTORY = 20
+    DEFAULT_MAX_HISTORY = 40
     MAX_CONTEXT_EVENTS = 12
 
     # ============================================================
@@ -100,7 +100,7 @@ class AgentConfig:
     # Tune the size and overlap of the recent-memory window.
     # ============================================================
     MEMORY_RECENT_DAYS = 2
-    MEMORY_WINDOW_OVERLAP_RATIO = 0.3
+    MEMORY_WINDOW_OVERLAP_RATIO = 0.2
 
     # ============================================================
     # 8. Search Tool Defaults
