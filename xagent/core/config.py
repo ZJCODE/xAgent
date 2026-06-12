@@ -125,9 +125,11 @@ class AgentConfig:
     RUNTIME_HEARTBEAT_ENABLED = True
     RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 300
 
-    # Idle diary timeout: when the agent has been idle (no conversation)
-    # for this many seconds, the heartbeat forces a diary write regardless
-    # of accumulated message count. Set to 0 to disable.
+    # Idle diary timeout is checked by the heartbeat loop, so the practical
+    # trigger granularity is bounded by RUNTIME_HEARTBEAT_INTERVAL_SECONDS.
+    # Keep this at or above the heartbeat interval unless you explicitly want
+    # coarse polling. Set to 0 to disable. 1800 means 30 minutes, which is a 
+    # reasonable default for capturing idle time without being too noisy.
     IDLE_DIARY_TIMEOUT_SECONDS = 1800  # 30 minutes
 
     # ============================================================
