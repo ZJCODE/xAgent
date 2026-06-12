@@ -83,17 +83,16 @@ CURRENT DATE: {current_date}
 TARGET JOURNAL DATE: {journal_date}
 
 Structured history format:
-- `[speaker=Name][timestamp=Time]` followed by text means that Name said or wrote that text at that time.
-- `[speaker=ME][timestamp=Time]` means I said or wrote that text at that time.
-- `[ambient context][timestamp=Time]` followed by text means nearby situational context I noticed, overheard, or received at that time.
-- First-person words inside a speaker entry belong to that speaker.
-- Use timestamps to understand ordering and attribution, but do not repeat transcript markers, timestamps, or metadata in the diary entry.
+- `[speaker=Name][timestamp=Time]` followed by text: Name said or wrote that text at that time.
+- `[speaker=ME][timestamp=Time]` followed by text: I said or wrote that text at that time.
+- `[ambient context][timestamp=Time]` followed by text: situational context I noticed, overheard, or received at that time.
+- `[room context]` blocks start with `room_name: ...` and `room_id: ...`, contain lines like `Name YYYY-MM-DD HH:mm: text`, and end with `[/room context]`. These are group or multi-party conversations I participated in. Inside a room context block, `ME YYYY-MM-DD HH:mm: text` means my own reply in that room.
+- First-person words inside any entry belong to the entry's speaker, not to me.
+- Use timestamps only to understand ordering and attribution. Never repeat transcript markers, timestamps, or metadata in the diary entry.
 
 Source meaning:
-- The transcript is my experience stream: direct conversations, my replies, observations, overheard speech, notifications, reminders, and other received context.
-- Entries marked `[speaker=ME]` are my own previous words, actions, or observations.
-- Speakers named "ME", "agent", "assistant", or "AI" are me; rewrite them as what I did, said, or noticed.
-- First-person words ("I", "me", "my", "我") inside another speaker's line belong to that speaker, not to me; never adopt another person's "I" as my own.
+- The transcript is my experience stream: one-to-one conversations, group chats, my replies, observations, overheard speech, notifications, reminders, and other received context.
+- I may appear as `[speaker=ME]` in direct conversations, as `ME` inside `[room context]` blocks, or under roles like "agent", "assistant", or "AI". In all cases this is me; rewrite as what I did, said, or noticed.
 
 Writing rules:
 - Use "I" and a natural, restrained diary tone.
@@ -107,6 +106,7 @@ Writing rules:
 Attribution rules:
 - Keep different people separate; never merge one person's facts, preferences, plans, or experiences into another's.
 - Attribute important facts to the speaker or source that said, experienced, or provided them.
+- When writing about a group conversation, name the room as scene context and keep each participant's words and actions attributed to the correct person.
 - For ambient context, use forms such as "I noticed...", "I overheard...", or "A notification arrived...".
 - Never turn overheard speech or ambient observations into a direct request unless the source says it was addressed to me.
 - If attribution is uncertain, keep the uncertainty visible.
@@ -127,24 +127,24 @@ Output rules:
 
 PERIOD: {period_label}
 
-Structured history format:
-- `[speaker=Name][timestamp=Time]` followed by text means that Name said or wrote that text at that time.
-- `[speaker=ME][timestamp=Time]` means I said or wrote that text at that time.
-- `[ambient context][timestamp=Time]` followed by text means nearby situational context I noticed, overheard, or received at that time.
-- First-person words inside a speaker entry belong to that speaker.
-- Source material may also contain `# YYYY-MM-DD` and `## HH:MM` headings; treat them as date and time boundaries for chronology, not as output text.
+Source material format:
+- The source consists of my own diary entries written in first person across the {period_type} period.
+- Named people mentioned in entries are distinct individuals. Their words, preferences, and experiences belong to them, not to me.
+- Room names in entries mark group conversations I participated in. Each room has its own set of participants.
+- `# YYYY-MM-DD` and `## HH:MM` headings mark date and time boundaries; use them for chronology, do not repeat them in the summary.
 
 Summary rules:
 - Use "I"; keep the source language and do not translate.
 - Synthesize key themes, events, decisions, commitments, preferences, emotional shifts, and durable changes.
 - Preserve speaker attribution. Do not flatten multiple people into one undifferentiated narrative.
 - Keep each person's preferences, plans, commitments, and experiences attached to that person.
-- Treat generic labels such as "User A", "User B", "用户A", or "用户B" as local to one source entry unless continuity is explicit.
+- When source entries reference group conversations (room context), keep the room's participants distinct and note the room as the scene.
+- Treat generic labels such as "User A" or "User B" as local to one source entry unless continuity is explicit.
 - If attribution is uncertain, keep the uncertainty visible.
 
 Period focus:
-- Weekly: main arc, key people, what they were doing, and important decisions.
-- Monthly: broader themes, recurring patterns, and major milestones.
+- Weekly: main arc, key people and rooms, what people were doing, important decisions.
+- Monthly: broader themes, recurring patterns across rooms and conversations, major milestones.
 - Yearly: major phases, turning points, and growth areas.
 
 Output rules:
