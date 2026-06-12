@@ -572,15 +572,15 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             max_history=_TEST_MAX_HISTORY,
         )
 
-        # First compression: last 20 messages (msg 10-29)
+        # First compression: cursor-range (0, 20] = msgs 0-19
         wrote1 = await handler.run_maintenance(force=False)
         self.assertTrue(wrote1)
         first_contents = [m["content"] for m in self.llm.diary_calls[0]["messages"]]
         self.assertEqual(len(first_contents), 20)
 
         # Add 14 more messages so the cursor gap reaches threshold naturally.
-        # After first compression: _last_processed_message_id = 30.
-        # New messages 30-43 → latest = 44, unprocessed = 44-30 = 14 ≥ threshold.
+        # After first compression: _last_processed_message_id = 20.
+        # New messages 30-43 → latest = 44, unprocessed = 44-20 = 24 ≥ 14.
         for i in range(30, 44):
             self.storage.append(Message(
                 role=RoleType.USER,
@@ -589,8 +589,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 timestamp=1716000000.0 + i,
             ))
 
-        # Second compression: last 20 messages (msg 24-43)
-        # Overlaps with first (msg 24-29 = 6 entries)
+        # Second compression: cursor-range (14, 34] = msgs 14-33
+        # Overlaps with first batch by window_overlap=6 (msgs 14-19)
         second_llm = _FakeLLMService()
         handler.llm_service = second_llm
         wrote2 = await handler.run_maintenance(force=False)

@@ -53,7 +53,7 @@ class MemoryHandler:
         self.recent_days = self._positive_int(recent_days, self.RECENT_DAYS)
         self.window_overlap = min(
             max(1, int(self.max_history * AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO)),
-            max(0, self.max_history - 1),
+            self.max_history - 1,
         )
         self.max_journal_source_chars = self._positive_int(
             max_journal_source_chars,
@@ -123,19 +123,27 @@ class MemoryHandler:
             return False
 
         # Gate on unprocessed message count: only run when enough new
-        # messages have accumulated since the last checkpoint.  Using
-        # max_history - window_overlap as the effective threshold preserves
-        # the same batch overlap that the old per-process interaction
-        # counter provided, but works correctly across multiple processes.
+        # messages have accumulated since the last checkpoint.  Based on
+        # the persisted cursor so it is safe across multiple processes.
         if not force:
             unprocessed_count = latest_message_id - self._last_processed_message_id
             if unprocessed_count < self.max_history - self.window_overlap:
                 return False
 
-        # Read the last max_history messages for compression, ensuring
-        # window_overlap entries naturally overlap with the previous batch.
-        recent_messages = await self.message_storage.get_messages(
-            count=self.max_history,
+        # Build a cursor-bounded window that starts window_overlap entries
+        # before the last checkpoint (for diary continuity between adjacent
+        # batches) and is capped at max_history (to bound the LLM budget
+        # even when many messages accumulate between maintenance cycles).
+        # Advancing the checkpoint to the batch end rather than to
+        # latest_message_id ensures overflow messages are not dropped.
+        start_exclusive = max(0, self._last_processed_message_id - self.window_overlap)
+        end_inclusive = min(latest_message_id, start_exclusive + self.max_history)
+        if end_inclusive <= 0:
+            return False
+
+        recent_messages = await self.message_storage.get_messages_in_cursor_range(
+            start_exclusive=start_exclusive,
+            end_inclusive=end_inclusive,
         )
         if not recent_messages:
             return False
@@ -146,7 +154,7 @@ class MemoryHandler:
             if self._is_memory_worthy_experience(message)
         ]
         if not new_records:
-            await self._commit_processed_message_id(latest_message_id)
+            await self._commit_processed_message_id(end_inclusive)
             return False
 
         batches = self._split_records_for_source_budget(new_records)
@@ -157,7 +165,7 @@ class MemoryHandler:
             if not await self._write_journal_entry(batch):
                 return False
 
-        if not await self._commit_processed_message_id(latest_message_id):
+        if not await self._commit_processed_message_id(end_inclusive):
             logger.warning(
                 "Diary write completed but checkpoint was not advanced; retry will replay pending messages."
             )
