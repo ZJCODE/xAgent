@@ -24,7 +24,7 @@ class _FakeAgent:
         yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": self.reply}
         yield {"type": "done"}
 
-    async def run_memory_maintenance(self):
+    async def run_memory_maintenance(self, trigger: str = "unknown"):
         self.maintenance_count += 1
 
 

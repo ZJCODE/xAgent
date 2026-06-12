@@ -27,7 +27,7 @@ class _FakeAgent:
         self.raise_on_maintenance = False
         self.memory_handler = _FakeMemoryHandler()
 
-    async def run_memory_maintenance(self):
+    async def run_memory_maintenance(self, trigger: str = "unknown"):
         if self.raise_on_maintenance:
             raise RuntimeError("maintenance failed")
         self.maintenance_count += 1

@@ -66,7 +66,7 @@ class FakeMemoryHandler:
     def schedule_experience_write(self, messages):
         self.experience_messages = messages
 
-    async def run_maintenance(self, force=False):
+    async def run_maintenance(self, force=False, trigger="count", idle_seconds=0):
         self.maintenance_calls += 1
         self.maintenance_force = force
         return False

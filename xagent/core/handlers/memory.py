@@ -99,8 +99,18 @@ class MemoryHandler:
         if any(self._is_memory_worthy_experience(message) for message in messages):
             self._schedule_maintenance()
 
-    async def run_maintenance(self, force: bool = False) -> bool:
-        """Run journal maintenance using persisted message history only."""
+    async def run_maintenance(
+        self, force: bool = False, trigger: str = "count", idle_seconds: float = 0
+    ) -> bool:
+        """Run journal maintenance using persisted message history only.
+
+        Args:
+            force: When True, skip the unprocessed-message gate.
+            trigger: ``"count"`` when triggered by accumulating enough messages;
+                     ``"idle"`` when triggered by idle timeout.
+            idle_seconds: Seconds since last interaction (only meaningful when
+                          *trigger* is ``"idle"``).
+        """
         current_task = asyncio.current_task()
         maintenance_task = self._maintenance_task
         if maintenance_task is not None and maintenance_task is not current_task and not maintenance_task.done():
@@ -113,9 +123,13 @@ class MemoryHandler:
                 return bool(existing_result)
 
         async with self._maintenance_guard(refresh_state=True):
-            return await self._run_maintenance_locked(force=force)
+            return await self._run_maintenance_locked(
+                force=force, trigger=trigger, idle_seconds=idle_seconds
+            )
 
-    async def _run_maintenance_locked(self, force: bool = False) -> bool:
+    async def _run_maintenance_locked(
+        self, force: bool = False, trigger: str = "count", idle_seconds: float = 0
+    ) -> bool:
         latest_message_id = await self.message_storage.get_latest_message_cursor()
         if latest_message_id <= 0:
             return False
@@ -165,7 +179,13 @@ class MemoryHandler:
             return False
 
         for batch in batches:
-            if not await self._write_journal_entry(batch):
+            if not await self._write_journal_entry(
+                batch,
+                trigger=trigger,
+                start_cursor=start_exclusive,
+                end_cursor=end_inclusive,
+                idle_seconds=idle_seconds,
+            ):
                 return False
 
         if not await self._commit_processed_message_id(end_inclusive):
@@ -206,9 +226,17 @@ class MemoryHandler:
         routine_types = {"heartbeat", "ping", "sensor_tick", "presence_tick"}
         return event_type not in routine_types and bool(message.content.strip())
 
-    async def _write_journal_entry(self, messages: List[dict]) -> bool:
+    async def _write_journal_entry(
+        self,
+        messages: List[dict],
+        trigger: str = "count",
+        start_cursor: int = 0,
+        end_cursor: int = 0,
+        idle_seconds: float = 0,
+    ) -> bool:
         """LLM-format messages and append to today's daily file."""
         today_str = date.today().isoformat()
+
         try:
             content = await self.llm_service.format_diary_entry(
                 messages=messages,
@@ -216,7 +244,24 @@ class MemoryHandler:
             )
             if content.strip():
                 await self.memory.append_daily(content)
-                logger.debug("Background diary write: %d msgs → %d chars", len(messages), len(content))
+
+                if trigger == "idle":
+                    logger.info(
+                        "Diary write [trigger=idle] idle=%.0fs, cursor %d→%d, %d msgs → %d chars",
+                        idle_seconds,
+                        start_cursor,
+                        end_cursor,
+                        len(messages),
+                        len(content),
+                    )
+                else:
+                    logger.info(
+                        "Diary write [trigger=count] cursor %d→%d, %d msgs → %d chars",
+                        start_cursor,
+                        end_cursor,
+                        len(messages),
+                        len(content),
+                    )
                 return True
         except Exception as exc:
             logger.error("Background diary write failed: %s", exc)

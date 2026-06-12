@@ -206,9 +206,10 @@ class Agent:
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
 
-    async def run_memory_maintenance(self) -> None:
+    async def run_memory_maintenance(self, trigger: str = "count") -> None:
         idle_timeout = AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS
         force = False
+        idle_seconds = 0.0
         if idle_timeout > 0:
             memory = getattr(self, "markdown_memory", None)
             if memory is not None:
@@ -217,10 +218,15 @@ class Agent:
                     last = float(path.read_text(encoding="utf-8").strip())
                 except (FileNotFoundError, ValueError):
                     last = time.time()
-                if time.time() - last >= idle_timeout:
+                elapsed = time.time() - last
+                if elapsed >= idle_timeout:
                     force = True
+                    trigger = "idle"
+                    idle_seconds = elapsed
 
-        await self.memory_handler.run_maintenance(force=force)
+        await self.memory_handler.run_maintenance(
+            force=force, trigger=trigger, idle_seconds=idle_seconds
+        )
         observability_flusher = getattr(self._observability_runtime(), "flush", None)
         if observability_flusher is not None:
             try:

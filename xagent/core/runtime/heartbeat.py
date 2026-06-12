@@ -100,7 +100,7 @@ class RuntimeHeartbeat:
         if flusher is None:
             return
         try:
-            await flusher()
+            await flusher(trigger="count")
         except Exception as exc:
             self._logger.warning("Runtime heartbeat memory maintenance failed: %s", exc)
 

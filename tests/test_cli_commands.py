@@ -2305,7 +2305,7 @@ class CLICommandTests(unittest.TestCase):
                         run_memory_maintenance=self.run_memory_maintenance,
                     )
 
-                async def run_memory_maintenance(self):
+                async def run_memory_maintenance(self, **kwargs):
                     return None
 
             adapter_instance = MagicMock()
@@ -2347,7 +2347,7 @@ class CLICommandTests(unittest.TestCase):
                         run_memory_maintenance=self.run_memory_maintenance,
                     )
 
-                async def run_memory_maintenance(self):
+                async def run_memory_maintenance(self, **kwargs):
                     return None
 
             adapter_instance = MagicMock()
