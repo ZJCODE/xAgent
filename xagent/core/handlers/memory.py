@@ -34,7 +34,6 @@ class MemoryHandler:
     """Manages recent diary context and count-based journal maintenance."""
 
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
-    WINDOW_OVERLAP = AgentConfig.MEMORY_WINDOW_OVERLAP
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
 
     def __init__(
@@ -53,8 +52,11 @@ class MemoryHandler:
         self.message_storage = message_storage
         self.max_history = self._positive_int(max_history, AgentConfig.DEFAULT_MAX_HISTORY)
         self.recent_days = self._positive_int(recent_days, self.RECENT_DAYS)
-        resolved_overlap = self._positive_int(window_overlap, self.WINDOW_OVERLAP)
-        self.window_overlap = min(resolved_overlap, max(0, self.max_history - 1))
+        if window_overlap is not None:
+            self.window_overlap = self._positive_int(window_overlap, 1)
+        else:
+            self.window_overlap = max(1, int(self.max_history * AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO))
+        self.window_overlap = min(self.window_overlap, max(0, self.max_history - 1))
         self.max_journal_source_chars = self._positive_int(
             max_journal_source_chars,
             self.DEFAULT_JOURNAL_SOURCE_CHARS,
