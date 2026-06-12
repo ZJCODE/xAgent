@@ -36,8 +36,8 @@ class _AttachmentTaskAgent(_TaskAgent):
         super().__init__(runtime_root)
         self.attachment = {
             "kind": "image",
-            "path": "temp/images/result.png",
-            "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+            "path": "assets/generated/images/result.png",
+            "blob_url": "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fresult.png",
             "mime_type": "image/png",
             "file_name": "result.png",
         }

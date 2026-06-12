@@ -35,9 +35,9 @@ from .send import extract_text, make_client_id, split_text
 from .state import WeixinCredentials, WeixinStateStore
 
 
-WEIXIN_INBOUND_IMAGE_DIR = "temp/images/weixin"
-WEIXIN_OUTBOUND_IMAGE_DIR = "temp/images/weixin/outbound"
-WEIXIN_ATTACHMENT_DIR = "temp/attachments/weixin"
+WEIXIN_INBOUND_IMAGE_DIR = "assets/inbound/weixin/images"
+WEIXIN_OUTBOUND_IMAGE_DIR = "assets/derived/weixin/outbound/images"
+WEIXIN_ATTACHMENT_DIR = "assets/inbound/weixin/files"
 _WECHAT_CHAT_TIMEOUT = 300.0  # seconds — per-message agent call deadline
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 _MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
@@ -834,5 +834,3 @@ def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
         last_index = end
     pieces.append(text[last_index:])
     return re.sub(r"\n{3,}", "\n\n", "".join(pieces)).strip()
-
-

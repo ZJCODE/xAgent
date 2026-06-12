@@ -980,8 +980,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 message for message in input_messages
                 if message.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME
             )
-            self.assertIn("/api/workspace/blob?path=temp%2Fimages%2Finbound%2F", recent_experience["content"])
-            self.assertIn("path: temp/images/inbound/", recent_experience["content"])
+            self.assertIn("/api/workspace/blob?path=assets%2Finbound%2Flocal%2Fimages%2F", recent_experience["content"])
+            self.assertIn("path: assets/inbound/local/images/", recent_experience["content"])
             current_task = next(
                 message for message in input_messages
                 if message.get("name") == AgentConfig.CURRENT_TASK_NAME
@@ -993,7 +993,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Attached files:", stored_messages[0].content)
             attachment = stored_messages[0].metadata["attachments"][0]
             self.assertEqual(attachment["kind"], "image")
-            self.assertTrue(attachment["path"].startswith("temp/images/inbound/"))
+            self.assertTrue(attachment["path"].startswith("assets/inbound/local/images/"))
             self.assertTrue((workspace_dir / attachment["path"]).is_file())
 
     async def test_chat_events_streams_preface_then_tool_then_final_reply(self):
@@ -1172,8 +1172,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         storage = InMemoryMessageStorage()
         attachment = {
             "kind": "image",
-            "path": "temp/images/result.png",
-            "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+            "path": "assets/generated/images/result.png",
+            "blob_url": "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fresult.png",
             "mime_type": "image/png",
             "file_name": "result.png",
             "caption": "Processed",
@@ -1546,8 +1546,8 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
                 "type": "generated_image",
                 "prompt": "chart",
                 "image": {
-                    "path": "temp/images/chart.png",
-                    "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fchart.png",
+                    "path": "assets/generated/images/chart.png",
+                    "blob_url": "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fchart.png",
                     "mime_type": "image/png",
                 },
             }
@@ -1564,7 +1564,7 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(display_result)
         self.assertEqual(display_result.content, "")
         self.assertEqual(display_result.attachments[0]["kind"], "image")
-        self.assertEqual(display_result.attachments[0]["path"], "temp/images/chart.png")
+        self.assertEqual(display_result.attachments[0]["path"], "assets/generated/images/chart.png")
 
     async def test_artifact_tool_result_exposes_structured_attachment(self):
         async def attach() -> dict:
@@ -1729,4 +1729,3 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

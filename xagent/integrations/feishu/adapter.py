@@ -85,8 +85,8 @@ class _FeishuLogRedactionFilter(logging.Filter):
 _LOG_REDACTION_FILTER = _FeishuLogRedactionFilter()
 
 _FEISHU_IMAGE_PLACEHOLDER = "The user sent an image."
-_FEISHU_INBOUND_IMAGE_OUTPUT_DIR = "temp/images/feishu"
-_FEISHU_OUTBOUND_IMAGE_OUTPUT_DIR = "temp/images/feishu/outbound"
+_FEISHU_INBOUND_IMAGE_OUTPUT_DIR = "assets/inbound/feishu/images"
+_FEISHU_OUTBOUND_IMAGE_OUTPUT_DIR = "assets/derived/feishu/outbound/images"
 _FEISHU_IMAGE_TRANSPORT_MAX_BYTES = DEFAULT_IMAGE_TRANSPORT_MAX_BYTES
 _FEISHU_IMAGE_TRANSPORT_MAX_EDGE = DEFAULT_IMAGE_TRANSPORT_MAX_EDGE
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
@@ -332,6 +332,7 @@ class FeishuAdapter:
         """Request a graceful shutdown of the connect loop."""
         self._stop_event.set()
         self._safe_stop()
+        await self._flush_agent_memory()
 
     def _safe_stop(self) -> None:
         self._cancel_processing_tasks()
@@ -342,6 +343,17 @@ class FeishuAdapter:
             channel.stop()
         except Exception:  # pragma: no cover - best-effort cleanup
             self.logger.debug("FeishuChannel stop raised", exc_info=True)
+
+    async def _flush_agent_memory(self) -> None:
+        flusher = getattr(self.agent, "run_memory_maintenance", None)
+        if not callable(flusher):
+            flusher = getattr(self.agent, "flush_memory", None)
+        if not callable(flusher):
+            return
+        try:
+            await flusher()
+        except Exception:
+            self.logger.warning("Feishu adapter memory flush failed", exc_info=True)
 
     def _cancel_processing_tasks(self) -> None:
         with self._processing_tasks_lock:

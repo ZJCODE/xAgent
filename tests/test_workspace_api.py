@@ -130,6 +130,26 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(blob_response.status_code, 200)
             self.assertEqual(blob_response.content, image_bytes)
 
+    async def test_workspace_upload_without_path_uses_web_inbound_image_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = self._server(Path(tmpdir))
+            image_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+
+            async with await self._client(server) as client:
+                upload_response = await client.post(
+                    "/api/workspace/upload",
+                    files={"file": ("tiny.png", image_bytes, "image/png")},
+                )
+                payload = upload_response.json()
+                blob_response = await client.get("/api/workspace/blob", params={"path": payload["path"]})
+
+            self.assertEqual(upload_response.status_code, 200)
+            self.assertTrue(payload["path"].startswith("assets/inbound/web/images/tiny-"))
+            self.assertTrue(payload["path"].endswith(".png"))
+            self.assertEqual(payload["blob_url"], f"/api/workspace/blob?path={payload['path'].replace('/', '%2F')}")
+            self.assertEqual(blob_response.status_code, 200)
+            self.assertEqual(blob_response.content, image_bytes)
+
     async def test_workspace_upload_accepts_non_image_attachment_with_blob_url(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             server = self._server(Path(tmpdir))
@@ -138,15 +158,15 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
             async with await self._client(server) as client:
                 upload_response = await client.post(
                     "/api/workspace/upload",
-                    data={"path": "incoming/"},
                     files={"file": ("report.csv", report_bytes, "text/csv")},
                 )
-                blob_response = await client.get("/api/workspace/blob", params={"path": "incoming/report.csv"})
+                payload = upload_response.json()
+                blob_response = await client.get("/api/workspace/blob", params={"path": payload["path"]})
 
             self.assertEqual(upload_response.status_code, 200)
-            payload = upload_response.json()
-            self.assertEqual(payload["path"], "incoming/report.csv")
-            self.assertEqual(payload["blob_url"], "/api/workspace/blob?path=incoming%2Freport.csv")
+            self.assertTrue(payload["path"].startswith("assets/inbound/web/files/report-"))
+            self.assertTrue(payload["path"].endswith(".csv"))
+            self.assertEqual(payload["blob_url"], f"/api/workspace/blob?path={payload['path'].replace('/', '%2F')}")
             self.assertEqual(blob_response.status_code, 200)
             self.assertEqual(blob_response.content, report_bytes)
 
@@ -204,11 +224,11 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
                 "inspect this",
                 role=RoleType.USER,
                 sender_id="alice",
-                image_source="/api/workspace/blob?path=temp%2Fimages%2Fweb%2Finput.png",
+                image_source="/api/workspace/blob?path=assets%2Finbound%2Fweb%2Fimages%2Finput.png",
             )
             message.metadata["images"] = [{
-                "workspace_path": "temp/images/web/input.png",
-                "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fweb%2Finput.png",
+                "workspace_path": "assets/inbound/web/images/input.png",
+                "blob_url": "/api/workspace/blob?path=assets%2Finbound%2Fweb%2Fimages%2Finput.png",
                 "mime_type": "image/png",
             }]
             server = self._server_with_messages(root, messages=[message])
@@ -219,7 +239,7 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200)
             payload = response.json()
             self.assertEqual(payload["messages"][0]["image_count"], 1)
-            self.assertEqual(payload["messages"][0]["images"][0]["workspace_path"], "temp/images/web/input.png")
+            self.assertEqual(payload["messages"][0]["images"][0]["workspace_path"], "assets/inbound/web/images/input.png")
 
 
 if __name__ == "__main__":

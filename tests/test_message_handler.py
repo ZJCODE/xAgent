@@ -43,18 +43,18 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
             images = msg.images
             self.assertEqual(len(images), 1)
-            self.assertTrue(images[0].source.startswith("/api/workspace/blob?path=temp%2Fimages%2Finbound%2F"))
+            self.assertTrue(images[0].source.startswith("/api/workspace/blob?path=assets%2Finbound%2Flocal%2Fimages%2F"))
             self.assertEqual(len(msg.metadata["images"]), 1)
             asset = msg.metadata["images"][0]
-            self.assertTrue(asset["workspace_path"].startswith("temp/images/inbound/"))
-            self.assertIn("/api/workspace/blob?path=temp%2Fimages%2Finbound%2F", asset["blob_url"])
+            self.assertTrue(asset["workspace_path"].startswith("assets/inbound/local/images/"))
+            self.assertIn("/api/workspace/blob?path=assets%2Finbound%2Flocal%2Fimages%2F", asset["blob_url"])
             self.assertEqual((Path(tmpdir) / asset["workspace_path"]).read_bytes(), image_bytes)
 
             current_images = MessageHandler._current_message_images(msg, "Joy", workspace_dir=tmpdir)
             self.assertEqual(data_uri_to_bytes(current_images[0])[0], image_bytes)
 
     def test_workspace_blob_markdown_is_detected_as_image_input(self):
-        blob_url = "/api/workspace/blob?path=temp%2Fimages%2Fresult.png"
+        blob_url = "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fresult.png"
 
         detected = extract_image_urls_from_text(f"please inspect ![Generated image]({blob_url})")
 
@@ -109,7 +109,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
             attachment = msg.metadata["attachments"][0]
             self.assertEqual(attachment["kind"], "image")
-            self.assertTrue(attachment["path"].startswith("temp/images/inbound/"))
+            self.assertTrue(attachment["path"].startswith("assets/inbound/local/images/"))
             self.assertIn("Attached files:", msg.content)
             self.assertIn(attachment["blob_url"], msg.content)
             self.assertIn(f"path: {attachment['path']}", msg.content)
@@ -301,7 +301,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         image_url = "data:image/png;base64,AAAA"
         messages = [
             Message.create(
-                "Please inspect this image\n\n![Feishu image](/api/workspace/blob?path=temp/images/feishu/inbound.png)",
+                "Please inspect this image\n\n![Feishu image](/api/workspace/blob?path=assets/inbound/feishu/images/inbound.png)",
                 role=RoleType.USER,
                 sender_id="Joy",
                 image_source=image_url,

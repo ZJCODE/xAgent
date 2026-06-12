@@ -363,15 +363,15 @@ class FeishuAdapterTests(unittest.TestCase):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 workspace_dir = Path(tmpdir).resolve()
-                image_path = workspace_dir / "temp" / "images" / "result.png"
+                image_path = workspace_dir / "assets" / "generated" / "images" / "result.png"
                 image_path.parent.mkdir(parents=True)
                 image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
                 agent = _AttachmentEventAgent(
                     content="",
                     attachments=[{
                         "kind": "image",
-                        "path": "temp/images/result.png",
-                        "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+                        "path": "assets/generated/images/result.png",
+                        "blob_url": "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fresult.png",
                         "mime_type": "image/png",
                         "file_name": "result.png",
                     }],
@@ -512,14 +512,21 @@ class FeishuAdapterTests(unittest.TestCase):
 
             asyncio.run(adapter._dispatch(msg))
 
-            saved_images = list((workspace_dir / "temp" / "images" / "feishu").glob("*.png"))
+            saved_images = list((workspace_dir / "assets" / "inbound" / "feishu" / "images").glob("*.png"))
             self.assertEqual(resource_api.requests[0].message_id, "om_image")
             self.assertEqual(resource_api.requests[0].file_key, "img_test")
             self.assertEqual(resource_api.requests[0].type, "image")
             self.assertEqual(len(saved_images), 1)
             self.assertEqual(saved_images[0].read_bytes(), resource_api.data)
-            self.assertTrue(agent.chat_calls[0]["image_source"].startswith("/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F"))
-            self.assertIn("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", agent.chat_calls[0]["user_message"])
+            self.assertTrue(
+                agent.chat_calls[0]["image_source"].startswith(
+                    "/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F"
+                )
+            )
+            self.assertIn(
+                "![Feishu image](/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F",
+                agent.chat_calls[0]["user_message"],
+            )
             self.assertNotIn(str(workspace_dir), agent.chat_calls[0]["user_message"])
 
     def test_direct_large_image_message_compresses_before_workspace_and_model(self):
@@ -552,7 +559,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
                 asyncio.run(adapter._dispatch(msg))
 
-                saved_images = list((workspace_dir / "temp" / "images" / "feishu").glob("*.jpg"))
+                saved_images = list((workspace_dir / "assets" / "inbound" / "feishu" / "images").glob("*.jpg"))
                 self.assertEqual(len(saved_images), 1)
                 self.assertLess(saved_images[0].stat().st_size, len(image_bytes))
                 self.assertLessEqual(saved_images[0].stat().st_size, feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_BYTES)
@@ -581,7 +588,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
             asyncio.run(adapter._dispatch(msg))
 
-            saved_images = list((workspace_dir / "temp" / "images" / "feishu").glob("*.png"))
+            saved_images = list((workspace_dir / "assets" / "inbound" / "feishu" / "images").glob("*.png"))
             self.assertEqual(adapter._channel.download_calls[0]["file_key"], "img_test")
             self.assertEqual(resource_api.requests, [])
             self.assertEqual(len(saved_images), 1)
@@ -611,7 +618,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
             asyncio.run(adapter._dispatch(msg))
 
-            saved_files = list((workspace_dir / "temp" / "attachments" / "feishu").glob("*.pdf"))
+            saved_files = list((workspace_dir / "assets" / "inbound" / "feishu" / "files").glob("*.pdf"))
             self.assertEqual(resource_api.requests[0].message_id, "om_file")
             self.assertEqual(resource_api.requests[0].file_key, "file_test")
             self.assertEqual(resource_api.requests[0].type, "file")
@@ -619,7 +626,7 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertEqual(saved_files[0].read_bytes(), resource_api.data)
             self.assertNotIn("image_source", agent.chat_calls[0])
             self.assertEqual(agent.chat_calls[0]["attachments"][0]["kind"], "file")
-            self.assertTrue(agent.chat_calls[0]["attachments"][0]["path"].startswith("temp/attachments/feishu/"))
+            self.assertTrue(agent.chat_calls[0]["attachments"][0]["path"].startswith("assets/inbound/feishu/files/"))
 
     def test_direct_image_message_strips_redundant_inline_feishu_markdown(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -644,7 +651,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
             user_message = agent.chat_calls[0]["user_message"]
             self.assertNotIn("![image](img_test)", user_message)
-            self.assertEqual(user_message.count("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F"), 1)
+            self.assertEqual(user_message.count("![Feishu image](/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F"), 1)
 
     def test_direct_image_message_routes_attachment_when_provider_lacks_vision(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -667,12 +674,15 @@ class FeishuAdapterTests(unittest.TestCase):
 
             asyncio.run(adapter._dispatch(msg))
 
-            saved_images = list((workspace_dir / "temp" / "images" / "feishu").glob("*.png"))
+            saved_images = list((workspace_dir / "assets" / "inbound" / "feishu" / "images").glob("*.png"))
             self.assertEqual(len(agent.chat_calls), 1)
             self.assertNotIn("image_source", agent.chat_calls[0])
             self.assertEqual(agent.chat_calls[0]["attachments"][0]["kind"], "image")
-            self.assertTrue(agent.chat_calls[0]["attachments"][0]["path"].startswith("temp/images/feishu/"))
-            self.assertIn("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", agent.chat_calls[0]["user_message"])
+            self.assertTrue(agent.chat_calls[0]["attachments"][0]["path"].startswith("assets/inbound/feishu/images/"))
+            self.assertIn(
+                "![Feishu image](/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F",
+                agent.chat_calls[0]["user_message"],
+            )
             self.assertEqual(len(saved_images), 1)
             self.assertEqual(saved_images[0].read_bytes(), resource_api.data)
             self.assertEqual(adapter._channel.sent[0][1], {"markdown": "agent reply"})
@@ -729,8 +739,12 @@ class FeishuAdapterTests(unittest.TestCase):
 
             user_message = agent.chat_calls[0]["user_message"]
             self.assertIn("[room context]", user_message)
-            self.assertIn("![Feishu image](/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F", user_message)
-            self.assertTrue(agent.chat_calls[0]["image_source"].startswith("/api/workspace/blob?path=temp%2Fimages%2Ffeishu%2F"))
+            self.assertIn("![Feishu image](/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F", user_message)
+            self.assertTrue(
+                agent.chat_calls[0]["image_source"].startswith(
+                    "/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F"
+                )
+            )
             self.assertNotIn(str(workspace_dir), user_message)
 
     def test_direct_chat_passes_explicit_sender_id_type_to_resolver(self):
@@ -1170,7 +1184,7 @@ class FeishuAdapterTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 workspace_dir = Path(tmpdir).resolve()
-                image_path = workspace_dir / "temp" / "attachments" / "web" / "large.jpg"
+                image_path = workspace_dir / "assets" / "inbound" / "web" / "images" / "large.jpg"
                 image_path.parent.mkdir(parents=True)
                 image_path.write_bytes(_noisy_jpeg_bytes())
                 agent = _FakeAgent()
@@ -1182,14 +1196,16 @@ class FeishuAdapterTests(unittest.TestCase):
                     chat_id="oc_dm",
                     message_id="om_user",
                     uuid_message_id="om_user",
-                    text="![Photo](/api/workspace/blob?path=temp%2Fattachments%2Fweb%2Flarge.jpg)",
+                    text="![Photo](/api/workspace/blob?path=assets%2Finbound%2Fweb%2Fimages%2Flarge.jpg)",
                     is_group=False,
                 ))
 
                 sent_path = Path(adapter._channel.sent[0][1]["image"]["source"])
                 self.assertNotEqual(sent_path, image_path.resolve())
                 self.assertTrue(sent_path.is_file())
-                self.assertTrue(sent_path.relative_to(workspace_dir).as_posix().startswith("temp/images/feishu/outbound/"))
+                self.assertTrue(
+                    sent_path.relative_to(workspace_dir).as_posix().startswith("assets/derived/feishu/outbound/images/")
+                )
                 self.assertLess(sent_path.stat().st_size, image_path.stat().st_size)
                 self.assertLessEqual(sent_path.stat().st_size, feishu_adapter_module._FEISHU_IMAGE_TRANSPORT_MAX_BYTES)
         finally:
@@ -1199,10 +1215,10 @@ class FeishuAdapterTests(unittest.TestCase):
     def test_structured_attachment_is_sent_once_when_markdown_duplicates_it(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir).resolve()
-            image_path = workspace_dir / "temp" / "images" / "result.png"
+            image_path = workspace_dir / "assets" / "generated" / "images" / "result.png"
             image_path.parent.mkdir(parents=True)
             image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
-            blob_url = "/api/workspace/blob?path=temp%2Fimages%2Fresult.png"
+            blob_url = "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fresult.png"
             agent = _FakeAgent()
             agent.workspace_dir = workspace_dir
             adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
@@ -1231,15 +1247,15 @@ class FeishuAdapterTests(unittest.TestCase):
     def test_message_done_structured_attachment_is_sent_without_markdown_dependency(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir).resolve()
-            image_path = workspace_dir / "temp" / "images" / "result.png"
+            image_path = workspace_dir / "assets" / "generated" / "images" / "result.png"
             image_path.parent.mkdir(parents=True)
             image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
             agent = _AttachmentEventAgent(
                 content="Here is the processed image.",
                 attachments=[{
                     "kind": "image",
-                    "path": "temp/images/result.png",
-                    "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+                    "path": "assets/generated/images/result.png",
+                    "blob_url": "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fresult.png",
                     "mime_type": "image/png",
                     "file_name": "result.png",
                     "caption": "",

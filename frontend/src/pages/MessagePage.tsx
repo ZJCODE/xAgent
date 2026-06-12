@@ -35,8 +35,8 @@ function messageImageUrls(message: MessageItem | MessageSearchResult): string[] 
     .map((attachment) => attachment.blob_url || (attachment.path ? workspaceBlobUrlFromPath(attachment.path) : ""));
   return [...(message.images || [])
     .map((image) => image.blob_url || image.external_url || "")
-    .filter((url) => url && !(message.content || "").includes(url)), ...attachmentImages]
-    .filter((url, index, urls) => url && urls.indexOf(url) === index && !(message.content || "").includes(url));
+    .filter(Boolean), ...attachmentImages]
+    .filter((url, index, urls) => url && urls.indexOf(url) === index);
 }
 
 function workspaceBlobUrlFromPath(path: string): string {

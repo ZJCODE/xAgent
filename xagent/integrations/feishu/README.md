@@ -132,7 +132,7 @@ The adapter behaves like a real human teammate:
 | Group / topic, not @mentioned | ignored by default | Set `group_reply_without_mention: true` to route every group/topic message to `agent.chat`. |
 | Scheduled delivery | `agent.chat` / message | Sent as a plain message; never quotes or @mentions the person who created the reminder. |
 | Image content | `agent.chat` | Feishu image resources are downloaded into workspace attachments. Providers with vision also receive current-turn image input; providers without vision still get workspace file references for file-level tools. |
-| File content | `agent.chat` | Feishu file resources are downloaded into `workspace/temp/attachments/feishu` and passed as workspace attachments. The model sees a file manifest and workspace blob link, not raw file bytes. |
+| File content | `agent.chat` | Feishu file resources are downloaded into `workspace/assets/inbound/feishu/files` and passed as workspace attachments. The model sees a file manifest and workspace blob link, not raw file bytes. |
 
 ```yaml
 channels:
@@ -200,8 +200,8 @@ remains predictable across direct and group conversations.
 ## Images and files
 
 Incoming Feishu image and file messages are downloaded through the official
-message resource API. Images are saved under `workspace/temp/images/feishu`; other
-files are saved under `workspace/temp/attachments/feishu`. Large images are
+message resource API. Images are saved under `workspace/assets/inbound/feishu/images`; other
+files are saved under `workspace/assets/inbound/feishu/files`. Large images are
 compressed at the Feishu boundary before they are saved or sent to the model:
 EXIF orientation is applied, metadata is stripped, aspect ratio is preserved, the
 longest edge is capped at 2048px by default, and the target payload is kept under
@@ -223,7 +223,7 @@ way because they do not require vision support.
 
 When xAgent returns structured workspace attachments, the adapter resolves each
 file under `workspace/`, writes a cached compressed derivative under
-`workspace/temp/images/feishu/outbound` when an image is too large for reliable
+`workspace/assets/derived/feishu/outbound/images` when an image is too large for reliable
 transport, uploads that derivative through `FeishuChannel.send`, and sends it
 back as a native Feishu image. Other workspace files are sent back as Feishu
 files. Any surrounding text is sent first, then attachments are sent as separate

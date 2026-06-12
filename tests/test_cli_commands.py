@@ -130,14 +130,14 @@ class CLICommandTests(unittest.TestCase):
             workspace = Path(tmpdir).resolve() / "workspace"
             attachments = [{
                 "kind": "image",
-                "path": "temp/images/result.png",
-                "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+                "path": "assets/generated/images/result.png",
+                "blob_url": "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fresult.png",
                 "mime_type": "image/png",
             }]
 
             formatted = _format_cli_attachments(attachments, workspace)
 
-        self.assertEqual(formatted, f"Attachments:\n- {workspace / 'temp' / 'images' / 'result.png'}")
+        self.assertEqual(formatted, f"Attachments:\n- {workspace / 'assets' / 'generated' / 'images' / 'result.png'}")
 
     def test_inspect_launcher_message_list_accepts_custom_count(self):
         class FakeUI:
@@ -213,8 +213,8 @@ class CLICommandTests(unittest.TestCase):
                     "content": "",
                     "attachments": [{
                         "kind": "image",
-                        "path": "temp/images/result.png",
-                        "blob_url": "/api/workspace/blob?path=temp%2Fimages%2Fresult.png",
+                        "path": "assets/generated/images/result.png",
+                        "blob_url": "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fresult.png",
                         "mime_type": "image/png",
                     }],
                 }
@@ -235,7 +235,7 @@ class CLICommandTests(unittest.TestCase):
                 ))
 
         output = stdout.getvalue()
-        self.assertIn(str(workspace / "temp" / "images" / "result.png"), output)
+        self.assertIn(str(workspace / "assets" / "generated" / "images" / "result.png"), output)
         self.assertIn("Attachments:", output)
         self.assertNotIn("/api/workspace/blob", output)
 

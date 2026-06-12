@@ -10,14 +10,15 @@ from typing import Any, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..utils.image_utils import workspace_blob_relative_path, workspace_blob_url
+from ..utils.image_utils import WORKSPACE_ASSET_ROOT, workspace_blob_relative_path, workspace_blob_url
 
 
 ATTACHMENT_KIND_FILE = "file"
 ATTACHMENT_KIND_IMAGE = "image"
 ATTACHMENT_METADATA_KEY = "attachments"
-DEFAULT_FEISHU_ATTACHMENT_DIR = "temp/attachments/feishu"
-DEFAULT_WEB_ATTACHMENT_DIR = "temp/attachments/web"
+DEFAULT_FEISHU_ATTACHMENT_DIR = f"{WORKSPACE_ASSET_ROOT}/inbound/feishu/files"
+DEFAULT_WEB_ATTACHMENT_DIR = f"{WORKSPACE_ASSET_ROOT}/inbound/web/files"
+DEFAULT_WEB_IMAGE_DIR = f"{WORKSPACE_ASSET_ROOT}/inbound/web/images"
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENT_BYTES = 200 * 1024 * 1024
 

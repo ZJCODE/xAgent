@@ -172,8 +172,8 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["type"], "generated_image")
             self.assertEqual(result["model"], "gpt-image-test")
             self.assertEqual(result["revised_prompt"], "A refined image prompt.")
-            self.assertTrue(result["image"]["path"].startswith("temp/images/"))
-            self.assertIn("/api/workspace/blob?path=temp%2Fimages%2F", result["image"]["blob_url"])
+            self.assertTrue(result["image"]["path"].startswith("assets/generated/images/"))
+            self.assertIn("/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2F", result["image"]["blob_url"])
             self.assertNotIn("markdown", result["image"])
 
             written = Path(tmpdir) / result["image"]["path"]
@@ -253,7 +253,7 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["provider"], "minimax")
             self.assertEqual(result["model"], "image-01")
             self.assertEqual(result["aspect_ratio"], "16:9")
-            self.assertTrue(result["image"]["path"].startswith("temp/images/"))
+            self.assertTrue(result["image"]["path"].startswith("assets/generated/images/"))
             self.assertNotIn("markdown", result["image"])
 
             written = Path(tmpdir) / result["image"]["path"]
@@ -322,7 +322,7 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result["prompt_extend"])
             self.assertFalse(result["watermark"])
             self.assertEqual(result["negative_prompt"], "文字模糊，扭曲")
-            self.assertTrue(result["image"]["path"].startswith("temp/images/"))
+            self.assertTrue(result["image"]["path"].startswith("assets/generated/images/"))
 
             written = Path(tmpdir) / result["image"]["path"]
             self.assertEqual(written.read_bytes(), image_bytes)

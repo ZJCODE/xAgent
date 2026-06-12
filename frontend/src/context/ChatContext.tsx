@@ -76,11 +76,6 @@ function canUseVision(capabilities: AgentCapabilities): boolean {
   return capabilities.vision_input ?? capabilities.vision;
 }
 
-function safeUploadName(file: File): string {
-  const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "attachment.bin";
-  return `temp/attachments/web/${Date.now()}-${Math.random().toString(16).slice(2, 10)}-${safeName}`;
-}
-
 function isImageAttachment(attachment: AttachmentAsset): boolean {
   return attachment.kind === "image" || Boolean(attachment.mime_type?.startsWith("image/"));
 }
@@ -257,7 +252,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
     void Promise.all(
       selectedFiles.map(async (file) => {
-        const uploaded = await uploadWorkspaceFile(file, safeUploadName(file));
+        const uploaded = await uploadWorkspaceFile(file);
         const blobUrl = uploaded.blob_url || workspaceBlobUrl(uploaded.path);
         const mimeType = uploaded.mime_type || file.type || "application/octet-stream";
         const attachment: AttachmentAsset = {

@@ -82,10 +82,10 @@ export async function searchWorkspace(query: string): Promise<{ query: string; r
   return requestJson(`/api/workspace/search?query=${encodeURIComponent(query)}`);
 }
 
-export async function uploadWorkspaceFile(file: File, path: string): Promise<WorkspaceUploadResult> {
+export async function uploadWorkspaceFile(file: File, path?: string): Promise<WorkspaceUploadResult> {
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("path", path);
+  if (path) formData.append("path", path);
   return requestJson("/api/workspace/upload", {
     method: "POST",
     body: formData,

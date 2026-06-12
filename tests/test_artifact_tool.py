@@ -10,18 +10,18 @@ class AttachArtifactToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_accepts_workspace_relative_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir).resolve()
-            image = workspace / "temp" / "images" / "result.png"
+            image = workspace / "assets" / "generated" / "images" / "result.png"
             image.parent.mkdir(parents=True)
             image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
             tool = create_attach_artifact_tool(workspace_dir=str(workspace))
 
-            result = await tool(path="temp/images/result.png", caption="Processed")
+            result = await tool(path="assets/generated/images/result.png", caption="Processed")
 
             self.assertEqual(result["status"], "ok")
             self.assertEqual(result["type"], "artifact_attachment")
             self.assertEqual(result["artifact"]["kind"], "image")
-            self.assertEqual(result["artifact"]["path"], "temp/images/result.png")
-            self.assertEqual(result["artifact"]["blob_url"], workspace_blob_url("temp/images/result.png"))
+            self.assertEqual(result["artifact"]["path"], "assets/generated/images/result.png")
+            self.assertEqual(result["artifact"]["blob_url"], workspace_blob_url("assets/generated/images/result.png"))
             self.assertEqual(result["artifact"]["caption"], "Processed")
 
     async def test_accepts_workspace_blob_url(self):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import mimetypes
 import shutil
@@ -14,7 +15,12 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from .models import IdentityInput, SkillCreateInput, SkillStateInput, SkillWriteInput, WorkspaceWriteInput
 from .serializers import message_item, message_search_result
 from ...core.runtime import delete_scheduled_task, list_active_task_views
-from ...schemas.attachment import MAX_ATTACHMENT_BYTES
+from ...schemas.attachment import (
+    DEFAULT_WEB_ATTACHMENT_DIR,
+    DEFAULT_WEB_IMAGE_DIR,
+    MAX_ATTACHMENT_BYTES,
+    safe_attachment_filename,
+)
 from ...tools.image_generation_tool import normalize_image_generation_provider
 from ...utils.image_utils import (
     MAX_IMAGE_BYTES,
@@ -309,9 +315,7 @@ def register_admin_routes(
     ):
         workspace_files = server._workspace_files()
         raw_target = path.strip()
-        filename = Path(file.filename or "upload.bin").name
-        requested = workspace_files.resolve_upload_path(raw_target, filename)
-        requested.parent.mkdir(parents=True, exist_ok=True)
+        filename = safe_attachment_filename(file.filename or "upload.bin")
         content = await file.read()
         content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
         detected_mime_type = detect_image_mime(content)
@@ -331,6 +335,15 @@ def register_admin_routes(
                 raise HTTPException(status_code=415, detail=f"Unsupported image MIME type; allowed: {allowed}")
         elif len(content) > MAX_ATTACHMENT_BYTES:
             raise HTTPException(status_code=413, detail="File upload exceeds 50MB")
+        if raw_target:
+            requested = workspace_files.resolve_upload_path(raw_target, filename)
+        else:
+            directory = DEFAULT_WEB_IMAGE_DIR if looks_like_image else DEFAULT_WEB_ATTACHMENT_DIR
+            requested = workspace_files.resolve_upload_path(
+                f"{directory}/",
+                _content_addressed_upload_name(filename, content),
+            )
+        requested.parent.mkdir(parents=True, exist_ok=True)
         requested.write_bytes(content)
         metadata = workspace_files.metadata(requested)
         return {"status": "ok", **metadata, "blob_url": workspace_blob_url(metadata["path"])}
@@ -487,3 +500,11 @@ def register_admin_routes(
             if newest:
                 result["latest_timestamp"] = newest[0].timestamp
         return result
+
+
+def _content_addressed_upload_name(filename: str, content: bytes) -> str:
+    safe_name = safe_attachment_filename(filename)
+    path = Path(safe_name)
+    digest = hashlib.sha1(content).hexdigest()[:12]
+    stem = path.stem or "upload"
+    return f"{stem}-{digest}{path.suffix}"
