@@ -34,7 +34,7 @@ class MemoryHandler:
     """Manages recent diary context and count-based journal maintenance."""
 
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
-    OVERLAP_COUNT = AgentConfig.MEMORY_OVERLAP_COUNT
+    WINDOW_OVERLAP = AgentConfig.MEMORY_WINDOW_OVERLAP
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
 
     def __init__(
@@ -45,7 +45,7 @@ class MemoryHandler:
         *,
         max_history: int,
         recent_days: Optional[int] = None,
-        overlap_count: Optional[int] = None,
+        window_overlap: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
     ) -> None:
         self.memory = memory
@@ -53,8 +53,8 @@ class MemoryHandler:
         self.message_storage = message_storage
         self.max_history = self._positive_int(max_history, AgentConfig.DEFAULT_MAX_HISTORY)
         self.recent_days = self._positive_int(recent_days, self.RECENT_DAYS)
-        resolved_overlap = self._positive_int(overlap_count, self.OVERLAP_COUNT)
-        self.overlap_count = min(resolved_overlap, max(0, self.max_history - 1))
+        resolved_overlap = self._positive_int(window_overlap, self.WINDOW_OVERLAP)
+        self.window_overlap = min(resolved_overlap, max(0, self.max_history - 1))
         self.max_journal_source_chars = self._positive_int(
             max_journal_source_chars,
             self.DEFAULT_JOURNAL_SOURCE_CHARS,
@@ -124,16 +124,16 @@ class MemoryHandler:
 
         # Gate on unprocessed message count: only run when enough new
         # messages have accumulated since the last checkpoint.  Using
-        # max_history - overlap_count as the effective threshold preserves
+        # max_history - window_overlap as the effective threshold preserves
         # the same batch overlap that the old per-process interaction
         # counter provided, but works correctly across multiple processes.
         if not force:
             unprocessed_count = latest_message_id - self._last_processed_message_id
-            if unprocessed_count < self.max_history - self.overlap_count:
+            if unprocessed_count < self.max_history - self.window_overlap:
                 return False
 
         # Read the last max_history messages for compression, ensuring
-        # overlap_count entries naturally overlap with the previous batch.
+        # window_overlap entries naturally overlap with the previous batch.
         recent_messages = await self.message_storage.get_messages(
             count=self.max_history,
         )

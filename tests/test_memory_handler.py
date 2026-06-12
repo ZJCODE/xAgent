@@ -173,7 +173,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.llm.diary_calls, [])
 
     async def test_run_maintenance_writes_when_cursor_gap_meets_threshold(self):
-        # Add 20 messages so cursor gap = 20 >= threshold (max_history - overlap_count = 14)
+        # Add 20 messages so cursor gap = 20 >= threshold (max_history - window_overlap = 14)
         for i in range(20):
             self.storage.append(Message(
                 role=RoleType.USER,

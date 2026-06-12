@@ -29,7 +29,7 @@ class AgentConfig:
     TASKS_DIRNAME = "tasks"
     MESSAGE_DB_FILENAME = "messages.sqlite3"
     MEMORY_RECENT_DAYS = 2
-    MEMORY_OVERLAP_COUNT = 6
+    MEMORY_WINDOW_OVERLAP = 6
     DEFAULT_USER_ID = "default_user"
     DEFAULT_MAX_HISTORY = 20
     MAX_CONTEXT_EVENTS = 12
