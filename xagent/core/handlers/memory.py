@@ -144,6 +144,11 @@ class MemoryHandler:
             end_inclusive=end_inclusive,
         )
         if not recent_messages:
+            # Jump checkpoint forward.  If messages were deleted (id gap),
+            # leap to just before latest so the next cycle catches real data
+            # instead of inching forward one window at a time.
+            jump_to = max(end_inclusive, latest_message_id - self.max_history)
+            await self._commit_processed_message_id(jump_to)
             return False
 
         new_records = [
