@@ -439,8 +439,41 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         second_wrote = await stale_handler.run_maintenance(force=True)
 
         self.assertTrue(first_wrote)
-        self.assertTrue(second_wrote)
-        self.assertEqual(len(stale_llm.diary_calls), 1)
+        self.assertFalse(second_wrote)
+        self.assertEqual(stale_llm.diary_calls, [])
+
+    async def test_force_maintenance_does_not_replay_overlap_without_new_messages(self):
+        storage = _FakeMessageStorage([
+            Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"entry {index}",
+                timestamp=1712650000 + index,
+            )
+            for index in range(8)
+        ])
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=self.llm,
+            message_storage=storage,
+            max_history=_TEST_MAX_HISTORY,
+        )
+
+        first_wrote = await handler.run_maintenance(
+            force=True,
+            trigger="idle",
+            idle_seconds=1800,
+        )
+        second_wrote = await handler.run_maintenance(
+            force=True,
+            trigger="idle",
+            idle_seconds=2100,
+        )
+
+        self.assertTrue(first_wrote)
+        self.assertFalse(second_wrote)
+        self.assertEqual(len(self.llm.diary_calls), 1)
+        self.assertEqual(handler._last_processed_message_id, 8)
 
     async def test_run_maintenance_serializes_handlers_with_workspace_lock(self):
         storage = _FakeMessageStorage([
@@ -478,9 +511,9 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         first_result, second_result = await asyncio.gather(first_task, second_task)
 
         self.assertTrue(first_result)
-        self.assertTrue(second_result)
+        self.assertFalse(second_result)
         self.assertEqual(len(blocking_llm.diary_calls), 1)
-        self.assertEqual(len(waiting_llm.diary_calls), 1)
+        self.assertEqual(waiting_llm.diary_calls, [])
 
     async def test_run_maintenance_recovers_checkpoint_after_restart(self):
         storage = _FakeMessageStorage([

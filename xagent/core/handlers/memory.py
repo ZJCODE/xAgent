@@ -133,6 +133,8 @@ class MemoryHandler:
         latest_message_id = await self.message_storage.get_latest_message_cursor()
         if latest_message_id <= 0:
             return False
+        if latest_message_id <= self._last_processed_message_id:
+            return False
 
         # Gate on unprocessed message count: only run when enough new
         # messages have accumulated since the last checkpoint.  Based on
