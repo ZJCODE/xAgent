@@ -9,8 +9,17 @@ logging.basicConfig(
 
 
 class AgentConfig:
-    """Configuration constants for Agent class."""
+    """Configuration constants for Agent class.
 
+    Organized by concern. Each section groups related parameters so that
+    tuning one aspect of the agent does not require scanning the whole file.
+    """
+
+    # ============================================================
+    # 1. Context Layer Names
+    # Ordered dictionary keys used by the message handler to assemble
+    # the system prompt from multiple context layers.
+    # ============================================================
     CORE_INTERACTION_RULES_NAME = "core_interaction_rules"
     TOOL_POLICY_NAME = "tool_policy"
     IDENTITY_CONTEXT_NAME = "identity_context"
@@ -20,7 +29,11 @@ class AgentConfig:
     RECENT_EXPERIENCE_NAME = "recent_experience"
     CURRENT_TASK_NAME = "current_task"
 
-    DEFAULT_MODEL = "gpt-5.4-mini"
+    # ============================================================
+    # 2. Storage & Directory Layout
+    # Workspace root, runtime-data directory names, and the SQLite
+    # filename. Changing these alters where the agent persists state.
+    # ============================================================
     DEFAULT_WORKSPACE = "~/.xagent"
     MEMORY_DIRNAME = "memory"
     MESSAGE_DIRNAME = "messages"
@@ -28,35 +41,80 @@ class AgentConfig:
     SKILLS_DIRNAME = "skills"
     TASKS_DIRNAME = "tasks"
     MESSAGE_DB_FILENAME = "messages.sqlite3"
-    MEMORY_RECENT_DAYS = 2
-    MEMORY_WINDOW_OVERLAP_RATIO = 0.3
+
+    # ============================================================
+    # 3. Model & Agent Defaults
+    # LLM selection, generation caps, user identity, and tool-call
+    # parallelism. These are the most frequently tuned knobs.
+    # ============================================================
+    DEFAULT_MODEL = "gpt-5.4-mini"
+    DEFAULT_MAX_TOKENS = 4096
     DEFAULT_USER_ID = "default_user"
+    DEFAULT_MAX_CONCURRENT_TOOLS = 4  # Maximum concurrent tool calls
+    TOOL_RESULT_PREVIEW_LENGTH = 20  # characters shown in tool-result summaries
+
+    # ============================================================
+    # 4. Agent Runtime Bounds
+    # Iteration cap, conversation history window, and context-event
+    # limit. Prevent infinite loops and unbounded prompt growth.
+    # ============================================================
+    DEFAULT_MAX_ITER = 50
     DEFAULT_MAX_HISTORY = 20
     MAX_CONTEXT_EVENTS = 12
-    DEFAULT_MAX_ITER = 50
-    DEFAULT_MAX_CONCURRENT_TOOLS = 4  # Maximum concurrent tool calls
-    DEFAULT_HTTP_MAX_CONCURRENT_CHATS = 4
-    DEFAULT_HTTP_QUEUE_TIMEOUT = 30.0
-    DEFAULT_HTTP_CHAT_TIMEOUT = 600.0  # 10 minutes
-    RUNTIME_HEARTBEAT_ENABLED = True
-    RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 300
-    TOOL_RESULT_PREVIEW_LENGTH = 20
-    DEFAULT_MAX_TOKENS = 4096
 
-    # Retry configuration
-    RETRY_ATTEMPTS = 3
-    RETRY_MIN_WAIT = 1
-    RETRY_MAX_WAIT = 60
-
-    # Shell tool configuration
-    MAX_COMMAND_TIMEOUT = 300  # hard upper bound for timeout parameter
+    # ============================================================
+    # 5. Safety & Resource Limits
+    # Hard upper bounds for shell commands and assembled prompts.
+    # These exist to prevent runaway resource consumption.
+    # ============================================================
+    MAX_COMMAND_TIMEOUT = 300  # hard upper bound for timeout parameter (seconds)
     MAX_COMMAND_OUTPUT_SIZE = 51200  # 50 KB per stream
     MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled instructions (chars)
-    MAX_SKILLS_CATALOG_CHARS = 8000
+    MAX_SKILLS_CATALOG_CHARS = 8000  # max characters for injected skill catalog
+
+    # ============================================================
+    # 6. Retry & Reliability
+    # Exponential backoff parameters for LLM API calls.
+    # ============================================================
+    RETRY_ATTEMPTS = 3
+    RETRY_MIN_WAIT = 1  # seconds
+    RETRY_MAX_WAIT = 60  # seconds
+
+    # ============================================================
+    # 7. Memory & History
+    # Tune the size and overlap of the recent-memory window.
+    # ============================================================
+    MEMORY_RECENT_DAYS = 2
+    MEMORY_WINDOW_OVERLAP_RATIO = 0.3
+
+    # ============================================================
+    # 8. Search Tool Defaults
+    # Result-count bounds for the web_search tool.
+    # ============================================================
     DEFAULT_SEARCH_RESULTS = 5
     MAX_SEARCH_RESULTS = 20
 
-    # Tool-specific instruction segments (injected when the tool is active)
+    # ============================================================
+    # 9. HTTP Server
+    # Only relevant when running in server mode. Concurrency and
+    # timeout controls for the HTTP API channel.
+    # ============================================================
+    DEFAULT_HTTP_MAX_CONCURRENT_CHATS = 4
+    DEFAULT_HTTP_QUEUE_TIMEOUT = 30.0  # seconds
+    DEFAULT_HTTP_CHAT_TIMEOUT = 600.0  # 10 minutes
+
+    # ============================================================
+    # 10. Runtime Heartbeat
+    # Keepalive / liveness signal emitted by the agent loop.
+    # ============================================================
+    RUNTIME_HEARTBEAT_ENABLED = True
+    RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 300
+
+    # ============================================================
+    # 11. Tool System Prompts
+    # Instruction segments injected into the system prompt when the
+    # corresponding tool is active. Each key matches a tool name.
+    # ============================================================
     TOOL_SYSTEM_PROMPTS = {
         "write_memory": (
             "\n**Long-Term Memory Writing:**\n"
@@ -139,6 +197,8 @@ class AgentConfig:
         ),
     }
 
+    # Tool policy order: determines the sequence in which tool
+    # instructions appear in the assembled system prompt.
     TOOL_POLICY_ORDER = (
         "run_command",
         "manage_scheduled_tasks",
@@ -151,6 +211,11 @@ class AgentConfig:
         "read_skill",
     )
 
+    # ============================================================
+    # 12. Prompt Templates
+    # Assembled by the static builder methods below. Each template
+    # corresponds to one context layer injected into the system prompt.
+    # ============================================================
     DEFAULT_SYSTEM_PROMPT = (
         "**Context:**\n"
     )
@@ -190,7 +255,12 @@ class AgentConfig:
         "</current_task>"
     )
 
-    # Foundational agent behavior — injected via the `instructions` API parameter
+    # ============================================================
+    # 13. Core Agent Behavior Prompts
+    # The foundational system prompt injected via the instructions API
+    # parameter. Defines the agent's identity, interaction rules, and
+    # capability self-awareness.
+    # ============================================================
 
     NO_VISION_NOTICE = (
         "\n**Image Understanding Limitation:**\n"
@@ -277,6 +347,12 @@ class AgentConfig:
         "\n"
     )
 
+    # ============================================================
+    # 14. Template Builders
+    # Static methods that assemble the prompt templates above with
+    # runtime values (user identity, workspace path, current time).
+    # ============================================================
+
     @staticmethod
     def build_turn_reply_prompt(current_user_id: str) -> str:
         return AgentConfig.TURN_REPLY_PROMPT_TEMPLATE.format(current_user_id=current_user_id)
@@ -310,6 +386,12 @@ class AgentConfig:
             "that should be delivered to the user.\n\n"
             f"Task: {content.strip()}"
         )
+
+# ================================================================
+# Reply Type Enum
+# Classifies each agent turn: plain text, tool call, or error.
+# Kept in config.py because both agent.py and model handler import it.
+# ================================================================
 
 class ReplyType(Enum):
     """Types of replies the agent can generate."""
