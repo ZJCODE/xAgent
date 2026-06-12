@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
@@ -61,9 +60,8 @@ class MemoryHandler:
         )
         self._maintenance_lock = asyncio.Lock()
         self._maintenance_task: Optional[asyncio.Task[bool]] = None
-        state = self._read_state_sync()
         self._last_processed_message_id = self._non_negative_int(
-            state.get("last_processed_message_id"),
+            self._read_state_sync(),
             0,
         )
 
@@ -387,70 +385,36 @@ class MemoryHandler:
             await asyncio.to_thread(self._release_process_lock_sync, lock_handle)
 
     async def _refresh_state_from_disk(self) -> None:
-        state = await asyncio.to_thread(self._read_state_sync)
-        if "last_processed_message_id" in state:
-            self._last_processed_message_id = self._non_negative_int(
-                state.get("last_processed_message_id"),
-                0,
-            )
-            return
-
-        legacy_count = self._non_negative_int(state.get("last_processed_message_count"), 0)
-        if legacy_count <= 0:
-            self._last_processed_message_id = 0
-            return
-
-        try:
-            migrated_cursor = await self.message_storage.cursor_for_message_count(legacy_count)
-        except Exception as exc:
-            logger.warning("Failed to migrate legacy journal checkpoint: %s", exc)
-            migrated_cursor = 0
-        if migrated_cursor <= 0:
-            # Legacy count exceeds current row count (stream shrunk) —
-            # fall back to latest cursor instead of 0 to avoid reprocessing all.
-            try:
-                migrated_cursor = await self.message_storage.get_latest_message_cursor()
-            except Exception:
-                migrated_cursor = 0
-        self._last_processed_message_id = self._non_negative_int(migrated_cursor, 0)
+        cursor = await asyncio.to_thread(self._read_state_sync)
+        self._last_processed_message_id = self._non_negative_int(cursor, 0)
 
     async def _commit_processed_message_id(self, processed_message_id: int) -> bool:
         normalized_id = self._non_negative_int(processed_message_id, 0)
         try:
-            await self._write_state(normalized_id)
+            await asyncio.to_thread(self._write_state_sync, normalized_id)
         except Exception as exc:
             logger.error("Failed to persist journal state: %s", exc)
             return False
         self._last_processed_message_id = normalized_id
         return True
 
-    async def _write_state(self, processed_message_id: int) -> None:
-        payload = {
-            "last_processed_message_id": self._non_negative_int(processed_message_id, 0),
-        }
-        await asyncio.to_thread(self._write_state_sync, payload)
-
-    def _read_state_sync(self) -> dict:
+    def _read_state_sync(self) -> int:
         path = self._state_path()
         try:
-            raw = path.read_text(encoding="utf-8")
+            raw = path.read_text(encoding="utf-8").strip()
+            if not raw:
+                return 0
+            return int(raw)
         except FileNotFoundError:
-            return {}
-        except OSError as exc:
-            logger.warning("Failed to read journal state: %s", exc)
-            return {}
+            return 0
+        except (ValueError, OSError) as exc:
+            logger.warning("Failed to read journal cursor: %s", exc)
+            return 0
 
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.warning("Failed to decode journal state: %s", exc)
-            return {}
-        return data if isinstance(data, dict) else {}
-
-    def _write_state_sync(self, payload: dict) -> None:
+    def _write_state_sync(self, cursor: int) -> None:
         path = self._state_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        path.write_text(str(int(cursor)), encoding="utf-8")
 
     def _acquire_process_lock_sync(self) -> IO[str]:
         path = self._lock_path()
@@ -489,7 +453,7 @@ class MemoryHandler:
             lock_file.close()
 
     def _state_path(self) -> Path:
-        return self.memory.root / "journal_state.json"
+        return self.memory.root / ".journal_cursor"
 
     def _lock_path(self) -> Path:
         return self.memory.root / ".journal_maintenance.lock"

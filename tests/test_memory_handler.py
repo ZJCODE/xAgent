@@ -1,7 +1,6 @@
 """Tests for MemoryHandler (count-based journaling from MessageStorage)."""
 
 import asyncio
-import json
 import tempfile
 import unittest
 from datetime import date
@@ -288,7 +287,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(wrote)
         self.assertEqual(handler._last_processed_message_id, 1)
         self.assertEqual(self.llm.diary_calls, [])
-        self.assertTrue(Path(self.memory.root / "journal_state.json").exists())
+        self.assertTrue(Path(self.memory.root / ".journal_cursor").exists())
 
     async def test_run_maintenance_does_not_advance_checkpoint_when_diary_write_fails(self):
         storage = _FakeMessageStorage([
@@ -312,7 +311,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(wrote)
         self.assertEqual(handler._last_processed_message_id, 0)
-        self.assertFalse(Path(self.memory.root / "journal_state.json").exists())
+        self.assertFalse(Path(self.memory.root / ".journal_cursor").exists())
 
     async def test_run_maintenance_retries_full_window_after_partial_batch_failure(self):
         storage = _FakeMessageStorage([
@@ -356,7 +355,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(today_text.count("entry 0"), 2)
         self.assertEqual(today_text.count("entry 1"), 1)
 
-    async def test_run_maintenance_migrates_legacy_checkpoint_count(self):
+    async def test_run_maintenance_reads_plain_int_cursor(self):
         storage = _FakeMessageStorage([
             Message(
                 role=RoleType.USER,
@@ -366,11 +365,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             )
             for index in range(4)
         ])
-        state_path = self.memory.root / "journal_state.json"
-        state_path.write_text(
-            json.dumps({"last_processed_message_count": 2}),
-            encoding="utf-8",
-        )
+        state_path = self.memory.root / ".journal_cursor"
+        state_path.write_text("2", encoding="utf-8")
         handler = MemoryHandler(
             memory=self.memory,
             llm_service=self.llm,
@@ -385,8 +381,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             [message["content"] for message in self.llm.diary_calls[0]["messages"]],
             ["entry 0", "entry 1", "entry 2", "entry 3"],
         )
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        self.assertEqual(state["last_processed_message_id"], 4)
+        self.assertEqual(state_path.read_text(encoding="utf-8").strip(), "4")
 
     async def test_run_maintenance_splits_oversized_period_by_source_budget(self):
         storage = _FakeMessageStorage([
@@ -506,7 +501,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         first_wrote = await first_handler.run_maintenance(force=True)
         self.assertTrue(first_wrote)
-        self.assertTrue(Path(self.memory.root / "journal_state.json").exists())
+        self.assertTrue(Path(self.memory.root / ".journal_cursor").exists())
 
         for index in range(2):
             storage.append(Message(
