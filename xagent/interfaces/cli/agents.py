@@ -306,7 +306,6 @@ def ensure_default_agent_for_setup(agent_name: Optional[str] = None) -> Path:
     registry = register_agent(
         DEFAULT_AGENT_NAME,
         path=default_agent_dir(DEFAULT_AGENT_NAME),
-        title="Default",
         make_active=True,
     )
     return registry.agents[DEFAULT_AGENT_NAME].path
@@ -351,7 +350,7 @@ def handle_agents(args: argparse.Namespace) -> int:
                 return 0
             for row in rows:
                 marker = "*" if row["active"] else " "
-                print(f"{marker} {row['name']}  {row['title']}")
+                print(f"{marker} {row['name']}")
                 print(f"  path: {row['path']}")
             return 0
 
@@ -366,7 +365,6 @@ def handle_agents(args: argparse.Namespace) -> int:
                 print(json.dumps(payload, indent=2, sort_keys=True))
                 return 0
             print(f"Agent: {payload['name']}")
-            print(f"Title: {payload['title']}")
             print(f"Active: {payload['active']}")
             print(f"Initialized: {payload['initialized']}")
             print(f"Path: {payload['path']}")
@@ -426,7 +424,6 @@ def handle_agents(args: argparse.Namespace) -> int:
             updated = register_agent(
                 name,
                 path=path,
-                title=getattr(args, "title", None) or _default_title(name),
                 make_active=not registry.agents,
             )
             active_note = " active" if updated.active_agent == name else ""

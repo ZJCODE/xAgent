@@ -1692,7 +1692,7 @@ def _agent_selection_options(registry, *, include_back: bool = False) -> list[Me
         MenuOption(
             key=name,
             title=f"{name} (active)" if name == registry.active_agent else name,
-            description=f"{entry.title} | {entry.path}",
+            description=str(entry.path),
         )
         for name, entry in sorted(registry.agents.items())
     ]
@@ -1708,7 +1708,6 @@ def _agent_list_text(registry) -> str:
     for name, entry in sorted(registry.agents.items()):
         marker = "active" if name == registry.active_agent else "available"
         lines.append(f"{name} ({marker})")
-        lines.append(f"  Title: {entry.title}")
         lines.append(f"  Path: {entry.path}")
     return "\n".join(lines)
 

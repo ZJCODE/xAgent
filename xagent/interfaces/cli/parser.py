@@ -451,7 +451,6 @@ def build_parser() -> argparse.ArgumentParser:
     agents_list.set_defaults(handler=agents.handle_agents)
     agents_create = agents_sub.add_parser("create", help="Create a managed agent")
     agents_create.add_argument("name", help="Agent name")
-    agents_create.add_argument("--title", default=None, help="Display title")
     agents_create.add_argument(
         "--yes",
         action="store_true",
