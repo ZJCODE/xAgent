@@ -66,6 +66,7 @@ from xagent.interfaces.cli.config_editor import (
     prepare_voice_wake_update,
     write_config,
 )
+from xagent.interfaces.cli.launcher import _agent_selection_options
 from xagent.interfaces.cli.overview import STATUS_ERROR, build_runtime_overview
 from xagent.interfaces.cli.processes import StartResult
 
@@ -375,6 +376,23 @@ class CLICommandTests(unittest.TestCase):
                 recovered = register_agent("personal", title="Personal")
                 self.assertEqual(recovered.active_agent, "personal")
                 self.assertEqual(load_agent_registry().active_agent, "personal")
+
+    def test_agent_selection_options_can_include_back(self):
+        registry = SimpleNamespace(
+            active_agent="test",
+            agents={
+                "test": SimpleNamespace(
+                    title="Test",
+                    path=Path("/tmp/xagent-test"),
+                )
+            },
+        )
+
+        options = _agent_selection_options(registry, include_back=True)
+
+        self.assertEqual(options[0].title, "test (active)")
+        self.assertEqual(options[-1].key, "back")
+        self.assertEqual(options[-1].title, "Back")
 
     def test_agents_list_explains_empty_registry(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2038,6 +2056,25 @@ class CLICommandTests(unittest.TestCase):
     def test_setup_without_registry_creates_default_agent(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir).resolve()
+            args = argparse.Namespace(config_dir=None, agent=None, force=False, schema=False)
+
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                with patch("xagent.interfaces.cli.setup.collect_init_selection_terminal_ui", return_value=_selection()):
+                    exit_code = handle_init(args)
+                registry = load_agent_registry()
+                default_path = registry.agents["default"].path
+                config_exists = (default_path / "config.yaml").is_file()
+                identity_exists = (default_path / "identity.md").is_file()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(registry.active_agent, "default")
+        self.assertTrue(config_exists)
+        self.assertTrue(identity_exists)
+
+    def test_setup_with_empty_registry_creates_default_agent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            (root / "agents.yaml").write_text("version: 1\nactive_agent: ''\nagents: {}\n", encoding="utf-8")
             args = argparse.Namespace(config_dir=None, agent=None, force=False, schema=False)
 
             with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):

@@ -300,7 +300,8 @@ def ensure_default_agent_for_setup(agent_name: Optional[str] = None) -> Path:
     try:
         return resolve_agent_runtime_dir(None)
     except AgentRegistryError as exc:
-        if "not found" not in str(exc):
+        message = str(exc)
+        if "not found" not in message and "has no agents" not in message:
             raise
     registry = register_agent(
         DEFAULT_AGENT_NAME,

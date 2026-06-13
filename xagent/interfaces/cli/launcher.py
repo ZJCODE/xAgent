@@ -1678,8 +1678,8 @@ def _agent_launcher_options(*, has_agents: bool) -> list[MenuOption]:
     ]
 
 
-def _agent_selection_options(registry) -> list[MenuOption]:
-    return [
+def _agent_selection_options(registry, *, include_back: bool = False) -> list[MenuOption]:
+    options = [
         MenuOption(
             key=name,
             title=f"{name} (active)" if name == registry.active_agent else name,
@@ -1687,6 +1687,9 @@ def _agent_selection_options(registry) -> list[MenuOption]:
         )
         for name, entry in sorted(registry.agents.items())
     ]
+    if include_back:
+        options.append(MenuOption("back", "Back", "Return to Agents."))
+    return options
 
 
 def _agent_list_text(registry) -> str:
@@ -1717,10 +1720,10 @@ def _run_agent_switch_launcher(ui: TerminalUI, registry) -> None:
     option = ui.select_menu(
         title="xAgent Agents / Switch",
         subtitle=f"Active: {registry.active_agent}",
-        options=_agent_selection_options(registry),
+        options=_agent_selection_options(registry, include_back=True),
         footer="↑/↓ Move • Enter Select  •  q Back",
     )
-    if option is None:
+    if option is None or option.key == "back":
         return
     try:
         select_agent(str(option.key))
@@ -1735,10 +1738,10 @@ def _run_agent_delete_launcher(ui: TerminalUI, registry) -> None:
     option = ui.select_menu(
         title="xAgent Agents / Delete",
         subtitle="Deleting an agent removes its config, identity, memory, messages, workspace, skills, tasks, logs, and run state.",
-        options=_agent_selection_options(registry),
+        options=_agent_selection_options(registry, include_back=True),
         footer="↑/↓ Move • Enter Select  •  q Back",
     )
-    if option is None:
+    if option is None or option.key == "back":
         return
     name = str(option.key)
     entry = registry.agents[name]
