@@ -24,6 +24,14 @@ from ...core.providers import (
 )
 from ...tools.search_tool import is_placeholder_api_key
 from ..base import BaseAgentConfig
+from .agents import (
+    DEFAULT_AGENT_NAME,
+    AgentRegistryError,
+    default_agent_dir,
+    handle_agents,
+    load_agent_registry,
+    select_agent,
+)
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
@@ -99,6 +107,11 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
         else "Create config, identity, workspace, memory, and tasks."
     )
     return [
+        MenuOption(
+            key="agent",
+            title="Agents",
+            description="Switch, create, or inspect managed agents.",
+        ),
         MenuOption(
             key="setup",
             title=setup_title,
@@ -380,6 +393,19 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command("xagent config show", config_dir=config_dir), style="cyan")
     content.append("\n         Print or validate config.yaml.\n")
     return content
+
+
+def _active_agent_context() -> tuple[str, Path]:
+    try:
+        registry = load_agent_registry()
+        entry = registry.agents[registry.active_agent]
+        return entry.name, entry.path
+    except AgentRegistryError:
+        return DEFAULT_AGENT_NAME, default_agent_dir(DEFAULT_AGENT_NAME)
+
+
+def _launcher_home_subtitle(overview: RuntimeOverview, *, agent_name: str) -> str:
+    return f"Agent: {agent_name}\n{_launcher_overview_subtitle(overview)}"
 
 
 def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
@@ -1642,6 +1668,168 @@ def _run_tasks_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
     )
 
 
+def _agent_launcher_options(*, has_agents: bool) -> list[MenuOption]:
+    return [
+        MenuOption("switch", "Switch Agent", "Choose the active agent.", disabled=not has_agents),
+        MenuOption("create", "Create Agent", "Create a new managed agent."),
+        MenuOption("delete", "Delete Agent", "Delete an agent and all of its local data.", disabled=not has_agents),
+        MenuOption("list", "List Agents", "Show registered agents.", disabled=not has_agents),
+        MenuOption("back", "Back", "Return to the main launcher."),
+    ]
+
+
+def _agent_selection_options(registry) -> list[MenuOption]:
+    return [
+        MenuOption(
+            key=name,
+            title=f"{name} (active)" if name == registry.active_agent else name,
+            description=f"{entry.title} | {entry.path}",
+        )
+        for name, entry in sorted(registry.agents.items())
+    ]
+
+
+def _agent_list_text(registry) -> str:
+    if not registry.agents:
+        return "No agents are registered yet.\nCreate one with: xagent agents create default"
+    lines = [f"Active: {registry.active_agent}", ""]
+    for name, entry in sorted(registry.agents.items()):
+        marker = "active" if name == registry.active_agent else "available"
+        lines.append(f"{name} ({marker})")
+        lines.append(f"  Title: {entry.title}")
+        lines.append(f"  Path: {entry.path}")
+    return "\n".join(lines)
+
+
+def _agent_directory_has_contents(path: Path) -> bool:
+    return path.exists() and path.is_dir() and any(path.iterdir())
+
+
+def _confirm_agent_directory_delete(ui: TerminalUI, *, name: str, path: Path, verb: str) -> bool:
+    confirmed = ui.confirm(
+        f"{verb} agent '{name}' and delete all local data at {path}?",
+        default=False,
+    )
+    return confirmed is True
+
+
+def _run_agent_switch_launcher(ui: TerminalUI, registry) -> None:
+    option = ui.select_menu(
+        title="xAgent Agents / Switch",
+        subtitle=f"Active: {registry.active_agent}",
+        options=_agent_selection_options(registry),
+        footer="↑/↓ Move • Enter Select  •  q Back",
+    )
+    if option is None:
+        return
+    try:
+        select_agent(str(option.key))
+        ui.print_panel(f"Active agent: {option.key}", title="Agents", border_style="green")
+        raise ReturnToLauncherHome()
+    except AgentRegistryError as exc:
+        ui.print_panel(f"Cannot select agent: {exc}", title="Agents", border_style="red")
+        ui.pause()
+
+
+def _run_agent_delete_launcher(ui: TerminalUI, registry) -> None:
+    option = ui.select_menu(
+        title="xAgent Agents / Delete",
+        subtitle="Deleting an agent removes its config, identity, memory, messages, workspace, skills, tasks, logs, and run state.",
+        options=_agent_selection_options(registry),
+        footer="↑/↓ Move • Enter Select  •  q Back",
+    )
+    if option is None:
+        return
+    name = str(option.key)
+    entry = registry.agents[name]
+    if not _confirm_agent_directory_delete(ui, name=name, path=entry.path, verb="Delete"):
+        ui.print_panel("Delete cancelled.", title="Agents")
+        ui.pause()
+        return
+    exit_code = handle_agents(_launcher_args(agents_action="remove", name=name, yes=True))
+    if exit_code == 0:
+        raise ReturnToLauncherHome()
+    ui.pause("Press Enter to return to Agents")
+
+
+def _run_agent_launcher() -> int:
+    ui = TerminalUI()
+    try:
+        while True:
+            try:
+                registry = load_agent_registry()
+                has_agents = bool(registry.agents)
+                subtitle = f"Active: {registry.active_agent}\nRegistry: {BaseAgentConfig.DEFAULT_CONFIG_DIR}/agents.yaml"
+            except AgentRegistryError as exc:
+                registry = None
+                has_agents = False
+                subtitle = f"{exc}\nCreate your first agent to initialize the registry."
+            option = ui.select_menu(
+                title="xAgent Agents",
+                subtitle=subtitle,
+                options=_agent_launcher_options(has_agents=has_agents),
+                footer="↑/↓ Move • Enter Select  •  q Back",
+            )
+            if option is None or option.key == "back":
+                ui.clear()
+                return 0
+            ui.clear()
+            if option.key == "switch":
+                if registry is not None:
+                    _run_agent_switch_launcher(ui, registry)
+                continue
+            if option.key == "create":
+                name = ui.ask_text(
+                    "Agent name",
+                    subtitle="Use lowercase letters, digits, hyphens, or underscores.",
+                ).strip()
+                if not name:
+                    continue
+                replace_existing = False
+                try:
+                    candidate_path = default_agent_dir(name)
+                    replace_existing = _agent_directory_has_contents(candidate_path)
+                    if replace_existing and not _confirm_agent_directory_delete(
+                        ui,
+                        name=name,
+                        path=candidate_path,
+                        verb="Replace existing directory for",
+                    ):
+                        ui.print_panel("Create cancelled.", title="Agents")
+                        ui.pause()
+                        continue
+                except AgentRegistryError as exc:
+                    ui.print_panel(f"Cannot create agent: {exc}", title="Agents", border_style="red")
+                    ui.pause()
+                    continue
+                exit_code = handle_agents(
+                    _launcher_args(agents_action="create", name=name, title=None, yes=replace_existing)
+                )
+                if exit_code == 0:
+                    try:
+                        select_agent(name)
+                    except AgentRegistryError:
+                        pass
+                    raise ReturnToLauncherHome()
+                ui.pause("Press Enter to return to Agents")
+                continue
+            if option.key == "delete":
+                if registry is not None:
+                    _run_agent_delete_launcher(ui, registry)
+                continue
+            if registry is None:
+                ui.print_panel(
+                    "No agents are registered yet.\nCreate one with: xagent agents create default",
+                    title="Agents",
+                )
+            else:
+                ui.print_panel(_agent_list_text(registry), title="Agents")
+            ui.pause("Press Enter to return to Agents")
+    except ReturnToLauncherHome:
+        ui.clear()
+        return 0
+
+
 def _run_inspect_launcher(config_dir: Path) -> int:
     ui = TerminalUI()
     sections = [
@@ -1775,15 +1963,15 @@ def _run_channel_launcher(config_dir: Path) -> int:
 def _run_interactive_launcher() -> int:
     from .runtime import _runtime_is_initialized, print_quick_start  # noqa: F401
 
-    config_dir = Path(BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
     ui = TerminalUI()
 
     while True:
+        agent_name, config_dir = _active_agent_context()
         overview = build_runtime_overview(config_dir)
         initialized = overview.initialized
         option = ui.select_menu(
             title=f"xAgent {_xagent_version_text()}",
-            subtitle=_launcher_overview_subtitle(overview),
+            subtitle=_launcher_home_subtitle(overview, agent_name=agent_name),
             options=_launcher_options(initialized=initialized),
             footer="↑/↓ Move • Enter Select  •  q Exit",
         )
@@ -1801,11 +1989,14 @@ def _run_interactive_launcher() -> int:
             continue
 
         ui.clear()
+        if option.key == "agent":
+            _run_agent_launcher()
+            continue
         if option.key == "setup":
             if initialized:
                 _run_resetup_launcher(config_dir)
                 continue
-            exit_code = handle_init(_launcher_args(config_dir=str(config_dir), force=False, schema=False))
+            exit_code = handle_init(_launcher_args(agent=None, config_dir=None, force=False, schema=False))
             if exit_code == 0:
                 continue
         elif option.key == "channel":

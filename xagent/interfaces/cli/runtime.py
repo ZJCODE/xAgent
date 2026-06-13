@@ -16,6 +16,7 @@ from typing import Any, Optional, Sequence
 
 from ...core.runtime import create_runtime_heartbeat
 from ..base import BaseAgentConfig, BaseAgentRunner
+from .agents import resolve_agent_name
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
@@ -35,7 +36,7 @@ from .processes import managed_paths, running_pid, start_background, stop_manage
 
 
 def handle_chat(args: argparse.Namespace) -> int:
-    agent_cli = AgentCLI(config_dir=args.config_dir, verbose=args.verbose)
+    agent_cli = AgentCLI(config_dir=str(runtime_dir(args)), verbose=args.verbose)
 
     if args.message is None:
         async def run_interactive_chat():
@@ -84,7 +85,7 @@ def handle_voice(args: argparse.Namespace) -> int:
             print(list_audio_devices_text())
             return 0
 
-        runner = BaseAgentRunner(config_dir=args.config_dir)
+        runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
         from ...voice.config import VoiceChannelConfig
         from ...voice.factory import create_local_voice_runtime
         from ...voice.runtime import VoiceRuntimeOptions
@@ -118,8 +119,9 @@ def handle_voice(args: argparse.Namespace) -> int:
 def handle_server(args: argparse.Namespace) -> int:
     from ..server import AgentHTTPServer
 
+    raw_config_dir = getattr(args, "config_dir", None)
     server_kwargs = {
-        "config_dir": args.config_dir,
+        "config_dir": raw_config_dir or str(runtime_dir(args)),
         "enable_web": not args.no_web,
     }
     if args.max_concurrent_chats is not None:
@@ -170,7 +172,9 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
     command = [sys.executable, "-m", "xagent.interfaces.cli", "_run-channel", channel]
     config_dir = getattr(args, "config_dir", None)
     if config_dir:
-        command.extend(["--dir", config_dir])
+        command.extend(["--config-dir", config_dir])
+    else:
+        command.extend(["--agent", resolve_agent_name(getattr(args, "agent", None))])
 
     for flag, attr in (
         ("--host", "host"),
@@ -192,8 +196,9 @@ def _api_runtime_values(
     config: dict[str, Any],
 ) -> tuple[dict[str, Any], Optional[str], Optional[int], bool]:
     api_cfg = api_config(config)
+    raw_config_dir = getattr(args, "config_dir", None)
     server_kwargs: dict[str, Any] = {
-        "config_dir": getattr(args, "config_dir", None),
+        "config_dir": raw_config_dir or str(runtime_dir(args)),
     }
 
     runtime_mapping = (
@@ -248,7 +253,7 @@ def _run_feishu_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
         print(f"Invalid Feishu channel config: {exc}")
         return 1
 
-    runner = BaseAgentRunner(config_dir=getattr(args, "config_dir", None))
+    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
     adapter = FeishuAdapter(agent=runner.agent, config=feishu_runtime_config)
 
     async def _run_daemon() -> bool:
@@ -334,7 +339,7 @@ def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
         print(f"Invalid Weixin channel config: {exc}")
         return 1
 
-    runner = BaseAgentRunner(config_dir=getattr(args, "config_dir", None))
+    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
     adapter = WeixinAdapter(
         agent=runner.agent,
         config=weixin_runtime_config,
@@ -669,7 +674,7 @@ def handle_observe(args: argparse.Namespace) -> int:
             print("--metadata must be a JSON object")
             return 1
 
-    runner = BaseAgentRunner(config_dir=args.config_dir)
+    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
 
     async def _run_observe():
         result = await runner.agent.observe(
@@ -699,7 +704,7 @@ def handle_config(args: argparse.Namespace) -> int:
         print(path.read_text(encoding="utf-8"), end="")
         return 0
     if args.config_command == "validate":
-        BaseAgentRunner(config_dir=args.config_dir)
+        BaseAgentRunner(config_dir=str(runtime_dir(args)))
         print(f"Config OK: {path}")
         return 0
     print(f"Unknown config command: {args.config_command}")
@@ -799,7 +804,7 @@ def handle_memory(args: argparse.Namespace) -> int:
 
 
 def handle_messages(args: argparse.Namespace) -> int:
-    runner = BaseAgentRunner(config_dir=args.config_dir)
+    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
     storage = runner.message_storage
 
     async def _run_messages() -> int:
@@ -905,16 +910,23 @@ def _runtime_is_initialized(config_dir: Path) -> bool:
 
 
 def print_quick_start() -> None:
-    config_dir = Path(BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
-    initialized = _runtime_is_initialized(config_dir)
+    try:
+        config_dir = runtime_dir(_launcher_args(agent=None, config_dir=None))
+        initialized = _runtime_is_initialized(config_dir)
+        runtime_label = str(config_dir)
+    except Exception:
+        initialized = False
+        runtime_label = "(no active agent)"
 
     print("xAgent")
-    print(f"Runtime: {config_dir}")
+    print(f"Runtime: {runtime_label}")
     print("")
     if not initialized:
-        print("First time? Run:  xagent setup")
+        print("First time? Run:  xagent agents create default")
         print("")
     print("Common commands:")
+    print("  xagent agents list              List managed agents")
+    print("  xagent agents select work       Set the active agent")
     print("  xagent chat                     Interactive terminal chat")
     print("  xagent web                      Open the web UI")
     print("  xagent voice                    Microphone / speaker mode")

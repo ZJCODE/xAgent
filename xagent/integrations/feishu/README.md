@@ -51,8 +51,8 @@ Configure your Feishu bot
 ## Configure xAgent
 
 ```bash
-# First time only (creates ~/.xagent/config.yaml + identity.md)
-xagent setup
+# First time only (creates ~/.xagent/agents/default/config.yaml + identity.md)
+xagent agents create default
 
 # One-click: create the Feishu app and write channels.feishu for you.
 # Opens an authorization link; sign in with a Feishu workspace admin account.
@@ -81,9 +81,9 @@ The one-click flow uses the Feishu device-authorization grant (`lark_oapi`
 browser, waits for an admin to approve, then stores the returned credentials.
 After credentials are ready, the setup flow applies the recommended defaults for
 delivery, memory, and room context, writes `channels.feishu`, and prints the
-exact start/status/logs commands for that runtime directory.
+exact start/status/logs commands for that agent.
 
-Either way this updates `~/.xagent/config.yaml`:
+Either way this updates the active agent's `config.yaml`:
 
 ```yaml
 channels:
@@ -103,7 +103,7 @@ channels:
 # background: managed process with PID and log files
 xagent feishu start
 
-# stop the managed Feishu process for this runtime dir
+# stop the managed Feishu process for this agent
 xagent feishu stop
 
 # inspect PID, log path, and running state
@@ -112,12 +112,12 @@ xagent feishu status
 # follow logs
 xagent feishu logs -f
 
-# custom runtime dir:
-xagent feishu start --dir ~/.xagent
+# explicit agent:
+xagent feishu start --agent work
 ```
 
 `xagent feishu start` starts a detached process, writes its PID to
-`~/.xagent/run/feishu.pid`, and appends logs to `~/.xagent/logs/feishu.log`.
+the selected agent's `run/feishu.pid`, and appends logs to `logs/feishu.log`.
 Use `xagent feishu logs -f` when you want to watch logs live.
 
 ## Routing rules
@@ -247,7 +247,7 @@ import asyncio
 from xagent.interfaces.base import BaseAgentRunner
 from xagent.integrations.feishu import FeishuAdapter, FeishuAdapterConfig
 
-runner = BaseAgentRunner(config_dir="~/.xagent")
+runner = BaseAgentRunner(config_dir="~/.xagent/agents/default")
 cfg = FeishuAdapterConfig.from_dict(runner.config["channels"]["feishu"])
 adapter = FeishuAdapter(agent=runner.agent, config=cfg)
 asyncio.run(adapter.run())
