@@ -64,7 +64,7 @@ class AgentConfigPromptTests(unittest.TestCase):
 
     def test_memory_defaults_are_internal_balanced_values(self):
         self.assertEqual(AgentConfig.MEMORY_RECENT_DAYS, 2)
-        self.assertEqual(AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO, 0.3)
+        self.assertEqual(AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO, 0.2)
 
 
 class ProviderConfigTests(unittest.TestCase):
@@ -382,7 +382,7 @@ provider:
             config_text = result.config_path.read_text(encoding="utf-8")
             identity_text = result.identity_path.read_text(encoding="utf-8")
             config = yaml.safe_load(config_text)
-            self.assertEqual(config["agent"], {"max_history": 20, "max_iter": 50, "max_concurrent_tools": 4})
+            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4})
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
             self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
@@ -390,8 +390,8 @@ provider:
             self.assertNotIn("backend", config["provider"])
             self.assertNotIn("model_api", config["provider"])
             self.assertNotIn("sdk", config["provider"])
-            self.assertEqual(config["search"]["provider"], "openai")
-            self.assertEqual(config["image_generation"]["provider"], "openai")
+            self.assertEqual(config["search"]["provider"], "none")
+            self.assertEqual(config["image_generation"]["provider"], "none")
             self.assertNotIn("enabled", config["channels"]["api"])
             self.assertNotIn("web_ui", config["channels"]["api"])
             self.assertEqual(config["channels"]["api"]["host"], "127.0.0.1")
@@ -430,7 +430,7 @@ provider:
 
             self.assertTrue(forced.wrote_files)
             config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(config["agent"], {"max_history": 20, "max_iter": 50, "max_concurrent_tools": 4})
+            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4})
             self.assertIn("You are a helpful assistant.", forced.identity_path.read_text(encoding="utf-8"))
 
     def test_init_force_keeps_runtime_data_by_default(self):
@@ -475,7 +475,7 @@ provider:
             self.assertFalse(memory_marker.exists())
             self.assertFalse(messages_marker.exists())
             self.assertFalse(workspace_marker.exists())
-            self.assertTrue(skills_marker.exists())
+            self.assertFalse(skills_marker.exists())
 
     def test_init_uses_selected_provider_model_key_and_identity(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -490,7 +490,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["agent"], {"max_history": 20, "max_iter": 50, "max_concurrent_tools": 4})
+            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4})
             self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
             self.assertEqual(config["provider"]["api_key"], "secret-key")
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")

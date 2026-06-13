@@ -74,7 +74,7 @@ class AgentConfig:
     # limit. Prevent infinite loops and unbounded prompt growth.
     # ============================================================
     DEFAULT_MAX_ITER = 50
-    DEFAULT_MAX_HISTORY = 40
+    DEFAULT_MAX_HISTORY = 32
     MAX_CONTEXT_EVENTS = 12
 
     # ============================================================
