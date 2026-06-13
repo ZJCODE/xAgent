@@ -12,6 +12,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import yaml
 
 from xagent.interfaces.cli.channels import enabled_channels_from_config
+from xagent.interfaces.cli.agents import (
+    default_agent_dir,
+    load_agent_registry,
+    load_agent_registry_or_empty,
+    register_agent,
+    remove_agent,
+    resolve_agent_runtime_dir,
+    select_agent,
+)
 from xagent.interfaces.cli import (
     AgentCLI,
     FeishuInitSelection,
@@ -32,6 +41,7 @@ from xagent.interfaces.cli import (
     build_parser,
     collect_feishu_init_selection_terminal_ui,
     handle_config,
+    handle_agents,
     handle_chat,
     handle_init,
     handle_init_feishu,
@@ -243,8 +253,8 @@ class CLICommandTests(unittest.TestCase):
         args = build_parser().parse_args([
             "feishu",
             "setup",
-            "--dir",
-            "./agent-dir",
+            "--agent",
+            "work",
             "--app-id",
             "cli_test",
             "--app-secret",
@@ -254,7 +264,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(args.command, "feishu")
         self.assertEqual(args.feishu_action, "setup")
-        self.assertEqual(args.config_dir, "./agent-dir")
+        self.assertEqual(args.agent, "work")
         self.assertEqual(args.app_id, "cli_test")
         self.assertTrue(args.force)
 
@@ -276,8 +286,8 @@ class CLICommandTests(unittest.TestCase):
         args = build_parser().parse_args([
             "weixin",
             "setup",
-            "--dir",
-            "./agent-dir",
+            "--agent",
+            "work",
             "--base-url",
             "https://ilink.example",
             "--allow-user",
@@ -289,7 +299,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(args.command, "weixin")
         self.assertEqual(args.weixin_action, "setup")
-        self.assertEqual(args.config_dir, "./agent-dir")
+        self.assertEqual(args.agent, "work")
         self.assertEqual(args.base_url, "https://ilink.example")
         self.assertEqual(args.allow_users, ["friend@im.wechat"])
         self.assertFalse(args.owner_only)
@@ -300,15 +310,15 @@ class CLICommandTests(unittest.TestCase):
         args = build_parser().parse_args([
             "chat",
             "Hello",
-            "--dir",
-            "./agent-dir",
+            "--agent",
+            "work",
             "--user-id",
             "alice",
         ])
 
         self.assertEqual(args.command, "chat")
         self.assertEqual(args.message, "Hello")
-        self.assertEqual(args.config_dir, "./agent-dir")
+        self.assertEqual(args.agent, "work")
         self.assertEqual(args.user_id, "alice")
 
     def test_parser_supports_chat_event_mode(self):
@@ -322,17 +332,118 @@ class CLICommandTests(unittest.TestCase):
         self.assertTrue(args.events)
         self.assertTrue(args.stream)
 
+    def test_parser_supports_agents_commands(self):
+        list_args = build_parser().parse_args(["agents", "list", "--json"])
+        self.assertEqual(list_args.command, "agents")
+        self.assertEqual(list_args.agents_action, "list")
+        self.assertTrue(list_args.json_output)
+
+        create_args = build_parser().parse_args(["agents", "create", "work", "--title", "Work"])
+        self.assertEqual(create_args.agents_action, "create")
+        self.assertEqual(create_args.name, "work")
+        self.assertEqual(create_args.title, "Work")
+
+        select_args = build_parser().parse_args(["agents", "select", "work"])
+        self.assertEqual(select_args.agents_action, "select")
+        self.assertEqual(select_args.name, "work")
+
+    def test_agent_registry_register_select_remove(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                register_agent("default", title="Default", make_active=True)
+                register_agent("work", title="Work")
+
+                registry = load_agent_registry()
+                self.assertEqual(registry.active_agent, "default")
+                self.assertEqual(default_agent_dir("work"), root / "agents" / "work")
+                self.assertEqual(resolve_agent_runtime_dir("work"), root / "agents" / "work")
+
+                select_agent("work")
+                self.assertEqual(load_agent_registry().active_agent, "work")
+
+                work_marker = root / "agents" / "work" / "identity.md"
+                work_marker.parent.mkdir(parents=True)
+                work_marker.write_text("identity", encoding="utf-8")
+                _updated, removed = remove_agent("work")
+                self.assertEqual(removed.name, "work")
+                self.assertEqual(load_agent_registry().active_agent, "default")
+                self.assertTrue(work_marker.exists())
+
+                _updated, removed = remove_agent("default")
+                self.assertEqual(removed.name, "default")
+                recovered = register_agent("personal", title="Personal")
+                self.assertEqual(recovered.active_agent, "personal")
+                self.assertEqual(load_agent_registry().active_agent, "personal")
+
+    def test_agents_list_explains_empty_registry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = handle_agents(argparse.Namespace(agents_action="list", json_output=False))
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("No agents are registered yet.", output)
+        self.assertIn("xagent agents create default", output)
+
+    def test_agents_remove_deletes_managed_directory_with_confirmation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                register_agent("work", title="Work", make_active=True)
+                work_path = default_agent_dir("work")
+                marker = work_path / "memory" / "daily.md"
+                marker.parent.mkdir(parents=True)
+                marker.write_text("memory", encoding="utf-8")
+
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = handle_agents(argparse.Namespace(agents_action="remove", name="work", yes=True))
+
+                registry = load_agent_registry_or_empty()
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(work_path.exists())
+        self.assertEqual(registry.active_agent, "")
+        self.assertIn("Deleted data", stdout.getvalue())
+
+    def test_agents_create_replaces_existing_unregistered_directory_after_confirmation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                stale_path = default_agent_dir("test")
+                stale_config = stale_path / "config.yaml"
+                stale_config.parent.mkdir(parents=True)
+                stale_config.write_text("old", encoding="utf-8")
+
+                with patch(
+                    "xagent.interfaces.cli.setup.collect_init_selection_terminal_ui",
+                    return_value=_selection(identity="you are test created by Jun"),
+                ):
+                    with patch("sys.stdout", new_callable=io.StringIO):
+                        exit_code = handle_agents(
+                            argparse.Namespace(agents_action="create", name="test", title=None, yes=True)
+                        )
+                registry = load_agent_registry()
+                config_text = stale_config.read_text(encoding="utf-8")
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("test", registry.agents)
+        self.assertIn("provider:", config_text)
+        self.assertNotEqual(config_text, "old")
+
     def test_parser_supports_voice_command(self):
         args = build_parser().parse_args([
             "voice",
-            "--dir",
-            "./agent-dir",
+            "--agent",
+            "work",
             "--user-id",
             "alice",
         ])
 
         self.assertEqual(args.command, "voice")
-        self.assertEqual(args.config_dir, "./agent-dir")
+        self.assertEqual(args.agent, "work")
         self.assertEqual(args.user_id, "alice")
 
     def test_voice_command_runs_foreground_runtime(self):
@@ -519,8 +630,8 @@ class CLICommandTests(unittest.TestCase):
     def test_parser_supports_web_command(self):
         args = build_parser().parse_args([
             "web",
-            "--dir",
-            "./agent-dir",
+            "--agent",
+            "work",
             "--no-open",
             "--host",
             "127.0.0.1",
@@ -535,7 +646,7 @@ class CLICommandTests(unittest.TestCase):
         ])
 
         self.assertEqual(args.command, "web")
-        self.assertEqual(args.config_dir, "./agent-dir")
+        self.assertEqual(args.agent, "work")
         self.assertFalse(args.open_browser)
         self.assertEqual(args.host, "127.0.0.1")
         self.assertEqual(args.port, 8010)
@@ -547,8 +658,8 @@ class CLICommandTests(unittest.TestCase):
         args = build_parser().parse_args([
             "api",
             "start",
-            "--dir",
-            "./agent-dir",
+            "--agent",
+            "work",
             "--host",
             "127.0.0.1",
             "--port",
@@ -558,7 +669,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.command, "api")
         self.assertEqual(args.api_action, "start")
         self.assertEqual(args.channels, ["api"])
-        self.assertEqual(args.config_dir, "./agent-dir")
+        self.assertEqual(args.agent, "work")
         self.assertEqual(args.host, "127.0.0.1")
         self.assertEqual(args.port, 8010)
 
@@ -590,9 +701,10 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(observe.command, "observe")
         self.assertEqual(observe.source, "sensor")
 
-        config = build_parser().parse_args(["config", "validate", "--dir", "./agent-dir"])
+        config = build_parser().parse_args(["config", "validate", "--agent", "work"])
         self.assertEqual(config.command, "config")
         self.assertEqual(config.config_command, "validate")
+        self.assertEqual(config.agent, "work")
 
         memory = build_parser().parse_args(["memory", "search", "project", "--scope", "daily"])
         self.assertEqual(memory.command, "memory")
@@ -679,7 +791,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         self.assertIn("First time?", output)
-        self.assertIn("xagent setup", output)
+        self.assertIn("xagent agents create default", output)
         self.assertIn("xagent chat", output)
         self.assertIn("xagent web", output)
 
@@ -695,9 +807,10 @@ class CLICommandTests(unittest.TestCase):
         initial_options = _launcher_options(initialized=False)
         reset_options = _launcher_options(initialized=True)
 
-        self.assertEqual(initial_options[0].title, "Setup")
-        self.assertEqual(reset_options[0].title, "Setup")
-        self.assertEqual(reset_options[0].description, "Review and update your current setup.")
+        self.assertEqual(initial_options[0].title, "Agents")
+        self.assertEqual(reset_options[0].title, "Agents")
+        self.assertEqual(reset_options[1].title, "Setup")
+        self.assertEqual(reset_options[1].description, "Review and update your current setup.")
         reset_titles = [option.title for option in reset_options]
         self.assertIn("Help", reset_titles)
         self.assertNotIn("Doctor", reset_titles)
@@ -1749,7 +1862,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_ui.panels[0][0], "xAgent Help")
-        self.assertIn("xagent setup --force", fake_ui.panels[0][1])
+        self.assertIn("xagent setup", fake_ui.panels[0][1])
         self.assertIn("xagent api start", fake_ui.panels[0][1])
         self.assertIn("xagent memory list --days 7", fake_ui.panels[0][1])
         self.assertNotIn("xagent doctor", fake_ui.panels[0][1])
@@ -1795,8 +1908,10 @@ class CLICommandTests(unittest.TestCase):
         setup_help = str(_launcher_help_content(config_dir=config_dir, initialized=False))
         resetup_help = str(_launcher_help_content(config_dir=config_dir, initialized=True))
 
-        self.assertIn("xagent setup --dir /tmp/xagent", setup_help)
-        self.assertIn("xagent setup --force --dir /tmp/xagent", resetup_help)
+        self.assertIn("xagent setup", setup_help)
+        self.assertIn("xagent setup --force", resetup_help)
+        self.assertNotIn("--dir", setup_help)
+        self.assertNotIn("--dir", resetup_help)
 
     def test_root_help_groups_public_commands(self):
         help_text = build_parser().format_help()
@@ -1806,6 +1921,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Inspect:", help_text)
         self.assertIn("Advanced:", help_text)
         self.assertIn("  web", help_text)
+        self.assertIn("  agents", help_text)
         self.assertIn("  api", help_text)
         self.assertIn("  feishu", help_text)
         self.assertIn("  weixin", help_text)
@@ -1899,10 +2015,9 @@ class CLICommandTests(unittest.TestCase):
             self.assertFalse(tasks_marker.exists())
             self.assertFalse(skills_marker.exists())
 
-    def test_init_prints_post_setup_guide_with_custom_dir_commands(self):
+    def test_init_prints_post_setup_guide_with_agent_commands(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            args = argparse.Namespace(config_dir=tmpdir, force=False, schema=False)
-            resolved_dir = str(Path(tmpdir).resolve())
+            args = argparse.Namespace(config_dir=tmpdir, agent="work", force=False, schema=False)
 
             with patch("xagent.interfaces.cli.setup.collect_init_selection_terminal_ui", return_value=_selection()):
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -1911,18 +2026,36 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
         self.assertIn("Pick how you want to use it next", output)
-        self.assertIn(f"xagent chat --dir {resolved_dir}", output)
-        self.assertIn(f"xagent web --dir {resolved_dir}", output)
-        self.assertIn(f"xagent api start --dir {resolved_dir}", output)
-        self.assertIn(f"xagent feishu setup --dir {resolved_dir}", output)
-        self.assertIn(f"xagent feishu start --dir {resolved_dir}", output)
+        self.assertIn("xagent chat --agent work", output)
+        self.assertIn("xagent web --agent work", output)
+        self.assertIn("xagent api start --agent work", output)
+        self.assertIn("xagent feishu setup --agent work", output)
+        self.assertIn("xagent feishu start --agent work", output)
         self.assertNotIn("xagent doctor", output)
-        self.assertNotIn(f"xagent voice --dir {resolved_dir}", output)
+        self.assertNotIn("xagent voice --agent work", output)
+        self.assertNotIn("--dir", output)
+
+    def test_setup_without_registry_creates_default_agent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            args = argparse.Namespace(config_dir=None, agent=None, force=False, schema=False)
+
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                with patch("xagent.interfaces.cli.setup.collect_init_selection_terminal_ui", return_value=_selection()):
+                    exit_code = handle_init(args)
+                registry = load_agent_registry()
+                default_path = registry.agents["default"].path
+                config_exists = (default_path / "config.yaml").is_file()
+                identity_exists = (default_path / "identity.md").is_file()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(registry.active_agent, "default")
+        self.assertTrue(config_exists)
+        self.assertTrue(identity_exists)
 
     def test_init_prints_voice_entry_when_voice_is_configured(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            args = argparse.Namespace(config_dir=tmpdir, force=False, schema=False)
-            resolved_dir = str(Path(tmpdir).resolve())
+            args = argparse.Namespace(config_dir=tmpdir, agent="work", force=False, schema=False)
 
             with patch(
                 "xagent.interfaces.cli.setup.collect_init_selection_terminal_ui",
@@ -1937,7 +2070,8 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
-        self.assertIn(f"xagent voice --dir {resolved_dir}", output)
+        self.assertIn("xagent voice --agent work", output)
+        self.assertNotIn("--dir", output)
 
     def test_init_uses_terminal_wizard(self):
         with tempfile.TemporaryDirectory() as tmpdir:

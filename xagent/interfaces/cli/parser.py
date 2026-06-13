@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN
-from . import runtime, setup
+from . import agents, runtime, setup
 
 
 class XAgentArgumentParser(argparse.ArgumentParser):
@@ -34,6 +34,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  chat        Start an interactive chat or send a single message",
             "  voice       Talk with your agent by microphone",
             "  web         Open the web UI",
+            "  agents      Create, select, and inspect managed agents",
             "",
             "Channels:",
             "  api         Manage the API / Web UI background service",
@@ -53,7 +54,10 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "",
             "Examples:",
             "  xagent setup",
+            "  xagent agents create work",
+            "  xagent agents select work",
             '  xagent chat "Help me plan today"',
+            '  xagent chat --agent work "Help me plan today"',
             "  xagent web",
             "  xagent api start",
             "  xagent api logs -f",
@@ -85,12 +89,12 @@ def _show_help_on_missing_action(parser: argparse.ArgumentParser) -> None:
     parser.error = _custom_error  # type: ignore[method-assign]
 
 
-def _add_dir_argument(parser: argparse.ArgumentParser) -> None:
+def _add_agent_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--dir",
-        dest="config_dir",
+        "--agent",
+        dest="agent",
         default=None,
-        help="Directory containing config.yaml and identity.md (default: ~/.xagent)",
+        help="Managed agent name (default: active agent)",
     )
 
 
@@ -147,7 +151,7 @@ def _add_api_runtime_arguments(
 
 
 def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:
-    _add_dir_argument(parser)
+    _add_agent_argument(parser)
     parser.add_argument("--app-id", dest="app_id", default=None, help="Feishu app id (cli_xxx)")
     parser.add_argument("--app-secret", dest="app_secret", default=None, help="Feishu app secret")
     parser.add_argument(
@@ -179,7 +183,7 @@ def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_weixin_setup_arguments(parser: argparse.ArgumentParser) -> None:
-    _add_dir_argument(parser)
+    _add_agent_argument(parser)
     parser.add_argument("--base-url", default=None, help="Weixin iLink API base URL")
     parser.add_argument("--cdn-base-url", default=None, help="Weixin iLink CDN base URL")
     parser.add_argument("--bot-type", default="3", help="iLink bot_type for QR login (default: 3)")
@@ -222,7 +226,7 @@ def _add_channel_lifecycle_subparsers(
 
     if has_open:
         open_parser = sub.add_parser("open", help="Start API in foreground and open the browser")
-        _add_dir_argument(open_parser)
+        _add_agent_argument(open_parser)
         _add_api_runtime_arguments(open_parser, open_by_default=True)
         open_parser.set_defaults(handler=runtime.handle_web)
 
@@ -236,28 +240,28 @@ def _add_channel_lifecycle_subparsers(
         setup_parser.set_defaults(handler=setup.handle_init_weixin)
 
     start_parser = sub.add_parser("start", help=f"Start the {channel} channel in the background")
-    _add_dir_argument(start_parser)
+    _add_agent_argument(start_parser)
     if channel == CHANNEL_API:
         _add_api_runtime_arguments(start_parser)
     start_parser.set_defaults(handler=runtime.handle_start, channels=[channel])
 
     stop_parser = sub.add_parser("stop", help=f"Stop the background {channel} channel")
-    _add_dir_argument(stop_parser)
+    _add_agent_argument(stop_parser)
     stop_parser.set_defaults(handler=runtime.handle_stop, channels=[channel])
 
     restart_parser = sub.add_parser("restart", help=f"Restart the background {channel} channel")
-    _add_dir_argument(restart_parser)
+    _add_agent_argument(restart_parser)
     if channel == CHANNEL_API:
         _add_api_runtime_arguments(restart_parser)
     restart_parser.set_defaults(handler=runtime.handle_restart, channels=[channel])
 
     status_parser = sub.add_parser("status", help=f"Show {channel} channel status")
-    _add_dir_argument(status_parser)
+    _add_agent_argument(status_parser)
     status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
     status_parser.set_defaults(handler=runtime.handle_status, channels=[channel])
 
     logs_parser = sub.add_parser("logs", help=f"Show {channel} channel logs")
-    _add_dir_argument(logs_parser)
+    _add_agent_argument(logs_parser)
     logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
     logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
     logs_parser.set_defaults(handler=runtime.handle_logs, channels=[channel])
@@ -281,13 +285,13 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
 
     setup_parser = subparsers.add_parser("setup", help="Create or reconfigure config.yaml and identity.md")
-    _add_dir_argument(setup_parser)
+    _add_agent_argument(setup_parser)
     setup_parser.add_argument("--force", action="store_true", help="Overwrite setup-managed files")
     setup_parser.set_defaults(handler=setup.handle_init)
 
     chat_parser = subparsers.add_parser("chat", help="Start an interactive chat or send a single message")
     chat_parser.add_argument("message", nargs="?", help="Single message to send; omit for interactive chat")
-    _add_dir_argument(chat_parser)
+    _add_agent_argument(chat_parser)
     chat_parser.add_argument("--user-id", dest="user_id", default=None, help="Speaker identifier")
     chat_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     chat_parser.add_argument(
@@ -304,7 +308,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.set_defaults(handler=runtime.handle_chat)
 
     voice_parser = subparsers.add_parser("voice", help="Talk with your agent by microphone")
-    _add_dir_argument(voice_parser)
+    _add_agent_argument(voice_parser)
     voice_parser.add_argument("--user-id", dest="user_id", default="local_voice", help="Speaker identifier")
     voice_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     voice_parser.add_argument(
@@ -325,7 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
     voice_parser.set_defaults(handler=runtime.handle_voice)
 
     web_parser = subparsers.add_parser("web", help="Open the web UI")
-    _add_dir_argument(web_parser)
+    _add_agent_argument(web_parser)
     _add_api_runtime_arguments(web_parser, open_by_default=True)
     web_parser.set_defaults(handler=runtime.handle_web)
 
@@ -346,7 +350,7 @@ def build_parser() -> argparse.ArgumentParser:
     _show_help_on_missing_action(weixin_parser)
 
     status_parser = subparsers.add_parser("status", help="Show running status of all channels")
-    _add_dir_argument(status_parser)
+    _add_agent_argument(status_parser)
     status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
     status_parser.set_defaults(handler=runtime.handle_status_all)
 
@@ -359,7 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
     config_sub.required = True
     for command_name in ("show", "validate", "path"):
         config_cmd = config_sub.add_parser(command_name, help=f"{command_name} config.yaml")
-        _add_dir_argument(config_cmd)
+        _add_agent_argument(config_cmd)
         config_cmd.set_defaults(handler=runtime.handle_config)
     _show_help_on_missing_action(config_parser)
 
@@ -368,16 +372,16 @@ def build_parser() -> argparse.ArgumentParser:
     memory_sub.required = True
     for command_name in ("stats", "clear"):
         memory_cmd = memory_sub.add_parser(command_name, help=f"{command_name} memory")
-        _add_dir_argument(memory_cmd)
+        _add_agent_argument(memory_cmd)
         memory_cmd.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
         memory_cmd.add_argument("--yes", action="store_true", help="Confirm destructive operations")
         memory_cmd.set_defaults(handler=runtime.handle_memory)
     memory_list = memory_sub.add_parser("list", help="Show recent daily journals")
-    _add_dir_argument(memory_list)
+    _add_agent_argument(memory_list)
     memory_list.add_argument("--days", type=int, default=setup.DEFAULT_MEMORY_LIST_DAYS, help="Recent natural days to scan")
     memory_list.set_defaults(handler=runtime.handle_memory)
     memory_search = memory_sub.add_parser("search", help="Search memory markdown files")
-    _add_dir_argument(memory_search)
+    _add_agent_argument(memory_search)
     memory_search.add_argument("query", help="Search query")
     memory_search.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
     memory_search.set_defaults(handler=runtime.handle_memory)
@@ -392,7 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
     identity_sub.required = True
     for command_name in ("show", "path"):
         identity_cmd = identity_sub.add_parser(command_name, help=f"{command_name} identity.md")
-        _add_dir_argument(identity_cmd)
+        _add_agent_argument(identity_cmd)
         identity_cmd.set_defaults(handler=runtime.handle_identity)
     _show_help_on_missing_action(identity_parser)
 
@@ -400,15 +404,15 @@ def build_parser() -> argparse.ArgumentParser:
     messages_sub = messages_parser.add_subparsers(dest="messages_command", metavar="<action>")
     messages_sub.required = True
     messages_stats = messages_sub.add_parser("stats", help="Show message stream statistics")
-    _add_dir_argument(messages_stats)
+    _add_agent_argument(messages_stats)
     messages_stats.set_defaults(handler=runtime.handle_messages)
     messages_list = messages_sub.add_parser("list", help="List recent messages")
-    _add_dir_argument(messages_list)
+    _add_agent_argument(messages_list)
     messages_list.add_argument("--count", type=int, default=20, help="Number of recent messages")
     messages_list.add_argument("--offset", type=int, default=0, help="Number of recent messages to skip")
     messages_list.set_defaults(handler=runtime.handle_messages)
     messages_clear = messages_sub.add_parser("clear", help="Clear all stored messages")
-    _add_dir_argument(messages_clear)
+    _add_agent_argument(messages_clear)
     messages_clear.add_argument("--yes", action="store_true", help="Confirm clearing the message stream")
     messages_clear.set_defaults(handler=runtime.handle_messages)
     _show_help_on_missing_action(messages_parser)
@@ -419,14 +423,14 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
 
     doctor_parser = subparsers.add_parser("doctor", help="Check local xAgent readiness")
-    _add_dir_argument(doctor_parser)
+    _add_agent_argument(doctor_parser)
     _add_channel_argument(doctor_parser, default_label="enabled channels")
     doctor_parser.add_argument("--online", action="store_true", help="Include network/model checks")
     doctor_parser.set_defaults(handler=runtime.handle_doctor)
 
     observe_parser = subparsers.add_parser("observe", help="Ingest context without generating a reply")
     observe_parser.add_argument("text", help="Observation text to store")
-    _add_dir_argument(observe_parser)
+    _add_agent_argument(observe_parser)
     observe_parser.add_argument("--source", default="cli", help="Observation source label")
     observe_parser.add_argument("--event-type", default="observation", help="Observation event type")
     observe_parser.add_argument("--metadata", default=None, help="JSON object with observation metadata")
@@ -435,13 +439,42 @@ def build_parser() -> argparse.ArgumentParser:
     version_parser = subparsers.add_parser("version", help="Show xAgent version")
     version_parser.set_defaults(handler=runtime.handle_version)
 
+    agents_parser = subparsers.add_parser("agents", help="Create, select, and inspect managed agents")
+    agents_sub = agents_parser.add_subparsers(dest="agents_action", metavar="<action>")
+    agents_sub.required = True
+    agents_list = agents_sub.add_parser("list", help="List managed agents")
+    agents_list.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    agents_list.set_defaults(handler=agents.handle_agents)
+    agents_create = agents_sub.add_parser("create", help="Create a managed agent")
+    agents_create.add_argument("name", help="Agent name")
+    agents_create.add_argument("--title", default=None, help="Display title")
+    agents_create.add_argument(
+        "--yes",
+        action="store_true",
+        help="Delete an existing unregistered agent directory without prompting",
+    )
+    agents_create.set_defaults(handler=agents.handle_agents)
+    agents_select = agents_sub.add_parser("select", help="Set the active agent")
+    agents_select.add_argument("name", help="Agent name")
+    agents_select.set_defaults(handler=agents.handle_agents)
+    agents_remove = agents_sub.add_parser("remove", help="Delete a managed agent and its data")
+    agents_remove.add_argument("name", help="Agent name")
+    agents_remove.add_argument("--yes", action="store_true", help="Confirm deletion without prompting")
+    agents_remove.set_defaults(handler=agents.handle_agents)
+    agents_info = agents_sub.add_parser("info", help="Show managed agent details")
+    agents_info.add_argument("name", help="Agent name")
+    agents_info.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    agents_info.set_defaults(handler=agents.handle_agents)
+    _show_help_on_missing_action(agents_parser)
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
     internal_run = subparsers.add_parser("_run-channel", help=argparse.SUPPRESS)
     internal_run.add_argument("channel", choices=(CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN))
-    _add_dir_argument(internal_run)
+    _add_agent_argument(internal_run)
+    internal_run.add_argument("--config-dir", dest="config_dir", default=None, help=argparse.SUPPRESS)
     _add_api_runtime_arguments(internal_run)
     internal_run.set_defaults(handler=runtime.handle_run_channel_internal)
     _hide_subparser_choice(subparsers, "_run-channel")

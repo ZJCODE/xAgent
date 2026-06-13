@@ -21,11 +21,13 @@ from .chat import (
     _format_cli_attachments,
     _format_cli_workspace_links,
 )
+from .agents import AgentRegistryError, handle_agents
 from .launcher import (
     _launcher_channel_options,
     _launcher_help_content,
     _launcher_options,
     _launcher_overview_subtitle,
+    _run_agent_launcher,
     _run_channel_launcher,
     _run_inspect_launcher,
     _run_interactive_launcher,
@@ -74,6 +76,7 @@ from .terminal_ui import ReturnToLauncherHome, TerminalUI, rich_terminal_availab
 
 __all__ = [
     "AgentCLI",
+    "AgentRegistryError",
     "FeishuInitSelection",
     "InitResult",
     "InitSelection",
@@ -87,6 +90,7 @@ __all__ = [
     "collect_weixin_init_selection_terminal_ui",
     "handle_chat",
     "handle_config",
+    "handle_agents",
     "handle_doctor",
     "handle_identity",
     "handle_init",
@@ -110,6 +114,7 @@ __all__ = [
     "init_agent_directory",
     "main",
     "print_quick_start",
+    "_run_agent_launcher",
     "rich_terminal_available",
 ]
 
@@ -130,7 +135,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print_quick_start()
         return 0
 
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except AgentRegistryError as exc:
+        print(f"Error: {exc}")
+        return 1
 
 
 if __name__ == "__main__":

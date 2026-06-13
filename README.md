@@ -15,16 +15,39 @@ pip install myxagent
 Run the first-time setup:
 
 ```bash
-xagent setup
+xagent agents create default
 ```
 
-Follow the prompts to choose your provider, model, API key, optional tools, local voice, and identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. Search is always an explicit init choice and supports `none`, OpenAI, Qwen, and MiniMax; matching search providers reuse the main API key. For a custom provider, `xagent setup` asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
+Follow the prompts to choose your provider, model, API key, optional tools, local voice, and identity. xAgent selects one model API protocol from the provider: official OpenAI uses OpenAI Responses; DeepSeek and Qwen use OpenAI-compatible Chat Completions; MiniMax and Anthropic use Anthropic Messages. Search is always an explicit init choice and supports `none`, OpenAI, Qwen, and MiniMax; matching search providers reuse the main API key. For a custom provider, setup asks which `model_api` to use before asking for the base URL. A clear identity helps the agent respond in the role and style you expect.
 
 OpenAI runtimes default to OpenAI built-in web search and recommend OpenAI image generation during init, while Qwen runtimes default to DashScope/Qwen built-in web search and Qwen image generation. Other providers can choose OpenAI search, Qwen search, or no search during init. OpenAI and Qwen native search reuse the main API key when the main provider matches; cross-provider OpenAI or Qwen search must set the matching key in `search.api_key`.
 
 Image input is supported by OpenAI and Qwen by default, with the known provider list kept in `VISION_CAPABLE_PROVIDERS`. Other built-in providers reject image input clearly instead of sending unsupported image payloads to the model; the Web UI keeps generic file upload available but only sends image bytes into the model when the active provider supports vision. Any provider can explicitly override vision support with `provider.supports_vision: true` or `false` when its selected model differs from the provider default. Image generation is a separate optional tool: OpenAI and MiniMax providers recommend their native image generation provider during init, but can choose `none`; other providers default to `none` and do not load cross-provider image generation. Web/API/Feishu inbound files are saved as workspace attachments under `workspace/temp/attachments/...`, images remain previewable through `workspace/temp/images/...`, and both use `/api/workspace/blob?path=...` links. Generated images and artifact files are returned as structured attachments: Web previews images or shows downloadable file chips, CLI prints local file paths, and Feishu sends native image/file attachments. Feishu compresses large images at the channel boundary before model input or native upload.
 
 Langfuse observability is included for teams that need LLM tracing, latency, usage, and error monitoring. It is disabled by default; `xagent setup` can write an `observability` block only when you choose to enable it.
+
+## Manage Agents
+
+xAgent manages named agents. The registry lives at `~/.xagent/agents.yaml`; each agent has its own runtime directory under `~/.xagent/agents/<name>/` with independent config, identity, memory, messages, workspace, skills, tasks, logs, and channel state.
+
+```bash
+xagent agents list
+xagent agents create work
+xagent agents select work
+xagent agents info work
+xagent agents remove work
+```
+
+Commands without `--agent` use the active agent. Pass `--agent NAME` to target a specific registered agent for one command:
+
+```bash
+xagent chat --agent work "Summarize today's priorities"
+xagent web --agent work
+```
+
+Use `xagent setup` to reconfigure the active agent.
+
+`xagent agents remove NAME` asks for confirmation and deletes that agent's local runtime directory. Recreating the same name starts from a clean directory.
 
 ## Use From The CLI
 
@@ -80,7 +103,7 @@ Use `api` for HTTP JSON, WebSocket, and the built-in web page. Use `feishu` for 
 
 ## Scheduled Tasks
 
-In long-running channels, xAgent can schedule future work directly from conversation. For example, if you say `一分钟后提醒我走两步` in the Web UI or Feishu, the agent writes a `message` task under `~/.xagent/tasks/` and the active channel runtime delivers the reminder automatically. If you say `半小时后帮我查一下当前系统的温度然后发我`, the agent writes an `agent` task that runs when due, calls tools as needed, and sends the final result back to the same channel.
+In long-running channels, xAgent can schedule future work directly from conversation. For example, if you say `一分钟后提醒我走两步` in the Web UI or Feishu, the agent writes a `message` task under that agent's `tasks/` directory and the active channel runtime delivers the reminder automatically. If you say `半小时后帮我查一下当前系统的温度然后发我`, the agent writes an `agent` task that runs when due, calls tools as needed, and sends the final result back to the same channel.
 
 The Web UI includes a Tasks tab for viewing and deleting scheduled tasks. API/Web scheduled task results are also pushed to connected Web clients through `/ws/tasks`.
 
@@ -128,7 +151,7 @@ For external integrations, configuration details, and full HTTP/WebSocket payloa
 
 ## Best Practices
 
-- Run `xagent setup` before your first chat.
+- Create an agent with `xagent agents create default` before your first chat.
 - Keep your API key in the generated local configuration.
 - Use the CLI for quick tasks and the web page when you want more room to work.
 - Give the agent a concise identity so it knows how it should help.

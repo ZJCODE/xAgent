@@ -9,8 +9,8 @@ Quick start:
     from xagent.integrations.feishu import FeishuAdapter, FeishuAdapterConfig
     from xagent.interfaces.base import BaseAgentRunner
 
-    runner = BaseAgentRunner(config_dir="~/.xagent")
-    cfg = FeishuAdapterConfig.from_file("~/.xagent/feishu/feishu.yaml")
+    runner = BaseAgentRunner(config_dir="~/.xagent/agents/default")
+    cfg = FeishuAdapterConfig.from_dict(runner.config["channels"]["feishu"])
     adapter = FeishuAdapter(agent=runner.agent, config=cfg)
     asyncio.run(adapter.run())
 """
