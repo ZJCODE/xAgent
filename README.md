@@ -47,7 +47,7 @@ You can do everything from the launcher, but these commands are convenient once 
 xagent setup
 xagent chat
 xagent web
-xagent voice start
+xagent voice
 xagent status
 ```
 
