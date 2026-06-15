@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import io
 import logging
+import sys
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -86,7 +87,7 @@ def _selection(**overrides) -> InitSelection:
     )
 
 
-def _write_runtime(directory: str, *, feishu: bool = False, weixin: bool = False) -> None:
+def _write_runtime(directory: str, *, feishu: bool = False, weixin: bool = False, voice: bool = False) -> None:
     config = {
         "provider": {
             "name": "openai",
@@ -110,6 +111,18 @@ def _write_runtime(directory: str, *, feishu: bool = False, weixin: bool = False
     if weixin:
         config["channels"]["weixin"] = {
             "account_id": "bot@im.bot",
+        }
+    if voice:
+        config["channels"]["voice"] = {
+            "provider": "soniox",
+            "stt": {
+                "provider": "soniox",
+                "api_key": "soniox-key",
+            },
+            "tts": {
+                "provider": "soniox",
+                "api_key": "soniox-key",
+            },
         }
     root = Path(directory)
     root.mkdir(parents=True, exist_ok=True)
@@ -703,6 +716,13 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(weixin.channels, ["weixin"])
         self.assertTrue(weixin.follow)
 
+        voice = build_parser().parse_args(["voice", "start", "--user-id", "alice", "--input-device", "auto"])
+        self.assertEqual(voice.command, "voice")
+        self.assertEqual(voice.voice_action, "start")
+        self.assertEqual(voice.channels, ["voice"])
+        self.assertEqual(voice.user_id, "alice")
+        self.assertEqual(voice.input_device, "auto")
+
     def test_service_command_is_removed(self):
         with self.assertRaises(SystemExit):
             build_parser().parse_args(["service", "start", "api"])
@@ -850,11 +870,12 @@ class CLICommandTests(unittest.TestCase):
 
     def test_launcher_overview_subtitle_shows_running_channel_details_only(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
+            _write_runtime(tmpdir, feishu=True, voice=True)
 
-            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[26807, 72069, None]):
+            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[1357, 26807, 72069, None]):
                 subtitle = _launcher_overview_subtitle(build_runtime_overview(Path(tmpdir)))
 
+        self.assertIn("Voice      running  soniox pid 1357", subtitle)
         self.assertIn("Web UI     running  127.0.0.1:8010 pid 26807", subtitle)
         self.assertIn("Feishu     running  pid 72069", subtitle)
         self.assertIn("Weixin     not set", subtitle)
@@ -905,7 +926,8 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_ui.channel_option_titles[:5], ["Chat", "Voice", "Web", "Feishu", "Weixin"])
-        self.assertIn("Start Background", fake_ui.action_option_titles)
+        self.assertIn("Start", fake_ui.action_option_titles)
+        self.assertNotIn("Start Background", fake_ui.action_option_titles)
         self.assertIn("Open Web UI", fake_ui.action_option_titles)
         self.assertNotIn("Start API", fake_ui.action_option_titles)
         starter.assert_called_once()
@@ -1043,6 +1065,25 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(web_ui.status, "ok")
         self.assertEqual(web_ui.value, "running")
         self.assertEqual(web_ui.detail, "127.0.0.1:8010 pid 26807")
+
+    def test_runtime_overview_shows_voice_channel_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, voice=True)
+
+            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[None, None]):
+                stopped = build_runtime_overview(Path(tmpdir))
+            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[9753, None]):
+                running = build_runtime_overview(Path(tmpdir))
+
+        stopped_voice = next(item for item in stopped.items if item.name == "Voice")
+        self.assertEqual(stopped_voice.status, "idle")
+        self.assertEqual(stopped_voice.value, "stopped")
+        self.assertEqual(stopped_voice.detail, "soniox")
+
+        running_voice = next(item for item in running.items if item.name == "Voice")
+        self.assertEqual(running_voice.status, "ok")
+        self.assertEqual(running_voice.value, "running")
+        self.assertEqual(running_voice.detail, "soniox pid 9753")
 
     def test_config_editor_updates_search_provider_with_validation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1656,6 +1697,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertFalse(fake_ui.options_by_key["setup"].disabled)
         self.assertTrue(fake_ui.options_by_key["start"].disabled)
+        self.assertNotIn("foreground", fake_ui.options_by_key)
         self.assertFalse(fake_ui.options_by_key["devices"].disabled)
 
     def test_voice_channel_launcher_setup_routes_to_provider_mode(self):
@@ -1811,6 +1853,41 @@ class CLICommandTests(unittest.TestCase):
         self.assertTrue(actions["restart"].disabled)
         self.assertFalse(actions["logs"].disabled)
 
+    def test_managed_channel_actions_disable_web_open_until_api_is_running(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+
+            from xagent.interfaces.cli.launcher import _managed_channel_actions
+
+            with patch("xagent.interfaces.cli.launcher.running_pid", return_value=None):
+                stopped_actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "api")}
+            with patch("xagent.interfaces.cli.launcher.running_pid", return_value=4321):
+                running_actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "api")}
+
+        self.assertTrue(stopped_actions["open"].disabled)
+        self.assertFalse(stopped_actions["start"].disabled)
+        self.assertFalse(running_actions["open"].disabled)
+
+    def test_managed_channel_open_only_opens_running_web_ui(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_dir = Path(tmpdir)
+
+            from xagent.interfaces.cli.launcher import _run_managed_channel_action
+
+            with patch("xagent.interfaces.cli.launcher.running_pid", return_value=None):
+                with patch("xagent.interfaces.cli.launcher.webbrowser.open") as stopped_browser_open:
+                    stopped_exit = _run_managed_channel_action(config_dir, "api", "open")
+
+            with patch("xagent.interfaces.cli.launcher.running_pid", return_value=4321):
+                with patch("xagent.interfaces.cli.launcher.webbrowser.open", return_value=True) as browser_open:
+                    running_exit = _run_managed_channel_action(config_dir, "api", "open")
+
+        self.assertEqual(stopped_exit, 1)
+        stopped_browser_open.assert_not_called()
+        self.assertEqual(running_exit, 0)
+        browser_open.assert_called_once_with("http://127.0.0.1:8010")
+
     def test_interactive_launcher_setup_opens_setup_menu(self):
         class FakeUI:
             def __init__(self):
@@ -1880,10 +1957,15 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_ui.panels[0][0], "xAgent Help")
+        self.assertIn("Setup:", fake_ui.panels[0][1])
+        self.assertIn("Use Now:", fake_ui.panels[0][1])
+        self.assertIn("Keep Running:", fake_ui.panels[0][1])
+        self.assertIn("Inspect:", fake_ui.panels[0][1])
         self.assertIn("xagent setup", fake_ui.panels[0][1])
         self.assertIn("xagent api start", fake_ui.panels[0][1])
+        self.assertIn("xagent voice logs -f", fake_ui.panels[0][1])
         self.assertIn("xagent memory list --days 7", fake_ui.panels[0][1])
-        self.assertNotIn("xagent doctor", fake_ui.panels[0][1])
+        self.assertNotIn("starts the API channel in the foreground", fake_ui.panels[0][1])
 
     def test_interactive_launcher_setup_success_returns_home_without_pause(self):
         class FakeUI:
@@ -1934,11 +2016,14 @@ class CLICommandTests(unittest.TestCase):
     def test_root_help_groups_public_commands(self):
         help_text = build_parser().format_help()
 
-        self.assertIn("Get Started:", help_text)
-        self.assertIn("Channels:", help_text)
+        self.assertIn("Setup:", help_text)
+        self.assertIn("Use Now:", help_text)
+        self.assertIn("Keep Running:", help_text)
         self.assertIn("Inspect:", help_text)
         self.assertIn("Advanced:", help_text)
+        self.assertIn("Common Flows:", help_text)
         self.assertIn("  web", help_text)
+        self.assertIn("  voice", help_text)
         self.assertIn("  agents", help_text)
         self.assertIn("  api", help_text)
         self.assertIn("  feishu", help_text)
@@ -2050,7 +2135,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("xagent feishu setup --agent work", output)
         self.assertIn("xagent feishu start --agent work", output)
         self.assertNotIn("xagent doctor", output)
-        self.assertNotIn("xagent voice --agent work", output)
+        self.assertNotIn("xagent voice start --agent work", output)
         self.assertNotIn("--dir", output)
 
     def test_setup_without_registry_creates_default_agent(self):
@@ -2107,7 +2192,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
-        self.assertIn("xagent voice --agent work", output)
+        self.assertIn("xagent voice start --agent work", output)
         self.assertNotIn("--dir", output)
 
     def test_init_uses_terminal_wizard(self):
@@ -2536,6 +2621,63 @@ class CLICommandTests(unittest.TestCase):
         self.assertTrue(heartbeat.stopped)
         adapter_instance.run.assert_awaited_once_with()
 
+    def test_run_channel_voice_starts_runtime_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, voice=True)
+            args = argparse.Namespace(
+                channel="voice",
+                config_dir=tmpdir,
+                user_id="alice",
+                input_device=None,
+                output_device=None,
+                verbose=False,
+            )
+
+            class _Heartbeat:
+                def __init__(self):
+                    self.started = False
+                    self.stopped = False
+
+                async def start(self):
+                    self.started = True
+
+                async def stop(self):
+                    self.stopped = True
+
+            class _Runner:
+                def __init__(self):
+                    self.config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
+                    self.tasks_dir = Path(tmpdir) / "tasks"
+                    self.agent = SimpleNamespace(
+                        model="gpt-5.4-mini",
+                        run_memory_maintenance=self.run_memory_maintenance,
+                    )
+
+                async def run_memory_maintenance(self, **kwargs):
+                    return None
+
+            class _Runtime:
+                def __init__(self):
+                    self.run_count = 0
+
+                async def run_forever(self):
+                    self.run_count += 1
+
+            runtime_instance = _Runtime()
+            heartbeat = _Heartbeat()
+
+            with patch("xagent.interfaces.cli.runtime.BaseAgentRunner", return_value=_Runner()):
+                with patch("xagent.voice.factory.create_local_voice_runtime", return_value=runtime_instance) as factory:
+                    with patch("xagent.interfaces.cli.runtime.create_runtime_heartbeat", return_value=heartbeat) as heartbeat_factory:
+                        exit_code = handle_run_channel_internal(args)
+
+        self.assertEqual(exit_code, 0)
+        heartbeat_factory.assert_called_once()
+        self.assertTrue(heartbeat.started)
+        self.assertTrue(heartbeat.stopped)
+        self.assertEqual(runtime_instance.run_count, 1)
+        self.assertEqual(factory.call_args.kwargs["options"].user_id, "alice")
+
     def test_start_all_includes_feishu_when_credentials_exist_without_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True)
@@ -2553,6 +2695,20 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(enabled_channels_from_config(config), ["api", "weixin"])
 
+    def test_start_all_includes_voice_when_configured_without_enabled(self):
+        config = {
+            "channels": {
+                "api": {"host": "127.0.0.1", "port": 8010},
+                "voice": {
+                    "provider": "soniox",
+                    "stt": {"api_key": "soniox-key"},
+                    "tts": {"api_key": "soniox-key"},
+                },
+            }
+        }
+
+        self.assertEqual(enabled_channels_from_config(config), ["api", "voice"])
+
     def test_enabled_channels_do_not_implicitly_add_api_when_channels_are_explicit(self):
         config = {
             "channels": {
@@ -2569,6 +2725,11 @@ class CLICommandTests(unittest.TestCase):
         config = {"channels": {"weixin": {"account_id": "bot@im.bot"}}}
 
         self.assertEqual(enabled_channels_from_config(config), ["weixin"])
+
+    def test_enabled_channels_can_select_voice_without_api(self):
+        config = {"channels": {"voice": {"provider": "soniox", "stt": {"api_key": "key"}, "tts": {"api_key": "key"}}}}
+
+        self.assertEqual(enabled_channels_from_config(config), ["voice"])
 
     def test_web_runs_api_channel_and_opens_browser_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2721,6 +2882,40 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(starter.call_count, 2)
         self.assertEqual(starter.call_args_list[0].kwargs["pid_path"], Path(tmpdir).resolve() / "run" / "api.pid")
         self.assertEqual(starter.call_args_list[0].kwargs["log_path"], Path(tmpdir).resolve() / "logs" / "api.log")
+
+    def test_start_voice_forwards_runtime_options_to_background_process(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, voice=True)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                channels=["voice"],
+                user_id="alice",
+                verbose=True,
+                input_device="auto",
+                output_device="#1",
+                host=None,
+                port=None,
+                open_browser=False,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+
+            with patch("xagent.interfaces.cli.runtime.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
+                exit_code = handle_start(args)
+
+        self.assertEqual(exit_code, 0)
+        command = starter.call_args.args[0]
+        self.assertEqual(command[:4], [sys.executable, "-m", "xagent.interfaces.cli", "_run-channel"])
+        self.assertIn("voice", command)
+        self.assertIn("--user-id", command)
+        self.assertIn("alice", command)
+        self.assertIn("--verbose", command)
+        self.assertIn("--input-device", command)
+        self.assertIn("auto", command)
+        self.assertIn("--output-device", command)
+        self.assertIn("#1", command)
+        self.assertEqual(starter.call_args.kwargs["pid_path"], Path(tmpdir).resolve() / "run" / "voice.pid")
 
     def test_stop_uses_managed_pid_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:

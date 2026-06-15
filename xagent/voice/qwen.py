@@ -43,13 +43,19 @@ def _connect_qwen_websocket(url: str, *, api_key: str):
             "The voice command requires the WebSocket dependency websockets. "
             "Reinstall or upgrade myxagent, then try again."
         ) from exc
-    return connect(
-        url,
-        additional_headers={
-            "Authorization": f"Bearer {api_key}",
-            "OpenAI-Beta": "realtime=v1",
-        },
-    )
+    try:
+        return connect(
+            url,
+            additional_headers={
+                "Authorization": f"Bearer {api_key}",
+                "OpenAI-Beta": "realtime=v1",
+            },
+        )
+    except ImportError as exc:
+        raise QwenVoiceError(
+            "Qwen realtime voice WebSocket needs python-socks when a SOCKS proxy is configured. "
+            "Install or upgrade myxagent dependencies, then try again."
+        ) from exc
 
 
 def _compact_json(data: dict[str, Any]) -> str:

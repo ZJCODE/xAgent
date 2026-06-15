@@ -14,6 +14,7 @@ from ..base import BaseAgentConfig, BaseAgentRunner
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
+    CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     api_config,
     feishu_config,
@@ -106,7 +107,7 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
                 _model_item(config),
                 _search_item(config),
                 _image_item(config),
-                _voice_item(config),
+                _voice_item(config_dir, config),
                 _service_item(config_dir, CHANNEL_API, api_config(config)),
                 _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config)),
                 _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config)),
@@ -185,25 +186,28 @@ def _image_item(config: dict[str, Any]) -> OverviewItem:
     return OverviewItem("Image", provider, STATUS_OK, detail)
 
 
-def _voice_item(config: dict[str, Any]) -> OverviewItem:
+def _voice_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
     raw_voice = voice_config(config)
-    if not raw_voice:
+    if not raw_voice or raw_voice.get("enabled") is False:
         return OverviewItem("Voice", "not set", STATUS_DISABLED)
     try:
         voice = VoiceChannelConfig.from_dict(raw_voice)
     except Exception as exc:
         return OverviewItem("Voice", "invalid", STATUS_ERROR, _friendly_overview_error(str(exc)))
     provider = voice.provider or "custom"
-    value = provider
-    detail = ""
+    provider_detail = provider
     if voice.stt.provider != voice.tts.provider or provider == "custom":
-        detail = f"{voice.stt.provider} / {voice.tts.provider}"
+        provider_detail = f"{voice.stt.provider} / {voice.tts.provider}"
     try:
         voice.resolved_stt_api_key()
         voice.resolved_tts_api_key()
     except ValueError as exc:
-        return OverviewItem("Voice", value, STATUS_ERROR, _friendly_overview_error(str(exc), fallback="Setup"))
-    return OverviewItem("Voice", value, STATUS_OK, detail)
+        return OverviewItem("Voice", provider, STATUS_ERROR, _friendly_overview_error(str(exc), fallback="Setup"))
+
+    pid = running_pid(managed_paths(config_dir, CHANNEL_VOICE).pid_path)
+    if pid is None:
+        return OverviewItem("Voice", "stopped", STATUS_IDLE, provider_detail)
+    return OverviewItem("Voice", "running", STATUS_OK, f"{provider_detail} pid {pid}")
 
 
 def _api_service_url(config: dict[str, Any]) -> str:

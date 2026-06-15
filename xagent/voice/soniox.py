@@ -34,7 +34,13 @@ def _connect_websocket(url: str):
             "The voice command requires the WebSocket dependency websockets. "
             "Reinstall or upgrade myxagent, then try again."
         ) from exc
-    return connect(url)
+    try:
+        return connect(url)
+    except ImportError as exc:
+        raise SonioxVoiceError(
+            "Soniox realtime voice WebSocket needs python-socks when a SOCKS proxy is configured. "
+            "Install or upgrade myxagent dependencies, then try again."
+        ) from exc
 
 
 def _compact_json(data: dict[str, Any]) -> str:

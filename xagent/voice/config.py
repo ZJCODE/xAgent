@@ -286,6 +286,7 @@ class VoiceChannelConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    enabled: bool = True
     provider: str | None = None
     websocket_base_url: str | None = None
     enable_interruptions: bool = False

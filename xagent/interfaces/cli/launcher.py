@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import webbrowser
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
@@ -35,6 +36,7 @@ from .agents import (
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
+    CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     api_config,
     feishu_config,
@@ -54,8 +56,8 @@ from .runtime import (
     handle_status,
     handle_stop,
     handle_voice,
-    handle_web,
 )
+from .processes import managed_paths, running_pid
 from .setup import (
     ANTHROPIC_MODELS,
     CUSTOM_MODEL_OPTION,
@@ -152,7 +154,7 @@ def _launcher_channel_options() -> list[MenuOption]:
         MenuOption(
             key="voice",
             title="Voice",
-            description="Start microphone mode or list local audio devices.",
+            description="Manage the microphone/speaker channel.",
         ),
         MenuOption(
             key=CHANNEL_API,
@@ -200,8 +202,24 @@ def _api_channel_is_enabled(config_dir: Path) -> bool:
     return bool(data.get("enabled", True))
 
 
+def _api_channel_is_running(config_dir: Path) -> bool:
+    return running_pid(managed_paths(config_dir, CHANNEL_API).pid_path) is not None
+
+
+def _api_channel_url(config_dir: Path) -> str:
+    config = _launcher_config_snapshot(config_dir)
+    data = api_config(config)
+    host = str(data.get("host") or BaseAgentConfig.DEFAULT_HOST).strip() or BaseAgentConfig.DEFAULT_HOST
+    port = str(data.get("port") or BaseAgentConfig.DEFAULT_PORT).strip() or str(BaseAgentConfig.DEFAULT_PORT)
+    browse_host = "127.0.0.1" if host == "0.0.0.0" else host
+    if ":" in browse_host and not browse_host.startswith("["):
+        browse_host = f"[{browse_host}]"
+    return f"http://{browse_host}:{port}"
+
+
 def _voice_is_configured(config: dict[str, Any]) -> bool:
-    return bool(voice_config(config))
+    data = voice_config(config)
+    return bool(data) and data.get("enabled") is not False
 
 
 def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
@@ -210,12 +228,21 @@ def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
     if not voice_enabled:
         options.append(MenuOption("setup", "Setup", "Configure voice mode."))
     start_description = (
-        "Start microphone mode with the configured runtime."
+        "Start the voice channel."
         if voice_enabled
         else "Set up voice first."
     )
     options.extend([
-        MenuOption("start", "Start Voice", start_description, disabled=not voice_enabled),
+        MenuOption("start", "Start", start_description, disabled=not voice_enabled),
+        MenuOption("stop", "Stop", "Stop the voice channel."),
+        MenuOption(
+            "restart",
+            "Restart",
+            "Restart the voice channel." if voice_enabled else "Set up voice first.",
+            disabled=not voice_enabled,
+        ),
+        MenuOption("status", "Status", "Show PID and log paths."),
+        MenuOption("logs", "Logs", "Print the latest log output."),
         MenuOption("devices", "List Devices", "Print available local audio input/output devices."),
         MenuOption("back", "Back", "Return to Channel."),
     ])
@@ -301,12 +328,14 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
     unavailable_description = "Complete setup before starting this channel."
     if channel == CHANNEL_API:
         channel_ready = _api_channel_is_enabled(config_dir)
-        open_description = (
-            "Run the API channel in the foreground and open the browser."
-            if channel_ready
-            else "Enable Web UI in Setup before starting this channel."
-        )
-        actions.append(MenuOption("open", "Open Web UI", open_description, disabled=not channel_ready))
+        api_running = channel_ready and _api_channel_is_running(config_dir)
+        if not channel_ready:
+            open_description = "Enable Web UI in Setup before starting this channel."
+        elif not api_running:
+            open_description = "Start the Web channel before opening it."
+        else:
+            open_description = "Open the running Web UI in your browser."
+        actions.append(MenuOption("open", "Open Web UI", open_description, disabled=not api_running))
     if channel == CHANNEL_FEISHU and not _feishu_channel_is_configured(config_dir):
         channel_ready = False
         unavailable_description = "Configure channels.feishu before starting this channel."
@@ -330,15 +359,15 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
     actions.extend([
         MenuOption(
             "start",
-            "Start Background",
-            "Start this channel in the background." if channel_ready else unavailable_description,
+            "Start",
+            "Start this channel." if channel_ready else unavailable_description,
             disabled=not channel_ready,
         ),
-        MenuOption("stop", "Stop", "Stop the background channel."),
+        MenuOption("stop", "Stop", "Stop this channel."),
         MenuOption(
             "restart",
             "Restart",
-            "Restart the background channel." if channel_ready else unavailable_description,
+            "Restart this channel." if channel_ready else unavailable_description,
             disabled=not channel_ready,
         ),
         MenuOption("status", "Status", "Show PID and log paths."),
@@ -352,55 +381,73 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     setup_command = "xagent setup --force" if initialized else "xagent setup"
     content = Text()
     content.append(f"Runtime: {config_dir}\n\n")
-    content.append("Common commands:\n")
-    content.append("setup    ")
+
+    content.append("Setup:\n")
+    content.append("  ")
     content.append(_format_init_command(setup_command, config_dir=config_dir), style="cyan")
-    content.append("\n         Create or reconfigure config.yaml and identity.md.\n")
-    content.append("agents   ")
+    content.append("\n    Configure the active agent.\n")
+    content.append("  ")
     content.append(_format_init_command("xagent agents list", config_dir=config_dir), style="cyan")
-    content.append("\n         List managed agents; use ")
+    content.append("\n    List agents; use ")
     content.append(_format_init_command("xagent agents select <name>", config_dir=config_dir), style="cyan")
     content.append(" to switch.\n")
-    content.append("chat     ")
+
+    content.append("\nUse Now:\n")
+    content.append("  ")
     content.append(_format_init_command("xagent chat", config_dir=config_dir), style="cyan")
-    content.append("\n         Start an interactive terminal chat, or run ")
+    content.append("\n    Chat in the terminal; use ")
     content.append(_format_init_command('xagent chat "Hey"', config_dir=config_dir), style="cyan")
-    content.append(" to send a single message.\n")
-    content.append("web      ")
+    content.append(" for one message.\n")
+    content.append("  ")
     content.append(_format_init_command("xagent web", config_dir=config_dir), style="cyan")
-    content.append("\n         Open the web UI (starts the API channel in the foreground).\n")
-    content.append("voice    ")
+    content.append("\n    Open the Web UI for this session.\n")
+    content.append("  ")
     content.append(_format_init_command("xagent voice", config_dir=config_dir), style="cyan")
-    content.append("\n         Start local microphone/speaker mode when voice is configured.\n")
-    content.append("api      ")
+    content.append("\n    Use microphone / speaker mode for this session.\n")
+
+    content.append("\nKeep Running:\n")
+    content.append("  ")
     content.append(_format_init_command("xagent api start", config_dir=config_dir), style="cyan")
-    content.append("\n         Run the API / Web UI channel in the background.\n")
-    content.append("feishu   ")
+    content.append("\n    Start the Web/API channel.\n")
+    content.append("  ")
+    content.append(_format_init_command("xagent voice start", config_dir=config_dir), style="cyan")
+    content.append("\n    Start the voice channel.\n")
+    content.append("  ")
+    content.append(_format_init_command("xagent status", config_dir=config_dir), style="cyan")
+    content.append("\n    Show all configured channel processes.\n")
+    content.append("  ")
+    content.append(_format_init_command("xagent api logs -f", config_dir=config_dir), style="cyan")
+    content.append("\n    Follow Web/API logs.\n")
+    content.append("  ")
+    content.append(_format_init_command("xagent voice logs -f", config_dir=config_dir), style="cyan")
+    content.append("\n    Follow voice logs.\n")
+
+    content.append("\nIntegrations:\n")
+    content.append("  ")
     content.append(_format_init_command("xagent feishu setup", config_dir=config_dir), style="cyan")
-    content.append("\n         Configure the Feishu bot, then start it with ")
+    content.append("\n    Configure Feishu, then start it with ")
     content.append(_format_init_command("xagent feishu start", config_dir=config_dir), style="cyan")
     content.append(".\n")
-    content.append("weixin   ")
+    content.append("  ")
     content.append(_format_init_command("xagent weixin setup", config_dir=config_dir), style="cyan")
-    content.append("\n         Configure the Weixin DM channel, then start it with ")
+    content.append("\n    Configure Weixin, then start it with ")
     content.append(_format_init_command("xagent weixin start", config_dir=config_dir), style="cyan")
     content.append(".\n")
-    content.append("status   ")
-    content.append(_format_init_command("xagent status", config_dir=config_dir), style="cyan")
-    content.append("\n         Show running status of all channels.\n")
-    content.append("memory   ")
+
+    content.append("\nInspect:\n")
+    content.append("  ")
     content.append(_format_init_command("xagent memory list --days 7", config_dir=config_dir), style="cyan")
-    content.append("\n         Show recent daily journals; use ")
+    content.append("\n    Show recent daily journals; use ")
     content.append(_format_init_command("xagent memory search <query>", config_dir=config_dir), style="cyan")
     content.append(" to search.\n")
-    content.append("config   ")
+    content.append("  ")
     content.append(_format_init_command("xagent config show", config_dir=config_dir), style="cyan")
-    content.append("\n         Print config.yaml; use ")
+    content.append("\n    Print config.yaml; use ")
     content.append(_format_init_command("xagent config validate", config_dir=config_dir), style="cyan")
     content.append(" to check it.\n")
-    content.append("doctor   ")
+    content.append("  ")
     content.append(_format_init_command("xagent doctor", config_dir=config_dir), style="cyan")
-    content.append("\n         Check local xAgent readiness.\n")
+    content.append("\n    Check local readiness.\n")
     return content
 
 
@@ -427,7 +474,7 @@ def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
         lines.append("")
     for item in visible_items:
         line = f"{item.name:<10} {item.value}"
-        if item.name in {"Web UI", "Feishu", "Weixin"} and item.value == "running" and item.detail:
+        if item.name in {"Web UI", "Voice", "Feishu", "Weixin"} and item.value == "running" and item.detail:
             line += f"  {item.detail}"
         lines.append(line)
     return "\n".join(lines)
@@ -463,17 +510,18 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
             )
         )
     if action == "open":
-        return handle_web(
-            _launcher_args(
-                config_dir=str(config_dir),
-                host=None,
-                port=None,
-                open_browser=True,
-                max_concurrent_chats=None,
-                queue_timeout=None,
-                chat_timeout=None,
-            )
-        )
+        if not _api_channel_is_enabled(config_dir):
+            print("Web UI is disabled. Enable it in Setup before opening it.")
+            return 1
+        if not _api_channel_is_running(config_dir):
+            print("Web UI is not running. Start the Web channel first.")
+            return 1
+        url = _api_channel_url(config_dir)
+        if webbrowser.open(url):
+            print(f"Opened: {url}")
+            return 0
+        print(f"Failed to open: {url}")
+        return 1
     if action == "start":
         return handle_start(
             _launcher_args(
@@ -1897,17 +1945,20 @@ def _run_voice_channel_launcher(ui: TerminalUI, config_dir: Path) -> None:
         if option.key == "setup":
             _run_voice_provider_mode_launcher(ui, config_dir, config)
             continue
-        exit_code = handle_voice(
-            _launcher_args(
-                config_dir=str(config_dir),
-                user_id="local_voice",
-                verbose=False,
-                list_devices=option.key == "devices",
-                input_device=None,
-                output_device=None,
-                memory=True,
+        if option.key in {"start", "stop", "restart", "status", "logs"}:
+            exit_code = _run_managed_channel_action(config_dir, CHANNEL_VOICE, str(option.key))
+        else:
+            exit_code = handle_voice(
+                _launcher_args(
+                    config_dir=str(config_dir),
+                    user_id="local_voice",
+                    verbose=False,
+                    list_devices=option.key == "devices",
+                    input_device=None,
+                    output_device=None,
+                    memory=True,
+                )
             )
-        )
         if exit_code != 0:
             ui.print_panel(f"Voice action exited with status {exit_code}.", title="Channel")
         ui.pause("Press Enter to return to Voice")

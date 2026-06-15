@@ -2033,7 +2033,7 @@ runtime:
             self.assertNotIn("enabled", runner.config["channels"]["api"])
             self.assertEqual(enabled_channels_from_config(runner.config), ["api"])
 
-    def test_config_accepts_soniox_voice_channel_without_managed_channel_entry(self):
+    def test_config_accepts_soniox_voice_channel_as_managed_channel(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -2063,7 +2063,7 @@ channels:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertEqual(runner.config["channels"]["voice"]["stt"]["model"], "stt-rt-v4")
-            self.assertEqual(enabled_channels_from_config(runner.config), ["api"])
+            self.assertEqual(enabled_channels_from_config(runner.config), ["api", "voice"])
 
     def test_voice_config_requires_provider_before_api_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2338,6 +2338,7 @@ channels:
         dependencies = "\n".join(pyproject["project"]["dependencies"])
         self.assertNotIn("optional-dependencies", pyproject["project"])
         self.assertIn("sounddevice", dependencies)
+        self.assertIn("python-socks", dependencies)
         self.assertIn("websockets", dependencies)
         self.assertNotIn("soniox", dependencies)
 

@@ -20,6 +20,7 @@ from .agents import resolve_agent_name
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
+    CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     ChannelSelectionError,
     api_config,
@@ -85,35 +86,14 @@ def handle_voice(args: argparse.Namespace) -> int:
             print(list_audio_devices_text())
             return 0
 
-        runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
-        from ...voice.config import VoiceChannelConfig
-        from ...voice.factory import create_local_voice_runtime
-        from ...voice.runtime import VoiceRuntimeOptions
-
-        runtime_config = VoiceChannelConfig.from_dict(voice_config(runner.config))
-        runtime = create_local_voice_runtime(
-            agent=runner.agent,
-            config=runtime_config,
-            options=VoiceRuntimeOptions(
-                user_id=args.user_id or "local_voice",
-                stream=True,
-                tasks_dir=getattr(runner, "tasks_dir", None),
-            ),
-            input_device=getattr(args, "input_device", None),
-            output_device=getattr(args, "output_device", None),
-        )
+        config = load_runtime_config(args)
+    except ChannelSelectionError as exc:
+        return _handle_channel_error(exc)
     except Exception as exc:
         print(f"Failed to start voice channel: {exc}")
         return 1
 
-    try:
-        asyncio.run(runtime.run_forever())
-    except KeyboardInterrupt:
-        print("\nVoice channel stopped.")
-    except Exception as exc:
-        print(f"Voice channel error: {exc}")
-        return 1
-    return 0
+    return _run_voice_channel(args, config)
 
 
 def handle_server(args: argparse.Namespace) -> int:
@@ -188,6 +168,18 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
             command.extend([flag, str(value)])
     if getattr(args, "open_browser", False):
         command.append("--open")
+    if channel == CHANNEL_VOICE:
+        user_id = getattr(args, "user_id", None)
+        if user_id:
+            command.extend(["--user-id", str(user_id)])
+        if getattr(args, "verbose", False):
+            command.append("--verbose")
+        input_device = getattr(args, "input_device", None)
+        if input_device is not None:
+            command.extend(["--input-device", str(input_device)])
+        output_device = getattr(args, "output_device", None)
+        if output_device is not None:
+            command.extend(["--output-device", str(output_device)])
     return command
 
 
@@ -406,6 +398,98 @@ def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
     return 0
 
 
+def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    try:
+        runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
+        voice_data = voice_config(runner.config)
+        if not voice_data or voice_data.get("enabled") is False:
+            print("Voice channel is not configured. Run: xagent setup")
+            return 1
+
+        from ...voice.config import VoiceChannelConfig
+        from ...voice.factory import create_local_voice_runtime
+        from ...voice.runtime import VoiceRuntimeOptions
+
+        voice_runtime_config = VoiceChannelConfig.from_dict(voice_data)
+        runtime = create_local_voice_runtime(
+            agent=runner.agent,
+            config=voice_runtime_config,
+            options=VoiceRuntimeOptions(
+                user_id=getattr(args, "user_id", None) or "local_voice",
+                stream=True,
+                tasks_dir=getattr(runner, "tasks_dir", None),
+            ),
+            input_device=getattr(args, "input_device", None),
+            output_device=getattr(args, "output_device", None),
+        )
+    except Exception as exc:
+        print(f"Failed to start voice channel: {exc}")
+        return 1
+
+    async def _run_daemon() -> bool:
+        heartbeat = create_runtime_heartbeat(
+            runner.agent,
+            config.get("runtime") if isinstance(config, dict) else None,
+            logger_=logging.getLogger(__name__),
+        )
+        stop_requested = False
+        loop = asyncio.get_running_loop()
+        old_handlers: dict[int, object] = {}
+        signal_handlers: list[int] = []
+
+        def _request_stop() -> None:
+            nonlocal stop_requested
+            stop_requested = True
+            stop_event = getattr(runtime, "stop_event", None)
+            if stop_event is not None:
+                stop_event.set()
+
+        def _handle_stop(_signum: int, _frame) -> None:
+            loop.call_soon_threadsafe(_request_stop)
+
+        for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+            if signum is None:
+                continue
+            try:
+                loop.add_signal_handler(signum, _request_stop)
+                signal_handlers.append(signum)
+            except (NotImplementedError, RuntimeError):
+                old_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, _handle_stop)
+
+        try:
+            if heartbeat is not None:
+                await heartbeat.start()
+            await runtime.run_forever()
+        finally:
+            for signum in signal_handlers:
+                try:
+                    loop.remove_signal_handler(signum)
+                except (NotImplementedError, RuntimeError):
+                    pass
+            for signum, previous_handler in old_handlers.items():
+                signal.signal(signum, previous_handler)
+            if heartbeat is not None:
+                await heartbeat.stop()
+        return stop_requested
+
+    print(f"xAgent voice channel ready (model={runner.agent.model}).")
+    try:
+        stop_requested = asyncio.run(_run_daemon())
+    except KeyboardInterrupt:
+        stop_requested = True
+    except RuntimeError as exc:
+        print(f"{exc}")
+        return 1
+    except Exception as exc:
+        print(f"Voice channel error: {exc}")
+        return 1
+
+    if stop_requested:
+        print("Voice channel stopped.")
+    return 0
+
+
 def _run_channel(channel: str, args: argparse.Namespace, config: dict[str, Any]) -> int:
     if channel == CHANNEL_API:
         return _run_api_channel(args, config)
@@ -413,6 +497,8 @@ def _run_channel(channel: str, args: argparse.Namespace, config: dict[str, Any])
         return _run_feishu_channel(args, config)
     if channel == CHANNEL_WEIXIN:
         return _run_weixin_channel(args, config)
+    if channel == CHANNEL_VOICE:
+        return _run_voice_channel(args, config)
     print(f"Unknown channel: {channel}")
     return 1
 
@@ -631,7 +717,12 @@ def handle_logs(args: argparse.Namespace) -> int:
             for token in str(raw_channel).split(",")
             if token.strip()
         ]
-        if len(explicit_tokens) != 1 or explicit_tokens[0] not in {CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN}:
+        if len(explicit_tokens) != 1 or explicit_tokens[0] not in {
+            CHANNEL_API,
+            CHANNEL_FEISHU,
+            CHANNEL_WEIXIN,
+            CHANNEL_VOICE,
+        }:
             print("--follow requires an explicit single channel")
             return 1
 
@@ -883,6 +974,21 @@ def handle_doctor(args: argparse.Namespace) -> int:
         else:
             print("Weixin: missing account_id")
             ok = False
+    if CHANNEL_VOICE in channels:
+        try:
+            from ...voice.config import VoiceChannelConfig
+
+            data = voice_config(config)
+            if not data or data.get("enabled") is False:
+                raise ValueError("channels.voice is not enabled")
+            voice_runtime_config = VoiceChannelConfig.from_dict(data)
+            voice_runtime_config.resolved_provider()
+            voice_runtime_config.resolved_stt_api_key()
+            voice_runtime_config.resolved_tts_api_key()
+            print("Voice: configured")
+        except Exception as exc:
+            print(f"Voice: {exc}")
+            ok = False
     if args.online:
         print("Online checks are not implemented yet.")
     return 0 if ok else 1
@@ -922,23 +1028,26 @@ def print_quick_start() -> None:
     print(f"Runtime: {runtime_label}")
     print("")
     if not initialized:
-        print("First time? Run:  xagent setup")
+        print("First time? Run:  xagent agents create default")
         print("")
-    print("Common commands:")
-    print("  xagent setup                    Create or reconfigure config")
-    print("  xagent agents list              List managed agents")
-    print("  xagent agents select work       Set the active agent")
-    print("  xagent chat                     Interactive terminal chat")
-    print("  xagent web                      Open the web UI")
-    print("  xagent voice                    Microphone / speaker mode")
-    print("  xagent api start                Run API / Web UI in background")
-    print("  xagent feishu setup             Configure the Feishu bot")
-    print("  xagent weixin setup             Configure the Weixin DM channel")
+    print("Use now:")
+    print("  xagent chat                     Chat in the terminal")
+    print("  xagent web                      Open the Web UI")
+    print("  xagent voice                    Use microphone / speaker mode")
+    print("")
+    print("Keep running:")
+    print("  xagent api start                Start Web/API channel")
+    print("  xagent voice start              Start voice channel")
     print("  xagent status                   Show channel status")
-    print("  xagent config show              Print config.yaml")
+    print("  xagent api logs -f              Follow Web/API logs")
+    print("  xagent voice logs -f            Follow voice logs")
+    print("")
+    print("Setup and inspect:")
+    print("  xagent setup                    Reconfigure the active agent")
+    print("  xagent agents list              List agents")
+    print("  xagent agents select work       Switch active agent")
     print("  xagent config validate          Validate config.yaml")
     print("  xagent memory list --days 7     Show recent daily journals")
-    print("  xagent memory search <query>    Search memory files")
     print("  xagent doctor                   Check readiness")
     print("")
     print("Full help: xagent --help")

@@ -206,8 +206,8 @@ class BaseAgentRunner:
                 raise ValueError(f"Unsupported runtime key(s): {joined_keys}")
             if "default_channel" in runtime_cfg:
                 default_channel = runtime_cfg.get("default_channel")
-                if default_channel not in {"api", "feishu", "weixin"}:
-                    raise ValueError("runtime.default_channel must be one of: api, feishu, weixin")
+                if default_channel not in {"api", "feishu", "weixin", "voice"}:
+                    raise ValueError("runtime.default_channel must be one of: api, feishu, weixin, voice")
             if "heartbeat_enabled" in runtime_cfg and not isinstance(runtime_cfg["heartbeat_enabled"], bool):
                 raise ValueError("runtime.heartbeat_enabled must be a boolean")
             if "heartbeat_interval_seconds" in runtime_cfg:

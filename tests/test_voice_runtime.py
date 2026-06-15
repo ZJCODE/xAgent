@@ -5,13 +5,20 @@ import threading
 import time
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from xagent.core.runtime import current_delivery_context, enqueue_scheduled_task, list_active_task_records
 from xagent.voice.config import VoiceChannelConfig, VoiceTTSConfig
 from xagent.voice.factory import create_local_voice_runtime
-from xagent.voice.qwen import QwenRealtimeSTT, QwenRealtimeTTS, _qwen_realtime_url
+from xagent.voice.qwen import (
+    QwenRealtimeSTT,
+    QwenRealtimeTTS,
+    QwenVoiceError,
+    _connect_qwen_websocket,
+    _qwen_realtime_url,
+)
 from xagent.voice.runtime import VoiceRuntime, VoiceRuntimeOptions, VoiceUtterance
-from xagent.voice.soniox import SonioxRealtimeTTS, _batch_text_chunks
+from xagent.voice.soniox import SonioxRealtimeTTS, SonioxVoiceError, _batch_text_chunks, _connect_websocket
 
 
 class FakeMicrophone:
@@ -822,6 +829,22 @@ class VoiceRuntimeTests(unittest.TestCase):
                 config=config,
                 options=VoiceRuntimeOptions(),
             )
+
+    def test_qwen_connect_explains_missing_python_socks_for_socks_proxy(self):
+        with patch(
+            "websockets.sync.client.connect",
+            side_effect=ImportError("python-socks is required to use a SOCKS proxy"),
+        ):
+            with self.assertRaisesRegex(QwenVoiceError, "python-socks"):
+                _connect_qwen_websocket("wss://example.invalid/realtime", api_key="qwen-key")
+
+    def test_soniox_connect_explains_missing_python_socks_for_socks_proxy(self):
+        with patch(
+            "websockets.sync.client.connect",
+            side_effect=ImportError("python-socks is required to use a SOCKS proxy"),
+        ):
+            with self.assertRaisesRegex(SonioxVoiceError, "python-socks"):
+                _connect_websocket("wss://example.invalid/realtime")
 
 
 if __name__ == "__main__":

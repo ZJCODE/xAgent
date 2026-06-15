@@ -1359,8 +1359,8 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection, agent_
             2,
             (
                 "voice",
-                _format_init_command("xagent voice", config_dir=config_dir, agent_name=agent_name),
-                "Talk to the agent by microphone.",
+                _format_init_command("xagent voice start", config_dir=config_dir, agent_name=agent_name),
+                "Run the microphone/speaker channel in the background.",
             ),
         )
 

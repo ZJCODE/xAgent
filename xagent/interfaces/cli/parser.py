@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN
+from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
 from . import agents, runtime, setup
 
 
@@ -29,22 +29,25 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "",
             "xAgent — your personal AI agent",
             "",
-            "Get Started:",
-            "  setup       Create or reconfigure config.yaml and identity.md",
-            "  chat        Start an interactive chat or send a single message",
-            "  voice       Talk with your agent by microphone",
-            "  web         Open the web UI",
-            "  agents      Create, select, and inspect managed agents",
+            "Setup:",
+            "  setup       Configure the active agent",
+            "  agents      Create, select, inspect, or remove agents",
             "",
-            "Channels:",
-            "  api         Manage the API / Web UI background service",
-            "  feishu      Manage the Feishu bot",
-            "  weixin      Manage the Weixin DM channel",
-            "  status      Show running status of all channels",
+            "Use Now:",
+            "  chat        Chat in the terminal",
+            "  web         Open the Web UI for this session",
+            "  voice       Use microphone / speaker mode for this session",
+            "",
+            "Keep Running:",
+            "  api         Web/API channel: start, stop, restart, status, logs, open",
+            "  voice       Voice channel: start, stop, restart, status, logs",
+            "  feishu      Feishu bot: setup, start, stop, restart, status, logs",
+            "  weixin      Weixin DM: setup, start, stop, restart, status, logs",
+            "  status      Show all configured channel processes",
             "",
             "Inspect:",
-            "  config      View or validate config.yaml",
-            "  memory      Browse, search, or clear long-term memory",
+            "  config      Show, validate, or locate config.yaml",
+            "  memory      List, search, stats, or clear long-term memory",
             "  inspect     Inspect identity, messages, skills, or tasks",
             "  doctor      Check local xAgent readiness",
             "",
@@ -52,24 +55,23 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  observe     Ingest context without generating a reply",
             "  version     Show xAgent version",
             "",
-            "Examples:",
+            "Common Flows:",
             "  xagent setup",
             "  xagent agents create work",
             "  xagent agents select work",
             '  xagent chat "Help me plan today"',
-            '  xagent chat --agent work "Help me plan today"',
             "  xagent web",
+            "  xagent voice start",
             "  xagent api start",
+            "  xagent status",
             "  xagent api logs -f",
+            "  xagent voice logs -f",
             "  xagent feishu setup",
             "  xagent feishu start",
             "  xagent weixin setup",
             "  xagent weixin start",
-            "  xagent status",
             "  xagent config show",
-            "  xagent config validate",
             "  xagent memory list --days 7",
-            "  xagent memory search keyword",
             "  xagent doctor",
             "",
             "Use 'xagent <command> --help' for detailed options.",
@@ -113,7 +115,7 @@ def _add_channel_argument(
         action="append",
         default=None,
         metavar="CHANNELS",
-        help=f"Channel(s) to use: api, feishu, weixin, or comma-separated values (default: {default_label})",
+        help=f"Channel(s) to use: api, feishu, weixin, voice, or comma-separated values (default: {default_label})",
     )
 
 
@@ -151,6 +153,31 @@ def _add_api_runtime_arguments(
         type=float,
         default=None,
         help="Seconds before a chat or observe request times out",
+    )
+
+
+def _add_voice_runtime_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    include_list_devices: bool = False,
+) -> None:
+    parser.add_argument("--user-id", dest="user_id", default="local_voice", help="Speaker identifier")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    if include_list_devices:
+        parser.add_argument(
+            "--list-devices",
+            action="store_true",
+            help="List available local audio input/output devices and exit",
+        )
+    parser.add_argument(
+        "--input-device",
+        default=None,
+        help="Override voice input device by name, #index, index, or auto",
+    )
+    parser.add_argument(
+        "--output-device",
+        default=None,
+        help="Override voice output device by name, #index, index, or auto",
     )
 
 
@@ -313,24 +340,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     voice_parser = subparsers.add_parser("voice", help="Talk with your agent by microphone")
     _add_agent_argument(voice_parser)
-    voice_parser.add_argument("--user-id", dest="user_id", default="local_voice", help="Speaker identifier")
-    voice_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    voice_parser.add_argument(
-        "--list-devices",
-        action="store_true",
-        help="List available local audio input/output devices and exit",
-    )
-    voice_parser.add_argument(
-        "--input-device",
-        default=None,
-        help="Override voice input device by name, #index, index, or auto",
-    )
-    voice_parser.add_argument(
-        "--output-device",
-        default=None,
-        help="Override voice output device by name, #index, index, or auto",
-    )
+    _add_voice_runtime_arguments(voice_parser, include_list_devices=True)
     voice_parser.set_defaults(handler=runtime.handle_voice)
+    voice_sub = voice_parser.add_subparsers(dest="voice_action", metavar="<action>")
+
+    voice_start = voice_sub.add_parser("start", help="Start the voice channel in the background")
+    _add_agent_argument(voice_start)
+    _add_voice_runtime_arguments(voice_start)
+    voice_start.set_defaults(handler=runtime.handle_start, channels=[CHANNEL_VOICE])
+
+    voice_stop = voice_sub.add_parser("stop", help="Stop the background voice channel")
+    _add_agent_argument(voice_stop)
+    voice_stop.set_defaults(handler=runtime.handle_stop, channels=[CHANNEL_VOICE])
+
+    voice_restart = voice_sub.add_parser("restart", help="Restart the background voice channel")
+    _add_agent_argument(voice_restart)
+    _add_voice_runtime_arguments(voice_restart)
+    voice_restart.set_defaults(handler=runtime.handle_restart, channels=[CHANNEL_VOICE])
+
+    voice_status = voice_sub.add_parser("status", help="Show voice channel status")
+    _add_agent_argument(voice_status)
+    voice_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    voice_status.set_defaults(handler=runtime.handle_status, channels=[CHANNEL_VOICE])
+
+    voice_logs = voice_sub.add_parser("logs", help="Show voice channel logs")
+    _add_agent_argument(voice_logs)
+    voice_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
+    voice_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
+    voice_logs.set_defaults(handler=runtime.handle_logs, channels=[CHANNEL_VOICE])
 
     web_parser = subparsers.add_parser("web", help="Open the web UI")
     _add_agent_argument(web_parser)
@@ -475,10 +512,11 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
 
     internal_run = subparsers.add_parser("_run-channel", help=argparse.SUPPRESS)
-    internal_run.add_argument("channel", choices=(CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN))
+    internal_run.add_argument("channel", choices=(CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN, CHANNEL_VOICE))
     _add_agent_argument(internal_run)
     internal_run.add_argument("--config-dir", dest="config_dir", default=None, help=argparse.SUPPRESS)
     _add_api_runtime_arguments(internal_run)
+    _add_voice_runtime_arguments(internal_run)
     internal_run.set_defaults(handler=runtime.handle_run_channel_internal)
     _hide_subparser_choice(subparsers, "_run-channel")
 

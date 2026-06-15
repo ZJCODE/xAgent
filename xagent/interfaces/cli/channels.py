@@ -11,7 +11,7 @@ CHANNEL_API = "api"
 CHANNEL_FEISHU = "feishu"
 CHANNEL_WEIXIN = "weixin"
 CHANNEL_VOICE = "voice"
-VALID_CHANNELS = {CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN}
+VALID_CHANNELS = {CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN, CHANNEL_VOICE}
 
 
 def _feishu_channel_enabled(config: Mapping[str, Any]) -> bool:
@@ -24,6 +24,12 @@ def _weixin_channel_enabled(config: Mapping[str, Any]) -> bool:
     if "enabled" in config:
         return bool(config.get("enabled"))
     return bool(config.get("account_id"))
+
+
+def _voice_channel_enabled(config: Mapping[str, Any]) -> bool:
+    if "enabled" in config:
+        return bool(config.get("enabled"))
+    return bool(config)
 
 
 class ChannelSelectionError(ValueError):
@@ -65,6 +71,11 @@ def enabled_channels_from_config(config: Optional[Mapping[str, Any]]) -> list[st
     if _weixin_channel_enabled(weixin_cfg):
         result.append(CHANNEL_WEIXIN)
 
+    voice_cfg = channels.get(CHANNEL_VOICE)
+    voice_cfg = voice_cfg if isinstance(voice_cfg, Mapping) else {}
+    if _voice_channel_enabled(voice_cfg):
+        result.append(CHANNEL_VOICE)
+
     return result
 
 
@@ -73,7 +84,8 @@ def default_start_channel_from_config(config: Optional[Mapping[str, Any]]) -> st
     enabled = enabled_channels_from_config(config)
     if not enabled:
         raise ChannelSelectionError(
-            "No enabled channels found. Configure channels.api, channels.feishu, or channels.weixin, "
+            "No enabled channels found. Configure channels.api, channels.feishu, channels.weixin, "
+            "or channels.voice, "
             "or pass --channel explicitly."
         )
     if CHANNEL_API in enabled:
@@ -104,7 +116,8 @@ def normalize_channel_values(
 
     if not selected:
         raise ChannelSelectionError(
-            "No enabled channels found. Configure channels.api, channels.feishu, or channels.weixin, "
+            "No enabled channels found. Configure channels.api, channels.feishu, channels.weixin, "
+            "or channels.voice, "
             "or pass --channel explicitly."
         )
     return selected
