@@ -97,7 +97,7 @@ from .config_editor import (
     provider_needs_feature_key,
     write_config,
 )
-from .overview import RuntimeOverview, build_runtime_overview
+from .overview import STATUS_DISABLED, RuntimeOverview, build_runtime_overview
 from .terminal_ui import MenuOption, ReturnToLauncherHome, TerminalUI
 
 
@@ -241,7 +241,6 @@ def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
             "Restart the voice channel." if voice_enabled else "Set up voice first.",
             disabled=not voice_enabled,
         ),
-        MenuOption("status", "Status", "Show PID and log paths."),
         MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
         MenuOption("devices", "List Devices", "Print available local audio input/output devices."),
         MenuOption("back", "Back", "Return to Channel."),
@@ -370,7 +369,6 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
             "Restart this channel." if channel_ready else unavailable_description,
             disabled=not channel_ready,
         ),
-        MenuOption("status", "Status", "Show PID and log paths."),
         MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
         MenuOption("back", "Back", "Return to Channel."),
     ])
@@ -460,23 +458,21 @@ def _active_agent_context() -> tuple[str, Path]:
         return DEFAULT_AGENT_NAME, default_agent_dir(DEFAULT_AGENT_NAME)
 
 
-def _launcher_home_subtitle(overview: RuntimeOverview, *, agent_name: str) -> str:
-    return f"Agent: {agent_name}\n{_launcher_overview_subtitle(overview)}"
-
-
 def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
-    lines = [
-        f"Runtime: {overview.config_dir}",
-        f"Status: {overview.headline}",
-    ]
+    lines = [f"Runtime: {overview.config_dir}"]
     visible_items = [item for item in overview.items if item.name not in {"Config", "Identity", "Data"}]
-    if visible_items:
+    active_items = [item for item in visible_items if item.status != STATUS_DISABLED]
+    disabled_names = [item.name for item in visible_items if item.status == STATUS_DISABLED]
+    if active_items:
         lines.append("")
-    for item in visible_items:
+    for item in active_items:
         line = f"{item.name:<10} {item.value}"
         if item.name in {"Web UI", "Voice", "Feishu", "Weixin"} and item.value == "running" and item.detail:
             line += f"  {item.detail}"
         lines.append(line)
+    if disabled_names:
+        lines.append("")
+        lines.append(f"Not configured: {', '.join(disabled_names)}")
     return "\n".join(lines)
 
 
@@ -2057,7 +2053,7 @@ def _run_interactive_launcher() -> int:
         initialized = overview.initialized
         option = ui.select_menu(
             title=f"xAgent {_xagent_version_text()}",
-            subtitle=_launcher_home_subtitle(overview, agent_name=agent_name),
+            subtitle=_launcher_overview_subtitle(overview),
             options=_launcher_options(initialized=initialized),
             footer="↑/↓ Move • Enter Select  •  q Exit",
         )
