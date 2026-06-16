@@ -115,11 +115,6 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
             description="Switch, create, or inspect managed agents.",
         ),
         MenuOption(
-            key="setup",
-            title=setup_title,
-            description=setup_description,
-        ),
-        MenuOption(
             key="channel",
             title="Channel",
             description="Open chat, Web UI, Feishu, and voice entry points.",
@@ -130,6 +125,11 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
             title="Inspect",
             description="Read config, identity, memory, and message state.",
             disabled=not initialized,
+        ),
+        MenuOption(
+            key="setup",
+            title=setup_title,
+            description=setup_description,
         ),
         MenuOption(
             key="help",
