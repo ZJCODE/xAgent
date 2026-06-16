@@ -242,7 +242,7 @@ def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
             disabled=not voice_enabled,
         ),
         MenuOption("status", "Status", "Show PID and log paths."),
-        MenuOption("logs", "Logs", "Print the latest log output."),
+        MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
         MenuOption("devices", "List Devices", "Print available local audio input/output devices."),
         MenuOption("back", "Back", "Return to Channel."),
     ])
@@ -371,7 +371,7 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
             disabled=not channel_ready,
         ),
         MenuOption("status", "Status", "Show PID and log paths."),
-        MenuOption("logs", "Logs", "Print the latest log output."),
+        MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
         MenuOption("back", "Back", "Return to Channel."),
     ])
     return actions
@@ -560,14 +560,19 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
         )
     from .runtime import handle_logs
 
-    return handle_logs(
-        _launcher_args(
-            config_dir=str(config_dir),
-            channels=channels,
-            lines=80,
-            follow=False,
+    print(f"\nFollowing {channel} logs (Ctrl+C to stop)...\n")
+    try:
+        return handle_logs(
+            _launcher_args(
+                config_dir=str(config_dir),
+                channels=channels,
+                lines=80,
+                follow=True,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        print("\nStopped following logs.")
+        return 0
 
 
 def _current_search_provider(config: dict[str, Any]) -> str:
@@ -1071,10 +1076,19 @@ def _run_voice_single_provider_config(ui: TerminalUI, config_dir: Path) -> None:
     if choice is None or choice.key == "back":
         return
     api_key = None
-    existing_key = _existing_voice_provider_api_key(config, choice.key)
-    if choice.key in VOICE_NESTED_PROVIDERS and (choice.key != current or not existing_key):
-        api_key = _required_feature_api_key(ui, provider=choice.key, feature="voice")
-        if api_key is None:
+    if choice.key in VOICE_NESTED_PROVIDERS:
+        existing_key = _existing_voice_provider_api_key(config, choice.key)
+        has_existing = bool(existing_key)
+        subtitle = "Leave blank to keep the existing key." if has_existing else ""
+        value = ui.ask_text(
+            f"{choice.key.title()} API key",
+            secret=True,
+            subtitle=subtitle,
+        ).strip()
+        if value:
+            api_key = value
+        elif not has_existing:
+            ui.print_panel("API key is required for this change.", title="Setup")
             return
     try:
         update = prepare_voice_preset_update(config, provider=choice.key, api_key=api_key)
@@ -1149,10 +1163,20 @@ def _run_voice_nested_config(ui: TerminalUI, config_dir: Path, config: dict[str,
     if choice is None or choice.key == "back":
         return
     api_key = None
-    current_key = _current_voice_nested_api_key(config, section)
-    if choice.key != current or is_placeholder_api_key(current_key):
-        api_key = _required_feature_api_key(ui, provider=choice.key, feature=f"voice {section.upper()}")
-        if api_key is None:
+    if choice.key in VOICE_NESTED_PROVIDERS:
+        current_key = _current_voice_nested_api_key(config, section)
+        has_existing = choice.key == current and bool(current_key) and not is_placeholder_api_key(current_key)
+        section_label = "STT" if section == "stt" else "TTS"
+        subtitle = "Leave blank to keep the existing key." if has_existing else ""
+        value = ui.ask_text(
+            f"{choice.key.title()} API key",
+            secret=True,
+            subtitle=subtitle,
+        ).strip()
+        if value:
+            api_key = value
+        elif not has_existing:
+            ui.print_panel("API key is required for this change.", title="Setup")
             return
     try:
         update = prepare_voice_nested_provider_update(config, section=section, provider=choice.key, api_key=api_key)

@@ -399,6 +399,11 @@ def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
 
 
 def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    log_level = logging.INFO if getattr(args, "verbose", False) else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     try:
         runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
         voice_data = voice_config(runner.config)

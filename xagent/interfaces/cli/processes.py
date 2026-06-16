@@ -143,6 +143,7 @@ def start_background(
         return StartResult(ok=False, pid=existing_pid, error=f"already running (pid={existing_pid})")
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     with log_path.open("ab") as log_handle:
         try:
             process = subprocess.Popen(
@@ -152,6 +153,7 @@ def start_background(
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
                 close_fds=True,
+                env=env,
             )
         except OSError as exc:
             return StartResult(ok=False, error=str(exc))
