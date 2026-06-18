@@ -252,6 +252,7 @@ class MessageHandler:
         include_images: bool = True,
         workspace_dir: Optional[Union[str, Path]] = None,
         current_message: Optional[Message] = None,
+        channel_instructions: str = "",
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -302,6 +303,7 @@ class MessageHandler:
                 or current_date
                 or datetime.now().strftime("%Y-%m-%d %H:%M")
             ),
+            channel_instructions=channel_instructions,
         )
         current_task_message = {
             "role": RoleType.USER.value,

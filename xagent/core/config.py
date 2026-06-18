@@ -414,12 +414,16 @@ class AgentConfig:
         current_user_id: str,
         current_time: str = "",
         current_date: str = "",
+        channel_instructions: str = "",
     ) -> str:
         resolved_current_time = current_time or current_date
+        reply_prompt = AgentConfig.build_turn_reply_prompt(current_user_id)
+        if channel_instructions.strip():
+            reply_prompt += "\n" + channel_instructions.strip()
         return AgentConfig.CURRENT_TASK_TEMPLATE.format(
             current_user_id=current_user_id,
             current_time=resolved_current_time,
-            reply_prompt=AgentConfig.build_turn_reply_prompt(current_user_id),
+            reply_prompt=reply_prompt,
         )
 
     @staticmethod

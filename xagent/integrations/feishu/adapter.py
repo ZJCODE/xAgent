@@ -596,6 +596,7 @@ class FeishuAdapter:
                         text=text,
                         mentioned=False,
                         route_reason="agent_decision",
+                        decision=decision,
                     )
                     return
 
@@ -609,11 +610,15 @@ class FeishuAdapter:
                 context=observation_context,
                 decision=decision,
             )
-            self.logger.debug(
-                "Feishu group message observed without reply: chat_type=%s chat_id=%s message_id=%s",
+            decision_reason = self._decision_reason(decision) if decision else ""
+            log_reason = decision_reason or ("skip (reply only when mentioned)" if self.config.group_reply_only_when_mentioned else "no decision")
+            self.logger.info(
+                "Feishu group message → observe (no reply): chat_type=%s chat_id=%s message_id=%s sender_id=%s reason=%s",
                 chat_type,
                 chat_id,
                 message_id,
+                sender_id,
+                log_reason,
             )
             return
 
@@ -633,6 +638,7 @@ class FeishuAdapter:
         text: str,
         mentioned: bool,
         route_reason: str,
+        decision: Any = None,
     ) -> None:
         attachment_download = await self._download_message_attachment_assets_with_failures(msg, message_id=message_id)
         if attachment_download.failed_resources:
@@ -660,13 +666,15 @@ class FeishuAdapter:
                 if mentioned
                 else "The user sent a group message without text."
             )
+        decision_reason = self._decision_reason(decision) if decision else ""
+        log_reason = f"{route_reason}" + (f" ({decision_reason})" if decision_reason else "")
         self.logger.info(
-            "Feishu group message routed to chat: chat_type=%s chat_id=%s message_id=%s sender_id=%s reason=%s",
+            "Feishu group message → reply: chat_type=%s chat_id=%s message_id=%s sender_id=%s reason=%s",
             chat_type,
             chat_id,
             message_id,
             sender_id,
-            route_reason,
+            log_reason,
         )
         sender_name = await self._resolve_sender_name(
             sender_id,
@@ -2340,6 +2348,12 @@ class FeishuAdapter:
         kwargs: dict[str, Any] = {
             "user_message": text,
             "user_id": user_id,
+            "channel_instructions": (
+                "Use <at user_id=\"ou_xxx\">Name</at> for all user mentions; never use plain-text @Name. "
+                "User IDs appear as Name(id) in the room context. "
+                "Only @mention users when necessary to get their attention or address them directly. "
+                "Do not @mention users in normal conversation."
+            ),
         }
         if image_sources:
             kwargs["image_source"] = image_sources[0] if len(image_sources) == 1 else image_sources

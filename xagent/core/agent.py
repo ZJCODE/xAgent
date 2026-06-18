@@ -179,6 +179,7 @@ class Agent:
         msg_handler: MessageHandler,
         user_msg: Message,
         user_id: str,
+        channel_instructions: str = "",
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
         recent_messages = await msg_handler.get_recent_messages(
@@ -203,6 +204,7 @@ class Agent:
             include_images=self.supports_vision,
             workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
+            channel_instructions=channel_instructions,
         )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
@@ -242,6 +244,7 @@ class Agent:
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
+        channel_instructions: str = "",
     ) -> Union[str, AsyncGenerator[str, None]]:
         return await self.chat(
             user_message=user_message,
@@ -249,6 +252,7 @@ class Agent:
             image_source=image_source,
             attachments=attachments,
             stream=stream,
+            channel_instructions=channel_instructions,
         )
 
     async def chat(
@@ -258,6 +262,7 @@ class Agent:
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
+        channel_instructions: str = "",
     ) -> Union[str, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message.
 
@@ -276,6 +281,7 @@ class Agent:
                     image_source=image_source,
                     attachments=attachments,
                     stream=True,
+                    channel_instructions=channel_instructions,
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or "")
@@ -299,6 +305,7 @@ class Agent:
                 image_source=image_source,
                 attachments=attachments,
                 stream=False,
+                channel_instructions=channel_instructions,
             ):
                 if event.get("type") == "message_done" and event.get("phase") == "final":
                     final_reply = str(event.get("content") or "")
@@ -331,6 +338,7 @@ class Agent:
                     msg_handler=msg_handler,
                     user_msg=user_msg,
                     user_id=user_id,
+                    channel_instructions=channel_instructions,
                 )
                 turn_obs.set_input(input_messages)
 
@@ -404,6 +412,7 @@ class Agent:
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
+        channel_instructions: str = "",
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -438,6 +447,7 @@ class Agent:
                 msg_handler=msg_handler,
                 user_msg=user_msg,
                 user_id=user_id,
+                channel_instructions=channel_instructions,
             )
             turn_obs.set_input(input_messages)
 
