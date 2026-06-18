@@ -935,9 +935,10 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(decision.should_reply)
         self.assertEqual(decision.reason, "can unblock the room")
         self.assertEqual(len(storage.messages), 1)
-        self.assertIn("participation_decision", model_client.calls[0][-1]["name"])
-        self.assertIn("Return JSON only", model_client.calls[0][-1]["content"])
-        self.assertIn("Earlier ambient context", model_client.calls[0][0]["content"])
+        self.assertEqual(len(model_client.calls[0]), 1)
+        self.assertEqual("participation_decision", model_client.calls[0][0]["name"])
+        self.assertIn("should we ship?", model_client.calls[0][0]["content"])
+        self.assertIn("Return JSON only", model_client.calls[0][0]["content"])
 
     async def test_decide_participation_defaults_to_silence_on_invalid_model_output(self):
         storage = InMemoryMessageStorage()

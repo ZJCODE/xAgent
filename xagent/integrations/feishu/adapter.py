@@ -566,8 +566,16 @@ class FeishuAdapter:
 
             decision = None
             if not self.config.group_reply_only_when_mentioned:
+                decision_context = await self._group_decision_context(
+                    chat_id=chat_id,
+                    current_message_id=message_id,
+                    raw_msg=msg,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    text=ambient_text,
+                )
                 decision = await self._decide_group_participation(
-                    context=observation_context,
+                    context=decision_context,
                     chat_type=chat_type,
                     chat_id=chat_id,
                     message_id=message_id,
@@ -782,6 +790,7 @@ class FeishuAdapter:
         sender_name: str,
         text: str,
     ) -> str:
+        """Build a compact single-message context for observation storage."""
         room_name = await self._resolve_room_name(chat_id, raw_msg)
         current_record = FeishuMessageRecord(
             current_message_id or "",
@@ -793,6 +802,39 @@ class FeishuAdapter:
         return format_room_context(
             chat_id,
             [current_record],
+            room_name=room_name,
+            bot_open_id=self._bot_open_id(),
+            bot_app_id=self.config.app_id,
+        )
+
+    async def _group_decision_context(
+        self,
+        *,
+        chat_id: str,
+        current_message_id: Optional[str],
+        raw_msg: Any,
+        sender_id: str,
+        sender_name: str,
+        text: str,
+    ) -> str:
+        """Build a full room-context block with recent history for participation decision."""
+        records = await self._fetch_group_history(
+            chat_id=chat_id,
+            current_message_id=current_message_id,
+            raw_msg=raw_msg,
+        )
+        room_name = await self._resolve_room_name(chat_id, raw_msg)
+        current_record = FeishuMessageRecord(
+            current_message_id or "",
+            sender_id,
+            sender_name,
+            text,
+            self._message_create_time_ms(raw_msg),
+        )
+        context_records = [*records, current_record]
+        return format_room_context(
+            chat_id,
+            context_records,
             room_name=room_name,
             bot_open_id=self._bot_open_id(),
             bot_app_id=self.config.app_id,

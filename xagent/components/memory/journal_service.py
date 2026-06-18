@@ -75,12 +75,8 @@ class JournalLLMService:
             return ""
 
     @staticmethod
-    def build_diary_system_prompt(journal_date: str, current_date: str | None = None) -> str:
-        current_date = current_date or datetime.now().strftime("%Y-%m-%d")
-        return f"""Write a concise daily diary entry from my first-person perspective.
-
-CURRENT DATE: {current_date}
-TARGET JOURNAL DATE: {journal_date}
+    def build_diary_system_prompt(journal_date: str) -> str:
+        return """Write a concise daily diary entry from my first-person perspective.
 
 Structured history format:
 - `[speaker=Name][timestamp=Time]` followed by text: Name said or wrote that text at that time.
@@ -124,8 +120,6 @@ Output rules:
     @staticmethod
     def build_summary_system_prompt(period_type: str, period_label: str) -> str:
         return f"""Write a concise {period_type} summary of diary entries from my first-person perspective.
-
-PERIOD: {period_label}
 
 Source material format:
 - The source consists of my own diary entries written in first person across the {period_type} period.

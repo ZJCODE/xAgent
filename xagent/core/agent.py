@@ -622,32 +622,33 @@ class Agent:
     ) -> ParticipationDecision:
         """Decide whether an observed event deserves an outward reply.
 
-        This is intentionally read-only: it uses recent experience and diary
-        context to choose whether to speak, but it does not persist the current
-        event. Callers should store the event via ``observe`` when the decision
-        is to stay silent, or route to ``chat`` when the decision is to reply.
+        Uses only the provided room context (which should include recent group
+        history) and the agent's identity. Does not pull from message storage
+        or memory — the decision is scoped to the current room's conversation.
         """
-        msg_handler = self.message_handler
         try:
-            recent_messages = await msg_handler.get_recent_messages(
-                max_history=self.max_history,
-            )
-            memory_context = await self.memory_handler.get_recent_context()
-            instructions = msg_handler.build_instruction_messages(
-                tool_names=[],
-                skills_catalog="",
-                supports_vision=self.supports_vision,
-                workspace_context="",
-            )
-            input_messages = self._build_participation_decision_messages(
-                msg_handler=msg_handler,
-                recent_messages=recent_messages,
-                memory_context=memory_context,
-                context=context,
-                source=source,
-                event_type=event_type,
-                metadata=metadata or {},
-            )
+            instructions = [{
+                "role": "system",
+                "name": AgentConfig.DECISION_RULES_NAME,
+                "content": AgentConfig.DECISION_SYSTEM_PROMPT,
+            }]
+            if self.system_prompt.strip():
+                instructions.append({
+                    "role": "system",
+                    "name": AgentConfig.IDENTITY_CONTEXT_NAME,
+                    "content": AgentConfig.build_identity_context(self.system_prompt),
+                })
+
+            input_messages = [{
+                "role": "user",
+                "name": "participation_decision",
+                "content": self._build_participation_decision_prompt(
+                    context=context,
+                    source=source,
+                    event_type=event_type,
+                ),
+            }]
+
             reply_type, payload = await self.model_client.call(
                 messages=input_messages,
                 tool_specs=None,
@@ -661,103 +662,21 @@ class Agent:
             logger.warning("Participation decision failed: %s", exc, exc_info=True)
         return ParticipationDecision(should_reply=False, reason="participation decision failed")
 
-    def _build_participation_decision_messages(
-        self,
-        *,
-        msg_handler: MessageHandler,
-        recent_messages: List[Message],
-        memory_context: str,
-        context: str,
-        source: str,
-        event_type: str,
-        metadata: Dict[str, Any],
-    ) -> list[dict]:
-        conversation_messages = MessageHandler.filter_conversation_messages(recent_messages)
-        observation_messages = MessageHandler.filter_context_events(recent_messages)
-        budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
-            conversation_messages,
-            max_messages=self.max_history,
-        )
-        budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
-            observation_messages,
-            max_events=AgentConfig.MAX_CONTEXT_EVENTS,
-        )
-        experience_entries = MessageHandler._merge_experience_entries(
-            budgeted_entries,
-            budgeted_observations,
-        )
-
-        messages: list[dict] = []
-        if memory_context.strip():
-            messages.append({
-                "role": "user",
-                "name": AgentConfig.RECENT_MEMORY_NAME,
-                "content": MessageHandler._wrap_untrusted_context(
-                    AgentConfig.RECENT_MEMORY_NAME,
-                    memory_context,
-                ),
-            })
-
-        messages.append({
-            "role": "user",
-            "name": AgentConfig.RECENT_EXPERIENCE_NAME,
-            "content": MessageHandler._build_recent_experience_context(
-                experience_entries=experience_entries,
-                omitted_messages=omitted_count,
-                omitted_observations=omitted_observation_count,
-            ),
-        })
-
-        messages.append({
-            "role": "user",
-            "name": "participation_decision",
-            "content": self._build_participation_decision_prompt(
-                context=context,
-                source=source,
-                event_type=event_type,
-                metadata=metadata,
-            ),
-        })
-        return msg_handler.sanitize_input_messages(messages)
-
     @staticmethod
     def _build_participation_decision_prompt(
         *,
         context: str,
         source: str,
         event_type: str,
-        metadata: Dict[str, Any],
     ) -> str:
-        metadata_preview = {
-            key: value
-            for key, value in metadata.items()
-            if key in {
-                "chat_id",
-                "chat_type",
-                "message_id",
-                "room_name",
-                "sender_id",
-                "sender_name",
-                "addressed_to_agent",
-            }
-        }
         return (
             "<participation_decision>\n"
-            "A new group-room event was heard. Decide whether I should speak now.\n\n"
-            "First principles:\n"
-            "- Listening is always part of being present; speaking is optional.\n"
-            "- Speak only when the reply is likely to help the room now.\n"
-            "- Stay silent when the room is flowing naturally, people are building rapport, "
-            "or my reply would mainly prove that I am present.\n"
-            "- Speak when I am directly expected to answer, can add uniquely useful context, "
-            "can prevent a meaningful misunderstanding, or can move an active shared task forward.\n"
-            "- Do not reply to routine chatter, acknowledgements, or messages that are only ambient context.\n\n"
             f"Source: {source}\n"
-            f"Event type: {event_type}\n"
-            f"Metadata: {json.dumps(metadata_preview, ensure_ascii=False, sort_keys=True)}\n\n"
-            "Current event:\n"
+            f"Event type: {event_type}\n\n"
+            "Recent group conversation:\n"
             f"{context.strip()}\n\n"
-            "Return JSON only, with this shape:\n"
+            "Decide whether to reply to the latest message above. "
+            "Return JSON only:\n"
             '{"should_reply": true|false, "reason": "brief reason"}\n'
             "</participation_decision>"
         )

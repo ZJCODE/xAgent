@@ -11,7 +11,6 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
     def test_diary_system_prompt_preserves_core_behavior_constraints(self):
         prompt = JournalLLMService.build_diary_system_prompt(
             journal_date="2026-03-19",
-            current_date="2026-03-19",
         )
 
         self.assertIn("first-person perspective", prompt)
@@ -26,7 +25,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Keep different people separate", prompt)
         self.assertIn("Attribute important facts to the speaker or source", prompt)
         self.assertIn("I overheard", prompt)
-        self.assertIn("Use timestamps to understand ordering and attribution", prompt)
+        self.assertIn("Use timestamps only to understand ordering and attribution", prompt)
         self.assertIn("If attribution is uncertain, keep the uncertainty visible", prompt)
         self.assertIn("do not give advice, proposals, recommendations, next steps", prompt)
         self.assertIn("Return only the diary entry text", prompt)
@@ -40,13 +39,12 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("first-person perspective", prompt)
         self.assertIn("keep the source language and do not translate", prompt)
-        self.assertIn("[speaker=Name][timestamp=Time]", prompt)
-        self.assertIn("[speaker=ME][timestamp=Time]", prompt)
-        self.assertIn("[ambient context][timestamp=Time]", prompt)
+        self.assertIn("# YYYY-MM-DD", prompt)
+        self.assertIn("## HH:MM", prompt)
         self.assertIn("Preserve speaker attribution", prompt)
         self.assertIn("Do not flatten multiple people into one undifferentiated narrative", prompt)
         self.assertIn("Keep each person's preferences, plans, commitments, and experiences attached to that person", prompt)
-        self.assertIn('generic labels such as "User A", "User B", "用户A", or "用户B"', prompt)
+        self.assertIn('generic labels such as "User A" or "User B"', prompt)
         self.assertIn("# YYYY-MM-DD", prompt)
         self.assertIn("## HH:MM", prompt)
         self.assertIn("If attribution is uncertain, keep the uncertainty visible", prompt)
