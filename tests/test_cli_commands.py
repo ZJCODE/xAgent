@@ -2262,7 +2262,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("enabled", config["channels"]["feishu"])
         self.assertNotIn("log_level", config["channels"]["feishu"])
         self.assertIs(config["channels"]["feishu"]["stream"], False)
-        self.assertNotIn("group_reply_only_when_mentioned", config["channels"]["feishu"])
+        self.assertIs(config["channels"]["feishu"]["group_reply_only_when_mentioned"], False)
 
         self.assertNotIn("runtime", config)
         output = stdout.getvalue()
@@ -2341,7 +2341,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_qr_app")
         self.assertEqual(config["channels"]["feishu"]["app_secret"], "qr_secret")
         self.assertIs(config["channels"]["feishu"]["stream"], False)
-        self.assertNotIn("group_reply_only_when_mentioned", config["channels"]["feishu"])
+        self.assertIs(config["channels"]["feishu"]["group_reply_only_when_mentioned"], False)
         self.assertIn("Feishu Ready", output)
         self.assertIn("Optional before group rollout", output)
         self.assertIn("If you only need direct chats right now", output)

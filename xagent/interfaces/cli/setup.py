@@ -1461,9 +1461,8 @@ def _feishu_channel_config(selection: FeishuInitSelection) -> dict[str, Any]:
         "app_secret": selection.app_secret,
         "stream": selection.stream,
         "group_fetch_limit": selection.group_fetch_limit,
+        "group_reply_only_when_mentioned": selection.group_reply_only_when_mentioned,
     }
-    if selection.group_reply_only_when_mentioned:
-        config["group_reply_only_when_mentioned"] = True
     return config
 
 
