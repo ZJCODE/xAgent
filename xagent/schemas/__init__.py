@@ -2,6 +2,7 @@ from .message import (
     AgentTurnResult,
     Message,
     MessageType,
+    ParticipationDecision,
     RoleType,
 )
 from .attachment import (
@@ -13,6 +14,7 @@ __all__ = [
     "ATTACHMENT_METADATA_KEY",
     "AgentTurnResult",
     "Message",
+    "ParticipationDecision",
     "RoleType",
     "MessageType",
     "WorkspaceAttachment",

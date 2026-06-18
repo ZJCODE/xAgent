@@ -43,6 +43,13 @@ class AgentTurnResult(BaseModel):
     source: Optional[str] = Field(None, description="Context event source")
 
 
+class ParticipationDecision(BaseModel):
+    """Model decision for whether an observed event warrants a reply."""
+
+    should_reply: bool = Field(False, description="Whether the agent should speak now")
+    reason: Optional[str] = Field(None, description="Brief internal reason for the decision")
+
+
 class Message(BaseModel):
     """Message model for communication between roles."""
     type: MessageType = Field(MessageType.MESSAGE, description="Type of message")

@@ -32,13 +32,14 @@ def _expand_env(value: Any) -> Any:
 class FeishuAdapterConfig:
     """User-facing configuration for the Feishu adapter.
 
-    The adapter behaves like a human teammate by default and only speaks in
-    group rooms when addressed explicitly:
+    The adapter behaves like a human teammate by default:
 
     * ``p2p`` direct chats: always reply.
     * ``group`` / ``topic`` with @bot: reply.
-    * ``group`` / ``topic`` without @bot: reply only when
-      ``group_reply_without_mention`` is true; otherwise ignore.
+    * ``group`` / ``topic`` without @bot: listen first, then let the agent
+      decide whether to speak. Set ``group_reply_only_when_mentioned`` to
+      true for conservative rooms where unmentioned messages should only be
+      recorded, never answered.
 
     Only credentials and a handful of operational defaults are configurable.
 
@@ -53,8 +54,8 @@ class FeishuAdapterConfig:
             pull for each routed group/topic message. ``0`` disables history
             pulls.
         group_fetch_timeout: Maximum seconds to wait for Feishu history.
-        group_reply_without_mention: Route all group/topic messages to chat,
-            even when the bot was not @mentioned. Defaults to false.
+        group_reply_only_when_mentioned: Record unmentioned group/topic
+            messages but never reply to them. Defaults to false.
         advanced: Raw pass-through kwargs for ``FeishuChannel`` (policy,
             safety, ...). Reserved for power users.
     """
@@ -68,7 +69,7 @@ class FeishuAdapterConfig:
 
     group_fetch_limit: int = 10
     group_fetch_timeout: float = 5.0
-    group_reply_without_mention: bool = False
+    group_reply_only_when_mentioned: bool = False
 
     advanced: Dict[str, Any] = field(default_factory=dict)
 

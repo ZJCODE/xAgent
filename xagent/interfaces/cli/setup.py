@@ -93,7 +93,7 @@ class FeishuInitSelection:
     app_secret: str
     stream: bool = False
     group_fetch_limit: int = 10
-    group_reply_without_mention: bool = False
+    group_reply_only_when_mentioned: bool = False
     credential_mode: str = "one_click"
 
 
@@ -1392,10 +1392,10 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection, agent_
     TerminalUI().print_panel(content, title="Next Steps")
 
 
-def _feishu_routing_label(group_reply_without_mention: bool) -> str:
-    if group_reply_without_mention:
-        return "Direct chats + every group/topic message"
-    return "Direct chats + group/topic @mentions"
+def _feishu_routing_label(group_reply_only_when_mentioned: bool) -> str:
+    if group_reply_only_when_mentioned:
+        return "Direct chats + group/topic @mentions only"
+    return "Direct chats + group presence, agent self-decides when to speak"
 
 
 def _weixin_access_label(selection: WeixinInitSelection) -> str:
@@ -1461,8 +1461,9 @@ def _feishu_channel_config(selection: FeishuInitSelection) -> dict[str, Any]:
         "app_secret": selection.app_secret,
         "stream": selection.stream,
         "group_fetch_limit": selection.group_fetch_limit,
-        "group_reply_without_mention": selection.group_reply_without_mention,
     }
+    if selection.group_reply_only_when_mentioned:
+        config["group_reply_only_when_mentioned"] = True
     return config
 
 
@@ -1557,35 +1558,13 @@ def collect_feishu_init_selection_terminal_ui(
         if interactive and app_secret_arg:
             wizard_ui.record("App Secret", "Provided via command line")
 
-    group_reply_arg = getattr(args, "group_reply_without_mention", None)
-    if group_reply_arg is None:
-        if interactive:
-            choice = wizard_ui.select(
-                label="Group Routing",
-                subtitle="Choose when the bot should respond in group chats.",
-                options=[
-                    MenuOption(
-                        "mentions",
-                        "Direct chats + group @mentions",
-                        "Safe default. The bot stays quiet in group until someone mentions it.",
-                    ),
-                    MenuOption(
-                        "ambient",
-                        "Direct chats + every group message",
-                        "Use for room-assistant scenarios. Higher cost, replies to almost every message, and can feel noisy in busy groups.",
-                    ),
-                ],
-                default_index=0,
-            )
-            if choice is None:
-                raise KeyboardInterrupt()
-            group_reply_without_mention = choice.key == "ambient"
-        else:
-            group_reply_without_mention = False
+    reply_only_arg = getattr(args, "group_reply_only_when_mentioned", None)
+    if reply_only_arg is not None:
+        group_reply_only_when_mentioned = bool(reply_only_arg)
     else:
-        group_reply_without_mention = bool(group_reply_arg)
-        if interactive:
-            wizard_ui.record("Group Routing", _feishu_routing_label(group_reply_without_mention))
+        group_reply_only_when_mentioned = False
+    if interactive:
+        wizard_ui.record("Group Routing", _feishu_routing_label(group_reply_only_when_mentioned))
 
     stream_arg = getattr(args, "stream", None)
     stream = bool(stream_arg) if stream_arg is not None else False
@@ -1604,7 +1583,7 @@ def collect_feishu_init_selection_terminal_ui(
         app_secret=app_secret,
         stream=stream,
         group_fetch_limit=group_fetch_limit,
-        group_reply_without_mention=group_reply_without_mention,
+        group_reply_only_when_mentioned=group_reply_only_when_mentioned,
         credential_mode=credential_mode,
     )
 
@@ -1678,7 +1657,7 @@ def _print_feishu_post_setup(
     summary.append(f"Feishu channel updated in {config_path}\n\n")
     summary.append("Configured behavior:\n")
     summary.append(f"- App ID: {selection.app_id}\n")
-    summary.append(f"- Routing: {_feishu_routing_label(selection.group_reply_without_mention)}\n")
+    summary.append(f"- Routing: {_feishu_routing_label(selection.group_reply_only_when_mentioned)}\n")
     ui.print_panel(summary, title="Feishu Ready", leading_blank_line=True)
 
     feishu_start = _format_init_command("xagent feishu start", config_dir=config_dir, agent_name=agent_name)
@@ -1704,10 +1683,10 @@ def _print_feishu_post_setup(
     next_steps.append("- contact:user.base:readonly\n")
     next_steps.append("- admin:app.info:readonly\n")
     next_steps.append("\nIf you only need direct chats right now, you can skip the group permission work and start the bot immediately.")
-    if selection.group_reply_without_mention:
+    if selection.group_reply_only_when_mentioned:
         next_steps.append("\n\n")
         next_steps.append(
-            "Caution: The bot will respond to most group messages, which may increase costs and create noise in busy rooms.",
+            "Conservative group mode is enabled: unmentioned group messages are recorded for memory but will not be answered.",
             style="yellow",
         )
 

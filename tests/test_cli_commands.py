@@ -289,12 +289,12 @@ class CLICommandTests(unittest.TestCase):
             "--stream",
             "--group-fetch-limit",
             "20",
-            "--group-reply-without-mention",
+            "--group-reply-only-when-mentioned",
         ])
 
         self.assertTrue(args.stream)
         self.assertEqual(args.group_fetch_limit, 20)
-        self.assertTrue(args.group_reply_without_mention)
+        self.assertTrue(args.group_reply_only_when_mentioned)
 
     def test_parser_supports_weixin_setup_command(self):
         args = build_parser().parse_args([
@@ -2245,7 +2245,7 @@ class CLICommandTests(unittest.TestCase):
 
                 group_fetch_limit=None,
 
-                group_reply_without_mention=None,
+                group_reply_only_when_mentioned=None,
             )
 
             with patch("builtins.input", return_value="cli_test") as input_mock:
@@ -2262,7 +2262,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("enabled", config["channels"]["feishu"])
         self.assertNotIn("log_level", config["channels"]["feishu"])
         self.assertIs(config["channels"]["feishu"]["stream"], False)
-        self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], False)
+        self.assertNotIn("group_reply_only_when_mentioned", config["channels"]["feishu"])
 
         self.assertNotIn("runtime", config)
         output = stdout.getvalue()
@@ -2281,7 +2281,7 @@ class CLICommandTests(unittest.TestCase):
 
                 group_fetch_limit=None,
 
-                group_reply_without_mention=None,
+                group_reply_only_when_mentioned=None,
             )
             selection = FeishuInitSelection(
                 app_id="cli_room",
@@ -2289,7 +2289,7 @@ class CLICommandTests(unittest.TestCase):
                 stream=True,
                 group_fetch_limit=20,
 
-                group_reply_without_mention=True,
+                group_reply_only_when_mentioned=True,
                 credential_mode="manual",
             )
 
@@ -2308,7 +2308,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIs(config["channels"]["feishu"]["stream"], True)
         self.assertEqual(config["channels"]["feishu"]["group_fetch_limit"], 20)
 
-        self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], True)
+        self.assertIs(config["channels"]["feishu"]["group_reply_only_when_mentioned"], True)
 
     def test_init_feishu_one_click_writes_registered_credentials(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2323,7 +2323,7 @@ class CLICommandTests(unittest.TestCase):
 
                 group_fetch_limit=None,
 
-                group_reply_without_mention=None,
+                group_reply_only_when_mentioned=None,
             )
 
             with patch(
@@ -2341,7 +2341,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_qr_app")
         self.assertEqual(config["channels"]["feishu"]["app_secret"], "qr_secret")
         self.assertIs(config["channels"]["feishu"]["stream"], False)
-        self.assertIs(config["channels"]["feishu"]["group_reply_without_mention"], False)
+        self.assertNotIn("group_reply_only_when_mentioned", config["channels"]["feishu"])
         self.assertIn("Feishu Ready", output)
         self.assertIn("Optional before group rollout", output)
         self.assertIn("If you only need direct chats right now", output)
@@ -2398,7 +2398,7 @@ class CLICommandTests(unittest.TestCase):
             stream=None,
             group_fetch_limit=None,
 
-            group_reply_without_mention=None,
+            group_reply_only_when_mentioned=None,
         )
         ui = FakeUI()
 
@@ -2406,7 +2406,7 @@ class CLICommandTests(unittest.TestCase):
             selection = collect_feishu_init_selection_terminal_ui(args=args, ui=ui)
 
         self.assertEqual(ui.menu_titles, ["App Access"])
-        self.assertEqual(ui.select_labels, ["Group Routing"])
+        self.assertEqual(ui.select_labels, [])
         self.assertEqual(ui.app_access_titles, ["Create new Feishu app", "Use existing App ID / App Secret", "Back"])
         self.assertEqual(ui.app_access_footer, "↑/↓ Move • Enter Select  •  q Back")
         self.assertEqual(selection.app_id, "cli_qr_app")
@@ -2414,7 +2414,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIs(selection.stream, False)
         self.assertEqual(selection.group_fetch_limit, 10)
 
-        self.assertIs(selection.group_reply_without_mention, False)
+        self.assertIs(selection.group_reply_only_when_mentioned, False)
         self.assertEqual(selection.credential_mode, "one_click")
 
     def test_feishu_wizard_app_access_back_cancels_setup(self):
@@ -2439,7 +2439,7 @@ class CLICommandTests(unittest.TestCase):
             stream=None,
             group_fetch_limit=None,
 
-            group_reply_without_mention=None,
+            group_reply_only_when_mentioned=None,
         )
 
         with self.assertRaises(KeyboardInterrupt):
@@ -2458,7 +2458,7 @@ class CLICommandTests(unittest.TestCase):
 
                 group_fetch_limit=None,
 
-                group_reply_without_mention=None,
+                group_reply_only_when_mentioned=None,
             )
 
             with patch("xagent.interfaces.cli.setup._register_feishu_app_via_qr", return_value=None):
@@ -2483,7 +2483,7 @@ class CLICommandTests(unittest.TestCase):
 
                 group_fetch_limit=None,
 
-                group_reply_without_mention=None,
+                group_reply_only_when_mentioned=None,
             )
 
             with patch("xagent.interfaces.cli.setup._register_feishu_app_via_qr") as register_mock:

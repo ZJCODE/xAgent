@@ -205,10 +205,10 @@ def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:
         help="How many recent group/topic messages to fetch before replying (default: 10)",
     )
     parser.add_argument(
-        "--group-reply-without-mention",
+        "--group-reply-only-when-mentioned",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Route every group/topic message, even without an @mention",
+        help="Record unmentioned group/topic messages but only reply when @mentioned",
     )
     parser.add_argument("--force", action="store_true", help="Overwrite existing channels.feishu config")
 

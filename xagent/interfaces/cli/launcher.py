@@ -501,8 +501,7 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                 force=False,
                 stream=None,
                 group_fetch_limit=None,
-
-                group_reply_without_mention=None,
+                group_reply_only_when_mentioned=None,
             )
         )
     if action == "open":
@@ -1334,8 +1333,7 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     force=_feishu_channel_is_configured(config_dir),
                     stream=None,
                     group_fetch_limit=None,
-    
-                    group_reply_without_mention=None,
+                    group_reply_only_when_mentioned=None,
                 )
             ) == 0:
                 raise ReturnToLauncherHome()

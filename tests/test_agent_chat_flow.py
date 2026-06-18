@@ -910,6 +910,52 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(captured["message_storage"], agent.message_storage)
 
+    async def test_decide_participation_returns_structured_decision_without_storing_event(self):
+        storage = InMemoryMessageStorage([
+            Message(
+                role=RoleType.ENVIRONMENT,
+                type=MessageType.CONTEXT_EVENT,
+                content="Earlier ambient context",
+                timestamp=1710000000.0,
+            )
+        ])
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, '{"should_reply": true, "reason": "can unblock the room"}'),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        decision = await Agent.decide_participation(
+            agent,
+            context="[room context]\nroom_id: oc_group\n\nAlice 2026-06-18 10:00: should we ship?\n[/room context]",
+            source="feishu",
+            event_type="group_message",
+            metadata={"chat_id": "oc_group", "sender_name": "Alice"},
+        )
+
+        self.assertTrue(decision.should_reply)
+        self.assertEqual(decision.reason, "can unblock the room")
+        self.assertEqual(len(storage.messages), 1)
+        self.assertIn("participation_decision", model_client.calls[0][-1]["name"])
+        self.assertIn("Return JSON only", model_client.calls[0][-1]["content"])
+        self.assertIn("Earlier ambient context", model_client.calls[0][0]["content"])
+
+    async def test_decide_participation_defaults_to_silence_on_invalid_model_output(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "I would probably wait."),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        decision = await Agent.decide_participation(
+            agent,
+            context="ambient group message",
+            source="feishu",
+            event_type="group_message",
+        )
+
+        self.assertFalse(decision.should_reply)
+        self.assertIsNone(decision.reason)
+
     async def test_chat_keeps_tool_messages_transient_inside_loop(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([

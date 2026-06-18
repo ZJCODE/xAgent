@@ -5,8 +5,10 @@ Routing is intentionally small:
 * ``p2p`` (direct chat with the bot): reply with ``agent.chat``.
 * ``group`` / ``topic`` with bot @mentioned: pull recent Feishu history,
     then reply with ``agent.chat``.
-* ``group`` / ``topic`` without @mention: reply only when
-    ``group_reply_without_mention`` is enabled; otherwise ignore.
+* ``group`` / ``topic`` without @mention: listen, then let the agent decide
+    whether to speak. Conservative deployments can set
+    ``group_reply_only_when_mentioned`` to record but never answer ambient
+    group messages.
 * Any other chat type is ignored.
 
 Before a Feishu message reaches the agent, the sender ID is resolved to a
@@ -234,7 +236,7 @@ class FeishuAdapter:
             kwargs["domain"] = self.config.domain
         if "policy" not in self.config.advanced:
             kwargs["policy"] = PolicyConfig(
-                require_mention=not self.config.group_reply_without_mention
+                require_mention=False
             )
         if "safety" not in self.config.advanced:
             kwargs["safety"] = SafetyConfig(text_batch=TextBatchConfig(delay_ms=0))
@@ -530,63 +532,77 @@ class FeishuAdapter:
 
         if chat_type in {"group", "topic"}:
             mentioned = self._is_bot_mentioned(msg)
-            if mentioned or self.config.group_reply_without_mention:
-                attachment_download = await self._download_message_attachment_assets_with_failures(msg, message_id=message_id)
-                if attachment_download.failed_resources:
-                    await self._send_attachment_download_failed(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        raw_msg=msg,
-                        is_group=True,
-                        failures=attachment_download.failed_resources,
-                    )
-                    return
-                attachment_assets = attachment_download.assets
-                image_assets = self._image_assets_from_attachment_assets(attachment_assets)
-                if not text and image_assets and len(image_assets) == len(attachment_assets):
-                    text = _FEISHU_IMAGE_PLACEHOLDER
-                elif not text and attachment_assets:
-                    text = (
-                        "The user mentioned you with file attachments."
-                        if mentioned
-                        else "The user sent file attachments."
-                    )
-                elif not text:
-                    text = (
-                        "The user mentioned you without adding any text."
-                        if mentioned
-                        else "The user sent a group message without text."
-                    )
-                route_reason = "mention" if mentioned else "group_reply_without_mention"
-                self.logger.info(
-                    "Feishu group message routed to chat: chat_type=%s chat_id=%s message_id=%s sender_id=%s reason=%s",
-                    chat_type,
-                    chat_id,
-                    message_id,
-                    sender_id,
-                    route_reason,
-                )
-                sender_name = await self._resolve_sender_name(
-                    sender_id,
-                    fallback=sender_fallback_name,
-                    id_type=sender_id_type,
-                    sender_type=sender_type,
-                )
-                await self._handle_chat(
+            if mentioned:
+                await self._route_group_chat(
+                    msg=msg,
+                    chat_type=chat_type,
                     chat_id=chat_id,
                     message_id=message_id,
-                    user_id=sender_name,
                     sender_id=sender_id,
-                    sender_name=sender_name,
+                    sender_id_type=sender_id_type,
+                    sender_type=sender_type,
+                    sender_fallback_name=sender_fallback_name,
                     text=text,
-                    is_group=True,
-                    raw_msg=msg,
-                    image_assets=image_assets,
-                    attachments=self._attachments_from_attachment_assets(attachment_assets),
+                    mentioned=True,
+                    route_reason="mention",
                 )
                 return
+
+            sender_name = await self._resolve_sender_name(
+                sender_id,
+                fallback=sender_fallback_name,
+                id_type=sender_id_type,
+                sender_type=sender_type,
+            )
+            ambient_text = self._ambient_group_text(text, msg)
+            observation_context = await self._group_observation_context(
+                chat_id=chat_id,
+                current_message_id=message_id,
+                raw_msg=msg,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                text=ambient_text,
+            )
+
+            decision = None
+            if not self.config.group_reply_only_when_mentioned:
+                decision = await self._decide_group_participation(
+                    context=observation_context,
+                    chat_type=chat_type,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    raw_msg=msg,
+                )
+                if self._decision_should_reply(decision):
+                    await self._route_group_chat(
+                        msg=msg,
+                        chat_type=chat_type,
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        sender_id=sender_id,
+                        sender_id_type=sender_id_type,
+                        sender_type=sender_type,
+                        sender_fallback_name=sender_fallback_name,
+                        text=text,
+                        mentioned=False,
+                        route_reason="agent_decision",
+                    )
+                    return
+
+            await self._handle_group_observation(
+                chat_type=chat_type,
+                chat_id=chat_id,
+                message_id=message_id,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                raw_msg=msg,
+                context=observation_context,
+                decision=decision,
+            )
             self.logger.debug(
-                "Ignoring unmentioned Feishu group message: chat_type=%s chat_id=%s message_id=%s",
+                "Feishu group message observed without reply: chat_type=%s chat_id=%s message_id=%s",
                 chat_type,
                 chat_id,
                 message_id,
@@ -594,6 +610,202 @@ class FeishuAdapter:
             return
 
         self.logger.debug("Ignoring chat_type=%s", chat_type)
+
+    async def _route_group_chat(
+        self,
+        *,
+        msg: Any,
+        chat_type: str,
+        chat_id: str,
+        message_id: Optional[str],
+        sender_id: str,
+        sender_id_type: Optional[str],
+        sender_type: str,
+        sender_fallback_name: Optional[str],
+        text: str,
+        mentioned: bool,
+        route_reason: str,
+    ) -> None:
+        attachment_download = await self._download_message_attachment_assets_with_failures(msg, message_id=message_id)
+        if attachment_download.failed_resources:
+            await self._send_attachment_download_failed(
+                chat_id=chat_id,
+                message_id=message_id,
+                raw_msg=msg,
+                is_group=True,
+                failures=attachment_download.failed_resources,
+            )
+            return
+        attachment_assets = attachment_download.assets
+        image_assets = self._image_assets_from_attachment_assets(attachment_assets)
+        if not text and image_assets and len(image_assets) == len(attachment_assets):
+            text = _FEISHU_IMAGE_PLACEHOLDER
+        elif not text and attachment_assets:
+            text = (
+                "The user mentioned you with file attachments."
+                if mentioned
+                else "The user sent file attachments."
+            )
+        elif not text:
+            text = (
+                "The user mentioned you without adding any text."
+                if mentioned
+                else "The user sent a group message without text."
+            )
+        self.logger.info(
+            "Feishu group message routed to chat: chat_type=%s chat_id=%s message_id=%s sender_id=%s reason=%s",
+            chat_type,
+            chat_id,
+            message_id,
+            sender_id,
+            route_reason,
+        )
+        sender_name = await self._resolve_sender_name(
+            sender_id,
+            fallback=sender_fallback_name,
+            id_type=sender_id_type,
+            sender_type=sender_type,
+        )
+        await self._handle_chat(
+            chat_id=chat_id,
+            message_id=message_id,
+            user_id=sender_name,
+            sender_id=sender_id,
+            sender_name=sender_name,
+            text=text,
+            is_group=True,
+            raw_msg=msg,
+            image_assets=image_assets,
+            attachments=self._attachments_from_attachment_assets(attachment_assets),
+        )
+
+    async def _handle_group_observation(
+        self,
+        *,
+        chat_type: str,
+        chat_id: str,
+        message_id: Optional[str],
+        sender_id: str,
+        sender_name: str,
+        raw_msg: Any,
+        context: str,
+        decision: Any = None,
+    ) -> None:
+        observer = getattr(self.agent, "observe", None)
+        if not callable(observer):
+            return
+        metadata = {
+            "source": "feishu",
+            "event_type": "group_message",
+            "chat_type": chat_type,
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "sender_id": sender_id,
+            "sender_name": sender_name,
+            "addressed_to_agent": False,
+            "memory_worthy": True,
+        }
+        reason = self._decision_reason(decision)
+        if reason:
+            metadata["silence_reason"] = reason
+        room_name = await self._resolve_room_name(chat_id, raw_msg)
+        if room_name:
+            metadata["room_name"] = room_name
+        await observer(
+            context=context,
+            source="feishu",
+            event_type="group_message",
+            metadata=metadata,
+        )
+
+    async def _decide_group_participation(
+        self,
+        *,
+        context: str,
+        chat_type: str,
+        chat_id: str,
+        message_id: Optional[str],
+        sender_id: str,
+        sender_name: str,
+        raw_msg: Any,
+    ) -> Any:
+        decider = getattr(self.agent, "decide_participation", None)
+        if not callable(decider):
+            return None
+        metadata = {
+            "source": "feishu",
+            "event_type": "group_message",
+            "chat_type": chat_type,
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "sender_id": sender_id,
+            "sender_name": sender_name,
+            "addressed_to_agent": False,
+        }
+        room_name = await self._resolve_room_name(chat_id, raw_msg)
+        if room_name:
+            metadata["room_name"] = room_name
+        try:
+            return await decider(
+                context=context,
+                source="feishu",
+                event_type="group_message",
+                metadata=metadata,
+            )
+        except Exception:
+            self.logger.exception(
+                "Feishu group participation decision failed; observing without reply"
+            )
+            return None
+
+    @staticmethod
+    def _decision_should_reply(decision: Any) -> bool:
+        if isinstance(decision, dict):
+            return bool(decision.get("should_reply"))
+        return bool(getattr(decision, "should_reply", False))
+
+    @staticmethod
+    def _decision_reason(decision: Any) -> str:
+        if isinstance(decision, dict):
+            value = decision.get("reason")
+        else:
+            value = getattr(decision, "reason", None)
+        return str(value or "").strip()
+
+    async def _group_observation_context(
+        self,
+        *,
+        chat_id: str,
+        current_message_id: Optional[str],
+        raw_msg: Any,
+        sender_id: str,
+        sender_name: str,
+        text: str,
+    ) -> str:
+        room_name = await self._resolve_room_name(chat_id, raw_msg)
+        current_record = FeishuMessageRecord(
+            current_message_id or "",
+            sender_id,
+            sender_name,
+            text,
+            self._message_create_time_ms(raw_msg),
+        )
+        return format_room_context(
+            chat_id,
+            [current_record],
+            room_name=room_name,
+            bot_open_id=self._bot_open_id(),
+            bot_app_id=self.config.app_id,
+        )
+
+    def _ambient_group_text(self, text: str, msg: Any) -> str:
+        if text:
+            return text
+        if self._message_attachment_resources(msg):
+            return "The user sent file attachments."
+        if self._message_image_resources(msg):
+            return _FEISHU_IMAGE_PLACEHOLDER
+        return "The user sent a group message without text."
 
     @staticmethod
     def _message_text(msg: Any) -> str:

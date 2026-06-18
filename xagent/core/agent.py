@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ from .config import AgentConfig, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_client, normalize_model_api
 from .tools import ToolExecutor, ToolManager
-from ..schemas import AgentTurnResult, Message
+from ..schemas import AgentTurnResult, Message, ParticipationDecision
 from ..tools import create_write_memory_tool, create_search_memory_tool
 logger = logging.getLogger(__name__)
 
@@ -612,6 +613,186 @@ class Agent:
             source=event_metadata.get("source"),
         )
 
+    async def decide_participation(
+        self,
+        context: str,
+        source: str = "environment",
+        event_type: str = "observation",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ParticipationDecision:
+        """Decide whether an observed event deserves an outward reply.
+
+        This is intentionally read-only: it uses recent experience and diary
+        context to choose whether to speak, but it does not persist the current
+        event. Callers should store the event via ``observe`` when the decision
+        is to stay silent, or route to ``chat`` when the decision is to reply.
+        """
+        msg_handler = self.message_handler
+        try:
+            recent_messages = await msg_handler.get_recent_messages(
+                max_history=self.max_history,
+            )
+            memory_context = await self.memory_handler.get_recent_context()
+            instructions = msg_handler.build_instruction_messages(
+                tool_names=[],
+                skills_catalog="",
+                supports_vision=self.supports_vision,
+                workspace_context="",
+            )
+            input_messages = self._build_participation_decision_messages(
+                msg_handler=msg_handler,
+                recent_messages=recent_messages,
+                memory_context=memory_context,
+                context=context,
+                source=source,
+                event_type=event_type,
+                metadata=metadata or {},
+            )
+            reply_type, payload = await self.model_client.call(
+                messages=input_messages,
+                tool_specs=None,
+                instructions=instructions,
+                stream=False,
+            )
+            if reply_type == ReplyType.SIMPLE_REPLY:
+                return self._parse_participation_decision(str(payload))
+            logger.warning("Participation decision returned non-text result: %s", reply_type)
+        except Exception as exc:
+            logger.warning("Participation decision failed: %s", exc, exc_info=True)
+        return ParticipationDecision(should_reply=False, reason="participation decision failed")
+
+    def _build_participation_decision_messages(
+        self,
+        *,
+        msg_handler: MessageHandler,
+        recent_messages: List[Message],
+        memory_context: str,
+        context: str,
+        source: str,
+        event_type: str,
+        metadata: Dict[str, Any],
+    ) -> list[dict]:
+        conversation_messages = MessageHandler.filter_conversation_messages(recent_messages)
+        observation_messages = MessageHandler.filter_context_events(recent_messages)
+        budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
+            conversation_messages,
+            max_messages=self.max_history,
+        )
+        budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
+            observation_messages,
+            max_events=AgentConfig.MAX_CONTEXT_EVENTS,
+        )
+        experience_entries = MessageHandler._merge_experience_entries(
+            budgeted_entries,
+            budgeted_observations,
+        )
+
+        messages: list[dict] = []
+        if memory_context.strip():
+            messages.append({
+                "role": "user",
+                "name": AgentConfig.RECENT_MEMORY_NAME,
+                "content": MessageHandler._wrap_untrusted_context(
+                    AgentConfig.RECENT_MEMORY_NAME,
+                    memory_context,
+                ),
+            })
+
+        messages.append({
+            "role": "user",
+            "name": AgentConfig.RECENT_EXPERIENCE_NAME,
+            "content": MessageHandler._build_recent_experience_context(
+                experience_entries=experience_entries,
+                omitted_messages=omitted_count,
+                omitted_observations=omitted_observation_count,
+            ),
+        })
+
+        messages.append({
+            "role": "user",
+            "name": "participation_decision",
+            "content": self._build_participation_decision_prompt(
+                context=context,
+                source=source,
+                event_type=event_type,
+                metadata=metadata,
+            ),
+        })
+        return msg_handler.sanitize_input_messages(messages)
+
+    @staticmethod
+    def _build_participation_decision_prompt(
+        *,
+        context: str,
+        source: str,
+        event_type: str,
+        metadata: Dict[str, Any],
+    ) -> str:
+        metadata_preview = {
+            key: value
+            for key, value in metadata.items()
+            if key in {
+                "chat_id",
+                "chat_type",
+                "message_id",
+                "room_name",
+                "sender_id",
+                "sender_name",
+                "addressed_to_agent",
+            }
+        }
+        return (
+            "<participation_decision>\n"
+            "A new group-room event was heard. Decide whether I should speak now.\n\n"
+            "First principles:\n"
+            "- Listening is always part of being present; speaking is optional.\n"
+            "- Speak only when the reply is likely to help the room now.\n"
+            "- Stay silent when the room is flowing naturally, people are building rapport, "
+            "or my reply would mainly prove that I am present.\n"
+            "- Speak when I am directly expected to answer, can add uniquely useful context, "
+            "can prevent a meaningful misunderstanding, or can move an active shared task forward.\n"
+            "- Do not reply to routine chatter, acknowledgements, or messages that are only ambient context.\n\n"
+            f"Source: {source}\n"
+            f"Event type: {event_type}\n"
+            f"Metadata: {json.dumps(metadata_preview, ensure_ascii=False, sort_keys=True)}\n\n"
+            "Current event:\n"
+            f"{context.strip()}\n\n"
+            "Return JSON only, with this shape:\n"
+            '{"should_reply": true|false, "reason": "brief reason"}\n'
+            "</participation_decision>"
+        )
+
+    @staticmethod
+    def _parse_participation_decision(payload: str) -> ParticipationDecision:
+        text = str(payload or "").strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    data = json.loads(text[start : end + 1])
+                except json.JSONDecodeError:
+                    data = {}
+            else:
+                data = {}
+
+        if not isinstance(data, dict):
+            data = {}
+        return ParticipationDecision(
+            should_reply=bool(data.get("should_reply")),
+            reason=str(data.get("reason") or "").strip() or None,
+        )
+
     def _observability_runtime(self) -> ObservabilityRuntime:
         observability = getattr(self, "observability", None)
         if observability is None:
@@ -735,4 +916,3 @@ class Agent:
             "call_id": call_id,
             "name": name,
         }
-
