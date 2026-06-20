@@ -1,26 +1,9 @@
 import logging
-import os
 from enum import Enum
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
 # Configure logging
 _log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 logging.basicConfig(level=logging.INFO, format=_log_format)
-
-# Add rotating file handler so logs don't grow indefinitely.
-# Default path: ~/.xagent/logs/xagent.log (overridable via XAGENT_LOG_DIR).
-_log_dir = Path(os.environ.get("XAGENT_LOG_DIR", "~/.xagent/logs")).expanduser()
-_log_dir.mkdir(parents=True, exist_ok=True)
-_rotating_handler = RotatingFileHandler(
-    _log_dir / "xagent.log",
-    maxBytes=10 * 1024 * 1024,  # 10 MB per file
-    backupCount=5,               # keep 5 rotated files
-    encoding="utf-8",
-)
-_rotating_handler.setLevel(logging.INFO)
-_rotating_handler.setFormatter(logging.Formatter(_log_format))
-logging.getLogger().addHandler(_rotating_handler)
 
 
 class AgentConfig:
