@@ -628,11 +628,10 @@ def create_image_generation_tool(
     @function_tool(
         name="generate_image",
         description=(
-            "Generate a new image from a text prompt using the configured image generation provider. "
-            "Use it when the user asks to create, draw, render, or generate a visual asset."
+            "Generate a visual asset from a text prompt using the configured image provider."
         ),
         param_descriptions={
-            "prompt": "Detailed image prompt describing subject, style, composition, and constraints.",
+            "prompt": "Image prompt: subject, style, composition, text, and constraints.",
             "size": "Optional output size such as 1024x1024, 1024x1536, 1536x1024, or auto.",
             "quality": "Optional quality value such as low, medium, high, or auto.",
             "output_format": "Optional output format: png, jpeg, or webp.",

@@ -388,12 +388,11 @@ def create_web_search_tool(
     @function_tool(
         name="web_search",
         description=(
-            "Search the web for current or external information using the configured provider. "
-            "Return concise results with source URLs so the final answer can cite them."
+            "Search current or external web information and return concise source-backed results."
         ),
         param_descriptions={
-            "query": "Search query. Include key entities, dates, and constraints.",
-            "max_results": "Maximum number of normalized source results to return, from 1 to 20. Defaults to 5.",
+            "query": "Search query with key entities, dates, and constraints.",
+            "max_results": "Number of normalized source results, 1-20.",
             "search_context_size": "OpenAI only. Web search context size: low, medium, or high.",
             "country": "OpenAI only. Approximate two-letter country code such as US, CN, GB, or DE.",
             "city": "OpenAI only. Approximate user city for local search results.",

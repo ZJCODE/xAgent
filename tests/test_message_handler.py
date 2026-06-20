@@ -235,7 +235,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("<current_task>", context_messages[2]["content"])
         self.assertIn("Current speaker: Joy", context_messages[2]["content"])
         self.assertIn("Current time: 2026-05-14 09:30", context_messages[2]["content"])
-        self.assertIn("what Joy most recently said", context_messages[2]["content"])
+        self.assertIn("what Joy just said", context_messages[2]["content"])
 
     def test_workspace_context_is_static_instruction_layer(self):
         handler = MessageHandler(
@@ -528,7 +528,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             transcript.index(f"[ambient context][timestamp={observation_timestamp}]"),
             transcript.index(f"[speaker=bob][timestamp={bob_timestamp}]"),
         )
-        self.assertIn("what alice most recently said", transcript)
+        self.assertIn("what alice just said", transcript)
 
     def test_long_observation_is_not_truncated_in_recent_experience(self):
         long_observation = "sensor log: " + ("x" * 1800)

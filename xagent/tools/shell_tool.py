@@ -22,21 +22,16 @@ def _truncate(text: str, max_size: int) -> str:
 @function_tool(
     name="run_command",
     description=(
-        "Execute a shell command and return its stdout, stderr, and return code. "
-        "Use this for running CLI tools, inspecting files, executing scripts, or system operations. "
-        "Safety guidelines: prefer read-only commands (ls, cat, grep, find, df, ps) for information gathering; "
-        "for destructive or write operations (rm, mv, chmod, kill, etc.), confirm the user's intent first; "
-        "never execute commands that could cause irreversible damage without explicit user approval. "
-        "Output is capped at 50 KB per stream and auto-truncated."
+        "Run a scoped shell command and return stdout, stderr, and exit code. "
+        "Prefer read-only inspection first; get explicit approval for destructive or sensitive operations. "
+        "Output is capped and truncated."
     ),
     param_descriptions={
         "command": (
-            "The shell command to execute. Prefer safe, scoped commands "
-            "(e.g. 'ls -la /path', 'cat file.txt', 'git status'). "
-            "Avoid broad destructive patterns like 'rm -rf /' or 'chmod -R 777 /'."
+            "Shell command to execute. Keep it specific and bounded."
         ),
-        "working_directory": "Optional working directory for the command. In standard xAgent runtimes, defaults to the agent workspace directory.",
-        "timeout": "Maximum execution time in seconds (1-300). Defaults to 30.",
+        "working_directory": "Optional cwd; defaults to the agent workspace in standard runtimes.",
+        "timeout": "Maximum seconds, 1-300. Defaults to 30.",
     },
 )
 async def run_command(

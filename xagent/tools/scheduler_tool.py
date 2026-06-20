@@ -22,21 +22,18 @@ def create_schedule_task_tool(*, tasks_dir: str):
     @function_tool(
         name="manage_scheduled_tasks",
         description=(
-            "Manage future tasks for the current conversation channel. "
-            "Use action='create' to schedule a one-time, daily, or weekly recurring task, action='list' to view active tasks, "
-            "and action='delete' to remove a task by task_id. "
-            "Use task_type='message' for direct future delivery, and task_type='agent' when the due-time work "
-            "must gather information, call tools, or reason before replying."
+            "Create, list, or delete future tasks for the active delivery channel. "
+            "Use message tasks for fixed text and agent tasks for due-time work that may need tools or reasoning."
         ),
         param_descriptions={
-            "action": "Use 'create' to add a task, 'list' to view active tasks, or 'delete' to remove a task by task_id.",
-            "task_type": "Use 'message' for direct text delivery, or 'agent' for a due-time agent turn that can call tools before replying.",
-            "content": "For message tasks, the exact text to send later. For agent tasks, the instruction to execute when due.",
-            "run_at": "For one-time tasks only, a local datetime such as 20260601-143000 or 2026-06-01 14:30:00.",
-            "delay_seconds": "Delay from now in seconds for one-time tasks. Not supported for recurring tasks.",
-            "recurrence": "Optional structured recurrence rules. Example daily: [{\"kind\": \"daily\", \"time\": \"10:00:00\"}]. Example weekly: [{\"kind\": \"weekly\", \"time\": \"14:28:00\", \"weekdays\": [\"wed\", \"fri\"]}].",
-            "title": "Optional short label for the task, such as Reminder or Temperature Check.",
-            "task_id": "Stable task id used by action='delete'. Obtain it from action='list' or the result of action='create'.",
+            "action": "'create', 'list', or 'delete'.",
+            "task_type": "'message' for fixed text, or 'agent' for a due-time agent turn.",
+            "content": "Text to send or instruction to execute when due.",
+            "run_at": "One-time local datetime, e.g. 20260601-143000 or 2026-06-01 14:30:00.",
+            "delay_seconds": "One-time delay from now in seconds.",
+            "recurrence": "Structured recurrence rules, e.g. daily or weekly dictionaries.",
+            "title": "Optional short label.",
+            "task_id": "Task id for delete; obtain from list or create.",
         },
     )
     def manage_scheduled_tasks(

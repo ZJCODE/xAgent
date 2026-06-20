@@ -123,16 +123,12 @@ def create_web_fetch_tool():
     @function_tool(
         name="web_fetch",
         description=(
-            "Fetch a web page URL and extract clean readable text content. "
-            "Strips navigation, ads, and boilerplate to return the main page "
-            "content. Use this when you need to read the full content of a "
-            "specific web page — articles, documentation, blog posts, etc. "
-            "Use web_search first if you need to find relevant pages."
+            "Fetch a known web page URL and extract readable main text. "
+            "Use web_search first when the relevant page is not known."
         ),
         param_descriptions={
             "url": (
-                "The full URL of the web page to fetch, including the "
-                "http:// or https:// scheme."
+                "Full http:// or https:// URL to fetch."
             ),
         },
     )

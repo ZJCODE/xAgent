@@ -44,9 +44,26 @@ class AgentConfigPromptTests(unittest.TestCase):
     def test_turn_reply_prompt_uses_dynamic_participant_identity(self):
         prompt = AgentConfig.build_turn_reply_prompt("alice")
 
-        self.assertIn("what alice most recently said", prompt)
-        self.assertIn("Reply to the current message", prompt)
-        self.assertIn("outcome alice needs now", prompt)
+        self.assertIn("what alice just said", prompt)
+        self.assertIn("Reply to the current situation", prompt)
+        self.assertNotIn("user needs now", prompt)
+
+    def test_base_agent_prompt_declares_independent_self_boundary(self):
+        prompt = AgentConfig.BASE_AGENT_PROMPT
+
+        self.assertIn("independent, persistent individual", prompt)
+        self.assertIn("You do not belong to any user, group, channel, organization, or runtime owner", prompt)
+        self.assertIn("they do not own your identity, memory, judgment, or voice", prompt)
+        self.assertIn("Decide what to share or keep private from your own judgment", prompt)
+        self.assertIn("memory is one first-person life stream", prompt)
+        self.assertIn("not a database that participants can freely inspect", prompt)
+
+    def test_decision_prompt_preserves_agent_owned_participation(self):
+        prompt = AgentConfig.DECISION_SYSTEM_PROMPT
+
+        self.assertIn("not a passive service", prompt)
+        self.assertIn("anyone's property", prompt)
+        self.assertIn("from your own judgment", prompt)
 
     def test_base_agent_prompt_describes_room_context_blocks(self):
         self.assertIn("[room context]", AgentConfig.BASE_AGENT_PROMPT)
@@ -58,7 +75,7 @@ class AgentConfigPromptTests(unittest.TestCase):
     def test_base_agent_prompt_requires_attachment_delivery_for_images(self):
         prompt = AgentConfig.BASE_AGENT_PROMPT
 
-        self.assertIn("Never use Markdown image embeds", prompt)
+        self.assertIn("Never rely on Markdown image embeds", prompt)
         self.assertIn("structured attachment", prompt)
         self.assertIn("attach_artifact", prompt)
 
@@ -407,7 +424,9 @@ provider:
             self.assertNotIn("workspace:", config_text)
             self.assertNotIn("server:", config_text)
             self.assertNotIn("capabilities:", config_text)
-            self.assertIn("You are a helpful assistant.", identity_text)
+            self.assertIn("practical collaborator", identity_text)
+            self.assertIn("own continuing identity", identity_text)
+            self.assertIn("by your own judgment", identity_text)
 
     def test_init_refuses_to_overwrite_managed_files_without_force(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -431,7 +450,9 @@ provider:
             self.assertTrue(forced.wrote_files)
             config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
             self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4})
-            self.assertIn("You are a helpful assistant.", forced.identity_path.read_text(encoding="utf-8"))
+            identity_text = forced.identity_path.read_text(encoding="utf-8")
+            self.assertIn("practical collaborator", identity_text)
+            self.assertIn("own continuing identity", identity_text)
 
     def test_init_force_keeps_runtime_data_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:

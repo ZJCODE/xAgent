@@ -21,16 +21,13 @@ def create_attach_artifact_tool(*, workspace_dir: str):
     @function_tool(
         name="attach_artifact",
         description=(
-            "Attach an existing workspace file so it is delivered to the user as an artifact. "
-            "Use this after creating or modifying a file that the user asked you to send, show, "
-            "return, or share. Do not only mention the file path in prose when the user expects "
-            "the file itself."
+            "Deliver an existing workspace file as a structured artifact when the file itself should be shown or sent."
         ),
         param_descriptions={
             "path": (
-                "Workspace-relative path, workspace blob URL, or absolute path inside the configured workspace."
+                "Workspace-relative path, workspace blob URL, or absolute path inside the workspace."
             ),
-            "caption": "Optional short caption to send before the artifact.",
+            "caption": "Optional short caption.",
         },
     )
     async def attach_artifact(path: str, caption: Optional[str] = None) -> dict:

@@ -20,13 +20,10 @@ def create_write_memory_tool(
     @function_tool(
         name="write_memory",
         description=(
-            "Record long-term useful memory from the conversation. "
-            "Use this for stable preferences, important facts, decisions, commitments, "
-            "or notable context that should help future interactions. "
-            "Keep entries concise, factual, and clearly attributed when needed."
+            "Record a concise, attributable diary-memory note for durable preferences, facts, decisions, commitments, or context."
         ),
         param_descriptions={
-            "content": "The memory note to record. Keep it concise, useful, and grounded in the conversation.",
+            "content": "Memory note to record. Keep it concise, grounded, and attributed when needed.",
         },
     )
     async def write_memory(content: str) -> dict:
@@ -54,17 +51,13 @@ def create_search_memory_tool(
     @function_tool(
         name="search_memory",
         description=(
-            "Search long-term memory by keyword or date range. "
-            "Use this when the user asks about past conversations, preferences, plans, "
-            "or remembered facts that are not in the recent context. "
-            "Do not call this on every turn — prefer the recent memory context already "
-            "in the system prompt."
+            "Search older diary memory or raw messages by keyword, date, or date range when recent context is not enough."
         ),
         param_descriptions={
-            "query": "Keyword to search for. Leave empty when only searching by date.",
-            "date": "A single date (YYYY-MM-DD) or date range (YYYY-MM-DD to YYYY-MM-DD) to read.",
-            "scope": "Which time-memory area to search: daily, weekly, monthly, yearly, or all. Default: all.",
-            "context_lines": "Number of context lines around each keyword match. Default: 3.",
+            "query": "Keyword to search. Leave empty for date-only reads.",
+            "date": "Date or range: YYYY-MM-DD or YYYY-MM-DD to YYYY-MM-DD.",
+            "scope": "Memory area: daily, weekly, monthly, yearly, or all.",
+            "context_lines": "Context lines around each match, default 3.",
         },
     )
     async def search_memory(

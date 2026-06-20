@@ -60,11 +60,9 @@ class SkillsStorageLocal(SkillsStorageBase):
 
         header = (
             "Available Skills\n"
-            "The following enabled Agent Skills are available as filesystem packages. "
-            "Each description comes from SKILL.md YAML frontmatter and explains what the skill does and when to use it. "
-            "Descriptions are discovery metadata, not complete task instructions. "
-            "When a skill matches the user's task, call `read_skill(skill_name)` to load SKILL.md before following it. "
-            "Read referenced files only as needed with `read_skill(skill_name, file_path=...)`.\n\n"
+            "Enabled filesystem skills are listed by name and description. "
+            "Descriptions are discovery metadata, not full instructions. "
+            "When a skill matches the task, load SKILL.md with `read_skill`; read referenced files only when needed.\n\n"
             "<available_skills>"
         )
         footer = "</available_skills>"

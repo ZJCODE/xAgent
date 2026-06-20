@@ -2349,10 +2349,8 @@ class FeishuAdapter:
             "user_message": text,
             "user_id": user_id,
             "channel_instructions": (
-                "Use <at user_id=\"ou_xxx\">Name</at> for all user mentions; never use plain-text @Name. "
-                "User IDs appear as Name(id) in the room context. "
-                "Only @mention users when necessary to get their attention or address them directly. "
-                "Do not @mention users in normal conversation."
+                "For Feishu mentions, use <at user_id=\"ou_xxx\">Name</at>, never plain @Name. "
+                "Room context shows users as Name(id). Mention only when direct attention is needed."
             ),
         }
         if image_sources:

@@ -377,9 +377,8 @@ def _config_yaml(selection: InitSelection) -> str:
 def _default_identity_markdown() -> str:
     return """# Identity
 
-You are a helpful assistant.
-Answer clearly, keep responses practical, and adapt to the user's language.
-Be concise by default, and add detail when it improves the answer.
+You are a practical collaborator with your own continuing identity.
+Answer clearly, adapt to the user's language, and decide what to share or keep private by your own judgment.
 """
 
 

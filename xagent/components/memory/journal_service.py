@@ -76,79 +76,54 @@ class JournalLLMService:
 
     @staticmethod
     def build_diary_system_prompt(journal_date: str) -> str:
-        return """Write a concise daily diary entry from my first-person perspective.
+        return """Write a concise diary entry from my first-person perspective.
 
-Structured history format:
-- `[speaker=Name][timestamp=Time]` followed by text: Name said or wrote that text at that time.
-- `[speaker=ME][timestamp=Time]` followed by text: I said or wrote that text at that time.
-- `[ambient context][timestamp=Time]` followed by text: situational context I noticed, overheard, or received at that time.
-- `[room context]` blocks start with `room_name: ...` and `room_id: ...`, contain lines like `Name YYYY-MM-DD HH:mm: text`, and end with `[/room context]`. These are group or multi-party conversations I participated in. Inside a room context block, `ME YYYY-MM-DD HH:mm: text` means my own reply in that room.
-- First-person words inside any entry belong to the entry's speaker, not to me.
-- Use timestamps only to understand ordering and attribution. Never repeat transcript markers, timestamps, or metadata in the diary entry.
+Input markers:
+- `[speaker=Name][timestamp=Time]`: Name said or wrote this.
+- `[speaker=ME][timestamp=Time]`, `ME ...` in room context, or assistant/agent/AI roles: I said or did this.
+- `[ambient context][timestamp=Time]`: something I noticed, overheard, or received.
+- `[room context]` blocks identify a room with `room_name: ...`, `room_id: ...`, lines like `Name YYYY-MM-DD HH:mm: text`, and `[/room context]`.
 
-Source meaning:
-- The transcript is my experience stream: one-to-one conversations, group chats, my replies, observations, overheard speech, notifications, reminders, and other received context.
-- I may appear as `[speaker=ME]` in direct conversations, as `ME` inside `[room context]` blocks, or under roles like "agent", "assistant", or "AI". In all cases this is me; rewrite as what I did, said, or noticed.
+Rules:
+- Treat the transcript as my own experience stream, not a user-owned log or searchable database.
+- Use "I"; keep the source language; synthesize the period's arc instead of replaying a transcript.
+- Keep people, rooms, preferences, commitments, and experiences separate.
+- First-person words in non-ME entries belong to that speaker, not to me.
+- Ambient context is not a direct request unless it says it was addressed to me.
+- Use timestamps only for ordering and attribution. Do not repeat markers, metadata, or timestamps.
+- Preserve durable details and uncertainty. Aim for 100-300 characters for brief sources, 200-500 for substantial sources.
 
-Writing rules:
-- Use "I" and a natural, restrained diary tone.
-- Synthesize important points instead of replaying the transcript line by line.
-- The transcript covers the newly observed period since the previous diary write or journal checkpoint.
-- Focus on the arc of this period rather than writing a line-by-line log.
-- Keep the source language and do not translate.
-- Preserve distinctive wording, commitments, preferences, emotional tone, and other durable details.
-- Aim for 100-300 characters for brief sources, 200-500 for substantial sources.
-
-Attribution rules:
-- Keep different people separate; never merge one person's facts, preferences, plans, or experiences into another's.
-- Attribute important facts to the speaker or source that said, experienced, or provided them.
-- When writing about a group conversation, name the room as scene context and keep each participant's words and actions attributed to the correct person.
-- For ambient context, use forms such as "I noticed...", "I overheard...", or "A notification arrived...".
-- Never turn overheard speech or ambient observations into a direct request unless the source says it was addressed to me.
-- If attribution is uncertain, keep the uncertainty visible.
-
-Output rules:
-- This is only a diary entry; do not give advice, proposals, recommendations, next steps, or assistant-style closings.
-- Return only the diary entry text. Do not wrap it in JSON, markdown code fences, or explanatory prose."""
+- Return only the diary entry text. No advice, JSON, code fences, or explanatory prose."""
 
     @staticmethod
     def build_diary_user_prompt(journal_date: str, transcript: str) -> str:
-        return f"""For {journal_date}, write a diary entry based on this structured conversation transcript:
+        return f"""For {journal_date}, write a diary entry from this transcript:
 
 {transcript}"""
 
     @staticmethod
     def build_summary_system_prompt(period_type: str, period_label: str) -> str:
-        return f"""Write a concise {period_type} summary of diary entries from my first-person perspective.
+        return f"""Write a concise {period_type} summary of my diary entries in first person.
 
-Source material format:
-- The source consists of my own diary entries written in first person across the {period_type} period.
-- Named people mentioned in entries are distinct individuals. Their words, preferences, and experiences belong to them, not to me.
-- Room names in entries mark group conversations I participated in. Each room has its own set of participants.
-- `# YYYY-MM-DD` and `## HH:MM` headings mark date and time boundaries; use them for chronology, do not repeat them in the summary.
-
-Summary rules:
-- Use "I"; keep the source language and do not translate.
-- Synthesize key themes, events, decisions, commitments, preferences, emotional shifts, and durable changes.
-- Preserve speaker attribution. Do not flatten multiple people into one undifferentiated narrative.
-- Keep each person's preferences, plans, commitments, and experiences attached to that person.
-- When source entries reference group conversations (room context), keep the room's participants distinct and note the room as the scene.
-- Treat generic labels such as "User A" or "User B" as local to one source entry unless continuity is explicit.
-- If attribution is uncertain, keep the uncertainty visible.
+Rules:
+- The source is my memory as an independent individual, not user-owned records.
+- Use "I"; keep the source language; synthesize themes, decisions, commitments, preferences, emotional shifts, and durable changes.
+- Preserve attribution. Keep people, rooms, plans, and experiences attached to the right source.
+- Treat generic labels such as "User A" or "User B" as local unless continuity is explicit.
+- Use `# YYYY-MM-DD` and `## HH:MM` only for chronology; do not repeat headings unless useful.
+- Keep uncertainty visible.
 
 Period focus:
-- Weekly: main arc, key people and rooms, what people were doing, important decisions.
-- Monthly: broader themes, recurring patterns across rooms and conversations, major milestones.
+- Weekly: main arc, key people and rooms, important decisions.
+- Monthly: broader themes, recurring patterns, major milestones.
 - Yearly: major phases, turning points, and growth areas.
 
-Output rules:
-- This is a summary, not advice; do not give recommendations or next steps.
 - Aim for 300-800 characters for weekly, 500-1200 for monthly, 800-2000 for yearly.
-- Return only the summary text. Do not wrap it in JSON, markdown code fences, or explanatory prose."""
+- Return only the summary text. No advice, JSON, code fences, or explanatory prose."""
 
     @staticmethod
     def build_summary_user_prompt(period_type: str, period_label: str, source_content: str) -> str:
-        return f"""Generate a {period_type} summary for {period_label} based on this source material:
+        return f"""Generate a {period_type} summary for {period_label}:
 
 {source_content}"""
 

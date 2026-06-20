@@ -685,7 +685,7 @@ class Agent:
             f"Event type: {event_type}\n\n"
             "Recent group conversation:\n"
             f"{context.strip()}\n\n"
-            "Decide whether to reply to the latest message above. "
+            "Decide whether to reply now. "
             "Return JSON only:\n"
             '{"should_reply": true|false, "reason": "brief reason"}\n'
             "</participation_decision>"

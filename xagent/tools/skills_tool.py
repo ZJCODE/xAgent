@@ -14,13 +14,11 @@ def create_read_skill_tool(skills_storage: SkillsStorageBase):
     @function_tool(
         name="read_skill",
         description=(
-            "Load instructions or a referenced UTF-8 file from an enabled Agent Skill package. "
-            "Call without file_path to read SKILL.md and discover the selected skill's package files. "
-            "Then read referenced files only as needed."
+            "Read SKILL.md or a referenced UTF-8 file from an enabled Agent Skill package."
         ),
         param_descriptions={
-            "skill_name": "The exact skill name from Available Skills, such as code-review.",
-            "file_path": "Relative file path inside the skill directory. Defaults to SKILL.md.",
+            "skill_name": "Exact skill name from Available Skills.",
+            "file_path": "Relative path inside the skill directory; defaults to SKILL.md.",
         },
     )
     async def read_skill(skill_name: str, file_path: Optional[str] = "SKILL.md") -> dict:
