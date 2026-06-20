@@ -5,15 +5,16 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from ..components import (
-    MarkdownMemory,
-    MessageStorageBase,
-    MessageStorageLocal,
-    SkillsStorageBase,
+    MarkdownMemoryStore,
+    SQLiteMessageStore,
 )
-from ..components.memory import JournalLLMService
+from .memory import JournalFormatter, MemoryMaintenanceService
+from .ports import MessageStore, SkillStore
+from .runtime import RuntimePaths
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
-from .config import AgentConfig, ReplyType
-from .handlers import MemoryHandler, MessageHandler, ModelClient
+from .config import AgentConfig
+from .model import ModelClient
+from .messages import InstructionBuilder, MessageService, TurnContextBuilder
 from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_client, normalize_model_api
 from .tools import ToolExecutor, ToolManager
 from ..schemas import AgentTurnResult, Message, ParticipationDecision
@@ -32,9 +33,11 @@ class Agent:
         model_api: str = MODEL_API_OPENAI_RESPONSES,
         model_max_tokens: int = AgentConfig.DEFAULT_MAX_TOKENS,
         tools: Optional[List] = None,
-        message_storage: Optional[MessageStorageBase] = None,
+        message_storage: Optional[MessageStore] = None,
         workspace: Optional[str] = None,
-        skills_storage: Optional[SkillsStorageBase] = None,
+        runtime_root: Optional[str] = None,
+        runtime_paths: Optional[RuntimePaths] = None,
+        skills_storage: Optional[SkillStore] = None,
         observability: Optional[ObservabilityRuntime] = None,
         supports_vision: bool = True,
         max_history: int = AgentConfig.DEFAULT_MAX_HISTORY,
@@ -62,42 +65,27 @@ class Agent:
         self.system_prompt = system_prompt or ""
         self._assistant_sender_id = "agent"
 
-        workspace_path: Optional[Path] = None
-        if workspace is not None:
-            workspace_path = Path(workspace).expanduser().resolve()
-
-        runtime_root = workspace_path or Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
-        runtime_root.mkdir(parents=True, exist_ok=True)
-        self.workspace = runtime_root
-        self.workspace_dir = self._workspace_dir(runtime_root)
-        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        configured_root = runtime_root if runtime_root is not None else workspace
+        self.paths = runtime_paths or RuntimePaths.from_root(configured_root)
+        self.paths.ensure_directories()
+        self.workspace = self.paths.root
+        self.workspace_dir = self.paths.workspace_dir
         self.skills_storage = skills_storage
 
         if message_storage is not None:
             self.message_storage = message_storage
-        elif workspace_path is not None:
-            self.message_storage = MessageStorageLocal(
-                path=str(self._message_storage_path(workspace_path))
-            )
         else:
-            self.message_storage = MessageStorageLocal(
-                path=str(self._message_storage_path(runtime_root))
-            )
+            self.message_storage = SQLiteMessageStore(path=self.paths.messages_db)
 
         # Markdown-based memory system
-        if workspace_path is not None:
-            memory_dir = str(self._memory_dir(workspace_path))
-        else:
-            memory_dir = str(self._memory_dir(runtime_root))
-
-        self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
-        self.llm_service = JournalLLMService(
+        self.markdown_memory = MarkdownMemoryStore(memory_dir=str(self.paths.memory_dir))
+        self.llm_service = JournalFormatter(
             client=self.client,
             model=self.model,
             model_api=self.model_api,
             max_tokens=self.model_max_tokens,
         )
-        self.memory_handler = MemoryHandler(
+        self.memory_handler = MemoryMaintenanceService(
             memory=self.markdown_memory,
             llm_service=self.llm_service,
             message_storage=self.message_storage,
@@ -123,14 +111,17 @@ class Agent:
             model_api=self.model_api,
             max_tokens=self.model_max_tokens,
         )
-        self.message_handler = MessageHandler(
-            message_storage=self.message_storage,
-            system_prompt=self.system_prompt,
+        self.message_service = MessageService(
+            message_store=self.message_storage,
+            workspace_dir=getattr(self, "workspace_dir", None),
+        )
+        self.instruction_builder = InstructionBuilder(system_prompt=self.system_prompt)
+        self.turn_context_builder = TurnContextBuilder(
             workspace_dir=getattr(self, "workspace_dir", None),
         )
         self.tool_executor = ToolExecutor(
             tool_manager=self.tool_manager,
-            message_storage=self.message_storage,
+            message_store=self.message_storage,
             client=self.client,
         )
 
@@ -144,8 +135,8 @@ class Agent:
 
     def set_identity(self, identity: str) -> None:
         self.system_prompt = identity or ""
-        if hasattr(self, "message_handler"):
-            self.message_handler.system_prompt = self.system_prompt
+        if hasattr(self, "instruction_builder"):
+            self.instruction_builder.system_prompt = self.system_prompt
 
     @property
     def tools(self) -> dict:
@@ -176,13 +167,13 @@ class Agent:
 
     async def _build_turn_context(
         self,
-        msg_handler: MessageHandler,
+        msg_service: MessageService,
         user_msg: Message,
         user_id: str,
         channel_instructions: str = "",
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
-        recent_messages = await msg_handler.get_recent_messages(
+        recent_messages = await msg_service.get_recent_messages(
             max_history=self.max_history,
         )
         memory_context = await self.memory_handler.get_recent_context()
@@ -190,23 +181,22 @@ class Agent:
         tool_specs = self.tool_manager.cached_tool_specs
         workspace_context = self._workspace_context(tool_names)
         skills_catalog = self._skills_catalog_context()
-        instructions = msg_handler.build_instruction_messages(
+        instructions = self.instruction_builder.build_messages(
             tool_names=tool_names,
             skills_catalog=skills_catalog,
             supports_vision=self.supports_vision,
             workspace_context=workspace_context,
         )
-        iteration_messages = msg_handler.build_turn_context_messages(
+        iteration_messages = self.turn_context_builder.build_messages(
             recent_messages,
             current_user_id=user_id,
             memory_context=memory_context,
             max_messages=self.max_history,
             include_images=self.supports_vision,
-            workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
             channel_instructions=channel_instructions,
         )
-        input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+        input_messages = msg_service.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
 
     async def run_memory_maintenance(self, trigger: str = "count") -> None:
@@ -267,9 +257,8 @@ class Agent:
         """Generate a reply from the agent given a user message.
 
         Args:
-            stream: When True, return an async text generator for compatibility
-                with the legacy Python API. New event consumers should prefer
-                ``chat_events(stream=True)``.
+            stream: When True, return an async text generator. New event
+                consumers should prefer ``chat_events(stream=True)``.
         """
         self._record_last_interaction()
         if stream:
@@ -296,114 +285,21 @@ class Agent:
 
             return text_stream()
 
-        if hasattr(self.model_client, "model_turn_events"):
-            final_reply = ""
-            last_error = ""
-            async for event in self.chat_events(
-                user_message=user_message,
-                user_id=user_id,
-                image_source=image_source,
-                attachments=attachments,
-                stream=False,
-                channel_instructions=channel_instructions,
-            ):
-                if event.get("type") == "message_done" and event.get("phase") == "final":
-                    final_reply = str(event.get("content") or "")
-                elif event.get("type") == "error":
-                    last_error = str(event.get("error") or "")
-            return final_reply or last_error
-
-        msg_handler = self.message_handler
-        model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
-        turn_ctx = self._observability_runtime().agent_turn(
+        final_reply = ""
+        last_error = ""
+        async for event in self.chat_events(
+            user_message=user_message,
             user_id=user_id,
-            model=model_name,
-            memory_mode="full",
+            image_source=image_source,
+            attachments=attachments,
             stream=False,
-        )
-        try:
-            with turn_ctx as turn_obs:
-                try:
-                    user_msg = await msg_handler.store_user_message(
-                        user_message,
-                        user_id,
-                        image_source,
-                        attachments=attachments,
-                    )
-                except ValueError as exc:
-                    logger.warning("Invalid image input from %s: %s", user_id, exc)
-                    return str(exc)
-
-                tool_specs, instructions, iteration_messages, input_messages = await self._build_turn_context(
-                    msg_handler=msg_handler,
-                    user_msg=user_msg,
-                    user_id=user_id,
-                    channel_instructions=channel_instructions,
-                )
-                turn_obs.set_input(input_messages)
-
-                for _ in range(self.max_iter):
-                    logger.debug("Agent iteration with input messages: %s", input_messages)
-                    reply_type, response = await self.model_client.call(
-                        messages=input_messages,
-                        tool_specs=tool_specs,
-                        instructions=instructions,
-                        stream=False,
-                        store_reply=lambda text: self._store_reply_and_schedule_experience(
-                            msg_handler=msg_handler,
-                            triggering_messages=[user_msg],
-                            reply_text=text,
-                        ),
-                    )
-
-                    if reply_type == ReplyType.SIMPLE_REPLY:
-                        assistant_msg = await msg_handler.store_model_reply(
-                            str(response),
-                            self._assistant_sender_id,
-                        )
-                        self._schedule_experience_write(
-                            messages=[user_msg, assistant_msg],
-                        )
-                        turn_obs.set_output(str(response))
-                        return response
-
-                    if reply_type == ReplyType.TOOL_CALL:
-                        tool_result = await self.tool_executor.handle_tool_calls(
-                            response,
-                            iteration_messages,
-                            self.max_concurrent_tools,
-                        )
-                        if tool_result is not None:
-                            assistant_msg = await msg_handler.store_model_reply(
-                                tool_result.description,
-                                self._assistant_sender_id,
-                                attachments=tool_result.attachments,
-                            )
-                            self._schedule_experience_write(
-                                messages=[user_msg, assistant_msg],
-                            )
-                            turn_obs.set_output(tool_result.content)
-                            return tool_result.content
-                        input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
-                        continue
-
-                    if reply_type == ReplyType.ERROR:
-                        logger.error("Model returned error event: %s", response)
-                        return "Sorry, I encountered an error while processing your request."
-
-                    logger.error("Unknown reply type: %s", reply_type)
-                    return "Sorry, I encountered an error while processing your request."
-
-                logger.error("Failed to generate response after %d attempts", self.max_iter)
-                return "Sorry, I could not generate a response after multiple attempts."
-        except Exception as exc:
-            logger.exception("Agent chat error: %s", exc)
-            return "Sorry, something went wrong."
-        finally:
-            try:
-                await self._observability_runtime().flush()
-            except Exception as exc:
-                logger.warning("Failed to flush observability events: %s", exc)
+            channel_instructions=channel_instructions,
+        ):
+            if event.get("type") == "message_done" and event.get("phase") == "final":
+                final_reply = str(event.get("content") or "")
+            elif event.get("type") == "error":
+                last_error = str(event.get("error") or "")
+        return final_reply or last_error
 
     async def chat_events(
         self,
@@ -421,7 +317,7 @@ class Agent:
         always eventized.
         """
         self._record_last_interaction()
-        msg_handler = self.message_handler
+        msg_service = self.message_service
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         turn_ctx = self._observability_runtime().agent_turn(
             user_id=user_id,
@@ -431,7 +327,7 @@ class Agent:
         )
         with turn_ctx as turn_obs:
             try:
-                user_msg = await msg_handler.store_user_message(
+                user_msg = await msg_service.store_user_message(
                     user_message,
                     user_id,
                     image_source,
@@ -444,7 +340,7 @@ class Agent:
                 return
 
             tool_specs, instructions, iteration_messages, input_messages = await self._build_turn_context(
-                msg_handler=msg_handler,
+                msg_service=msg_service,
                 user_msg=user_msg,
                 user_id=user_id,
                 channel_instructions=channel_instructions,
@@ -507,7 +403,7 @@ class Agent:
                                 deltas=text_parts,
                             ):
                                 yield event
-                        await msg_handler.store_model_reply(
+                        await msg_service.store_model_reply(
                             visible_text,
                             self._assistant_sender_id,
                             metadata={"turn_phase": "preface"},
@@ -535,7 +431,7 @@ class Agent:
                             attachments=tool_result.attachments,
                         ):
                             yield event
-                        assistant_msg = await msg_handler.store_model_reply(
+                        assistant_msg = await msg_service.store_model_reply(
                             tool_result.description,
                             self._assistant_sender_id,
                             metadata={"turn_phase": "final"},
@@ -548,7 +444,7 @@ class Agent:
                         yield {"type": "done"}
                         return
 
-                    input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+                    input_messages = msg_service.sanitize_input_messages(list(iteration_messages))
                     continue
 
                 if visible_text:
@@ -563,7 +459,7 @@ class Agent:
                             deltas=text_parts,
                         ):
                             yield event
-                    assistant_msg = await msg_handler.store_model_reply(
+                    assistant_msg = await msg_service.store_model_reply(
                         visible_text,
                         self._assistant_sender_id,
                         metadata={"turn_phase": "final"},
@@ -604,7 +500,7 @@ class Agent:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> AgentTurnResult:
         """Record environmental context without generating a reply."""
-        event_msg = await self.message_handler.store_context_event(
+        event_msg = await self.message_service.store_context_event(
             context=context,
             source=source,
             event_type=event_type,
@@ -659,15 +555,21 @@ class Agent:
                 ),
             }]
 
-            reply_type, payload = await self.model_client.call(
+            text_parts: list[str] = []
+            async for event in self.model_client.model_turn_events(
                 messages=input_messages,
                 tool_specs=None,
                 instructions=instructions,
                 stream=False,
-            )
-            if reply_type == ReplyType.SIMPLE_REPLY:
-                return self._parse_participation_decision(str(payload))
-            logger.warning("Participation decision returned non-text result: %s", reply_type)
+            ):
+                if event.type in {"text", "delta"} and event.delta:
+                    text_parts.append(event.delta)
+                elif event.type == "error":
+                    logger.warning("Participation decision returned model error: %s", event.error)
+                    break
+            if text_parts:
+                return self._parse_participation_decision("".join(text_parts))
+            logger.warning("Participation decision returned no text result")
         except Exception as exc:
             logger.warning("Participation decision failed: %s", exc, exc_info=True)
         return ParticipationDecision(should_reply=False, reason="participation decision failed")
@@ -739,20 +641,6 @@ class Agent:
             path.write_text(str(time.time()), encoding="utf-8")
         except OSError:
             pass
-
-    async def _store_reply_and_schedule_experience(
-        self,
-        msg_handler: MessageHandler,
-        triggering_messages: List[Message],
-        reply_text: str,
-    ) -> None:
-        assistant_msg = await msg_handler.store_model_reply(
-            reply_text,
-            self._assistant_sender_id,
-        )
-        self._schedule_experience_write(
-            messages=[*triggering_messages, assistant_msg],
-        )
 
     def _schedule_experience_write(
         self,

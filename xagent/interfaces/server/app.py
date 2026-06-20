@@ -30,7 +30,7 @@ from .models import (
 from .runtime_routes import register_runtime_routes
 from .serializers import message_item, message_search_result, response_payload
 from .web import register_spa_routes
-from ...components.skills import SkillsStorageLocal
+from ...components.skills import FilesystemSkillsStore
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
@@ -294,8 +294,8 @@ class AgentHTTPServer(BaseAgentRunner):
         }
         stored_message = None
         if task.task_type == "message":
-            message_handler = getattr(self.agent, "message_handler", None)
-            store_model_reply = getattr(message_handler, "store_model_reply", None)
+            message_service = getattr(self.agent, "message_service", None)
+            store_model_reply = getattr(message_service, "store_model_reply", None)
             if callable(store_model_reply):
                 stored_message = await store_model_reply(
                     result.content,
@@ -589,11 +589,11 @@ class AgentHTTPServer(BaseAgentRunner):
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    def _get_skills_storage(self) -> SkillsStorageLocal:
+    def _get_skills_storage(self) -> FilesystemSkillsStore:
         skills_storage = getattr(self, "skills_storage", None)
-        if isinstance(skills_storage, SkillsStorageLocal):
+        if isinstance(skills_storage, FilesystemSkillsStore):
             return skills_storage
-        storage = SkillsStorageLocal(self._get_skills_root())
+        storage = FilesystemSkillsStore(self._get_skills_root())
         self.skills_storage = storage
         if not hasattr(self.agent, "skills_storage"):
             try:
@@ -633,9 +633,9 @@ class AgentHTTPServer(BaseAgentRunner):
             self.agent.set_identity(identity)
         else:
             self.agent.system_prompt = identity
-            message_handler = getattr(self.agent, "message_handler", None)
-            if message_handler is not None:
-                message_handler.system_prompt = identity
+            instruction_builder = getattr(self.agent, "instruction_builder", None)
+            if instruction_builder is not None:
+                instruction_builder.system_prompt = identity
         self.identity = identity
 
     def _create_app(self) -> FastAPI:

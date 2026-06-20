@@ -8,7 +8,7 @@ from unittest.mock import patch
 from xagent.interfaces.base import BaseAgentRunner
 
 
-class _FakeMessageStorageLocal:
+class _FakeSQLiteMessageStore:
     def __init__(self, path: str):
         self.path = path
 
@@ -51,12 +51,12 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
             )
             identity_path.write_text("You are a research assistant.", encoding="utf-8")
 
-            with patch("xagent.interfaces.base.MessageStorageLocal", _FakeMessageStorageLocal):
+            with patch("xagent.interfaces.base.SQLiteMessageStore", _FakeSQLiteMessageStore):
                 runner = _RunnerWithoutAgent(config_dir=str(resolved_tmpdir))
 
             self.assertEqual(
                 runner.message_storage.path,
-                str(resolved_tmpdir / "messages" / "messages.sqlite3"),
+                resolved_tmpdir / "messages" / "messages.sqlite3",
             )
             self.assertFalse(hasattr(runner, "memory_storage"))
 

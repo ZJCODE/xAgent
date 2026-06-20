@@ -14,7 +14,7 @@ _TIME_SCOPES: tuple[str, ...] = ("daily", "weekly", "monthly", "yearly")
 _VALID_SCOPES: set[str] = {*_TIME_SCOPES, "all"}
 
 
-class MarkdownMemory:
+class MarkdownMemoryStore:
     """Store diary memory as daily, weekly, monthly, and yearly markdown files.
 
     This class owns file layout and I/O only. Scheduling writes, generating
@@ -259,12 +259,12 @@ class MarkdownMemory:
     @staticmethod
     async def _append_file(path: Path, content: str) -> None:
         """Append *content* to *path*."""
-        await asyncio.to_thread(MarkdownMemory._append_file_sync, path, content)
+        await asyncio.to_thread(MarkdownMemoryStore._append_file_sync, path, content)
 
     @staticmethod
     async def _write_file(path: Path, content: str) -> None:
         """Overwrite *path*."""
-        await asyncio.to_thread(MarkdownMemory._write_file_sync, path, content)
+        await asyncio.to_thread(MarkdownMemoryStore._write_file_sync, path, content)
 
     @staticmethod
     def _read_text_sync(path: Path) -> str:
@@ -294,7 +294,7 @@ class MarkdownMemory:
     def _list_files_many_sync(search_dirs: List[Path]) -> List[str]:
         files: list[str] = []
         for search_dir in search_dirs:
-            files.extend(MarkdownMemory._list_files_sync(search_dir))
+            files.extend(MarkdownMemoryStore._list_files_sync(search_dir))
         return sorted(files)
 
     @staticmethod
@@ -330,7 +330,7 @@ class MarkdownMemory:
     def _search_keyword_many_sync(query: str, search_dirs: List[Path], context_lines: int) -> str:
         blocks: list[str] = []
         for search_dir in search_dirs:
-            text = MarkdownMemory._search_keyword_sync(query, search_dir, context_lines)
+            text = MarkdownMemoryStore._search_keyword_sync(query, search_dir, context_lines)
             if text.strip():
                 blocks.append(text)
         return "\n--\n".join(blocks)

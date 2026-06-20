@@ -1,4 +1,4 @@
-"""Tests for MarkdownMemory (file-based diary storage)."""
+"""Tests for MarkdownMemoryStore (file-based diary storage)."""
 
 import asyncio
 import tempfile
@@ -7,14 +7,14 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from xagent.components.memory import MarkdownMemory
+from xagent.components.memory import MarkdownMemoryStore
 
 
 class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.memory_dir = self._tmpdir.name
-        self.memory = MarkdownMemory(self.memory_dir)
+        self.memory = MarkdownMemoryStore(self.memory_dir)
 
     def tearDown(self):
         self._tmpdir.cleanup()
@@ -97,7 +97,7 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_week_range_for(self):
         d = date(2025, 7, 9)  # Wednesday
-        monday, sunday = MarkdownMemory.week_range_for(d)
+        monday, sunday = MarkdownMemoryStore.week_range_for(d)
         self.assertEqual(monday.weekday(), 0)  # Monday
         self.assertEqual(sunday.weekday(), 6)  # Sunday
         self.assertLessEqual(monday, d)

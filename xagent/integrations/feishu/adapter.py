@@ -208,7 +208,7 @@ class FeishuAdapter:
         self._processing_tasks_lock = threading.Lock()
         self._processing_tasks: set[asyncio.Task[None]] = set()
         self._artifact_renderer = FeishuArtifactRenderer(self)
-        runtime_root = Path(getattr(agent, "workspace", AgentConfig.DEFAULT_WORKSPACE)).expanduser().resolve()
+        runtime_root = Path(getattr(agent, "workspace", AgentConfig.DEFAULT_RUNTIME_ROOT)).expanduser().resolve()
         self._tasks_dir = runtime_root / AgentConfig.TASKS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
 
@@ -2234,8 +2234,8 @@ class FeishuAdapter:
                 attachments=result.attachments,
                 is_group=is_group,
             )
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
+        message_service = getattr(self.agent, "message_service", None)
+        store_model_reply = getattr(message_service, "store_model_reply", None)
         if callable(store_model_reply):
             try:
                 await store_model_reply(

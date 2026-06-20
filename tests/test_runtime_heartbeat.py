@@ -6,7 +6,7 @@ from xagent.core.config import AgentConfig
 from xagent.core.runtime import RuntimeHeartbeat, RuntimeHeartbeatConfig, create_runtime_heartbeat
 
 
-class _FakeMemoryHandler:
+class _FakeMemoryMaintenanceService:
     def __init__(self):
         self.weekly_calls = []
         self.weekly_event = asyncio.Event()
@@ -25,7 +25,7 @@ class _FakeAgent:
         self.maintenance_count = 0
         self.maintenance_event = asyncio.Event()
         self.raise_on_maintenance = False
-        self.memory_handler = _FakeMemoryHandler()
+        self.memory_handler = _FakeMemoryMaintenanceService()
 
     async def run_memory_maintenance(self, trigger: str = "unknown"):
         if self.raise_on_maintenance:

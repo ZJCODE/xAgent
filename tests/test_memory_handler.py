@@ -1,4 +1,4 @@
-"""Tests for MemoryHandler (count-based journaling from MessageStorage)."""
+"""Tests for MemoryMaintenanceService (count-based journaling from MessageStorage)."""
 
 import asyncio
 import tempfile
@@ -6,8 +6,9 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from xagent.components.memory import MarkdownMemory
-from xagent.core.handlers.memory import MemoryHandler
+from xagent.components.memory import MarkdownMemoryStore
+from xagent.components.messages import StoredMessage
+from xagent.core.memory import MemoryMaintenanceService
 from xagent.schemas import Message, MessageType, RoleType
 
 _TEST_MAX_HISTORY = 20
@@ -54,31 +55,30 @@ class _FakeMessageStorage:
         start = max(0, end - count)
         return self.messages[start:end]
 
-    async def get_latest_message_cursor(self):
+    async def get_latest_message_id(self):
         return len(self.messages)
 
-    async def get_messages_in_cursor_range(self, start_exclusive=0, end_inclusive=None):
+    async def get_messages_by_id_range(self, start_exclusive=0, end_inclusive=None):
         start = max(0, int(start_exclusive or 0))
         end = len(self.messages) if end_inclusive is None else max(0, int(end_inclusive))
         if end <= start:
             return []
-        return self.messages[start:end]
-
-    async def cursor_for_message_count(self, message_count):
-        normalized = max(0, int(message_count or 0))
-        return normalized if normalized <= len(self.messages) else 0
+        return [
+            StoredMessage(id=index + 1, message=message)
+            for index, message in enumerate(self.messages[start:end], start=start)
+        ]
 
     def append(self, message: Message) -> None:
         self.messages.append(message)
 
 
-class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
+class MemoryMaintenanceServiceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.memory = MarkdownMemory(self._tmpdir.name)
+        self.memory = MarkdownMemoryStore(self._tmpdir.name)
         self.storage = _FakeMessageStorage()
         self.llm = _FakeLLMService()
-        self.handler = MemoryHandler(
+        self.handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
@@ -110,7 +110,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             timestamp=1710000000.0,
         )
 
-        record = MemoryHandler._experience_record(message)
+        record = MemoryMaintenanceService._experience_record(message)
 
         self.assertEqual(record["timestamp"], 1710000000.0)
 
@@ -122,7 +122,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             timestamp=1710000000.0,
         )
         self.storage.append(message)
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
@@ -152,27 +152,27 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(self.handler._maintenance_task)
 
-    async def test_run_maintenance_skips_when_cursor_gap_below_threshold(self):
+    async def test_run_maintenance_skips_when_message_id_gap_below_threshold(self):
         self.storage.append(Message(
             role=RoleType.USER,
             sender_id="alice",
             content="recent note",
             timestamp=1710000000.0,
         ))
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
             max_history=_TEST_MAX_HISTORY,
         )
-        # Cursor gap is 0 (last_processed=0, latest=1), below threshold of 14 → no write
+        # Message id gap is 0 (last_processed=0, latest=1), below threshold of 14 → no write
         wrote = await handler.run_maintenance(force=False)
 
         self.assertFalse(wrote)
         self.assertEqual(self.llm.diary_calls, [])
 
-    async def test_run_maintenance_writes_when_cursor_gap_meets_threshold(self):
-        # Add 20 messages so cursor gap = 20 >= threshold (max_history - window_overlap = 14)
+    async def test_run_maintenance_writes_when_message_id_gap_meets_threshold(self):
+        # Add 20 messages so message id gap = 20 >= threshold (max_history - window_overlap = 14)
         for i in range(20):
             self.storage.append(Message(
                 role=RoleType.USER,
@@ -180,7 +180,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 content="quiet reflection note" if i == 0 else f"filler {i}",
                 timestamp=1710000000.0 + i,
             ))
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
@@ -195,7 +195,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("quiet reflection note", diary_contents)
 
     async def test_run_maintenance_filters_routine_events_from_compression(self):
-        # Add enough filler messages to clear the cursor-gap threshold (14).
+        # Add enough filler messages to clear the message id-gap threshold (14).
         filler_messages = [
             Message(
                 role=RoleType.USER,
@@ -222,7 +222,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 metadata={"event_type": "heartbeat", "source": "runtime"},
             ),
         ])
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
@@ -247,7 +247,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             for index in range(4)
         ]
         storage = _FakeMessageStorage(stored_messages)
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
@@ -275,7 +275,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 metadata={"event_type": "heartbeat", "source": "runtime"},
             )
         ])
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
@@ -287,7 +287,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(wrote)
         self.assertEqual(handler._last_processed_message_id, 1)
         self.assertEqual(self.llm.diary_calls, [])
-        self.assertTrue(Path(self.memory.root / ".journal_cursor").exists())
+        self.assertTrue(Path(self.memory.root / ".journal_message_id").exists())
 
     async def test_run_maintenance_does_not_advance_checkpoint_when_diary_write_fails(self):
         storage = _FakeMessageStorage([
@@ -300,7 +300,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         ])
         llm = _FakeLLMService()
         llm.fail_on_diary_call_number = 1
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=llm,
             message_storage=storage,
@@ -311,7 +311,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(wrote)
         self.assertEqual(handler._last_processed_message_id, 0)
-        self.assertFalse(Path(self.memory.root / ".journal_cursor").exists())
+        self.assertFalse(Path(self.memory.root / ".journal_message_id").exists())
 
     async def test_run_maintenance_retries_full_window_after_partial_batch_failure(self):
         storage = _FakeMessageStorage([
@@ -325,7 +325,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         ])
         failing_llm = _FakeLLMService()
         failing_llm.fail_on_diary_call_number = 2
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=failing_llm,
             message_storage=storage,
@@ -339,7 +339,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handler._last_processed_message_id, 0)
 
         retry_llm = _FakeLLMService()
-        retry_handler = MemoryHandler(
+        retry_handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=retry_llm,
             message_storage=storage,
@@ -355,7 +355,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(today_text.count("entry 0"), 2)
         self.assertEqual(today_text.count("entry 1"), 1)
 
-    async def test_run_maintenance_reads_plain_int_cursor(self):
+    async def test_run_maintenance_reads_plain_int_message_id(self):
         storage = _FakeMessageStorage([
             Message(
                 role=RoleType.USER,
@@ -365,9 +365,9 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             )
             for index in range(4)
         ])
-        state_path = self.memory.root / ".journal_cursor"
+        state_path = self.memory.root / ".journal_message_id"
         state_path.write_text("2", encoding="utf-8")
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
@@ -393,7 +393,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             )
             for index in range(3)
         ])
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
@@ -421,14 +421,14 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             for index in range(2)
         ])
         first_llm = _FakeLLMService()
-        first_handler = MemoryHandler(
+        first_handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=first_llm,
             message_storage=storage,
             max_history=_TEST_MAX_HISTORY,
         )
         stale_llm = _FakeLLMService()
-        stale_handler = MemoryHandler(
+        stale_handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=stale_llm,
             message_storage=storage,
@@ -452,7 +452,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             )
             for index in range(8)
         ])
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
@@ -487,13 +487,13 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         blocking_llm = _FakeLLMService()
         blocking_llm.diary_gate = asyncio.Event()
         waiting_llm = _FakeLLMService()
-        first_handler = MemoryHandler(
+        first_handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=blocking_llm,
             message_storage=storage,
             max_history=_TEST_MAX_HISTORY,
         )
-        second_handler = MemoryHandler(
+        second_handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=waiting_llm,
             message_storage=storage,
@@ -525,7 +525,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             )
             for index in range(2)
         ])
-        first_handler = MemoryHandler(
+        first_handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
@@ -534,7 +534,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         first_wrote = await first_handler.run_maintenance(force=True)
         self.assertTrue(first_wrote)
-        self.assertTrue(Path(self.memory.root / ".journal_cursor").exists())
+        self.assertTrue(Path(self.memory.root / ".journal_message_id").exists())
 
         for index in range(2):
             storage.append(Message(
@@ -545,7 +545,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             ))
 
         second_llm = _FakeLLMService()
-        second_handler = MemoryHandler(
+        second_handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=second_llm,
             message_storage=storage,
@@ -561,8 +561,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             ["old 0", "old 1", "new 0", "new 1"],
         )
 
-    async def test_cursor_gap_triggers_maintenance(self):
-        # Add exactly max_history (20) messages so cursor gap = 20 >= 14
+    async def test_message_id_gap_triggers_maintenance(self):
+        # Add exactly max_history (20) messages so message id gap = 20 >= 14
         for i in range(20):
             self.storage.append(Message(
                 role=RoleType.USER,
@@ -570,13 +570,13 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 content=f"msg {i}",
                 timestamp=1715000000.0 + i,
             ))
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
             max_history=_TEST_MAX_HISTORY,
         )
-        # _last_processed_message_id = 0, latest cursor = 20, unprocessed = 20 >= 14
+        # _last_processed_message_id = 0, latest message id = 20, unprocessed = 20 >= 14
 
         wrote = await handler.run_maintenance(force=False)
 
@@ -593,22 +593,22 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 content=f"msg {i}",
                 timestamp=1716000000.0 + i,
             ))
-        handler = MemoryHandler(
+        handler = MemoryMaintenanceService(
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
             max_history=_TEST_MAX_HISTORY,
         )
 
-        # First compression: cursor-range (0, 20] = msgs 0-19
+        # First compression: message id-range (0, 20] = msgs 0-19
         wrote1 = await handler.run_maintenance(force=False)
         self.assertTrue(wrote1)
         first_contents = [m["content"] for m in self.llm.diary_calls[0]["messages"]]
         self.assertEqual(len(first_contents), 20)
 
-        # Add 14 more messages so the cursor gap reaches threshold naturally.
+        # Add enough messages so the message id gap reaches threshold naturally.
         # After first compression: _last_processed_message_id = 20.
-        # New messages 30-43 → latest = 44, unprocessed = 44-20 = 24 ≥ 14.
+        # New messages 30-43 -> latest = 44, unprocessed = 44-20 = 24.
         for i in range(30, 44):
             self.storage.append(Message(
                 role=RoleType.USER,
@@ -617,8 +617,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 timestamp=1716000000.0 + i,
             ))
 
-        # Second compression: cursor-range (14, 34] = msgs 14-33
-        # Overlaps with first batch by window_overlap=6 (msgs 14-19)
+        # Second compression overlaps with the first by the configured window size.
         second_llm = _FakeLLMService()
         handler.llm_service = second_llm
         wrote2 = await handler.run_maintenance(force=False)
@@ -626,11 +625,9 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         second_contents = [m["content"] for m in second_llm.diary_calls[0]["messages"]]
         self.assertEqual(len(second_contents), 20)
 
-        # Check overlap: last 6 of first batch should match first 6 of second batch
-        # First batch covers msgs 10-29; second batch covers msgs 24-43
-        # Overlap region: msgs 24-29
-        overlap_first = set(first_contents[-6:])
-        overlap_second = set(second_contents[:6])
+        overlap = handler.window_overlap
+        overlap_first = set(first_contents[-overlap:])
+        overlap_second = set(second_contents[:overlap])
         self.assertEqual(overlap_first, overlap_second,
                          f"Expected overlap: {sorted(overlap_first)} vs {sorted(overlap_second)}")
 

@@ -1,4 +1,4 @@
 from .agent import Agent
-from .config import AgentConfig, ReplyType
+from .config import AgentConfig
 
-__all__ = ["Agent", "AgentConfig", "ReplyType"]
+__all__ = ["Agent", "AgentConfig"]

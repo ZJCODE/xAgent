@@ -1,4 +1,5 @@
 from .heartbeat import RuntimeHeartbeat, RuntimeHeartbeatConfig, create_runtime_heartbeat
+from .paths import RuntimePaths
 from .scheduler import (
     parse_run_at,
 )
@@ -20,6 +21,7 @@ from .tasks import (
 __all__ = [
     "RuntimeHeartbeat",
     "RuntimeHeartbeatConfig",
+    "RuntimePaths",
     "create_runtime_heartbeat",
     "parse_run_at",
     "AsyncTaskScheduler",

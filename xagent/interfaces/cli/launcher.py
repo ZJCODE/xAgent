@@ -1398,9 +1398,9 @@ def _print_skills_summary(config_dir: Path) -> int:
         print("Skills: not found")
         return 0
 
-    from ...components.skills import SkillsStorageLocal
+    from ...components.skills import FilesystemSkillsStore
 
-    storage = SkillsStorageLocal(root, seed_builtins=False)
+    storage = FilesystemSkillsStore(root, seed_builtins=False)
     info = storage.info()
     print(f"Skills root: {info['root']}")
     print(f"Total: {info['count']}")
@@ -1417,9 +1417,9 @@ def _print_skills_list(config_dir: Path) -> int:
         print("No skills found.")
         return 0
 
-    from ...components.skills import SkillsStorageLocal
+    from ...components.skills import FilesystemSkillsStore
 
-    storage = SkillsStorageLocal(root, seed_builtins=False)
+    storage = FilesystemSkillsStore(root, seed_builtins=False)
     skills = storage.list_skills(include_disabled=True, include_invalid=True)
     if not skills:
         print("No skills found.")
@@ -1444,9 +1444,9 @@ def _print_skills_search(config_dir: Path, query: str) -> int:
         print("No skills found.")
         return 0
 
-    from ...components.skills import SkillsStorageLocal
+    from ...components.skills import FilesystemSkillsStore
 
-    storage = SkillsStorageLocal(root, seed_builtins=False)
+    storage = FilesystemSkillsStore(root, seed_builtins=False)
     results = storage.search(query).get("results", [])
     if not results:
         print("No matching skill files.")
@@ -1466,9 +1466,9 @@ def _print_skills_validation(config_dir: Path) -> int:
         print("No skills found.")
         return 0
 
-    from ...components.skills import SkillsStorageLocal
+    from ...components.skills import FilesystemSkillsStore
 
-    storage = SkillsStorageLocal(root, seed_builtins=False)
+    storage = FilesystemSkillsStore(root, seed_builtins=False)
     validation = storage.validate_all()
     if validation.get("valid"):
         print("Skills OK")

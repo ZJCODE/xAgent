@@ -3,14 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from xagent.components.skills import SkillsStorageLocal
+from xagent.components.skills import FilesystemSkillsStore
 from xagent.tools import create_read_skill_tool
 
 
-class SkillsStorageLocalTests(unittest.TestCase):
+class FilesystemSkillsStoreTests(unittest.TestCase):
     def test_create_list_catalog_and_read_skill(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            storage = SkillsStorageLocal(Path(tmpdir) / "skills", seed_builtins=False)
+            storage = FilesystemSkillsStore(Path(tmpdir) / "skills", seed_builtins=False)
 
             skill = storage.create_skill(
                 name="code-review",
@@ -39,7 +39,7 @@ class SkillsStorageLocalTests(unittest.TestCase):
 
     def test_disable_hides_skill_from_catalog_and_tool_read(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            storage = SkillsStorageLocal(Path(tmpdir) / "skills", seed_builtins=False)
+            storage = FilesystemSkillsStore(Path(tmpdir) / "skills", seed_builtins=False)
             storage.create_skill(
                 name="writing-docs",
                 description="Writes project documentation. Use when drafting docs.",
@@ -56,7 +56,7 @@ class SkillsStorageLocalTests(unittest.TestCase):
     def test_read_skill_file_cannot_escape_selected_skill_root(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            storage = SkillsStorageLocal(root / "skills", seed_builtins=False)
+            storage = FilesystemSkillsStore(root / "skills", seed_builtins=False)
             storage.create_skill(
                 name="alpha-skill",
                 description="Handles alpha tasks. Use when alpha is mentioned.",
@@ -76,7 +76,7 @@ class SkillsStorageLocalTests(unittest.TestCase):
 
     def test_invalid_skill_is_listed_with_validation_errors(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            storage = SkillsStorageLocal(Path(tmpdir) / "skills", seed_builtins=False)
+            storage = FilesystemSkillsStore(Path(tmpdir) / "skills", seed_builtins=False)
             invalid_dir = storage.root / "bad-skill"
             invalid_dir.mkdir()
             (invalid_dir / "SKILL.md").write_text(
@@ -94,7 +94,7 @@ class SkillsStorageLocalTests(unittest.TestCase):
 
     def test_read_skill_tool_loads_main_and_referenced_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            storage = SkillsStorageLocal(Path(tmpdir) / "skills", seed_builtins=False)
+            storage = FilesystemSkillsStore(Path(tmpdir) / "skills", seed_builtins=False)
             storage.create_skill(
                 name="testing-code",
                 description="Generates tests. Use when adding test coverage.",
@@ -115,7 +115,7 @@ class SkillsStorageLocalTests(unittest.TestCase):
 
     def test_builtin_skill_creator_is_seeded_and_readable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            storage = SkillsStorageLocal(Path(tmpdir) / "skills")
+            storage = FilesystemSkillsStore(Path(tmpdir) / "skills")
 
             skill = storage.get_skill("skill-creator")
             self.assertIsNotNone(skill)
@@ -133,12 +133,12 @@ class SkillsStorageLocalTests(unittest.TestCase):
     def test_builtin_skill_seed_does_not_overwrite_existing_copy(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             skills_root = Path(tmpdir) / "skills"
-            storage = SkillsStorageLocal(skills_root)
+            storage = FilesystemSkillsStore(skills_root)
             skill_file = storage.root / "skill-creator" / "SKILL.md"
             original = skill_file.read_text(encoding="utf-8")
             skill_file.write_text(original + "\nCUSTOM LOCAL EDIT\n", encoding="utf-8")
 
-            SkillsStorageLocal(skills_root)
+            FilesystemSkillsStore(skills_root)
 
             self.assertIn("CUSTOM LOCAL EDIT", skill_file.read_text(encoding="utf-8"))
 

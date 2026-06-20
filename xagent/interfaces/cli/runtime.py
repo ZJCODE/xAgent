@@ -846,7 +846,7 @@ def handle_memory(args: argparse.Namespace) -> int:
         return 0
 
     if args.memory_command == "list":
-        from ...components.memory import MarkdownMemory
+        from ...components.memory import MarkdownMemoryStore
 
         days = int(getattr(args, "days", 7) or 7)
         if days <= 0:
@@ -854,7 +854,7 @@ def handle_memory(args: argparse.Namespace) -> int:
             return 1
 
         async def _run_memory_list() -> int:
-            memory = MarkdownMemory(str(root))
+            memory = MarkdownMemoryStore(str(root))
             entries = await memory.read_recent_dailies(days=days)
             if not entries:
                 unit = "day" if days == 1 else "days"

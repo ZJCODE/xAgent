@@ -6,18 +6,52 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from xagent.components.message import MessageStorageBase
 from xagent.core.agent import Agent
-from xagent.core.config import AgentConfig, ReplyType
-from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
-from xagent.core.handlers.message import MessageHandler
+from xagent.core.config import AgentConfig
+from xagent.core.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
+from xagent.core.messages import ExperienceFormatter, InstructionBuilder, MessageService, TurnContextBuilder
+from xagent.core.ports import MessageStore
 from xagent.core.providers import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_OPENAI_RESPONSES
 from xagent.core.tools.executor import ToolDisplayResult, ToolExecutor
 from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
 
 
-class InMemoryMessageStorage(MessageStorageBase):
+def _text_turn(text: str) -> list[ModelStreamEvent]:
+    return [ModelStreamEvent(type="text", delta=text)]
+
+
+def _tool_turn(tool_calls: list, text: str = "") -> list[ModelStreamEvent]:
+    events: list[ModelStreamEvent] = []
+    if text:
+        events.append(ModelStreamEvent(type="text", delta=text))
+    events.append(ModelStreamEvent(type="tool_calls", tool_calls=tool_calls))
+    return events
+
+
+def _error_turn(error: ModelErrorEvent) -> list[ModelStreamEvent]:
+    return [ModelStreamEvent(type="error", error=error)]
+
+
+async def _collect_model_turn_events(
+    model: ModelClient,
+    *,
+    messages: list,
+    tool_specs: list | None = None,
+    instructions=None,
+    stream: bool = False,
+) -> list[ModelStreamEvent]:
+    return [
+        event async for event in model.model_turn_events(
+            messages=messages,
+            tool_specs=tool_specs,
+            instructions=instructions,
+            stream=stream,
+        )
+    ]
+
+
+class InMemoryMessageStorage(MessageStore):
     def __init__(self, initial_messages=None):
         self.messages = list(initial_messages or [])
         self.last_count = None
@@ -54,7 +88,7 @@ class FakeToolManager:
         return self._tools.get(name)
 
 
-class FakeMemoryHandler:
+class FakeMemoryMaintenanceService:
     def __init__(self):
         self.experience_messages = None
         self.maintenance_calls = 0
@@ -125,10 +159,14 @@ class CapturingModelClient:
         self.calls = []
         self.instructions_calls = []
 
-    async def call(self, messages, tool_specs, instructions=None, stream=False, store_reply=None):
+    async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
         self.calls.append(messages)
         self.instructions_calls.append(instructions)
-        return self.responses.pop(0)
+        turn = self.responses.pop(0)
+        if isinstance(turn, ModelStreamEvent):
+            turn = [turn]
+        for event in turn:
+            yield event
 
 
 class CapturingStreamingModelClient(CapturingModelClient):
@@ -285,37 +323,57 @@ def _responses_response(output_text=None, output=None):
 
 
 class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
-    def test_non_stream_response_preserves_text_on_tool_calls(self):
+    @staticmethod
+    def _lookup_tool_specs() -> list[dict]:
+        return [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+
+    async def test_non_stream_response_preserves_text_on_tool_calls(self):
         raw_tool_call = SimpleNamespace(
             id="call-1",
             type="function",
             function=SimpleNamespace(name="lookup", arguments="{}"),
         )
-        response = _chat_response(content="I will look that up first.", tool_calls=[raw_tool_call])
+        client = FakeOpenAIClient([
+            _chat_response(content="I will look that up first.", tool_calls=[raw_tool_call])
+        ])
+        model = ModelClient(client=client, model="test-model")
 
-        reply_type, payload = ModelClient._handle_non_stream(response)
+        events = await _collect_model_turn_events(
+            model,
+            messages=[{"role": "user", "content": "lookup"}],
+            tool_specs=self._lookup_tool_specs(),
+        )
 
-        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload[0].call_id, "call-1")
-        self.assertEqual(payload[0].name, "lookup")
-        self.assertEqual(payload[0].arguments, "{}")
-        self.assertEqual(payload[0].assistant_content, "I will look that up first.")
+        self.assertEqual([event.type for event in events], ["text", "tool_calls"])
+        self.assertEqual(events[0].delta, "I will look that up first.")
+        tool_call = events[1].tool_calls[0]
+        self.assertEqual(tool_call.call_id, "call-1")
+        self.assertEqual(tool_call.name, "lookup")
+        self.assertEqual(tool_call.arguments, "{}")
+        self.assertEqual(tool_call.assistant_content, "I will look that up first.")
 
-    def test_non_stream_tool_calls_preserve_reasoning_content(self):
+    async def test_non_stream_tool_calls_preserve_reasoning_content(self):
         raw_tool_call = SimpleNamespace(
             id="call-1",
             type="function",
             function=SimpleNamespace(name="lookup", arguments="{}"),
         )
-        response = _chat_response(
-            tool_calls=[raw_tool_call],
-            reasoning_content="I need to inspect local state before answering.",
+        client = FakeOpenAIClient([
+            _chat_response(
+                tool_calls=[raw_tool_call],
+                reasoning_content="I need to inspect local state before answering.",
+            )
+        ])
+        model = ModelClient(client=client, model="test-model")
+
+        events = await _collect_model_turn_events(
+            model,
+            messages=[{"role": "user", "content": "lookup"}],
+            tool_specs=self._lookup_tool_specs(),
         )
 
-        reply_type, payload = ModelClient._handle_non_stream(response)
-
-        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload[0].reasoning_content, "I need to inspect local state before answering.")
+        self.assertEqual([event.type for event in events], ["tool_calls"])
+        self.assertEqual(events[0].tool_calls[0].reasoning_content, "I need to inspect local state before answering.")
 
     async def test_model_turn_events_non_stream_preserves_text_and_tool_calls(self):
         raw_tool_call = SimpleNamespace(
@@ -341,25 +399,26 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[1].tool_calls[0].assistant_content, "I will look that up first.")
         self.assertFalse(client.chat_completions.calls[0]["stream"])
 
-    async def test_call_uses_chat_completions_with_system_message(self):
+    async def test_model_turn_events_uses_chat_completions_with_system_message(self):
         client = FakeOpenAIClient([_chat_response(content="ok")])
         model = ModelClient(client=client, model="test-model")
 
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "hello"}],
             tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
             instructions="Core Rules",
         )
 
-        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
-        self.assertEqual(payload, "ok")
+        self.assertEqual([event.type for event in events], ["text"])
+        self.assertEqual(events[0].delta, "ok")
         call = client.chat_completions.calls[0]
         self.assertEqual(call["model"], "test-model")
         self.assertEqual(call["messages"][0], {"role": "system", "content": "Core Rules"})
         self.assertEqual(call["messages"][1], {"role": "user", "content": "hello"})
         self.assertEqual(call["tool_choice"], "auto")
 
-    async def test_call_uses_responses_api_when_selected(self):
+    async def test_model_turn_events_uses_responses_api_when_selected(self):
         client = FakeOpenAIClient(response_api_responses=[_responses_response(output_text="ok")])
         model = ModelClient(
             client=client,
@@ -367,7 +426,8 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             model_api=MODEL_API_OPENAI_RESPONSES,
         )
 
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "hello"}],
             tool_specs=[{
                 "type": "function",
@@ -380,8 +440,8 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             instructions=[{"role": "system", "name": "core", "content": "Core Rules"}],
         )
 
-        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
-        self.assertEqual(payload, "ok")
+        self.assertEqual([event.type for event in events], ["text"])
+        self.assertEqual(events[0].delta, "ok")
         call = client.responses_api.calls[0]
         self.assertEqual(call["model"], "test-model")
         self.assertEqual(call["instructions"], "Core Rules")
@@ -419,18 +479,20 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             model_api=MODEL_API_OPENAI_RESPONSES,
         )
 
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "lookup"}],
             tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
         )
 
-        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload[0].call_id, "call-1")
-        self.assertEqual(payload[0].name, "lookup")
-        self.assertEqual(payload[0].arguments, '{"query": "x"}')
-        self.assertEqual(payload[0].response_items, response_items)
+        self.assertEqual([event.type for event in events], ["tool_calls"])
+        tool_call = events[0].tool_calls[0]
+        self.assertEqual(tool_call.call_id, "call-1")
+        self.assertEqual(tool_call.name, "lookup")
+        self.assertEqual(tool_call.arguments, '{"query": "x"}')
+        self.assertEqual(tool_call.response_items, response_items)
 
-    async def test_call_uses_anthropic_messages_backend(self):
+    async def test_model_turn_events_uses_anthropic_messages_backend(self):
         client = FakeAnthropicClient([
             _anthropic_response([{"type": "text", "text": "ok"}])
         ])
@@ -441,7 +503,8 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             max_tokens=1234,
         )
 
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "hello"}],
             tool_specs=[{
                 "type": "function",
@@ -454,8 +517,8 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             instructions="Core Rules",
         )
 
-        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
-        self.assertEqual(payload, "ok")
+        self.assertEqual([event.type for event in events], ["text"])
+        self.assertEqual(events[0].delta, "ok")
         call = client.messages.calls[0]
         self.assertEqual(call["model"], "MiniMax-M2.7")
         self.assertEqual(call["max_tokens"], 1234)
@@ -479,7 +542,8 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         client = FakeAnthropicClient([_anthropic_response(response_blocks)])
         model = ModelClient(client=client, model="MiniMax-M2.7", model_api=MODEL_API_ANTHROPIC_MESSAGES)
 
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "hello"}],
             tool_specs=[{
                 "type": "function",
@@ -487,11 +551,12 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             }],
         )
 
-        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload[0].call_id, "toolu_1")
-        self.assertEqual(payload[0].name, "lookup")
-        self.assertEqual(payload[0].arguments, '{"query": "x"}')
-        self.assertEqual(payload[0].content_blocks, response_blocks)
+        self.assertEqual([event.type for event in events], ["tool_calls"])
+        tool_call = events[0].tool_calls[0]
+        self.assertEqual(tool_call.call_id, "toolu_1")
+        self.assertEqual(tool_call.name, "lookup")
+        self.assertEqual(tool_call.arguments, '{"query": "x"}')
+        self.assertEqual(tool_call.content_blocks, response_blocks)
 
     async def test_anthropic_request_replays_assistant_tool_content_blocks(self):
         content_blocks = [
@@ -503,7 +568,8 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         ])
         model = ModelClient(client=client, model="MiniMax-M2.7", model_api=MODEL_API_ANTHROPIC_MESSAGES)
 
-        await model.call(
+        await _collect_model_turn_events(
+            model,
             messages=[
                 {
                     "role": "assistant",
@@ -557,14 +623,15 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             }
         ]
 
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=user_messages,
             tool_specs=None,
             instructions=instruction_messages,
         )
 
-        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
-        self.assertEqual(payload, "ok")
+        self.assertEqual([event.type for event in events], ["text"])
+        self.assertEqual(events[0].delta, "ok")
         call = client.chat_completions.calls[0]
         self.assertEqual(
             call["messages"],
@@ -580,7 +647,8 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         client = FakeOpenAIClient([_chat_response(content="ok")])
         model = ModelClient(client=client, model="test-model")
 
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=[{
                 "role": "user",
                 "name": AgentConfig.CURRENT_TASK_NAME,
@@ -604,8 +672,8 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
-        self.assertEqual(payload, "ok")
+        self.assertEqual([event.type for event in events], ["text"])
+        self.assertEqual(events[0].delta, "ok")
         call = client.chat_completions.calls[0]
         self.assertEqual(
             call["messages"],
@@ -639,33 +707,25 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("name", stripped[0])
         self.assertEqual(stripped[0]["tool_calls"][0]["function"]["name"], "lookup")
 
-    async def test_stream_text_yields_chunks_and_stores_final_text(self):
+    async def test_stream_text_yields_chunks(self):
         chunks = [
             SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Hel", tool_calls=None))]),
             SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="lo", tool_calls=None))]),
         ]
         client = FakeOpenAIClient([AsyncChunkStream(chunks)])
         model = ModelClient(client=client, model="test-model")
-        stored = []
 
-        async def store_reply(text):
-            stored.append(text)
-
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "hello"}],
             tool_specs=None,
             stream=True,
-            store_reply=store_reply,
         )
 
-        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
-        collected = []
-        async for chunk in payload:
-            collected.append(chunk)
-        self.assertEqual(collected, ["Hel", "lo"])
-        self.assertEqual(stored, ["Hello"])
+        self.assertEqual([event.type for event in events], ["delta", "delta"])
+        self.assertEqual([event.delta for event in events], ["Hel", "lo"])
 
-    async def test_responses_stream_text_yields_chunks_and_stores_final_text(self):
+    async def test_responses_stream_text_yields_chunks(self):
         events = [
             SimpleNamespace(type="response.output_text.delta", delta="Hel"),
             SimpleNamespace(type="response.output_text.delta", delta="lo"),
@@ -676,24 +736,16 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             model="test-model",
             model_api=MODEL_API_OPENAI_RESPONSES,
         )
-        stored = []
 
-        async def store_reply(text):
-            stored.append(text)
-
-        reply_type, payload = await model.call(
+        turn_events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "hello"}],
             tool_specs=None,
             stream=True,
-            store_reply=store_reply,
         )
 
-        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
-        collected = []
-        async for chunk in payload:
-            collected.append(chunk)
-        self.assertEqual(collected, ["Hel", "lo"])
-        self.assertEqual(stored, ["Hello"])
+        self.assertEqual([event.type for event in turn_events], ["delta", "delta"])
+        self.assertEqual([event.delta for event in turn_events], ["Hel", "lo"])
 
     async def test_stream_tool_calls_accumulates_split_arguments(self):
         chunks = [
@@ -712,15 +764,16 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         client = FakeOpenAIClient([AsyncChunkStream(chunks)])
         model = ModelClient(client=client, model="test-model")
 
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "lookup"}],
             tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
             stream=True,
         )
 
-        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
+        self.assertEqual([event.type for event in events], ["tool_calls"])
         self.assertEqual(
-            payload,
+            events[0].tool_calls,
             [ChatToolCall(
                 call_id="call-1",
                 name="lookup",
@@ -743,15 +796,17 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         client = FakeOpenAIClient([AsyncChunkStream(chunks)])
         model = ModelClient(client=client, model="test-model")
 
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "lookup"}],
             tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
             stream=True,
         )
 
-        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload[0].call_id, "call-1")
-        self.assertEqual(payload[0].assistant_content, "I will check.")
+        self.assertEqual([event.type for event in events], ["delta", "tool_calls"])
+        self.assertEqual(events[0].delta, "I will check.")
+        self.assertEqual(events[1].tool_calls[0].call_id, "call-1")
+        self.assertEqual(events[1].tool_calls[0].assistant_content, "I will check.")
 
     async def test_responses_stream_tool_calls_accumulates_split_arguments(self):
         events = [
@@ -786,17 +841,19 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             model_api=MODEL_API_OPENAI_RESPONSES,
         )
 
-        reply_type, payload = await model.call(
+        turn_events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "lookup"}],
             tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
             stream=True,
         )
 
-        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload[0].call_id, "call-1")
-        self.assertEqual(payload[0].name, "lookup")
-        self.assertEqual(payload[0].arguments, '{"value": "ok"}')
-        self.assertEqual(payload[0].response_items[-1]["type"], "function_call")
+        self.assertEqual([event.type for event in turn_events], ["tool_calls"])
+        tool_call = turn_events[0].tool_calls[0]
+        self.assertEqual(tool_call.call_id, "call-1")
+        self.assertEqual(tool_call.name, "lookup")
+        self.assertEqual(tool_call.arguments, '{"value": "ok"}')
+        self.assertEqual(tool_call.response_items[-1]["type"], "function_call")
 
     async def test_responses_stream_text_before_tool_call_is_preserved_in_replay(self):
         events = [
@@ -831,18 +888,20 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             model_api=MODEL_API_OPENAI_RESPONSES,
         )
 
-        reply_type, payload = await model.call(
+        turn_events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "lookup"}],
             tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
             stream=True,
         )
 
-        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload[0].assistant_content, "I will check.")
-        self.assertEqual(payload[0].response_items[0]["type"], "message")
-        self.assertEqual(payload[0].response_items[0]["content"][0]["text"], "I will check.")
+        self.assertEqual([event.type for event in turn_events], ["delta", "tool_calls"])
+        tool_call = turn_events[1].tool_calls[0]
+        self.assertEqual(tool_call.assistant_content, "I will check.")
+        self.assertEqual(tool_call.response_items[0]["type"], "message")
+        self.assertEqual(tool_call.response_items[0]["content"][0]["text"], "I will check.")
 
-    async def test_model_call_exception_returns_error_event(self):
+    async def test_model_turn_exception_returns_error_event(self):
         class FailingChatCompletions:
             async def create(self, **kwargs):
                 raise RuntimeError("provider rejected messages")
@@ -852,16 +911,17 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         )
         model = ModelClient(client=client, model="test-model")
 
-        reply_type, payload = await model.call(
+        events = await _collect_model_turn_events(
+            model,
             messages=[{"role": "user", "content": "hello"}],
             tool_specs=None,
         )
 
-        self.assertEqual(reply_type, ReplyType.ERROR)
-        self.assertIsInstance(payload, ModelErrorEvent)
-        self.assertEqual(payload.code, "model_call_failed")
-        self.assertEqual(payload.message, "Model call failed.")
-        self.assertIn("provider rejected messages", payload.details)
+        self.assertEqual([event.type for event in events], ["error"])
+        self.assertIsInstance(events[0].error, ModelErrorEvent)
+        self.assertEqual(events[0].error.code, "model_stream_failed")
+        self.assertEqual(events[0].error.message, "Model stream failed.")
+        self.assertIn("provider rejected messages", events[0].error.details)
 
 
 class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
@@ -879,6 +939,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent"
         agent.supports_vision = True
+        agent.workspace_dir = None
+        agent.skills_storage = None
         agent.max_history = AgentConfig.DEFAULT_MAX_HISTORY
         agent.max_iter = AgentConfig.DEFAULT_MAX_ITER
         agent.max_concurrent_tools = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
@@ -886,15 +948,17 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.tool_manager = FakeToolManager(tools=tools)
         agent.model_client = model_client
         agent.message_storage = storage
-        agent.message_handler = MessageHandler(message_storage=storage, system_prompt="")
-        agent.memory_handler = memory_handler or FakeMemoryHandler()
+        agent.message_service = MessageService(message_store=storage)
+        agent.instruction_builder = InstructionBuilder(system_prompt=agent.system_prompt)
+        agent.turn_context_builder = TurnContextBuilder()
+        agent.memory_handler = memory_handler or FakeMemoryMaintenanceService()
         agent.tool_executor = tool_executor or FakeToolExecutor()
         return agent
 
     def test_agent_init_passes_message_storage_to_memory_handler(self):
         captured = {}
 
-        class CapturingMemoryHandler:
+        class CapturingMemoryMaintenanceService:
             def __init__(self, **kwargs):
                 captured.update(kwargs)
 
@@ -902,7 +966,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 return ""
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("xagent.core.agent.MemoryHandler", CapturingMemoryHandler):
+            with patch("xagent.core.agent.MemoryMaintenanceService", CapturingMemoryMaintenanceService):
                 agent = Agent(
                     client=object(),
                     workspace=tmpdir,
@@ -920,7 +984,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             )
         ])
         model_client = CapturingModelClient([
-            (ReplyType.SIMPLE_REPLY, '{"should_reply": true, "reason": "can unblock the room"}'),
+            _text_turn('{"should_reply": true, "reason": "can unblock the room"}'),
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
@@ -943,7 +1007,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_decide_participation_defaults_to_silence_on_invalid_model_output(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([
-            (ReplyType.SIMPLE_REPLY, "I would probably wait."),
+            _text_turn("I would probably wait."),
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
@@ -960,8 +1024,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_keeps_tool_messages_transient_inside_loop(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([
-            (ReplyType.TOOL_CALL, [FakeToolCall()]),
-            (ReplyType.SIMPLE_REPLY, "Done"),
+            _tool_turn([FakeToolCall()]),
+            _text_turn("Done"),
         ])
         tool_executor = FakeToolExecutor()
         agent = self._build_agent(
@@ -1001,13 +1065,12 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir).resolve()
             storage = InMemoryMessageStorage()
-            model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "processed")])
+            model_client = CapturingModelClient([_text_turn("processed")])
             agent = self._build_agent(storage=storage, model_client=model_client)
             agent.supports_vision = False
             agent.workspace_dir = workspace_dir
-            agent.message_handler = MessageHandler(
-                message_storage=storage,
-                system_prompt="",
+            agent.message_service = MessageService(
+                message_store=storage,
                 workspace_dir=workspace_dir,
             )
 
@@ -1045,7 +1108,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_chat_events_streams_preface_then_tool_then_final_reply(self):
         storage = InMemoryMessageStorage()
-        memory_handler = FakeMemoryHandler()
+        memory_handler = FakeMemoryMaintenanceService()
         model_client = CapturingStreamingModelClient([
             [
                 ModelStreamEvent(type="delta", delta="I will check."),
@@ -1118,7 +1181,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent = self._build_agent(
             storage=storage,
             model_client=model_client,
-            memory_handler=FakeMemoryHandler(),
+            memory_handler=FakeMemoryMaintenanceService(),
         )
 
         events = Agent.chat_events(
@@ -1159,7 +1222,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent = self._build_agent(
             storage=storage,
             model_client=model_client,
-            memory_handler=FakeMemoryHandler(),
+            memory_handler=FakeMemoryMaintenanceService(),
         )
 
         response = await Agent.chat(
@@ -1192,7 +1255,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             storage=storage,
             model_client=model_client,
             tool_executor=FakeToolExecutor(),
-            memory_handler=FakeMemoryHandler(),
+            memory_handler=FakeMemoryMaintenanceService(),
         )
 
         events = [
@@ -1241,7 +1304,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             storage=storage,
             model_client=model_client,
             tool_executor=FakeAttachmentToolExecutor(tool_result),
-            memory_handler=FakeMemoryHandler(),
+            memory_handler=FakeMemoryMaintenanceService(),
         )
 
         events = [
@@ -1264,7 +1327,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_wraps_turn_in_observability_context(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([
-            (ReplyType.SIMPLE_REPLY, "Traced answer"),
+            _text_turn("Traced answer"),
         ])
         observability = FakeObservabilityRuntime()
         agent = self._build_agent(
@@ -1302,7 +1365,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_chat_updates_last_interaction_file(self):
         storage = InMemoryMessageStorage()
-        model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "ok")])
+        model_client = CapturingModelClient([_text_turn("ok")])
         agent = self._build_agent(storage=storage, model_client=model_client)
         with tempfile.TemporaryDirectory() as tmpdir:
             agent.markdown_memory = SimpleNamespace(root=Path(tmpdir))
@@ -1314,7 +1377,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_observe_does_not_update_last_interaction_file(self):
         storage = InMemoryMessageStorage()
-        memory_handler = FakeMemoryHandler()
+        memory_handler = FakeMemoryMaintenanceService()
         model_client = CapturingModelClient([])
         agent = self._build_agent(
             storage=storage,
@@ -1332,7 +1395,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_memory_maintenance_passes_force_when_idle(self):
         storage = InMemoryMessageStorage()
-        memory_handler = FakeMemoryHandler()
+        memory_handler = FakeMemoryMaintenanceService()
         model_client = CapturingModelClient([])
         agent = self._build_agent(
             storage=storage,
@@ -1351,7 +1414,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_memory_maintenance_does_not_force_when_active(self):
         storage = InMemoryMessageStorage()
-        memory_handler = FakeMemoryHandler()
+        memory_handler = FakeMemoryMaintenanceService()
         model_client = CapturingModelClient([])
         agent = self._build_agent(
             storage=storage,
@@ -1371,7 +1434,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             for index in range(50)
         ])
         model_client = CapturingModelClient([
-            (ReplyType.SIMPLE_REPLY, "Final answer"),
+            _text_turn("Final answer"),
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
@@ -1400,7 +1463,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             for index in range(50)
         ])
         model_client = CapturingModelClient([
-            (ReplyType.SIMPLE_REPLY, "Final answer"),
+            _text_turn("Final answer"),
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
         agent.max_history = 15
@@ -1427,14 +1490,11 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_hides_model_error_event_from_user(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([
-            (
-                ReplyType.ERROR,
-                ModelErrorEvent(
-                    code="model_call_failed",
-                    message="Model call failed.",
-                    details="provider rejected messages",
-                ),
-            ),
+            _error_turn(ModelErrorEvent(
+                code="model_call_failed",
+                message="Model call failed.",
+                details="provider rejected messages",
+            )),
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
@@ -1460,7 +1520,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             Message.create("x" * 30, role=RoleType.USER, sender_id="alice")
         )
 
-        transcript = MessageHandler.build_recent_transcript_message(
+        transcript = ExperienceFormatter.build_recent_transcript_message(
             messages,
             current_user_id="alice",
             max_messages=2,
@@ -1478,7 +1538,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             Message.create("look at this", role=RoleType.USER, sender_id="alice", image_source=image_url),
         ]
 
-        model_message = MessageHandler.build_recent_transcript_message(
+        model_message = ExperienceFormatter.build_recent_transcript_message(
             messages,
             current_user_id="alice",
             max_messages=1,
@@ -1489,7 +1549,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_observe_ingests_event_without_calling_model(self):
         storage = InMemoryMessageStorage()
-        memory_handler = FakeMemoryHandler()
+        memory_handler = FakeMemoryMaintenanceService()
         model_client = CapturingModelClient([])
         agent = self._build_agent(
             storage=storage,
@@ -1515,7 +1575,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_observe_stores_ingested_history_recap(self):
         storage = InMemoryMessageStorage()
-        memory_handler = FakeMemoryHandler()
+        memory_handler = FakeMemoryMaintenanceService()
         model_client = CapturingModelClient([])
         agent = self._build_agent(
             storage=storage,
@@ -1539,7 +1599,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_observe_preserves_overheard_attribution_in_metadata(self):
         storage = InMemoryMessageStorage()
-        memory_handler = FakeMemoryHandler()
+        memory_handler = FakeMemoryMaintenanceService()
         model_client = CapturingModelClient([])
         agent = self._build_agent(
             storage=storage,
@@ -1572,7 +1632,7 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         storage = InMemoryMessageStorage()
         executor = ToolExecutor(
             tool_manager=FakeToolManager(tools={"lookup": lookup}),
-            message_storage=storage,
+            message_store=storage,
             client=None,
         )
 
@@ -1601,7 +1661,7 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
 
         executor = ToolExecutor(
             tool_manager=FakeToolManager(tools={"draw": draw}),
-            message_storage=InMemoryMessageStorage(),
+            message_store=InMemoryMessageStorage(),
             client=None,
         )
 
@@ -1630,7 +1690,7 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
 
         executor = ToolExecutor(
             tool_manager=FakeToolManager(tools={"attach_artifact": attach}),
-            message_storage=InMemoryMessageStorage(),
+            message_store=InMemoryMessageStorage(),
             client=None,
         )
 
@@ -1652,7 +1712,7 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         storage = InMemoryMessageStorage()
         executor = ToolExecutor(
             tool_manager=FakeToolManager(tools={"first": first, "second": second}),
-            message_storage=storage,
+            message_store=storage,
             client=None,
         )
         messages = [{"role": "user", "content": "run tools"}]
@@ -1679,7 +1739,7 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         storage = InMemoryMessageStorage()
         executor = ToolExecutor(
             tool_manager=FakeToolManager(tools={"lookup": lookup}),
-            message_storage=storage,
+            message_store=storage,
             client=None,
         )
         messages = [{"role": "user", "content": "run tool"}]
@@ -1724,7 +1784,7 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         storage = InMemoryMessageStorage()
         executor = ToolExecutor(
             tool_manager=FakeToolManager(tools={"lookup": lookup}),
-            message_storage=storage,
+            message_store=storage,
             client=None,
         )
         messages = [{"role": "user", "content": "run tool"}]
@@ -1755,7 +1815,7 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         client = FakeOpenAIClient()
         executor = ToolExecutor(
             tool_manager=FakeToolManager(tools={"draw": draw}),
-            message_storage=InMemoryMessageStorage(),
+            message_store=InMemoryMessageStorage(),
             client=client,
         )
 

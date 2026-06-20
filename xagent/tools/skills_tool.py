@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from xagent.components.skills import SkillsStorageBase
+from xagent.core.ports import SkillStore
 from xagent.utils.tool_decorator import function_tool
 
 
-def create_read_skill_tool(skills_storage: SkillsStorageBase):
+def create_read_skill_tool(skills_storage: SkillStore):
     """Create a tool that reads SKILL.md or another referenced skill file."""
 
     @function_tool(

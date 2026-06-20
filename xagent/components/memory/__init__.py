@@ -1,10 +1,8 @@
-"""Long-term diary memory storage and formatting services."""
+"""Long-term diary memory storage."""
 
-from .journal_service import JournalLLMService
-from .markdown_memory import MarkdownMemory, MemoryScope
+from .markdown_memory import MarkdownMemoryStore, MemoryScope
 
 __all__ = [
-    "JournalLLMService",
-    "MarkdownMemory",
+    "MarkdownMemoryStore",
     "MemoryScope",
 ]

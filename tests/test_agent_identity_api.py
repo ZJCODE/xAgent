@@ -25,7 +25,6 @@ class IdentityAgent:
 
     def __init__(self, identity: str, memory_root: Path):
         self.system_prompt = identity
-        self.message_handler = SimpleNamespace(system_prompt=identity)
         self.message_storage = FakeMessageStorage()
         self.markdown_memory = SimpleNamespace(root=str(memory_root))
 
@@ -35,7 +34,6 @@ class IdentityAgent:
 
     def set_identity(self, identity: str) -> None:
         self.system_prompt = identity
-        self.message_handler.system_prompt = identity
 
 
 class AgentIdentityApiTests(unittest.IsolatedAsyncioTestCase):
@@ -89,7 +87,7 @@ class AgentIdentityApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual((root / "identity.md").read_text(encoding="utf-8"), f"{new_identity}\n")
             self.assertEqual(server.agent.system_prompt, new_identity)
-            self.assertEqual(server.agent.message_handler.system_prompt, new_identity)
+            self.assertEqual(server.agent.identity, new_identity)
             self.assertEqual(read_response.json()["identity"], f"{new_identity}\n")
 
     async def test_update_identity_rejects_empty_content(self):

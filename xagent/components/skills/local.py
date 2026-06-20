@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from .base import SkillMetadata, SkillsStorageBase, SkillValidationIssue
+from .base import SkillMetadata, SkillValidationIssue
 
 
 SKILL_FILENAME = "SKILL.md"
@@ -24,7 +24,7 @@ _TEXT_READ_LIMIT = 1_000_000
 _SEARCH_TEXT_LIMIT = 2_000_000
 
 
-class SkillsStorageLocal(SkillsStorageBase):
+class FilesystemSkillsStore:
     """Manage open-standard Agent Skills stored under a runtime skills directory."""
 
     def __init__(self, root: str | Path, *, seed_builtins: bool = True):

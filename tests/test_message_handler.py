@@ -1,4 +1,4 @@
-"""Tests for MessageHandler system prompt memory injection."""
+"""Tests for message services and prompt context builders."""
 
 import base64
 from datetime import datetime
@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from xagent.core.config import AgentConfig
-from xagent.core.handlers.message import MessageHandler
+from xagent.core.messages import ExperienceFormatter, InstructionBuilder, MessageImageNormalizer, MessageService, TurnContextBuilder
 from xagent.schemas import Message, MessageType, RoleType
 from xagent.utils.image_utils import data_uri_to_bytes, extract_image_urls_from_text
 
@@ -22,17 +22,17 @@ class _FakeMessageStorage:
         self.messages.extend(messages)
 
 
-class MessageHandlerMemoryContextTests(unittest.TestCase):
+class MessageServicesContextTests(unittest.TestCase):
     def test_handler_persists_data_uri_as_metadata_and_blob_source(self):
         image_bytes = b"\x89PNG\r\n\x1a\npng"
         image_source = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            handler = MessageHandler(
-                message_storage=_FakeMessageStorage(),
+            handler = MessageService(
+                message_store=_FakeMessageStorage(),
                 workspace_dir=tmpdir,
             )
-            normalized_sources, image_metadata = handler._prepare_message_images([image_source])
+            normalized_sources, image_metadata = handler.image_normalizer.prepare_message_images([image_source])
             msg = Message.create(
                 "inspect this",
                 role=RoleType.USER,
@@ -50,7 +50,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             self.assertIn("/api/workspace/blob?path=assets%2Finbound%2Flocal%2Fimages%2F", asset["blob_url"])
             self.assertEqual((Path(tmpdir) / asset["workspace_path"]).read_bytes(), image_bytes)
 
-            current_images = MessageHandler._current_message_images(msg, "Joy", workspace_dir=tmpdir)
+            current_images = MessageImageNormalizer.current_message_images(msg, "Joy", workspace_dir=tmpdir)
             self.assertEqual(data_uri_to_bytes(current_images[0])[0], image_bytes)
 
     def test_workspace_blob_markdown_is_detected_as_image_input(self):
@@ -64,8 +64,8 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         import asyncio
 
         storage = _FakeMessageStorage()
-        handler = MessageHandler(
-            message_storage=storage,
+        handler = MessageService(
+            message_store=storage,
             workspace_dir="/tmp/workspace",
         )
 
@@ -96,8 +96,8 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = _FakeMessageStorage()
-            handler = MessageHandler(
-                message_storage=storage,
+            handler = MessageService(
+                message_store=storage,
                 workspace_dir=tmpdir,
             )
 
@@ -118,22 +118,16 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
     
     def test_build_instructions_includes_tool_prompts(self):
         """build_instructions includes tool-specific segments for active tools."""
-        handler = MessageHandler(
-            system_prompt="",
-            message_storage=_FakeMessageStorage(),
-        )
-        instructions = handler.build_instructions(tool_names=["write_memory"])
+        builder = InstructionBuilder(system_prompt="")
+        instructions = builder.build_text(tool_names=["write_memory"])
         self.assertIn("Long-Term Memory Writing", instructions)
         self.assertIn("write_memory", instructions)
         self.assertNotIn("write_daily_memory", instructions)
 
     def test_tool_policy_directs_images_and_artifacts_to_attachments(self):
-        handler = MessageHandler(
-            system_prompt="",
-            message_storage=_FakeMessageStorage(),
-        )
+        builder = InstructionBuilder(system_prompt="")
 
-        messages = handler.build_instruction_messages(
+        messages = builder.build_messages(
             tool_names=["generate_image", "attach_artifact"],
         )
         tool_policy = messages[1]["content"]
@@ -143,12 +137,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("attach the workspace file instead", tool_policy)
 
     def test_build_instruction_messages_are_named_and_layered(self):
-        handler = MessageHandler(
-            system_prompt="# I am Mono\n\nKeep a warm voice.",
-            message_storage=_FakeMessageStorage(),
-        )
+        builder = InstructionBuilder(system_prompt="# I am Mono\n\nKeep a warm voice.")
 
-        messages = handler.build_instruction_messages(
+        messages = builder.build_messages(
             tool_names=["write_memory", "run_command"],
         )
 
@@ -172,10 +163,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("# I am Mono", messages[2]["content"])
 
     def test_build_instruction_messages_include_skills_catalog_layer(self):
-        handler = MessageHandler(
-            system_prompt="# I am Mono\n\nKeep a warm voice.",
-            message_storage=_FakeMessageStorage(),
-        )
+        builder = InstructionBuilder(system_prompt="# I am Mono\n\nKeep a warm voice.")
         catalog = (
             "Available Skills\n"
             "<available_skills>\n"
@@ -185,7 +173,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             "</available_skills>"
         )
 
-        messages = handler.build_instruction_messages(
+        messages = builder.build_messages(
             tool_names=["read_skill"],
             skills_catalog=catalog,
         )
@@ -212,7 +200,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         ]
         memory_context = "[2026-05-13]\n昨天聊过路线图。"
 
-        context_messages = MessageHandler.build_turn_context_messages(
+        context_messages = TurnContextBuilder().build_messages(
             messages,
             current_user_id="Joy",
             memory_context=memory_context,
@@ -238,16 +226,13 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("what Joy just said", context_messages[2]["content"])
 
     def test_workspace_context_is_static_instruction_layer(self):
-        handler = MessageHandler(
-            system_prompt="",
-            message_storage=_FakeMessageStorage(),
-        )
+        builder = InstructionBuilder(system_prompt="")
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
         ]
         workspace_context = AgentConfig.build_workspace_context("/tmp/xagent/workspace")
 
-        instruction_messages = handler.build_instruction_messages(
+        instruction_messages = builder.build_messages(
             tool_names=["run_command"],
             workspace_context=workspace_context,
         )
@@ -256,10 +241,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("/tmp/xagent/workspace", instruction_messages[-1]["content"])
         self.assertIn("self-managed work area", instruction_messages[-1]["content"])
 
-        context_messages = MessageHandler.build_turn_context_messages(
+        context_messages = TurnContextBuilder().build_messages(
             messages,
             current_user_id="Joy",
-            workspace_context=workspace_context,
             current_time="2026-05-14 09:30",
         )
 
@@ -283,7 +267,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             ),
         ]
 
-        context_messages = MessageHandler.build_turn_context_messages(
+        context_messages = TurnContextBuilder().build_messages(
             messages,
             current_user_id="Joy",
             current_time="2026-05-14 09:30",
@@ -310,7 +294,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             Message.create("What does the label say?", role=RoleType.USER, sender_id="Joy"),
         ]
 
-        context_messages = MessageHandler.build_turn_context_messages(
+        context_messages = TurnContextBuilder().build_messages(
             messages,
             current_user_id="Joy",
             current_time="2026-05-14 09:30",
@@ -329,7 +313,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             Message.create("Zoom in on the lower right.", role=RoleType.USER, sender_id="Joy"),
         ]
 
-        context_messages = MessageHandler.build_turn_context_messages(
+        context_messages = TurnContextBuilder().build_messages(
             messages,
             current_user_id="Joy",
             current_time="2026-05-14 09:30",
@@ -350,7 +334,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             Message.create("And what about the title?", role=RoleType.USER, sender_id="Joy"),
         ]
 
-        context_messages = MessageHandler.build_turn_context_messages(
+        context_messages = TurnContextBuilder().build_messages(
             messages,
             current_user_id="Joy",
             current_time="2026-05-14 09:30",
@@ -370,7 +354,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             Message.create("And what about the title?", role=RoleType.USER, sender_id="bob"),
         ]
 
-        transcript_message = MessageHandler.build_recent_transcript_message(
+        transcript_message = ExperienceFormatter.build_recent_transcript_message(
             messages,
             current_user_id="bob",
         )
@@ -379,15 +363,11 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
     def test_transcript_includes_memory_context(self):
         """memory_context is injected into the transcript message under 'Recent Memory'."""
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="alice"),
         ]
         memory_context = "[2026-03-18]\n今天主要围绕路线图推进。"
-        transcript = handler.build_recent_transcript_message(
+        transcript = ExperienceFormatter.build_recent_transcript_message(
             messages,
             current_user_id="alice",
             memory_context=memory_context,
@@ -398,14 +378,10 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
     def test_transcript_omits_memory_section_when_context_empty(self):
         """Empty memory_context should not inject a memory section in transcript."""
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="alice"),
         ]
-        transcript = handler.build_recent_transcript_message(
+        transcript = ExperienceFormatter.build_recent_transcript_message(
             messages,
             current_user_id="alice",
             memory_context="",
@@ -414,23 +390,15 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertNotIn("Recent Memory", content)
 
     def test_build_recent_transcript_message_contains_runtime_context(self):
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="alice"),
         ]
-        transcript = handler.build_recent_transcript_message(messages, current_user_id="alice")
+        transcript = ExperienceFormatter.build_recent_transcript_message(messages, current_user_id="alice")
         content = transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"]
         self.assertIn("Current speaker: alice", content)
         self.assertIn("Date:", content)
 
     def test_build_recent_transcript_message_records_images_without_attaching_them(self):
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
         messages = [
             Message.create("Need help with this screenshot", role=RoleType.USER, sender_id="alice"),
             Message.create(
@@ -441,17 +409,13 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             ),
         ]
 
-        transcript_message = handler.build_recent_transcript_message(messages, current_user_id="bob")
+        transcript_message = ExperienceFormatter.build_recent_transcript_message(messages, current_user_id="bob")
 
         self.assertEqual(transcript_message["role"], "user")
         self.assertIsInstance(transcript_message["content"], str)
         self.assertIn("[Attached image: 1]", transcript_message["content"])
 
     def test_build_recent_transcript_message_can_omit_images(self):
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
         messages = [
             Message.create(
                 "Please inspect this image",
@@ -461,10 +425,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             ),
         ]
 
-        transcript_message = handler.build_recent_transcript_message(
+        transcript_message = ExperienceFormatter.build_recent_transcript_message(
             messages,
             current_user_id="bob",
-            include_images=False,
         )
 
         self.assertEqual(transcript_message["role"], "user")
@@ -481,7 +444,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             ),
         ]
 
-        context_messages = MessageHandler.build_turn_context_messages(
+        context_messages = TurnContextBuilder().build_messages(
             messages,
             current_user_id="bob",
             include_images=False,
@@ -505,7 +468,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         bob = Message.create("Can you hear that?", role=RoleType.USER, sender_id="bob")
         bob.timestamp = 3.0
 
-        transcript = MessageHandler.build_recent_transcript_message(
+        transcript = ExperienceFormatter.build_recent_transcript_message(
             [bob, observation, alice],
             current_user_id="alice",
         )["content"]
@@ -538,7 +501,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             event_type="observation",
         )
 
-        context_messages = MessageHandler.build_turn_context_messages(
+        context_messages = TurnContextBuilder().build_messages(
             [observation],
             current_user_id="alice",
             current_time="2026-06-10 12:00",

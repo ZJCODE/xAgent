@@ -1,15 +1,15 @@
 import unittest
 from unittest.mock import patch
 
-from xagent.components.memory import JournalLLMService
-from xagent.core.config import ReplyType
+from xagent.core.memory import JournalFormatter
+from xagent.core.model import ModelStreamEvent
 from xagent.core.providers import MODEL_API_OPENAI_RESPONSES
 from xagent.schemas import Message
 
 
-class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
+class JournalFormatterPromptTests(unittest.IsolatedAsyncioTestCase):
     def test_diary_system_prompt_preserves_core_behavior_constraints(self):
-        prompt = JournalLLMService.build_diary_system_prompt(
+        prompt = JournalFormatter.build_diary_system_prompt(
             journal_date="2026-03-19",
         )
 
@@ -31,7 +31,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Return JSON only", prompt)
 
     def test_summary_system_prompt_preserves_core_behavior_constraints(self):
-        prompt = JournalLLMService.build_summary_system_prompt(
+        prompt = JournalFormatter.build_summary_system_prompt(
             period_type="weekly",
             period_label="2026-03-16 to 2026-03-22",
         )
@@ -56,7 +56,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Return JSON only", prompt)
 
     def test_format_transcript_distinguishes_context_events(self):
-        transcript = JournalLLMService._format_transcript([
+        transcript = JournalFormatter._format_transcript([
             {
                 "role": "environment",
                 "type": "context_event",
@@ -72,7 +72,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Bob 说活动可能要提前开始。", transcript)
 
     def test_format_transcript_uses_structured_speaker_headers(self):
-        transcript = JournalLLMService._format_transcript([
+        transcript = JournalFormatter._format_transcript([
             {
                 "role": "assistant",
                 "sender_id": "assistant",
@@ -94,7 +94,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_build_diary_user_prompt_uses_single_period_transcript(self):
-        prompt = JournalLLMService.build_diary_user_prompt(
+        prompt = JournalFormatter.build_diary_user_prompt(
             journal_date="2026-06-09",
             transcript="[speaker=ME][timestamp=2026-06-09 09:00:00]\nNew period content.",
         )
@@ -111,17 +111,17 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
                 self.calls = []
                 FakeModelClient.instances.append(self)
 
-            async def call(self, **kwargs):
+            async def model_turn_events(self, **kwargs):
                 self.calls.append(kwargs)
-                return ReplyType.SIMPLE_REPLY, "Diary entry."
+                yield ModelStreamEvent(type="text", delta="Diary entry.")
 
-        service = JournalLLMService(
+        service = JournalFormatter(
             client=object(),
             model="gpt-test",
             model_api=MODEL_API_OPENAI_RESPONSES,
         )
 
-        with patch("xagent.core.handlers.model.ModelClient", FakeModelClient):
+        with patch("xagent.core.model.ModelClient", FakeModelClient):
             result = await service.format_diary_entry(
                 messages=[
                     {
@@ -158,17 +158,17 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
                 self.calls = []
                 FakeModelClient.instances.append(self)
 
-            async def call(self, **kwargs):
+            async def model_turn_events(self, **kwargs):
                 self.calls.append(kwargs)
-                return ReplyType.SIMPLE_REPLY, "Weekly summary.\n\n"
+                yield ModelStreamEvent(type="text", delta="Weekly summary.\n\n")
 
-        service = JournalLLMService(
+        service = JournalFormatter(
             client=object(),
             model="gpt-test",
             model_api=MODEL_API_OPENAI_RESPONSES,
         )
 
-        with patch("xagent.core.handlers.model.ModelClient", FakeModelClient):
+        with patch("xagent.core.model.ModelClient", FakeModelClient):
             result = await service.generate_summary(
                 source_content="Diary source",
                 period_type="weekly",

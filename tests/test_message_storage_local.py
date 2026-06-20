@@ -2,52 +2,46 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from xagent.components.message import MessageStorageLocal
+from xagent.components.messages import SQLiteMessageStore
 from xagent.schemas import Message, MessageType, RoleType
 
 
-class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
-    async def test_cursor_range_is_stable_when_newer_messages_arrive(self):
+class SQLiteMessageStoreTests(unittest.IsolatedAsyncioTestCase):
+    async def test_id_range_is_stable_when_newer_messages_arrive(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "messages.sqlite3"
-            storage = MessageStorageLocal(path=str(db_path))
+            storage = SQLiteMessageStore(path=str(db_path))
             await storage.add_messages([
                 Message.create("first", role=RoleType.USER, sender_id="alice"),
                 Message.create("second", role=RoleType.USER, sender_id="alice"),
                 Message.create("third", role=RoleType.USER, sender_id="alice"),
             ])
 
-            first_cursor = await storage.cursor_for_message_count(1)
-            snapshot_cursor = await storage.get_latest_message_cursor()
+            stored_snapshot = await storage.get_stored_messages(3)
+            first_id = stored_snapshot[0].id
+            snapshot_id = await storage.get_latest_message_id()
 
             await storage.add_messages([
                 Message.create("newer one", role=RoleType.USER, sender_id="alice"),
                 Message.create("newer two", role=RoleType.USER, sender_id="alice"),
             ])
 
-            messages = await storage.get_messages_in_cursor_range(
-                start_exclusive=first_cursor,
-                end_inclusive=snapshot_cursor,
+            stored_messages = await storage.get_messages_by_id_range(
+                start_exclusive=first_id,
+                end_inclusive=snapshot_id,
             )
 
-            self.assertEqual([message.content for message in messages], ["second", "third"])
+            self.assertEqual([stored.message.content for stored in stored_messages], ["second", "third"])
 
-    async def test_cursor_for_message_count_returns_zero_when_stream_shrinks(self):
+    async def test_path_is_required(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "messages.sqlite3"
-            storage = MessageStorageLocal(path=str(db_path))
-            await storage.add_messages([
-                Message.create("first", role=RoleType.USER, sender_id="alice"),
-                Message.create("second", role=RoleType.USER, sender_id="alice"),
-            ])
-
-            self.assertGreater(await storage.cursor_for_message_count(2), 0)
-            self.assertEqual(await storage.cursor_for_message_count(3), 0)
+            with self.assertRaises(TypeError):
+                SQLiteMessageStore()  # type: ignore[call-arg]
 
     async def test_clear_messages_resets_stream(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "messages.sqlite3"
-            storage = MessageStorageLocal(path=str(db_path))
+            storage = SQLiteMessageStore(path=str(db_path))
             await storage.add_messages([
                 Message.create("first", role=RoleType.USER, sender_id="alice"),
                 Message.create("second", role=RoleType.USER, sender_id="bob"),
@@ -60,7 +54,7 @@ class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
     async def test_context_event_roundtrips_with_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "messages.sqlite3"
-            storage = MessageStorageLocal(path=str(db_path))
+            storage = SQLiteMessageStore(path=str(db_path))
             event = Message.create_context_event(
                 "看到有人靠近",
                 source="camera",

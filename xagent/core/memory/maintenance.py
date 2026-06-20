@@ -1,4 +1,4 @@
-"""Memory handler: recent context injection and count-based diary writing."""
+"""Memory maintenance service: recent context injection and count-based diary writing."""
 
 from __future__ import annotations
 
@@ -23,13 +23,14 @@ from ..config import AgentConfig
 from ...schemas import Message, MessageType
 
 if TYPE_CHECKING:
-    from ...components.memory import JournalLLMService, MarkdownMemory
-    from ...components.message import MessageStorageBase
+    from ...components.memory import MarkdownMemoryStore
+    from .journal import JournalFormatter
+    from ..ports import MessageStore
 
 logger = logging.getLogger(__name__)
 
 
-class MemoryHandler:
+class MemoryMaintenanceService:
     """Manages recent diary context and count-based journal maintenance."""
 
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
@@ -37,9 +38,9 @@ class MemoryHandler:
 
     def __init__(
         self,
-        memory: MarkdownMemory,
-        llm_service: JournalLLMService,
-        message_storage: MessageStorageBase,
+        memory: MarkdownMemoryStore,
+        llm_service: JournalFormatter,
+        message_storage: MessageStore,
         *,
         max_history: int,
         recent_days: Optional[int] = None,
@@ -130,21 +131,21 @@ class MemoryHandler:
     async def _run_maintenance_locked(
         self, force: bool = False, trigger: str = "count", idle_seconds: float = 0
     ) -> bool:
-        latest_message_id = await self.message_storage.get_latest_message_cursor()
+        latest_message_id = await self.message_storage.get_latest_message_id()
         if latest_message_id <= 0:
             return False
         if latest_message_id <= self._last_processed_message_id:
             return False
 
         # Gate on unprocessed message count: only run when enough new
-        # messages have accumulated since the last checkpoint.  Based on
-        # the persisted cursor so it is safe across multiple processes.
+        # messages have accumulated since the last checkpoint. Based on
+        # the persisted message id so it is safe across multiple processes.
         if not force:
             unprocessed_count = latest_message_id - self._last_processed_message_id
             if unprocessed_count < self.max_history - self.window_overlap:
                 return False
 
-        # Build a cursor-bounded window that starts window_overlap entries
+        # Build an id-bounded window that starts window_overlap entries
         # before the last checkpoint (for diary continuity between adjacent
         # batches) and is capped at max_history (to bound the LLM budget
         # even when many messages accumulate between maintenance cycles).
@@ -155,10 +156,11 @@ class MemoryHandler:
         if end_inclusive <= 0:
             return False
 
-        recent_messages = await self.message_storage.get_messages_in_cursor_range(
+        stored_messages = await self.message_storage.get_messages_by_id_range(
             start_exclusive=start_exclusive,
             end_inclusive=end_inclusive,
         )
+        recent_messages = [stored.message for stored in stored_messages]
         if not recent_messages:
             # Jump checkpoint forward.  If messages were deleted (id gap),
             # leap to just before latest so the next cycle catches real data
@@ -184,8 +186,8 @@ class MemoryHandler:
             if not await self._write_journal_entry(
                 batch,
                 trigger=trigger,
-                start_cursor=start_exclusive,
-                end_cursor=end_inclusive,
+                start_message_id=start_exclusive,
+                end_message_id=end_inclusive,
                 idle_seconds=idle_seconds,
             ):
                 return False
@@ -232,8 +234,8 @@ class MemoryHandler:
         self,
         messages: List[dict],
         trigger: str = "count",
-        start_cursor: int = 0,
-        end_cursor: int = 0,
+        start_message_id: int = 0,
+        end_message_id: int = 0,
         idle_seconds: float = 0,
     ) -> bool:
         """LLM-format messages and append to today's daily file."""
@@ -249,18 +251,18 @@ class MemoryHandler:
 
                 if trigger == "idle":
                     logger.info(
-                        "Diary write [trigger=idle] idle=%.0fs, cursor %d→%d, %d msgs → %d chars",
+                        "Diary write [trigger=idle] idle=%.0fs, message ids %d→%d, %d msgs → %d chars",
                         idle_seconds,
-                        start_cursor,
-                        end_cursor,
+                        start_message_id,
+                        end_message_id,
                         len(messages),
                         len(content),
                     )
                 else:
                     logger.info(
-                        "Diary write [trigger=count] cursor %d→%d, %d msgs → %d chars",
-                        start_cursor,
-                        end_cursor,
+                        "Diary write [trigger=count] message ids %d→%d, %d msgs → %d chars",
+                        start_message_id,
+                        end_message_id,
                         len(messages),
                         len(content),
                     )
@@ -437,8 +439,8 @@ class MemoryHandler:
             await asyncio.to_thread(self._release_process_lock_sync, lock_handle)
 
     async def _refresh_state_from_disk(self) -> None:
-        cursor = await asyncio.to_thread(self._read_state_sync)
-        self._last_processed_message_id = self._non_negative_int(cursor, 0)
+        message_id = await asyncio.to_thread(self._read_state_sync)
+        self._last_processed_message_id = self._non_negative_int(message_id, 0)
 
     async def _commit_processed_message_id(self, processed_message_id: int) -> bool:
         normalized_id = self._non_negative_int(processed_message_id, 0)
@@ -460,13 +462,13 @@ class MemoryHandler:
         except FileNotFoundError:
             return 0
         except (ValueError, OSError) as exc:
-            logger.warning("Failed to read journal cursor: %s", exc)
+            logger.warning("Failed to read journal message id: %s", exc)
             return 0
 
-    def _write_state_sync(self, cursor: int) -> None:
+    def _write_state_sync(self, message_id: int) -> None:
         path = self._state_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(int(cursor)), encoding="utf-8")
+        path.write_text(str(int(message_id)), encoding="utf-8")
 
     def _acquire_process_lock_sync(self) -> IO[str]:
         path = self._lock_path()
@@ -505,7 +507,7 @@ class MemoryHandler:
             lock_file.close()
 
     def _state_path(self) -> Path:
-        return self.memory.root / ".journal_cursor"
+        return self.memory.root / ".journal_message_id"
 
     def _lock_path(self) -> Path:
         return self.memory.root / ".journal_maintenance.lock"

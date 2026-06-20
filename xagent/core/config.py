@@ -1,5 +1,4 @@
 import logging
-from enum import Enum
 
 # Configure logging
 _log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -33,7 +32,7 @@ class AgentConfig:
     # Workspace root, runtime-data directory names, and the SQLite
     # filename. Changing these alters where the agent persists state.
     # ============================================================
-    DEFAULT_WORKSPACE = "~/.xagent"
+    DEFAULT_RUNTIME_ROOT = "~/.xagent"
     MEMORY_DIRNAME = "memory"
     MESSAGE_DIRNAME = "messages"
     WORKSPACE_DIRNAME = "workspace"
@@ -337,16 +336,3 @@ class AgentConfig:
             "This scheduled task is now due. Execute it and return the message to deliver.\n\n"
             f"Task: {content.strip()}"
         )
-
-# ================================================================
-# Reply Type Enum
-# Classifies each agent turn: plain text, tool call, or error.
-# Kept in config.py because both agent.py and model handler import it.
-# ================================================================
-
-class ReplyType(Enum):
-    """Types of replies the agent can generate."""
-
-    SIMPLE_REPLY = "simple_reply"
-    TOOL_CALL = "tool_call"
-    ERROR = "error"

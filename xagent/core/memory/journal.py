@@ -1,4 +1,4 @@
-"""LLM-backed formatting service for diary memory."""
+"""LLM-backed formatting for diary memory."""
 
 from __future__ import annotations
 
@@ -8,18 +8,17 @@ from typing import Any, List, Optional
 
 from openai import AsyncOpenAI
 
+from ..providers import MODEL_API_OPENAI_CHAT_COMPLETIONS
 
-DEFAULT_OPENAI_CHAT_MODEL_API = "openai_chat_completions"
 
-
-class JournalLLMService:
+class JournalFormatter:
     """Format conversation snippets and summaries for the diary memory store."""
 
     def __init__(
         self,
         client: Optional[Any] = None,
         model: str = "gpt-5.4-mini",
-        model_api: str = DEFAULT_OPENAI_CHAT_MODEL_API,
+        model_api: str = MODEL_API_OPENAI_CHAT_COMPLETIONS,
         max_tokens: int = 4096,
     ) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -132,7 +131,7 @@ Period focus:
         system_prompt: str,
         user_prompt: str,
     ) -> str:
-        from ...core.handlers.model import ModelClient
+        from ..model import ModelClient
 
         model_client = ModelClient(
             client=self.client,
@@ -140,14 +139,18 @@ Period focus:
             model_api=self.model_api,
             max_tokens=self.max_tokens,
         )
-        reply_type, payload = await model_client.call(
+        text_parts: list[str] = []
+        async for event in model_client.model_turn_events(
             messages=[{"role": "user", "content": user_prompt}],
             tool_specs=None,
             instructions=system_prompt,
-        )
-        if getattr(reply_type, "value", None) == "simple_reply":
-            return str(payload)
-        raise ValueError(f"LLM did not return text output: {payload}")
+            stream=False,
+        ):
+            if event.type in {"text", "delta"} and event.delta:
+                text_parts.append(event.delta)
+            elif event.type == "error":
+                raise ValueError(f"LLM did not return text output: {event.error}")
+        return "".join(text_parts)
 
     @staticmethod
     def _format_transcript(messages: List[dict]) -> str:
@@ -156,33 +159,33 @@ Period focus:
             content = str(message.get("content", "")).strip()
             if not content:
                 continue
-            header = JournalLLMService._format_transcript_header(message)
+            header = JournalFormatter._format_transcript_header(message)
             blocks.append(f"{header}\n{content}" if header else content)
         return "\n\n".join(blocks)
 
     @staticmethod
     def _format_transcript_header(message: dict) -> str:
         message_type = str(message.get("type", "message")).strip().lower()
-        timestamp = JournalLLMService._normalize_timestamp(message.get("timestamp"))
+        timestamp = JournalFormatter._normalize_timestamp(message.get("timestamp"))
         if message_type == "context_event":
-            return JournalLLMService._append_timestamp_marker("[ambient context]", timestamp)
+            return JournalFormatter._append_timestamp_marker("[ambient context]", timestamp)
 
-        speaker = JournalLLMService._normalize_transcript_speaker(message)
+        speaker = JournalFormatter._normalize_transcript_speaker(message)
         if speaker:
-            return JournalLLMService._append_timestamp_marker(f"[speaker={speaker}]", timestamp)
+            return JournalFormatter._append_timestamp_marker(f"[speaker={speaker}]", timestamp)
         if timestamp:
             return f"[timestamp={timestamp}]"
         return ""
 
     @staticmethod
     def _normalize_transcript_speaker(message: dict) -> str:
-        sender = JournalLLMService._sanitize_marker_field(message.get("sender_id"))
+        sender = JournalFormatter._sanitize_marker_field(message.get("sender_id"))
         role = str(message.get("role", "unknown")).strip().lower()
-        if JournalLLMService._is_self_speaker(sender=sender, role=role):
+        if JournalFormatter._is_self_speaker(sender=sender, role=role):
             return "ME"
         if sender:
             return sender
-        fallback = JournalLLMService._sanitize_marker_field(role)
+        fallback = JournalFormatter._sanitize_marker_field(role)
         return fallback or "unknown"
 
     @staticmethod
@@ -221,7 +224,7 @@ Period focus:
         try:
             parsed = datetime.fromisoformat(iso_candidate)
         except ValueError:
-            return JournalLLMService._sanitize_marker_field(text)
+            return JournalFormatter._sanitize_marker_field(text)
         return parsed.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
@@ -238,20 +241,16 @@ Period focus:
         lines: List[str] = []
         previous_blank = False
         for raw_line in str(content or "").splitlines():
-            normalized = raw_line.strip()
-            if not normalized:
-                if lines and not previous_blank:
+            line = raw_line.rstrip()
+            if not line:
+                if not previous_blank:
                     lines.append("")
                 previous_blank = True
                 continue
-            lines.append(normalized)
+            lines.append(line)
             previous_blank = False
-        while lines and lines[0] == "":
-            lines.pop(0)
-        while lines and lines[-1] == "":
-            lines.pop()
-        return "\n".join(lines)
+        return "\n".join(lines).strip()
 
     @staticmethod
     def _fallback_entry(messages: List[dict]) -> str:
-        return JournalLLMService._format_transcript(messages)
+        return JournalFormatter._format_transcript(messages)

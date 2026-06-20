@@ -20,8 +20,10 @@ from ..core.providers import (
     PROVIDER_MINIMAX,
     PROVIDER_QWEN,
 )
-from ..components import MessageStorageBase, MessageStorageLocal
-from ..components.skills import SkillsStorageBase, SkillsStorageLocal
+from ..components import SQLiteMessageStore
+from ..components.skills import FilesystemSkillsStore
+from ..core.ports import MessageStore, SkillStore
+from ..core.runtime import RuntimePaths
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
 from ..tools import (
     create_attach_artifact_tool,
@@ -53,7 +55,7 @@ class BaseAgentConfig:
     """Configuration constants for BaseAgentRunner."""
 
     DEFAULT_MODEL = AgentConfig.DEFAULT_MODEL
-    DEFAULT_CONFIG_DIR = AgentConfig.DEFAULT_WORKSPACE
+    DEFAULT_CONFIG_DIR = AgentConfig.DEFAULT_RUNTIME_ROOT
     MEMORY_DIRNAME = AgentConfig.MEMORY_DIRNAME
     MESSAGE_DIRNAME = AgentConfig.MESSAGE_DIRNAME
     WORKSPACE_DIRNAME = AgentConfig.WORKSPACE_DIRNAME
@@ -107,13 +109,12 @@ class BaseAgentRunner:
         self.identity = self._load_identity(self.identity_path)
         
         # Local runtime data lives beside config.yaml.
-        self.workspace = self.config_dir
-        self.workspace_dir = self.workspace / BaseAgentConfig.WORKSPACE_DIRNAME
-        self.workspace_dir.mkdir(parents=True, exist_ok=True)
-        self.skills_dir = self.workspace / BaseAgentConfig.SKILLS_DIRNAME
-        self.skills_dir.mkdir(parents=True, exist_ok=True)
-        self.tasks_dir = self.workspace / BaseAgentConfig.TASKS_DIRNAME
-        self.tasks_dir.mkdir(parents=True, exist_ok=True)
+        self.paths = RuntimePaths.from_root(self.config_dir)
+        self.paths.ensure_directories()
+        self.workspace = self.paths.root
+        self.workspace_dir = self.paths.workspace_dir
+        self.skills_dir = self.paths.skills_dir
+        self.tasks_dir = self.paths.tasks_dir
         self.observability = self._initialize_observability(self.config)
 
         # Initialize components in dependency order
@@ -560,7 +561,7 @@ class BaseAgentRunner:
             client=client,
             tools=tools,
             message_storage=self.message_storage,
-            workspace=str(self.workspace),
+            runtime_paths=self.paths,
             skills_storage=self.skills_storage,
             observability=self.observability,
             supports_vision=self._provider_supports_vision(agent_cfg),
@@ -829,7 +830,7 @@ class BaseAgentRunner:
 
         return merged_config
 
-    def _initialize_message_storage(self) -> MessageStorageBase:
+    def _initialize_message_storage(self) -> MessageStore:
         """
         Initialize the default message storage backend.
 
@@ -841,8 +842,8 @@ class BaseAgentRunner:
     def _get_message_storage_path(self) -> Path:
         return self.workspace / BaseAgentConfig.MESSAGE_DIRNAME / BaseAgentConfig.MESSAGE_DB_FILENAME
 
-    def _create_message_storage(self) -> MessageStorageBase:
-        return MessageStorageLocal(path=str(self._get_message_storage_path()))
+    def _create_message_storage(self) -> MessageStore:
+        return SQLiteMessageStore(path=self._get_message_storage_path())
 
-    def _initialize_skills_storage(self) -> SkillsStorageBase:
-        return SkillsStorageLocal(self.skills_dir)
+    def _initialize_skills_storage(self) -> SkillStore:
+        return FilesystemSkillsStore(self.skills_dir)
