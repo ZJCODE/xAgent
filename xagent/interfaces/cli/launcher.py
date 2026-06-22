@@ -502,6 +502,7 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                 stream=None,
                 group_fetch_limit=None,
                 group_reply_only_when_mentioned=None,
+                show_next_steps=False,
             )
         )
     if action == "open":
@@ -1334,8 +1335,10 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     stream=None,
                     group_fetch_limit=None,
                     group_reply_only_when_mentioned=None,
+                    show_next_steps=False,
                 )
             ) == 0:
+                ui.pause("Press Enter to return to the launcher")
                 raise ReturnToLauncherHome()
         elif option.key == "weixin":
             if handle_init_weixin(
@@ -1350,6 +1353,7 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     force=_weixin_channel_is_configured(config_dir),
                 )
             ) == 0:
+                ui.pause("Press Enter to return to the launcher")
                 raise ReturnToLauncherHome()
         elif option.key == "voice":
             _run_voice_config_launcher(ui, config_dir)

@@ -1393,12 +1393,6 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection, agent_
     TerminalUI().print_panel(content, title="Next Steps")
 
 
-def _feishu_routing_label(group_reply_only_when_mentioned: bool) -> str:
-    if group_reply_only_when_mentioned:
-        return "Direct chats + group/topic @mentions only"
-    return "Direct chats + group presence, agent self-decides when to speak"
-
-
 def _weixin_access_label(selection: WeixinInitSelection) -> str:
     if selection.owner_only:
         extra = len(selection.allow_users)
@@ -1558,13 +1552,7 @@ def collect_feishu_init_selection_terminal_ui(
         if interactive and app_secret_arg:
             wizard_ui.record("App Secret", "Provided via command line")
 
-    reply_only_arg = getattr(args, "group_reply_only_when_mentioned", None)
-    if reply_only_arg is not None:
-        group_reply_only_when_mentioned = bool(reply_only_arg)
-    else:
-        group_reply_only_when_mentioned = False
-    if interactive:
-        wizard_ui.record("Group Routing", _feishu_routing_label(group_reply_only_when_mentioned))
+    group_reply_only_when_mentioned = bool(getattr(args, "group_reply_only_when_mentioned", False))
 
     stream_arg = getattr(args, "stream", None)
     stream = bool(stream_arg) if stream_arg is not None else False
@@ -1649,6 +1637,7 @@ def _print_feishu_post_setup(
     selection: FeishuInitSelection,
     *,
     agent_name: str | None = None,
+    show_next_steps: bool = True,
 ) -> None:
     config_dir = config_path.parent
     ui = TerminalUI()
@@ -1657,39 +1646,34 @@ def _print_feishu_post_setup(
     summary.append(f"Feishu channel updated in {config_path}\n\n")
     summary.append("Configured behavior:\n")
     summary.append(f"- App ID: {selection.app_id}\n")
-    summary.append(f"- Routing: {_feishu_routing_label(selection.group_reply_only_when_mentioned)}\n")
+    summary.append("\n")
+    summary.append("Manage the app at https://open.feishu.cn/app/\n")
+    summary.append("\nOptional before group rollout — add these permissions:\n")
+    summary.append("- im:message.group_msg\n")
+    summary.append("- im:message.group_at_msg.include_bot:readonly\n")
+    summary.append("- contact:user.base:readonly\n")
+    summary.append("- admin:app.info:readonly\n")
+    summary.append("\nIf you only need direct chats right now, you can skip the group permission work and start the bot immediately.")
     ui.print_panel(summary, title="Feishu Ready", leading_blank_line=True)
 
-    feishu_start = _format_init_command("xagent feishu start", config_dir=config_dir, agent_name=agent_name)
-    status = _format_init_command("xagent feishu status", config_dir=config_dir, agent_name=agent_name)
-    logs = _format_init_command("xagent feishu logs -f", config_dir=config_dir, agent_name=agent_name)
+    if show_next_steps:
+        feishu_start = _format_init_command("xagent feishu start", config_dir=config_dir, agent_name=agent_name)
+        status = _format_init_command("xagent feishu status", config_dir=config_dir, agent_name=agent_name)
+        logs = _format_init_command("xagent feishu logs -f", config_dir=config_dir, agent_name=agent_name)
 
-    next_steps = Text()
-    next_steps.append("Run next:\n")
-    next_steps.append("start   ")
-    next_steps.append(feishu_start, style="cyan")
-    next_steps.append("\n        Start only the Feishu channel.\n")
-    next_steps.append("status  ")
-    next_steps.append(status, style="cyan")
-    next_steps.append("\n        Check PID, logs, and whether the bot is already running.\n")
-    next_steps.append("logs    ")
-    next_steps.append(logs, style="cyan")
-    next_steps.append("\n        Follow the Feishu channel log live.\n")
+        next_steps = Text()
+        next_steps.append("Run next:\n")
+        next_steps.append("start   ")
+        next_steps.append(feishu_start, style="cyan")
+        next_steps.append("\n        Start only the Feishu channel.\n")
+        next_steps.append("status  ")
+        next_steps.append(status, style="cyan")
+        next_steps.append("\n        Check PID, logs, and whether the bot is already running.\n")
+        next_steps.append("logs    ")
+        next_steps.append(logs, style="cyan")
+        next_steps.append("\n        Follow the Feishu channel log live.\n")
 
-    next_steps.append("\nOptional before group rollout:\n")
-    next_steps.append("- im:message.group_msg\n")
-    next_steps.append("- im:message.group_at_msg.include_bot:readonly\n")
-    next_steps.append("- contact:user.base:readonly\n")
-    next_steps.append("- admin:app.info:readonly\n")
-    next_steps.append("\nIf you only need direct chats right now, you can skip the group permission work and start the bot immediately.")
-    if selection.group_reply_only_when_mentioned:
-        next_steps.append("\n\n")
-        next_steps.append(
-            "Conservative group mode is enabled: unmentioned group messages are recorded for memory but will not be answered.",
-            style="yellow",
-        )
-
-    ui.print_panel(next_steps, title="Next Steps")
+        ui.print_panel(next_steps, title="Next Steps")
 
 
 def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
@@ -1844,7 +1828,12 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
     channels_cfg["feishu"] = _feishu_channel_config(selection)
 
     config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
-    _print_feishu_post_setup(config_file, selection, agent_name=agent_name)
+    _print_feishu_post_setup(
+        config_file,
+        selection,
+        agent_name=agent_name,
+        show_next_steps=getattr(args, "show_next_steps", True),
+    )
     return 0
 
 
