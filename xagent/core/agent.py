@@ -15,7 +15,7 @@ from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRunti
 from .config import AgentConfig, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_client, normalize_model_api
-from .tools import ToolExecutor, ToolManager
+from .tooling import ToolExecutor, ToolManager
 from ..schemas import AgentTurnResult, Message, ParticipationDecision
 from ..tools import create_write_memory_tool, create_search_memory_tool
 logger = logging.getLogger(__name__)

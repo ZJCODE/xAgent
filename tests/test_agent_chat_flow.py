@@ -12,7 +12,7 @@ from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.providers import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_OPENAI_RESPONSES
-from xagent.core.tools.executor import ToolDisplayResult, ToolExecutor
+from xagent.core.tooling.executor import ToolDisplayResult, ToolExecutor
 from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
 
