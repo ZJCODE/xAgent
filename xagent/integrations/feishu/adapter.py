@@ -2176,6 +2176,7 @@ class FeishuAdapter:
             image_sources=image_sources,
             attachments=attachments,
             room_name=resolved_room_name,
+            is_group=is_group,
         )
         anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         context = ScheduledDeliveryContext(
@@ -2353,15 +2354,17 @@ class FeishuAdapter:
         image_sources: Optional[list[str]] = None,
         attachments: Optional[list[dict[str, Any]]] = None,
         room_name: Optional[str] = None,
+        is_group: bool = False,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "user_message": text,
             "user_id": user_id,
-            "channel_instructions": (
+        }
+        if is_group:
+            kwargs["channel_instructions"] = (
                 "For mentions, use <at user_id=\"ou_xxx\">Name</at>, never plain @Name. "
                 "Room context shows users as Name(id). Mention only when direct attention is needed."
-            ),
-        }
+            )
         if room_name:
             kwargs["room_name"] = room_name
         if image_sources:
