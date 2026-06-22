@@ -150,41 +150,29 @@ def empty_agent_registry(*, active_agent: str = "") -> AgentRegistry:
     return AgentRegistry(active_agent=active_agent, agents={})
 
 
-def allocate_api_port(
-    *,
-    root: Optional[Path] = None,
-    exclude_agent_path: Optional[Path] = None,
-) -> int:
+def allocate_api_port(*, root: Optional[Path] = None) -> int:
     """Return the lowest unused API port >= ``BaseAgentConfig.DEFAULT_PORT``.
 
-    Scans the config.yaml of every registered agent for an existing
-    ``channels.api.port`` value.  Agents that lack a config file, or
-    whose config has no ``channels.api`` section or no ``port`` value,
-    are skipped silently.
-
-    When the registry is absent or empty, ``DEFAULT_PORT`` (8010) is
-    returned.
+    Reads every registered agent's config.yaml and collects existing
+    ``channels.api.port`` values, then returns the first port >=
+    ``DEFAULT_PORT`` (8010) not in that set.
     """
-    from .channels import load_config_file  # lazy import to avoid coupling
+    from .channels import api_config, load_config_file
 
     used_ports: set[int] = set()
     try:
         registry = load_agent_registry(root=root)
-        for entry in registry.agents.values():
-            if exclude_agent_path is not None and entry.path.resolve() == exclude_agent_path.resolve():
-                continue
-            try:
-                config = load_config_file(entry.path)
-            except Exception:
-                continue
-            try:
-                port_value = config["channels"]["api"]["port"]
-            except (KeyError, TypeError):
-                continue
-            if isinstance(port_value, int):
-                used_ports.add(port_value)
     except AgentRegistryError:
-        pass
+        return BaseAgentConfig.DEFAULT_PORT
+
+    for entry in registry.agents.values():
+        try:
+            cfg = load_config_file(entry.path)
+        except Exception:
+            continue
+        port_value = api_config(cfg).get("port")
+        if isinstance(port_value, int):
+            used_ports.add(port_value)
 
     port = BaseAgentConfig.DEFAULT_PORT
     while port in used_ports:

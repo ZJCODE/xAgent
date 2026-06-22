@@ -272,7 +272,7 @@ def _default_init_selection() -> InitSelection:
 
 
 
-def _config_yaml(selection: InitSelection, port: Optional[int] = None) -> str:
+def _config_yaml(selection: InitSelection, port: int) -> str:
     provider_config = {
         "name": selection.provider,
         "base_url": selection.base_url,
@@ -293,7 +293,7 @@ def _config_yaml(selection: InitSelection, port: Optional[int] = None) -> str:
         "channels": {
             "api": {
                 "host": BaseAgentConfig.DEFAULT_HOST,
-                "port": port if port is not None else BaseAgentConfig.DEFAULT_PORT,
+                "port": port,
             }
         },
     }
@@ -1292,7 +1292,7 @@ def init_agent_directory(
     tasks_dir.mkdir(parents=True, exist_ok=True)
 
     selection = selection or _default_init_selection()
-    port = allocate_api_port(exclude_agent_path=resolved_dir)
+    port = allocate_api_port()
     config_file.write_text(_config_yaml(selection, port=port), encoding="utf-8")
     identity_file.write_text(selection.identity, encoding="utf-8")
 
@@ -1773,6 +1773,20 @@ def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
     return app_id, app_secret
 
 
+def _ensure_api_port(channels_cfg: dict) -> None:
+    """Set ``api.host`` / ``api.port`` in *channels_cfg* if they are missing.
+
+    Port is only assigned when no port exists yet, reusing the
+    :func:`allocate_api_port` heuristic.
+    """
+    api_cfg = channels_cfg.setdefault("api", {})
+    if not isinstance(api_cfg, dict):
+        return
+    api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
+    if "port" not in api_cfg:
+        api_cfg["port"] = allocate_api_port()
+
+
 def handle_init_feishu(args: argparse.Namespace) -> int:
     ui = TerminalUI()
     config_file = _config_path(args)
@@ -1827,12 +1841,7 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
     if selection is None:
         return 1
 
-    api_cfg = channels_cfg.setdefault("api", {})
-    if isinstance(api_cfg, dict):
-        api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
-        if "port" not in api_cfg:
-            api_cfg["port"] = allocate_api_port()
-
+    _ensure_api_port(channels_cfg)
     channels_cfg["feishu"] = _feishu_channel_config(selection)
 
     config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
@@ -2018,11 +2027,7 @@ def handle_init_weixin(args: argparse.Namespace) -> int:
     if selection is None:
         return 1
 
-    api_cfg = channels_cfg.setdefault("api", {})
-    if isinstance(api_cfg, dict):
-        api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
-        if "port" not in api_cfg:
-            api_cfg["port"] = allocate_api_port()
+    _ensure_api_port(channels_cfg)
     channels_cfg["weixin"] = _weixin_channel_config(selection)
     config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
     _print_weixin_post_setup(config_file, selection, agent_name=agent_name)
