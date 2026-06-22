@@ -4,7 +4,7 @@ import logging
 import unittest
 from types import SimpleNamespace
 
-from xagent.integrations.feishu.send import send_message
+from xagent.channels.feishu.send import send_message
 
 
 def _ok(message_id="om_sent"):

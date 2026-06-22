@@ -4,8 +4,8 @@ import unittest
 
 import httpx
 
-from xagent.integrations.weixin.client import WeixinClient, qr_login
-from xagent.integrations.weixin.state import WeixinCredentials
+from xagent.channels.weixin.client import WeixinClient, qr_login
+from xagent.channels.weixin.state import WeixinCredentials
 
 
 class WeixinClientTests(unittest.TestCase):

@@ -6,15 +6,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from xagent.core.agent import Agent
-from xagent.core.config import AgentConfig
-from xagent.core.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
-from xagent.core.messages import ExperienceFormatter, InstructionBuilder, MessageService, TurnContextBuilder
-from xagent.core.ports import MessageStore
-from xagent.core.providers import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_OPENAI_RESPONSES
-from xagent.core.tools.executor import ToolDisplayResult, ToolExecutor
-from xagent.integrations.langfuse import NoopObservabilityRuntime
-from xagent.schemas import Message, MessageType, RoleType
+from xagent.application.agent_service import Agent
+from xagent.config.schema import AgentConfig
+from xagent.infrastructure.llm import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
+from xagent.application import ExperienceFormatter, InstructionBuilder, MessageService, TurnContextBuilder
+from xagent.ports import MessageStore
+from xagent.config.providers import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_OPENAI_RESPONSES
+from xagent.tools.executor import ToolDisplayResult, ToolExecutor
+from xagent.infrastructure.observability import NoopObservabilityRuntime
+from xagent.domain import Message, MessageType, RoleType
 
 
 def _text_turn(text: str) -> list[ModelStreamEvent]:
@@ -966,7 +966,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 return ""
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("xagent.core.agent.MemoryMaintenanceService", CapturingMemoryMaintenanceService):
+            with patch("xagent.application.agent_service.MemoryMaintenanceService", CapturingMemoryMaintenanceService):
                 agent = Agent(
                     client=object(),
                     workspace=tmpdir,

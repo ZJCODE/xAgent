@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from xagent.tools.search_tool import (
+from xagent.tools.builtins.search import (
     create_web_search_tool,
     normalize_search_provider,
 )
@@ -313,7 +313,7 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
         )
         tool = create_web_search_tool({"provider": "minimax", "api_key": "minimax-key"})
 
-        with patch("xagent.tools.search_tool.httpx.AsyncClient", return_value=http_client):
+        with patch("xagent.tools.builtins.search.httpx.AsyncClient", return_value=http_client):
             result = await tool(query="杭州天气", max_results=5)
 
         self.assertEqual(result["status"], "ok")
@@ -350,7 +350,7 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
         )
         tool = create_web_search_tool({"provider": "minimax", "api_key": "minimax-key"})
 
-        with patch("xagent.tools.search_tool.httpx.AsyncClient", return_value=http_client):
+        with patch("xagent.tools.builtins.search.httpx.AsyncClient", return_value=http_client):
             result = await tool(query="杭州天气", max_results=5)
 
         self.assertEqual(result["status"], "ok")

@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from xagent.tools.artifact_tool import create_attach_artifact_tool
-from xagent.utils.image_utils import workspace_blob_url
+from xagent.tools.builtins.artifacts import create_attach_artifact_tool
+from xagent.infrastructure.media.images import workspace_blob_url
 
 
 class AttachArtifactToolTests(unittest.IsolatedAsyncioTestCase):

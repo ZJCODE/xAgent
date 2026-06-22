@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import httpx
 
-from xagent.interfaces.server import AgentHTTPServer
-from xagent.schemas import Message, MessageType, RoleType
+from xagent.api import AgentHTTPServer
+from xagent.domain import Message, MessageType, RoleType
 
 
 class FakeMessageStorage:

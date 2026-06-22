@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from xagent.tools.web_fetch_tool import (
+from xagent.tools.builtins.web_fetch import (
     create_web_fetch_tool,
     _is_private_or_reserved_ip,
     _resolve_to_private,
@@ -148,7 +148,7 @@ class WebFetchToolExecutionTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, *args):
                 pass
 
-        with patch("xagent.tools.web_fetch_tool.httpx.AsyncClient", new=FakeAsyncClient):
+        with patch("xagent.tools.builtins.web_fetch.httpx.AsyncClient", new=FakeAsyncClient):
             result = await self.tool(url="https://example.com")
 
         self.assertEqual(result["status"], "ok")
@@ -184,7 +184,7 @@ class WebFetchToolExecutionTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, *args):
                 pass
 
-        with patch("xagent.tools.web_fetch_tool.httpx.AsyncClient", new=FakeAsyncClient):
+        with patch("xagent.tools.builtins.web_fetch.httpx.AsyncClient", new=FakeAsyncClient):
             result = await self.tool(url="https://example.com/long")
 
         self.assertEqual(result["status"], "ok")
@@ -215,7 +215,7 @@ class WebFetchToolExecutionTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, *args):
                 pass
 
-        with patch("xagent.tools.web_fetch_tool.httpx.AsyncClient", new=FakeAsyncClient):
+        with patch("xagent.tools.builtins.web_fetch.httpx.AsyncClient", new=FakeAsyncClient):
             result = await self.tool(url="https://example.com/not-found")
 
         self.assertEqual(result["status"], "error")
@@ -237,7 +237,7 @@ class WebFetchToolExecutionTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, *args):
                 pass
 
-        with patch("xagent.tools.web_fetch_tool.httpx.AsyncClient", new=FakeAsyncClient):
+        with patch("xagent.tools.builtins.web_fetch.httpx.AsyncClient", new=FakeAsyncClient):
             result = await self.tool(url="https://example.com/slow")
 
         self.assertEqual(result["status"], "error")
@@ -278,7 +278,7 @@ class WebFetchToolExecutionTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, *args):
                 pass
 
-        with patch("xagent.tools.web_fetch_tool.httpx.AsyncClient", new=FakeAsyncClient):
+        with patch("xagent.tools.builtins.web_fetch.httpx.AsyncClient", new=FakeAsyncClient):
             result = await self.tool(url="https://example.com/empty")
 
         self.assertEqual(result["status"], "error")
@@ -299,7 +299,7 @@ class WebFetchToolExecutionTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, *args):
                 pass
 
-        with patch("xagent.tools.web_fetch_tool.httpx.AsyncClient", new=FakeAsyncClient):
+        with patch("xagent.tools.builtins.web_fetch.httpx.AsyncClient", new=FakeAsyncClient):
             result = await self.tool(url="https://example.com")
 
         self.assertEqual(result["status"], "error")

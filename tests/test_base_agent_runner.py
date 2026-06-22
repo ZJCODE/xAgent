@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from xagent.interfaces.base import BaseAgentRunner
+from xagent.bootstrap.container import BaseAgentRunner
 
 
 class _FakeSQLiteMessageStore:
@@ -51,7 +51,7 @@ class BaseAgentRunnerStorageTests(unittest.TestCase):
             )
             identity_path.write_text("You are a research assistant.", encoding="utf-8")
 
-            with patch("xagent.interfaces.base.SQLiteMessageStore", _FakeSQLiteMessageStore):
+            with patch("xagent.bootstrap.container.SQLiteMessageStore", _FakeSQLiteMessageStore):
                 runner = _RunnerWithoutAgent(config_dir=str(resolved_tmpdir))
 
             self.assertEqual(

@@ -4,10 +4,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from xagent.components import SQLiteMessageStore
-from xagent.core.messages import MessageService
-from xagent.core.runtime import enqueue_scheduled_task, list_task_records
-from xagent.interfaces.server import AgentHTTPServer
+from xagent.infrastructure.storage import SQLiteMessageStore
+from xagent.application import MessageService
+from xagent.application import enqueue_scheduled_task, list_task_records
+from xagent.api import AgentHTTPServer
 
 
 class _TaskAgent:

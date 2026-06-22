@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from xagent.components.memory import MarkdownMemoryStore
+from xagent.infrastructure.storage import MarkdownMemoryStore
 
 
 class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):

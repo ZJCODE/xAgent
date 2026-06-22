@@ -5,10 +5,10 @@ import tempfile
 import unittest
 from datetime import date
 
-from xagent.components.memory import MarkdownMemoryStore
-from xagent.components.messages import SQLiteMessageStore
-from xagent.schemas import Message, RoleType
-from xagent.tools.memory_tool import (
+from xagent.infrastructure.storage import MarkdownMemoryStore
+from xagent.infrastructure.storage import SQLiteMessageStore
+from xagent.domain import Message, RoleType
+from xagent.tools.builtins.memory import (
     create_write_memory_tool,
     create_search_memory_tool,
 )

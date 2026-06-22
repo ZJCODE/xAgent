@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import yaml
 
-from xagent.core.config import AgentConfig
-from xagent.core.providers import (
+from xagent.config.schema import AgentConfig
+from xagent.config.providers import (
     MODEL_API_ANTHROPIC_MESSAGES,
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
     MODEL_API_OPENAI_RESPONSES,
@@ -20,14 +20,14 @@ from xagent.core.providers import (
     provider_supports_vision,
     provider_model_api,
 )
-from xagent.interfaces.cli.channels import enabled_channels_from_config
-from xagent.interfaces.cli import (
+from xagent.cli.commands.channels import enabled_channels_from_config
+from xagent.cli import (
     InitSelection,
     collect_init_selection,
     collect_init_selection_terminal_ui,
     init_agent_directory,
 )
-from xagent.interfaces.base import BaseAgentRunner
+from xagent.bootstrap.container import BaseAgentRunner
 
 
 def write_identity(directory: str, text: str = "You are a test assistant.") -> None:
@@ -2105,12 +2105,12 @@ channels:
                 runner = BaseAgentRunner(config_dir=tmpdir)
                 with self.assertRaisesRegex(ValueError, "channels.voice.provider"):
                     runner.config["channels"]["voice"]
-                    from xagent.voice.config import VoiceChannelConfig
+                    from xagent.infrastructure.voice.config import VoiceChannelConfig
 
                     VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_provider()
 
     def test_voice_config_rejects_top_level_api_key(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.infrastructure.voice.config import VoiceChannelConfig
 
         with self.assertRaisesRegex(ValueError, "api_key"):
             VoiceChannelConfig.from_dict({"provider": "soniox", "api_key": "soniox-key"})
@@ -2135,12 +2135,12 @@ channels:
                 runner = BaseAgentRunner(config_dir=tmpdir)
                 with self.assertRaisesRegex(ValueError, "channels.voice.stt.api_key"):
                     runner.config["channels"]["voice"]
-                    from xagent.voice.config import VoiceChannelConfig
+                    from xagent.infrastructure.voice.config import VoiceChannelConfig
 
                     VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_stt_api_key()
 
     def test_voice_config_rejects_placeholder_api_key(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.infrastructure.voice.config import VoiceChannelConfig
 
         config = VoiceChannelConfig.from_dict({"provider": "soniox", "stt": {"api_key": "your_soniox_api_key_here"}})
 
@@ -2148,7 +2148,7 @@ channels:
             config.resolved_stt_api_key()
 
     def test_voice_config_accepts_none_provider_without_implying_soniox(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.infrastructure.voice.config import VoiceChannelConfig
 
         config = VoiceChannelConfig.from_dict({"provider": "none"})
 
@@ -2157,7 +2157,7 @@ channels:
             config.resolved_provider()
 
     def test_voice_config_rejects_qwen_placeholder_api_key(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.infrastructure.voice.config import VoiceChannelConfig
 
         config = VoiceChannelConfig.from_dict({"provider": "qwen", "stt": {"api_key": "your_qwen_api_key_here"}})
 
@@ -2165,7 +2165,7 @@ channels:
             config.resolved_stt_api_key()
 
     def test_voice_config_accepts_qwen_defaults(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.infrastructure.voice.config import VoiceChannelConfig
 
         config = VoiceChannelConfig.from_dict({
             "provider": "qwen",
@@ -2185,7 +2185,7 @@ channels:
         self.assertEqual(config.tts.audio_format, "pcm")
 
     def test_voice_config_accepts_custom_stt_tts_providers(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.infrastructure.voice.config import VoiceChannelConfig
 
         config = VoiceChannelConfig.from_dict(
             {

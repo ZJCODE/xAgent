@@ -6,10 +6,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from xagent.core.config import AgentConfig
-from xagent.core.messages import ExperienceFormatter, InstructionBuilder, MessageImageNormalizer, MessageService, TurnContextBuilder
-from xagent.schemas import Message, MessageType, RoleType
-from xagent.utils.image_utils import data_uri_to_bytes, extract_image_urls_from_text
+from xagent.config.schema import AgentConfig
+from xagent.application import ExperienceFormatter, InstructionBuilder, MessageImageNormalizer, MessageService, TurnContextBuilder
+from xagent.domain import Message, MessageType, RoleType
+from xagent.infrastructure.media.images import data_uri_to_bytes, extract_image_urls_from_text
 
 
 class _FakeMessageStorage:

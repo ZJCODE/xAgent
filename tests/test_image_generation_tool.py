@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from xagent.tools.image_generation_tool import (
+from xagent.tools.builtins.image_generation import (
     create_image_generation_tool,
     normalize_image_generation_provider,
 )
@@ -240,7 +240,7 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
                 workspace_dir=tmpdir,
             )
 
-            with patch("xagent.tools.image_generation_tool.httpx.AsyncClient", return_value=http_client):
+            with patch("xagent.tools.builtins.image_generation.httpx.AsyncClient", return_value=http_client):
                 result = await tool(
                     prompt="女孩在图书馆的窗户前，看向远方",
                     aspect_ratio="16:9",
@@ -302,7 +302,7 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
                 workspace_dir=tmpdir,
             )
 
-            with patch("xagent.tools.image_generation_tool.httpx.AsyncClient", return_value=http_client):
+            with patch("xagent.tools.builtins.image_generation.httpx.AsyncClient", return_value=http_client):
                 result = await tool(
                     prompt="Draw a bilingual poster with clean Chinese text",
                     size="2048*2048",

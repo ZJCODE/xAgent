@@ -2,8 +2,8 @@ import asyncio
 import unittest
 from datetime import date
 
-from xagent.core.config import AgentConfig
-from xagent.core.runtime import RuntimeHeartbeat, RuntimeHeartbeatConfig, create_runtime_heartbeat
+from xagent.config.schema import AgentConfig
+from xagent.application import RuntimeHeartbeat, RuntimeHeartbeatConfig, create_runtime_heartbeat
 
 
 class _FakeMemoryMaintenanceService:

@@ -4,10 +4,10 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from xagent.core.runtime import enqueue_scheduled_task, list_task_records
-from xagent.integrations.weixin.adapter import WeixinAdapter
-from xagent.integrations.weixin.config import WeixinAdapterConfig
-from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
+from xagent.application import enqueue_scheduled_task, list_task_records
+from xagent.channels.weixin.adapter import WeixinAdapter
+from xagent.channels.weixin.config import WeixinAdapterConfig
+from xagent.channels.weixin.state import WeixinCredentials, WeixinStateStore
 
 
 class _FakeAgent:

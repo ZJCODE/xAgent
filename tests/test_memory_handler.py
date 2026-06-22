@@ -6,10 +6,10 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from xagent.components.memory import MarkdownMemoryStore
-from xagent.components.messages import StoredMessage
-from xagent.core.memory import MemoryMaintenanceService
-from xagent.schemas import Message, MessageType, RoleType
+from xagent.infrastructure.storage import MarkdownMemoryStore
+from xagent.infrastructure.storage import StoredMessage
+from xagent.application import MemoryMaintenanceService
+from xagent.domain import Message, MessageType, RoleType
 
 _TEST_MAX_HISTORY = 20
 

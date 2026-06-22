@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from xagent.integrations.weixin.media import (
+from xagent.channels.weixin.media import (
     ITEM_IMAGE,
     aes128_ecb_decrypt,
     aes128_ecb_encrypt,

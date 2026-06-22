@@ -7,18 +7,18 @@ import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from xagent.core.runtime import current_delivery_context, enqueue_scheduled_task, list_active_task_records
-from xagent.voice.config import VoiceChannelConfig, VoiceTTSConfig
-from xagent.voice.factory import create_local_voice_runtime
-from xagent.voice.qwen import (
+from xagent.application import current_delivery_context, enqueue_scheduled_task, list_active_task_records
+from xagent.infrastructure.voice.config import VoiceChannelConfig, VoiceTTSConfig
+from xagent.infrastructure.voice.factory import create_local_voice_runtime
+from xagent.infrastructure.voice.qwen import (
     QwenRealtimeSTT,
     QwenRealtimeTTS,
     QwenVoiceError,
     _connect_qwen_websocket,
     _qwen_realtime_url,
 )
-from xagent.voice.runtime import VoiceRuntime, VoiceRuntimeOptions, VoiceUtterance
-from xagent.voice.soniox import SonioxRealtimeTTS, SonioxVoiceError, _batch_text_chunks, _connect_websocket
+from xagent.channels.voice.runtime import VoiceRuntime, VoiceRuntimeOptions, VoiceUtterance
+from xagent.infrastructure.voice.soniox import SonioxRealtimeTTS, SonioxVoiceError, _batch_text_chunks, _connect_websocket
 
 
 class FakeMicrophone:

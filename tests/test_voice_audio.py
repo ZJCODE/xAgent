@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from xagent.voice import audio as voice_audio
+from xagent.infrastructure.voice import audio as voice_audio
 
 
 class _FakeDefaults:
@@ -185,7 +185,7 @@ class VoiceAudioTests(unittest.TestCase):
     def test_resolve_audio_profile_prefers_duplex_usb_device(self):
         fake_sd = _FakeSoundDevice()
 
-        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+        with patch("xagent.infrastructure.voice.audio._import_sounddevice", return_value=fake_sd):
             profile = voice_audio.resolve_audio_io_profile(
                 input_sample_rate=16000,
                 input_channels=1,
@@ -203,7 +203,7 @@ class VoiceAudioTests(unittest.TestCase):
     def test_resolve_audio_profile_prefers_default_mac_builtins(self):
         fake_sd = _FakeMacSoundDevice()
 
-        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+        with patch("xagent.infrastructure.voice.audio._import_sounddevice", return_value=fake_sd):
             profile = voice_audio.resolve_audio_io_profile(
                 input_sample_rate=16000,
                 input_channels=1,
@@ -219,7 +219,7 @@ class VoiceAudioTests(unittest.TestCase):
     def test_resolve_audio_profile_prefers_natural_stereo_stream_for_stereo_usb_device(self):
         fake_sd = _FakeStereoUsbSoundDevice()
 
-        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+        with patch("xagent.infrastructure.voice.audio._import_sounddevice", return_value=fake_sd):
             profile = voice_audio.resolve_audio_io_profile(
                 input_sample_rate=16000,
                 input_channels=1,
@@ -237,7 +237,7 @@ class VoiceAudioTests(unittest.TestCase):
     def test_resolve_audio_profile_honors_named_device_preferences(self):
         fake_sd = _FakeMacSoundDevice()
 
-        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+        with patch("xagent.infrastructure.voice.audio._import_sounddevice", return_value=fake_sd):
             profile = voice_audio.resolve_audio_io_profile(
                 input_sample_rate=16000,
                 input_channels=1,
@@ -255,7 +255,7 @@ class VoiceAudioTests(unittest.TestCase):
     def test_resolve_audio_profile_accepts_index_preferences(self):
         fake_sd = _FakeMacSoundDevice()
 
-        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+        with patch("xagent.infrastructure.voice.audio._import_sounddevice", return_value=fake_sd):
             profile = voice_audio.resolve_audio_io_profile(
                 input_sample_rate=16000,
                 input_channels=1,
@@ -271,7 +271,7 @@ class VoiceAudioTests(unittest.TestCase):
     def test_resolve_audio_profile_rejects_wrong_direction_preference(self):
         fake_sd = _FakeMacSoundDevice()
 
-        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+        with patch("xagent.infrastructure.voice.audio._import_sounddevice", return_value=fake_sd):
             with self.assertRaisesRegex(RuntimeError, "has no output channels"):
                 voice_audio.resolve_audio_io_profile(
                     input_sample_rate=16000,
@@ -284,7 +284,7 @@ class VoiceAudioTests(unittest.TestCase):
     def test_list_audio_devices_text_splits_input_and_output_devices(self):
         fake_sd = _FakeMacSoundDevice()
 
-        with patch("xagent.voice.audio._import_sounddevice", return_value=fake_sd):
+        with patch("xagent.infrastructure.voice.audio._import_sounddevice", return_value=fake_sd):
             text = voice_audio.list_audio_devices_text()
 
         self.assertIn("Input devices:", text)

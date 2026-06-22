@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import httpx
 
-from xagent.interfaces.server import AgentHTTPServer
+from xagent.api import AgentHTTPServer
 
 
 class FakeMessageStorage:

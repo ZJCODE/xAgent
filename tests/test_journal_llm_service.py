@@ -1,10 +1,10 @@
 import unittest
 from unittest.mock import patch
 
-from xagent.core.memory import JournalFormatter
-from xagent.core.model import ModelStreamEvent
-from xagent.core.providers import MODEL_API_OPENAI_RESPONSES
-from xagent.schemas import Message
+from xagent.application import JournalFormatter
+from xagent.infrastructure.llm import ModelStreamEvent
+from xagent.config.providers import MODEL_API_OPENAI_RESPONSES
+from xagent.domain import Message
 
 
 class JournalFormatterPromptTests(unittest.IsolatedAsyncioTestCase):
@@ -121,7 +121,7 @@ class JournalFormatterPromptTests(unittest.IsolatedAsyncioTestCase):
             model_api=MODEL_API_OPENAI_RESPONSES,
         )
 
-        with patch("xagent.core.model.ModelClient", FakeModelClient):
+        with patch("xagent.infrastructure.llm.ModelClient", FakeModelClient):
             result = await service.format_diary_entry(
                 messages=[
                     {
@@ -168,7 +168,7 @@ class JournalFormatterPromptTests(unittest.IsolatedAsyncioTestCase):
             model_api=MODEL_API_OPENAI_RESPONSES,
         )
 
-        with patch("xagent.core.model.ModelClient", FakeModelClient):
+        with patch("xagent.infrastructure.llm.ModelClient", FakeModelClient):
             result = await service.generate_summary(
                 source_content="Diary source",
                 period_type="weekly",

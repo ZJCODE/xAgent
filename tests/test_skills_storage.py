@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from xagent.components.skills import FilesystemSkillsStore
+from xagent.infrastructure.storage import FilesystemSkillsStore
 from xagent.tools import create_read_skill_tool
 
 

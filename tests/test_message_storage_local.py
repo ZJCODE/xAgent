@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from xagent.components.messages import SQLiteMessageStore
-from xagent.schemas import Message, MessageType, RoleType
+from xagent.infrastructure.storage import SQLiteMessageStore
+from xagent.domain import Message, MessageType, RoleType
 
 
 class SQLiteMessageStoreTests(unittest.IsolatedAsyncioTestCase):

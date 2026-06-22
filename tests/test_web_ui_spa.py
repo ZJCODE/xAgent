@@ -3,7 +3,7 @@ import unittest
 import httpx
 from fastapi import HTTPException
 
-from xagent.interfaces.server import AgentHTTPServer, ChatInput
+from xagent.api import AgentHTTPServer, ChatInput
 
 
 class FakeMessageStorage:

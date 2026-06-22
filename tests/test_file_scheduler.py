@@ -3,14 +3,14 @@ import tempfile
 import unittest
 from datetime import datetime
 
-from xagent.core.runtime import (
+from xagent.application import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     enqueue_scheduled_task,
     list_task_records,
     scheduled_delivery_context,
 )
-from xagent.tools.scheduler_tool import create_schedule_task_tool
+from xagent.tools.builtins.scheduler import create_schedule_task_tool
 
 
 class ScheduledTaskTests(unittest.TestCase):

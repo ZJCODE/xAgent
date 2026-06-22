@@ -5,8 +5,8 @@ from unittest.mock import patch
 import httpx
 from fastapi.testclient import TestClient
 
-from xagent.interfaces.server import AgentHTTPServer
-from xagent.schemas import AgentTurnResult
+from xagent.api import AgentHTTPServer
+from xagent.domain import AgentTurnResult
 
 
 class FakeMessageStorage:
@@ -243,7 +243,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
         heartbeat = FakeHeartbeat()
         server = AgentHTTPServer(agent=agent, enable_web=False)
 
-        with patch("xagent.interfaces.server.app.create_runtime_heartbeat", return_value=heartbeat) as factory:
+        with patch("xagent.api.app.create_runtime_heartbeat", return_value=heartbeat) as factory:
             with TestClient(server.app):
                 pass
 
