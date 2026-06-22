@@ -1,4 +1,12 @@
 from .heartbeat import RuntimeHeartbeat, RuntimeHeartbeatConfig, create_runtime_heartbeat
+from .inspiration import (
+    InspirationLoop,
+    load_contacts,
+    resolve_contacts_path,
+    resolve_inspiration_tasks_dir,
+    save_contacts,
+    upsert_contact,
+)
 from .scheduler import (
     parse_run_at,
 )
@@ -21,6 +29,12 @@ __all__ = [
     "RuntimeHeartbeat",
     "RuntimeHeartbeatConfig",
     "create_runtime_heartbeat",
+    "InspirationLoop",
+    "load_contacts",
+    "resolve_contacts_path",
+    "resolve_inspiration_tasks_dir",
+    "save_contacts",
+    "upsert_contact",
     "parse_run_at",
     "AsyncTaskScheduler",
     "ScheduledDeliveryContext",

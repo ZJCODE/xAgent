@@ -14,7 +14,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
-from ...core.runtime import AsyncTaskScheduler, ScheduledDeliveryContext, scheduled_delivery_context
+from ...core.runtime import (
+    AsyncTaskScheduler,
+    ScheduledDeliveryContext,
+    resolve_contacts_path,
+    resolve_inspiration_tasks_dir,
+    scheduled_delivery_context,
+    upsert_contact,
+)
 from ...schemas.attachment import (
     ATTACHMENT_KIND_IMAGE,
     attachment_kind,
@@ -131,6 +138,9 @@ class WeixinAdapter:
         self._stop_event = asyncio.Event()
         self._tasks_dir = self.runtime_dir / AgentConfig.TASKS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
+        self._inspiration_tasks_dir = resolve_inspiration_tasks_dir(self.runtime_dir)
+        self._inspiration_scheduler: Optional[AsyncTaskScheduler] = None
+        self._contacts_file = resolve_contacts_path(self.runtime_dir)
 
     async def run(self) -> None:
         credentials = self.state_store.load_credentials(self.config.account_id)
@@ -156,11 +166,23 @@ class WeixinAdapter:
         )
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
+
+        inspiration_scheduler = AsyncTaskScheduler(
+            self._inspiration_tasks_dir,
+            can_handle=self._can_handle_scheduled_task,
+            dispatch=self._dispatch_scheduled_task,
+            logger_=self.logger,
+        )
+        self._inspiration_scheduler = inspiration_scheduler
+        await inspiration_scheduler.start()
+
         try:
             await self._poll_loop()
         finally:
             await task_scheduler.stop()
             self._task_scheduler = None
+            await inspiration_scheduler.stop()
+            self._inspiration_scheduler = None
             await self._cancel_processing_tasks()
             if self._owns_client and self.client is not None:
                 await self.client.aclose()
@@ -339,6 +361,21 @@ class WeixinAdapter:
             return
 
         chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound)
+
+        # Record contact for subconscious inspiration routing
+        try:
+            upsert_contact(
+                self._contacts_file,
+                channel="weixin",
+                user_id=user_id,
+                target={
+                    "user_id": user_id,
+                    "account_id": self._credentials.account_id,
+                },
+            )
+        except Exception:
+            self.logger.debug("Failed to record contact for inspiration", exc_info=True)
+
         context = ScheduledDeliveryContext(
             channel="weixin",
             user_id=user_id,

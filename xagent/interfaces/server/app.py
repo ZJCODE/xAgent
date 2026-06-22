@@ -38,7 +38,10 @@ from ...core.runtime import (
     ScheduledDeliveryContext,
     create_runtime_heartbeat,
     list_active_task_views,
+    resolve_contacts_path,
+    resolve_inspiration_tasks_dir,
     scheduled_delivery_context,
+    upsert_contact,
 )
 from ...schemas.attachment import (
     MAX_ATTACHMENT_BYTES,
@@ -118,6 +121,9 @@ class AgentHTTPServer(BaseAgentRunner):
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
+        self._inspiration_tasks_dir = resolve_inspiration_tasks_dir(self.workspace)
+        self._inspiration_scheduler: Optional[AsyncTaskScheduler] = None
+        self._contacts_file = resolve_contacts_path(self.workspace)
         self._task_subscribers: dict[str, set[WebSocket]] = {}
         self._task_subscribers_lock = asyncio.Lock()
         self.app = self._create_app()
@@ -144,6 +150,18 @@ class AgentHTTPServer(BaseAgentRunner):
     async def _call_agent(self, input_data: ChatInput):
         attachments = self._input_attachments(input_data)
         image_sources = self._input_image_sources(input_data, attachments=attachments)
+
+        # Record contact for subconscious inspiration routing
+        try:
+            upsert_contact(
+                self._contacts_file,
+                channel="api",
+                user_id=input_data.user_id,
+                target={"user_id": input_data.user_id},
+            )
+        except Exception:
+            self.logger.debug("Failed to record contact for inspiration", exc_info=True)
+
         context = self._scheduled_delivery_context(input_data, channel="api")
         with scheduled_delivery_context(context):
             return await self.agent(
@@ -199,6 +217,18 @@ class AgentHTTPServer(BaseAgentRunner):
             if not callable(chat_events):
                 raise RuntimeError("Agent does not support chat_events().")
             attachments = self._input_attachments(input_data)
+
+            # Record contact for subconscious inspiration routing
+            try:
+                upsert_contact(
+                    self._contacts_file,
+                    channel="web",
+                    user_id=input_data.user_id,
+                    target={"user_id": input_data.user_id},
+                )
+            except Exception:
+                self.logger.debug("Failed to record contact for inspiration", exc_info=True)
+
             context = self._scheduled_delivery_context(input_data, channel="web")
             with scheduled_delivery_context(context):
                 response = chat_events(
@@ -663,6 +693,12 @@ class AgentHTTPServer(BaseAgentRunner):
             dispatch=self._dispatch_scheduled_task,
             logger_=self.logger,
         )
+        inspiration_scheduler = AsyncTaskScheduler(
+            self._inspiration_tasks_dir,
+            can_handle=self._can_handle_scheduled_task,
+            dispatch=self._dispatch_scheduled_task,
+            logger_=self.logger,
+        )
         try:
             if heartbeat is not None:
                 await heartbeat.start()
@@ -673,11 +709,17 @@ class AgentHTTPServer(BaseAgentRunner):
             self._task_scheduler = task_scheduler
             await task_scheduler.start()
             self.logger.info("Scheduled task runtime started: tasks=%s", self.tasks_dir)
+            self._inspiration_scheduler = inspiration_scheduler
+            await inspiration_scheduler.start()
+            self.logger.info("Inspiration task scheduler started: dir=%s", self._inspiration_tasks_dir)
             yield
         finally:
             await task_scheduler.stop()
             self._task_scheduler = None
             self.logger.info("Scheduled task runtime stopped")
+            await inspiration_scheduler.stop()
+            self._inspiration_scheduler = None
+            self.logger.info("Inspiration task scheduler stopped")
             if heartbeat is not None:
                 await heartbeat.stop()
                 self.logger.info("Runtime heartbeat stopped")

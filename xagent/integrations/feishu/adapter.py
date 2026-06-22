@@ -43,7 +43,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
-from ...core.runtime import AsyncTaskScheduler, ScheduledDeliveryContext, scheduled_delivery_context
+from ...core.runtime import (
+    AsyncTaskScheduler,
+    ScheduledDeliveryContext,
+    resolve_contacts_path,
+    resolve_inspiration_tasks_dir,
+    scheduled_delivery_context,
+    upsert_contact,
+)
 from .config import FeishuAdapterConfig
 from .history import (
     FeishuHistoryFetcher,
@@ -211,6 +218,9 @@ class FeishuAdapter:
         runtime_root = Path(getattr(agent, "workspace", AgentConfig.DEFAULT_WORKSPACE)).expanduser().resolve()
         self._tasks_dir = runtime_root / AgentConfig.TASKS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
+        self._inspiration_tasks_dir = resolve_inspiration_tasks_dir(runtime_root)
+        self._inspiration_scheduler: Optional[AsyncTaskScheduler] = None
+        self._contacts_file = resolve_contacts_path(runtime_root)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -278,6 +288,17 @@ class FeishuAdapter:
         )
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
+
+        # Inspiration scheduler (separate directory, same can_handle / dispatch)
+        inspiration_scheduler = AsyncTaskScheduler(
+            self._inspiration_tasks_dir,
+            can_handle=self._can_handle_scheduled_task,
+            dispatch=self._dispatch_scheduled_task,
+            logger_=self.logger,
+        )
+        self._inspiration_scheduler = inspiration_scheduler
+        await inspiration_scheduler.start()
+
         run_task = loop.run_in_executor(None, self.run_blocking)
         stop_task = asyncio.create_task(self._stop_event.wait())
         try:
@@ -296,6 +317,8 @@ class FeishuAdapter:
         finally:
             await task_scheduler.stop()
             self._task_scheduler = None
+            await inspiration_scheduler.stop()
+            self._inspiration_scheduler = None
             self._safe_stop()
             self._owner_loop = None
 
@@ -2202,6 +2225,22 @@ class FeishuAdapter:
                 "chat_id": chat_id,
             },
         )
+        # Record contact for subconscious inspiration routing
+        try:
+            upsert_contact(
+                self._contacts_file,
+                channel="feishu",
+                user_id=user_id,
+                target={
+                    "chat_id": chat_id,
+                    "is_group": is_group,
+                    "sender_id": sender_id,
+                    "sender_name": sender_name,
+                },
+            )
+        except Exception:
+            self.logger.debug("Failed to record contact for inspiration", exc_info=True)
+
         with scheduled_delivery_context(context):
             await self._send_event_replies(
                 chat_id=chat_id,

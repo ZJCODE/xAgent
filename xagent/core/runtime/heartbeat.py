@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from ..config import AgentConfig
@@ -49,12 +50,14 @@ class RuntimeHeartbeat:
         interval_seconds: float = AgentConfig.RUNTIME_HEARTBEAT_INTERVAL_SECONDS,
         today_provider: Callable[[], date] = date.today,
         logger_: Optional[logging.Logger] = None,
+        inspiration_loop: Any = None,
     ) -> None:
         self.agent = agent
         self.interval_seconds = max(0.001, float(interval_seconds))
         self._today_provider = today_provider
         self._logger = logger_ or logger
         self._task: Optional[asyncio.Task[None]] = None
+        self._inspiration_loop = inspiration_loop
 
     @property
     def is_running(self) -> bool:
@@ -84,6 +87,8 @@ class RuntimeHeartbeat:
         today = self._today_provider()
         if today.weekday() == 0:
             await self._generate_previous_weekly_summary(today)
+        if self._inspiration_loop is not None:
+            await self._inspiration_loop.maybe_inspire()
 
     async def _run_loop(self) -> None:
         while True:
@@ -124,8 +129,36 @@ def create_runtime_heartbeat(
     config = RuntimeHeartbeatConfig.from_mapping(runtime_config)
     if not config.enabled:
         return None
+
+    # Resolve workspace path for the inspiration loop
+    workspace = _resolve_agent_workspace(agent)
+    inspiration_loop = None
+    if workspace is not None and AgentConfig.INSPIRATION_ENABLED:
+        from .inspiration import InspirationLoop
+
+        inspiration_loop = InspirationLoop(
+            agent,
+            workspace=workspace,
+            logger_=logger_,
+        )
+
     return RuntimeHeartbeat(
         agent,
         interval_seconds=config.interval_seconds,
         logger_=logger_,
+        inspiration_loop=inspiration_loop,
     )
+
+
+def _resolve_agent_workspace(agent: Any) -> Optional[Path]:
+    """Resolve the agent workspace directory path."""
+    markdown_memory = getattr(agent, "markdown_memory", None)
+    if markdown_memory is not None:
+        root = getattr(markdown_memory, "root", None)
+        if root is not None:
+            # root is the memory/ directory; workspace is its parent
+            return Path(root).parent
+    workspace_dir = getattr(agent, "workspace_dir", None)
+    if workspace_dir is not None:
+        return Path(workspace_dir)
+    return None

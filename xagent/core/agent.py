@@ -639,6 +639,37 @@ class Agent:
             source=event_metadata.get("source"),
         )
 
+    async def record_internal_thought(
+        self,
+        content: str,
+        reasoning: str = "",
+    ) -> AgentTurnResult:
+        """Record an internal monologue thought (not sent to any user).
+
+        The thought is stored as a context event with event_type
+        ``"internal_monologue"``, which the transcript formatter renders
+        as ``[speaker=ME][timestamp=...][internal]``.  This allows the
+        thought to become part of the agent's memory stream (diary
+        compression) without interrupting the conversation.
+        """
+        event_msg = await self.message_handler.store_context_event(
+            context=content,
+            source="inspiration",
+            event_type="internal_monologue",
+            metadata={"reasoning": reasoning} if reasoning else {},
+        )
+        self._schedule_experience_write(
+            messages=[event_msg],
+        )
+        return AgentTurnResult(
+            kind="internal_thought",
+            replied=False,
+            reply=None,
+            event_id=event_msg.timestamp,
+            event_type="internal_monologue",
+            source="inspiration",
+        )
+
     async def decide_participation(
         self,
         context: str,

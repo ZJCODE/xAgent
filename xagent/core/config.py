@@ -117,6 +117,17 @@ class AgentConfig:
     IDLE_DIARY_TIMEOUT_SECONDS = 1800  # 30 minutes
 
     # ============================================================
+    # 10b. Subconscious Inspiration
+    # Low-probability autonomous thought generation. The heartbeat
+    # rolls the dice each tick; when inspiration fires the agent
+    # generates an internal thought and decides whether to share it.
+    # ============================================================
+    INSPIRATION_ENABLED = True
+    INSPIRATION_PROBABILITY = 0.02  # 2 % chance per heartbeat tick
+    INSPIRATION_TASKS_DIRNAME = "inspiration_tasks"
+    INSPIRATION_MAX_CONTACTS = 10
+
+    # ============================================================
     # 11. Tool System Prompts
     # Instruction segments injected into the system prompt when the
     # corresponding tool is active. Each key matches a tool name.
