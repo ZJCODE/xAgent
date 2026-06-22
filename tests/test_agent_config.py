@@ -2105,12 +2105,12 @@ channels:
                 runner = BaseAgentRunner(config_dir=tmpdir)
                 with self.assertRaisesRegex(ValueError, "channels.voice.provider"):
                     runner.config["channels"]["voice"]
-                    from xagent.voice.config import VoiceChannelConfig
+                    from xagent.interfaces.voice.config import VoiceChannelConfig
 
                     VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_provider()
 
     def test_voice_config_rejects_top_level_api_key(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.interfaces.voice.config import VoiceChannelConfig
 
         with self.assertRaisesRegex(ValueError, "api_key"):
             VoiceChannelConfig.from_dict({"provider": "soniox", "api_key": "soniox-key"})
@@ -2135,12 +2135,12 @@ channels:
                 runner = BaseAgentRunner(config_dir=tmpdir)
                 with self.assertRaisesRegex(ValueError, "channels.voice.stt.api_key"):
                     runner.config["channels"]["voice"]
-                    from xagent.voice.config import VoiceChannelConfig
+                    from xagent.interfaces.voice.config import VoiceChannelConfig
 
                     VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_stt_api_key()
 
     def test_voice_config_rejects_placeholder_api_key(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.interfaces.voice.config import VoiceChannelConfig
 
         config = VoiceChannelConfig.from_dict({"provider": "soniox", "stt": {"api_key": "your_soniox_api_key_here"}})
 
@@ -2148,7 +2148,7 @@ channels:
             config.resolved_stt_api_key()
 
     def test_voice_config_accepts_none_provider_without_implying_soniox(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.interfaces.voice.config import VoiceChannelConfig
 
         config = VoiceChannelConfig.from_dict({"provider": "none"})
 
@@ -2157,7 +2157,7 @@ channels:
             config.resolved_provider()
 
     def test_voice_config_rejects_qwen_placeholder_api_key(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.interfaces.voice.config import VoiceChannelConfig
 
         config = VoiceChannelConfig.from_dict({"provider": "qwen", "stt": {"api_key": "your_qwen_api_key_here"}})
 
@@ -2165,7 +2165,7 @@ channels:
             config.resolved_stt_api_key()
 
     def test_voice_config_accepts_qwen_defaults(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.interfaces.voice.config import VoiceChannelConfig
 
         config = VoiceChannelConfig.from_dict({
             "provider": "qwen",
@@ -2185,7 +2185,7 @@ channels:
         self.assertEqual(config.tts.audio_format, "pcm")
 
     def test_voice_config_accepts_custom_stt_tts_providers(self):
-        from xagent.voice.config import VoiceChannelConfig
+        from xagent.interfaces.voice.config import VoiceChannelConfig
 
         config = VoiceChannelConfig.from_dict(
             {

@@ -524,7 +524,7 @@ class CLICommandTests(unittest.TestCase):
             )
 
             with patch("xagent.interfaces.cli.runtime.BaseAgentRunner.__init__", init_runner):
-                with patch("xagent.voice.factory.create_local_voice_runtime", return_value=fake_runtime) as factory:
+                with patch("xagent.interfaces.voice.factory.create_local_voice_runtime", return_value=fake_runtime) as factory:
                     with patch("sys.stdout", new_callable=io.StringIO):
                         exit_code = handle_voice(args)
 
@@ -2667,7 +2667,7 @@ class CLICommandTests(unittest.TestCase):
             heartbeat = _Heartbeat()
 
             with patch("xagent.interfaces.cli.runtime.BaseAgentRunner", return_value=_Runner()):
-                with patch("xagent.voice.factory.create_local_voice_runtime", return_value=runtime_instance) as factory:
+                with patch("xagent.interfaces.voice.factory.create_local_voice_runtime", return_value=runtime_instance) as factory:
                     with patch("xagent.interfaces.cli.runtime.create_runtime_heartbeat", return_value=heartbeat) as heartbeat_factory:
                         exit_code = handle_run_channel_internal(args)
 

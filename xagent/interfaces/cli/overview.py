@@ -9,7 +9,7 @@ from typing import Any
 from ...core.providers import provider_model_api
 from ...core.runtime import list_task_records
 from ...tools.search_tool import is_placeholder_api_key, normalize_search_provider
-from ...voice.config import VoiceChannelConfig
+from ..voice.config import VoiceChannelConfig
 from ..base import BaseAgentConfig, BaseAgentRunner
 from .channels import (
     CHANNEL_API,

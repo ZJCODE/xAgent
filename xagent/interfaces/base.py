@@ -187,7 +187,7 @@ class BaseAgentRunner:
                 raise ValueError(f"Unsupported channels key(s): {joined_keys}")
             voice_cfg = channels_cfg.get("voice")
             if voice_cfg is not None:
-                from ..voice.config import VoiceChannelConfig
+                from .voice.config import VoiceChannelConfig
 
                 VoiceChannelConfig.from_dict(voice_cfg)
 

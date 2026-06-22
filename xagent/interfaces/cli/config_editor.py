@@ -38,7 +38,7 @@ from ...tools.image_generation_tool import (
     normalize_image_generation_provider,
 )
 from ...tools.search_tool import is_placeholder_api_key, normalize_search_provider
-from ...voice.config import (
+from ..voice.config import (
     QWEN_KEY_PLACEHOLDER,
     SONIOX_KEY_PLACEHOLDER,
     VOICE_PROVIDER_CUSTOM,

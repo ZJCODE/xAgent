@@ -81,7 +81,7 @@ def handle_voice(args: argparse.Namespace) -> int:
 
     try:
         if getattr(args, "list_devices", False):
-            from ...voice.audio import list_audio_devices_text
+            from ..voice.audio import list_audio_devices_text
 
             print(list_audio_devices_text())
             return 0
@@ -411,9 +411,9 @@ def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
             print("Voice channel is not configured. Run: xagent setup")
             return 1
 
-        from ...voice.config import VoiceChannelConfig
-        from ...voice.factory import create_local_voice_runtime
-        from ...voice.runtime import VoiceRuntimeOptions
+        from ..voice.config import VoiceChannelConfig
+        from ..voice.factory import create_local_voice_runtime
+        from ..voice.runtime import VoiceRuntimeOptions
 
         voice_runtime_config = VoiceChannelConfig.from_dict(voice_data)
         runtime = create_local_voice_runtime(
@@ -981,7 +981,7 @@ def handle_doctor(args: argparse.Namespace) -> int:
             ok = False
     if CHANNEL_VOICE in channels:
         try:
-            from ...voice.config import VoiceChannelConfig
+            from ..voice.config import VoiceChannelConfig
 
             data = voice_config(config)
             if not data or data.get("enabled") is False:
