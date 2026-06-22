@@ -38,8 +38,8 @@ class JournalLLMService:
             return ""
 
         transcript = self._format_transcript(messages)
-        system_prompt = self.build_diary_system_prompt(journal_date)
-        user_prompt = self.build_diary_user_prompt(journal_date, transcript)
+        system_prompt = self.build_diary_system_prompt()
+        user_prompt = self.build_diary_user_prompt(transcript)
 
         try:
             content = await self._call_text(
@@ -75,7 +75,7 @@ class JournalLLMService:
             return ""
 
     @staticmethod
-    def build_diary_system_prompt(journal_date: str) -> str:
+    def build_diary_system_prompt() -> str:
         return """Write a concise diary entry from my first-person perspective.
 
 Input markers:
@@ -99,8 +99,8 @@ Rules:
 - Return only the diary entry text. No advice, JSON, code fences, or explanatory prose."""
 
     @staticmethod
-    def build_diary_user_prompt(journal_date: str, transcript: str) -> str:
-        return f"""For {journal_date}, write a diary entry from this transcript:
+    def build_diary_user_prompt(transcript: str) -> str:
+        return f"""Write a diary entry from this transcript:
 
 {transcript}"""
 

@@ -9,9 +9,7 @@ from xagent.schemas import Message
 
 class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
     def test_diary_system_prompt_preserves_core_behavior_constraints(self):
-        prompt = JournalLLMService.build_diary_system_prompt(
-            journal_date="2026-03-19",
-        )
+        prompt = JournalLLMService.build_diary_system_prompt()
 
         self.assertIn("first-person perspective", prompt)
         self.assertIn("something I noticed, overheard, or received", prompt)
@@ -95,11 +93,10 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
 
     def test_build_diary_user_prompt_uses_single_period_transcript(self):
         prompt = JournalLLMService.build_diary_user_prompt(
-            journal_date="2026-06-09",
             transcript="[speaker=ME][timestamp=2026-06-09 09:00:00]\nNew period content.",
         )
 
-        self.assertIn("write a diary entry from this transcript", prompt)
+        self.assertIn("Write a diary entry from this transcript", prompt)
         self.assertIn("New period content.", prompt)
 
     async def test_format_diary_entry_uses_plain_text_and_forwards_model_api(self):
