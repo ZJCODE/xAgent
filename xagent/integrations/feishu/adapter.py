@@ -732,6 +732,7 @@ class FeishuAdapter:
             source="feishu",
             event_type="group_message",
             metadata=metadata,
+            room_name=room_name,
         )
 
     async def _decide_group_participation(
@@ -2147,6 +2148,7 @@ class FeishuAdapter:
         raw_msg: Any = None,
         image_assets: Optional[list[_FeishuInboundImageAsset]] = None,
         attachments: Optional[list[dict[str, Any]]] = None,
+        room_name: Optional[str] = None,
     ) -> None:
         image_assets = image_assets or []
         supports_vision = bool(getattr(self.agent, "supports_vision", True))
@@ -2163,11 +2165,17 @@ class FeishuAdapter:
                 text=chat_text,
             )
 
+        # Resolve room name for group messages so agent replies carry room context
+        resolved_room_name = room_name
+        if is_group and not resolved_room_name:
+            resolved_room_name = await self._resolve_room_name(chat_id, raw_msg)
+
         chat_kwargs = self._chat_kwargs(
             user_id=user_id,
             text=chat_text,
             image_sources=image_sources,
             attachments=attachments,
+            room_name=resolved_room_name,
         )
         anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         context = ScheduledDeliveryContext(
@@ -2344,15 +2352,18 @@ class FeishuAdapter:
         text: str,
         image_sources: Optional[list[str]] = None,
         attachments: Optional[list[dict[str, Any]]] = None,
+        room_name: Optional[str] = None,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "user_message": text,
             "user_id": user_id,
             "channel_instructions": (
-                "For Feishu mentions, use <at user_id=\"ou_xxx\">Name</at>, never plain @Name. "
+                "For mentions, use <at user_id=\"ou_xxx\">Name</at>, never plain @Name. "
                 "Room context shows users as Name(id). Mention only when direct attention is needed."
             ),
         }
+        if room_name:
+            kwargs["room_name"] = room_name
         if image_sources:
             kwargs["image_source"] = image_sources[0] if len(image_sources) == 1 else image_sources
         if attachments:
@@ -2515,7 +2526,8 @@ class FeishuAdapter:
 
         anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         sent_count = 0
-        async for event in chat_events(**chat_kwargs, stream=False):
+        room_name = chat_kwargs.pop("room_name", None)
+        async for event in chat_events(**chat_kwargs, stream=False, room_name=room_name):
             event_type = event.get("type")
             if event_type == "message_done":
                 content = str(event.get("content") or "").strip()
@@ -2552,11 +2564,12 @@ class FeishuAdapter:
         chat_kwargs: dict[str, Any],
         raw_msg: Any = None,
     ) -> None:
-        chat_events = getattr(self.agent, "chat_events", None)
-        if not callable(chat_events):
+        chat_events_fn = getattr(self.agent, "chat_events", None)
+        if not callable(chat_events_fn):
             raise RuntimeError("Agent does not support chat_events().")
 
         anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
+        room_name = chat_kwargs.pop("room_name", None)
         assert self._channel is not None
         sent_count = 0
         active_queue: Optional[asyncio.Queue[Optional[str]]] = None
@@ -2628,7 +2641,7 @@ class FeishuAdapter:
                     is_group=is_group,
                 )
 
-        async for event in chat_events(**chat_kwargs, stream=True):
+        async for event in chat_events_fn(**chat_kwargs, stream=True, room_name=room_name):
             event_type = event.get("type")
             if event_type == "message_start":
                 if active_queue is not None:

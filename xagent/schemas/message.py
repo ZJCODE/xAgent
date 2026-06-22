@@ -55,6 +55,7 @@ class Message(BaseModel):
     type: MessageType = Field(MessageType.MESSAGE, description="Type of message")
     role: RoleType = Field(RoleType.USER, description="The role of the sender")
     sender_id: Optional[str] = Field(None, description="Stable identifier for the speaker in the agent message stream")
+    room_name: Optional[str] = Field(None, description="Room or group name when the message belongs to a multi-participant conversation")
     content: str = Field(..., description="The content of the message")
     timestamp: float = Field(default_factory=time.time, description="The timestamp of when the message was sent")
     images: Optional[List[ImageContent]] = Field(None, description="Image content associated with the message")

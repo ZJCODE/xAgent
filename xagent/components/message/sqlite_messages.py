@@ -407,7 +407,11 @@ class MessageStorage:
     def _format_search_match(message: Message) -> str:
         ts = datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d %H:%M:%S")
         sender = message.sender_id or message.role.value
-        return f"[{ts}][speaker={sender}]\n{message.content.strip()}"
+        header = f"[{ts}][speaker={sender}]"
+        if message.room_name:
+            safe_room = message.room_name.replace("\n", " ").replace("]", "")
+            header += f"[room={safe_room}]"
+        return f"{header}\n{message.content.strip()}"
 
     @staticmethod
     def _date_str_to_timestamp(date_str: str, is_end: bool = False) -> float:

@@ -51,6 +51,7 @@ class MessageHandler:
         user_id: str,
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
+        room_name: Optional[str] = None,
     ) -> Message:
         """Store a user message, auto-detecting embedded image URLs and attachments."""
         normalized_attachments = dedupe_attachments(list(attachments or []))
@@ -72,6 +73,8 @@ class MessageHandler:
             image_source=normalized_sources or None,
             sender_id=user_id,
         )
+        if room_name:
+            msg.room_name = room_name
         if normalized_attachments:
             msg.metadata[ATTACHMENT_METADATA_KEY] = normalized_attachments
         if image_metadata:
@@ -85,6 +88,7 @@ class MessageHandler:
         sender_id: str,
         metadata: Optional[Dict[str, Any]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
+        room_name: Optional[str] = None,
     ) -> Message:
         normalized_attachments = dedupe_attachments(list(attachments or []))
         image_source = extract_image_urls_from_text(reply_text)
@@ -93,6 +97,8 @@ class MessageHandler:
             role=RoleType.ASSISTANT,
             sender_id=sender_id,
         )
+        if room_name:
+            model_msg.room_name = room_name
         if metadata:
             model_msg.metadata.update(metadata)
         if normalized_attachments:
@@ -109,6 +115,7 @@ class MessageHandler:
         source: str = "environment",
         event_type: str = "observation",
         metadata: Optional[Dict[str, Any]] = None,
+        room_name: Optional[str] = None,
     ) -> Message:
         """Store a non-direct observation from the agent's environment."""
         event_msg = Message.create_context_event(
@@ -117,6 +124,8 @@ class MessageHandler:
             event_type=event_type,
             metadata=metadata,
         )
+        if room_name:
+            event_msg.room_name = room_name
         await self.message_storage.add_messages(event_msg)
         return event_msg
 
@@ -440,13 +449,21 @@ class MessageHandler:
 
     @staticmethod
     def _format_context_event_header(message: Message) -> str:
-        return f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
+        header = f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
+        if message.room_name:
+            safe_room = message.room_name.replace("\n", " ").replace("]", "")
+            header += f"[room={safe_room}]"
+        return header
 
     @staticmethod
     def _format_transcript_message_header(message: Message) -> str:
         speaker = MessageHandler._format_transcript_speaker(message)
         timestamp = MessageHandler._format_transcript_timestamp(message)
-        return f"[speaker={speaker}][timestamp={timestamp}]"
+        header = f"[speaker={speaker}][timestamp={timestamp}]"
+        if message.room_name:
+            safe_room = message.room_name.replace("\n", " ").replace("]", "")
+            header += f"[room={safe_room}]"
+        return header
 
     @staticmethod
     def _format_transcript_timestamp(message: Message) -> str:

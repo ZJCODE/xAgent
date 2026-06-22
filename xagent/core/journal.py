@@ -79,9 +79,12 @@ class JournalLLMService:
         return """Write a concise diary entry from my first-person perspective.
 
 Input markers:
-- `[speaker=Name][timestamp=Time]`: Name said or wrote this.
+- `[speaker=Name][timestamp=Time]`: Name said or wrote this directly.
+- `[speaker=Name][timestamp=Time][room=RoomName]`: Name said or wrote this in room RoomName.
 - `[speaker=ME][timestamp=Time]`, `ME ...` in room context, or assistant/agent/AI roles: I said or did this.
+- `[speaker=ME][timestamp=Time][room=RoomName]`: I said or did this in room RoomName.
 - `[ambient context][timestamp=Time]`: something I noticed, overheard, or received.
+- `[ambient context][timestamp=Time][room=RoomName]`: something I noticed, overheard, or received in room RoomName.
 - `[room context]` blocks identify a room with `room_name: ...`, `room_id: ...`, lines like `Name YYYY-MM-DD HH:mm: text`, and `[/room context]`.
 
 Rules:
@@ -164,12 +167,20 @@ Period focus:
     def _format_transcript_header(message: dict) -> str:
         message_type = str(message.get("type", "message")).strip().lower()
         timestamp = JournalLLMService._normalize_timestamp(message.get("timestamp"))
+        room_name = JournalLLMService._sanitize_marker_field(message.get("room_name"))
+
         if message_type == "context_event":
-            return JournalLLMService._append_timestamp_marker("[ambient context]", timestamp)
+            header = JournalLLMService._append_timestamp_marker("[ambient context]", timestamp)
+            if room_name:
+                header += f"[room={room_name}]"
+            return header
 
         speaker = JournalLLMService._normalize_transcript_speaker(message)
         if speaker:
-            return JournalLLMService._append_timestamp_marker(f"[speaker={speaker}]", timestamp)
+            header = JournalLLMService._append_timestamp_marker(f"[speaker={speaker}]", timestamp)
+            if room_name:
+                header += f"[room={room_name}]"
+            return header
         if timestamp:
             return f"[timestamp={timestamp}]"
         return ""
