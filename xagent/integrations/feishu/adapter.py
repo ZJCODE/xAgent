@@ -516,6 +516,13 @@ class FeishuAdapter:
                 id_type=sender_id_type,
                 sender_type=sender_type,
             )
+            self.logger.info(
+                "Feishu p2p message → reply: chat_type=p2p chat_id=%s message_id=%s sender_id=%s sender_name=%s",
+                chat_id,
+                message_id,
+                sender_id,
+                sender_name,
+            )
             await self._handle_chat(
                 chat_id=chat_id,
                 message_id=message_id,
