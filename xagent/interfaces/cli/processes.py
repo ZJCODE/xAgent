@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import time
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from typing import Optional, Sequence
 DEFAULT_STARTUP_TIMEOUT = 2.0
 DEFAULT_STOP_TIMEOUT = 5.0
 STOP_POLL_INTERVAL = 0.1
+DEFAULT_API_PORT = 8010
+DEFAULT_API_HOST = "127.0.0.1"
 
 
 @dataclass(frozen=True)
@@ -130,6 +133,57 @@ def wait_for_process_exit(pid: int, timeout: float = DEFAULT_STOP_TIMEOUT) -> bo
     return not pid_is_running(pid)
 
 
+def _extract_host_port(command: Sequence[str]) -> tuple[str, int]:
+    """Extract --host and --port values from a managed-channel command.
+
+    Returns (host, port) with ``DEFAULT_API_HOST`` / ``DEFAULT_API_PORT``
+    when the flags are absent.
+    """
+    host = DEFAULT_API_HOST
+    port = DEFAULT_API_PORT
+    it = iter(command)
+    for token in it:
+        if token == "--host":
+            try:
+                host = next(it)
+            except StopIteration:
+                pass
+        elif token == "--port":
+            try:
+                port = int(next(it))
+            except (StopIteration, ValueError):
+                pass
+    return host, port
+
+
+def _is_port_in_use(host: str, port: int) -> bool:
+    """Return ``True`` when *something* is already listening on *host:port*."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((host, port)) == 0
+
+
+def _pid_listening_on_port(host: str, port: int) -> Optional[int]:
+    """Best-effort lookup of the PID listening on *host:port*.  Returns ``None``
+    when the lookup is not supported or fails."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-i", f"@{host}:{port}", "-t", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    try:
+        return int(result.stdout.strip().split("\n")[0])
+    except (ValueError, IndexError):
+        return None
+
+
 def start_background(
     command: Sequence[str],
     *,
@@ -141,6 +195,18 @@ def start_background(
     existing_pid = running_pid(pid_path)
     if existing_pid is not None:
         return StartResult(ok=False, pid=existing_pid, error=f"already running (pid={existing_pid})")
+
+    host, port = _extract_host_port(command)
+    if _is_port_in_use(host, port):
+        # Try to identify *which* process is holding the port so the
+        # error message is immediately actionable.
+        pid_owning = _pid_listening_on_port(host, port)
+        detail = f" (pid={pid_owning})" if pid_owning else ""
+        return StartResult(
+            ok=False,
+            error=f"port {host}:{port} is already in use{detail} — "
+            f"stop that process or use a different --port",
+        )
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
