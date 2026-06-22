@@ -1679,7 +1679,6 @@ def _print_feishu_post_setup(
     next_steps.append("\nOptional before group rollout:\n")
     next_steps.append("- im:message.group_msg\n")
     next_steps.append("- im:message.group_at_msg.include_bot:readonly\n")
-    next_steps.append("- im:resource:readonly\n")
     next_steps.append("- contact:user.base:readonly\n")
     next_steps.append("- admin:app.info:readonly\n")
     next_steps.append("\nIf you only need direct chats right now, you can skip the group permission work and start the bot immediately.")

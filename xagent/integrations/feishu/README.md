@@ -42,7 +42,6 @@ Configure your Feishu bot
 3. Add extra permissions:
     * im:message.group_msg (for group chats)
     * im:message.group_at_msg.include_bot:readonly (for group @mentions from users and bots)
-    * im:resource:readonly (for downloading images and files sent to the bot)
     * contact:user.base:readonly (for user display names)
     * admin:app.info:readonly (for other bot or agent display names)
 4. Copy your App ID and App Secret.
