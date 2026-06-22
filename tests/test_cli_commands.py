@@ -1877,17 +1877,15 @@ class CLICommandTests(unittest.TestCase):
 
             with patch("xagent.interfaces.cli.launcher.running_pid", return_value=None):
                 with patch("xagent.interfaces.cli.launcher.webbrowser.open") as stopped_browser_open:
-                    stopped_exit, stopped_msg = _run_managed_channel_action(config_dir, "api", "open")
+                    stopped_exit = _run_managed_channel_action(config_dir, "api", "open")
 
             with patch("xagent.interfaces.cli.launcher.running_pid", return_value=4321):
                 with patch("xagent.interfaces.cli.launcher.webbrowser.open", return_value=True) as browser_open:
-                    running_exit, running_msg = _run_managed_channel_action(config_dir, "api", "open")
+                    running_exit = _run_managed_channel_action(config_dir, "api", "open")
 
         self.assertEqual(stopped_exit, 1)
-        self.assertIn("not running", stopped_msg)
         stopped_browser_open.assert_not_called()
         self.assertEqual(running_exit, 0)
-        self.assertEqual(running_msg, "")
         browser_open.assert_called_once_with("http://127.0.0.1:8010")
 
     def test_interactive_launcher_setup_opens_setup_menu(self):

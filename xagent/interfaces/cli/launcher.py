@@ -476,8 +476,7 @@ def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
     return "\n".join(lines)
 
 
-def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> tuple[int, str]:
-    """Returns (exit_code, error_message)."""
+def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> int:
     channels = [channel]
     if action == "setup":
         if channel == CHANNEL_WEIXIN:
@@ -492,7 +491,7 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                     media_enabled=True,
                     force=False,
                 )
-            ), ""
+            )
         return handle_init_feishu(
             _launcher_args(
                 config_dir=str(config_dir),
@@ -504,29 +503,48 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                 group_fetch_limit=None,
                 group_reply_only_when_mentioned=None,
             )
-        ), ""
+        )
     if action == "open":
         if not _api_channel_is_enabled(config_dir):
-            msg = "Web UI is disabled. Enable it in Setup before opening it."
-            print(msg)
-            return 1, msg
+            print("Web UI is disabled. Enable it in Setup before opening it.")
+            return 1
         if not _api_channel_is_running(config_dir):
-            msg = "Web UI is not running. Start the Web channel first."
-            print(msg)
-            return 1, msg
+            print("Web UI is not running. Start the Web channel first.")
+            return 1
         url = _api_channel_url(config_dir)
         if webbrowser.open(url):
             print(f"Opened: {url}")
-            return 0, ""
-        msg = f"Failed to open: {url}"
-        print(msg)
-        return 1, msg
+            return 0
+        print(f"Failed to open: {url}")
+        return 1
     if action == "start":
-        return _run_start_with_capture(config_dir, channel)
+        return handle_start(
+            _launcher_args(
+                config_dir=str(config_dir),
+                channels=channels,
+                host=None,
+                port=None,
+                open_browser=False,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+        )
     if action == "stop":
-        return handle_stop(_launcher_args(config_dir=str(config_dir), channels=channels)), ""
+        return handle_stop(_launcher_args(config_dir=str(config_dir), channels=channels))
     if action == "restart":
-        return _run_restart_with_capture(config_dir, channel)
+        return handle_restart(
+            _launcher_args(
+                config_dir=str(config_dir),
+                channels=channels,
+                host=None,
+                port=None,
+                open_browser=False,
+                max_concurrent_chats=None,
+                queue_timeout=None,
+                chat_timeout=None,
+            )
+        )
     if action == "status":
         return handle_status(
             _launcher_args(
@@ -534,7 +552,7 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                 channels=channels,
                 json_output=False,
             )
-        ), ""
+        )
     from .runtime import handle_logs
 
     print(f"\nFollowing {channel} logs (Ctrl+C to stop)...\n")
@@ -546,62 +564,10 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                 lines=80,
                 follow=True,
             )
-        ), ""
+        )
     except KeyboardInterrupt:
         print("\nStopped following logs.")
-        return 0, ""
-
-
-def _run_start_with_capture(config_dir: Path, channel: str) -> tuple[int, str]:
-    """Call ``handle_start`` while capturing printed output for error display."""
-    import io
-    import sys as _sys
-
-    capture = io.StringIO()
-    old = _sys.stdout
-    _sys.stdout = capture
-    try:
-        exit_code = handle_start(
-            _launcher_args(
-                config_dir=str(config_dir),
-                channels=[channel],
-                host=None,
-                port=None,
-                open_browser=False,
-                max_concurrent_chats=None,
-                queue_timeout=None,
-                chat_timeout=None,
-            )
-        )
-    finally:
-        _sys.stdout = old
-    return exit_code, capture.getvalue().strip()
-
-
-def _run_restart_with_capture(config_dir: Path, channel: str) -> tuple[int, str]:
-    """Call ``handle_restart`` while capturing printed output for error display."""
-    import io
-    import sys as _sys
-
-    capture = io.StringIO()
-    old = _sys.stdout
-    _sys.stdout = capture
-    try:
-        exit_code = handle_restart(
-            _launcher_args(
-                config_dir=str(config_dir),
-                channels=[channel],
-                host=None,
-                port=None,
-                open_browser=False,
-                max_concurrent_chats=None,
-                queue_timeout=None,
-                chat_timeout=None,
-            )
-        )
-    finally:
-        _sys.stdout = old
-    return exit_code, capture.getvalue().strip()
+        return 0
 
 
 def _current_search_provider(config: dict[str, Any]) -> str:
@@ -1998,9 +1964,9 @@ def _run_voice_channel_launcher(ui: TerminalUI, config_dir: Path) -> None:
             _run_voice_provider_mode_launcher(ui, config_dir, config)
             continue
         if option.key in {"start", "stop", "restart", "status", "logs"}:
-            exit_code, error_msg = _run_managed_channel_action(config_dir, CHANNEL_VOICE, str(option.key))
+            exit_code = _run_managed_channel_action(config_dir, CHANNEL_VOICE, str(option.key))
         else:
-            exit_code, error_msg = handle_voice(
+            exit_code = handle_voice(
                 _launcher_args(
                     config_dir=str(config_dir),
                     user_id="local_voice",
@@ -2010,12 +1976,9 @@ def _run_voice_channel_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     output_device=None,
                     memory=True,
                 )
-            ), ""
+            )
         if exit_code != 0:
-            if error_msg:
-                ui.print_panel(error_msg, title="Error", border_style="red")
-            else:
-                ui.print_panel(f"Voice action exited with status {exit_code}.", title="Channel")
+            ui.print_panel(f"Voice action exited with status {exit_code}.", title="Channel")
         ui.pause("Press Enter to return to Voice")
 
 
@@ -2067,13 +2030,10 @@ def _run_channel_launcher(config_dir: Path) -> int:
             if option is None or option.key == "back":
                 continue
             ui.clear()
-            exit_code, error_msg = _run_managed_channel_action(config_dir, str(channel_option.key), str(option.key))
+            exit_code = _run_managed_channel_action(config_dir, str(channel_option.key), str(option.key))
 
             if exit_code != 0:
-                if error_msg:
-                    ui.print_panel(error_msg, title="Error", border_style="red")
-                else:
-                    ui.print_panel(f"Channel action exited with status {exit_code}.", title="Channel")
+                ui.print_panel(f"Channel action exited with status {exit_code}.", title="Channel")
             ui.pause("Press Enter to return to Channel")
     except ReturnToLauncherHome:
         ui.clear()
