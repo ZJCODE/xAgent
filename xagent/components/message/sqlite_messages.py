@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sqlite3
+from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
-from .base import MessageBatch, MessageStorageBase
 from ...schemas import Message
 
 
-class MessageStorageLocalConfig:
-    """Configuration constants for ``MessageStorageLocal``."""
+MessageBatch = Union[Message, Sequence[Message]]
+
+
+class MessageStorageConfig:
+    """Configuration constants for ``MessageStorage``."""
 
     DEFAULT_PATH = "~/.xagent/messages/messages.sqlite3"
     DEFAULT_MESSAGE_COUNT = 100
@@ -22,11 +27,11 @@ class MessageStorageLocalConfig:
     CURRENT_COLUMNS = {"id", "timestamp", "message_json"}
 
 
-class MessageStorageLocal(MessageStorageBase):
+class MessageStorage:
     """Persistent message storage for one ordered stream, backed by SQLite."""
 
     def __init__(self, path: Optional[str] = None) -> None:
-        self.path = Path(path or MessageStorageLocalConfig.DEFAULT_PATH).expanduser()
+        self.path = Path(path or MessageStorageConfig.DEFAULT_PATH).expanduser()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(self.__class__.__name__)
         self._initialize_database()
@@ -34,7 +39,7 @@ class MessageStorageLocal(MessageStorageBase):
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
             str(self.path),
-            timeout=MessageStorageLocalConfig.CONNECT_TIMEOUT,
+            timeout=MessageStorageConfig.CONNECT_TIMEOUT,
         )
         connection.row_factory = sqlite3.Row
         return connection
@@ -45,20 +50,20 @@ class MessageStorageLocal(MessageStorageBase):
             columns = {
                 row["name"]
                 for row in connection.execute(
-                    f"PRAGMA table_info({MessageStorageLocalConfig.TABLE_NAME})"
+                    f"PRAGMA table_info({MessageStorageConfig.TABLE_NAME})"
                 ).fetchall()
             }
 
             if not columns:
                 self._create_current_schema(connection)
-            elif columns == MessageStorageLocalConfig.CURRENT_COLUMNS:
+            elif columns == MessageStorageConfig.CURRENT_COLUMNS:
                 self._ensure_current_indexes(connection)
             else:
                 self.logger.warning(
                     "Unexpected messages schema at %s; recreating storage table.",
                     self.path,
                 )
-                connection.execute(f"DROP TABLE IF EXISTS {MessageStorageLocalConfig.TABLE_NAME}")
+                connection.execute(f"DROP TABLE IF EXISTS {MessageStorageConfig.TABLE_NAME}")
                 self._create_current_schema(connection)
 
             connection.commit()
@@ -66,7 +71,7 @@ class MessageStorageLocal(MessageStorageBase):
     def _create_current_schema(self, connection: sqlite3.Connection) -> None:
         connection.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {MessageStorageLocalConfig.TABLE_NAME} (
+            CREATE TABLE IF NOT EXISTS {MessageStorageConfig.TABLE_NAME} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
                 message_json TEXT NOT NULL
@@ -78,8 +83,8 @@ class MessageStorageLocal(MessageStorageBase):
     def _ensure_current_indexes(self, connection: sqlite3.Connection) -> None:
         connection.execute(
             f"""
-            CREATE INDEX IF NOT EXISTS idx_{MessageStorageLocalConfig.TABLE_NAME}_id
-            ON {MessageStorageLocalConfig.TABLE_NAME} (id)
+            CREATE INDEX IF NOT EXISTS idx_{MessageStorageConfig.TABLE_NAME}_id
+            ON {MessageStorageConfig.TABLE_NAME} (id)
             """
         )
 
@@ -98,7 +103,7 @@ class MessageStorageLocal(MessageStorageBase):
         with self._connect() as connection:
             connection.executemany(
                 f"""
-                INSERT INTO {MessageStorageLocalConfig.TABLE_NAME} (timestamp, message_json)
+                INSERT INTO {MessageStorageConfig.TABLE_NAME} (timestamp, message_json)
                 VALUES (?, ?)
                 """,
                 rows,
@@ -107,7 +112,7 @@ class MessageStorageLocal(MessageStorageBase):
 
     async def get_messages(
         self,
-        count: int = MessageStorageLocalConfig.DEFAULT_MESSAGE_COUNT,
+        count: int = MessageStorageConfig.DEFAULT_MESSAGE_COUNT,
         offset: int = 0,
     ) -> List[Message]:
         count, offset = self.validate_pagination(count, offset)
@@ -118,7 +123,7 @@ class MessageStorageLocal(MessageStorageBase):
             rows = connection.execute(
                 f"""
                 SELECT message_json
-                FROM {MessageStorageLocalConfig.TABLE_NAME}
+                FROM {MessageStorageConfig.TABLE_NAME}
                 ORDER BY id DESC
                 LIMIT ? OFFSET ?
                 """,
@@ -138,7 +143,7 @@ class MessageStorageLocal(MessageStorageBase):
 
     def _clear_messages_sync(self) -> None:
         with self._connect() as connection:
-            connection.execute(f"DELETE FROM {MessageStorageLocalConfig.TABLE_NAME}")
+            connection.execute(f"DELETE FROM {MessageStorageConfig.TABLE_NAME}")
             connection.commit()
 
     async def pop_message(self) -> Optional[Message]:
@@ -150,7 +155,7 @@ class MessageStorageLocal(MessageStorageBase):
                 row = connection.execute(
                     f"""
                     SELECT id, message_json
-                    FROM {MessageStorageLocalConfig.TABLE_NAME}
+                    FROM {MessageStorageConfig.TABLE_NAME}
                     ORDER BY id DESC
                     LIMIT 1
                     """
@@ -159,7 +164,7 @@ class MessageStorageLocal(MessageStorageBase):
                     return None
 
                 connection.execute(
-                    f"DELETE FROM {MessageStorageLocalConfig.TABLE_NAME} WHERE id = ?",
+                    f"DELETE FROM {MessageStorageConfig.TABLE_NAME} WHERE id = ?",
                     (row["id"],),
                 )
                 connection.commit()
@@ -180,7 +185,7 @@ class MessageStorageLocal(MessageStorageBase):
             row = connection.execute(
                 f"""
                 SELECT COUNT(*) AS message_count
-                FROM {MessageStorageLocalConfig.TABLE_NAME}
+                FROM {MessageStorageConfig.TABLE_NAME}
                 """
             ).fetchone()
         return int(row["message_count"]) if row is not None else 0
@@ -193,7 +198,7 @@ class MessageStorageLocal(MessageStorageBase):
             row = connection.execute(
                 f"""
                 SELECT COALESCE(MAX(id), 0) AS latest_id
-                FROM {MessageStorageLocalConfig.TABLE_NAME}
+                FROM {MessageStorageConfig.TABLE_NAME}
                 """
             ).fetchone()
         return int(row["latest_id"]) if row is not None else 0
@@ -234,7 +239,7 @@ class MessageStorageLocal(MessageStorageBase):
             rows = connection.execute(
                 f"""
                 SELECT message_json
-                FROM {MessageStorageLocalConfig.TABLE_NAME}
+                FROM {MessageStorageConfig.TABLE_NAME}
                 WHERE id > ? AND id <= ?
                 ORDER BY id ASC
                 """,
@@ -264,7 +269,7 @@ class MessageStorageLocal(MessageStorageBase):
             row = connection.execute(
                 f"""
                 SELECT id
-                FROM {MessageStorageLocalConfig.TABLE_NAME}
+                FROM {MessageStorageConfig.TABLE_NAME}
                 ORDER BY id ASC
                 LIMIT 1 OFFSET ?
                 """,
@@ -323,7 +328,7 @@ class MessageStorageLocal(MessageStorageBase):
                 pass
 
         where = " AND ".join(conditions)
-        table = MessageStorageLocalConfig.TABLE_NAME
+        table = MessageStorageConfig.TABLE_NAME
 
         with self._connect() as connection:
             rows = connection.execute(
@@ -365,4 +370,52 @@ class MessageStorageLocal(MessageStorageBase):
         }
 
     def __repr__(self) -> str:
-        return f"MessageStorageLocal(path='{self.path}')"
+        return f"MessageStorage(path='{self.path}')"
+
+    def __str__(self) -> str:
+        return f"MessageStorage(path='{self.path}')"
+
+    async def has_messages(self) -> bool:
+        """Return whether the stream contains at least one message."""
+        return await self.get_message_count() > 0
+
+    @staticmethod
+    def normalize_messages(messages: MessageBatch) -> List[Message]:
+        """Normalize caller input to a concrete list of ``Message`` objects."""
+        if isinstance(messages, Message):
+            return [messages]
+        normalized = list(messages)
+        if not all(isinstance(message, Message) for message in normalized):
+            raise TypeError("messages must be a Message or a sequence of Message instances")
+        return normalized
+
+    @staticmethod
+    def validate_pagination(count: int, offset: int = 0) -> tuple[int, int]:
+        """Validate and normalize message pagination arguments."""
+        try:
+            normalized_count = int(count)
+            normalized_offset = int(offset)
+        except (TypeError, ValueError) as exception:
+            raise ValueError("count and offset must be integers") from exception
+        if normalized_count <= 0:
+            raise ValueError("count must be a positive integer")
+        if normalized_offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+        return normalized_count, normalized_offset
+
+    @staticmethod
+    def _format_search_match(message: Message) -> str:
+        ts = datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        sender = message.sender_id or message.role.value
+        return f"[{ts}][speaker={sender}]\n{message.content.strip()}"
+
+    @staticmethod
+    def _date_str_to_timestamp(date_str: str, is_end: bool = False) -> float:
+        """Convert YYYY-MM-DD to a UTC timestamp."""
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            if is_end:
+                dt = dt.replace(hour=23, minute=59, second=59)
+            return dt.replace(tzinfo=timezone.utc).timestamp()
+        except (ValueError, OverflowError):
+            return 0.0

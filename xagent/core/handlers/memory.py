@@ -23,8 +23,9 @@ from ..config import AgentConfig
 from ...schemas import Message, MessageType
 
 if TYPE_CHECKING:
-    from ...components.memory import JournalLLMService, MarkdownMemory
-    from ...components.message import MessageStorageBase
+    from ...components.memory import MarkdownMemory
+    from ...components.message import MessageStorage
+    from ..journal import JournalLLMService
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class MemoryHandler:
         self,
         memory: MarkdownMemory,
         llm_service: JournalLLMService,
-        message_storage: MessageStorageBase,
+        message_storage: MessageStorage,
         *,
         max_history: int,
         recent_days: Optional[int] = None,

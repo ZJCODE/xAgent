@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from xagent.components.message import MessageStorageBase
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
@@ -17,7 +16,7 @@ from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
 
 
-class InMemoryMessageStorage(MessageStorageBase):
+class InMemoryMessageStorage:
     def __init__(self, initial_messages=None):
         self.messages = list(initial_messages or [])
         self.last_count = None

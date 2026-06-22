@@ -20,7 +20,7 @@ from ..core.providers import (
     PROVIDER_MINIMAX,
     PROVIDER_QWEN,
 )
-from ..components import MessageStorageBase, MessageStorageLocal
+from ..components import MessageStorage
 from ..components.skills import SkillsStorageBase, SkillsStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
 from ..tools import (
@@ -829,7 +829,7 @@ class BaseAgentRunner:
 
         return merged_config
 
-    def _initialize_message_storage(self) -> MessageStorageBase:
+    def _initialize_message_storage(self) -> MessageStorage:
         """
         Initialize the default message storage backend.
 
@@ -841,8 +841,8 @@ class BaseAgentRunner:
     def _get_message_storage_path(self) -> Path:
         return self.workspace / BaseAgentConfig.MESSAGE_DIRNAME / BaseAgentConfig.MESSAGE_DB_FILENAME
 
-    def _create_message_storage(self) -> MessageStorageBase:
-        return MessageStorageLocal(path=str(self._get_message_storage_path()))
+    def _create_message_storage(self) -> MessageStorage:
+        return MessageStorage(path=str(self._get_message_storage_path()))
 
     def _initialize_skills_storage(self) -> SkillsStorageBase:
         return SkillsStorageLocal(self.skills_dir)

@@ -8,7 +8,7 @@ from xagent.utils.tool_decorator import function_tool
 
 if TYPE_CHECKING:
     from xagent.components.memory import MarkdownMemory
-    from xagent.components.message import MessageStorageBase
+    from xagent.components.message import MessageStorage
 
 
 def create_write_memory_tool(
@@ -44,7 +44,7 @@ def create_write_memory_tool(
 def create_search_memory_tool(
     memory: MarkdownMemory,
     is_enabled: bool = True,
-    message_storage: Optional[MessageStorageBase] = None,
+    message_storage: Optional[MessageStorage] = None,
 ):
     """Create a tool for searching long-term memory by keyword or date range."""
 

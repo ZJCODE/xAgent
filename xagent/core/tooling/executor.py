@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from ..config import AgentConfig
 from .manager import ToolManager
-from ...components import MessageStorageBase
+from ...components import MessageStorage
 from ...utils.image_utils import is_image_output
 from ...tools.image_generation_tool import (
     generated_image_attachments,
@@ -38,7 +38,7 @@ class ToolExecutor:
     def __init__(
         self,
         tool_manager: ToolManager,
-        message_storage: MessageStorageBase,
+        message_storage: MessageStorage,
         client: Any,
     ):
         self.tool_manager = tool_manager

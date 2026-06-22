@@ -132,7 +132,7 @@ Period focus:
         system_prompt: str,
         user_prompt: str,
     ) -> str:
-        from ...core.handlers.model import ModelClient
+        from .handlers.model import ModelClient
 
         model_client = ModelClient(
             client=self.client,

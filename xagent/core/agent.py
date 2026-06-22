@@ -6,11 +6,10 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from ..components import (
     MarkdownMemory,
-    MessageStorageBase,
-    MessageStorageLocal,
+    MessageStorage,
     SkillsStorageBase,
 )
-from ..components.memory import JournalLLMService
+from .journal import JournalLLMService
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
 from .config import AgentConfig, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
@@ -32,7 +31,7 @@ class Agent:
         model_api: str = MODEL_API_OPENAI_RESPONSES,
         model_max_tokens: int = AgentConfig.DEFAULT_MAX_TOKENS,
         tools: Optional[List] = None,
-        message_storage: Optional[MessageStorageBase] = None,
+        message_storage: Optional[MessageStorage] = None,
         workspace: Optional[str] = None,
         skills_storage: Optional[SkillsStorageBase] = None,
         observability: Optional[ObservabilityRuntime] = None,
@@ -76,11 +75,11 @@ class Agent:
         if message_storage is not None:
             self.message_storage = message_storage
         elif workspace_path is not None:
-            self.message_storage = MessageStorageLocal(
+            self.message_storage = MessageStorage(
                 path=str(self._message_storage_path(workspace_path))
             )
         else:
-            self.message_storage = MessageStorageLocal(
+            self.message_storage = MessageStorage(
                 path=str(self._message_storage_path(runtime_root))
             )
 

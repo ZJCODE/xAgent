@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from xagent.components import MessageStorageLocal
+from xagent.components import MessageStorage
 from xagent.core.handlers import MessageHandler
 from xagent.core.runtime import enqueue_scheduled_task, list_task_records
 from xagent.interfaces.server import AgentHTTPServer
@@ -19,7 +19,7 @@ class _TaskAgent:
         self.workspace = runtime_root
         self.workspace_dir = runtime_root / "workspace"
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
-        self.message_storage = MessageStorageLocal(path=str(runtime_root / "messages" / "messages.db"))
+        self.message_storage = MessageStorage(path=str(runtime_root / "messages" / "messages.db"))
         self.message_handler = MessageHandler(self.message_storage, workspace_dir=self.workspace_dir)
         self.chat_calls = []
 

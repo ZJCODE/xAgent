@@ -6,7 +6,7 @@ import unittest
 from datetime import date
 
 from xagent.components.memory import MarkdownMemory
-from xagent.components.message.local import MessageStorageLocal
+from xagent.components.message import MessageStorage
 from xagent.schemas import Message, RoleType
 from xagent.tools.memory_tool import (
     create_write_memory_tool,
@@ -70,7 +70,7 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
             db_path = tmp.name
         try:
-            msg_storage = MessageStorageLocal(path=db_path)
+            msg_storage = MessageStorage(path=db_path)
             msg = Message.create(
                 content="We discussed the Q3 deployment plan for the new cluster",
                 role=RoleType.USER,
@@ -100,7 +100,7 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
             db_path = tmp.name
         try:
-            msg_storage = MessageStorageLocal(path=db_path)
+            msg_storage = MessageStorage(path=db_path)
             msg = Message.create(
                 content="Afternoon: continued refactoring auth, hit a snag with JWT validation",
                 role=RoleType.USER,
@@ -130,7 +130,7 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
             db_path = tmp.name
         try:
-            msg_storage = MessageStorageLocal(path=db_path)
+            msg_storage = MessageStorage(path=db_path)
             msg = Message.create(
                 content="Remember to update the production SSL certificate before June 30",
                 role=RoleType.ASSISTANT,
@@ -158,7 +158,7 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
             db_path = tmp.name
         try:
-            msg_storage = MessageStorageLocal(path=db_path)
+            msg_storage = MessageStorage(path=db_path)
             today_str = date.today().isoformat()
             msg = Message.create(
                 content="Today's task: review the API documentation",

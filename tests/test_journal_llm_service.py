@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from xagent.components.memory import JournalLLMService
+from xagent.core.journal import JournalLLMService
 from xagent.core.config import ReplyType
 from xagent.core.providers import MODEL_API_OPENAI_RESPONSES
 from xagent.schemas import Message

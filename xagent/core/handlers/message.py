@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
-from ...components import MessageStorageBase
+from ...components import MessageStorage
 from ...schemas import Message, RoleType, MessageType
 from ...schemas.attachment import (
     ATTACHMENT_METADATA_KEY,
@@ -37,7 +37,7 @@ class MessageHandler:
 
     def __init__(
         self,
-        message_storage: MessageStorageBase,
+        message_storage: MessageStorage,
         system_prompt: str = "",
         workspace_dir: Optional[Union[str, Path]] = None,
     ):

@@ -2,15 +2,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from xagent.components.message import MessageStorageLocal
+from xagent.components.message import MessageStorage
 from xagent.schemas import Message, MessageType, RoleType
 
 
-class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
+class MessageStorageTests(unittest.IsolatedAsyncioTestCase):
     async def test_cursor_range_is_stable_when_newer_messages_arrive(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "messages.sqlite3"
-            storage = MessageStorageLocal(path=str(db_path))
+            storage = MessageStorage(path=str(db_path))
             await storage.add_messages([
                 Message.create("first", role=RoleType.USER, sender_id="alice"),
                 Message.create("second", role=RoleType.USER, sender_id="alice"),
@@ -35,7 +35,7 @@ class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
     async def test_cursor_for_message_count_returns_zero_when_stream_shrinks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "messages.sqlite3"
-            storage = MessageStorageLocal(path=str(db_path))
+            storage = MessageStorage(path=str(db_path))
             await storage.add_messages([
                 Message.create("first", role=RoleType.USER, sender_id="alice"),
                 Message.create("second", role=RoleType.USER, sender_id="alice"),
@@ -47,7 +47,7 @@ class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
     async def test_clear_messages_resets_stream(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "messages.sqlite3"
-            storage = MessageStorageLocal(path=str(db_path))
+            storage = MessageStorage(path=str(db_path))
             await storage.add_messages([
                 Message.create("first", role=RoleType.USER, sender_id="alice"),
                 Message.create("second", role=RoleType.USER, sender_id="bob"),
@@ -60,7 +60,7 @@ class MessageStorageLocalTests(unittest.IsolatedAsyncioTestCase):
     async def test_context_event_roundtrips_with_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "messages.sqlite3"
-            storage = MessageStorageLocal(path=str(db_path))
+            storage = MessageStorage(path=str(db_path))
             event = Message.create_context_event(
                 "看到有人靠近",
                 source="camera",

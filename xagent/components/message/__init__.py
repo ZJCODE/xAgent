@@ -1,10 +1,8 @@
-"""Short-term conversation message storage backends."""
+"""Short-term conversation message storage."""
 
-from .base import MessageBatch, MessageStorageBase
-from .local import MessageStorageLocal
+from .sqlite_messages import MessageBatch, MessageStorage
 
 __all__ = [
     "MessageBatch",
-    "MessageStorageBase",
-    "MessageStorageLocal",
+    "MessageStorage",
 ]
