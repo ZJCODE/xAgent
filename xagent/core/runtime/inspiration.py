@@ -270,7 +270,7 @@ class InspirationLoop:
 
     async def _generate_inspiration(self) -> Dict[str, Any]:
         """Call the LLM to generate an inspiration thought."""
-        memory_context = self._collect_memory_context()
+        memory_context = await self._collect_memory_context()
         contacts_summary = self._collect_contacts_summary()
 
         prompt = (
@@ -329,15 +329,16 @@ class InspirationLoop:
             return {"worthy": False, "content": str(result)[:500], "reasoning": "non-dict result"}
         return result
 
-    def _collect_memory_context(self) -> str:
+    async def _collect_memory_context(self) -> str:
         """Collect recent memory for inspiration context."""
         memory_handler = getattr(self._agent, "memory_handler", None)
         if memory_handler is None:
             return "(no memory available)"
         try:
-            ctx = memory_handler.get_recent_context()
+            ctx = await memory_handler.get_recent_context()
             return ctx.strip() if ctx else "(no recent memory)"
         except Exception:
+            self._logger.warning("Failed to collect memory context", exc_info=True)
             return "(memory read failed)"
 
     def _collect_contacts_summary(self) -> str:
