@@ -92,7 +92,8 @@ class MarkdownMemory:
         return await asyncio.to_thread(self._read_text_sync, path)
 
     async def read_recent_dailies(self, days: int = 3) -> List[Tuple[str, str]]:
-        """Return ``[(date_str, content), ...]`` for the last *days* days."""
+        """Return ``[(date_str, content), ...]`` for the last *days* days,
+        in chronological order (oldest first)."""
         today = date.today()
         results: List[Tuple[str, str]] = []
         for offset in range(days):
@@ -101,6 +102,7 @@ class MarkdownMemory:
             text = await self.read_file(path)
             if text.strip():
                 results.append((entry_date.isoformat(), text))
+        results.reverse()
         return results
 
     # ------------------------------------------------------------------
