@@ -18,7 +18,7 @@ from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     resolve_contacts_path,
-    resolve_inspiration_tasks_dir,
+    resolve_subconscious_tasks_dir,
     scheduled_delivery_context,
     upsert_contact,
 )
@@ -138,8 +138,8 @@ class WeixinAdapter:
         self._stop_event = asyncio.Event()
         self._tasks_dir = self.runtime_dir / AgentConfig.TASKS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._inspiration_tasks_dir = resolve_inspiration_tasks_dir(self.runtime_dir)
-        self._inspiration_scheduler: Optional[AsyncTaskScheduler] = None
+        self._subconscious_tasks_dir = resolve_subconscious_tasks_dir(self.runtime_dir)
+        self._subconscious_scheduler: Optional[AsyncTaskScheduler] = None
         self._contacts_file = resolve_contacts_path(self.runtime_dir)
 
     async def run(self) -> None:
@@ -167,22 +167,22 @@ class WeixinAdapter:
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
 
-        inspiration_scheduler = AsyncTaskScheduler(
-            self._inspiration_tasks_dir,
+        subconscious_scheduler = AsyncTaskScheduler(
+            self._subconscious_tasks_dir,
             can_handle=self._can_handle_scheduled_task,
             dispatch=self._dispatch_scheduled_task,
             logger_=self.logger,
         )
-        self._inspiration_scheduler = inspiration_scheduler
-        await inspiration_scheduler.start()
+        self._subconscious_scheduler = subconscious_scheduler
+        await subconscious_scheduler.start()
 
         try:
             await self._poll_loop()
         finally:
             await task_scheduler.stop()
             self._task_scheduler = None
-            await inspiration_scheduler.stop()
-            self._inspiration_scheduler = None
+            await subconscious_scheduler.stop()
+            self._subconscious_scheduler = None
             await self._cancel_processing_tasks()
             if self._owns_client and self.client is not None:
                 await self.client.aclose()
@@ -362,7 +362,7 @@ class WeixinAdapter:
 
         chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound)
 
-        # Record contact for subconscious inspiration routing
+        # Record contact for subconscious thought routing
         try:
             upsert_contact(
                 self._contacts_file,
@@ -374,7 +374,7 @@ class WeixinAdapter:
                 },
             )
         except Exception:
-            self.logger.debug("Failed to record contact for inspiration", exc_info=True)
+            self.logger.debug("Failed to record contact for subconscious", exc_info=True)
 
         context = ScheduledDeliveryContext(
             channel="weixin",

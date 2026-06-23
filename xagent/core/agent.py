@@ -654,7 +654,7 @@ class Agent:
         """
         event_msg = await self.message_handler.store_context_event(
             context=content,
-            source="inspiration",
+            source="subconscious",
             event_type="internal_monologue",
             metadata={"reasoning": reasoning} if reasoning else {},
         )
@@ -667,7 +667,7 @@ class Agent:
             reply=None,
             event_id=event_msg.timestamp,
             event_type="internal_monologue",
-            source="inspiration",
+            source="subconscious",
         )
 
     async def decide_participation(

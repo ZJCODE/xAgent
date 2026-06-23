@@ -1,9 +1,9 @@
 from .heartbeat import RuntimeHeartbeat, RuntimeHeartbeatConfig, create_runtime_heartbeat
-from .inspiration import (
-    InspirationLoop,
+from .subconscious import (
+    SubconsciousLoop,
     load_contacts,
     resolve_contacts_path,
-    resolve_inspiration_tasks_dir,
+    resolve_subconscious_tasks_dir,
     save_contacts,
     upsert_contact,
 )
@@ -29,10 +29,10 @@ __all__ = [
     "RuntimeHeartbeat",
     "RuntimeHeartbeatConfig",
     "create_runtime_heartbeat",
-    "InspirationLoop",
+    "SubconsciousLoop",
     "load_contacts",
     "resolve_contacts_path",
-    "resolve_inspiration_tasks_dir",
+    "resolve_subconscious_tasks_dir",
     "save_contacts",
     "upsert_contact",
     "parse_run_at",

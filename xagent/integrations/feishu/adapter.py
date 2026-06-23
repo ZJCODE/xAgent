@@ -47,7 +47,7 @@ from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     resolve_contacts_path,
-    resolve_inspiration_tasks_dir,
+    resolve_subconscious_tasks_dir,
     scheduled_delivery_context,
     upsert_contact,
 )
@@ -218,8 +218,8 @@ class FeishuAdapter:
         runtime_root = Path(getattr(agent, "workspace", AgentConfig.DEFAULT_WORKSPACE)).expanduser().resolve()
         self._tasks_dir = runtime_root / AgentConfig.TASKS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._inspiration_tasks_dir = resolve_inspiration_tasks_dir(runtime_root)
-        self._inspiration_scheduler: Optional[AsyncTaskScheduler] = None
+        self._subconscious_tasks_dir = resolve_subconscious_tasks_dir(runtime_root)
+        self._subconscious_scheduler: Optional[AsyncTaskScheduler] = None
         self._contacts_file = resolve_contacts_path(runtime_root)
 
     # ------------------------------------------------------------------
@@ -289,15 +289,15 @@ class FeishuAdapter:
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
 
-        # Inspiration scheduler (separate directory, same can_handle / dispatch)
-        inspiration_scheduler = AsyncTaskScheduler(
-            self._inspiration_tasks_dir,
+        # Subconscious scheduler (separate directory, same can_handle / dispatch)
+        subconscious_scheduler = AsyncTaskScheduler(
+            self._subconscious_tasks_dir,
             can_handle=self._can_handle_scheduled_task,
             dispatch=self._dispatch_scheduled_task,
             logger_=self.logger,
         )
-        self._inspiration_scheduler = inspiration_scheduler
-        await inspiration_scheduler.start()
+        self._subconscious_scheduler = subconscious_scheduler
+        await subconscious_scheduler.start()
 
         run_task = loop.run_in_executor(None, self.run_blocking)
         stop_task = asyncio.create_task(self._stop_event.wait())
@@ -317,8 +317,8 @@ class FeishuAdapter:
         finally:
             await task_scheduler.stop()
             self._task_scheduler = None
-            await inspiration_scheduler.stop()
-            self._inspiration_scheduler = None
+            await subconscious_scheduler.stop()
+            self._subconscious_scheduler = None
             self._safe_stop()
             self._owner_loop = None
 
@@ -2225,7 +2225,7 @@ class FeishuAdapter:
                 "chat_id": chat_id,
             },
         )
-        # Record contact for subconscious inspiration routing
+        # Record contact for subconscious thought routing
         try:
             upsert_contact(
                 self._contacts_file,
@@ -2239,7 +2239,7 @@ class FeishuAdapter:
                 },
             )
         except Exception:
-            self.logger.debug("Failed to record contact for inspiration", exc_info=True)
+            self.logger.debug("Failed to record contact for subconscious", exc_info=True)
 
         with scheduled_delivery_context(context):
             await self._send_event_replies(

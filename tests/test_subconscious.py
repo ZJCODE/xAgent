@@ -1,4 +1,4 @@
-"""Unit tests for the subconscious inspiration system."""
+"""Unit tests for the subconscious thought system."""
 
 import asyncio
 import json
@@ -9,17 +9,17 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from xagent.core.config import AgentConfig
-from xagent.core.runtime.inspiration import (
-    INSPIRATION_SOURCE,
-    INSPIRATION_EVENT_TYPE,
+from xagent.core.runtime.subconscious import (
+    SUBCONSCIOUS_SOURCE,
+    SUBCONSCIOUS_EVENT_TYPE,
     INTERNAL_MARKER,
     ContactEntry,
-    InspirationLoop,
+    SubconsciousLoop,
     load_contacts,
     save_contacts,
     upsert_contact,
     resolve_contacts_path,
-    resolve_inspiration_tasks_dir,
+    resolve_subconscious_tasks_dir,
 )
 from xagent.core.runtime.tasks import enqueue_scheduled_task, list_active_task_records
 
@@ -100,21 +100,25 @@ class ContactManagementTests(unittest.TestCase):
         result = resolve_contacts_path(workspace)
         self.assertEqual(result, workspace / "contacts.json")
 
-    def test_resolve_inspiration_tasks_dir(self):
+    def test_resolve_subconscious_tasks_dir(self):
         workspace = Path("/tmp/test_workspace")
-        result = resolve_inspiration_tasks_dir(workspace)
-        self.assertTrue(result.name == "inspiration_tasks")
+        result = resolve_subconscious_tasks_dir(workspace)
+        self.assertTrue(result.name == "subconscious_tasks")
         self.assertEqual(result.parent, workspace)
 
 
-class InspirationLoopTests(unittest.TestCase):
-    """Tests for the InspirationLoop class."""
+class SubconsciousLoopTests(unittest.TestCase):
+    """Tests for the SubconsciousLoop class."""
 
     def _make_agent_mock(self) -> MagicMock:
         agent = MagicMock()
+        agent.system_prompt = "You are a helpful assistant."
         memory_handler = MagicMock()
         memory_handler.get_recent_context.return_value = "Recent memory content."
         agent.memory_handler = memory_handler
+        message_handler = MagicMock()
+        message_handler.get_recent_messages = AsyncMock(return_value=[])
+        agent.message_handler = message_handler
         model_client = AsyncMock()
         from xagent.core.config import ReplyType
         model_client.call.return_value = (
@@ -128,7 +132,7 @@ class InspirationLoopTests(unittest.TestCase):
     def test_should_trigger_disabled(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = InspirationLoop(agent, workspace=Path(tmpdir))
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop._enabled = False
             for _ in range(100):
                 self.assertFalse(loop.should_trigger())
@@ -136,7 +140,7 @@ class InspirationLoopTests(unittest.TestCase):
     def test_should_trigger_probability(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = InspirationLoop(agent, workspace=Path(tmpdir))
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop._probability = 1.0
             for _ in range(20):
                 self.assertTrue(loop.should_trigger())
@@ -145,48 +149,48 @@ class InspirationLoopTests(unittest.TestCase):
             for _ in range(20):
                 self.assertFalse(loop.should_trigger())
 
-    def test_parse_inspiration_json_plain(self):
-        result = InspirationLoop._parse_inspiration_json(
+    def test_parse_subconscious_json_plain(self):
+        result = SubconsciousLoop._parse_subconscious_json(
             '{"worthy": true, "content": "Hello!", "reasoning": "Seems useful."}'
         )
         self.assertTrue(result["worthy"])
         self.assertEqual(result["content"], "Hello!")
 
-    def test_parse_inspiration_json_with_code_fence(self):
-        result = InspirationLoop._parse_inspiration_json(
+    def test_parse_subconscious_json_with_code_fence(self):
+        result = SubconsciousLoop._parse_subconscious_json(
             '```json\n{"worthy": false, "content": "Nah.", "reasoning": "Nothing."}\n```'
         )
         self.assertFalse(result["worthy"])
         self.assertEqual(result["content"], "Nah.")
 
-    def test_parse_inspiration_json_fallback(self):
-        result = InspirationLoop._parse_inspiration_json("Just a random string")
+    def test_parse_subconscious_json_fallback(self):
+        result = SubconsciousLoop._parse_subconscious_json("Just a random string")
         self.assertFalse(result.get("worthy"))
 
     def test_is_appropriate_time_default_config(self):
         """Default quiet hours 22–8: 8 AM to <10 PM is appropriate."""
-        with patch.object(AgentConfig, 'INSPIRATION_QUIET_HOURS_START', 22), \
-             patch.object(AgentConfig, 'INSPIRATION_QUIET_HOURS_END', 8):
-            self.assertFalse(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 7, 0)))
-            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 8, 0)))
-            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 12, 0)))
-            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 21, 59)))
-            self.assertFalse(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 22, 0)))
-            self.assertFalse(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 23, 0)))
+        with patch.object(AgentConfig, 'SUBCONSCIOUS_QUIET_HOURS_START', 22), \
+             patch.object(AgentConfig, 'SUBCONSCIOUS_QUIET_HOURS_END', 8):
+            self.assertFalse(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 7, 0)))
+            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 8, 0)))
+            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 12, 0)))
+            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 21, 59)))
+            self.assertFalse(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 22, 0)))
+            self.assertFalse(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 23, 0)))
 
     def test_is_appropriate_time_simple_range(self):
         """Simple range: quiet 0–6, only midnight to 6 AM is blocked."""
-        with patch.object(AgentConfig, 'INSPIRATION_QUIET_HOURS_START', 0), \
-             patch.object(AgentConfig, 'INSPIRATION_QUIET_HOURS_END', 6):
-            self.assertFalse(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 3, 0)))
-            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 6, 0)))
-            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 12, 0)))
-            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 23, 0)))
+        with patch.object(AgentConfig, 'SUBCONSCIOUS_QUIET_HOURS_START', 0), \
+             patch.object(AgentConfig, 'SUBCONSCIOUS_QUIET_HOURS_END', 6):
+            self.assertFalse(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 3, 0)))
+            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 6, 0)))
+            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 12, 0)))
+            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 23, 0)))
 
     def test_record_interaction(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = InspirationLoop(agent, workspace=Path(tmpdir))
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop.record_interaction(
                 channel="feishu",
                 user_id="ou_123",
@@ -196,15 +200,88 @@ class InspirationLoopTests(unittest.TestCase):
             self.assertEqual(len(contacts), 1)
             self.assertEqual(contacts[0].channel, "feishu")
 
-    def test_maybe_inspire_not_triggered(self):
+    def test_recent_messages_injected_into_prompt(self):
+        """Verify recent conversation messages are included in the LLM prompt."""
+        from xagent.core.config import ReplyType
+        from xagent.schemas import Message, RoleType
+
+        agent = self._make_agent_mock()
+        # Set up recent messages
+        agent.message_handler.get_recent_messages = AsyncMock(return_value=[
+            Message(role=RoleType.USER, sender_id="alice", content="你好，今天心情怎么样？", timestamp=1716000000.0),
+            Message(role=RoleType.ASSISTANT, sender_id=None, content="挺好的！", timestamp=1716000001.0),
+        ])
+        agent.model_client.call.return_value = (
+            ReplyType.SIMPLE_REPLY,
+            json.dumps({"worthy": False, "content": "Hmm.", "reasoning": "Nothing to say."}),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            # Verify the prompt passed to the LLM includes recent experience
+            call_args = agent.model_client.call.call_args
+            user_message = call_args.kwargs["messages"][0]["content"]
+            self.assertIn("**Recent experience:**", user_message)
+            self.assertIn("[speaker=alice]", user_message)
+            self.assertIn("今天心情怎么样", user_message)
+            self.assertIn("[speaker=ME]", user_message)
+            self.assertIn("挺好的", user_message)
+
+    def test_recent_messages_empty_omits_section(self):
+        """When there are no recent messages, the section is omitted."""
+        agent = self._make_agent_mock()
+        agent.message_handler.get_recent_messages = AsyncMock(return_value=[])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            call_args = agent.model_client.call.call_args
+            user_message = call_args.kwargs["messages"][0]["content"]
+            self.assertNotIn("**Recent experience:**", user_message)
+            self.assertIn("**Recent memories:**", user_message)
+
+    def test_core_rules_and_identity_in_instructions(self):
+        """Verify composable BASE_AGENT_* rules (without Response) and identity are passed."""
+        agent = self._make_agent_mock()
+        agent.system_prompt = "I am a test identity."
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            call_args = agent.model_client.call.call_args
+            instructions = call_args.kwargs["instructions"]
+
+            # Should have at least 3 instructions: subconscious prompt, core rules, identity
+            self.assertGreaterEqual(len(instructions), 3)
+
+            contents = [i["content"] for i in instructions]
+            # Should contain the relevant building blocks (without Response)
+            self.assertTrue(any("Context and Attribution" in c for c in contents))
+            # Should NOT contain the Response section
+            self.assertFalse(any("Deliver user-visible images" in c for c in contents))
+            self.assertFalse(any("Reply to the latest speaker" in c for c in contents))
+
+            # Check identity context is present
+            identities = [i for i in instructions if i.get("name") == "identity_context"]
+            self.assertEqual(len(identities), 1)
+            self.assertIn("I am a test identity.", identities[0]["content"])
+
+    def test_maybe_think_not_triggered(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = InspirationLoop(agent, workspace=Path(tmpdir))
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop._probability = 0.0
-            asyncio.run(loop.maybe_inspire())
+            asyncio.run(loop.maybe_think())
             agent.model_client.call.assert_not_called()
 
-    def test_maybe_inspire_unworthy_writes_internal_thought(self):
+    def test_maybe_think_unworthy_writes_internal_thought(self):
         from xagent.core.config import ReplyType
 
         agent = self._make_agent_mock()
@@ -213,10 +290,10 @@ class InspirationLoopTests(unittest.TestCase):
             json.dumps({"worthy": False, "content": "Hmm interesting...", "reasoning": "Not worth sharing."}),
         )
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = InspirationLoop(agent, workspace=Path(tmpdir))
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop._probability = 1.0
 
-            asyncio.run(loop.maybe_inspire())
+            asyncio.run(loop.maybe_think())
 
             agent.record_internal_thought.assert_called_once()
             call_args = agent.record_internal_thought.call_args
@@ -225,7 +302,7 @@ class InspirationLoopTests(unittest.TestCase):
 
 
     def test_nighttime_worthy_writes_internal_thought(self):
-        """During quiet hours, even worthy inspirations are written as internal thoughts."""
+        """During quiet hours, even worthy thoughts are written as internal thoughts."""
         from xagent.core.config import ReplyType
 
         agent = self._make_agent_mock()
@@ -239,7 +316,7 @@ class InspirationLoopTests(unittest.TestCase):
             }),
         )
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = InspirationLoop(agent, workspace=Path(tmpdir))
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             # Add a contact so routing has a recipient
             loop.record_interaction(
                 channel="feishu",
@@ -248,8 +325,8 @@ class InspirationLoopTests(unittest.TestCase):
             )
             loop._probability = 1.0
 
-            with patch.object(InspirationLoop, '_is_appropriate_time', return_value=False):
-                asyncio.run(loop.maybe_inspire())
+            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=False):
+                asyncio.run(loop.maybe_think())
 
             # Should have written as internal thought, NOT enqueued a task
             agent.record_internal_thought.assert_called_once()
@@ -257,7 +334,7 @@ class InspirationLoopTests(unittest.TestCase):
             self.assertEqual(call_args[0][0], "A 3 AM revelation!")
 
     def test_daytime_worthy_enqueues_task(self):
-        """During appropriate hours, worthy inspirations are enqueued for delivery."""
+        """During appropriate hours, worthy thoughts are enqueued for delivery."""
         from xagent.core.config import ReplyType
 
         agent = self._make_agent_mock()
@@ -271,7 +348,7 @@ class InspirationLoopTests(unittest.TestCase):
             }),
         )
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = InspirationLoop(agent, workspace=Path(tmpdir))
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop.record_interaction(
                 channel="feishu",
                 user_id="ou_123",
@@ -279,27 +356,27 @@ class InspirationLoopTests(unittest.TestCase):
             )
             loop._probability = 1.0
 
-            with patch.object(InspirationLoop, '_is_appropriate_time', return_value=True):
-                asyncio.run(loop.maybe_inspire())
+            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
+                asyncio.run(loop.maybe_think())
 
             # Should have enqueued a task, NOT written as internal thought
             agent.record_internal_thought.assert_not_called()
-            # Verify the inspiration task was created
-            records = list_active_task_records(loop.inspiration_tasks_dir)
+            # Verify the subconscious task was created
+            records = list_active_task_records(loop.subconscious_tasks_dir)
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0].content, "A daytime insight!")
             self.assertEqual(records[0].delivery_channel, "feishu")
 
 
-class InspirationTaskIsolationTests(unittest.TestCase):
-    """Verify inspiration tasks are isolated from user-created tasks."""
+class SubconsciousTaskIsolationTests(unittest.TestCase):
+    """Verify subconscious tasks are isolated from user-created tasks."""
 
-    def test_inspiration_tasks_separate_directory(self):
+    def test_subconscious_tasks_separate_directory(self):
         with tempfile.TemporaryDirectory() as workspace:
             tasks_dir = Path(workspace) / "tasks"
-            inspiration_dir = Path(workspace) / "inspiration_tasks"
+            subconscious_dir = Path(workspace) / "subconscious_tasks"
             tasks_dir.mkdir(parents=True)
-            inspiration_dir.mkdir(parents=True)
+            subconscious_dir.mkdir(parents=True)
 
             # Enqueue a user task
             user_task = enqueue_scheduled_task(
@@ -312,34 +389,34 @@ class InspirationTaskIsolationTests(unittest.TestCase):
                 user_id="web_user",
             )
 
-            # Enqueue an inspiration task in the separate directory
+            # Enqueue an subconscious task in the separate directory
             insp_task = enqueue_scheduled_task(
                 task_type="message",
-                content="Inspiration thought",
+                content="Subconscious thought",
                 run_at=datetime(2026, 6, 22, 14, 0, 0),
-                tasks_dir=inspiration_dir,
+                tasks_dir=subconscious_dir,
                 channel="feishu",
                 target={"chat_id": "oc_xxx"},
                 user_id="ou_123",
-                source={"source": "inspiration"},
+                source={"source": "subconscious"},
             )
 
-            # User task list should NOT include inspiration tasks
+            # User task list should NOT include subconscious tasks
             user_records = list_active_task_records(tasks_dir)
             self.assertEqual(len(user_records), 1)
             self.assertEqual(user_records[0].content, "User reminder")
 
-            # Inspiration task list should NOT include user tasks
-            insp_records = list_active_task_records(inspiration_dir)
-            self.assertEqual(len(insp_records), 1)
-            self.assertEqual(insp_records[0].content, "Inspiration thought")
+            # Subconscious task list should NOT include user tasks
+            sub_records = list_active_task_records(subconscious_dir)
+            self.assertEqual(len(sub_records), 1)
+            self.assertEqual(sub_records[0].content, "Subconscious thought")
 
     def test_async_scheduler_filters_by_channel_across_dirs(self):
-        """Both task and inspiration schedulers filter by channel independently."""
+        """Both task and subconscious schedulers filter by channel independently."""
         async def run_test():
             with tempfile.TemporaryDirectory() as workspace:
                 tasks_dir = Path(workspace) / "tasks"
-                insp_dir = Path(workspace) / "inspiration_tasks"
+                insp_dir = Path(workspace) / "subconscious_tasks"
 
                 # User task for web channel
                 enqueue_scheduled_task(
@@ -347,7 +424,7 @@ class InspirationTaskIsolationTests(unittest.TestCase):
                     run_at=datetime(2026, 1, 1), tasks_dir=tasks_dir,
                     channel="web", target={"user_id": "u1"}, user_id="u1",
                 )
-                # Inspiration task for feishu channel
+                # Subconscious task for feishu channel
                 enqueue_scheduled_task(
                     task_type="message", content="Insp feishu task",
                     run_at=datetime(2026, 1, 1), tasks_dir=insp_dir,
@@ -367,7 +444,7 @@ class InternalThoughtFormatTests(unittest.TestCase):
     """Verify the [internal] marker format for internal monologue."""
 
     def test_internal_monologue_event_type(self):
-        self.assertEqual(INSPIRATION_EVENT_TYPE, "internal_monologue")
+        self.assertEqual(SUBCONSCIOUS_EVENT_TYPE, "internal_monologue")
         self.assertEqual(INTERNAL_MARKER, "internal")
 
     def test_context_event_metadata_for_internal_thought(self):
@@ -375,13 +452,13 @@ class InternalThoughtFormatTests(unittest.TestCase):
         from xagent.schemas import Message
         msg = Message.create_context_event(
             content="A private thought",
-            source=INSPIRATION_SOURCE,
-            event_type=INSPIRATION_EVENT_TYPE,
+            source=SUBCONSCIOUS_SOURCE,
+            event_type=SUBCONSCIOUS_EVENT_TYPE,
             metadata={"reasoning": "Test reasoning"},
         )
         self.assertEqual(msg.type.value, "context_event")
         self.assertEqual(msg.metadata["event_type"], "internal_monologue")
-        self.assertEqual(msg.metadata["source"], "inspiration")
+        self.assertEqual(msg.metadata["source"], "subconscious")
         self.assertEqual(msg.metadata["reasoning"], "Test reasoning")
 
     def test_internal_monologue_detection(self):
@@ -400,8 +477,8 @@ class InternalThoughtFormatTests(unittest.TestCase):
         # Internal monologue
         internal = Message.create_context_event(
             content="I just realized something...",
-            source=INSPIRATION_SOURCE,
-            event_type=INSPIRATION_EVENT_TYPE,
+            source=SUBCONSCIOUS_SOURCE,
+            event_type=SUBCONSCIOUS_EVENT_TYPE,
         )
         self.assertTrue(MessageHandler._is_internal_monologue(internal))
 
@@ -412,8 +489,8 @@ class InternalThoughtFormatTests(unittest.TestCase):
 
         msg = Message.create_context_event(
             content="Thinking...",
-            source=INSPIRATION_SOURCE,
-            event_type=INSPIRATION_EVENT_TYPE,
+            source=SUBCONSCIOUS_SOURCE,
+            event_type=SUBCONSCIOUS_EVENT_TYPE,
         )
         header = MessageHandler._format_internal_thought_header(msg)
         self.assertIn("[speaker=ME]", header)
@@ -427,8 +504,8 @@ class InternalThoughtFormatTests(unittest.TestCase):
 
         msg = Message.create_context_event(
             content="A deep thought",
-            source=INSPIRATION_SOURCE,
-            event_type=INSPIRATION_EVENT_TYPE,
+            source=SUBCONSCIOUS_SOURCE,
+            event_type=SUBCONSCIOUS_EVENT_TYPE,
         )
         lines = MessageHandler._format_experience_entry("observation", msg, "A deep thought")
         self.assertEqual(len(lines), 2)

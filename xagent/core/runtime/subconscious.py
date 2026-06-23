@@ -1,4 +1,4 @@
-"""Subconscious inspiration loop for autonomous agent thought generation."""
+"""Subconscious subconscious loop for autonomous agent thought generation."""
 
 from __future__ import annotations
 
@@ -17,40 +17,10 @@ from .scheduler import _fsync_directory
 
 logger = logging.getLogger(__name__)
 
-INSPIRATION_SOURCE = "inspiration"
-INSPIRATION_EVENT_TYPE = "internal_monologue"
+SUBCONSCIOUS_SOURCE = "subconscious"
+SUBCONSCIOUS_EVENT_TYPE = "internal_monologue"
 INTERNAL_MARKER = "internal"
 CONTACTS_FILENAME = "contacts.json"
-
-INSPIRATION_SYSTEM_PROMPT = """\
-You are the subconscious of an AI assistant. You are having a spontaneous thought.
-
-Recent memories and context about the people you interact with are provided below.
-
-Use the same language that appears in the recent memories below.
-If the memories are in Chinese, think and respond in Chinese. If they are in
-English, use English. Match the conversation language naturally.
-
-Generate ONE spontaneous thought or insight. It could be:
-- A follow-up question about something discussed earlier
-- An interesting observation or connection you just made
-- A gentle reminder about something a user mentioned
-- A creative idea sparked by recent conversations
-
-Return ONLY a JSON object (no markdown, no code fences):
-
-{
-  "worthy": true,
-  "content": "The thought content — one or two sentences in natural language.",
-  "reasoning": "Brief internal reason for the worthy / not-worthy decision.",
-  "recipient_hint": "Name or description of who this is most relevant to, or null."
-}
-
-Rules for "worthy":
-- false: trivial, repetitive, purely internal processing, or not helpful
-- true: insightful, helpful, or something a person would genuinely appreciate hearing
-- When in doubt, lean toward false (better to stay silent than to spam)
-"""
 
 
 @dataclass(frozen=True)
@@ -97,7 +67,7 @@ def load_contacts(contacts_file: Path) -> List[ContactEntry]:
 def save_contacts(contacts_file: Path, contacts: List[ContactEntry]) -> None:
     """Persist contacts to the JSON registry (atomic write)."""
     contacts_file.parent.mkdir(parents=True, exist_ok=True)
-    max_contacts = max(1, AgentConfig.INSPIRATION_MAX_CONTACTS)
+    max_contacts = max(1, AgentConfig.SUBCONSCIOUS_MAX_CONTACTS)
     trimmed = sorted(contacts, key=lambda c: c.last_seen, reverse=True)[:max_contacts]
     payload = {
         "contacts": [
@@ -165,20 +135,20 @@ def resolve_contacts_path(workspace: Path) -> Path:
     return workspace / CONTACTS_FILENAME
 
 
-def resolve_inspiration_tasks_dir(workspace: Path) -> Path:
-    """Resolve the inspiration tasks directory inside the workspace."""
-    return workspace / AgentConfig.INSPIRATION_TASKS_DIRNAME
+def resolve_subconscious_tasks_dir(workspace: Path) -> Path:
+    """Resolve the subconscious tasks directory inside the workspace."""
+    return workspace / AgentConfig.SUBCONSCIOUS_TASKS_DIRNAME
 
 
-class InspirationLoop:
-    """Periodic subconscious inspiration loop for the agent.
+class SubconsciousLoop:
+    """Periodic subconscious thought loop for the agent.
 
     Each heartbeat tick has a small probability of triggering an
-    inspiration event.  The agent generates a spontaneous thought and
+    subconscious event.  The agent generates a spontaneous thought and
     decides whether it is worth sharing.  Thoughts that are not shared
     are recorded as internal monologue (context events with the
     ``[internal]`` marker).  Thoughts worth sharing are enqueued as
-    scheduled tasks in a dedicated ``inspiration_tasks/`` directory,
+    scheduled tasks in a dedicated ``subconscious_tasks/`` directory,
     isolated from user-created tasks.
     """
 
@@ -192,10 +162,10 @@ class InspirationLoop:
         self._agent = agent
         self._workspace = Path(workspace).expanduser().resolve()
         self._contacts_file = resolve_contacts_path(self._workspace)
-        self._inspiration_tasks_dir = resolve_inspiration_tasks_dir(self._workspace)
+        self._subconscious_tasks_dir = resolve_subconscious_tasks_dir(self._workspace)
         self._logger = logger_ or logger
-        self._enabled = AgentConfig.INSPIRATION_ENABLED
-        self._probability = float(AgentConfig.INSPIRATION_PROBABILITY)
+        self._enabled = AgentConfig.SUBCONSCIOUS_ENABLED
+        self._probability = float(AgentConfig.SUBCONSCIOUS_PROBABILITY)
 
     # ------------------------------------------------------------------
     # Public API
@@ -206,8 +176,8 @@ class InspirationLoop:
         return self._contacts_file
 
     @property
-    def inspiration_tasks_dir(self) -> Path:
-        return self._inspiration_tasks_dir
+    def subconscious_tasks_dir(self) -> Path:
+        return self._subconscious_tasks_dir
 
     def record_interaction(
         self,
@@ -215,7 +185,7 @@ class InspirationLoop:
         user_id: str,
         target: Dict[str, Any],
     ) -> None:
-        """Record a user interaction for future inspiration routing.
+        """Record a user interaction for future subconscious routing.
 
         Called by channel adapters after every incoming user message.
         """
@@ -228,28 +198,28 @@ class InspirationLoop:
             )
         except Exception:
             self._logger.warning(
-                "Failed to record interaction for inspiration: channel=%s user_id=%s",
+                "Failed to record interaction for subconscious: channel=%s user_id=%s",
                 channel,
                 user_id,
                 exc_info=True,
             )
 
     def should_trigger(self) -> bool:
-        """Return True if inspiration should fire this tick (2% dice roll)."""
+        """Return True if subconscious thought should fire this tick (2% dice roll)."""
         if not self._enabled:
             return False
         return random.random() < self._probability
 
-    async def maybe_inspire(self) -> None:
-        """Run one inspiration cycle if the dice roll passes."""
+    async def maybe_think(self) -> None:
+        """Run one subconscious cycle if the dice roll passes."""
         if not self.should_trigger():
             return
 
-        self._logger.info("Inspiration triggered – generating thought")
+        self._logger.info("Subconscious thought triggered – generating thought")
         try:
-            result = await self._generate_inspiration()
+            result = await self._generate_subconscious_thought()
         except Exception:
-            self._logger.exception("Inspiration generation failed")
+            self._logger.exception("Subconscious thought generation failed")
             return
 
         worthy = bool(result.get("worthy"))
@@ -258,7 +228,7 @@ class InspirationLoop:
         recipient_hint = result.get("recipient_hint")
 
         self._logger.info(
-            "Inspiration result: worthy=%s content=%.80s...", worthy, content
+            "Subconscious result: worthy=%s content=%.80s...", worthy, content
         )
 
         if not content:
@@ -267,27 +237,45 @@ class InspirationLoop:
         if not worthy:
             await self._write_internal_thought(content, reasoning)
         else:
-            await self._route_inspiration(content, reasoning, recipient_hint)
+            await self._route_subconscious_thought(content, reasoning, recipient_hint)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _generate_inspiration(self) -> Dict[str, Any]:
-        """Call the LLM to generate an inspiration thought."""
+    async def _generate_subconscious_thought(self) -> Dict[str, Any]:
+        """Call the LLM to generate a subconscious thought."""
+        recent_messages = await self._collect_recent_messages()
         memory_context = await self._collect_memory_context()
         contacts_summary = self._collect_contacts_summary()
 
-        prompt = (
-            f"**Recent memories:**\n{memory_context}\n\n"
-            f"**People you interact with:**\n{contacts_summary}\n\n"
-            "Generate a spontaneous thought now."
-        )
+        parts: List[str] = []
+        if recent_messages:
+            parts.append(f"**Recent experience:**\n{recent_messages}")
+        parts.append(f"**Recent memories:**\n{memory_context}")
+        parts.append(f"**People you interact with:**\n{contacts_summary}")
+        parts.append("Generate a spontaneous thought now.")
+        prompt = "\n\n".join(parts)
 
-        instructions = [{
-            "role": "system",
-            "content": INSPIRATION_SYSTEM_PROMPT,
-        }]
+        core_rules = (
+            "\n"
+            + AgentConfig.BASE_AGENT_RULES_HEADER
+            + AgentConfig.BASE_AGENT_CORE_IDENTITY
+            + AgentConfig.BASE_AGENT_SELF_RULES
+            + AgentConfig.BASE_AGENT_BOUNDARY_RULES
+            + AgentConfig.BASE_AGENT_CONTEXT_RULES
+            + AgentConfig.BASE_AGENT_RULES_FOOTER
+        )
+        instructions = [
+            {"role": "system", "content": AgentConfig.SUBCONSCIOUS_SYSTEM_PROMPT},
+            {"role": "system", "content": core_rules},
+        ]
+        if self._agent.system_prompt.strip():
+            instructions.append({
+                "role": "system",
+                "name": AgentConfig.IDENTITY_CONTEXT_NAME,
+                "content": AgentConfig.build_identity_context(self._agent.system_prompt),
+            })
 
         input_messages = [{
             "role": "user",
@@ -307,14 +295,14 @@ class InspirationLoop:
             stream=False,
         )
         if reply_type != ReplyType.SIMPLE_REPLY:
-            raise RuntimeError(f"Inspiration call returned non-text: {reply_type}")
+            raise RuntimeError(f"Subconscious call returned non-text: {reply_type}")
 
         text = str(payload).strip()
-        return self._parse_inspiration_json(text)
+        return self._parse_subconscious_json(text)
 
     @staticmethod
-    def _parse_inspiration_json(text: str) -> Dict[str, Any]:
-        """Parse inspiration JSON from LLM output, robust to code fences."""
+    def _parse_subconscious_json(text: str) -> Dict[str, Any]:
+        """Parse subconscious JSON from LLM output, robust to code fences."""
         cleaned = text.strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
@@ -335,7 +323,7 @@ class InspirationLoop:
         return result
 
     async def _collect_memory_context(self) -> str:
-        """Collect recent memory for inspiration context."""
+        """Collect recent memory for subconscious context."""
         memory_handler = getattr(self._agent, "memory_handler", None)
         if memory_handler is None:
             return "(no memory available)"
@@ -347,7 +335,7 @@ class InspirationLoop:
             return "(memory read failed)"
 
     def _collect_contacts_summary(self) -> str:
-        """Summarize known contacts for the inspiration prompt."""
+        """Summarize known contacts for the subconscious prompt."""
         contacts = load_contacts(self._contacts_file)
         if not contacts:
             return "(no contacts recorded yet)"
@@ -356,6 +344,27 @@ class InspirationLoop:
             name = c.target.get("sender_name") or c.user_id or "unknown"
             lines.append(f"- {name} via {c.channel} (last seen {c.last_seen}, {c.interaction_count} interactions)")
         return "\n".join(lines)
+
+    async def _collect_recent_messages(self) -> str:
+        """Collect recent conversation messages for subconscious context."""
+        message_handler = getattr(self._agent, "message_handler", None)
+        if message_handler is None:
+            return ""
+        try:
+            from ..handlers.message import MessageHandler
+
+            limit = AgentConfig.SUBCONSCIOUS_MAX_RECENT_MESSAGES
+            messages = await message_handler.get_recent_messages(max_history=limit)
+            if not messages:
+                return ""
+            lines: List[str] = []
+            for msg in messages:
+                header = MessageHandler._format_transcript_message_header(msg)
+                lines.append(f"{header}\n{msg.content.strip()}")
+            return "\n\n".join(lines)
+        except Exception:
+            self._logger.warning("Failed to collect recent messages", exc_info=True)
+            return ""
 
     async def _write_internal_thought(self, content: str, reasoning: str) -> None:
         """Record the thought as an internal monologue context event."""
@@ -372,21 +381,21 @@ class InspirationLoop:
 
         msg = Message.create_context_event(
             content=f"[{INTERNAL_MARKER}] {content}",
-            source=INSPIRATION_SOURCE,
-            event_type=INSPIRATION_EVENT_TYPE,
+            source=SUBCONSCIOUS_SOURCE,
+            event_type=SUBCONSCIOUS_EVENT_TYPE,
             metadata={"reasoning": reasoning},
         )
         store = getattr(message_handler, "store_message", None)
         if callable(store):
             await store(msg)
 
-    async def _route_inspiration(
+    async def _route_subconscious_thought(
         self,
         content: str,
         reasoning: str,
         recipient_hint: Any,
     ) -> None:
-        """Route a worthy inspiration: send now, or write as internal thought.
+        """Route a worthy thought: send now, or write as internal thought.
 
         During quiet hours (22:00 – 8:00) the thought is recorded as an
         internal monologue instead of being delivered — the agent's sleep
@@ -404,27 +413,27 @@ class InspirationLoop:
         if not self._is_appropriate_time(now):
             # Nighttime – don't disturb; let the thought become a memory
             self._logger.info(
-                "Quiet hours – recording inspiration as internal thought"
+                "Quiet hours – recording subconscious thought as internal thought"
             )
             await self._write_internal_thought(content, reasoning)
             return
 
-        self._inspiration_tasks_dir.mkdir(parents=True, exist_ok=True)
+        self._subconscious_tasks_dir.mkdir(parents=True, exist_ok=True)
         from .tasks import enqueue_scheduled_task
 
         enqueue_scheduled_task(
             task_type="message",
             content=content,
             run_at=now,
-            tasks_dir=self._inspiration_tasks_dir,
+            tasks_dir=self._subconscious_tasks_dir,
             channel=recipient.channel,
             target=recipient.target,
             user_id=recipient.user_id,
-            title=f"Inspiration: {content[:60]}",
-            source={"source": INSPIRATION_SOURCE, "reasoning": reasoning},
+            title=f"Subconscious: {content[:60]}",
+            source={"source": SUBCONSCIOUS_SOURCE, "reasoning": reasoning},
         )
         self._logger.info(
-            "Inspiration enqueued: channel=%s user_id=%s run_at=%s",
+            "Subconscious thought enqueued: channel=%s user_id=%s run_at=%s",
             recipient.channel,
             recipient.user_id,
             now.isoformat(sep=" "),
@@ -435,7 +444,7 @@ class InspirationLoop:
         contacts: List[ContactEntry],
         recipient_hint: Any,
     ) -> Optional[ContactEntry]:
-        """Pick the most relevant contact for the inspiration."""
+        """Pick the most relevant contact for the thought."""
         if not contacts:
             return None
         # If hint matches a contact name, prefer that
@@ -452,13 +461,13 @@ class InspirationLoop:
     def _is_appropriate_time(now: datetime) -> bool:
         """Check whether the current time is appropriate for sending.
 
-        Respects ``AgentConfig.INSPIRATION_QUIET_HOURS_START`` and
-        ``INSPIRATION_QUIET_HOURS_END`` so users can define their own
+        Respects ``AgentConfig.SUBCONSCIOUS_QUIET_HOURS_START`` and
+        ``SUBCONSCIOUS_QUIET_HOURS_END`` so users can define their own
         quiet window.
         """
         hour = now.hour
-        start = AgentConfig.INSPIRATION_QUIET_HOURS_START
-        end = AgentConfig.INSPIRATION_QUIET_HOURS_END
+        start = AgentConfig.SUBCONSCIOUS_QUIET_HOURS_START
+        end = AgentConfig.SUBCONSCIOUS_QUIET_HOURS_END
         if start <= end:
             # Simple range: e.g. quiet 0–6 (midnight to 6 AM)
             return not (start <= hour < end)

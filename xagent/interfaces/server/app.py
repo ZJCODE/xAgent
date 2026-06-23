@@ -39,7 +39,7 @@ from ...core.runtime import (
     create_runtime_heartbeat,
     list_active_task_views,
     resolve_contacts_path,
-    resolve_inspiration_tasks_dir,
+    resolve_subconscious_tasks_dir,
     scheduled_delivery_context,
     upsert_contact,
 )
@@ -121,8 +121,8 @@ class AgentHTTPServer(BaseAgentRunner):
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._inspiration_tasks_dir = resolve_inspiration_tasks_dir(self.workspace)
-        self._inspiration_scheduler: Optional[AsyncTaskScheduler] = None
+        self._subconscious_tasks_dir = resolve_subconscious_tasks_dir(self.workspace)
+        self._subconscious_scheduler: Optional[AsyncTaskScheduler] = None
         self._contacts_file = resolve_contacts_path(self.workspace)
         self._task_subscribers: dict[str, set[WebSocket]] = {}
         self._task_subscribers_lock = asyncio.Lock()
@@ -151,7 +151,7 @@ class AgentHTTPServer(BaseAgentRunner):
         attachments = self._input_attachments(input_data)
         image_sources = self._input_image_sources(input_data, attachments=attachments)
 
-        # Record contact for subconscious inspiration routing
+        # Record contact for subconscious thought routing
         try:
             upsert_contact(
                 self._contacts_file,
@@ -160,7 +160,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 target={"user_id": input_data.user_id},
             )
         except Exception:
-            self.logger.debug("Failed to record contact for inspiration", exc_info=True)
+            self.logger.debug("Failed to record contact for subconscious", exc_info=True)
 
         context = self._scheduled_delivery_context(input_data, channel="api")
         with scheduled_delivery_context(context):
@@ -218,7 +218,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 raise RuntimeError("Agent does not support chat_events().")
             attachments = self._input_attachments(input_data)
 
-            # Record contact for subconscious inspiration routing
+            # Record contact for subconscious thought routing
             try:
                 upsert_contact(
                     self._contacts_file,
@@ -227,7 +227,7 @@ class AgentHTTPServer(BaseAgentRunner):
                     target={"user_id": input_data.user_id},
                 )
             except Exception:
-                self.logger.debug("Failed to record contact for inspiration", exc_info=True)
+                self.logger.debug("Failed to record contact for subconscious", exc_info=True)
 
             context = self._scheduled_delivery_context(input_data, channel="web")
             with scheduled_delivery_context(context):
@@ -693,8 +693,8 @@ class AgentHTTPServer(BaseAgentRunner):
             dispatch=self._dispatch_scheduled_task,
             logger_=self.logger,
         )
-        inspiration_scheduler = AsyncTaskScheduler(
-            self._inspiration_tasks_dir,
+        subconscious_scheduler = AsyncTaskScheduler(
+            self._subconscious_tasks_dir,
             can_handle=self._can_handle_scheduled_task,
             dispatch=self._dispatch_scheduled_task,
             logger_=self.logger,
@@ -709,17 +709,17 @@ class AgentHTTPServer(BaseAgentRunner):
             self._task_scheduler = task_scheduler
             await task_scheduler.start()
             self.logger.info("Scheduled task runtime started: tasks=%s", self.tasks_dir)
-            self._inspiration_scheduler = inspiration_scheduler
-            await inspiration_scheduler.start()
-            self.logger.info("Inspiration task scheduler started: dir=%s", self._inspiration_tasks_dir)
+            self._subconscious_scheduler = subconscious_scheduler
+            await subconscious_scheduler.start()
+            self.logger.info("Subconscious task scheduler started: dir=%s", self._subconscious_tasks_dir)
             yield
         finally:
             await task_scheduler.stop()
             self._task_scheduler = None
             self.logger.info("Scheduled task runtime stopped")
-            await inspiration_scheduler.stop()
-            self._inspiration_scheduler = None
-            self.logger.info("Inspiration task scheduler stopped")
+            await subconscious_scheduler.stop()
+            self._subconscious_scheduler = None
+            self.logger.info("Subconscious task scheduler stopped")
             if heartbeat is not None:
                 await heartbeat.stop()
                 self.logger.info("Runtime heartbeat stopped")

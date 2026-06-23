@@ -17,7 +17,7 @@ from xagent.core.runtime import (
     ScheduledDeliveryContext,
     ScheduledTaskRecord,
     resolve_contacts_path,
-    resolve_inspiration_tasks_dir,
+    resolve_subconscious_tasks_dir,
     scheduled_delivery_context,
     upsert_contact,
 )
@@ -112,7 +112,7 @@ class VoiceRuntime:
         self.stop_event = threading.Event()
         self._playback_lock = asyncio.Lock()
         self.task_scheduler: AsyncTaskScheduler | None = None
-        self._inspiration_scheduler: AsyncTaskScheduler | None = None
+        self._subconscious_scheduler: AsyncTaskScheduler | None = None
         self._contacts_file: Optional[Path] = None
         if self.options.tasks_dir is not None:
             self.task_scheduler = AsyncTaskScheduler(
@@ -121,10 +121,10 @@ class VoiceRuntime:
                 dispatch=self._dispatch_scheduled_task,
             )
             runtime_root = Path(self.options.tasks_dir).parent
-            self._inspiration_tasks_dir = resolve_inspiration_tasks_dir(runtime_root)
+            self._subconscious_tasks_dir = resolve_subconscious_tasks_dir(runtime_root)
             self._contacts_file = resolve_contacts_path(runtime_root)
-            self._inspiration_scheduler = AsyncTaskScheduler(
-                self._inspiration_tasks_dir,
+            self._subconscious_scheduler = AsyncTaskScheduler(
+                self._subconscious_tasks_dir,
                 can_handle=self._can_handle_scheduled_task,
                 dispatch=self._dispatch_scheduled_task,
             )
@@ -147,8 +147,8 @@ class VoiceRuntime:
         try:
             if self.task_scheduler is not None:
                 await self.task_scheduler.start()
-            if self._inspiration_scheduler is not None:
-                await self._inspiration_scheduler.start()
+            if self._subconscious_scheduler is not None:
+                await self._subconscious_scheduler.start()
             next_utterance_task = self._create_next_utterance_task(utterances)
             while not self.stop_event.is_set():
                 utterance_result = await self._await_next_utterance(next_utterance_task)
@@ -173,8 +173,8 @@ class VoiceRuntime:
                 next_utterance_task.cancel()
             if self.task_scheduler is not None:
                 await self.task_scheduler.stop()
-            if self._inspiration_scheduler is not None:
-                await self._inspiration_scheduler.stop()
+            if self._subconscious_scheduler is not None:
+                await self._subconscious_scheduler.stop()
 
     def _ready_message(self) -> str:
         if not self.config.wake.enabled:
@@ -419,7 +419,7 @@ class VoiceRuntime:
         return future
 
     async def _agent_text_chunks(self, transcript: str) -> AsyncIterator[str]:
-        # Record contact for subconscious inspiration routing
+        # Record contact for subconscious thought routing
         if self._contacts_file is not None:
             try:
                 upsert_contact(
