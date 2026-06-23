@@ -3,6 +3,16 @@ import { useEffect, useMemo, useState } from "react";
 import { FileTree } from "../components/FileTree";
 import { Markdown } from "../components/Markdown";
 import {
+  BrowserLayout,
+  Button,
+  EmptyState,
+  IconButton,
+  PageShell,
+  PageToolbar,
+  SearchField,
+  StatusBadge,
+} from "../components/ui";
+import {
   createSkill,
   deleteSkillPath,
   getSkillsInfo,
@@ -164,14 +174,14 @@ export function SkillsPage() {
 
   const renderSkillActions = (skill: SkillMetadata) => (
     <div className="toolbar-actions">
-      <button type="button" className="ghost-button icon-text-button" onClick={() => void toggleSelectedSkill(skill)}>
+      <Button type="button" onClick={() => void toggleSelectedSkill(skill)}>
         {skill.enabled ? <PowerOff size={15} /> : <Power size={15} />}
         {skill.enabled ? "Disable" : "Enable"}
-      </button>
-      <button type="button" className="danger-button" onClick={() => void deleteSkill(skill)}>
+      </Button>
+      <Button type="button" variant="danger" onClick={() => void deleteSkill(skill)}>
         <Trash2 size={15} />
         Delete
-      </button>
+      </Button>
     </div>
   );
 
@@ -179,9 +189,9 @@ export function SkillsPage() {
     <section className="skill-form-panel">
       <div className="content-heading">
         <h3>New Skill</h3>
-        <button type="button" className="ghost-button icon-button" onClick={() => setCreating(false)} title="Close">
+        <IconButton type="button" onClick={() => setCreating(false)} title="Close">
           <X size={16} />
-        </button>
+        </IconButton>
       </div>
       <div className="skill-form">
         <label className="form-field">
@@ -209,10 +219,10 @@ export function SkillsPage() {
           />
         </label>
         <div className="toolbar-actions">
-          <button type="button" className="ghost-button icon-text-button" disabled={saving} onClick={submitNewSkill}>
+          <Button type="button" disabled={saving} onClick={submitNewSkill}>
             <CheckCircle2 size={15} />
             Create
-          </button>
+          </Button>
         </div>
       </div>
     </section>
@@ -226,9 +236,9 @@ export function SkillsPage() {
           <span>{info?.root || "skills"}</span>
         </div>
         <div className="chip-list">
-          <span className="data-chip">{info?.enabled_count || 0} enabled</span>
-          <span className="data-chip">{info?.disabled_count || 0} disabled</span>
-          <span className="data-chip">{info?.invalid_count || 0} invalid</span>
+          <StatusBadge tone="good">{info?.enabled_count || 0} enabled</StatusBadge>
+          <StatusBadge tone="muted">{info?.disabled_count || 0} disabled</StatusBadge>
+          <StatusBadge tone={info?.invalid_count ? "danger" : "muted"}>{info?.invalid_count || 0} invalid</StatusBadge>
         </div>
       </div>
       {skills.length ? (
@@ -239,8 +249,8 @@ export function SkillsPage() {
                 <h4>{skill.name}</h4>
                 <p>{skill.description || "No description"}</p>
                 <div className="chip-list">
-                  <span className="data-chip">{skill.enabled ? "enabled" : "disabled"}</span>
-                  <span className="data-chip">{skill.valid ? "valid" : "invalid"}</span>
+                  <StatusBadge tone={skill.enabled ? "good" : "muted"}>{skill.enabled ? "enabled" : "disabled"}</StatusBadge>
+                  <StatusBadge tone={skill.valid ? "good" : "danger"}>{skill.valid ? "valid" : "invalid"}</StatusBadge>
                   <span className="data-chip path-chip">{skill.skill_file}</span>
                 </div>
               </div>
@@ -249,7 +259,7 @@ export function SkillsPage() {
           ))}
         </div>
       ) : (
-        <div className="empty-state h-full">No skills found</div>
+        <EmptyState title="No skills found" className="h-full" />
       )}
     </>
   );
@@ -332,7 +342,7 @@ export function SkillsPage() {
             <Markdown content={body} className="skill-markdown" />
           </section>
         ) : (
-          <div className="empty-state">No instructions in this skill</div>
+          <EmptyState title="No instructions in this skill" />
         )}
       </article>
     );
@@ -353,8 +363,8 @@ export function SkillsPage() {
         </div>
         {selectedSkill && !isSkillMarkdown(selected.path) ? (
           <div className="skill-meta-row">
-            <span className="data-chip">{selectedSkill.enabled ? "enabled" : "disabled"}</span>
-            <span className="data-chip">{selectedSkill.valid ? "valid" : "invalid"}</span>
+            <StatusBadge tone={selectedSkill.enabled ? "good" : "muted"}>{selectedSkill.enabled ? "enabled" : "disabled"}</StatusBadge>
+            <StatusBadge tone={selectedSkill.valid ? "good" : "danger"}>{selectedSkill.valid ? "valid" : "invalid"}</StatusBadge>
             {selectedSkill.compatibility ? <span className="data-chip">{selectedSkill.compatibility}</span> : null}
             {selectedSkill.license ? <span className="data-chip">{selectedSkill.license}</span> : null}
           </div>
@@ -366,48 +376,41 @@ export function SkillsPage() {
         ) : selected.text ? (
           <pre className="file-pre">{selected.content}</pre>
         ) : (
-          <div className="empty-state">Binary file preview is unavailable</div>
+          <EmptyState title="Binary file preview is unavailable" />
         )}
       </>
     );
   };
 
   return (
-    <div className="console-page">
-      <section className="console-toolbar">
-        <div className="min-w-0">
-          <h2>Skills</h2>
-          <p>{info?.root || "Agent skills"}</p>
-        </div>
-        <div className="console-toolbar-actions">
-          <button
-            type="button"
-            className="ghost-button icon-text-button"
-            onClick={() => {
-              setSelected(null);
-              setCreating(true);
-            }}
-          >
-            <Plus size={15} />
-            New
-          </button>
-          <div className="search-control skills-search-control">
-            <input
-              className="search-input"
+    <PageShell>
+      <PageToolbar
+        title="Skills"
+        subtitle={info?.root || "Agent skills"}
+        actions={
+          <>
+            <Button
+              type="button"
+              onClick={() => {
+                setSelected(null);
+                setCreating(true);
+              }}
+            >
+              <Plus size={15} />
+              New
+            </Button>
+            <SearchField
               placeholder="Search skills"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void runSearch();
-              }}
+              onSubmit={() => void runSearch()}
             />
-            <button type="button" className="ghost-button icon-text-button" onClick={runSearch}>
+            <Button type="button" onClick={runSearch}>
               <Search size={15} />
               Search
-            </button>
-            <button
+            </Button>
+            <IconButton
               type="button"
-              className="ghost-button icon-button"
               onClick={() => {
                 setQuery("");
                 setResults([]);
@@ -415,18 +418,18 @@ export function SkillsPage() {
               title="Clear search"
             >
               <X size={16} />
-            </button>
-            <button type="button" className="ghost-button icon-button" onClick={load} title="Refresh">
+            </IconButton>
+            <IconButton type="button" onClick={load} title="Refresh">
               <RefreshCw size={16} />
-            </button>
-          </div>
-        </div>
-      </section>
+            </IconButton>
+          </>
+        }
+      />
 
       {error ? <div className="error-strip">{error}</div> : null}
-      <div className="browser-layout">
-        <aside className="browser-sidebar">
-          {results.length ? (
+      <BrowserLayout
+        sidebar={
+          results.length ? (
             <div className="space-y-2">
               {results.map((item) => (
                 <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}>
@@ -436,15 +439,14 @@ export function SkillsPage() {
               ))}
             </div>
           ) : loading ? (
-            <div className="empty-state">Loading...</div>
+            <EmptyState title="Loading..." />
           ) : (
             <FileTree nodes={tree} selectedPath={selected?.path} onSelect={selectFile} />
-          )}
-        </aside>
-        <main className="browser-content">
+          )
+        }
+      >
           {creating ? renderCreateForm() : selected ? renderSelected() : renderOverview()}
-        </main>
-      </div>
-    </div>
+      </BrowserLayout>
+    </PageShell>
   );
 }

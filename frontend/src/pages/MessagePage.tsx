@@ -1,6 +1,7 @@
 import { FileIcon, RefreshCw, Search, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Markdown } from "../components/Markdown";
+import { Button, EmptyState, IconButton, PageShell, PageToolbar, SearchField } from "../components/ui";
 import { getAgentInfo, getMessages, searchMessages } from "../lib/api";
 import { classNames, formatBytes, formatTimestamp } from "../lib/format";
 import type { AttachmentAsset, MessageItem, MessageSearchResult } from "../types";
@@ -127,54 +128,49 @@ export function MessagePage() {
   const activeMessages: Array<MessageItem | MessageSearchResult> = searchActive ? results : messages;
 
   return (
-    <div className="console-page">
-      <section className="console-toolbar">
-        <div className="min-w-0">
-          <h2>Messages</h2>
-          <p>{storagePath || "Message storage"}</p>
-        </div>
-        <div className="search-control">
-          <input
-            className="search-input"
-            placeholder="Search messages"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void runSearch();
-            }}
-          />
-          <button type="button" className="ghost-button icon-text-button" onClick={runSearch}>
-            <Search size={15} />
-            Search
-          </button>
-          <button
-            type="button"
-            className="ghost-button icon-button"
-            onClick={() => {
-              setQuery("");
-              setResults([]);
-              setSearchActive(false);
-            }}
-            title="Clear search"
-          >
-            <X size={16} />
-          </button>
-          <button
-            type="button"
-            className="ghost-button icon-button"
-            onClick={() => {
-              if (searchActive && query.trim()) {
-                void runSearch();
-                return;
-              }
-              void load(false);
-            }}
-            title="Refresh"
-          >
-            <RefreshCw size={15} />
-          </button>
-        </div>
-      </section>
+    <PageShell>
+      <PageToolbar
+        title="Messages"
+        subtitle={storagePath || "Message storage"}
+        actions={
+          <>
+            <SearchField
+              placeholder="Search messages"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onSubmit={() => void runSearch()}
+            />
+            <Button type="button" onClick={runSearch}>
+              <Search size={15} />
+              Search
+            </Button>
+            <IconButton
+              type="button"
+              onClick={() => {
+                setQuery("");
+                setResults([]);
+                setSearchActive(false);
+              }}
+              title="Clear search"
+            >
+              <X size={16} />
+            </IconButton>
+            <IconButton
+              type="button"
+              onClick={() => {
+                if (searchActive && query.trim()) {
+                  void runSearch();
+                  return;
+                }
+                void load(false);
+              }}
+              title="Refresh"
+            >
+              <RefreshCw size={15} />
+            </IconButton>
+          </>
+        }
+      />
       {error ? <div className="error-strip">{error}</div> : null}
       <div className="message-stream">
         {activeMessages.length ? (
@@ -229,14 +225,14 @@ export function MessagePage() {
             );
           })
         ) : (
-          <div className="empty-state">{loading ? "Loading..." : searchActive ? "No matching messages" : "No messages found"}</div>
+          <EmptyState title={loading ? "Loading..." : searchActive ? "No matching messages" : "No messages found"} />
         )}
         {!searchActive && hasMore ? (
-          <button type="button" className="ghost-button icon-text-button mx-auto" onClick={() => void load(true)} disabled={loading}>
+          <Button type="button" className="mx-auto" onClick={() => void load(true)} disabled={loading}>
             Load more
-          </button>
+          </Button>
         ) : null}
       </div>
-    </div>
+    </PageShell>
   );
 }

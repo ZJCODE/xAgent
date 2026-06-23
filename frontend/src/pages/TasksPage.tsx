@@ -1,5 +1,6 @@
 import { CalendarClock, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Button, EmptyState, PageShell, PageToolbar, StatusBadge } from "../components/ui";
 import { deleteTask, getTasks } from "../lib/api";
 import type { ScheduledTaskItem, TasksResponse } from "../types";
 
@@ -79,26 +80,26 @@ export function TasksPage() {
   };
 
   return (
-    <div className="console-page">
-      <div className="console-toolbar">
-        <div className="min-w-0">
-          <h2>Tasks</h2>
-          <p>{data?.root || "tasks"}</p>
-        </div>
-        <div className="console-toolbar-actions">
-          <span className="data-chip">{activeCount} active</span>
-          <button type="button" className="ghost-button icon-text-button" onClick={() => void load()} disabled={loading}>
-            <RefreshCw size={15} />
-            Refresh
-          </button>
-        </div>
-      </div>
+    <PageShell>
+      <PageToolbar
+        title="Tasks"
+        subtitle={data?.root || "tasks"}
+        actions={
+          <>
+            <StatusBadge tone="info">{activeCount} active</StatusBadge>
+            <Button type="button" onClick={() => void load()} disabled={loading}>
+              <RefreshCw size={15} />
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       <div className="tasks-layout">
         <section className="task-list-panel">
           {error && <div className="error-banner">{error}</div>}
           {loading ? (
-            <div className="empty-state">Loading tasks...</div>
+            <EmptyState title="Loading tasks..." />
           ) : tasks.length ? (
             <div className="task-list">
               {tasks.map((task) => (
@@ -120,18 +121,18 @@ export function TasksPage() {
                       ))}
                     </div>
                   </div>
-                  <button type="button" className="danger-button" onClick={() => void removeTask(task)} title="Delete task">
+                  <Button type="button" variant="danger" onClick={() => void removeTask(task)} title="Delete task">
                     <Trash2 size={15} />
                     Delete
-                  </button>
+                  </Button>
                 </article>
               ))}
             </div>
           ) : (
-            <div className="empty-state">No scheduled tasks</div>
+            <EmptyState title="No scheduled tasks" />
           )}
         </section>
       </div>
-    </div>
+    </PageShell>
   );
 }

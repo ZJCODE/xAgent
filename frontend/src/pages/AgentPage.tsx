@@ -1,5 +1,6 @@
 import { RefreshCw, Save, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Button, IconButton, PageShell, PageToolbar, Panel, PanelHeader } from "../components/ui";
 import {
   clearMemory,
   clearMessages,
@@ -83,21 +84,22 @@ export function AgentPage() {
   };
 
   return (
-    <div className="console-page agent-page">
-      <section className="console-toolbar">
-        <div>
-          <h2>Agent</h2>
-        </div>
-        <button type="button" className="ghost-button icon-text-button" onClick={load}>
-          <RefreshCw size={15} />
-          Refresh
-        </button>
-      </section>
+    <PageShell className="agent-page">
+      <PageToolbar
+        title="Agent"
+        subtitle="Runtime identity and local maintenance"
+        actions={
+          <Button type="button" onClick={load}>
+            <RefreshCw size={15} />
+            Refresh
+          </Button>
+        }
+      />
       {error ? <div className="error-strip">{error}</div> : null}
 
       <div className="agent-grid">
-        <section className="info-panel">
-          <h3>Runtime</h3>
+        <Panel className="info-panel">
+          <PanelHeader title="Runtime" />
           <dl>
             <dt>Provider</dt>
             <dd className="chip-list">
@@ -112,56 +114,55 @@ export function AgentPage() {
               {info?.tools?.length ? info.tools.map((tool) => <span key={tool} className="data-chip">{tool}</span>) : "None"}
             </dd>
           </dl>
-        </section>
+        </Panel>
 
-        <section className="identity-panel">
-          <div className="content-heading">
-            <div>
-              <h3>identity.md</h3>
-              <span>{identity?.path || info?.identity_file}</span>
-            </div>
+        <Panel className="identity-panel">
+          <PanelHeader
+            title="identity.md"
+            meta={identity?.path || info?.identity_file}
+            actions={
             <div className="toolbar-actions">
-              <button type="button" className="ghost-button icon-text-button" disabled={!editable || !dirty || saving} onClick={saveIdentity}>
+              <Button type="button" disabled={!editable || !dirty || saving} onClick={saveIdentity}>
                 <Save size={15} />
                 Save
-              </button>
-              <button
+              </Button>
+              <IconButton
                 type="button"
-                className="ghost-button icon-button"
                 disabled={!dirty || saving}
                 onClick={() => setEditorValue(identity?.identity || "")}
                 title="Revert"
               >
                 <RotateCcw size={16} />
-              </button>
+              </IconButton>
             </div>
-          </div>
+            }
+          />
           <textarea
             className="identity-editor"
             value={editorValue}
             disabled={!editable || saving}
             onChange={(event) => setEditorValue(event.target.value)}
           />
-        </section>
+        </Panel>
 
-        <section className="danger-panel">
-          <h3>Maintenance</h3>
+        <Panel className="danger-panel">
+          <PanelHeader title="Maintenance" />
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="danger-button" onClick={runClearMemory}>
+            <Button type="button" variant="danger" onClick={runClearMemory}>
               <Trash2 size={15} />
               Clear Memory
-            </button>
-            <button type="button" className="danger-button" onClick={runClearMessages}>
+            </Button>
+            <Button type="button" variant="danger" onClick={runClearMessages}>
               <Trash2 size={15} />
               Clear Messages
-            </button>
-            <button type="button" className="danger-button" onClick={runClearWorkspace}>
+            </Button>
+            <Button type="button" variant="danger" onClick={runClearWorkspace}>
               <Trash2 size={15} />
               Clear Workspace
-            </button>
+            </Button>
           </div>
-        </section>
+        </Panel>
       </div>
-    </div>
+    </PageShell>
   );
 }

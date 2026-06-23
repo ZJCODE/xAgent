@@ -1,6 +1,7 @@
 import { FileIcon, Paperclip, Send, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Markdown } from "../components/Markdown";
+import { Button, EmptyState, IconButton, StatusBadge } from "../components/ui";
 import { useChat } from "../context/ChatContext";
 import { classNames, formatBytes } from "../lib/format";
 import type { AttachmentAsset, ChatPanelState } from "../types";
@@ -158,6 +159,7 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
     <section className="chat-panel">
       <div className="panel-settings-bar">
         <div className="panel-settings-left">
+          <StatusBadge tone="muted">Single stream</StatusBadge>
           <label className="inline-field">
             <span className="inline-label">User</span>
             <input
@@ -184,15 +186,9 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
         {panel.messages.length ? (
           panel.messages.map((message) => <ChatMessageView key={message.id} message={message} />)
         ) : (
-          <div className="h-full min-h-[320px] flex items-center justify-center text-center text-sm text-zinc-500 dark:text-zinc-400">
-            <div>
-              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl panel-muted">
-                <Send size={24} />
-              </div>
-              <p className="font-semibold text-base text-zinc-800 dark:text-zinc-100">Start a message stream</p>
-              <p className="mt-2">Type a message and press Enter to send.</p>
-            </div>
-          </div>
+          <EmptyState icon={<Send size={24} />} title="Start a message stream">
+            Type a message and press Enter to send.
+          </EmptyState>
         )}
       </div>
 
@@ -219,9 +215,9 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
             if (event.key === "Enter" && !event.shiftKey) submitObservation(event);
           }}
         />
-        <button type="submit" disabled={panel.sending || !observeText.trim()}>
+        <Button type="submit" variant="secondary" disabled={panel.sending || !observeText.trim()}>
           Observe
-        </button>
+        </Button>
       </form>
 
       <form onSubmit={submitMessage} className="composer-row">
@@ -236,15 +232,15 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
           }}
         />
         <div className="composer-actions">
-          <button
+          <IconButton
             type="button"
-            className="icon-button composer-upload-button"
+            className="composer-upload-button"
             onClick={() => fileInputRef.current?.click()}
             title="Attach files"
             disabled={panel.sending}
           >
             <Paperclip size={18} />
-          </button>
+          </IconButton>
           <input
             ref={fileInputRef}
             type="file"
@@ -255,10 +251,10 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
               event.currentTarget.value = "";
             }}
           />
-          <button type="submit" className="send-button" disabled={panel.sending || (!messageText.trim() && !panel.pendingAttachments.length)}>
+          <Button type="submit" variant="primary" className="send-button" disabled={panel.sending || (!messageText.trim() && !panel.pendingAttachments.length)}>
             <Send size={16} />
             Send
-          </button>
+          </Button>
         </div>
       </form>
     </section>

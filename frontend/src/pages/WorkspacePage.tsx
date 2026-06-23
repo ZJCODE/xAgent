@@ -2,6 +2,7 @@ import { RefreshCw, Search, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { FileTree } from "../components/FileTree";
 import { Markdown } from "../components/Markdown";
+import { BrowserLayout, Button, EmptyState, IconButton, PageShell, PageToolbar, SearchField } from "../components/ui";
 import { getAgentInfo, getWorkspaceTree, readWorkspaceFile, searchWorkspace, workspaceBlobUrl } from "../lib/api";
 import { formatBytes, formatTimestamp } from "../lib/format";
 import type { AgentInfo, FileNode, FileReadResult, SearchResult } from "../types";
@@ -57,47 +58,43 @@ export function WorkspacePage() {
   const isImage = selected?.mime_type?.startsWith("image/");
 
   return (
-    <div className="console-page">
-      <section className="console-toolbar">
-        <div className="min-w-0">
-          <h2>Workspace</h2>
-          <p>{info?.workspace_dir || "Agent workspace files"}</p>
-        </div>
-        <div className="search-control">
-          <input
-            className="search-input"
-            placeholder="Search workspace"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void runSearch();
-            }}
-          />
-          <button type="button" className="ghost-button icon-text-button" onClick={runSearch}>
-            <Search size={15} />
-            Search
-          </button>
-          <button
-            type="button"
-            className="ghost-button icon-button"
-            onClick={() => {
-              setQuery("");
-              setResults([]);
-            }}
-            title="Clear search"
-          >
-            <X size={16} />
-          </button>
-          <button type="button" className="ghost-button icon-button" onClick={load} title="Refresh">
-            <RefreshCw size={16} />
-          </button>
-        </div>
-      </section>
+    <PageShell>
+      <PageToolbar
+        title="Workspace"
+        subtitle={info?.workspace_dir || "Agent workspace files"}
+        actions={
+          <>
+            <SearchField
+              placeholder="Search workspace"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onSubmit={() => void runSearch()}
+            />
+            <Button type="button" onClick={runSearch}>
+              <Search size={15} />
+              Search
+            </Button>
+            <IconButton
+              type="button"
+              onClick={() => {
+                setQuery("");
+                setResults([]);
+              }}
+              title="Clear search"
+            >
+              <X size={16} />
+            </IconButton>
+            <IconButton type="button" onClick={load} title="Refresh">
+              <RefreshCw size={16} />
+            </IconButton>
+          </>
+        }
+      />
 
       {error ? <div className="error-strip">{error}</div> : null}
-      <div className="browser-layout">
-        <aside className="browser-sidebar">
-          {results.length ? (
+      <BrowserLayout
+        sidebar={
+          results.length ? (
             <div className="space-y-2">
               {results.map((item) => (
                 <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}>
@@ -107,12 +104,12 @@ export function WorkspacePage() {
               ))}
             </div>
           ) : loading ? (
-            <div className="empty-state">Loading...</div>
+            <EmptyState title="Loading..." />
           ) : (
             <FileTree nodes={tree} selectedPath={selected?.path} onSelect={selectFile} />
-          )}
-        </aside>
-        <main className="browser-content">
+          )
+        }
+      >
           {selected ? (
             <>
               <div className="content-heading">
@@ -131,14 +128,13 @@ export function WorkspacePage() {
               ) : isImage ? (
                 <img className="workspace-preview-image" src={workspaceBlobUrl(selected.path)} alt={selected.name} />
               ) : (
-                <div className="empty-state">Binary file preview is unavailable</div>
+                <EmptyState title="Binary file preview is unavailable" />
               )}
             </>
           ) : (
-            <div className="empty-state h-full">Select a workspace file</div>
+            <EmptyState title="Select a workspace file" className="h-full" />
           )}
-        </main>
-      </div>
-    </div>
+      </BrowserLayout>
+    </PageShell>
   );
 }
