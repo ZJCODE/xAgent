@@ -157,6 +157,7 @@ class SubconsciousLoop:
         agent: Any,
         *,
         workspace: Path,
+        probability: Optional[float] = None,
         logger_: Optional[logging.Logger] = None,
     ) -> None:
         self._agent = agent
@@ -165,7 +166,11 @@ class SubconsciousLoop:
         self._subconscious_tasks_dir = resolve_subconscious_tasks_dir(self._workspace)
         self._logger = logger_ or logger
         self._enabled = AgentConfig.SUBCONSCIOUS_ENABLED
-        self._probability = float(AgentConfig.SUBCONSCIOUS_PROBABILITY)
+        self._probability = (
+            float(probability)
+            if probability is not None
+            else float(AgentConfig.SUBCONSCIOUS_ACTIVITY)
+        )
 
     # ------------------------------------------------------------------
     # Public API

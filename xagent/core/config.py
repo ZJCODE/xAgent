@@ -123,7 +123,9 @@ class AgentConfig:
     # generates an internal thought and decides whether to share it.
     # ============================================================
     SUBCONSCIOUS_ENABLED = True
-    SUBCONSCIOUS_PROBABILITY = 0.5  # 2% chance per heartbeat tick
+    # Probability of spontaneous thought per heartbeat tick.
+    # 0=off, 1=very active. Suggested: 0.01~0.1
+    SUBCONSCIOUS_ACTIVITY = 0.02
     SUBCONSCIOUS_TASKS_DIRNAME = "subconscious_tasks"
     SUBCONSCIOUS_MAX_CONTACTS = 10
     SUBCONSCIOUS_MAX_RECENT_MESSAGES = 12  # recent messages injected into subconscious prompt

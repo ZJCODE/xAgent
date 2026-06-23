@@ -289,6 +289,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "max_history": AgentConfig.DEFAULT_MAX_HISTORY,
             "max_iter": AgentConfig.DEFAULT_MAX_ITER,
             "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+            "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
         },
         "channels": {
             "api": {
@@ -372,7 +373,13 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "secret_key": selection.langfuse_secret_key or LANGFUSE_SECRET_KEY_PLACEHOLDER,
             "base_url": selection.langfuse_base_url or LANGFUSE_BASE_URL,
         }
-    return yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
+    yaml_str = yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
+    # Inline comment for subconscious_activity
+    yaml_str = yaml_str.replace(
+        "subconscious_activity: 0.02\n",
+        "subconscious_activity: 0.02  # 0=off, 1=very active. Suggested: 0.01~0.1\n",
+    )
+    return yaml_str
 
 
 def _default_identity_markdown() -> str:

@@ -399,7 +399,7 @@ provider:
             config_text = result.config_path.read_text(encoding="utf-8")
             identity_text = result.identity_path.read_text(encoding="utf-8")
             config = yaml.safe_load(config_text)
-            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4})
+            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02})
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
             self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
@@ -450,7 +450,7 @@ provider:
 
             self.assertTrue(forced.wrote_files)
             config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4})
+            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02})
             identity_text = forced.identity_path.read_text(encoding="utf-8")
             self.assertIn("practical collaborator", identity_text)
             self.assertIn("own continuing identity", identity_text)
@@ -512,7 +512,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4})
+            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02})
             self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
             self.assertEqual(config["provider"]["api_key"], "secret-key")
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
