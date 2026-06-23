@@ -123,7 +123,7 @@ class AgentConfig:
     # generates an internal thought and decides whether to share it.
     # ============================================================
     INSPIRATION_ENABLED = True
-    INSPIRATION_PROBABILITY = 1.0  # 100 % chance per heartbeat tick
+    INSPIRATION_PROBABILITY = 0.02  # 2% chance per heartbeat tick
     INSPIRATION_TASKS_DIRNAME = "inspiration_tasks"
     INSPIRATION_MAX_CONTACTS = 10
     INSPIRATION_QUIET_HOURS_START = 22  # 10 PM – no immediate sends after this
