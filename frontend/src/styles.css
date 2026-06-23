@@ -1401,8 +1401,27 @@ input::placeholder {
 }
 
 @media (max-width: 760px) {
+  .app-shell {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .app-main {
+    order: 1;
+  }
+
+  .app-sidebar {
+    order: 2;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    border-bottom: 0;
+  }
+
   .app-topbar {
     min-height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
   }
 
   .brand-block {
@@ -1410,28 +1429,109 @@ input::placeholder {
   }
 
   .app-nav {
-    gap: 4px;
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 2px;
+    overflow: visible;
+    padding: 0;
   }
 
   .nav-link {
-    min-height: 34px;
-    padding: 0 9px;
+    min-width: 0;
+    min-height: 54px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    padding: 4px 2px;
+    border-radius: 8px;
+    font-size: 10px;
+    line-height: 1.1;
+    text-align: center;
   }
 
   .nav-link svg {
-    width: 14px;
-    height: 14px;
+    width: 17px;
+    height: 17px;
+  }
+
+  .nav-link span {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .status-cluster {
+    flex: 1;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .status-cluster .status-badge {
+    min-width: 0;
+    padding: 0 7px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .topbar-actions {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    margin-left: auto;
   }
 
   .page-toolbar {
     min-height: auto;
+    gap: 10px;
+    padding: 10px;
   }
 
   .page-toolbar-actions {
+    display: flex;
+    flex-wrap: nowrap;
     width: 100%;
+    gap: 6px;
+    align-items: center;
+    overflow: hidden;
+  }
+
+  .page-toolbar-actions .search-field {
+    width: auto;
+    flex: 1 1 160px;
+    min-width: 120px;
   }
 
   .page-toolbar-actions .ui-button {
+    flex: 0 0 36px;
+    min-width: 0;
+    width: 36px;
+    padding: 0;
+    font-size: 0;
+    white-space: nowrap;
+  }
+
+  .page-toolbar-actions .ui-icon-button {
+    width: 36px;
+  }
+
+  .page-toolbar-actions .ui-button svg {
+    flex: 0 0 auto;
+  }
+
+  .page-toolbar-actions .status-badge {
+    min-width: 0;
+    justify-content: center;
+    overflow: hidden;
+    padding: 0 8px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ui-button,
+  .ui-icon-button,
+  .search-field {
     min-height: 34px;
   }
 
@@ -1454,18 +1554,31 @@ input::placeholder {
   }
 
   .chat-toolbar {
-    align-items: stretch;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
     gap: 8px;
+    padding: 8px 10px;
   }
 
   .panel-settings-left,
   .panel-settings-right {
-    width: 100%;
+    min-width: 0;
+    width: auto;
+    flex-wrap: nowrap;
     justify-content: space-between;
   }
 
+  .panel-settings-left {
+    grid-column: 1 / -1;
+  }
+
+  .panel-settings-right {
+    grid-column: 1 / -1;
+  }
+
   .inline-field {
+    min-width: 0;
     flex: 1;
   }
 
@@ -1477,6 +1590,8 @@ input::placeholder {
   .observe-panel,
   .composer-row {
     grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 8px 10px;
   }
 
   .observe-actions,
@@ -1486,10 +1601,12 @@ input::placeholder {
 
   .composer-actions {
     width: 100%;
+    display: grid;
+    grid-template-columns: 42px 42px minmax(0, 1fr);
   }
 
   .composer-actions .send-button {
-    flex: 1;
+    width: 100%;
   }
 
   .maintenance-row {
