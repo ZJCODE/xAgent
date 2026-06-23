@@ -19,6 +19,29 @@ function RuntimeValue({ value, fallback = "Unavailable" }: { value?: unknown; fa
   return <span className="data-chip path-chip">{stringValue(value) || fallback}</span>;
 }
 
+function MaintenanceRow({
+  title,
+  description,
+  onClear,
+}: {
+  title: string;
+  description: string;
+  onClear: () => void;
+}) {
+  return (
+    <div className="maintenance-row">
+      <div>
+        <h4>{title}</h4>
+        <p>{description}</p>
+      </div>
+      <Button type="button" variant="danger" onClick={onClear}>
+        <Trash2 size={14} />
+        Clear
+      </Button>
+    </div>
+  );
+}
+
 export function AgentPage() {
   const [info, setInfo] = useState<AgentInfo | null>(null);
   const [identity, setIdentity] = useState<AgentIdentity | null>(null);
@@ -147,19 +170,22 @@ export function AgentPage() {
 
         <Panel className="danger-panel">
           <PanelHeader title="Maintenance" />
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="danger" onClick={runClearMemory}>
-              <Trash2 size={15} />
-              Clear Memory
-            </Button>
-            <Button type="button" variant="danger" onClick={runClearMessages}>
-              <Trash2 size={15} />
-              Clear Messages
-            </Button>
-            <Button type="button" variant="danger" onClick={runClearWorkspace}>
-              <Trash2 size={15} />
-              Clear Workspace
-            </Button>
+          <div className="maintenance-list">
+            <MaintenanceRow
+              title="Memory"
+              description="Remove stored memory files."
+              onClear={runClearMemory}
+            />
+            <MaintenanceRow
+              title="Messages"
+              description="Remove message history and reload runtime info."
+              onClear={runClearMessages}
+            />
+            <MaintenanceRow
+              title="Workspace"
+              description="Remove files from the local workspace."
+              onClear={runClearWorkspace}
+            />
           </div>
         </Panel>
       </div>

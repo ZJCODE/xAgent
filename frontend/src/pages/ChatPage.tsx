@@ -1,7 +1,7 @@
-import { FileIcon, Paperclip, Send, X } from "lucide-react";
+import { Eye, FileIcon, Paperclip, Send, Trash2, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Markdown } from "../components/Markdown";
-import { Button, EmptyState, IconButton, StatusBadge } from "../components/ui";
+import { Button, EmptyState, IconButton } from "../components/ui";
 import { useChat } from "../context/ChatContext";
 import { classNames, formatBytes } from "../lib/format";
 import type { AttachmentAsset, ChatPanelState } from "../types";
@@ -128,9 +128,10 @@ function PendingAttachmentPreview({ attachment, onRemove }: { attachment: Attach
 }
 
 function ChatPanel({ panel }: { panel: ChatPanelState }) {
-  const { updateSettings, addAttachments, removeAttachment, sendMessage, sendObservation } = useChat();
+  const { updateSettings, addAttachments, removeAttachment, sendMessage, sendObservation, clearVisiblePanels } = useChat();
   const [messageText, setMessageText] = useState("");
   const [observeText, setObserveText] = useState("");
+  const [observeOpen, setObserveOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -153,13 +154,13 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
     if (!text) return;
     setObserveText("");
     void sendObservation(panel.id, text);
+    setObserveOpen(false);
   };
 
   return (
     <section className="chat-panel">
-      <div className="panel-settings-bar">
+      <div className="chat-toolbar">
         <div className="panel-settings-left">
-          <StatusBadge tone="muted">Single stream</StatusBadge>
           <label className="inline-field">
             <span className="inline-label">User</span>
             <input
@@ -179,6 +180,15 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
             />
             <span className="toggle-track" />
           </label>
+          <IconButton
+            type="button"
+            onClick={clearVisiblePanels}
+            title="Clear chat"
+            aria-label="Clear chat"
+            disabled={!panel.messages.length}
+          >
+            <Trash2 size={15} />
+          </IconButton>
         </div>
       </div>
 
@@ -204,21 +214,36 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
         </div>
       ) : null}
 
-      <form onSubmit={submitObservation} className="observe-row">
-        <textarea
-          rows={1}
-          placeholder="Observe context..."
-          value={observeText}
-          disabled={panel.sending}
-          onChange={(event) => setObserveText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) submitObservation(event);
-          }}
-        />
-        <Button type="submit" variant="secondary" disabled={panel.sending || !observeText.trim()}>
-          Observe
-        </Button>
-      </form>
+      {observeOpen ? (
+        <form onSubmit={submitObservation} className="observe-panel">
+          <textarea
+            rows={1}
+            placeholder="Observe context..."
+            value={observeText}
+            disabled={panel.sending}
+            onChange={(event) => setObserveText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) submitObservation(event);
+            }}
+          />
+          <div className="observe-actions">
+            <Button type="submit" variant="secondary" disabled={panel.sending || !observeText.trim()}>
+              Observe
+            </Button>
+            <IconButton
+              type="button"
+              title="Close observation"
+              aria-label="Close observation"
+              onClick={() => {
+                setObserveText("");
+                setObserveOpen(false);
+              }}
+            >
+              <X size={15} />
+            </IconButton>
+          </div>
+        </form>
+      ) : null}
 
       <form onSubmit={submitMessage} className="composer-row">
         <textarea
@@ -232,6 +257,16 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
           }}
         />
         <div className="composer-actions">
+          <IconButton
+            type="button"
+            className="observe-toggle-button"
+            onClick={() => setObserveOpen((value) => !value)}
+            title="Add observation"
+            aria-label="Add observation"
+            disabled={panel.sending}
+          >
+            <Eye size={18} />
+          </IconButton>
           <IconButton
             type="button"
             className="composer-upload-button"

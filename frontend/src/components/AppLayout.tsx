@@ -12,11 +12,10 @@ import {
   WifiOff,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useChat } from "../context/ChatContext";
 import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
 import type { RoutePath } from "../types";
-import { Button, IconButton, StatusBadge } from "./ui";
+import { IconButton, StatusBadge } from "./ui";
 
 interface AppLayoutProps {
   route: RoutePath;
@@ -45,7 +44,6 @@ export function AppLayout({
   onToggleTheme,
   children,
 }: AppLayoutProps) {
-  const { clearVisiblePanels } = useChat();
   const { dark } = useTheme();
 
   return (
@@ -86,11 +84,6 @@ export function AppLayout({
             </StatusBadge>
           </div>
           <div className="topbar-actions">
-            {route === "/" && (
-              <Button type="button" variant="ghost" onClick={clearVisiblePanels}>
-                Clear Chat
-              </Button>
-            )}
             <IconButton type="button" onClick={onToggleTheme} title="Toggle theme" aria-label="Toggle theme">
               {dark ? <Sun size={16} /> : <Moon size={16} />}
             </IconButton>
