@@ -380,29 +380,36 @@ class InspirationLoop:
         reasoning: str,
         recipient_hint: Any,
     ) -> None:
-        """Route a worthy inspiration: send now or schedule for later."""
+        """Route a worthy inspiration: send now, or write as internal thought.
+
+        During quiet hours (22:00 – 8:00) the thought is recorded as an
+        internal monologue instead of being delivered — the agent's sleep
+        thoughts become part of its memory without disturbing the user.
+        """
         contacts = load_contacts(self._contacts_file)
         recipient = self._pick_recipient(contacts, recipient_hint)
 
         if recipient is None:
-            # No known contacts – write as internal thought instead
             self._logger.info("No suitable recipient – recording as internal thought")
             await self._write_internal_thought(content, reasoning)
             return
 
         now = datetime.now()
-        if self._is_appropriate_time(now):
-            run_at = now
-        else:
-            run_at = self._next_appropriate_time(now)
+        if not self._is_appropriate_time(now):
+            # Nighttime – don't disturb; let the thought become a memory
+            self._logger.info(
+                "Quiet hours – recording inspiration as internal thought"
+            )
+            await self._write_internal_thought(content, reasoning)
+            return
 
         self._inspiration_tasks_dir.mkdir(parents=True, exist_ok=True)
         from .tasks import enqueue_scheduled_task
 
-        task = enqueue_scheduled_task(
+        enqueue_scheduled_task(
             task_type="message",
             content=content,
-            run_at=run_at,
+            run_at=now,
             tasks_dir=self._inspiration_tasks_dir,
             channel=recipient.channel,
             target=recipient.target,
@@ -414,7 +421,7 @@ class InspirationLoop:
             "Inspiration enqueued: channel=%s user_id=%s run_at=%s",
             recipient.channel,
             recipient.user_id,
-            run_at.isoformat(sep=" "),
+            now.isoformat(sep=" "),
         )
 
     @staticmethod
@@ -439,16 +446,16 @@ class InspirationLoop:
     def _is_appropriate_time(now: datetime) -> bool:
         """Check whether the current time is appropriate for sending.
 
-        Uses a reasonable default: 8 AM – 10 PM is fair game.
+        Respects ``AgentConfig.INSPIRATION_QUIET_HOURS_START`` and
+        ``INSPIRATION_QUIET_HOURS_END`` so users can define their own
+        quiet window.
         """
         hour = now.hour
-        return 8 <= hour < 22
+        start = AgentConfig.INSPIRATION_QUIET_HOURS_START
+        end = AgentConfig.INSPIRATION_QUIET_HOURS_END
+        if start <= end:
+            # Simple range: e.g. quiet 0–6 (midnight to 6 AM)
+            return not (start <= hour < end)
+        # Overnight range: e.g. quiet 22–8 (10 PM to 8 AM)
+        return not (hour >= start or hour < end)
 
-    @staticmethod
-    def _next_appropriate_time(now: datetime) -> datetime:
-        """Return the next appropriate send time (tomorrow 9 AM)."""
-        next_dt = now.replace(hour=9, minute=0, second=0, microsecond=0)
-        if next_dt <= now:
-            from datetime import timedelta
-            next_dt += timedelta(days=1)
-        return next_dt

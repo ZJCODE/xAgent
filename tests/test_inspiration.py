@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from xagent.core.config import AgentConfig
 from xagent.core.runtime.inspiration import (
     INSPIRATION_SOURCE,
     INSPIRATION_EVENT_TYPE,
@@ -162,32 +163,25 @@ class InspirationLoopTests(unittest.TestCase):
         result = InspirationLoop._parse_inspiration_json("Just a random string")
         self.assertFalse(result.get("worthy"))
 
-    def test_is_appropriate_time(self):
-        morning = datetime(2026, 6, 22, 7, 0, 0)
-        self.assertFalse(InspirationLoop._is_appropriate_time(morning))
+    def test_is_appropriate_time_default_config(self):
+        """Default quiet hours 22–8: 8 AM to <10 PM is appropriate."""
+        with patch.object(AgentConfig, 'INSPIRATION_QUIET_HOURS_START', 22), \
+             patch.object(AgentConfig, 'INSPIRATION_QUIET_HOURS_END', 8):
+            self.assertFalse(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 7, 0)))
+            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 8, 0)))
+            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 12, 0)))
+            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 21, 59)))
+            self.assertFalse(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 22, 0)))
+            self.assertFalse(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 23, 0)))
 
-        daytime = datetime(2026, 6, 22, 12, 0, 0)
-        self.assertTrue(InspirationLoop._is_appropriate_time(daytime))
-
-        evening = datetime(2026, 6, 22, 23, 0, 0)
-        self.assertFalse(InspirationLoop._is_appropriate_time(evening))
-
-        early_morning = datetime(2026, 6, 22, 8, 0, 0)
-        self.assertTrue(InspirationLoop._is_appropriate_time(early_morning))
-
-    def test_next_appropriate_time(self):
-        # Late night → next day 9 AM
-        late = datetime(2026, 6, 22, 23, 0, 0)
-        result = InspirationLoop._next_appropriate_time(late)
-        self.assertEqual(result.hour, 9)
-        self.assertEqual(result.minute, 0)
-        self.assertEqual(result.day, 23)
-
-        # Early morning → today 9 AM
-        early = datetime(2026, 6, 22, 3, 0, 0)
-        result = InspirationLoop._next_appropriate_time(early)
-        self.assertEqual(result.hour, 9)
-        self.assertEqual(result.day, 22)
+    def test_is_appropriate_time_simple_range(self):
+        """Simple range: quiet 0–6, only midnight to 6 AM is blocked."""
+        with patch.object(AgentConfig, 'INSPIRATION_QUIET_HOURS_START', 0), \
+             patch.object(AgentConfig, 'INSPIRATION_QUIET_HOURS_END', 6):
+            self.assertFalse(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 3, 0)))
+            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 6, 0)))
+            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 12, 0)))
+            self.assertTrue(InspirationLoop._is_appropriate_time(datetime(2026, 6, 22, 23, 0)))
 
     def test_record_interaction(self):
         agent = self._make_agent_mock()
@@ -228,6 +222,73 @@ class InspirationLoopTests(unittest.TestCase):
             call_args = agent.record_internal_thought.call_args
             self.assertEqual(call_args[0][0], "Hmm interesting...")
             self.assertIn("Not worth sharing", call_args[1].get("reasoning", ""))
+
+
+    def test_nighttime_worthy_writes_internal_thought(self):
+        """During quiet hours, even worthy inspirations are written as internal thoughts."""
+        from xagent.core.config import ReplyType
+
+        agent = self._make_agent_mock()
+        agent.model_client.call.return_value = (
+            ReplyType.SIMPLE_REPLY,
+            json.dumps({
+                "worthy": True,
+                "content": "A 3 AM revelation!",
+                "reasoning": "This is profound, but it's 3 AM.",
+                "recipient_hint": "张三",
+            }),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = InspirationLoop(agent, workspace=Path(tmpdir))
+            # Add a contact so routing has a recipient
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_123",
+                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+
+            with patch.object(InspirationLoop, '_is_appropriate_time', return_value=False):
+                asyncio.run(loop.maybe_inspire())
+
+            # Should have written as internal thought, NOT enqueued a task
+            agent.record_internal_thought.assert_called_once()
+            call_args = agent.record_internal_thought.call_args
+            self.assertEqual(call_args[0][0], "A 3 AM revelation!")
+
+    def test_daytime_worthy_enqueues_task(self):
+        """During appropriate hours, worthy inspirations are enqueued for delivery."""
+        from xagent.core.config import ReplyType
+
+        agent = self._make_agent_mock()
+        agent.model_client.call.return_value = (
+            ReplyType.SIMPLE_REPLY,
+            json.dumps({
+                "worthy": True,
+                "content": "A daytime insight!",
+                "reasoning": "User should see this.",
+                "recipient_hint": "张三",
+            }),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = InspirationLoop(agent, workspace=Path(tmpdir))
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_123",
+                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+
+            with patch.object(InspirationLoop, '_is_appropriate_time', return_value=True):
+                asyncio.run(loop.maybe_inspire())
+
+            # Should have enqueued a task, NOT written as internal thought
+            agent.record_internal_thought.assert_not_called()
+            # Verify the inspiration task was created
+            records = list_active_task_records(loop.inspiration_tasks_dir)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].content, "A daytime insight!")
+            self.assertEqual(records[0].delivery_channel, "feishu")
 
 
 class InspirationTaskIsolationTests(unittest.TestCase):

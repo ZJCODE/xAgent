@@ -126,6 +126,8 @@ class AgentConfig:
     INSPIRATION_PROBABILITY = 0.02  # 2 % chance per heartbeat tick
     INSPIRATION_TASKS_DIRNAME = "inspiration_tasks"
     INSPIRATION_MAX_CONTACTS = 10
+    INSPIRATION_QUIET_HOURS_START = 22  # 10 PM – no immediate sends after this
+    INSPIRATION_QUIET_HOURS_END = 8    # 8 AM – resume immediate sends
 
     # ============================================================
     # 11. Tool System Prompts
