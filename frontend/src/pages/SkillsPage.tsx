@@ -173,15 +173,20 @@ export function SkillsPage() {
   };
 
   const renderSkillActions = (skill: SkillMetadata) => (
-    <div className="toolbar-actions">
-      <Button type="button" onClick={() => void toggleSelectedSkill(skill)}>
+    <div className="skill-actions">
+      <Button type="button" className="skill-toggle-button" onClick={() => void toggleSelectedSkill(skill)}>
         {skill.enabled ? <PowerOff size={15} /> : <Power size={15} />}
         {skill.enabled ? "Disable" : "Enable"}
       </Button>
-      <Button type="button" variant="danger" onClick={() => void deleteSkill(skill)}>
+      <IconButton
+        type="button"
+        variant="danger"
+        onClick={() => void deleteSkill(skill)}
+        title={`Delete ${skill.name}`}
+        aria-label={`Delete ${skill.name}`}
+      >
         <Trash2 size={15} />
-        Delete
-      </Button>
+      </IconButton>
     </div>
   );
 

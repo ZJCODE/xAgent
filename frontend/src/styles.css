@@ -1001,6 +1001,18 @@ input::placeholder {
   padding: 12px;
 }
 
+.skill-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.skill-toggle-button {
+  min-width: 104px;
+}
+
 .skill-summary h4,
 .task-row-title h3 {
   margin: 0;
@@ -1417,8 +1429,9 @@ input::placeholder {
   }
 
   .app-topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     min-height: auto;
-    flex-direction: row;
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
@@ -1463,6 +1476,7 @@ input::placeholder {
   }
 
   .status-cluster {
+    display: flex;
     flex: 1;
     flex-wrap: nowrap;
     gap: 6px;
@@ -1473,10 +1487,17 @@ input::placeholder {
     min-width: 0;
     padding: 0 7px;
     font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
+  .status-cluster .status-badge svg {
+    flex: 0 0 auto;
+  }
+
   .topbar-actions {
+    display: flex;
     flex: 0 0 auto;
     flex-wrap: nowrap;
     margin-left: auto;
@@ -1616,6 +1637,29 @@ input::placeholder {
 
   .maintenance-row .ui-button {
     width: fit-content;
+  }
+
+  .skill-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 10px;
+  }
+
+  .skill-actions {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .skill-toggle-button {
+    min-width: 40px;
+    width: 40px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .skill-toggle-button svg {
+    flex: 0 0 auto;
   }
 
   .task-row {

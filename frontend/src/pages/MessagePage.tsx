@@ -181,7 +181,6 @@ export function MessagePage() {
               <article key={`${message.timestamp}-${index}`} className={classNames("message-row", roleClass(message.role))}>
                 <div className="message-row-meta">
                   <span className={classNames("meta-chip", roleClass(message.role))}>{message.role}</span>
-                  <span className="meta-chip">{message.type}</span>
                   {message.sender_id ? <span className="meta-chip">{message.sender_id}</span> : null}
                   <span className="meta-chip">{formatTimestamp(message.timestamp)}</span>
                   {isSearchResult(message)
