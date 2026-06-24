@@ -227,22 +227,38 @@ class SubconsciousLoop:
             self._logger.exception("Subconscious thought generation failed")
             return
 
+        internal_content = str(result.get("internal_content") or "").strip()
+        external_content = str(result.get("external_content") or "").strip()
         worthy = bool(result.get("worthy"))
-        content = str(result.get("content") or "").strip()
         reasoning = str(result.get("reasoning") or "").strip()
         recipient_hint = result.get("recipient_hint")
 
         self._logger.info(
-            "Subconscious result: worthy=%s content=%.80s...", worthy, content
+            "Subconscious result: worthy=%s internal=%.80s... external=%.80s...",
+            worthy,
+            internal_content,
+            external_content,
         )
 
-        if not content:
+        if not internal_content and not external_content:
             return
 
         if not worthy:
-            await self._write_internal_thought(content, reasoning)
-        else:
-            await self._route_subconscious_thought(content, reasoning, recipient_hint)
+            if internal_content:
+                await self._write_internal_thought(internal_content, reasoning)
+            return
+
+        if not external_content:
+            if internal_content:
+                await self._write_internal_thought(internal_content, reasoning)
+            return
+
+        await self._route_subconscious_thought(
+            external_content,
+            internal_content,
+            reasoning,
+            recipient_hint,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -322,9 +338,21 @@ class SubconsciousLoop:
             result = json.loads(cleaned)
         except json.JSONDecodeError:
             # Fallback: treat the whole text as an unworthy thought
-            return {"worthy": False, "content": text[:500], "reasoning": "json parse failed"}
+            return {
+                "internal_content": text[:500],
+                "worthy": False,
+                "reasoning": "json parse failed",
+                "recipient_hint": None,
+                "external_content": None,
+            }
         if not isinstance(result, dict):
-            return {"worthy": False, "content": str(result)[:500], "reasoning": "non-dict result"}
+            return {
+                "internal_content": str(result)[:500],
+                "worthy": False,
+                "reasoning": "non-dict result",
+                "recipient_hint": None,
+                "external_content": None,
+            }
         return result
 
     async def _collect_memory_context(self) -> str:
@@ -396,7 +424,8 @@ class SubconsciousLoop:
 
     async def _route_subconscious_thought(
         self,
-        content: str,
+        external_content: str,
+        internal_content: str,
         reasoning: str,
         recipient_hint: Any,
     ) -> None:
@@ -411,7 +440,8 @@ class SubconsciousLoop:
 
         if recipient is None:
             self._logger.info("No suitable recipient – recording as internal thought")
-            await self._write_internal_thought(content, reasoning)
+            if internal_content:
+                await self._write_internal_thought(internal_content, reasoning)
             return
 
         now = datetime.now()
@@ -420,7 +450,8 @@ class SubconsciousLoop:
             self._logger.info(
                 "Quiet hours – recording subconscious thought as internal thought"
             )
-            await self._write_internal_thought(content, reasoning)
+            if internal_content:
+                await self._write_internal_thought(internal_content, reasoning)
             return
 
         self._subconscious_tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -428,13 +459,13 @@ class SubconsciousLoop:
 
         enqueue_scheduled_task(
             task_type="message",
-            content=content,
+            content=external_content,
             run_at=now,
             tasks_dir=self._subconscious_tasks_dir,
             channel=recipient.channel,
             target=recipient.target,
             user_id=recipient.user_id,
-            title=f"Subconscious: {content[:60]}",
+            title=f"Subconscious: {external_content[:60]}",
             source={"source": SUBCONSCIOUS_SOURCE, "reasoning": reasoning},
         )
         self._logger.info(
@@ -478,4 +509,3 @@ class SubconsciousLoop:
             return not (start <= hour < end)
         # Overnight range: e.g. quiet 22–8 (10 PM to 8 AM)
         return not (hour >= start or hour < end)
-

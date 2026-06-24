@@ -123,7 +123,13 @@ class SubconsciousLoopTests(unittest.TestCase):
         from xagent.core.config import ReplyType
         model_client.call.return_value = (
             ReplyType.SIMPLE_REPLY,
-            json.dumps({"worthy": False, "content": "Just a thought.", "reasoning": "Not helpful."}),
+            json.dumps({
+                "internal_content": "Just a thought.",
+                "worthy": False,
+                "reasoning": "Not helpful.",
+                "recipient_hint": None,
+                "external_content": None,
+            }),
         )
         agent.model_client = model_client
         agent.record_internal_thought = AsyncMock()
@@ -151,21 +157,45 @@ class SubconsciousLoopTests(unittest.TestCase):
 
     def test_parse_subconscious_json_plain(self):
         result = SubconsciousLoop._parse_subconscious_json(
-            '{"worthy": true, "content": "Hello!", "reasoning": "Seems useful."}'
+            json.dumps({
+                "internal_content": "Thinking about saying hello.",
+                "worthy": True,
+                "reasoning": "Seems useful.",
+                "recipient_hint": "Alice",
+                "external_content": "Hello!",
+            })
         )
         self.assertTrue(result["worthy"])
-        self.assertEqual(result["content"], "Hello!")
+        self.assertEqual(result["internal_content"], "Thinking about saying hello.")
+        self.assertEqual(result["external_content"], "Hello!")
 
     def test_parse_subconscious_json_with_code_fence(self):
         result = SubconsciousLoop._parse_subconscious_json(
-            '```json\n{"worthy": false, "content": "Nah.", "reasoning": "Nothing."}\n```'
+            "```json\n"
+            + json.dumps({
+                "internal_content": "Nah.",
+                "worthy": False,
+                "reasoning": "Nothing.",
+                "recipient_hint": None,
+                "external_content": None,
+            })
+            + "\n```"
         )
         self.assertFalse(result["worthy"])
-        self.assertEqual(result["content"], "Nah.")
+        self.assertEqual(result["internal_content"], "Nah.")
+        self.assertIsNone(result["external_content"])
 
     def test_parse_subconscious_json_fallback(self):
         result = SubconsciousLoop._parse_subconscious_json("Just a random string")
         self.assertFalse(result.get("worthy"))
+        self.assertEqual(result["internal_content"], "Just a random string")
+        self.assertIsNone(result["external_content"])
+
+    def test_parse_subconscious_json_non_dict_fallback(self):
+        result = SubconsciousLoop._parse_subconscious_json('["not", "a dict"]')
+        self.assertFalse(result.get("worthy"))
+        self.assertEqual(result["internal_content"], "['not', 'a dict']")
+        self.assertIsNone(result["external_content"])
 
     def test_is_appropriate_time_default_config(self):
         """Default quiet hours 22–8: 8 AM to <10 PM is appropriate."""
@@ -213,7 +243,13 @@ class SubconsciousLoopTests(unittest.TestCase):
         ])
         agent.model_client.call.return_value = (
             ReplyType.SIMPLE_REPLY,
-            json.dumps({"worthy": False, "content": "Hmm.", "reasoning": "Nothing to say."}),
+            json.dumps({
+                "internal_content": "Hmm.",
+                "worthy": False,
+                "reasoning": "Nothing to say.",
+                "recipient_hint": None,
+                "external_content": None,
+            }),
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -287,7 +323,13 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent = self._make_agent_mock()
         agent.model_client.call.return_value = (
             ReplyType.SIMPLE_REPLY,
-            json.dumps({"worthy": False, "content": "Hmm interesting...", "reasoning": "Not worth sharing."}),
+            json.dumps({
+                "internal_content": "Hmm interesting...",
+                "worthy": False,
+                "reasoning": "Not worth sharing.",
+                "recipient_hint": None,
+                "external_content": None,
+            }),
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
@@ -309,10 +351,11 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent.model_client.call.return_value = (
             ReplyType.SIMPLE_REPLY,
             json.dumps({
+                "internal_content": "The timing matters, but this can wait.",
                 "worthy": True,
-                "content": "A 3 AM revelation!",
                 "reasoning": "This is profound, but it's 3 AM.",
                 "recipient_hint": "张三",
+                "external_content": "A 3 AM revelation!",
             }),
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -331,7 +374,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             # Should have written as internal thought, NOT enqueued a task
             agent.record_internal_thought.assert_called_once()
             call_args = agent.record_internal_thought.call_args
-            self.assertEqual(call_args[0][0], "A 3 AM revelation!")
+            self.assertEqual(call_args[0][0], "The timing matters, but this can wait.")
 
     def test_daytime_worthy_enqueues_task(self):
         """During appropriate hours, worthy thoughts are enqueued for delivery."""
@@ -341,10 +384,11 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent.model_client.call.return_value = (
             ReplyType.SIMPLE_REPLY,
             json.dumps({
+                "internal_content": "This insight might help 张三 move the thread forward.",
                 "worthy": True,
-                "content": "A daytime insight!",
                 "reasoning": "User should see this.",
                 "recipient_hint": "张三",
+                "external_content": "A daytime insight!",
             }),
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -366,6 +410,65 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0].content, "A daytime insight!")
             self.assertEqual(records[0].delivery_channel, "feishu")
+
+    def test_worthy_without_recipient_writes_internal_thought(self):
+        """A worthy thought with no route records the internal thought only."""
+        from xagent.core.config import ReplyType
+
+        agent = self._make_agent_mock()
+        agent.model_client.call.return_value = (
+            ReplyType.SIMPLE_REPLY,
+            json.dumps({
+                "internal_content": "This is for someone, but I do not know who yet.",
+                "worthy": True,
+                "reasoning": "Useful but unroutable.",
+                "recipient_hint": "张三",
+                "external_content": "A routable insight.",
+            }),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+
+            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
+                asyncio.run(loop.maybe_think())
+
+            agent.record_internal_thought.assert_called_once()
+            call_args = agent.record_internal_thought.call_args
+            self.assertEqual(call_args[0][0], "This is for someone, but I do not know who yet.")
+            self.assertEqual(list_active_task_records(loop.subconscious_tasks_dir), [])
+
+    def test_worthy_without_external_content_writes_internal_thought(self):
+        """A worthy decision without outward wording does not enqueue an empty task."""
+        from xagent.core.config import ReplyType
+
+        agent = self._make_agent_mock()
+        agent.model_client.call.return_value = (
+            ReplyType.SIMPLE_REPLY,
+            json.dumps({
+                "internal_content": "There is a signal here, but it is not speakable yet.",
+                "worthy": True,
+                "reasoning": "No outward text was produced.",
+                "recipient_hint": "张三",
+                "external_content": None,
+            }),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_123",
+                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+
+            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
+                asyncio.run(loop.maybe_think())
+
+            agent.record_internal_thought.assert_called_once()
+            call_args = agent.record_internal_thought.call_args
+            self.assertEqual(call_args[0][0], "There is a signal here, but it is not speakable yet.")
+            self.assertEqual(list_active_task_records(loop.subconscious_tasks_dir), [])
 
 
 class SubconsciousTaskIsolationTests(unittest.TestCase):
