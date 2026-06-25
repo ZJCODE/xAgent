@@ -666,11 +666,10 @@ class InternalThoughtFormatTests(unittest.TestCase):
             event_type=SUBCONSCIOUS_EVENT_TYPE,
         )
         header = MessageHandler._format_internal_thought_header(msg)
-        self.assertIn("[speaker=ME]", header)
-        self.assertIn("[timestamp=", header)
-        self.assertIn("[internal_monologue]", header)
+        self.assertTrue(header.startswith("[internal_monologue][timestamp="))
+        self.assertNotIn("[speaker=ME]", header)
 
-    def test_experience_entry_formats_internal_as_me(self):
+    def test_experience_entry_uses_internal_monologue_header(self):
         """Verify _format_experience_entry uses the internal thought header."""
         from xagent.schemas import Message
         from xagent.core.handlers.message import MessageHandler
@@ -683,8 +682,8 @@ class InternalThoughtFormatTests(unittest.TestCase):
         )
         lines = MessageHandler._format_experience_entry("observation", msg, "A deep thought")
         self.assertEqual(len(lines), 2)
-        self.assertIn("[speaker=ME]", lines[0])
-        self.assertIn("[internal_monologue]", lines[0])
+        self.assertTrue(lines[0].startswith("[internal_monologue][timestamp="))
+        self.assertNotIn("[speaker=ME]", lines[0])
 
 
 if __name__ == "__main__":
