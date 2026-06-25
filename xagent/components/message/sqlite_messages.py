@@ -20,7 +20,6 @@ MessageBatch = Union[Message, Sequence[Message]]
 class MessageStorageConfig:
     """Configuration constants for ``MessageStorage``."""
 
-    DEFAULT_PATH = "~/.xagent/messages/messages.sqlite3"
     DEFAULT_MESSAGE_COUNT = 100
     CONNECT_TIMEOUT = 5.0
     TABLE_NAME = "messages"
@@ -30,8 +29,8 @@ class MessageStorageConfig:
 class MessageStorage:
     """Persistent message storage for one ordered stream, backed by SQLite."""
 
-    def __init__(self, path: Optional[str] = None) -> None:
-        self.path = Path(path or MessageStorageConfig.DEFAULT_PATH).expanduser()
+    def __init__(self, path: str) -> None:
+        self.path = Path(path).expanduser()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(self.__class__.__name__)
         self._initialize_database()
