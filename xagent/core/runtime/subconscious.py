@@ -515,15 +515,20 @@ class SubconsciousLoop:
         """Pick the most relevant contact for the thought."""
         if not contacts:
             return None
-        # If hint matches a contact name, prefer that
+        # If hint matches a contact, prefer that
         hint = str(recipient_hint or "").strip().lower()
         if hint:
+            # -- pass 1: exact match on name or user_id --
+            for c in contacts:
+                name = str(c.target.get("sender_name") or "").lower()
+                if hint == name or hint == c.user_id.lower():
+                    return c
+            # -- pass 2: partial match (hint contains name, or name contains
+            #    hint).  The hint may carry channel annotations such as
+            #    "Telos (feishu)", and user / sender names may be prefixes.
             for c in contacts:
                 name = str(c.target.get("sender_name") or "").lower()
                 user_id_lower = c.user_id.lower()
-                # Match if the hint contains the name / user_id, OR the
-                # name / user_id contains the hint.  The hint may carry
-                # channel annotations such as "Telos (feishu)".
                 if (
                     hint in name
                     or hint in user_id_lower
