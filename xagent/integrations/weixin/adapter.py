@@ -670,6 +670,8 @@ class WeixinAdapter:
         )
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        if delivery.recipient.channel != "weixin":
+            raise ValueError(f"Weixin runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
         user_id = str(delivery.recipient.target.get("user_id") or delivery.recipient.user_id or "").strip()
         if not user_id:
             raise ValueError("subconscious Weixin delivery is missing user_id")

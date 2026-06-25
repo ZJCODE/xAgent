@@ -533,6 +533,8 @@ class VoiceRuntime:
             self.pause_event.clear()
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        if delivery.recipient.channel != "voice":
+            raise ValueError(f"Voice runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
         text = str(delivery.content or "").strip()
         if not text:
             raise ValueError("subconscious voice delivery produced no content")

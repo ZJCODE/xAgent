@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from ..config import AgentConfig
 
@@ -126,6 +126,7 @@ def create_runtime_heartbeat(
     *,
     logger_: Optional[logging.Logger] = None,
     subconscious_delivery_sink: Optional[Callable[..., Any]] = None,
+    subconscious_deliverable_channels: Optional[Iterable[str]] = None,
 ) -> Optional[RuntimeHeartbeat]:
     config = RuntimeHeartbeatConfig.from_mapping(runtime_config)
     if not config.enabled:
@@ -143,6 +144,7 @@ def create_runtime_heartbeat(
             probability=getattr(agent, "subconscious_activity", None),
             pure_thought=getattr(agent, "subconscious_pure_thought", None),
             delivery_sink=subconscious_delivery_sink,
+            deliverable_channels=subconscious_deliverable_channels,
             logger_=logger_,
         )
 

@@ -2307,6 +2307,8 @@ class FeishuAdapter:
                 self.logger.debug("Failed to persist Feishu scheduled task result", exc_info=True)
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        if delivery.recipient.channel != "feishu":
+            raise ValueError(f"Feishu runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
         target = delivery.recipient.target
         chat_id = str(target.get("chat_id") or "").strip()
         if not chat_id:

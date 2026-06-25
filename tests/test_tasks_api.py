@@ -96,6 +96,30 @@ class TaskApiTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_http_subconscious_delivery_rejects_feishu_channel(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                agent = _TaskAgent(Path(tmpdir))
+                server = AgentHTTPServer(agent=agent, enable_web=False)
+                delivery = SubconsciousDelivery(
+                    content="A direct subconscious note",
+                    recipient=ContactEntry(
+                        channel="feishu",
+                        user_id="ou_123",
+                        target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                        last_seen="2026-06-25 09:00:00",
+                    ),
+                    internal_content="The inner thought",
+                    created_at=datetime(2026, 6, 25, 9, 0, 0),
+                )
+
+                with self.assertRaisesRegex(ValueError, "HTTP runtime cannot deliver"):
+                    await server.deliver_subconscious_message(delivery)
+
+        import asyncio
+
+        asyncio.run(run_test())
+
     def test_list_and_delete_task(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = _TaskAgent(Path(tmpdir))

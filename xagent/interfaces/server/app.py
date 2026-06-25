@@ -467,6 +467,8 @@ class AgentHTTPServer(BaseAgentRunner):
                         self._task_subscribers.pop(user_id, None)
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        if delivery.recipient.channel not in {"api", "web"}:
+            raise ValueError(f"HTTP runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
         target = delivery.recipient.target
         user_id = str(target.get("user_id") or delivery.recipient.user_id or "").strip()
         if not user_id:
@@ -742,6 +744,7 @@ class AgentHTTPServer(BaseAgentRunner):
             self.config.get("runtime") if isinstance(self.config, dict) else None,
             logger_=self.logger,
             subconscious_delivery_sink=self.deliver_subconscious_message,
+            subconscious_deliverable_channels={"api", "web"},
         )
         task_scheduler = AsyncTaskScheduler(
             self.tasks_dir,

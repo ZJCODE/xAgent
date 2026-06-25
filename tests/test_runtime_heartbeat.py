@@ -80,6 +80,23 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
         self.assertIsNotNone(heartbeat)
         self.assertIs(heartbeat._subconscious_loop._delivery_sink, sink)
 
+    def test_factory_passes_subconscious_deliverable_channels(self):
+        class _Agent:
+            subconscious_activity = 0.02
+
+            def __init__(self, workspace):
+                self.workspace_dir = Path(workspace) / "workspace"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            heartbeat = create_runtime_heartbeat(
+                _Agent(tmpdir),
+                {"heartbeat_enabled": True, "heartbeat_interval_seconds": 1},
+                subconscious_deliverable_channels={"api", "web"},
+            )
+
+        self.assertIsNotNone(heartbeat)
+        self.assertEqual(heartbeat._subconscious_loop._deliverable_channels, {"api", "web"})
+
 
 class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_once_runs_memory_maintenance_without_weekly_on_non_monday(self):

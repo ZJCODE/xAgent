@@ -10,7 +10,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from ..config import AgentConfig
 from .scheduler import _fsync_directory
@@ -162,12 +162,14 @@ class SubconsciousLoop:
         probability: Optional[float] = None,
         pure_thought: Optional[bool] = None,
         delivery_sink: Optional[Callable[[SubconsciousDelivery], Awaitable[None] | None]] = None,
+        deliverable_channels: Optional[Iterable[str]] = None,
         logger_: Optional[logging.Logger] = None,
     ) -> None:
         self._agent = agent
         self._workspace = Path(workspace).expanduser().resolve()
         self._contacts_file = resolve_contacts_path(self._workspace)
         self._delivery_sink = delivery_sink
+        self._deliverable_channels = self._normalize_deliverable_channels(deliverable_channels)
         self._logger = logger_ or logger
         self._enabled = AgentConfig.SUBCONSCIOUS_ENABLED
         self._probability = (
@@ -437,9 +439,9 @@ class SubconsciousLoop:
         Each line shows the fields the agent can use as ``recipient_hint``
         — prefer the human-readable ``name``, fall back to ``user_id``.
         """
-        contacts = load_contacts(self._contacts_file)
+        contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         if not contacts:
-            return "(no contacts recorded yet)"
+            return "(no contacts available for this runtime)"
         lines: List[str] = ["Contacts (use exact name or user_id for recipient_hint):"]
         for c in contacts:
             name = str(c.target.get("sender_name") or "").strip()
@@ -489,7 +491,7 @@ class SubconsciousLoop:
         internal monologue instead of being delivered — the agent's sleep
         thoughts become part of its memory without disturbing the user.
         """
-        contacts = load_contacts(self._contacts_file)
+        contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         recipient = self._pick_recipient(contacts, recipient_hint)
 
         if recipient is None:
@@ -558,14 +560,26 @@ class SubconsciousLoop:
                 name = str(c.target.get("sender_name") or "").lower()
                 user_id_lower = c.user_id.lower()
                 if (
-                    hint in name
-                    or hint in user_id_lower
-                    or name in hint
-                    or user_id_lower in hint
+                    (name and (hint in name or name in hint))
+                    or (user_id_lower and (hint in user_id_lower or user_id_lower in hint))
                 ):
                     return c
+            return None
         # Default: most recently seen contact
         return max(contacts, key=lambda c: c.last_seen)
+
+    @staticmethod
+    def _normalize_deliverable_channels(channels: Optional[Iterable[str]]) -> set[str]:
+        if channels is None:
+            return set()
+        return {str(channel).strip().lower() for channel in channels if str(channel).strip()}
+
+    def _filter_deliverable_contacts(self, contacts: List[ContactEntry]) -> List[ContactEntry]:
+        return [
+            contact
+            for contact in contacts
+            if str(contact.channel or "").strip().lower() in self._deliverable_channels
+        ]
 
     @staticmethod
     def _is_appropriate_time(now: datetime) -> bool:
