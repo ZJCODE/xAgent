@@ -2181,10 +2181,19 @@ class FeishuAdapter:
                 text=chat_text,
             )
 
-        # Resolve room name for group messages so agent replies carry room context
+        # Resolve room name so agent replies carry room / recipient context.
+        # For group chats this is the group name; for p2p chats we encode
+        # channel + sender so the message page shows who was addressed.
+        # All resolved room names carry the "feishu:" prefix for consistent
+        # display (group names get it too).
         resolved_room_name = room_name
-        if is_group and not resolved_room_name:
-            resolved_room_name = await self._resolve_room_name(chat_id, raw_msg)
+        if not resolved_room_name:
+            if is_group:
+                group_name = await self._resolve_room_name(chat_id, raw_msg)
+                if group_name:
+                    resolved_room_name = f"feishu:{group_name}"
+            else:
+                resolved_room_name = f"feishu:{sender_name}"
 
         chat_kwargs = self._chat_kwargs(
             user_id=user_id,

@@ -26,6 +26,53 @@ function roleClass(role: string): string {
   return "role-observation";
 }
 
+function messageRoleClass(message: MessageItem): string {
+  // Internal monologue: context_event + assistant
+  if (message.type === "context_event" && message.role === "assistant") {
+    return "role-internal-monologue";
+  }
+  return roleClass(message.role);
+}
+
+function messageRoleLabel(message: MessageItem): string {
+  // Internal monologue
+  if (message.type === "context_event" && message.role === "assistant") {
+    return "internal_monologue";
+  }
+  return message.role;
+}
+
+/** Extract channel / name / group from a message for display as meta chips. */
+function messageMetaChips(message: MessageItem): { channel?: string; name?: string; group?: string } {
+  const hasChannel = message.room_name?.includes(":");
+  const channel = hasChannel ? message.room_name!.split(":")[0] : undefined;
+  const roomSuffix = hasChannel ? message.room_name!.split(":").slice(1).join(":") : message.room_name;
+
+  if (message.role === "user") {
+    const name = message.sender_id || undefined;
+    const group = roomSuffix && roomSuffix !== message.sender_id ? roomSuffix : undefined;
+    return { channel, name, group };
+  }
+
+  if (message.role === "assistant") {
+    // Subconscious delivery recipient takes priority over room_name
+    const metadata = message.metadata;
+    const sub = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).subconscious : undefined;
+    if (sub && typeof sub === "object") {
+      const recipient = (sub as Record<string, unknown>).recipient;
+      if (recipient && typeof recipient === "object") {
+        const r = recipient as Record<string, unknown>;
+        const target = (r.target as Record<string, unknown> | undefined);
+        return { channel: r.channel as string || undefined, name: `→ ${target?.sender_name || r.user_id || "?"}` };
+      }
+    }
+    const name = roomSuffix ? `→ ${roomSuffix}` : undefined;
+    return { channel, name };
+  }
+
+  return {};
+}
+
 function isSearchResult(message: MessageItem | MessageSearchResult): message is MessageSearchResult {
   return Array.isArray((message as MessageSearchResult).matched_in);
 }
@@ -178,10 +225,19 @@ export function MessagePage() {
             const imageUrls = messageImageUrls(message);
             const files = messageFileAttachments(message);
             return (
-              <article key={`${message.timestamp}-${index}`} className={classNames("message-row", roleClass(message.role))}>
+              <article key={`${message.timestamp}-${index}`} className={classNames("message-row", messageRoleClass(message))}>
                 <div className="message-row-meta">
-                  <span className={classNames("meta-chip", roleClass(message.role))}>{message.role}</span>
-                  {message.sender_id ? <span className="meta-chip">{message.sender_id}</span> : null}
+                  <span className={classNames("meta-chip", messageRoleClass(message))}>{messageRoleLabel(message)}</span>
+                  {(() => {
+                    const chips = messageMetaChips(message);
+                    return (
+                      <>
+                        {chips.channel ? <span className="meta-chip">{chips.channel}</span> : null}
+                        {chips.name ? <span className="meta-chip">{chips.name}</span> : null}
+                        {chips.group ? <span className="meta-chip">{chips.group}</span> : null}
+                      </>
+                    );
+                  })()}
                   <span className="meta-chip">{formatTimestamp(message.timestamp)}</span>
                   {isSearchResult(message)
                     ? message.matched_in.map((match) => (

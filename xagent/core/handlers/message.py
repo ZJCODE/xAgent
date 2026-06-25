@@ -116,6 +116,7 @@ class MessageHandler:
         event_type: str = "observation",
         metadata: Optional[Dict[str, Any]] = None,
         room_name: Optional[str] = None,
+        role: RoleType = RoleType.ENVIRONMENT,
     ) -> Message:
         """Store a non-direct observation from the agent's environment."""
         event_msg = Message.create_context_event(
@@ -123,6 +124,7 @@ class MessageHandler:
             source=source,
             event_type=event_type,
             metadata=metadata,
+            role=role,
         )
         if room_name:
             event_msg.room_name = room_name
@@ -554,17 +556,23 @@ class MessageHandler:
 
     @staticmethod
     def _is_internal_monologue(message: Message) -> bool:
-        """Check whether a context event is an internal monologue thought."""
-        if message.type != MessageType.CONTEXT_EVENT:
-            return False
-        metadata = message.metadata if isinstance(message.metadata, dict) else {}
-        return metadata.get("event_type") == "internal_monologue"
+        """Check whether a context event is an internal monologue thought.
+
+        Internal monologue is uniquely identified by the combination of
+        ``CONTEXT_EVENT`` type and ``ASSISTANT`` role — the agent
+        producing context for itself rather than receiving it from the
+        environment.
+        """
+        return (
+            message.type == MessageType.CONTEXT_EVENT
+            and message.role == RoleType.ASSISTANT
+        )
 
     @staticmethod
     def _format_internal_thought_header(message: Message) -> str:
         """Format header for internal monologue: [speaker=ME][timestamp=Time][internal]."""
         timestamp = MessageHandler._format_transcript_timestamp(message)
-        return f"[speaker=ME][timestamp={timestamp}][internal]"
+        return f"[speaker=ME][timestamp={timestamp}][internal_monologue]"
 
     @staticmethod
     def _latest_current_user_message(

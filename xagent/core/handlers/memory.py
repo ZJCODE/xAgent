@@ -239,9 +239,9 @@ class MemoryHandler:
 
     @staticmethod
     def _is_all_internal_monologue(records: List[dict]) -> bool:
-        """Return True if every record is an internal_monologue context event."""
+        """Return True if every record is an internal monologue context event."""
         return all(
-            r.get("metadata", {}).get("event_type") == "internal_monologue"
+            r.get("type") == "context_event" and r.get("role") == "assistant"
             for r in records
         )
 

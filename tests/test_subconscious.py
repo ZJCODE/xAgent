@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from xagent.core.config import AgentConfig
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.handlers.model import ChatToolCall, ModelStreamEvent
+from xagent.schemas import RoleType
 from xagent.core.runtime.subconscious import (
     SUBCONSCIOUS_SOURCE,
     SUBCONSCIOUS_EVENT_TYPE,
-    INTERNAL_MARKER,
     ContactEntry,
     SubconsciousLoop,
     load_contacts,
@@ -539,11 +539,10 @@ class SubconsciousLoopTests(unittest.TestCase):
 
 
 class InternalThoughtFormatTests(unittest.TestCase):
-    """Verify the [internal] marker format for internal monologue."""
+    """Verify the [internal_monologue] marker format for internal monologue."""
 
     def test_internal_monologue_event_type(self):
         self.assertEqual(SUBCONSCIOUS_EVENT_TYPE, "internal_monologue")
-        self.assertEqual(INTERNAL_MARKER, "internal")
 
     def test_context_event_metadata_for_internal_thought(self):
         """Verify internal thoughts carry the right metadata."""
@@ -570,11 +569,12 @@ class InternalThoughtFormatTests(unittest.TestCase):
         )
         self.assertFalse(MessageHandler._is_internal_monologue(regular))
 
-        # Internal monologue
+        # Internal monologue (ASSISTANT role identifies it as the agent's own thought)
         internal = Message.create_context_event(
             content="I just realized something...",
             source=SUBCONSCIOUS_SOURCE,
             event_type=SUBCONSCIOUS_EVENT_TYPE,
+            role=RoleType.ASSISTANT,
         )
         self.assertTrue(MessageHandler._is_internal_monologue(internal))
 
@@ -591,7 +591,7 @@ class InternalThoughtFormatTests(unittest.TestCase):
         header = MessageHandler._format_internal_thought_header(msg)
         self.assertIn("[speaker=ME]", header)
         self.assertIn("[timestamp=", header)
-        self.assertIn("[internal]", header)
+        self.assertIn("[internal_monologue]", header)
 
     def test_experience_entry_formats_internal_as_me(self):
         """Verify _format_experience_entry uses the internal thought header."""
@@ -602,11 +602,12 @@ class InternalThoughtFormatTests(unittest.TestCase):
             content="A deep thought",
             source=SUBCONSCIOUS_SOURCE,
             event_type=SUBCONSCIOUS_EVENT_TYPE,
+            role=RoleType.ASSISTANT,
         )
         lines = MessageHandler._format_experience_entry("observation", msg, "A deep thought")
         self.assertEqual(len(lines), 2)
         self.assertIn("[speaker=ME]", lines[0])
-        self.assertIn("[internal]", lines[0])
+        self.assertIn("[internal_monologue]", lines[0])
 
 
 if __name__ == "__main__":

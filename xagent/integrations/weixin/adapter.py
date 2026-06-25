@@ -486,6 +486,7 @@ class WeixinAdapter:
         kwargs: dict[str, Any] = {
             "user_message": text,
             "user_id": user_id,
+            "room_name": f"weixin:{user_id}",
         }
         if inbound.image_sources and bool(getattr(self.agent, "supports_vision", True)):
             kwargs["image_source"] = inbound.image_sources[0] if len(inbound.image_sources) == 1 else inbound.image_sources
@@ -705,6 +706,7 @@ class WeixinAdapter:
                 user_message=prompt,
                 user_id=user_id,
                 stream=False,
+                room_name=f"weixin:{user_id}",
             ):
                 if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":
                     content = str(event.get("content") or "").strip()

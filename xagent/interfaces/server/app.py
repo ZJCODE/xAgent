@@ -167,6 +167,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 user_id=input_data.user_id,
                 image_source=image_sources,
                 attachments=attachments,
+                room_name=f"web:{input_data.user_id}",
             )
 
     async def _call_observe(self, input_data: ObserveInput):
@@ -235,6 +236,7 @@ class AgentHTTPServer(BaseAgentRunner):
                     image_source=self._input_image_sources(input_data, attachments=attachments),
                     attachments=attachments,
                     stream=bool(input_data.stream),
+                    room_name=f"web:{input_data.user_id}",
                 )
                 async for event in self._iterate_before_deadline(response, deadline):
                     if event.get("type") == "done":
@@ -330,6 +332,7 @@ class AgentHTTPServer(BaseAgentRunner):
                     getattr(self.agent, "_assistant_sender_id", "agent"),
                     metadata=metadata,
                     attachments=result.attachments,
+                    room_name=f"web:{task.delivery_user_id or 'scheduled'}",
                 )
         await self._broadcast_scheduled_message(
             task,
@@ -484,6 +487,7 @@ class AgentHTTPServer(BaseAgentRunner):
                         },
                     }
                 },
+                room_name=f"{delivery.recipient.channel}:{delivery.recipient.user_id}",
             )
         payload: Dict[str, Any] = {
             "type": "subconscious_message",

@@ -15,7 +15,7 @@ from .config import AgentConfig, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_client, normalize_model_api
 from .tooling import ToolExecutor, ToolManager
-from ..schemas import AgentTurnResult, Message, ParticipationDecision
+from ..schemas import AgentTurnResult, Message, ParticipationDecision, RoleType
 from ..tools import create_write_memory_tool, create_search_memory_tool
 logger = logging.getLogger(__name__)
 
@@ -649,7 +649,7 @@ class Agent:
 
         The thought is stored as a context event with event_type
         ``"internal_monologue"``, which the transcript formatter renders
-        as ``[speaker=ME][timestamp=...][internal]``.  This allows the
+        as ``[speaker=ME][timestamp=...][internal_monologue]``.  This allows the
         thought to become part of the agent's memory stream (diary
         compression) without interrupting the conversation.
         """
@@ -657,6 +657,7 @@ class Agent:
             context=content,
             source="subconscious",
             event_type="internal_monologue",
+            role=RoleType.ASSISTANT,
         )
         self._schedule_experience_write(
             messages=[event_msg],

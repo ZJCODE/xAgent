@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 SUBCONSCIOUS_SOURCE = "subconscious"
 SUBCONSCIOUS_EVENT_TYPE = "internal_monologue"
-INTERNAL_MARKER = "internal"
 CONTACTS_FILENAME = "contacts.json"
 
 
@@ -442,12 +441,13 @@ class SubconsciousLoop:
         message_handler = getattr(self._agent, "message_handler", None)
         if message_handler is None:
             return
-        from ...schemas import Message
+        from ...schemas import Message, RoleType
 
         msg = Message.create_context_event(
-            content=f"[{INTERNAL_MARKER}] {content}",
+            content=f"[{SUBCONSCIOUS_EVENT_TYPE}] {content}",
             source=SUBCONSCIOUS_SOURCE,
             event_type=SUBCONSCIOUS_EVENT_TYPE,
+            role=RoleType.ASSISTANT,
         )
         store = getattr(message_handler, "store_message", None)
         if callable(store):

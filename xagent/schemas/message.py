@@ -121,13 +121,19 @@ class Message(BaseModel):
         source: str = "environment",
         event_type: str = "observation",
         metadata: Optional[Dict[str, Any]] = None,
+        role: RoleType = RoleType.ENVIRONMENT,
     ) -> "Message":
-        """Create a persisted observation/context event."""
+        """Create a persisted observation/context event.
+
+        The ``role`` parameter distinguishes WHO originates the event:
+        ``ENVIRONMENT`` for external observations (default), ``ASSISTANT``
+        for the agent's own internal thoughts.
+        """
         event_metadata = dict(metadata or {})
         event_metadata.setdefault("source", source)
         event_metadata.setdefault("event_type", event_type)
         return cls(
-            role=RoleType.ENVIRONMENT,
+            role=role,
             type=MessageType.CONTEXT_EVENT,
             content=content,
             metadata=event_metadata,

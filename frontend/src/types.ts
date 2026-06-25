@@ -160,6 +160,7 @@ export interface MessageItem {
   image_count?: number;
   attachments?: AttachmentAsset[];
   attachment_count?: number;
+  room_name?: string;
   tool_call?: {
     name: string;
     arguments: unknown;
