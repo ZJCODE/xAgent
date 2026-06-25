@@ -144,7 +144,6 @@ class SubconsciousLoopTests(unittest.TestCase):
         self._set_model_json(agent, {
             "internal_content": "Just a thought.",
             "worthy": False,
-            "reasoning": "Not helpful.",
             "recipient_hint": None,
             "external_content": None,
         })
@@ -187,7 +186,6 @@ class SubconsciousLoopTests(unittest.TestCase):
             json.dumps({
                 "internal_content": "Thinking about saying hello.",
                 "worthy": True,
-                "reasoning": "Seems useful.",
                 "recipient_hint": "Alice",
                 "external_content": "Hello!",
             })
@@ -202,7 +200,6 @@ class SubconsciousLoopTests(unittest.TestCase):
             + json.dumps({
                 "internal_content": "Nah.",
                 "worthy": False,
-                "reasoning": "Nothing.",
                 "recipient_hint": None,
                 "external_content": None,
             })
@@ -270,7 +267,6 @@ class SubconsciousLoopTests(unittest.TestCase):
         self._set_model_json(agent, {
             "internal_content": "Hmm.",
             "worthy": False,
-            "reasoning": "Nothing to say.",
             "recipient_hint": None,
             "external_content": None,
         })
@@ -345,7 +341,6 @@ class SubconsciousLoopTests(unittest.TestCase):
             [self._json_event({
                 "internal_content": "Tool result changed the thought.",
                 "worthy": False,
-                "reasoning": "Still not worth sharing.",
                 "recipient_hint": None,
                 "external_content": None,
             })],
@@ -400,7 +395,6 @@ class SubconsciousLoopTests(unittest.TestCase):
         self._set_model_json(agent, {
             "internal_content": "Hmm interesting...",
             "worthy": False,
-            "reasoning": "Not worth sharing.",
             "recipient_hint": None,
             "external_content": None,
         })
@@ -413,7 +407,6 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.record_internal_thought.assert_called_once()
             call_args = agent.record_internal_thought.call_args
             self.assertEqual(call_args[0][0], "Hmm interesting...")
-            self.assertIn("Not worth sharing", call_args[1].get("reasoning", ""))
 
 
     def test_nighttime_worthy_writes_internal_thought(self):
@@ -422,7 +415,6 @@ class SubconsciousLoopTests(unittest.TestCase):
         self._set_model_json(agent, {
             "internal_content": "The timing matters, but this can wait.",
             "worthy": True,
-            "reasoning": "This is profound, but it's 3 AM.",
             "recipient_hint": "张三",
             "external_content": "A 3 AM revelation!",
         })
@@ -450,7 +442,6 @@ class SubconsciousLoopTests(unittest.TestCase):
         self._set_model_json(agent, {
             "internal_content": "This insight might help 张三 move the thread forward.",
             "worthy": True,
-            "reasoning": "User should see this.",
             "recipient_hint": "张三",
             "external_content": "A daytime insight!",
         })
@@ -472,7 +463,6 @@ class SubconsciousLoopTests(unittest.TestCase):
             delivery = delivery_sink.await_args.args[0]
             self.assertEqual(delivery.content, "A daytime insight!")
             self.assertEqual(delivery.internal_content, "This insight might help 张三 move the thread forward.")
-            self.assertEqual(delivery.reasoning, "User should see this.")
             self.assertEqual(delivery.recipient.channel, "feishu")
             self.assertEqual(delivery.recipient.user_id, "ou_123")
 
@@ -482,7 +472,6 @@ class SubconsciousLoopTests(unittest.TestCase):
         self._set_model_json(agent, {
             "internal_content": "This should not be lost.",
             "worthy": True,
-            "reasoning": "Delivery path may fail.",
             "recipient_hint": "张三",
             "external_content": "A fragile outward message.",
         })
@@ -509,7 +498,6 @@ class SubconsciousLoopTests(unittest.TestCase):
         self._set_model_json(agent, {
             "internal_content": "This is for someone, but I do not know who yet.",
             "worthy": True,
-            "reasoning": "Useful but unroutable.",
             "recipient_hint": "张三",
             "external_content": "A routable insight.",
         })
@@ -530,7 +518,6 @@ class SubconsciousLoopTests(unittest.TestCase):
         self._set_model_json(agent, {
             "internal_content": "There is a signal here, but it is not speakable yet.",
             "worthy": True,
-            "reasoning": "No outward text was produced.",
             "recipient_hint": "张三",
             "external_content": None,
         })
@@ -565,12 +552,10 @@ class InternalThoughtFormatTests(unittest.TestCase):
             content="A private thought",
             source=SUBCONSCIOUS_SOURCE,
             event_type=SUBCONSCIOUS_EVENT_TYPE,
-            metadata={"reasoning": "Test reasoning"},
         )
         self.assertEqual(msg.type.value, "context_event")
         self.assertEqual(msg.metadata["event_type"], "internal_monologue")
         self.assertEqual(msg.metadata["source"], "subconscious")
-        self.assertEqual(msg.metadata["reasoning"], "Test reasoning")
 
     def test_internal_monologue_detection(self):
         """Verify _is_internal_monologue correctly identifies such messages."""

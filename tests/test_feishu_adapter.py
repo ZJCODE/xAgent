@@ -361,7 +361,6 @@ class FeishuAdapterTests(unittest.TestCase):
                     last_seen="2026-06-25 09:00:00",
                 ),
                 internal_content="inner",
-                reasoning="worth sharing",
                 created_at=datetime(2026, 6, 25, 9, 0, 0),
             )
 

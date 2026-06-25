@@ -258,7 +258,6 @@ class AgentConfig:
         "Return JSON only. Use this exact shape; `worthy` must be a JSON boolean:\n"
         "{{\"internal_content\": \"the raw inner thought that naturally emerged\", "
         "\"worthy\": false, "
-        "\"reasoning\": \"brief reason for the worthy / not-worthy decision\", "
         "\"recipient_hint\": \"name or description of who this is most relevant to, or null\", "
         "\"external_content\": \"complete outward message if worthy, otherwise null\"}}\n"
         "</current_task>"

@@ -2329,7 +2329,6 @@ class FeishuAdapter:
                     metadata={
                         "subconscious": {
                             "source": "subconscious",
-                            "reasoning": delivery.reasoning,
                             "created_at": delivery.created_at.isoformat(sep=" "),
                             "recipient": {
                                 "channel": delivery.recipient.channel,

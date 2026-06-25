@@ -477,7 +477,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 metadata={
                     "subconscious": {
                         "source": "subconscious",
-                        "reasoning": delivery.reasoning,
                         "created_at": delivery.created_at.isoformat(sep=" "),
                         "recipient": {
                             "channel": delivery.recipient.channel,
@@ -490,7 +489,6 @@ class AgentHTTPServer(BaseAgentRunner):
             "type": "subconscious_message",
             "content": delivery.content,
             "subconscious": {
-                "reasoning": delivery.reasoning,
                 "created_at": delivery.created_at.isoformat(sep=" "),
             },
         }

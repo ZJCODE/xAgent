@@ -644,7 +644,6 @@ class Agent:
     async def record_internal_thought(
         self,
         content: str,
-        reasoning: str = "",
     ) -> AgentTurnResult:
         """Record an internal monologue thought (not sent to any user).
 
@@ -658,7 +657,6 @@ class Agent:
             context=content,
             source="subconscious",
             event_type="internal_monologue",
-            metadata={"reasoning": reasoning} if reasoning else {},
         )
         self._schedule_experience_write(
             messages=[event_msg],

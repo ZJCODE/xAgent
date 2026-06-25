@@ -41,7 +41,6 @@ class SubconsciousDelivery:
     content: str
     recipient: ContactEntry
     internal_content: str
-    reasoning: str
     created_at: datetime
 
 
@@ -231,7 +230,6 @@ class SubconsciousLoop:
         internal_content = str(result.get("internal_content") or "").strip()
         external_content = str(result.get("external_content") or "").strip()
         worthy = bool(result.get("worthy"))
-        reasoning = str(result.get("reasoning") or "").strip()
         recipient_hint = result.get("recipient_hint")
 
         self._logger.info(
@@ -246,18 +244,17 @@ class SubconsciousLoop:
 
         if not worthy:
             if internal_content:
-                await self._write_internal_thought(internal_content, reasoning)
+                await self._write_internal_thought(internal_content)
             return
 
         if not external_content:
             if internal_content:
-                await self._write_internal_thought(internal_content, reasoning)
+                await self._write_internal_thought(internal_content)
             return
 
         await self._route_subconscious_thought(
             external_content,
             internal_content,
-            reasoning,
             recipient_hint,
         )
 
@@ -397,7 +394,6 @@ class SubconsciousLoop:
             return {
                 "internal_content": text[:500],
                 "worthy": False,
-                "reasoning": "json parse failed",
                 "recipient_hint": None,
                 "external_content": None,
             }
@@ -405,7 +401,6 @@ class SubconsciousLoop:
             return {
                 "internal_content": str(result)[:500],
                 "worthy": False,
-                "reasoning": "non-dict result",
                 "recipient_hint": None,
                 "external_content": None,
             }
@@ -436,11 +431,11 @@ class SubconsciousLoop:
             lines.append(f"- {name} via {c.channel} (last seen {c.last_seen}, {c.interaction_count} interactions)")
         return "\n".join(lines)
 
-    async def _write_internal_thought(self, content: str, reasoning: str) -> None:
+    async def _write_internal_thought(self, content: str) -> None:
         """Record the thought as an internal monologue context event."""
         record_method = getattr(self._agent, "record_internal_thought", None)
         if callable(record_method):
-            await record_method(content, reasoning=reasoning)
+            await record_method(content)
             self._logger.info("Internal thought recorded")
             return
         # Fallback: store directly via message_handler
@@ -453,7 +448,6 @@ class SubconsciousLoop:
             content=f"[{INTERNAL_MARKER}] {content}",
             source=SUBCONSCIOUS_SOURCE,
             event_type=SUBCONSCIOUS_EVENT_TYPE,
-            metadata={"reasoning": reasoning},
         )
         store = getattr(message_handler, "store_message", None)
         if callable(store):
@@ -463,7 +457,6 @@ class SubconsciousLoop:
         self,
         external_content: str,
         internal_content: str,
-        reasoning: str,
         recipient_hint: Any,
     ) -> None:
         """Route a worthy thought: deliver now, or write as internal thought.
@@ -478,7 +471,7 @@ class SubconsciousLoop:
         if recipient is None:
             self._logger.info("No suitable recipient – recording as internal thought")
             if internal_content:
-                await self._write_internal_thought(internal_content, reasoning)
+                await self._write_internal_thought(internal_content)
             return
 
         now = datetime.now()
@@ -488,20 +481,19 @@ class SubconsciousLoop:
                 "Quiet hours – recording subconscious thought as internal thought"
             )
             if internal_content:
-                await self._write_internal_thought(internal_content, reasoning)
+                await self._write_internal_thought(internal_content)
             return
 
         if self._delivery_sink is None:
             self._logger.info("No subconscious delivery sink – recording as internal thought")
             if internal_content:
-                await self._write_internal_thought(internal_content, reasoning)
+                await self._write_internal_thought(internal_content)
             return
 
         delivery = SubconsciousDelivery(
             content=external_content,
             recipient=recipient,
             internal_content=internal_content,
-            reasoning=reasoning,
             created_at=now,
         )
         try:
@@ -517,7 +509,7 @@ class SubconsciousLoop:
         except Exception:
             self._logger.warning("Subconscious delivery failed; recording internal thought", exc_info=True)
             if internal_content:
-                await self._write_internal_thought(internal_content, reasoning)
+                await self._write_internal_thought(internal_content)
 
     @staticmethod
     def _pick_recipient(
