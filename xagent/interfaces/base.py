@@ -220,7 +220,13 @@ class BaseAgentRunner:
         if agent_cfg is not None:
             if not isinstance(agent_cfg, dict):
                 raise ValueError("agent must be a dictionary")
-            allowed_agent_keys = {"max_history", "max_iter", "max_concurrent_tools", "subconscious_activity"}
+            allowed_agent_keys = {
+                "max_history",
+                "max_iter",
+                "max_concurrent_tools",
+                "subconscious_activity",
+                "subconscious_pure_thought",
+            }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
             if unsupported_agent_keys:
                 joined_keys = ", ".join(unsupported_agent_keys)
@@ -234,6 +240,8 @@ class BaseAgentRunner:
                     raise ValueError(
                         f"agent.subconscious_activity must be a number between 0 and 1, got {val!r}"
                     )
+            if "subconscious_pure_thought" in agent_cfg and not isinstance(agent_cfg["subconscious_pure_thought"], bool):
+                raise ValueError("agent.subconscious_pure_thought must be a boolean")
 
         self._validate_observability_config(config.get("observability"))
 
@@ -574,6 +582,10 @@ class BaseAgentRunner:
             max_iter=agent_section.get("max_iter", AgentConfig.DEFAULT_MAX_ITER),
             max_concurrent_tools=agent_section.get("max_concurrent_tools", AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
+            subconscious_pure_thought=agent_section.get(
+                "subconscious_pure_thought",
+                AgentConfig.SUBCONSCIOUS_PURE_THOUGHT,
+            ),
         )
 
     def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:

@@ -40,6 +40,7 @@ class Agent:
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
+        subconscious_pure_thought: bool = AgentConfig.SUBCONSCIOUS_PURE_THOUGHT,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.model_api = normalize_model_api(model_api)
@@ -49,6 +50,7 @@ class Agent:
         self.max_iter = max_iter
         self.max_concurrent_tools = max_concurrent_tools
         self.subconscious_activity = subconscious_activity
+        self.subconscious_pure_thought = bool(subconscious_pure_thought)
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client
         if self.client is None:

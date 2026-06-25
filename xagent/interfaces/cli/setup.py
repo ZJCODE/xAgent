@@ -290,6 +290,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "max_iter": AgentConfig.DEFAULT_MAX_ITER,
             "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
+            "subconscious_pure_thought": AgentConfig.SUBCONSCIOUS_PURE_THOUGHT,
         },
         "channels": {
             "api": {
@@ -378,6 +379,10 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     yaml_str = yaml_str.replace(
         "subconscious_activity: 0.02\n",
         "subconscious_activity: 0.02  # 0=off, 1=very active. Suggested: 0.01~0.1\n",
+    )
+    yaml_str = yaml_str.replace(
+        "subconscious_pure_thought: true\n",
+        "subconscious_pure_thought: true  # true=pure thought without tools/skills during subconscious turns\n",
     )
     return yaml_str
 

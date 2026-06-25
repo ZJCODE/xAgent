@@ -160,6 +160,7 @@ class SubconsciousLoop:
         *,
         workspace: Path,
         probability: Optional[float] = None,
+        pure_thought: Optional[bool] = None,
         delivery_sink: Optional[Callable[[SubconsciousDelivery], Awaitable[None] | None]] = None,
         logger_: Optional[logging.Logger] = None,
     ) -> None:
@@ -173,6 +174,11 @@ class SubconsciousLoop:
             float(probability)
             if probability is not None
             else float(AgentConfig.SUBCONSCIOUS_ACTIVITY)
+        )
+        self._pure_thought = (
+            bool(pure_thought)
+            if pure_thought is not None
+            else bool(getattr(agent, "subconscious_pure_thought", AgentConfig.SUBCONSCIOUS_PURE_THOUGHT))
         )
 
     # ------------------------------------------------------------------
@@ -303,6 +309,12 @@ class SubconsciousLoop:
                     raise RuntimeError(f"Subconscious model error: {message or model_event.error}")
 
             text = "".join(text_parts).strip()
+            if tool_calls and self._pure_thought:
+                self._logger.warning("Subconscious pure thought returned tool calls; tools are disabled for this turn")
+                if text:
+                    return self._parse_subconscious_json(text)
+                raise RuntimeError("Subconscious pure thought returned tool calls without text")
+
             if tool_calls:
                 if tool_executor is None:
                     raise RuntimeError("Agent has no tool_executor")
@@ -338,17 +350,21 @@ class SubconsciousLoop:
         memory_context = await self._collect_memory_context()
         contacts_summary = self._collect_contacts_summary()
 
-        tool_manager = getattr(self._agent, "tool_manager", None)
-        tool_names = list(getattr(tool_manager, "_tools", {}) or {})
-        tool_specs = getattr(tool_manager, "cached_tool_specs", None)
         workspace_context = ""
-        workspace_context_fn = getattr(self._agent, "_workspace_context", None)
-        if callable(workspace_context_fn):
-            workspace_context = workspace_context_fn(tool_names)
         skills_catalog = ""
-        skills_catalog_fn = getattr(self._agent, "_skills_catalog_context", None)
-        if callable(skills_catalog_fn):
-            skills_catalog = skills_catalog_fn()
+        tool_specs = []
+        tool_names: list[str] = []
+
+        if not self._pure_thought:
+            tool_manager = getattr(self._agent, "tool_manager", None)
+            tool_names = list(getattr(tool_manager, "_tools", {}) or {})
+            tool_specs = list(getattr(tool_manager, "cached_tool_specs", None) or [])
+            workspace_context_fn = getattr(self._agent, "_workspace_context", None)
+            if callable(workspace_context_fn):
+                workspace_context = workspace_context_fn(tool_names)
+            skills_catalog_fn = getattr(self._agent, "_skills_catalog_context", None)
+            if callable(skills_catalog_fn):
+                skills_catalog = skills_catalog_fn()
 
         instructions = message_handler.build_instruction_messages(
             tool_names=tool_names,
@@ -367,7 +383,7 @@ class SubconsciousLoop:
             contacts_context=contacts_summary,
         )
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
-        return instructions, iteration_messages, input_messages, list(tool_specs or [])
+        return instructions, iteration_messages, input_messages, tool_specs
 
     @staticmethod
     def _parse_subconscious_json(text: str) -> Dict[str, Any]:

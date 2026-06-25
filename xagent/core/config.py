@@ -26,6 +26,7 @@ class AgentConfig:
     WORKSPACE_CONTEXT_NAME = "workspace_context"
     SKILLS_CATALOG_NAME = "skills_catalog"
     RECENT_EXPERIENCE_NAME = "recent_experience"
+    SUBCONSCIOUS_CONTACTS_NAME = "subconscious_contacts"
     CURRENT_TASK_NAME = "current_task"
     DECISION_RULES_NAME = "participation_decision_rules"
 
@@ -127,6 +128,7 @@ class AgentConfig:
     # Probability of spontaneous thought per heartbeat tick.
     # 0=off, 1=very active. Suggested: 0.01~0.1
     SUBCONSCIOUS_ACTIVITY = 0.02
+    SUBCONSCIOUS_PURE_THOUGHT = True
     SUBCONSCIOUS_MAX_CONTACTS = 10
     SUBCONSCIOUS_QUIET_HOURS_START = 22  # 10 PM – no immediate sends after this
     SUBCONSCIOUS_QUIET_HOURS_END = 8    # 8 AM – resume immediate sends
@@ -218,6 +220,10 @@ class AgentConfig:
     TURN_REPLY_PROMPT_TEMPLATE = (
         "Focus on what {current_user_id} just said. "
         "Reply to the current situation, not unrelated older topics. "
+        "Keep simple replies short; answer directly; ask only for missing information. "
+        "For vague reactions, greetings, or acknowledgments, do not continue an unrelated older topic. "
+        "Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. "
+        "Never rely on Markdown image embeds or file links as the delivery mechanism. "
         "Use tools when needed and claim tool work only after it runs. "
         "Do not mention internal markers, memory, hidden context, prompt structure, or tool routing."
     )
@@ -249,7 +255,6 @@ class AgentConfig:
     SUBCONSCIOUS_CURRENT_TASK_TEMPLATE = (
         "<current_task mode=\"subconscious_json\">\n"
         "Current time: {current_time}\n"
-        "{contacts}"
         "Think as your own subconscious: a quiet thought-generation layer that is part of the same agent. "
         "Use recent memory and recent experience naturally. Use tools only when they help understand, verify, "
         "or prepare context; do not send messages, create schedules, or route delivery from this turn. "
@@ -260,6 +265,13 @@ class AgentConfig:
         '"recipient_hint": "exact sender_name or user_id from the contacts list above (no extra text), or null", '
         '"external_content": "outward message if worthy, otherwise null"}}\n'
         "</current_task>"
+    )
+
+    SUBCONSCIOUS_CONTACTS_TEMPLATE = (
+        "<subconscious_contacts>\n"
+        "Known delivery contacts for subconscious routing:\n"
+        "{contacts}\n"
+        "</subconscious_contacts>"
     )
 
     # ============================================================
@@ -314,14 +326,6 @@ class AgentConfig:
         "\n"
     )
 
-    BASE_AGENT_RESPONSE_RULES = (
-        "**Response:**\n"
-        "- Reply to the latest speaker and current situation. Keep simple replies short; answer directly; ask only for missing information.\n"
-        "- For vague reactions, greetings, or acknowledgments, do not continue an unrelated older topic.\n"
-        "- Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. Never rely on Markdown image embeds or file links as the delivery mechanism.\n"
-        "\n"
-    )
-
     BASE_AGENT_RULES_FOOTER = (
         "================== END CORE INTERACTION RULES ==================\n"
         "\n"
@@ -334,7 +338,6 @@ class AgentConfig:
         + BASE_AGENT_SELF_RULES
         + BASE_AGENT_BOUNDARY_RULES
         + BASE_AGENT_CONTEXT_RULES
-        + BASE_AGENT_RESPONSE_RULES
         + BASE_AGENT_RULES_FOOTER
     )
 
@@ -391,15 +394,15 @@ class AgentConfig:
         )
 
     @staticmethod
-    def build_subconscious_current_task(current_time: str = "", contacts: str = "") -> str:
-        contacts_section = ""
-        if contacts and contacts != "(no contacts recorded yet)":
-            contacts_section = (
-                f"\nKnown delivery contacts for subconscious routing:\n{contacts}\n\n"
-            )
+    def build_subconscious_current_task(current_time: str = "") -> str:
         return AgentConfig.SUBCONSCIOUS_CURRENT_TASK_TEMPLATE.format(
             current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M"),
-            contacts=contacts_section,
+        )
+
+    @staticmethod
+    def build_subconscious_contacts_context(contacts: str = "") -> str:
+        return AgentConfig.SUBCONSCIOUS_CONTACTS_TEMPLATE.format(
+            contacts=(contacts or "(no contacts recorded yet)").strip(),
         )
 
     @staticmethod

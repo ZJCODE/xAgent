@@ -134,6 +134,7 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent.max_history = AgentConfig.DEFAULT_MAX_HISTORY
         agent.max_iter = AgentConfig.DEFAULT_MAX_ITER
         agent.max_concurrent_tools = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
+        agent.subconscious_pure_thought = AgentConfig.SUBCONSCIOUS_PURE_THOUGHT
         agent._assistant_sender_id = "agent"
         memory_handler = MagicMock()
         memory_handler.get_recent_context.return_value = "Recent memory content."
@@ -286,6 +287,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             current_task = next(msg for msg in messages if msg.get("name") == AgentConfig.CURRENT_TASK_NAME)
             self.assertIn('mode="subconscious_json"', current_task["content"])
             self.assertIn("Return JSON only", current_task["content"])
+            self.assertNotIn("Known delivery contacts", current_task["content"])
 
     def test_recent_messages_empty_uses_named_recent_experience_layer(self):
         """When there are no recent messages, the named layer remains with empty context."""
@@ -303,9 +305,41 @@ class SubconsciousLoopTests(unittest.TestCase):
             recent_memory = next(msg for msg in messages if msg.get("name") == AgentConfig.RECENT_MEMORY_NAME)
             self.assertIn("Recent memory content", recent_memory["content"])
 
-    def test_core_rules_and_identity_in_instructions(self):
-        """Verify the same static instruction layers as normal turns are passed."""
+    def test_default_pure_thought_omits_tools_and_skills(self):
+        """Default subconscious turns keep identity but omit tool/skill capability layers."""
         agent = self._make_agent_mock()
+        agent.system_prompt = "I am a test identity."
+        agent.message_handler.system_prompt = agent.system_prompt
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            instructions = agent.model_client.calls[0]["instructions"]
+
+            names = {i.get("name") for i in instructions}
+            self.assertIn(AgentConfig.CORE_INTERACTION_RULES_NAME, names)
+            self.assertIn(AgentConfig.IDENTITY_CONTEXT_NAME, names)
+            self.assertNotIn(AgentConfig.TOOL_POLICY_NAME, names)
+            self.assertNotIn(AgentConfig.WORKSPACE_CONTEXT_NAME, names)
+            self.assertNotIn(AgentConfig.SKILLS_CATALOG_NAME, names)
+
+            contents = [i["content"] for i in instructions]
+            self.assertTrue(any("Context and Attribution" in c for c in contents))
+            self.assertFalse(any("All available tools are defined" in c for c in contents))
+            self.assertEqual(agent.model_client.calls[0]["tool_specs"], [])
+            agent._workspace_context.assert_not_called()
+            agent._skills_catalog_context.assert_not_called()
+
+            identities = [i for i in instructions if i.get("name") == "identity_context"]
+            self.assertEqual(len(identities), 1)
+            self.assertIn("I am a test identity.", identities[0]["content"])
+
+    def test_non_pure_thought_includes_tool_and_skill_layers(self):
+        """Disabling pure thought preserves the previous tool/skill-capable behavior."""
+        agent = self._make_agent_mock()
+        agent.subconscious_pure_thought = False
         agent.system_prompt = "I am a test identity."
         agent.message_handler.system_prompt = agent.system_prompt
 
@@ -322,19 +356,17 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn(AgentConfig.IDENTITY_CONTEXT_NAME, names)
             self.assertIn(AgentConfig.WORKSPACE_CONTEXT_NAME, names)
             self.assertIn(AgentConfig.SKILLS_CATALOG_NAME, names)
-
-            contents = [i["content"] for i in instructions]
-            self.assertTrue(any("Context and Attribution" in c for c in contents))
-            self.assertTrue(any("Deliver user-visible images" in c for c in contents))
-            self.assertTrue(any("All available tools are defined" in c for c in contents))
-
-            identities = [i for i in instructions if i.get("name") == "identity_context"]
-            self.assertEqual(len(identities), 1)
-            self.assertIn("I am a test identity.", identities[0]["content"])
+            self.assertEqual(
+                agent.model_client.calls[0]["tool_specs"],
+                [{"type": "function", "function": {"name": "web_search"}}],
+            )
+            agent._workspace_context.assert_called_once()
+            agent._skills_catalog_context.assert_called_once()
 
     def test_tool_call_loop_continues_until_json(self):
         """Subconscious turns can use tools before returning final JSON."""
         agent = self._make_agent_mock()
+        agent.subconscious_pure_thought = False
         tool_call = ChatToolCall(call_id="call_1", name="web_search", arguments='{"query":"x"}')
         self._set_model_events(agent, [
             [ModelStreamEvent(type="tool_calls", tool_calls=[tool_call])],
@@ -357,9 +389,54 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.record_internal_thought.assert_called_once()
             self.assertEqual(agent.record_internal_thought.call_args[0][0], "Tool result changed the thought.")
 
+    def test_pure_thought_tool_call_without_text_is_not_executed(self):
+        """Pure thought mode rejects tool-only model turns without executing tools."""
+        agent = self._make_agent_mock()
+        tool_call = ChatToolCall(call_id="call_1", name="web_search", arguments='{"query":"x"}')
+        self._set_model_events(agent, [
+            [ModelStreamEvent(type="tool_calls", tool_calls=[tool_call])],
+        ])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
+            agent.tool_executor.handle_tool_calls.assert_not_awaited()
+            self.assertEqual(len(agent.model_client.calls), 1)
+            agent.record_internal_thought.assert_not_called()
+
+    def test_pure_thought_ignores_tool_call_when_text_is_present(self):
+        """Pure thought mode parses returned JSON text and ignores stray tool calls."""
+        agent = self._make_agent_mock()
+        tool_call = ChatToolCall(call_id="call_1", name="web_search", arguments='{"query":"x"}')
+        self._set_model_events(agent, [
+            [
+                ModelStreamEvent(type="tool_calls", tool_calls=[tool_call]),
+                self._json_event({
+                    "internal_content": "Text still wins.",
+                    "worthy": False,
+                    "recipient_hint": None,
+                    "external_content": None,
+                }),
+            ],
+        ])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
+            agent.tool_executor.handle_tool_calls.assert_not_awaited()
+            agent.record_internal_thought.assert_called_once()
+            self.assertEqual(agent.record_internal_thought.call_args[0][0], "Text still wins.")
+
     def test_non_json_after_tool_loop_falls_back_to_internal_thought(self):
         """Invalid final JSON does not trigger delivery after tool use."""
         agent = self._make_agent_mock()
+        agent.subconscious_pure_thought = False
         tool_call = ChatToolCall(call_id="call_1", name="web_search", arguments='{"query":"x"}')
         self._set_model_events(agent, [
             [ModelStreamEvent(type="tool_calls", tool_calls=[tool_call])],

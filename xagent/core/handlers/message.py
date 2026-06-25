@@ -332,9 +332,14 @@ class MessageHandler:
             or datetime.now().strftime("%Y-%m-%d %H:%M")
         )
         if task_mode == "subconscious_json":
+            if contacts_context.strip():
+                context_messages.append({
+                    "role": RoleType.USER.value,
+                    "name": AgentConfig.SUBCONSCIOUS_CONTACTS_NAME,
+                    "content": AgentConfig.build_subconscious_contacts_context(contacts_context),
+                })
             current_task_text = AgentConfig.build_subconscious_current_task(
                 current_time=resolved_current_time,
-                contacts=contacts_context,
             )
         else:
             current_task_text = AgentConfig.build_current_task(

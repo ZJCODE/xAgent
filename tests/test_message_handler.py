@@ -236,6 +236,42 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Current speaker: Joy", context_messages[2]["content"])
         self.assertIn("Current time: 2026-05-14 09:30", context_messages[2]["content"])
         self.assertIn("what Joy just said", context_messages[2]["content"])
+        self.assertIn("Keep simple replies short", context_messages[2]["content"])
+        self.assertIn("Never rely on Markdown image embeds", context_messages[2]["content"])
+
+    def test_subconscious_contacts_are_separate_context_layer(self):
+        messages = [
+            Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
+        ]
+        contacts = (
+            "Contacts (use exact name or user_id for recipient_hint):\n"
+            "- name: Telos | channel: feishu | last_seen: 2026-06-25 17:48:26 | interactions: 60"
+        )
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="agent",
+            current_time="2026-06-25 18:00",
+            task_mode="subconscious_json",
+            contacts_context=contacts,
+        )
+
+        self.assertEqual(
+            [message["name"] for message in context_messages],
+            [
+                AgentConfig.RECENT_EXPERIENCE_NAME,
+                AgentConfig.SUBCONSCIOUS_CONTACTS_NAME,
+                AgentConfig.CURRENT_TASK_NAME,
+            ],
+        )
+        contacts_message = context_messages[1]
+        current_task = context_messages[2]
+        self.assertIn("<subconscious_contacts>", contacts_message["content"])
+        self.assertIn("Known delivery contacts", contacts_message["content"])
+        self.assertIn("Telos", contacts_message["content"])
+        self.assertNotIn("Known delivery contacts", current_task["content"])
+        self.assertNotIn("Telos", current_task["content"])
+        self.assertIn('mode="subconscious_json"', current_task["content"])
 
     def test_workspace_context_is_static_instruction_layer(self):
         handler = MessageHandler(

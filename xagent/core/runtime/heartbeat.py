@@ -141,6 +141,7 @@ def create_runtime_heartbeat(
             agent,
             workspace=workspace,
             probability=getattr(agent, "subconscious_activity", None),
+            pure_thought=getattr(agent, "subconscious_pure_thought", None),
             delivery_sink=subconscious_delivery_sink,
             logger_=logger_,
         )
