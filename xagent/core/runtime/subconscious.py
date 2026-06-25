@@ -337,11 +337,6 @@ class SubconsciousLoop:
         )
         memory_context = await self._collect_memory_context()
         contacts_summary = self._collect_contacts_summary()
-        if contacts_summary and contacts_summary != "(no contacts recorded yet)":
-            memory_context = (
-                f"{memory_context}\n\n"
-                f"Known delivery contacts for subconscious routing:\n{contacts_summary}"
-            ).strip()
 
         tool_manager = getattr(self._agent, "tool_manager", None)
         tool_names = list(getattr(tool_manager, "_tools", {}) or {})
@@ -369,6 +364,7 @@ class SubconsciousLoop:
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
             task_mode="subconscious_json",
+            contacts_context=contacts_summary,
         )
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
         return instructions, iteration_messages, input_messages, list(tool_specs or [])

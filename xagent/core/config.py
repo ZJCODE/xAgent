@@ -249,7 +249,7 @@ class AgentConfig:
     SUBCONSCIOUS_CURRENT_TASK_TEMPLATE = (
         "<current_task mode=\"subconscious_json\">\n"
         "Current time: {current_time}\n"
-        "\n"
+        "{contacts}"
         "Think as your own subconscious: a quiet thought-generation layer that is part of the same agent. "
         "Use recent memory and recent experience naturally. Use tools only when they help understand, verify, "
         "or prepare context; do not send messages, create schedules, or route delivery from this turn. "
@@ -391,9 +391,15 @@ class AgentConfig:
         )
 
     @staticmethod
-    def build_subconscious_current_task(current_time: str = "") -> str:
+    def build_subconscious_current_task(current_time: str = "", contacts: str = "") -> str:
+        contacts_section = ""
+        if contacts and contacts != "(no contacts recorded yet)":
+            contacts_section = (
+                f"\nKnown delivery contacts for subconscious routing:\n{contacts}\n\n"
+            )
         return AgentConfig.SUBCONSCIOUS_CURRENT_TASK_TEMPLATE.format(
-            current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M")
+            current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M"),
+            contacts=contacts_section,
         )
 
     @staticmethod

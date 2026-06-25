@@ -282,6 +282,7 @@ class MessageHandler:
         current_message: Optional[Message] = None,
         channel_instructions: str = "",
         task_mode: str = "reply",
+        contacts_context: str = "",
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -333,6 +334,7 @@ class MessageHandler:
         if task_mode == "subconscious_json":
             current_task_text = AgentConfig.build_subconscious_current_task(
                 current_time=resolved_current_time,
+                contacts=contacts_context,
             )
         else:
             current_task_text = AgentConfig.build_current_task(
