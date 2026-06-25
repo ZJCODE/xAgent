@@ -177,6 +177,14 @@ class MemoryHandler:
             await self._commit_processed_message_id(end_inclusive)
             return False
 
+        # Pure internal-monologue batches should not trigger a standalone
+        # diary write — they can piggyback on user-interaction batches, but
+        # writing a diary entry solely for subconscious thoughts fragments
+        # the journal and wastes LLM calls.
+        if self._is_all_internal_monologue(new_records):
+            await self._commit_processed_message_id(end_inclusive)
+            return False
+
         batches = self._split_records_for_source_budget(new_records)
         if not batches:
             return False
@@ -228,6 +236,14 @@ class MemoryHandler:
         event_type = str(metadata.get("event_type", "observation")).lower()
         routine_types = {"heartbeat", "ping", "sensor_tick", "presence_tick"}
         return event_type not in routine_types and bool(message.content.strip())
+
+    @staticmethod
+    def _is_all_internal_monologue(records: List[dict]) -> bool:
+        """Return True if every record is an internal_monologue context event."""
+        return all(
+            r.get("metadata", {}).get("event_type") == "internal_monologue"
+            for r in records
+        )
 
     async def _write_journal_entry(
         self,
