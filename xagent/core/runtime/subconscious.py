@@ -520,7 +520,16 @@ class SubconsciousLoop:
         if hint:
             for c in contacts:
                 name = str(c.target.get("sender_name") or "").lower()
-                if hint in name or hint in c.user_id.lower():
+                user_id_lower = c.user_id.lower()
+                # Match if the hint contains the name / user_id, OR the
+                # name / user_id contains the hint.  The hint may carry
+                # channel annotations such as "Telos (feishu)".
+                if (
+                    hint in name
+                    or hint in user_id_lower
+                    or name in hint
+                    or user_id_lower in hint
+                ):
                     return c
         # Default: most recently seen contact
         return max(contacts, key=lambda c: c.last_seen)
