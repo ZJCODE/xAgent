@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
 import random
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from ..config import AgentConfig
 from .scheduler import _fsync_directory
@@ -32,6 +32,17 @@ class ContactEntry:
     target: Dict[str, Any]
     last_seen: str  # ISO-format timestamp
     interaction_count: int = 0
+
+
+@dataclass(frozen=True)
+class SubconsciousDelivery:
+    """A direct outbound message chosen by the subconscious loop."""
+
+    content: str
+    recipient: ContactEntry
+    internal_content: str
+    reasoning: str
+    created_at: datetime
 
 
 def load_contacts(contacts_file: Path) -> List[ContactEntry]:
@@ -135,21 +146,14 @@ def resolve_contacts_path(workspace: Path) -> Path:
     return workspace / CONTACTS_FILENAME
 
 
-def resolve_subconscious_tasks_dir(workspace: Path) -> Path:
-    """Resolve the subconscious tasks directory inside the workspace."""
-    return workspace / AgentConfig.SUBCONSCIOUS_TASKS_DIRNAME
-
-
 class SubconsciousLoop:
     """Periodic subconscious thought loop for the agent.
 
     Each heartbeat tick has a small probability of triggering an
     subconscious event.  The agent generates a spontaneous thought and
-    decides whether it is worth sharing.  Thoughts that are not shared
-    are recorded as internal monologue (context events with the
-    ``[internal]`` marker).  Thoughts worth sharing are enqueued as
-    scheduled tasks in a dedicated ``subconscious_tasks/`` directory,
-    isolated from user-created tasks.
+    decides whether it is worth sharing. Thoughts that are not shared
+    are recorded as internal monologue. Thoughts worth sharing are handed
+    to the runtime's direct delivery sink.
     """
 
     def __init__(
@@ -158,12 +162,13 @@ class SubconsciousLoop:
         *,
         workspace: Path,
         probability: Optional[float] = None,
+        delivery_sink: Optional[Callable[[SubconsciousDelivery], Awaitable[None] | None]] = None,
         logger_: Optional[logging.Logger] = None,
     ) -> None:
         self._agent = agent
         self._workspace = Path(workspace).expanduser().resolve()
         self._contacts_file = resolve_contacts_path(self._workspace)
-        self._subconscious_tasks_dir = resolve_subconscious_tasks_dir(self._workspace)
+        self._delivery_sink = delivery_sink
         self._logger = logger_ or logger
         self._enabled = AgentConfig.SUBCONSCIOUS_ENABLED
         self._probability = (
@@ -179,10 +184,6 @@ class SubconsciousLoop:
     @property
     def contacts_file(self) -> Path:
         return self._contacts_file
-
-    @property
-    def subconscious_tasks_dir(self) -> Path:
-        return self._subconscious_tasks_dir
 
     def record_interaction(
         self,
@@ -265,61 +266,116 @@ class SubconsciousLoop:
     # ------------------------------------------------------------------
 
     async def _generate_subconscious_thought(self) -> Dict[str, Any]:
-        """Call the LLM to generate a subconscious thought."""
-        recent_messages = await self._collect_recent_messages()
-        memory_context = await self._collect_memory_context()
-        contacts_summary = self._collect_contacts_summary()
-
-        parts: List[str] = []
-        if recent_messages:
-            parts.append(f"**Recent experience:**\n{recent_messages}")
-        parts.append(f"**Recent memories:**\n{memory_context}")
-        parts.append(f"**People you interact with:**\n{contacts_summary}")
-        parts.append("Generate a spontaneous thought now.")
-        prompt = "\n\n".join(parts)
-
-        core_rules = (
-            "\n"
-            + AgentConfig.BASE_AGENT_RULES_HEADER
-            + AgentConfig.BASE_AGENT_CORE_IDENTITY
-            + AgentConfig.BASE_AGENT_SELF_RULES
-            + AgentConfig.BASE_AGENT_BOUNDARY_RULES
-            + AgentConfig.BASE_AGENT_CONTEXT_RULES
-            + AgentConfig.BASE_AGENT_RULES_FOOTER
-        )
-        instructions = [
-            {"role": "system", "content": AgentConfig.SUBCONSCIOUS_SYSTEM_PROMPT},
-            {"role": "system", "content": core_rules},
-        ]
-        if self._agent.system_prompt.strip():
-            instructions.append({
-                "role": "system",
-                "name": AgentConfig.IDENTITY_CONTEXT_NAME,
-                "content": AgentConfig.build_identity_context(self._agent.system_prompt),
-            })
-
-        input_messages = [{
-            "role": "user",
-            "content": prompt,
-        }]
+        """Run a subconscious agent turn and parse the final JSON result."""
+        instructions, iteration_messages, input_messages, tool_specs = await self._build_subconscious_turn_context()
 
         model_client = getattr(self._agent, "model_client", None)
         if model_client is None:
             raise RuntimeError("Agent has no model_client")
+        if not callable(getattr(model_client, "model_turn_events", None)):
+            raise RuntimeError("Agent model_client does not support model_turn_events()")
 
-        from ..config import ReplyType
-
-        reply_type, payload = await model_client.call(
-            messages=input_messages,
-            tool_specs=None,
-            instructions=instructions,
-            stream=False,
+        max_iter = int(getattr(self._agent, "max_iter", AgentConfig.DEFAULT_MAX_ITER) or AgentConfig.DEFAULT_MAX_ITER)
+        max_concurrent_tools = int(
+            getattr(
+                self._agent,
+                "max_concurrent_tools",
+                AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+            )
+            or AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
         )
-        if reply_type != ReplyType.SIMPLE_REPLY:
-            raise RuntimeError(f"Subconscious call returned non-text: {reply_type}")
+        tool_executor = getattr(self._agent, "tool_executor", None)
+        msg_handler = getattr(self._agent, "message_handler", None)
 
-        text = str(payload).strip()
-        return self._parse_subconscious_json(text)
+        for _ in range(max_iter):
+            text_parts: List[str] = []
+            tool_calls = []
+            async for model_event in model_client.model_turn_events(
+                messages=input_messages,
+                tool_specs=tool_specs,
+                instructions=instructions,
+                stream=False,
+            ):
+                if model_event.type in {"delta", "text"} and model_event.delta:
+                    text_parts.append(model_event.delta)
+                    continue
+                if model_event.type == "tool_calls":
+                    tool_calls = model_event.tool_calls
+                    continue
+                if model_event.type == "error":
+                    message = getattr(getattr(model_event, "error", None), "message", "")
+                    raise RuntimeError(f"Subconscious model error: {message or model_event.error}")
+
+            text = "".join(text_parts).strip()
+            if tool_calls:
+                if tool_executor is None:
+                    raise RuntimeError("Agent has no tool_executor")
+                await tool_executor.handle_tool_calls(
+                    tool_calls,
+                    iteration_messages,
+                    max_concurrent_tools,
+                )
+                if msg_handler is not None and callable(getattr(msg_handler, "sanitize_input_messages", None)):
+                    input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+                else:
+                    from ..handlers.message import MessageHandler
+
+                    input_messages = MessageHandler.sanitize_input_messages(list(iteration_messages))
+                continue
+
+            if text:
+                return self._parse_subconscious_json(text)
+
+            raise RuntimeError("Subconscious model turn ended without text or tool calls")
+
+        raise RuntimeError(f"Subconscious thought failed after {max_iter} attempts")
+
+    async def _build_subconscious_turn_context(self) -> tuple[list[dict], list[dict], list[dict], list]:
+        """Build model input using the same layers as a normal agent turn."""
+        message_handler = getattr(self._agent, "message_handler", None)
+        if message_handler is None:
+            raise RuntimeError("Agent has no message_handler")
+
+        recent_messages = await message_handler.get_recent_messages(
+            max_history=getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY)
+        )
+        memory_context = await self._collect_memory_context()
+        contacts_summary = self._collect_contacts_summary()
+        if contacts_summary and contacts_summary != "(no contacts recorded yet)":
+            memory_context = (
+                f"{memory_context}\n\n"
+                f"Known delivery contacts for subconscious routing:\n{contacts_summary}"
+            ).strip()
+
+        tool_manager = getattr(self._agent, "tool_manager", None)
+        tool_names = list(getattr(tool_manager, "_tools", {}) or {})
+        tool_specs = getattr(tool_manager, "cached_tool_specs", None)
+        workspace_context = ""
+        workspace_context_fn = getattr(self._agent, "_workspace_context", None)
+        if callable(workspace_context_fn):
+            workspace_context = workspace_context_fn(tool_names)
+        skills_catalog = ""
+        skills_catalog_fn = getattr(self._agent, "_skills_catalog_context", None)
+        if callable(skills_catalog_fn):
+            skills_catalog = skills_catalog_fn()
+
+        instructions = message_handler.build_instruction_messages(
+            tool_names=tool_names,
+            skills_catalog=skills_catalog,
+            supports_vision=bool(getattr(self._agent, "supports_vision", True)),
+            workspace_context=workspace_context,
+        )
+        iteration_messages = message_handler.build_turn_context_messages(
+            recent_messages,
+            current_user_id=getattr(self._agent, "_assistant_sender_id", "agent"),
+            memory_context=memory_context,
+            max_messages=getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY),
+            include_images=False,
+            workspace_dir=getattr(self._agent, "workspace_dir", None),
+            task_mode="subconscious_json",
+        )
+        input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
+        return instructions, iteration_messages, input_messages, list(tool_specs or [])
 
     @staticmethod
     def _parse_subconscious_json(text: str) -> Dict[str, Any]:
@@ -361,7 +417,9 @@ class SubconsciousLoop:
         if memory_handler is None:
             return "(no memory available)"
         try:
-            ctx = await memory_handler.get_recent_context()
+            ctx = memory_handler.get_recent_context()
+            if inspect.isawaitable(ctx):
+                ctx = await ctx
             return ctx.strip() if ctx else "(no recent memory)"
         except Exception:
             self._logger.warning("Failed to collect memory context", exc_info=True)
@@ -377,27 +435,6 @@ class SubconsciousLoop:
             name = c.target.get("sender_name") or c.user_id or "unknown"
             lines.append(f"- {name} via {c.channel} (last seen {c.last_seen}, {c.interaction_count} interactions)")
         return "\n".join(lines)
-
-    async def _collect_recent_messages(self) -> str:
-        """Collect recent conversation messages for subconscious context."""
-        message_handler = getattr(self._agent, "message_handler", None)
-        if message_handler is None:
-            return ""
-        try:
-            from ..handlers.message import MessageHandler
-
-            limit = AgentConfig.SUBCONSCIOUS_MAX_RECENT_MESSAGES
-            messages = await message_handler.get_recent_messages(max_history=limit)
-            if not messages:
-                return ""
-            lines: List[str] = []
-            for msg in messages:
-                header = MessageHandler._format_transcript_message_header(msg)
-                lines.append(f"{header}\n{msg.content.strip()}")
-            return "\n\n".join(lines)
-        except Exception:
-            self._logger.warning("Failed to collect recent messages", exc_info=True)
-            return ""
 
     async def _write_internal_thought(self, content: str, reasoning: str) -> None:
         """Record the thought as an internal monologue context event."""
@@ -429,7 +466,7 @@ class SubconsciousLoop:
         reasoning: str,
         recipient_hint: Any,
     ) -> None:
-        """Route a worthy thought: send now, or write as internal thought.
+        """Route a worthy thought: deliver now, or write as internal thought.
 
         During quiet hours (22:00 – 8:00) the thought is recorded as an
         internal monologue instead of being delivered — the agent's sleep
@@ -454,26 +491,33 @@ class SubconsciousLoop:
                 await self._write_internal_thought(internal_content, reasoning)
             return
 
-        self._subconscious_tasks_dir.mkdir(parents=True, exist_ok=True)
-        from .tasks import enqueue_scheduled_task
+        if self._delivery_sink is None:
+            self._logger.info("No subconscious delivery sink – recording as internal thought")
+            if internal_content:
+                await self._write_internal_thought(internal_content, reasoning)
+            return
 
-        enqueue_scheduled_task(
-            task_type="message",
+        delivery = SubconsciousDelivery(
             content=external_content,
-            run_at=now,
-            tasks_dir=self._subconscious_tasks_dir,
-            channel=recipient.channel,
-            target=recipient.target,
-            user_id=recipient.user_id,
-            title=f"Subconscious: {external_content[:60]}",
-            source={"source": SUBCONSCIOUS_SOURCE, "reasoning": reasoning},
+            recipient=recipient,
+            internal_content=internal_content,
+            reasoning=reasoning,
+            created_at=now,
         )
-        self._logger.info(
-            "Subconscious thought enqueued: channel=%s user_id=%s run_at=%s",
-            recipient.channel,
-            recipient.user_id,
-            now.isoformat(sep=" "),
-        )
+        try:
+            result = self._delivery_sink(delivery)
+            if inspect.isawaitable(result):
+                await result
+            self._logger.info(
+                "Subconscious thought delivered: channel=%s user_id=%s created_at=%s",
+                recipient.channel,
+                recipient.user_id,
+                now.isoformat(sep=" "),
+            )
+        except Exception:
+            self._logger.warning("Subconscious delivery failed; recording internal thought", exc_info=True)
+            if internal_content:
+                await self._write_internal_thought(internal_content, reasoning)
 
     @staticmethod
     def _pick_recipient(

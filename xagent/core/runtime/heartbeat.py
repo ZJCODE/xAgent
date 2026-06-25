@@ -125,6 +125,7 @@ def create_runtime_heartbeat(
     runtime_config: Optional[Mapping[str, Any]],
     *,
     logger_: Optional[logging.Logger] = None,
+    subconscious_delivery_sink: Optional[Callable[..., Any]] = None,
 ) -> Optional[RuntimeHeartbeat]:
     config = RuntimeHeartbeatConfig.from_mapping(runtime_config)
     if not config.enabled:
@@ -140,6 +141,7 @@ def create_runtime_heartbeat(
             agent,
             workspace=workspace,
             probability=getattr(agent, "subconscious_activity", None),
+            delivery_sink=subconscious_delivery_sink,
             logger_=logger_,
         )
 

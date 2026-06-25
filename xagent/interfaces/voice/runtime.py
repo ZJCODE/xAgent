@@ -16,8 +16,8 @@ from xagent.core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     ScheduledTaskRecord,
+    SubconsciousDelivery,
     resolve_contacts_path,
-    resolve_subconscious_tasks_dir,
     scheduled_delivery_context,
     upsert_contact,
 )
@@ -112,7 +112,6 @@ class VoiceRuntime:
         self.stop_event = threading.Event()
         self._playback_lock = asyncio.Lock()
         self.task_scheduler: AsyncTaskScheduler | None = None
-        self._subconscious_scheduler: AsyncTaskScheduler | None = None
         self._contacts_file: Optional[Path] = None
         if self.options.tasks_dir is not None:
             self.task_scheduler = AsyncTaskScheduler(
@@ -121,13 +120,7 @@ class VoiceRuntime:
                 dispatch=self._dispatch_scheduled_task,
             )
             runtime_root = Path(self.options.tasks_dir).parent
-            self._subconscious_tasks_dir = resolve_subconscious_tasks_dir(runtime_root)
             self._contacts_file = resolve_contacts_path(runtime_root)
-            self._subconscious_scheduler = AsyncTaskScheduler(
-                self._subconscious_tasks_dir,
-                can_handle=self._can_handle_scheduled_task,
-                dispatch=self._dispatch_scheduled_task,
-            )
         self._wake_active = False
         self._wake_last_activity_at = 0.0
 
@@ -147,8 +140,6 @@ class VoiceRuntime:
         try:
             if self.task_scheduler is not None:
                 await self.task_scheduler.start()
-            if self._subconscious_scheduler is not None:
-                await self._subconscious_scheduler.start()
             next_utterance_task = self._create_next_utterance_task(utterances)
             while not self.stop_event.is_set():
                 utterance_result = await self._await_next_utterance(next_utterance_task)
@@ -173,8 +164,6 @@ class VoiceRuntime:
                 next_utterance_task.cancel()
             if self.task_scheduler is not None:
                 await self.task_scheduler.stop()
-            if self._subconscious_scheduler is not None:
-                await self._subconscious_scheduler.stop()
 
     def _ready_message(self) -> str:
         if not self.config.wake.enabled:
@@ -542,13 +531,21 @@ class VoiceRuntime:
             playback_stop_event.set()
             self.pause_event.clear()
 
+    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        text = str(delivery.content or "").strip()
+        if not text:
+            raise ValueError("subconscious voice delivery produced no content")
+        self.output("\nSubconscious message")
+        async with self._playback_lock:
+            await self._play_scheduled_text(text)
+
     async def _scheduled_task_text(self, task: ScheduledTaskRecord) -> str:
         if task.task_type == "message":
             return task.content.strip()
         if task.task_type != "agent":
             raise ValueError(f"unsupported scheduled voice task type: {task.task_type}")
 
-        prompt = f"Scheduled task is due now. Complete it and reply with the message to deliver:\n\n{task.content}"
+        prompt = AgentConfig.scheduled_agent_prompt(task.content)
         with scheduled_delivery_context(self._delivery_context(task=task)):
             if hasattr(self.agent, "chat_events"):
                 parts: list[str] = []

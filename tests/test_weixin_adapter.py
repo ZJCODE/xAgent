@@ -1,10 +1,11 @@
 import asyncio
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from xagent.core.runtime import enqueue_scheduled_task, list_task_records
+from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
 from xagent.integrations.weixin.adapter import WeixinAdapter
 from xagent.integrations.weixin.config import WeixinAdapterConfig
 from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
@@ -185,6 +186,34 @@ class WeixinAdapterTests(unittest.TestCase):
         self.assertEqual(sent_text[0]["to_user_id"], "owner@im.wechat")
         self.assertEqual(sent_text[0]["context_token"], "ctx-owner")
         self.assertEqual(sent_text[0]["text"], "scheduled hello")
+
+    def test_deliver_subconscious_message_uses_cached_context(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                adapter, _agent, client, _state = self._adapter(tmpdir)
+                adapter._context_tokens["owner@im.wechat"] = "ctx-owner"
+                delivery = SubconsciousDelivery(
+                    content="subconscious hello",
+                    recipient=ContactEntry(
+                        channel="weixin",
+                        user_id="owner@im.wechat",
+                        target={"user_id": "owner@im.wechat"},
+                        last_seen="2026-06-25 09:00:00",
+                    ),
+                    internal_content="inner",
+                    reasoning="worth sharing",
+                    created_at=datetime(2026, 6, 25, 9, 0, 0),
+                )
+
+                await adapter.deliver_subconscious_message(delivery)
+                return client.sent_text
+
+        sent_text = asyncio.run(run_test())
+
+        self.assertEqual(sent_text[0]["to_user_id"], "owner@im.wechat")
+        self.assertEqual(sent_text[0]["context_token"], "ctx-owner")
+        self.assertEqual(sent_text[0]["text"], "subconscious hello")
+        self.assertTrue(sent_text[0]["client_id"])
 
 
 if __name__ == "__main__":

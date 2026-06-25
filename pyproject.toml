@@ -38,6 +38,7 @@ dependencies = [
     "trafilatura>=2.0.0",
     
     # Utilities
+    "lxml[html-clean]>=5.0.0",
     "lark-oapi>=1.5.5",
     "qrcode[pil]>=7.4.2",
     "pillow>=10.0.0",

@@ -36,10 +36,10 @@ from ...core.config import AgentConfig
 from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
+    SubconsciousDelivery,
     create_runtime_heartbeat,
     list_active_task_views,
     resolve_contacts_path,
-    resolve_subconscious_tasks_dir,
     scheduled_delivery_context,
     upsert_contact,
 )
@@ -121,8 +121,6 @@ class AgentHTTPServer(BaseAgentRunner):
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._subconscious_tasks_dir = resolve_subconscious_tasks_dir(self.workspace)
-        self._subconscious_scheduler: Optional[AsyncTaskScheduler] = None
         self._contacts_file = resolve_contacts_path(self.workspace)
         self._task_subscribers: dict[str, set[WebSocket]] = {}
         self._task_subscribers_lock = asyncio.Lock()
@@ -464,6 +462,58 @@ class AgentHTTPServer(BaseAgentRunner):
                     if not registered:
                         self._task_subscribers.pop(user_id, None)
 
+    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        target = delivery.recipient.target
+        user_id = str(target.get("user_id") or delivery.recipient.user_id or "").strip()
+        if not user_id:
+            raise ValueError("subconscious delivery is missing user_id")
+        message_handler = getattr(self.agent, "message_handler", None)
+        store_model_reply = getattr(message_handler, "store_model_reply", None)
+        stored_message = None
+        if callable(store_model_reply):
+            stored_message = await store_model_reply(
+                delivery.content,
+                getattr(self.agent, "_assistant_sender_id", "agent"),
+                metadata={
+                    "subconscious": {
+                        "source": "subconscious",
+                        "reasoning": delivery.reasoning,
+                        "created_at": delivery.created_at.isoformat(sep=" "),
+                        "recipient": {
+                            "channel": delivery.recipient.channel,
+                            "user_id": delivery.recipient.user_id,
+                        },
+                    }
+                },
+            )
+        payload: Dict[str, Any] = {
+            "type": "subconscious_message",
+            "content": delivery.content,
+            "subconscious": {
+                "reasoning": delivery.reasoning,
+                "created_at": delivery.created_at.isoformat(sep=" "),
+            },
+        }
+        if stored_message is not None:
+            payload["message"] = message_item(stored_message)
+
+        async with self._task_subscribers_lock:
+            subscribers = list(self._task_subscribers.get(user_id, set()))
+        stale: list[WebSocket] = []
+        for websocket in subscribers:
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                stale.append(websocket)
+        if stale:
+            async with self._task_subscribers_lock:
+                registered = self._task_subscribers.get(user_id)
+                if registered is not None:
+                    for websocket in stale:
+                        registered.discard(websocket)
+                    if not registered:
+                        self._task_subscribers.pop(user_id, None)
+
     async def _register_task_subscriber(self, user_id: str, websocket: WebSocket) -> None:
         async with self._task_subscribers_lock:
             self._task_subscribers.setdefault(user_id, set()).add(websocket)
@@ -686,15 +736,10 @@ class AgentHTTPServer(BaseAgentRunner):
             self.agent,
             self.config.get("runtime") if isinstance(self.config, dict) else None,
             logger_=self.logger,
+            subconscious_delivery_sink=self.deliver_subconscious_message,
         )
         task_scheduler = AsyncTaskScheduler(
             self.tasks_dir,
-            can_handle=self._can_handle_scheduled_task,
-            dispatch=self._dispatch_scheduled_task,
-            logger_=self.logger,
-        )
-        subconscious_scheduler = AsyncTaskScheduler(
-            self._subconscious_tasks_dir,
             can_handle=self._can_handle_scheduled_task,
             dispatch=self._dispatch_scheduled_task,
             logger_=self.logger,
@@ -709,17 +754,11 @@ class AgentHTTPServer(BaseAgentRunner):
             self._task_scheduler = task_scheduler
             await task_scheduler.start()
             self.logger.info("Scheduled task runtime started: tasks=%s", self.tasks_dir)
-            self._subconscious_scheduler = subconscious_scheduler
-            await subconscious_scheduler.start()
-            self.logger.info("Subconscious task scheduler started: dir=%s", self._subconscious_tasks_dir)
             yield
         finally:
             await task_scheduler.stop()
             self._task_scheduler = None
             self.logger.info("Scheduled task runtime stopped")
-            await subconscious_scheduler.stop()
-            self._subconscious_scheduler = None
-            self.logger.info("Subconscious task scheduler stopped")
             if heartbeat is not None:
                 await heartbeat.stop()
                 self.logger.info("Runtime heartbeat stopped")

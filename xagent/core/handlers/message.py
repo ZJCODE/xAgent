@@ -262,6 +262,7 @@ class MessageHandler:
         workspace_dir: Optional[Union[str, Path]] = None,
         current_message: Optional[Message] = None,
         channel_instructions: str = "",
+        task_mode: str = "reply",
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -305,15 +306,21 @@ class MessageHandler:
             ),
         })
 
-        current_task_text = AgentConfig.build_current_task(
-            current_user_id=current_user_id,
-            current_time=(
-                current_time
-                or current_date
-                or datetime.now().strftime("%Y-%m-%d %H:%M")
-            ),
-            channel_instructions=channel_instructions,
+        resolved_current_time = (
+            current_time
+            or current_date
+            or datetime.now().strftime("%Y-%m-%d %H:%M")
         )
+        if task_mode == "subconscious_json":
+            current_task_text = AgentConfig.build_subconscious_current_task(
+                current_time=resolved_current_time,
+            )
+        else:
+            current_task_text = AgentConfig.build_current_task(
+                current_user_id=current_user_id,
+                current_time=resolved_current_time,
+                channel_instructions=channel_instructions,
+            )
         current_task_message = {
             "role": RoleType.USER.value,
             "name": AgentConfig.CURRENT_TASK_NAME,

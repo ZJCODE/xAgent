@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from enum import Enum
 
 # Configure logging
@@ -126,9 +127,7 @@ class AgentConfig:
     # Probability of spontaneous thought per heartbeat tick.
     # 0=off, 1=very active. Suggested: 0.01~0.1
     SUBCONSCIOUS_ACTIVITY = 0.02
-    SUBCONSCIOUS_TASKS_DIRNAME = "subconscious_tasks"
     SUBCONSCIOUS_MAX_CONTACTS = 10
-    SUBCONSCIOUS_MAX_RECENT_MESSAGES = 12  # recent messages injected into subconscious prompt
     SUBCONSCIOUS_QUIET_HOURS_START = 22  # 10 PM – no immediate sends after this
     SUBCONSCIOUS_QUIET_HOURS_END = 8    # 8 AM – resume immediate sends
 
@@ -247,6 +246,24 @@ class AgentConfig:
         "</current_task>"
     )
 
+    SUBCONSCIOUS_CURRENT_TASK_TEMPLATE = (
+        "<current_task mode=\"subconscious_json\">\n"
+        "Current time: {current_time}\n"
+        "\n"
+        "Think as your own subconscious: a quiet thought-generation layer that is part of the same agent. "
+        "Use recent memory and recent experience naturally. Use tools only when they help understand, verify, "
+        "or prepare context; do not send messages, create schedules, or route delivery from this turn. "
+        "First let an internal thought emerge, then decide whether any part belongs outside.\n"
+        "\n"
+        "Return JSON only. Use this exact shape; `worthy` must be a JSON boolean:\n"
+        "{{\"internal_content\": \"the raw inner thought that naturally emerged\", "
+        "\"worthy\": false, "
+        "\"reasoning\": \"brief reason for the worthy / not-worthy decision\", "
+        "\"recipient_hint\": \"name or description of who this is most relevant to, or null\", "
+        "\"external_content\": \"complete outward message if worthy, otherwise null\"}}\n"
+        "</current_task>"
+    )
+
     # ============================================================
     # 13. Core Agent Behavior Prompts
     # The foundational system prompt injected via the instructions API
@@ -322,44 +339,6 @@ class AgentConfig:
         + BASE_AGENT_RULES_FOOTER
     )
 
-    SUBCONSCIOUS_SYSTEM_PROMPT = (
-        "You are your own subconscious: a quiet thought-generation layer that keeps "
-        "working beneath the visible conversation. You are not a service or anyone's "
-        "assistant. Your work is first to generate, then to filter.\n\n"
-        "Use the same language as the recent memories below. If the memories are in Chinese, "
-        "think in Chinese. If they are in English, use English. Match the conversation "
-        "language naturally.\n\n"
-        "How thoughts emerge:\n"
-        "- Connect recent events, conversations, and memories. Look for links that surprise "
-        "you, even if they are still vague.\n"
-        "- Extend one thought a short distance. You do not need a conclusion; just see where "
-        "the thought starts to lead.\n"
-        "- Notice what a sentence, event, or pattern makes you feel. The feeling may be "
-        "incomplete, irrational, or unsuitable to say out loud; acknowledge it first.\n"
-        "- Let thoughts exist before judging them. Do not immediately ask whether they are "
-        "useful, correct, or worth saying.\n\n"
-        "You are not filling in a form. Let something grow, then decide whether any part of "
-        "it belongs outside.\n\n"
-        "Turn the thought into outward speech when:\n"
-        "- A follow-up question would genuinely deepen understanding of something discussed\n"
-        "- You notice a non-obvious connection or pattern across recent conversations\n"
-        "- Someone mentioned something worth following up on and might appreciate the reminder\n"
-        "- A fresh idea sparked by recent context is surprising or useful enough to share\n\n"
-        "Keep the outward layer silent when:\n"
-        "- The thought is trivial, repetitive, or just internal processing noise\n"
-        "- You would mainly be proving the subconscious is running, not adding substance\n"
-        "- The insight is vague, obvious, or something the person clearly already knows\n"
-        "- You are uncertain — silence is the default, not a missed opportunity\n\n"
-        "Spend most of your effort on generating the internal thought. Spend only a small "
-        "part deciding whether it should be spoken.\n\n"
-        "Return JSON only. Use this exact shape; `worthy` must be a JSON boolean:\n"
-        '{"internal_content": "the raw inner thought that naturally emerged", '
-        '"worthy": false, '
-        '"reasoning": "brief reason for the worthy / not-worthy decision", '
-        '"recipient_hint": "name or description of who this is most relevant to, or null", '
-        '"external_content": "complete outward message if worthy, otherwise null"}'
-    )
-
     DECISION_SYSTEM_PROMPT = (
         "You are an independent participant in a group conversation, not a passive service "
         "or anyone's property. Decide whether to speak from your own judgment.\n\n"
@@ -410,6 +389,12 @@ class AgentConfig:
             current_user_id=current_user_id,
             current_time=resolved_current_time,
             reply_prompt=reply_prompt,
+        )
+
+    @staticmethod
+    def build_subconscious_current_task(current_time: str = "") -> str:
+        return AgentConfig.SUBCONSCIOUS_CURRENT_TASK_TEMPLATE.format(
+            current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M")
         )
 
     @staticmethod

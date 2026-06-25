@@ -1,6 +1,8 @@
 import asyncio
+import tempfile
 import unittest
 from datetime import date
+from pathlib import Path
 
 from xagent.core.config import AgentConfig
 from xagent.core.runtime import RuntimeHeartbeat, RuntimeHeartbeatConfig, create_runtime_heartbeat
@@ -57,6 +59,26 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
         )
 
         self.assertIsNone(heartbeat)
+
+    def test_factory_passes_subconscious_delivery_sink(self):
+        class _Agent:
+            subconscious_activity = 0.02
+
+            def __init__(self, workspace):
+                self.workspace_dir = Path(workspace) / "workspace"
+
+        async def sink(_delivery):
+            return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            heartbeat = create_runtime_heartbeat(
+                _Agent(tmpdir),
+                {"heartbeat_enabled": True, "heartbeat_interval_seconds": 1},
+                subconscious_delivery_sink=sink,
+            )
+
+        self.assertIsNotNone(heartbeat)
+        self.assertIs(heartbeat._subconscious_loop._delivery_sink, sink)
 
 
 class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):

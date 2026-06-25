@@ -7,7 +7,13 @@ import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from xagent.core.runtime import current_delivery_context, enqueue_scheduled_task, list_active_task_records
+from xagent.core.runtime import (
+    ContactEntry,
+    SubconsciousDelivery,
+    current_delivery_context,
+    enqueue_scheduled_task,
+    list_active_task_records,
+)
 from xagent.interfaces.voice.config import VoiceChannelConfig, VoiceTTSConfig
 from xagent.interfaces.voice.factory import create_local_voice_runtime
 from xagent.interfaces.voice.qwen import (
@@ -523,13 +529,47 @@ class VoiceRuntimeTests(unittest.TestCase):
                 await runtime.task_scheduler.tick()
 
                 self.assertEqual(agent.kwargs["user_id"], "alice")
-                self.assertIn("Scheduled task is due now", agent.kwargs["user_message"])
+                self.assertIn("This scheduled task is now due", agent.kwargs["user_message"])
                 self.assertEqual(agent.context.channel, "voice")
                 self.assertEqual(agent.context.user_id, "alice")
                 self.assertEqual(synth.calls[0]["chunks"], ["done"])
                 self.assertEqual(list_active_task_records(tmpdir), [])
 
         asyncio.run(run_task())
+
+    def test_runtime_delivers_subconscious_message_directly(self):
+        async def run_task():
+            synth = FakeSynthesizer()
+            runtime = VoiceRuntime(
+                agent=FakeAgent(),
+                config=voice_channel_config({"api_key": "test-key"}),
+                microphone=FakeMicrophone(),
+                recognizer=FakeRecognizer([]),
+                synthesizer=synth,
+                player=FakePlayer(),
+                options=VoiceRuntimeOptions(user_id="alice"),
+                output=lambda *args, **kwargs: None,
+            )
+            delivery = SubconsciousDelivery(
+                content="direct voice thought",
+                recipient=ContactEntry(
+                    channel="voice",
+                    user_id="alice",
+                    target={"user_id": "alice"},
+                    last_seen="2026-06-25 09:00:00",
+                ),
+                internal_content="inner",
+                reasoning="worth sharing",
+                created_at=datetime(2026, 6, 25, 9, 0, 0),
+            )
+
+            await runtime.deliver_subconscious_message(delivery)
+
+            return synth.calls
+
+        calls = asyncio.run(run_task())
+
+        self.assertEqual(calls[0]["chunks"], ["direct voice thought"])
 
     def test_runtime_default_keeps_microphone_paused_during_playback(self):
         config = voice_channel_config({"api_key": "test-key"})

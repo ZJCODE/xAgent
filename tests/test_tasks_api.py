@@ -1,12 +1,13 @@
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from xagent.components import MessageStorage
 from xagent.core.handlers import MessageHandler
-from xagent.core.runtime import enqueue_scheduled_task, list_task_records
+from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
 from xagent.interfaces.server import AgentHTTPServer
 
 
@@ -56,6 +57,46 @@ class _AttachmentTaskAgent(_TaskAgent):
 
 
 class TaskApiTests(unittest.TestCase):
+    def test_deliver_subconscious_message_broadcasts_to_subscriber(self):
+        async def run_test():
+            class _Subscriber:
+                def __init__(self):
+                    self.payloads = []
+
+                async def send_json(self, payload):
+                    self.payloads.append(payload)
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                agent = _TaskAgent(Path(tmpdir))
+                server = AgentHTTPServer(agent=agent, enable_web=False)
+                subscriber = _Subscriber()
+                await server._register_task_subscriber("web_user", subscriber)
+                delivery = SubconsciousDelivery(
+                    content="A direct subconscious note",
+                    recipient=ContactEntry(
+                        channel="web",
+                        user_id="web_user",
+                        target={"user_id": "web_user"},
+                        last_seen="2026-06-25 09:00:00",
+                    ),
+                    internal_content="The inner thought",
+                    reasoning="Worth sharing",
+                    created_at=datetime(2026, 6, 25, 9, 0, 0),
+                )
+
+                await server.deliver_subconscious_message(delivery)
+
+            self.assertEqual(len(subscriber.payloads), 1)
+            payload = subscriber.payloads[0]
+            self.assertEqual(payload["type"], "subconscious_message")
+            self.assertEqual(payload["content"], "A direct subconscious note")
+            self.assertIn("message", payload)
+            self.assertEqual(payload["message"]["role"], "assistant")
+
+        import asyncio
+
+        asyncio.run(run_test())
+
     def test_list_and_delete_task(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = _TaskAgent(Path(tmpdir))

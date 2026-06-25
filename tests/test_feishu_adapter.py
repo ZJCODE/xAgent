@@ -4,9 +4,10 @@ import logging
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 try:
     from lark_oapi import LogLevel
@@ -16,7 +17,7 @@ except ImportError:  # pragma: no cover - optional dependency
 from xagent.integrations.feishu import adapter as feishu_adapter_module
 from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAttachment
 from xagent.integrations.feishu.config import FeishuAdapterConfig
-from xagent.core.runtime import enqueue_scheduled_task, list_task_records
+from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
 
 
 class _FakeAgent:
@@ -344,6 +345,39 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertTrue(adapter._channel.sent[0][2]["uuid"].startswith("scheduled:"))
 
         asyncio.run(run_test())
+
+    def test_deliver_subconscious_message_sends_markdown_and_persists(self):
+        async def run_test():
+            agent = _FakeAgent()
+            agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel()
+            delivery = SubconsciousDelivery(
+                content="A direct thought",
+                recipient=ContactEntry(
+                    channel="feishu",
+                    user_id="ou_user",
+                    target={"chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
+                    last_seen="2026-06-25 09:00:00",
+                ),
+                internal_content="inner",
+                reasoning="worth sharing",
+                created_at=datetime(2026, 6, 25, 9, 0, 0),
+            )
+
+            await adapter.deliver_subconscious_message(delivery)
+
+            return agent, adapter
+
+        agent, adapter = asyncio.run(run_test())
+
+        self.assertEqual(adapter._channel.sent[0][0], "oc_group")
+        self.assertEqual(adapter._channel.sent[0][1], {"markdown": "A direct thought"})
+        self.assertEqual(adapter._channel.sent[0][2]["reply_to"], "om_anchor")
+        agent.message_handler.store_model_reply.assert_awaited_once()
+        self.assertEqual(agent.message_handler.store_model_reply.await_args.args[0], "A direct thought")
+        metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
+        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
 
     def test_scheduled_agent_task_dispatch_sends_agent_reply_to_feishu_chat(self):
         async def run_test():

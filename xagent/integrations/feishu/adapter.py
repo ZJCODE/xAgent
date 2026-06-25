@@ -46,8 +46,8 @@ from ...core.config import AgentConfig
 from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
+    SubconsciousDelivery,
     resolve_contacts_path,
-    resolve_subconscious_tasks_dir,
     scheduled_delivery_context,
     upsert_contact,
 )
@@ -218,8 +218,6 @@ class FeishuAdapter:
         runtime_root = Path(getattr(agent, "workspace", AgentConfig.DEFAULT_WORKSPACE)).expanduser().resolve()
         self._tasks_dir = runtime_root / AgentConfig.TASKS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._subconscious_tasks_dir = resolve_subconscious_tasks_dir(runtime_root)
-        self._subconscious_scheduler: Optional[AsyncTaskScheduler] = None
         self._contacts_file = resolve_contacts_path(runtime_root)
 
     # ------------------------------------------------------------------
@@ -289,16 +287,6 @@ class FeishuAdapter:
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
 
-        # Subconscious scheduler (separate directory, same can_handle / dispatch)
-        subconscious_scheduler = AsyncTaskScheduler(
-            self._subconscious_tasks_dir,
-            can_handle=self._can_handle_scheduled_task,
-            dispatch=self._dispatch_scheduled_task,
-            logger_=self.logger,
-        )
-        self._subconscious_scheduler = subconscious_scheduler
-        await subconscious_scheduler.start()
-
         run_task = loop.run_in_executor(None, self.run_blocking)
         stop_task = asyncio.create_task(self._stop_event.wait())
         try:
@@ -317,8 +305,6 @@ class FeishuAdapter:
         finally:
             await task_scheduler.stop()
             self._task_scheduler = None
-            await subconscious_scheduler.stop()
-            self._subconscious_scheduler = None
             self._safe_stop()
             self._owner_loop = None
 
@@ -2317,6 +2303,44 @@ class FeishuAdapter:
                 )
             except Exception:
                 self.logger.debug("Failed to persist Feishu scheduled task result", exc_info=True)
+
+    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        target = delivery.recipient.target
+        chat_id = str(target.get("chat_id") or "").strip()
+        if not chat_id:
+            raise ValueError("subconscious Feishu delivery is missing chat_id")
+        message_id = str(target.get("message_id") or "").strip() or None
+        is_group = bool(target.get("is_group"))
+        uuid_message_id = f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{delivery.recipient.user_id}"
+        await self._send_markdown(
+            chat_id=chat_id,
+            message_id=message_id,
+            uuid_message_id=uuid_message_id,
+            text=delivery.content,
+            is_group=is_group,
+        )
+        message_handler = getattr(self.agent, "message_handler", None)
+        store_model_reply = getattr(message_handler, "store_model_reply", None)
+        if callable(store_model_reply):
+            try:
+                await store_model_reply(
+                    delivery.content,
+                    getattr(self.agent, "_assistant_sender_id", "agent"),
+                    metadata={
+                        "subconscious": {
+                            "source": "subconscious",
+                            "reasoning": delivery.reasoning,
+                            "created_at": delivery.created_at.isoformat(sep=" "),
+                            "recipient": {
+                                "channel": delivery.recipient.channel,
+                                "user_id": delivery.recipient.user_id,
+                                "target": target,
+                            },
+                        }
+                    },
+                )
+            except Exception:
+                self.logger.debug("Failed to persist Feishu subconscious delivery", exc_info=True)
 
     async def _scheduled_task_result(self, task) -> _FeishuScheduledTaskResult:
         task_type = task.task_type
