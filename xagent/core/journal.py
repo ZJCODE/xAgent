@@ -168,9 +168,12 @@ Period focus:
         message_type = str(message.get("type", "message")).strip().lower()
         timestamp = JournalLLMService._normalize_timestamp(message.get("timestamp"))
         room_name = JournalLLMService._sanitize_marker_field(message.get("room_name"))
+        channel = JournalLLMService._sanitize_marker_field(message.get("channel"))
 
         if message_type == "context_event":
             header = JournalLLMService._append_timestamp_marker("[ambient context]", timestamp)
+            if channel:
+                header += f"[channel={channel}]"
             if room_name:
                 header += f"[room={room_name}]"
             return header
@@ -178,6 +181,8 @@ Period focus:
         speaker = JournalLLMService._normalize_transcript_speaker(message)
         if speaker:
             header = JournalLLMService._append_timestamp_marker(f"[speaker={speaker}]", timestamp)
+            if channel:
+                header += f"[channel={channel}]"
             if room_name:
                 header += f"[room={room_name}]"
             return header

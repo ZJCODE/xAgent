@@ -44,30 +44,28 @@ function messageRoleLabel(message: MessageItem): string {
 
 /** Extract channel / name / group from a message for display as meta chips. */
 function messageMetaChips(message: MessageItem): { channel?: string; name?: string; group?: string } {
-  const hasChannel = message.room_name?.includes(":");
-  const channel = hasChannel ? message.room_name!.split(":")[0] : undefined;
-  const roomSuffix = hasChannel ? message.room_name!.split(":").slice(1).join(":") : message.room_name;
-
   if (message.role === "user") {
-    const name = message.sender_id || undefined;
-    const group = roomSuffix && roomSuffix !== message.sender_id ? roomSuffix : undefined;
-    return { channel, name, group };
+    return {
+      channel: message.channel,
+      name: message.sender_id || undefined,
+      group: message.room_name && message.room_name !== message.sender_id ? message.room_name : undefined,
+    };
   }
 
   if (message.role === "assistant") {
-    // Subconscious delivery recipient takes priority over room_name
-    const metadata = message.metadata;
-    const sub = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).subconscious : undefined;
-    if (sub && typeof sub === "object") {
-      const recipient = (sub as Record<string, unknown>).recipient;
-      if (recipient && typeof recipient === "object") {
-        const r = recipient as Record<string, unknown>;
-        const target = (r.target as Record<string, unknown> | undefined);
-        return { channel: r.channel as string || undefined, name: `→ ${target?.sender_name || r.user_id || "?"}` };
-      }
+    if (message.recipient_id) {
+      const isGroup = Boolean(message.room_name);
+      const label = isGroup ? `→ group:${message.recipient_id}` : `→ ${message.recipient_id}`;
+      return {
+        channel: message.channel,
+        name: label,
+        group: isGroup ? message.room_name : undefined,
+      };
     }
-    const name = roomSuffix ? `→ ${roomSuffix}` : undefined;
-    return { channel, name };
+    return {
+      channel: message.channel,
+      name: message.room_name ? `→ ${message.room_name}` : undefined,
+    };
   }
 
   return {};

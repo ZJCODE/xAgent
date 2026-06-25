@@ -265,6 +265,7 @@ class Agent:
         stream: bool = False,
         channel_instructions: str = "",
         room_name: Optional[str] = None,
+        channel: Optional[str] = None,
     ) -> Union[str, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message.
 
@@ -286,6 +287,7 @@ class Agent:
                     stream=True,
                     channel_instructions=channel_instructions,
                     room_name=room_name,
+                    channel=channel,
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or "")
@@ -311,6 +313,7 @@ class Agent:
                 stream=False,
                 channel_instructions=channel_instructions,
                 room_name=room_name,
+                    channel=channel,
             ):
                 if event.get("type") == "message_done" and event.get("phase") == "final":
                     final_reply = str(event.get("content") or "")
@@ -335,6 +338,7 @@ class Agent:
                         image_source,
                         attachments=attachments,
                         room_name=room_name,
+                        channel=channel,
                     )
                 except ValueError as exc:
                     logger.warning("Invalid image input from %s: %s", user_id, exc)
@@ -367,6 +371,8 @@ class Agent:
                             str(response),
                             self._assistant_sender_id,
                             room_name=room_name,
+                            channel=channel,
+                            recipient_id=room_name or user_id,
                         )
                         self._schedule_experience_write(
                             messages=[user_msg, assistant_msg],
@@ -386,6 +392,8 @@ class Agent:
                                 self._assistant_sender_id,
                                 attachments=tool_result.attachments,
                                 room_name=room_name,
+                                channel=channel,
+                                recipient_id=room_name or user_id,
                             )
                             self._schedule_experience_write(
                                 messages=[user_msg, assistant_msg],
@@ -422,6 +430,7 @@ class Agent:
         stream: bool = False,
         channel_instructions: str = "",
         room_name: Optional[str] = None,
+        channel: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -449,6 +458,7 @@ class Agent:
                     image_source,
                     attachments=attachments,
                     room_name=room_name,
+                    channel=channel,
                 )
             except ValueError as exc:
                 logger.warning("Invalid image input from %s: %s", user_id, exc)
@@ -525,6 +535,8 @@ class Agent:
                             self._assistant_sender_id,
                             metadata={"turn_phase": "preface"},
                             room_name=room_name,
+                            channel=channel,
+                            recipient_id=room_name or user_id,
                         )
 
                     for tool_call in tool_calls:
@@ -555,6 +567,8 @@ class Agent:
                             metadata={"turn_phase": "final"},
                             attachments=tool_result.attachments,
                             room_name=room_name,
+                            channel=channel,
+                            recipient_id=room_name or user_id,
                         )
                         self._schedule_experience_write(
                             messages=[user_msg, assistant_msg],
@@ -583,6 +597,8 @@ class Agent:
                         self._assistant_sender_id,
                         metadata={"turn_phase": "final"},
                         room_name=room_name,
+                        channel=channel,
+                        recipient_id=room_name or user_id,
                     )
                     self._schedule_experience_write(
                         messages=[user_msg, assistant_msg],
@@ -619,6 +635,7 @@ class Agent:
         event_type: str = "observation",
         metadata: Optional[Dict[str, Any]] = None,
         room_name: Optional[str] = None,
+        channel: Optional[str] = None,
     ) -> AgentTurnResult:
         """Record environmental context without generating a reply."""
         event_msg = await self.message_handler.store_context_event(
@@ -627,6 +644,7 @@ class Agent:
             event_type=event_type,
             metadata=metadata,
             room_name=room_name,
+                    channel=channel,
         )
         self._schedule_experience_write(
             messages=[event_msg],
@@ -795,10 +813,16 @@ class Agent:
         reply_text: str,
     ) -> None:
         room_name = next((m.room_name for m in triggering_messages if m.room_name), None)
+        channel = next((m.channel for m in triggering_messages if m.channel), None)
+        recipient_id = room_name or next(
+            (m.sender_id for m in triggering_messages if m.sender_id and m.role == RoleType.USER), None
+        )
         assistant_msg = await msg_handler.store_model_reply(
             reply_text,
             self._assistant_sender_id,
             room_name=room_name,
+            channel=channel,
+            recipient_id=recipient_id,
         )
         self._schedule_experience_write(
             messages=[*triggering_messages, assistant_msg],

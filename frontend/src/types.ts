@@ -154,12 +154,14 @@ export interface MessageItem {
   type: string;
   content: string;
   sender_id?: string;
+  recipient_id?: string;
   timestamp?: number;
   metadata?: Record<string, unknown>;
   images?: ImageAsset[];
   image_count?: number;
   attachments?: AttachmentAsset[];
   attachment_count?: number;
+  channel?: string;
   room_name?: string;
   tool_call?: {
     name: string;

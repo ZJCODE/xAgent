@@ -440,7 +440,7 @@ class VoiceRuntime:
                 user_message=transcript,
                 user_id=self.options.user_id,
                 stream=self.options.stream,
-                room_name=f"voice:{self.options.user_id}",
+                channel="voice",
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
@@ -555,7 +555,7 @@ class VoiceRuntime:
                     user_message=prompt,
                     user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
                     stream=self.options.stream,
-                    room_name=f"voice:{task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID}",
+                    channel="voice",
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or uuid.uuid4().hex)

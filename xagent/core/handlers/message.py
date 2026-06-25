@@ -52,6 +52,8 @@ class MessageHandler:
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         room_name: Optional[str] = None,
+        channel: Optional[str] = None,
+        recipient_id: Optional[str] = None,
     ) -> Message:
         """Store a user message, auto-detecting embedded image URLs and attachments."""
         normalized_attachments = dedupe_attachments(list(attachments or []))
@@ -73,8 +75,11 @@ class MessageHandler:
             image_source=normalized_sources or None,
             sender_id=user_id,
         )
+        msg.recipient_id = recipient_id or "agent"
         if room_name:
             msg.room_name = room_name
+        if channel:
+            msg.channel = channel
         if normalized_attachments:
             msg.metadata[ATTACHMENT_METADATA_KEY] = normalized_attachments
         if image_metadata:
@@ -89,6 +94,8 @@ class MessageHandler:
         metadata: Optional[Dict[str, Any]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         room_name: Optional[str] = None,
+        channel: Optional[str] = None,
+        recipient_id: Optional[str] = None,
     ) -> Message:
         normalized_attachments = dedupe_attachments(list(attachments or []))
         image_source = extract_image_urls_from_text(reply_text)
@@ -97,8 +104,12 @@ class MessageHandler:
             role=RoleType.ASSISTANT,
             sender_id=sender_id,
         )
+        if recipient_id:
+            model_msg.recipient_id = recipient_id
         if room_name:
             model_msg.room_name = room_name
+        if channel:
+            model_msg.channel = channel
         if metadata:
             model_msg.metadata.update(metadata)
         if normalized_attachments:
@@ -117,6 +128,8 @@ class MessageHandler:
         metadata: Optional[Dict[str, Any]] = None,
         room_name: Optional[str] = None,
         role: RoleType = RoleType.ENVIRONMENT,
+        channel: Optional[str] = None,
+        recipient_id: Optional[str] = None,
     ) -> Message:
         """Store a non-direct observation from the agent's environment."""
         event_msg = Message.create_context_event(
@@ -126,8 +139,12 @@ class MessageHandler:
             metadata=metadata,
             role=role,
         )
+        if recipient_id:
+            event_msg.recipient_id = recipient_id
         if room_name:
             event_msg.room_name = room_name
+        if channel:
+            event_msg.channel = channel
         await self.message_storage.add_messages(event_msg)
         return event_msg
 
@@ -461,6 +478,8 @@ class MessageHandler:
     @staticmethod
     def _format_context_event_header(message: Message) -> str:
         header = f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
+        if message.channel:
+            header += f"[channel={message.channel}]"
         if message.room_name:
             safe_room = message.room_name.replace("\n", " ").replace("]", "")
             header += f"[room={safe_room}]"
@@ -471,6 +490,8 @@ class MessageHandler:
         speaker = MessageHandler._format_transcript_speaker(message)
         timestamp = MessageHandler._format_transcript_timestamp(message)
         header = f"[speaker={speaker}][timestamp={timestamp}]"
+        if message.channel:
+            header += f"[channel={message.channel}]"
         if message.room_name:
             safe_room = message.room_name.replace("\n", " ").replace("]", "")
             header += f"[room={safe_room}]"
@@ -570,9 +591,12 @@ class MessageHandler:
 
     @staticmethod
     def _format_internal_thought_header(message: Message) -> str:
-        """Format header for internal monologue: [speaker=ME][timestamp=Time][internal]."""
+        """Format header for internal monologue: [speaker=ME][timestamp=Time][internal_monologue]."""
         timestamp = MessageHandler._format_transcript_timestamp(message)
-        return f"[speaker=ME][timestamp={timestamp}][internal_monologue]"
+        header = f"[speaker=ME][timestamp={timestamp}][internal_monologue]"
+        if message.channel:
+            header += f"[channel={message.channel}]"
+        return header
 
     @staticmethod
     def _latest_current_user_message(

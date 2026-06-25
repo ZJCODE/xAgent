@@ -167,7 +167,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 user_id=input_data.user_id,
                 image_source=image_sources,
                 attachments=attachments,
-                room_name=f"web:{input_data.user_id}",
+                channel="web",
             )
 
     async def _call_observe(self, input_data: ObserveInput):
@@ -236,7 +236,7 @@ class AgentHTTPServer(BaseAgentRunner):
                     image_source=self._input_image_sources(input_data, attachments=attachments),
                     attachments=attachments,
                     stream=bool(input_data.stream),
-                    room_name=f"web:{input_data.user_id}",
+                    channel="web",
                 )
                 async for event in self._iterate_before_deadline(response, deadline):
                     if event.get("type") == "done":
@@ -332,7 +332,8 @@ class AgentHTTPServer(BaseAgentRunner):
                     getattr(self.agent, "_assistant_sender_id", "agent"),
                     metadata=metadata,
                     attachments=result.attachments,
-                    room_name=f"web:{task.delivery_user_id or 'scheduled'}",
+                    channel="web",
+                    recipient_id=task.delivery_user_id or str(task.target.get("user_id") or ""),
                 )
         await self._broadcast_scheduled_message(
             task,
@@ -484,10 +485,12 @@ class AgentHTTPServer(BaseAgentRunner):
                         "recipient": {
                             "channel": delivery.recipient.channel,
                             "user_id": delivery.recipient.user_id,
+                            "target": delivery.recipient.target,
                         },
                     }
                 },
-                room_name=f"{delivery.recipient.channel}:{delivery.recipient.user_id}",
+                channel=delivery.recipient.channel,
+                recipient_id=user_id,
             )
         payload: Dict[str, Any] = {
             "type": "subconscious_message",

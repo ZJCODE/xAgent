@@ -24,12 +24,14 @@ def message_item(message: Message) -> Dict[str, Any]:
         "type": message.type.value if hasattr(message.type, "value") else str(message.type),
         "content": message.content,
         "sender_id": message.sender_id,
+        "recipient_id": message.recipient_id,
         "timestamp": message.timestamp,
         "metadata": message.metadata,
         "images": images,
         "image_count": len(images),
         "attachments": attachments,
         "attachment_count": len(attachments),
+        "channel": message.channel,
         "room_name": message.room_name,
     }
     return item
@@ -143,6 +145,7 @@ def _message_search_fields(message: Message) -> List[tuple[str, str]]:
     fields: List[tuple[str, str]] = [
         ("content", message.content or ""),
         ("sender", message.sender_id or ""),
+        ("recipient", message.recipient_id or ""),
         ("role", role),
         ("type", message_type),
     ]

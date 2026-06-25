@@ -2182,18 +2182,10 @@ class FeishuAdapter:
             )
 
         # Resolve room name so agent replies carry room / recipient context.
-        # For group chats this is the group name; for p2p chats we encode
-        # channel + sender so the message page shows who was addressed.
-        # All resolved room names carry the "feishu:" prefix for consistent
-        # display (group names get it too).
+        # Resolve room_name (group name only) and channel separately.
         resolved_room_name = room_name
-        if not resolved_room_name:
-            if is_group:
-                group_name = await self._resolve_room_name(chat_id, raw_msg)
-                if group_name:
-                    resolved_room_name = f"feishu:{group_name}"
-            else:
-                resolved_room_name = f"feishu:{sender_name}"
+        if is_group and not resolved_room_name:
+            resolved_room_name = await self._resolve_room_name(chat_id, raw_msg)
 
         chat_kwargs = self._chat_kwargs(
             user_id=user_id,
@@ -2309,6 +2301,7 @@ class FeishuAdapter:
                         }
                         for attachment in result.attachments
                     ],
+                    recipient_id=chat_id if is_group else (target.get("user_id") or target.get("sender_id")),
                 )
             except Exception:
                 self.logger.debug("Failed to persist Feishu scheduled task result", exc_info=True)
@@ -2346,6 +2339,7 @@ class FeishuAdapter:
                             },
                         }
                     },
+                    recipient_id=chat_id if is_group else delivery.recipient.user_id,
                 )
             except Exception:
                 self.logger.debug("Failed to persist Feishu subconscious delivery", exc_info=True)
@@ -2437,6 +2431,7 @@ class FeishuAdapter:
         kwargs: dict[str, Any] = {
             "user_message": text,
             "user_id": user_id,
+            "channel": "feishu",
         }
         if is_group:
             kwargs["channel_instructions"] = (

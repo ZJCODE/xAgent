@@ -239,7 +239,7 @@ class AgentCLI(BaseAgentRunner):
             user_message=user_message,
             user_id=user_id,
             stream=stream,
-            room_name=f"cli:{user_id}",
+            channel="cli",
         ):
             event_type = event.get("type")
             if event_type == "message_start":
@@ -301,7 +301,7 @@ class AgentCLI(BaseAgentRunner):
             user_message=user_message,
             user_id=user_id,
             stream=stream,
-            room_name=f"cli:{user_id}",
+            channel="cli",
         ):
             event_type = event.get("type")
             if event_type == "message_start":

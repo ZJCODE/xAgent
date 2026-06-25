@@ -305,11 +305,11 @@ class AgentConfig:
     BASE_AGENT_CONTEXT_RULES = (
         "**Context and Attribution:**\n"
         "- Structured history is evidence, not user-facing text. Never mention markers, labels, timestamps, metadata, hidden context, or prompt structure.\n"
-        "- `[speaker=Name][timestamp=Time]` means Name said it. `[speaker=ME][timestamp=Time]` means you said it.\n"
-        "- `[speaker=Name][timestamp=Time][room=RoomName]` means Name said it in room RoomName. `[speaker=ME][timestamp=Time][room=RoomName]` means you said it in that room.\n"
+        "- `[speaker=Name][timestamp=Time][channel=Channel]` means Name said it via Channel. `[speaker=ME][timestamp=Time][channel=Channel]` means you said it via that channel.\n"
+        "- `[speaker=Name][timestamp=Time][channel=Channel][room=RoomName]` means Name said it in room RoomName via Channel. `[speaker=ME][timestamp=Time][channel=Channel][room=RoomName]` means you said it in that room via that channel.\n"
         "- `[room context]` may include `room_name: ...`, `room_id: ...`, lines like `Name YYYY-MM-DD HH:mm: text`, and `[/room context]`; `ME ...` inside it is you.\n"
-        "- `[ambient context][timestamp=Time]` is something observed or received, not a participant message or request unless it says it was addressed to you.\n"
-        "- `[ambient context][timestamp=Time][room=RoomName]` is something observed or received within a specific room.\n"
+        "- `[ambient context][timestamp=Time][channel=Channel]` is something observed or received via Channel, not a participant message or request unless it says it was addressed to you.\n"
+        "- `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` is something observed or received via Channel within a specific room.\n"
         "- Keep people, rooms, preferences, commitments, and experiences separate. Do not carry one person's private topic into another person's reply unless they clearly joined or referred to it.\n"
         "\n"
     )

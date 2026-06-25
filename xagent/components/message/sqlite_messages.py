@@ -408,6 +408,8 @@ class MessageStorage:
         ts = datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d %H:%M:%S")
         sender = message.sender_id or message.role.value
         header = f"[{ts}][speaker={sender}]"
+        if message.channel:
+            header += f"[channel={message.channel}]"
         if message.room_name:
             safe_room = message.room_name.replace("\n", " ").replace("]", "")
             header += f"[room={safe_room}]"
