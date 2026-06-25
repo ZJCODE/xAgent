@@ -85,6 +85,7 @@ Input markers:
 - `[speaker=ME][timestamp=Time][room=RoomName]`: I said or did this in room RoomName.
 - `[ambient context][timestamp=Time]`: something I noticed, overheard, or received.
 - `[ambient context][timestamp=Time][room=RoomName]`: something I noticed, overheard, or received in room RoomName.
+- `[internal_monologue][timestamp=Time]`: my own internal thought (not spoken aloud).
 - `[room context]` blocks identify a room with `room_name: ...`, `room_id: ...`, lines like `Name YYYY-MM-DD HH:mm: text`, and `[/room context]`.
 
 Rules:

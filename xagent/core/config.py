@@ -310,6 +310,7 @@ class AgentConfig:
         "- `[room context]` may include `room_name: ...`, `room_id: ...`, lines like `Name YYYY-MM-DD HH:mm: text`, and `[/room context]`; `ME ...` inside it is you.\n"
         "- `[ambient context][timestamp=Time][channel=Channel]` is something observed or received via Channel, not a participant message or request unless it says it was addressed to you.\n"
         "- `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` is something observed or received via Channel within a specific room.\n"
+        "- `[internal_monologue][timestamp=Time]` is your own internal thought, not spoken or sent to anyone.\n"
         "- Keep people, rooms, preferences, commitments, and experiences separate. Do not carry one person's private topic into another person's reply unless they clearly joined or referred to it.\n"
         "\n"
     )

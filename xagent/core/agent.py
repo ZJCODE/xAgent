@@ -667,7 +667,7 @@ class Agent:
 
         The thought is stored as a context event with event_type
         ``"internal_monologue"``, which the transcript formatter renders
-        as ``[speaker=ME][timestamp=...][internal_monologue]``.  This allows the
+        as ``[internal_monologue][timestamp=...]``.  This allows the
         thought to become part of the agent's memory stream (diary
         compression) without interrupting the conversation.
         """

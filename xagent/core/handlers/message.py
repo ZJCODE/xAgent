@@ -593,12 +593,9 @@ class MessageHandler:
 
     @staticmethod
     def _format_internal_thought_header(message: Message) -> str:
-        """Format header for internal monologue: [speaker=ME][timestamp=Time][internal_monologue]."""
+        """Format header for internal monologue: [internal_monologue][timestamp=Time]."""
         timestamp = MessageHandler._format_transcript_timestamp(message)
-        header = f"[speaker=ME][timestamp={timestamp}][internal_monologue]"
-        if message.channel:
-            header += f"[channel={message.channel}]"
-        return header
+        return f"[internal_monologue][timestamp={timestamp}]"
 
     @staticmethod
     def _latest_current_user_message(
