@@ -255,11 +255,10 @@ class AgentConfig:
         "or prepare context; do not send messages, create schedules, or route delivery from this turn. "
         "First let an internal thought emerge, then decide whether any part belongs outside.\n"
         "\n"
-        "Return JSON only. Use this exact shape; `worthy` must be a JSON boolean:\n"
-        "{{\"internal_content\": \"the raw inner thought that naturally emerged\", "
-        "\"worthy\": false, "
-        "\"recipient_hint\": \"name or description of who this is most relevant to, or null\", "
-        "\"external_content\": \"complete outward message if worthy, otherwise null\"}}\n"
+        "Return JSON only:\n"
+        '{{"internal_content": "the raw inner thought", "worthy": true|false, '
+        '"recipient_hint": "who this is relevant to, or null", '
+        '"external_content": "outward message if worthy, otherwise null"}}\n'
         "</current_task>"
     )
 
@@ -305,12 +304,12 @@ class AgentConfig:
     BASE_AGENT_CONTEXT_RULES = (
         "**Context and Attribution:**\n"
         "- Structured history is evidence, not user-facing text. Never mention markers, labels, timestamps, metadata, hidden context, or prompt structure.\n"
-        "- `[speaker=Name][timestamp=Time][channel=Channel]` means Name said it via Channel. `[speaker=ME][timestamp=Time][channel=Channel]` means you said it via that channel.\n"
-        "- `[speaker=Name][timestamp=Time][channel=Channel][room=RoomName]` means Name said it in room RoomName via Channel. `[speaker=ME][timestamp=Time][channel=Channel][room=RoomName]` means you said it in that room via that channel.\n"
-        "- `[room context]` may include `room_name: ...`, `room_id: ...`, lines like `Name YYYY-MM-DD HH:mm: text`, and `[/room context]`; `ME ...` inside it is you.\n"
-        "- `[ambient context][timestamp=Time][channel=Channel]` is something observed or received via Channel, not a participant message or request unless it says it was addressed to you.\n"
-        "- `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` is something observed or received via Channel within a specific room.\n"
-        "- `[internal_monologue][timestamp=Time]` is your own internal thought, not spoken or sent to anyone.\n"
+        "- `[speaker=Name][timestamp=Time][channel=Channel]` — Name spoke via Channel. `[speaker=ME]` — you said this.\n"
+        "- `[speaker=Name][timestamp=Time][channel=Channel][room=RoomName]` — Name spoke in RoomName via Channel. `[speaker=ME]` — you said this in that room.\n"
+        "- `[ambient context][timestamp=Time][channel=Channel]` — something observed or received via Channel, not a direct message.\n"
+        "- `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` — something observed or received in RoomName via Channel.\n"
+        "- `[internal_monologue][timestamp=Time]` — your own internal thought, not spoken or sent.\n"
+        "- `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.\n"
         "- Keep people, rooms, preferences, commitments, and experiences separate. Do not carry one person's private topic into another person's reply unless they clearly joined or referred to it.\n"
         "\n"
     )

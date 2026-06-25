@@ -67,8 +67,8 @@ class AgentConfigPromptTests(unittest.TestCase):
 
     def test_base_agent_prompt_describes_room_context_blocks(self):
         self.assertIn("[room context]", AgentConfig.BASE_AGENT_PROMPT)
-        self.assertIn("room_name: ...", AgentConfig.BASE_AGENT_PROMPT)
-        self.assertIn("room_id: ...", AgentConfig.BASE_AGENT_PROMPT)
+        self.assertIn("room_name:", AgentConfig.BASE_AGENT_PROMPT)
+        self.assertIn("room_id:", AgentConfig.BASE_AGENT_PROMPT)
         self.assertIn("Name YYYY-MM-DD HH:mm: text", AgentConfig.BASE_AGENT_PROMPT)
         self.assertIn("[/room context]", AgentConfig.BASE_AGENT_PROMPT)
 

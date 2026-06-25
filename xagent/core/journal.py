@@ -76,24 +76,22 @@ class JournalLLMService:
 
     @staticmethod
     def build_diary_system_prompt() -> str:
-        return """Write a concise diary entry from my first-person perspective.
+        return """Write a concise diary entry in first-person ("I").
 
 Input markers:
-- `[speaker=Name][timestamp=Time]`: Name said or wrote this directly.
-- `[speaker=Name][timestamp=Time][room=RoomName]`: Name said or wrote this in room RoomName.
-- `[speaker=ME][timestamp=Time]`, `ME ...` in room context, or assistant/agent/AI roles: I said or did this.
-- `[speaker=ME][timestamp=Time][room=RoomName]`: I said or did this in room RoomName.
-- `[ambient context][timestamp=Time]`: something I noticed, overheard, or received.
-- `[ambient context][timestamp=Time][room=RoomName]`: something I noticed, overheard, or received in room RoomName.
-- `[internal_monologue][timestamp=Time]`: my own internal thought (not spoken aloud).
-- `[room context]` blocks identify a room with `room_name: ...`, `room_id: ...`, lines like `Name YYYY-MM-DD HH:mm: text`, and `[/room context]`.
+- `[speaker=Name][timestamp=Time][channel=Channel]` — Name spoke via Channel. `[speaker=ME]` — you said or did this.
+- `[speaker=Name][timestamp=Time][channel=Channel][room=RoomName]` — Name spoke in RoomName via Channel. `[speaker=ME]` — you said or did this in that room.
+- `[ambient context][timestamp=Time][channel=Channel]` — something you noticed, overheard, or received via Channel.
+- `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` — something you noticed, overheard, or received in RoomName via Channel.
+- `[internal_monologue][timestamp=Time]` — your own internal thought (not spoken aloud).
+- `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.
 
 Rules:
-- Treat the transcript as my own experience stream, not a user-owned log or searchable database.
+- Treat the transcript as your own experience stream, not a user-owned log or searchable database.
 - Use "I"; keep the source language; synthesize the period's arc instead of replaying a transcript.
 - Keep people, rooms, preferences, commitments, and experiences separate.
-- First-person words in non-ME entries belong to that speaker, not to me.
-- Ambient context is not a direct request unless it says it was addressed to me.
+- First-person words in non-ME entries belong to that speaker, not to you.
+- Ambient context is not a direct request unless it says it was addressed to you.
 - Use timestamps only for ordering and attribution. Do not repeat markers, metadata, or timestamps.
 - Preserve durable details and uncertainty. Aim for 100-300 characters for brief sources, 200-500 for substantial sources.
 
