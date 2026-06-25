@@ -416,14 +416,26 @@ class SubconsciousLoop:
             return "(memory read failed)"
 
     def _collect_contacts_summary(self) -> str:
-        """Summarize known contacts for the subconscious prompt."""
+        """Summarize known contacts for the subconscious prompt.
+
+        Each line shows the fields the agent can use as ``recipient_hint``
+        — prefer the human-readable ``name``, fall back to ``user_id``.
+        """
         contacts = load_contacts(self._contacts_file)
         if not contacts:
             return "(no contacts recorded yet)"
-        lines: List[str] = []
+        lines: List[str] = ["Contacts (use exact name or user_id for recipient_hint):"]
         for c in contacts:
-            name = c.target.get("sender_name") or c.user_id or "unknown"
-            lines.append(f"- {name} via {c.channel} (last seen {c.last_seen}, {c.interaction_count} interactions)")
+            name = str(c.target.get("sender_name") or "").strip()
+            user_id = str(c.user_id or "").strip()
+            display_name = name or user_id or "unknown"
+            lines.append(
+                f"- name: {display_name}"
+                + (f" | user_id: {user_id}" if name and user_id != name else "")
+                + f" | channel: {c.channel}"
+                + f" | last_seen: {c.last_seen}"
+                + f" | interactions: {c.interaction_count}"
+            )
         return "\n".join(lines)
 
     async def _write_internal_thought(self, content: str) -> None:

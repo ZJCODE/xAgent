@@ -257,7 +257,7 @@ class AgentConfig:
         "\n"
         "Return JSON only:\n"
         '{{"internal_content": "the raw inner thought", "worthy": true|false, '
-        '"recipient_hint": "who this is relevant to, or null", '
+        '"recipient_hint": "exact sender_name or user_id from the contacts list above (no extra text), or null", '
         '"external_content": "outward message if worthy, otherwise null"}}\n'
         "</current_task>"
     )
