@@ -21,13 +21,7 @@ Run:
 xagent
 ```
 
-The launcher will guide you through the rest:
-
-- **Setup**: configure your model, API key, identity, search, image generation, and voice.
-- **Agents**: create or switch between different local agents.
-- **Channel**: open Chat, Web, Voice, Feishu, or Weixin.
-- **Inspect**: view config, memory, messages, and local state.
-- **Help**: see the most common commands for the current agent.
+The launcher will guide you through the rest
 
 For most users, `xagent` is the only command you need to remember.
 
@@ -38,30 +32,6 @@ For most users, `xagent` is the only command you need to remember.
 - A voice channel for microphone and speaker interaction.
 - Background channels for Web/API, voice, Feishu, and Weixin.
 - Multiple named agents, each with its own identity, memory, workspace, tasks, skills, logs, and channel state.
-
-## Useful Shortcuts
-
-You can do everything from the launcher, but these commands are convenient once you know what you want:
-
-```bash
-xagent setup
-xagent chat
-xagent web
-xagent voice
-xagent status
-```
-
-Channel logs and lifecycle commands follow the same pattern:
-
-```bash
-xagent api start
-xagent api logs -f
-xagent api stop
-
-xagent voice status
-xagent voice logs -f
-xagent voice stop
-```
 
 ## Local Data
 
