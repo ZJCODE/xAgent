@@ -717,6 +717,7 @@ class SubconsciousLoopTests(unittest.TestCase):
                 delivery_sink=delivery_sink,
                 deliverable_channels={"feishu"},
             )
+            loop._delivery_retry_delay_seconds = 0
             loop.record_interaction(
                 channel="feishu",
                 user_id="ou_123",
@@ -727,9 +728,40 @@ class SubconsciousLoopTests(unittest.TestCase):
             with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
                 asyncio.run(loop.maybe_think())
 
-            delivery_sink.assert_awaited_once()
+            self.assertEqual(delivery_sink.await_count, 3)
             agent.record_internal_thought.assert_called_once()
             self.assertEqual(agent.record_internal_thought.call_args[0][0], "This should not be lost.")
+
+    def test_delivery_sink_transient_failure_retries_without_internal_thought(self):
+        """A transient direct delivery failure is retried before falling back."""
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "This should still reach the user.",
+            "worthy": True,
+            "recipient_hint": "张三",
+            "external_content": "A retried outward message.",
+        })
+        delivery_sink = AsyncMock(side_effect=[RuntimeError("rate limited"), None])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
+            loop._delivery_retry_delay_seconds = 0
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_123",
+                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+
+            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
+                asyncio.run(loop.maybe_think())
+
+            self.assertEqual(delivery_sink.await_count, 2)
+            agent.record_internal_thought.assert_not_called()
 
     def test_worthy_without_recipient_writes_internal_thought(self):
         """A worthy thought with no route records the internal thought only."""

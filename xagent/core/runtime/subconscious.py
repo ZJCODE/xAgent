@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 SUBCONSCIOUS_SOURCE = "subconscious"
 SUBCONSCIOUS_EVENT_TYPE = "internal_monologue"
 CONTACTS_FILENAME = "contacts.json"
+SUBCONSCIOUS_DELIVERY_RETRIES = 2
+SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,8 @@ class SubconsciousLoop:
             if pure_thought is not None
             else bool(getattr(agent, "subconscious_pure_thought", AgentConfig.SUBCONSCIOUS_PURE_THOUGHT))
         )
+        self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
+        self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
 
     # ------------------------------------------------------------------
     # Public API
@@ -523,9 +528,7 @@ class SubconsciousLoop:
             created_at=now,
         )
         try:
-            result = self._delivery_sink(delivery)
-            if inspect.isawaitable(result):
-                await result
+            await self._deliver_with_retries(delivery)
             self._logger.info(
                 "Subconscious thought delivered: channel=%s user_id=%s created_at=%s",
                 recipient.channel,
@@ -536,6 +539,36 @@ class SubconsciousLoop:
             self._logger.warning("Subconscious delivery failed; recording internal thought", exc_info=True)
             if internal_content:
                 await self._write_internal_thought(internal_content)
+
+    async def _deliver_with_retries(self, delivery: SubconsciousDelivery) -> None:
+        """Deliver a subconscious thought, retrying transient sink failures."""
+        if self._delivery_sink is None:
+            raise RuntimeError("Subconscious delivery sink is not configured")
+
+        attempts = max(1, int(self._delivery_retries) + 1)
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                result = self._delivery_sink(delivery)
+                if inspect.isawaitable(result):
+                    await result
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt >= attempts:
+                    break
+                self._logger.warning(
+                    "Subconscious delivery attempt %s/%s failed; retrying",
+                    attempt,
+                    attempts,
+                    exc_info=True,
+                )
+                delay = max(0.0, float(self._delivery_retry_delay_seconds))
+                if delay:
+                    await asyncio.sleep(delay * attempt)
+
+        if last_error is not None:
+            raise last_error
 
     @staticmethod
     def _pick_recipient(
