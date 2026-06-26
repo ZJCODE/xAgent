@@ -11,8 +11,6 @@ xAgent is a local-first personal AI agent. Use it from the terminal, Web UI, voi
 pip install myxagent
 ```
 
-Python 3.10 or newer is required.
-
 ## Start
 
 Run:
