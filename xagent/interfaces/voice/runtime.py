@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import threading
 import time
 import unicodedata
@@ -108,6 +109,7 @@ class VoiceRuntime:
         self.player = player
         self.options = options or VoiceRuntimeOptions()
         self.output = output
+        self.logger = logging.getLogger(self.__class__.__name__)
         self.pause_event = threading.Event()
         self.stop_event = threading.Event()
         self._playback_lock = asyncio.Lock()
@@ -541,6 +543,34 @@ class VoiceRuntime:
         self.output("\nSubconscious message")
         async with self._playback_lock:
             await self._play_scheduled_text(text)
+        message_handler = getattr(self.agent, "message_handler", None)
+        store_model_reply = getattr(message_handler, "store_model_reply", None)
+        if callable(store_model_reply):
+            try:
+                recipient_id = str(
+                    delivery.recipient.target.get("user_id")
+                    or delivery.recipient.user_id
+                    or self.options.user_id
+                )
+                await store_model_reply(
+                    text,
+                    getattr(self.agent, "_assistant_sender_id", "agent"),
+                    metadata={
+                        "subconscious": {
+                            "source": "subconscious",
+                            "created_at": delivery.created_at.isoformat(sep=" "),
+                            "recipient": {
+                                "channel": delivery.recipient.channel,
+                                "user_id": delivery.recipient.user_id,
+                                "target": delivery.recipient.target,
+                            },
+                        }
+                    },
+                    channel="voice",
+                    recipient_id=recipient_id,
+                )
+            except Exception:
+                self.logger.debug("Failed to persist voice subconscious delivery", exc_info=True)
 
     async def _scheduled_task_text(self, task: ScheduledTaskRecord) -> str:
         if task.task_type == "message":

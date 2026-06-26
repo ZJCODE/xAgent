@@ -685,6 +685,29 @@ class WeixinAdapter:
             attachments=[],
             stable_key=f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{user_id}",
         )
+        message_handler = getattr(self.agent, "message_handler", None)
+        store_model_reply = getattr(message_handler, "store_model_reply", None)
+        if callable(store_model_reply):
+            try:
+                await store_model_reply(
+                    delivery.content,
+                    getattr(self.agent, "_assistant_sender_id", "agent"),
+                    metadata={
+                        "subconscious": {
+                            "source": "subconscious",
+                            "created_at": delivery.created_at.isoformat(sep=" "),
+                            "recipient": {
+                                "channel": delivery.recipient.channel,
+                                "user_id": delivery.recipient.user_id,
+                                "target": delivery.recipient.target,
+                            },
+                        }
+                    },
+                    channel="weixin",
+                    recipient_id=user_id,
+                )
+            except Exception:
+                self.logger.debug("Failed to persist Weixin subconscious delivery", exc_info=True)
 
     async def _scheduled_task_result(self, task, *, user_id: str) -> _WeixinScheduledTaskResult:
         if task.task_type == "message":

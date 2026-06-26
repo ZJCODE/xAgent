@@ -4,6 +4,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
 from xagent.integrations.weixin.adapter import WeixinAdapter
@@ -191,6 +192,7 @@ class WeixinAdapterTests(unittest.TestCase):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 adapter, _agent, client, _state = self._adapter(tmpdir)
+                _agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
                 adapter._context_tokens["owner@im.wechat"] = "ctx-owner"
                 delivery = SubconsciousDelivery(
                     content="subconscious hello",
@@ -205,14 +207,20 @@ class WeixinAdapterTests(unittest.TestCase):
                 )
 
                 await adapter.deliver_subconscious_message(delivery)
-                return client.sent_text
+                return _agent, client.sent_text
 
-        sent_text = asyncio.run(run_test())
+        agent, sent_text = asyncio.run(run_test())
 
         self.assertEqual(sent_text[0]["to_user_id"], "owner@im.wechat")
         self.assertEqual(sent_text[0]["context_token"], "ctx-owner")
         self.assertEqual(sent_text[0]["text"], "subconscious hello")
         self.assertTrue(sent_text[0]["client_id"])
+        agent.message_handler.store_model_reply.assert_awaited_once()
+        self.assertEqual(agent.message_handler.store_model_reply.await_args.args[0], "subconscious hello")
+        self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["channel"], "weixin")
+        self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["recipient_id"], "owner@im.wechat")
+        metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
+        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,8 @@ import threading
 import time
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from xagent.core.runtime import (
     ContactEntry,
@@ -540,8 +541,10 @@ class VoiceRuntimeTests(unittest.TestCase):
     def test_runtime_delivers_subconscious_message_directly(self):
         async def run_task():
             synth = FakeSynthesizer()
+            agent = FakeAgent()
+            agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
             runtime = VoiceRuntime(
-                agent=FakeAgent(),
+                agent=agent,
                 config=voice_channel_config({"api_key": "test-key"}),
                 microphone=FakeMicrophone(),
                 recognizer=FakeRecognizer([]),
@@ -564,11 +567,17 @@ class VoiceRuntimeTests(unittest.TestCase):
 
             await runtime.deliver_subconscious_message(delivery)
 
-            return synth.calls
+            return agent, synth.calls
 
-        calls = asyncio.run(run_task())
+        agent, calls = asyncio.run(run_task())
 
         self.assertEqual(calls[0]["chunks"], ["direct voice thought"])
+        agent.message_handler.store_model_reply.assert_awaited_once()
+        self.assertEqual(agent.message_handler.store_model_reply.await_args.args[0], "direct voice thought")
+        self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["channel"], "voice")
+        self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["recipient_id"], "alice")
+        metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
+        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
 
     def test_runtime_default_keeps_microphone_paused_during_playback(self):
         config = voice_channel_config({"api_key": "test-key"})
