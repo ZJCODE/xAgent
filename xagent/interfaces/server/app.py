@@ -701,7 +701,7 @@ class AgentHTTPServer(BaseAgentRunner):
 
     @staticmethod
     def _memory_scope_roots(memory_dir: Path) -> List[Path]:
-        return [memory_dir / scope for scope in ("daily", "weekly", "monthly", "yearly")]
+        return [memory_dir / scope for scope in ("daily", "weekly", "monthly", "yearly", "relationships")]
 
     def _get_identity_path(self) -> Path:
         identity_path = getattr(self, "identity_path", None)

@@ -1,11 +1,13 @@
 import { RefreshCw, Search, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FileTree } from "../components/FileTree";
 import { Markdown } from "../components/Markdown";
 import { BrowserLayout, Button, EmptyState, IconButton, PageShell, PageToolbar, SearchField } from "../components/ui";
 import { getAgentInfo, getMemoryTree, readMemoryFile, searchMemory } from "../lib/api";
 import { formatTimestamp } from "../lib/format";
 import type { AgentInfo, FileNode, FileReadResult, SearchResult } from "../types";
+
+const TIME_SCOPES = new Set(["daily", "weekly", "monthly", "yearly"]);
 
 export function MemoryPage() {
   const [info, setInfo] = useState<AgentInfo | null>(null);
@@ -54,6 +56,19 @@ export function MemoryPage() {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
+
+  const { timeNodes, relNodes } = useMemo(() => {
+    const time: FileNode[] = [];
+    const rel: FileNode[] = [];
+    for (const node of tree) {
+      if (TIME_SCOPES.has(node.name)) {
+        time.push(node);
+      } else {
+        rel.push(node);
+      }
+    }
+    return { timeNodes: time, relNodes: rel };
+  }, [tree]);
 
   return (
     <PageShell>
@@ -104,7 +119,20 @@ export function MemoryPage() {
           ) : loading ? (
             <EmptyState title="Loading..." />
           ) : (
-            <FileTree nodes={tree} selectedPath={selected?.path} onSelect={selectFile} />
+            <div className="space-y-3">
+              {timeNodes.length > 0 && (
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 px-1">Time</div>
+                  <FileTree nodes={timeNodes} selectedPath={selected?.path} onSelect={selectFile} />
+                </div>
+              )}
+              {relNodes.length > 0 && (
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 px-1">Relationships</div>
+                  <FileTree nodes={relNodes} selectedPath={selected?.path} onSelect={selectFile} />
+                </div>
+              )}
+            </div>
           )
         }
       >
