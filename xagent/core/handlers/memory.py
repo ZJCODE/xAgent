@@ -237,7 +237,7 @@ class MemoryHandler:
         A best-effort projection over the diary stream: failures here must
         never break diary maintenance, so everything is wrapped defensively.
         """
-        if not AgentConfig.RELATIONSHIP_MEMORY_ENABLED or self.relationship_store is None:
+        if self.relationship_store is None:
             return
         try:
             participants = self._extract_participants(recent_messages)
@@ -331,7 +331,7 @@ class MemoryHandler:
         so the subconscious can emit a deterministic ``recipient_hint``; reply
         turns leave it off so the identifier is never exposed to users.
         """
-        if not AgentConfig.RELATIONSHIP_MEMORY_ENABLED or self.relationship_store is None:
+        if self.relationship_store is None:
             return ""
 
         ordered_keys: list[str] = []
@@ -357,13 +357,10 @@ class MemoryHandler:
         if not cards:
             return ""
 
-        budget = max(120, AgentConfig.RELATIONSHIP_CARD_INJECT_CHARS)
         blocks: list[str] = []
         for card in cards:
             name = card.display_name or card.user_id or card.key
             body = card.body.strip()
-            if len(body) > budget:
-                body = body[:budget].rstrip() + " …"
             if include_routing_id and card.user_id:
                 header = f"## {name} [user_id: {card.user_id}]"
             else:

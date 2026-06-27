@@ -269,17 +269,6 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         rendered_cards = context.count("## ")
         self.assertEqual(rendered_cards, AgentConfig.RELATIONSHIP_MAX_CARDS_PER_TURN)
 
-    async def test_get_relationship_context_empty_when_disabled(self):
-        storage = _FakeMessageStorage()
-        handler = self._make_handler(storage, _FakeDiaryLLMService())
-        original = AgentConfig.RELATIONSHIP_MEMORY_ENABLED
-        AgentConfig.RELATIONSHIP_MEMORY_ENABLED = False
-        try:
-            context = await handler.get_relationship_context(speaker_keys=["feishu:p0"])
-        finally:
-            AgentConfig.RELATIONSHIP_MEMORY_ENABLED = original
-        self.assertEqual(context, "")
-
     async def test_get_relationship_context_routing_id_only_in_subconscious(self):
         await self.store.write_card(
             RelationshipCard(

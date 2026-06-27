@@ -241,7 +241,7 @@ class Agent:
 
         participant_keys: list[str] = []
         seen = {speaker_key}
-        max_peers = max(0, AgentConfig.RELATIONSHIP_MAX_PARTICIPANT_CARDS)
+        max_peers = max(0, AgentConfig.RELATIONSHIP_MAX_CARDS_PER_TURN - 1)
         for message in reversed(recent_messages):
             if len(participant_keys) >= max_peers:
                 break

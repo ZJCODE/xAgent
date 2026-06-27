@@ -92,17 +92,9 @@ class AgentConfig:
 
     # ------------------------------------------------------------------
     # Relationship memory (per-person cards derived from the diary)
-    # A relationship card is a regenerable projection over the unified
-    # diary stream, not a separate source of truth. These bounds cap how
-    # many cards are injected per turn and how large each rendered card is.
     # ------------------------------------------------------------------
-    RELATIONSHIP_MEMORY_ENABLED = True
     # Max relationship cards injected into a single turn (speaker + others).
     RELATIONSHIP_MAX_CARDS_PER_TURN = 4
-    # Max additional participant cards (beyond the current speaker) in group rooms.
-    RELATIONSHIP_MAX_PARTICIPANT_CARDS = 3
-    # Soft character cap for a single rendered card body when injected.
-    RELATIONSHIP_CARD_INJECT_CHARS = 1200
     # Max cards summarised for the subconscious thinking layer.
     RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS = 6
 
