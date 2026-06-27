@@ -150,6 +150,8 @@ class ScheduledTaskRecord:
             "next_run_at": self.run_at.isoformat(sep=" "),
             "recurrence": self.recurrence or None,
             "status": self.status,
+            "state": self.state,
+            "reason": self.reason,
             "channel": self.delivery_channel or "local",
             "user_id": self.delivery_user_id,
             "target": self.target,
@@ -300,11 +302,11 @@ def delete_task_file(tasks_dir: Path | str, name: str) -> ScheduledTaskRecord:
 
 
 def delete_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
-    """Delete an active scheduled task by stable task id."""
+    """Delete a scheduled task by stable task id (searches active and failed)."""
     normalized_task_id = str(task_id or "").strip()
     if not normalized_task_id:
         raise ValueError("task_id is required")
-    for record in list_active_task_records(tasks_dir):
+    for record in list_task_records(tasks_dir):
         if record.task_id != normalized_task_id:
             continue
         record.path.unlink()
@@ -416,8 +418,12 @@ class AsyncTaskScheduler:
                 await self.dispatch(claimed)
             except Exception as exc:
                 self.logger.exception("scheduled task failed -> %s: %s", record.name, exc)
-                self._quarantine(claimed_path, record.name, "failed")
-                continue
+                if not claimed.recurrence:
+                    self._quarantine(claimed_path, record.name, "failed")
+                    continue
+                # Recurring task: log the failure but fall through to
+                # _complete_record to reschedule instead of
+                # quarantining permanently.
             try:
                 self._complete_record(claimed_path, claimed)
             except Exception as exc:

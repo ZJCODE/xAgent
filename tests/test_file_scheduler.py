@@ -182,10 +182,10 @@ class ScheduledTaskTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
-    def test_async_scheduler_quarantines_failed_daily_task_without_reschedule(self):
+    def test_async_scheduler_reschedules_failed_daily_task_on_dispatch_error(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
-                enqueue_scheduled_task(
+                original = enqueue_scheduled_task(
                     task_type="message",
                     content="写日报",
                     run_at=datetime(2026, 6, 1, 10, 0, 0),
@@ -207,20 +207,21 @@ class ScheduledTaskTests(unittest.TestCase):
                 active_records = list_task_records(tmpdir, include_failed=False)
                 all_records = list_task_records(tmpdir)
 
-            self.assertEqual(active_records, [])
+            self.assertEqual(len(active_records), 1)
+            self.assertEqual(active_records[0].task_id, original.task_id)
+            self.assertEqual(active_records[0].recurrence, [{"kind": "daily", "time": "10:00:00"}])
+            self.assertEqual(active_records[0].run_at, datetime(2026, 6, 2, 10, 0, 0))
             self.assertEqual(len(all_records), 1)
-            self.assertEqual(all_records[0].state, "failed")
-            self.assertEqual(all_records[0].recurrence, [{"kind": "daily", "time": "10:00:00"}])
 
         async def _raise_dispatch_error(task):
             raise RuntimeError(f"boom: {task.content}")
 
         asyncio.run(run_test())
 
-    def test_async_scheduler_quarantines_failed_weekly_task_without_reschedule(self):
+    def test_async_scheduler_reschedules_failed_weekly_task_on_dispatch_error(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
-                enqueue_scheduled_task(
+                original = enqueue_scheduled_task(
                     task_type="message",
                     content="走路",
                     run_at=datetime(2026, 6, 3, 14, 28, 0),
@@ -242,10 +243,11 @@ class ScheduledTaskTests(unittest.TestCase):
                 active_records = list_task_records(tmpdir, include_failed=False)
                 all_records = list_task_records(tmpdir)
 
-            self.assertEqual(active_records, [])
+            self.assertEqual(len(active_records), 1)
+            self.assertEqual(active_records[0].task_id, original.task_id)
+            self.assertEqual(active_records[0].recurrence, [{"kind": "weekly", "time": "14:28:00", "weekdays": ["wed", "fri"]}])
+            self.assertEqual(active_records[0].run_at, datetime(2026, 6, 5, 14, 28, 0))
             self.assertEqual(len(all_records), 1)
-            self.assertEqual(all_records[0].state, "failed")
-            self.assertEqual(all_records[0].recurrence, [{"kind": "weekly", "time": "14:28:00", "weekdays": ["wed", "fri"]}])
 
         async def _raise_dispatch_error(task):
             raise RuntimeError(f"boom: {task.content}")

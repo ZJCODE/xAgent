@@ -10,6 +10,7 @@ from xagent.core.runtime import (
     delete_scheduled_task,
     enqueue_scheduled_task,
     list_active_task_views,
+    list_task_records,
     resolve_scheduled_task_run_at,
 )
 from xagent.utils.tool_decorator import function_tool
@@ -47,7 +48,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
         task_id: Optional[str] = None,
     ) -> dict:
         if action == "list":
-            tasks = list_active_task_views(task_root)
+            tasks = [r.to_task_view() for r in list_task_records(task_root)]
             return {
                 "ok": True,
                 "action": "list",

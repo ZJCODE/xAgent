@@ -14,7 +14,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 
 from .models import IdentityInput, SkillCreateInput, SkillStateInput, SkillWriteInput, WorkspaceWriteInput
 from .serializers import message_item, message_search_result
-from ...core.runtime import delete_scheduled_task, list_active_task_views
+from ...core.runtime import delete_scheduled_task, list_task_records
 from ...schemas.attachment import (
     DEFAULT_WEB_ATTACHMENT_DIR,
     DEFAULT_WEB_IMAGE_DIR,
@@ -90,7 +90,7 @@ def register_admin_routes(
 
     @app.get("/api/tasks", tags=["Monitoring"])
     async def tasks_list():
-        tasks = list_active_task_views(server.tasks_dir)
+        tasks = [record.to_task_view() for record in list_task_records(server.tasks_dir)]
         return {
             "root": str(server.tasks_dir),
             "tasks": tasks,
