@@ -16,7 +16,6 @@ policy.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import re
@@ -57,10 +56,9 @@ class RelationshipCard:
 class RelationshipStore:
     """Store relationship cards as one markdown file per person.
 
-    Files live under ``<root>/`` with a filesystem-safe slug derived from the
-    person key plus a short hash to avoid collisions between distinct keys that
-    sanitise to the same slug. Each file starts with a single metadata comment
-    line owned by this store, followed by the LLM-managed card body.
+    Files live under ``<root>/<channel>/<user_id>.md``. Each file starts with
+    a single metadata comment line owned by this store, followed by the
+    LLM-managed card body.
     """
 
     def __init__(self, relationships_dir: str) -> None:
@@ -85,13 +83,14 @@ class RelationshipStore:
         channel, _, user_id = key.partition(":")
         return channel, user_id
 
-    def _slug(self, key: str) -> str:
-        sanitized = _SLUG_UNSAFE.sub("_", key.strip()).strip("_") or "person"
-        digest = hashlib.blake2b(key.strip().encode("utf-8"), digest_size=4).hexdigest()
-        return f"{sanitized[:48]}.{digest}"
+    @staticmethod
+    def _safe_segment(value: str) -> str:
+        sanitized = _SLUG_UNSAFE.sub("_", value.strip()).strip("_") or "unknown"
+        return sanitized[:64]
 
     def card_path(self, key: str) -> Path:
-        return self.root / f"{self._slug(key)}.md"
+        channel, user_id = self.split_key(key)
+        return self.root / self._safe_segment(channel) / f"{self._safe_segment(user_id)}.md"
 
     # ------------------------------------------------------------------
     # Read
@@ -221,4 +220,4 @@ class RelationshipStore:
     def _list_paths_sync(search_dir: Path) -> List[Path]:
         if not search_dir.exists():
             return []
-        return sorted(path for path in search_dir.glob("*.md") if path.is_file())
+        return sorted(path for path in search_dir.rglob("*.md") if path.is_file())

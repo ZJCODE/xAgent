@@ -37,11 +37,12 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
     def test_slug_is_filesystem_safe_and_distinct(self):
         path_a = self.store.card_path("feishu:ou_123")
         path_b = self.store.card_path("weixin:ou_123")
-        self.assertNotEqual(path_a.name, path_b.name)
-        # No path-separators or colons leak into the filename.
+        self.assertNotEqual(path_a, path_b)
+        # No colons leak into any path segment below the store root.
         for path in (path_a, path_b):
-            self.assertNotIn(":", path.name)
-            self.assertNotIn("/", path.name)
+            rel = path.relative_to(self.store.root)
+            for part in rel.parts:
+                self.assertNotIn(":", part)
 
     async def test_read_missing_card_returns_none(self):
         self.assertIsNone(await self.store.read_card("feishu:nobody"))

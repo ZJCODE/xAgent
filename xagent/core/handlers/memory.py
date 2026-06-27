@@ -257,6 +257,11 @@ class MemoryHandler:
                 existing_cards=existing_cards,
             )
             if not new_cards:
+                logger.info(
+                    "Relationship card update: no changes for %d participant(s) — %s",
+                    len(participants),
+                    ", ".join(p["key"] for p in participants),
+                )
                 return
 
             from ...components.memory import RelationshipCard
@@ -275,7 +280,11 @@ class MemoryHandler:
                         updated=today_str,
                     )
                 )
-            logger.info("Updated %d relationship card(s)", len(new_cards))
+            logger.info(
+                "Updated %d relationship card(s): %s",
+                len(new_cards),
+                ", ".join(f"{k} ({len(v)} chars)" for k, v in new_cards.items()),
+            )
         except Exception as exc:
             logger.warning("Relationship card update failed: %s", exc, exc_info=True)
 

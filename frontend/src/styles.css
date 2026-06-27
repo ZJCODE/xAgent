@@ -40,9 +40,9 @@
   --text-faint: #687385;
   --accent: #7aa2ff;
   --accent-soft: rgba(122, 162, 255, 0.12);
-  --message-user-bg: #f8fafc;
-  --message-user-text: #0f172a;
-  --message-user-border: rgba(255, 255, 255, 0.18);
+  --message-user-bg: #111418;
+  --message-user-text: #f5f7fa;
+  --message-user-border: #252a33;
   --success: #34d399;
   --success-soft: rgba(52, 211, 153, 0.12);
   --danger: #f87171;

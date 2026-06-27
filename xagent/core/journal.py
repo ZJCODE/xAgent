@@ -156,6 +156,14 @@ Period focus:
             transcript=transcript,
         )
 
+        participant_keys = [str(p.get("key", "?")) for p in participants]
+        self.logger.info(
+            "Updating relationship cards for %d participant(s): %s (transcript: %d chars)",
+            len(participants),
+            ", ".join(participant_keys),
+            len(transcript),
+        )
+
         try:
             content = await self._call_text(
                 system_prompt=system_prompt,
@@ -166,7 +174,14 @@ Period focus:
             return {}
 
         valid_keys = {str(p.get("key")) for p in participants if p.get("key")}
-        return self._parse_relationship_cards(content, valid_keys)
+        result = self._parse_relationship_cards(content, valid_keys)
+        self.logger.info(
+            "Relationship cards result: %d updated, %d skipped — %s",
+            len(result),
+            len(valid_keys) - len(result),
+            ", ".join(result.keys()) if result else "(none)",
+        )
+        return result
 
     @staticmethod
     def build_relationship_update_system_prompt() -> str:
