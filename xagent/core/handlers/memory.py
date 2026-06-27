@@ -20,10 +20,10 @@ except ImportError:  # pragma: no cover - POSIX platforms
     msvcrt = None
 
 from ..config import AgentConfig
-from ...schemas import Message, MessageType
+from ...schemas import Message, MessageType, RoleType
 
 if TYPE_CHECKING:
-    from ...components.memory import MarkdownMemory
+    from ...components.memory import MarkdownMemory, RelationshipStore
     from ...components.message import MessageStorage
     from ..journal import JournalLLMService
 
@@ -45,10 +45,12 @@ class MemoryHandler:
         max_history: int,
         recent_days: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
+        relationship_store: Optional["RelationshipStore"] = None,
     ) -> None:
         self.memory = memory
         self.llm_service = llm_service
         self.message_storage = message_storage
+        self.relationship_store = relationship_store
         self.max_history = self._positive_int(max_history, AgentConfig.DEFAULT_MAX_HISTORY)
         self.recent_days = self._positive_int(recent_days, self.RECENT_DAYS)
         self.window_overlap = min(
@@ -199,6 +201,8 @@ class MemoryHandler:
             ):
                 return False
 
+        await self._update_relationship_cards(recent_messages, new_records)
+
         if not await self._commit_processed_message_id(end_inclusive):
             logger.warning(
                 "Diary write completed but checkpoint was not advanced; retry will replay pending messages."
@@ -218,6 +222,145 @@ class MemoryHandler:
             "timestamp": message.timestamp,
             "metadata": metadata,
         }
+
+    # ------------------------------------------------------------------
+    # Relationship cards (derived projection over the diary)
+    # ------------------------------------------------------------------
+
+    async def _update_relationship_cards(
+        self,
+        recent_messages: List[Message],
+        new_records: List[dict],
+    ) -> None:
+        """Derive/update per-person relationship cards from this batch.
+
+        A best-effort projection over the diary stream: failures here must
+        never break diary maintenance, so everything is wrapped defensively.
+        """
+        if not AgentConfig.RELATIONSHIP_MEMORY_ENABLED or self.relationship_store is None:
+            return
+        try:
+            participants = self._extract_participants(recent_messages)
+            if not participants:
+                return
+
+            store = self.relationship_store
+            existing_cards: dict[str, str] = {}
+            for participant in participants:
+                card = await store.read_card(participant["key"])
+                if card is not None and not card.is_empty:
+                    existing_cards[participant["key"]] = card.body
+
+            new_cards = await self.llm_service.update_relationship_cards(
+                participants=participants,
+                messages=new_records,
+                existing_cards=existing_cards,
+            )
+            if not new_cards:
+                return
+
+            from ...components.memory import RelationshipCard
+
+            today_str = date.today().isoformat()
+            participant_by_key = {p["key"]: p for p in participants}
+            for key, body in new_cards.items():
+                participant = participant_by_key.get(key, {})
+                await store.write_card(
+                    RelationshipCard(
+                        key=key,
+                        body=body,
+                        display_name=str(participant.get("display_name") or ""),
+                        channel=str(participant.get("channel") or ""),
+                        user_id=str(participant.get("user_id") or ""),
+                        updated=today_str,
+                    )
+                )
+            logger.info("Updated %d relationship card(s)", len(new_cards))
+        except Exception as exc:
+            logger.warning("Relationship card update failed: %s", exc, exc_info=True)
+
+    @staticmethod
+    def _extract_participants(messages: List[Message]) -> List[dict]:
+        """Collect distinct human participants (non-self) from a batch."""
+        from ...components.memory import RelationshipStore
+
+        participants: dict[str, dict] = {}
+        for message in messages:
+            if message.type != MessageType.MESSAGE:
+                continue
+            if message.role != RoleType.USER:
+                continue
+            user_id = (message.sender_id or "").strip()
+            if not user_id:
+                continue
+            channel = (message.channel or "").strip()
+            key = RelationshipStore.make_key(channel, user_id)
+            if key in participants:
+                continue
+            metadata = message.metadata or {}
+            display_name = str(metadata.get("sender_name") or "").strip() or user_id
+            participants[key] = {
+                "key": key,
+                "display_name": display_name,
+                "channel": channel,
+                "user_id": user_id,
+            }
+        return list(participants.values())
+
+    async def get_relationship_context(
+        self,
+        speaker_keys: List[str],
+        participant_keys: Optional[List[str]] = None,
+        max_cards: Optional[int] = None,
+        include_routing_id: bool = False,
+    ) -> str:
+        """Return rendered relationship cards for the given people.
+
+        ``speaker_keys`` (the current speaker) are always included first;
+        ``participant_keys`` (other people in the room) fill remaining budget.
+        ``include_routing_id`` appends each person's ``user_id`` to the header
+        so the subconscious can emit a deterministic ``recipient_hint``; reply
+        turns leave it off so the identifier is never exposed to users.
+        """
+        if not AgentConfig.RELATIONSHIP_MEMORY_ENABLED or self.relationship_store is None:
+            return ""
+
+        ordered_keys: list[str] = []
+        seen: set[str] = set()
+        for key in [*(speaker_keys or []), *(participant_keys or [])]:
+            normalized = (key or "").strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                ordered_keys.append(normalized)
+
+        resolved_max = max_cards if max_cards is not None else AgentConfig.RELATIONSHIP_MAX_CARDS_PER_TURN
+        resolved_max = max(1, resolved_max)
+        ordered_keys = ordered_keys[:resolved_max]
+        if not ordered_keys:
+            return ""
+
+        try:
+            cards = await self.relationship_store.read_cards(ordered_keys)
+        except Exception as exc:
+            logger.warning("Failed to read relationship cards: %s", exc, exc_info=True)
+            return ""
+
+        if not cards:
+            return ""
+
+        budget = max(120, AgentConfig.RELATIONSHIP_CARD_INJECT_CHARS)
+        blocks: list[str] = []
+        for card in cards:
+            name = card.display_name or card.user_id or card.key
+            body = card.body.strip()
+            if len(body) > budget:
+                body = body[:budget].rstrip() + " …"
+            if include_routing_id and card.user_id:
+                header = f"## {name} [user_id: {card.user_id}]"
+            else:
+                header = f"## {name}"
+            blocks.append(f"{header}\n{body}")
+        return "\n\n".join(blocks)
 
     @staticmethod
     def _is_memory_worthy_experience(message: Message) -> bool:

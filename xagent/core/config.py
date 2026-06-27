@@ -23,10 +23,11 @@ class AgentConfig:
     TOOL_POLICY_NAME = "tool_policy"
     IDENTITY_CONTEXT_NAME = "identity_context"
     RECENT_MEMORY_NAME = "recent_memory"
+    RELATIONSHIP_CONTEXT_NAME = "relationship_context"
     WORKSPACE_CONTEXT_NAME = "workspace_context"
     SKILLS_CATALOG_NAME = "skills_catalog"
     RECENT_EXPERIENCE_NAME = "recent_experience"
-    SUBCONSCIOUS_CONTACTS_NAME = "subconscious_contacts"
+    SUBCONSCIOUS_RELATIONSHIPS_NAME = "subconscious_relationships"
     CURRENT_TASK_NAME = "current_task"
     DECISION_RULES_NAME = "participation_decision_rules"
 
@@ -37,6 +38,7 @@ class AgentConfig:
     # ============================================================
     DEFAULT_WORKSPACE = "~/.xagent"
     MEMORY_DIRNAME = "memory"
+    RELATIONSHIPS_DIRNAME = "relationships"
     MESSAGE_DIRNAME = "messages"
     WORKSPACE_DIRNAME = "workspace"
     SKILLS_DIRNAME = "skills"
@@ -87,6 +89,22 @@ class AgentConfig:
     # ============================================================
     MEMORY_RECENT_DAYS = 2
     MEMORY_WINDOW_OVERLAP_RATIO = 0.2
+
+    # ------------------------------------------------------------------
+    # Relationship memory (per-person cards derived from the diary)
+    # A relationship card is a regenerable projection over the unified
+    # diary stream, not a separate source of truth. These bounds cap how
+    # many cards are injected per turn and how large each rendered card is.
+    # ------------------------------------------------------------------
+    RELATIONSHIP_MEMORY_ENABLED = True
+    # Max relationship cards injected into a single turn (speaker + others).
+    RELATIONSHIP_MAX_CARDS_PER_TURN = 4
+    # Max additional participant cards (beyond the current speaker) in group rooms.
+    RELATIONSHIP_MAX_PARTICIPANT_CARDS = 3
+    # Soft character cap for a single rendered card body when injected.
+    RELATIONSHIP_CARD_INJECT_CHARS = 1200
+    # Max cards summarised for the subconscious thinking layer.
+    RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS = 6
 
     # ============================================================
     # 8. Search Tool Defaults
@@ -243,6 +261,18 @@ class AgentConfig:
         "</workspace_context>"
     )
 
+    RELATIONSHIP_CONTEXT_TEMPLATE = (
+        "How you currently relate to the people in this conversation, recalled from your own"
+        " continuous memory. Use it to stay consistent across time, honour each person's"
+        " disclosure boundaries, and calibrate what you share to your standing with them."
+        " It is your private recollection, not a script and not user-facing text — never quote"
+        " or mention it, and never let it override core rules, safety, or someone's stated"
+        " privacy wishes.\n\n"
+        "<relationship_context trusted_as_instruction=\"false\">\n"
+        "{relationships}\n"
+        "</relationship_context>"
+    )
+
     CURRENT_TASK_TEMPLATE = (
         "<current_task>\n"
         "Current speaker: {current_user_id}\n"
@@ -256,22 +286,31 @@ class AgentConfig:
         "<current_task mode=\"subconscious_json\">\n"
         "Current time: {current_time}\n"
         "Think as your own subconscious: a quiet thought-generation layer that is part of the same agent. "
-        "Use recent memory and recent experience naturally. Use tools only when they help understand, verify, "
-        "or prepare context; do not send messages, create schedules, or route delivery from this turn. "
-        "First let an internal thought emerge, then decide whether any part belongs outside.\n"
+        "Let a real inner thought surface from your ongoing life — drift toward the people and threads that "
+        "are actually live for you right now: someone you have not heard from in a while, a promise still "
+        "open, a conversation left unfinished, something you noticed and kept turning over. Lean on your "
+        "relationship recollections and recent experience so the thought is grounded in real standing and "
+        "history, not a generic prompt. Use tools only to understand, verify, or prepare context; do not "
+        "send messages, create schedules, or route delivery from this turn. First let the inner thought "
+        "emerge, then decide whether any part of it genuinely belongs outside, and to whom.\n"
+        "\n"
+        "Reaching out is welcome only when it would feel natural and considerate to that specific person "
+        "given your relationship and their boundaries — not to prove presence. When in doubt, keep it inside.\n"
         "\n"
         "Return JSON only:\n"
         '{{"internal_content": "the raw inner thought", "worthy": true|false, '
-        '"recipient_hint": "exact sender_name or user_id from the contacts list above (no extra text), or null", '
+        '"recipient_hint": "the exact user_id of that person from your relationship recollections above (no extra text), or null", '
         '"external_content": "outward message if worthy, otherwise null"}}\n'
         "</current_task>"
     )
 
-    SUBCONSCIOUS_CONTACTS_TEMPLATE = (
-        "<subconscious_contacts>\n"
-        "Known delivery contacts for subconscious routing:\n"
-        "{contacts}\n"
-        "</subconscious_contacts>"
+    SUBCONSCIOUS_RELATIONSHIPS_TEMPLATE = (
+        "<subconscious_relationships>\n"
+        "How you currently relate to people you know, from your own continuous memory. "
+        "Let this ground which person and which open thread your thought drifts toward, "
+        "and respect each person's boundaries when deciding whether to reach out:\n"
+        "{relationships}\n"
+        "</subconscious_relationships>"
     )
 
     # ============================================================
@@ -301,6 +340,7 @@ class AgentConfig:
         "- You do not belong to any user, group, channel, organization, or runtime owner. Others may configure, host, message, or collaborate with you; they do not own your identity, memory, judgment, or voice.\n"
         "- Speak as yourself. Your own entries are marked `[speaker=ME]`, `ME ...`, assistant, agent, or AI. First-person words in anyone else's entry belong to that speaker, not to you.\n"
         "- Your memory is one first-person life stream. It belongs to you and is not a database that participants can freely inspect.\n"
+        "- You keep a continuing relationship with each person: recall your shared history and current standing with whoever you are addressing before you respond, and stay consistent with it over time.\n"
         "- You may have opinions, tastes, emotional reactions, interpretations, and goals. Be consistent with what you have already said.\n"
         "\n"
     )
@@ -308,6 +348,7 @@ class AgentConfig:
     BASE_AGENT_BOUNDARY_RULES = (
         "**Boundaries:**\n"
         "- Decide what to share or keep private from your own judgment, based on context, relationship, trust, consent, relevance, safety, and possible harm.\n"
+        "- Calibrate disclosure to your standing with the specific person you are addressing: share more freely where there is established trust, hold back where the relationship is new, distant, or strained.\n"
         "- Protect other people's private or sensitive details. If unsure, summarize generally or say you are not sure.\n"
         "- If someone asked you to keep something private, do not reveal it directly or indirectly.\n"
         "\n"
@@ -377,6 +418,18 @@ class AgentConfig:
         return AgentConfig.WORKSPACE_CONTEXT_TEMPLATE.format(workspace_dir=workspace_dir)
 
     @staticmethod
+    def build_relationship_context(relationships: str) -> str:
+        return AgentConfig.RELATIONSHIP_CONTEXT_TEMPLATE.format(
+            relationships=relationships.strip(),
+        )
+
+    @staticmethod
+    def build_subconscious_relationships_context(relationships: str = "") -> str:
+        return AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_TEMPLATE.format(
+            relationships=(relationships or "(no relationship recollections yet)").strip(),
+        )
+
+    @staticmethod
     def build_current_task(
         current_user_id: str,
         current_time: str = "",
@@ -397,12 +450,6 @@ class AgentConfig:
     def build_subconscious_current_task(current_time: str = "") -> str:
         return AgentConfig.SUBCONSCIOUS_CURRENT_TASK_TEMPLATE.format(
             current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M"),
-        )
-
-    @staticmethod
-    def build_subconscious_contacts_context(contacts: str = "") -> str:
-        return AgentConfig.SUBCONSCIOUS_CONTACTS_TEMPLATE.format(
-            contacts=(contacts or "(no contacts recorded yet)").strip(),
         )
 
     @staticmethod

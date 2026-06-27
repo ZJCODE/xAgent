@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Any, List, Optional
@@ -128,6 +129,124 @@ Period focus:
         return f"""Generate a {period_type} summary for {period_label}:
 
 {source_content}"""
+
+    async def update_relationship_cards(
+        self,
+        participants: List[dict],
+        messages: List[dict],
+        existing_cards: dict[str, str],
+    ) -> dict[str, str]:
+        """Derive updated per-person relationship cards from a message batch.
+
+        Each card is a first-person, regenerable projection over the diary —
+        not a separate memory store. Returns ``{person_key: card_body}`` for the
+        people that have something durable to record.
+        """
+        if not participants or not messages:
+            return {}
+
+        transcript = self._format_transcript(messages)
+        if not transcript.strip():
+            return {}
+
+        system_prompt = self.build_relationship_update_system_prompt()
+        user_prompt = self.build_relationship_update_user_prompt(
+            participants=participants,
+            existing_cards=existing_cards,
+            transcript=transcript,
+        )
+
+        try:
+            content = await self._call_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+        except Exception as exception:
+            self.logger.error("Error updating relationship cards: %s", exception)
+            return {}
+
+        valid_keys = {str(p.get("key")) for p in participants if p.get("key")}
+        return self._parse_relationship_cards(content, valid_keys)
+
+    @staticmethod
+    def build_relationship_update_system_prompt() -> str:
+        return """You keep your own private relationship notes: one short first-person card per person you know. A card is your evolving sense of who this person is to you — not a transcript, not a dossier they could read.
+
+For each person listed, update their card from the new experience: carry forward what still holds, revise what changed, drop what is now wrong.
+
+Keep each card first-person ("I"), in the person's own language where natural, covering only durable, useful things:
+- Who they are to me and how we relate — closeness, tone, current standing.
+- Trust and boundaries — what they asked me to keep private, what feels safe to share with them.
+- Shared history that matters — how we met, recurring themes, references between us.
+- Open threads — unfinished conversations, promises either of us made, things to follow up.
+- How being with them tends to feel.
+
+Rules:
+- These are my own impressions. First-person words in the transcript that are not mine (`[speaker=ME]`) belong to that speaker.
+- Stay grounded in what actually happened; keep uncertainty visible; do not invent closeness or facts.
+- No advice to a reader, no meta commentary, no headings boilerplate. Keep each card roughly 60-400 characters.
+
+Input markers:
+- `[speaker=Name][timestamp=Time][channel=Channel]` — Name spoke via Channel. `[speaker=ME]` — I said or did this.
+- `[ambient context][timestamp=Time][channel=Channel]` — something I noticed or received, not a direct message.
+- `[internal_monologue][timestamp=Time]` — my own internal thought.
+- `[room context]` ... `[/room context]` — group transcript lines; `ME ...` inside means me.
+
+Return JSON only: an object mapping each person key to their full updated card text. Use exactly the keys provided. Omit a person only if there is genuinely nothing durable to record. No code fences, no commentary."""
+
+    @staticmethod
+    def build_relationship_update_user_prompt(
+        participants: List[dict],
+        existing_cards: dict[str, str],
+        transcript: str,
+    ) -> str:
+        people_blocks: List[str] = []
+        for participant in participants:
+            key = str(participant.get("key") or "").strip()
+            if not key:
+                continue
+            name = str(participant.get("display_name") or "").strip() or key
+            existing = str(existing_cards.get(key) or "").strip()
+            existing_text = existing if existing else "(no card yet)"
+            people_blocks.append(
+                f'- key="{key}" name="{name}"\n'
+                f"  existing card:\n"
+                f"  {existing_text}"
+            )
+        people_section = "\n".join(people_blocks)
+        return f"""People to update (use these exact keys in your JSON object):
+{people_section}
+
+New experience:
+{transcript}"""
+
+    @staticmethod
+    def _parse_relationship_cards(content: str, valid_keys: set[str]) -> dict[str, str]:
+        cleaned = str(content or "").strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            end = None
+            for index in range(len(lines) - 1, 0, -1):
+                if lines[index].strip() == "```":
+                    end = index
+                    break
+            if end is not None:
+                cleaned = "\n".join(lines[1:end]).strip()
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        result: dict[str, str] = {}
+        for key, value in parsed.items():
+            normalized_key = str(key).strip()
+            if valid_keys and normalized_key not in valid_keys:
+                continue
+            body = str(value or "").strip()
+            if body:
+                result[normalized_key] = body
+        return result
 
     async def _call_text(
         self,

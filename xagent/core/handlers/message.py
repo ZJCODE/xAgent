@@ -271,6 +271,7 @@ class MessageHandler:
         messages: List[Message],
         current_user_id: str,
         memory_context: str = "",
+        relationship_context: str = "",
         workspace_context: str = "",
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
@@ -282,7 +283,6 @@ class MessageHandler:
         current_message: Optional[Message] = None,
         channel_instructions: str = "",
         task_mode: str = "reply",
-        contacts_context: str = "",
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -316,6 +316,23 @@ class MessageHandler:
                 ),
             })
 
+        if relationship_context.strip():
+            if task_mode == "subconscious_json":
+                relationship_layer_name = AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_NAME
+                relationship_layer_content = AgentConfig.build_subconscious_relationships_context(
+                    relationship_context
+                )
+            else:
+                relationship_layer_name = AgentConfig.RELATIONSHIP_CONTEXT_NAME
+                relationship_layer_content = AgentConfig.build_relationship_context(
+                    relationship_context
+                )
+            context_messages.append({
+                "role": RoleType.USER.value,
+                "name": relationship_layer_name,
+                "content": relationship_layer_content,
+            })
+
         context_messages.append({
             "role": RoleType.USER.value,
             "name": AgentConfig.RECENT_EXPERIENCE_NAME,
@@ -332,12 +349,6 @@ class MessageHandler:
             or datetime.now().strftime("%Y-%m-%d %H:%M")
         )
         if task_mode == "subconscious_json":
-            if contacts_context.strip():
-                context_messages.append({
-                    "role": RoleType.USER.value,
-                    "name": AgentConfig.SUBCONSCIOUS_CONTACTS_NAME,
-                    "content": AgentConfig.build_subconscious_contacts_context(contacts_context),
-                })
             current_task_text = AgentConfig.build_subconscious_current_task(
                 current_time=resolved_current_time,
             )

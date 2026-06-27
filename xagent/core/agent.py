@@ -7,6 +7,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 from ..components import (
     MarkdownMemory,
     MessageStorage,
+    RelationshipStore,
     SkillsStorageBase,
 )
 from .journal import JournalLLMService
@@ -15,7 +16,7 @@ from .config import AgentConfig, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_client, normalize_model_api
 from .tooling import ToolExecutor, ToolManager
-from ..schemas import AgentTurnResult, Message, ParticipationDecision, RoleType
+from ..schemas import AgentTurnResult, Message, MessageType, ParticipationDecision, RoleType
 from ..tools import create_write_memory_tool, create_search_memory_tool
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,9 @@ class Agent:
             memory_dir = str(self._memory_dir(runtime_root))
 
         self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
+        self.relationship_store = RelationshipStore(
+            relationships_dir=str(Path(memory_dir) / AgentConfig.RELATIONSHIPS_DIRNAME)
+        )
         self.llm_service = JournalLLMService(
             client=self.client,
             model=self.model,
@@ -105,6 +109,7 @@ class Agent:
             llm_service=self.llm_service,
             message_storage=self.message_storage,
             max_history=self.max_history,
+            relationship_store=self.relationship_store,
         )
 
         bound_tools = list(tools or [])
@@ -189,6 +194,11 @@ class Agent:
             max_history=self.max_history,
         )
         memory_context = await self.memory_handler.get_recent_context()
+        relationship_context = await self._relationship_context_for_turn(
+            user_msg=user_msg,
+            user_id=user_id,
+            recent_messages=recent_messages,
+        )
         tool_names = list(self.tool_manager._tools)
         tool_specs = self.tool_manager.cached_tool_specs
         workspace_context = self._workspace_context(tool_names)
@@ -203,6 +213,7 @@ class Agent:
             recent_messages,
             current_user_id=user_id,
             memory_context=memory_context,
+            relationship_context=relationship_context,
             max_messages=self.max_history,
             include_images=self.supports_vision,
             workspace_dir=getattr(self, "workspace_dir", None),
@@ -211,6 +222,46 @@ class Agent:
         )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
+
+    async def _relationship_context_for_turn(
+        self,
+        user_msg: Message,
+        user_id: str,
+        recent_messages: List[Message],
+    ) -> str:
+        """Assemble relationship cards for the current speaker and room peers."""
+        memory_handler = getattr(self, "memory_handler", None)
+        if memory_handler is None or not callable(
+            getattr(memory_handler, "get_relationship_context", None)
+        ):
+            return ""
+
+        channel = getattr(user_msg, "channel", None) or ""
+        speaker_key = RelationshipStore.make_key(channel, user_id)
+
+        participant_keys: list[str] = []
+        seen = {speaker_key}
+        max_peers = max(0, AgentConfig.RELATIONSHIP_MAX_PARTICIPANT_CARDS)
+        for message in reversed(recent_messages):
+            if len(participant_keys) >= max_peers:
+                break
+            if message.type != MessageType.MESSAGE or message.role != RoleType.USER:
+                continue
+            peer_id = (message.sender_id or "").strip()
+            if not peer_id:
+                continue
+            peer_key = RelationshipStore.make_key(
+                (message.channel or "").strip(), peer_id
+            )
+            if peer_key in seen:
+                continue
+            seen.add(peer_key)
+            participant_keys.append(peer_key)
+
+        return await memory_handler.get_relationship_context(
+            speaker_keys=[speaker_key],
+            participant_keys=participant_keys,
+        )
 
     async def run_memory_maintenance(self, trigger: str = "count") -> None:
         idle_timeout = AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS

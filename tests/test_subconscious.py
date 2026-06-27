@@ -305,7 +305,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             recent_memory = next(msg for msg in messages if msg.get("name") == AgentConfig.RECENT_MEMORY_NAME)
             self.assertIn("Recent memory content", recent_memory["content"])
 
-    def test_contacts_summary_filters_undeliverable_channels(self):
+    def test_deliverable_filter_keeps_declared_channels_only(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
@@ -320,14 +320,15 @@ class SubconsciousLoopTests(unittest.TestCase):
                 target={"user_id": "api_user", "sender_name": "Alice"},
             )
 
-            summary = loop._collect_contacts_summary()
+            deliverable = loop._filter_deliverable_contacts(load_contacts(loop.contacts_file))
 
-            self.assertIn("Alice", summary)
-            self.assertIn("channel: api", summary)
-            self.assertNotIn("张三", summary)
-            self.assertNotIn("channel: feishu", summary)
+            channels = {contact.channel for contact in deliverable}
+            self.assertEqual(channels, {"api"})
+            user_ids = {contact.user_id for contact in deliverable}
+            self.assertIn("api_user", user_ids)
+            self.assertNotIn("ou_123", user_ids)
 
-    def test_contacts_summary_without_declared_channels_exposes_no_contacts(self):
+    def test_deliverable_filter_without_declared_channels_exposes_no_contacts(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
@@ -337,9 +338,9 @@ class SubconsciousLoopTests(unittest.TestCase):
                 target={"chat_id": "oc_xxx", "sender_name": "张三"},
             )
 
-            summary = loop._collect_contacts_summary()
+            deliverable = loop._filter_deliverable_contacts(load_contacts(loop.contacts_file))
 
-            self.assertEqual(summary, "(no contacts available for this runtime)")
+            self.assertEqual(deliverable, [])
 
     def test_default_pure_thought_omits_tools_and_skills(self):
         """Default subconscious turns keep identity but omit tool/skill capability layers."""

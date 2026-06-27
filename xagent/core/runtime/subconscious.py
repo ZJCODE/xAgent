@@ -355,7 +355,7 @@ class SubconsciousLoop:
             max_history=getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY)
         )
         memory_context = await self._collect_memory_context()
-        contacts_summary = self._collect_contacts_summary()
+        relationship_context = await self._collect_relationship_context()
 
         workspace_context = ""
         skills_catalog = ""
@@ -383,11 +383,11 @@ class SubconsciousLoop:
             recent_messages,
             current_user_id=getattr(self._agent, "_assistant_sender_id", "agent"),
             memory_context=memory_context,
+            relationship_context=relationship_context,
             max_messages=getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY),
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
             task_mode="subconscious_json",
-            contacts_context=contacts_summary,
         )
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
         return instructions, iteration_messages, input_messages, tool_specs
@@ -438,28 +438,30 @@ class SubconsciousLoop:
             self._logger.warning("Failed to collect memory context", exc_info=True)
             return "(memory read failed)"
 
-    def _collect_contacts_summary(self) -> str:
-        """Summarize known contacts for the subconscious prompt.
-
-        Each line shows the fields the agent can use as ``recipient_hint``
-        — prefer the human-readable ``name``, fall back to ``user_id``.
-        """
+    async def _collect_relationship_context(self) -> str:
+        """Collect relationship cards for known contacts to ground the thought."""
+        memory_handler = getattr(self._agent, "memory_handler", None)
+        if memory_handler is None or not callable(
+            getattr(memory_handler, "get_relationship_context", None)
+        ):
+            return ""
         contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         if not contacts:
-            return "(no contacts available for this runtime)"
-        lines: List[str] = ["Contacts (use exact name or user_id for recipient_hint):"]
-        for c in contacts:
-            name = str(c.target.get("sender_name") or "").strip()
-            user_id = str(c.user_id or "").strip()
-            display_name = name or user_id or "unknown"
-            lines.append(
-                f"- name: {display_name}"
-                + (f" | user_id: {user_id}" if name and user_id != name else "")
-                + f" | channel: {c.channel}"
-                + f" | last_seen: {c.last_seen}"
-                + f" | interactions: {c.interaction_count}"
+            return ""
+        from ...components.memory import RelationshipStore
+
+        keys: list[str] = []
+        for contact in contacts:
+            keys.append(RelationshipStore.make_key(contact.channel, contact.user_id))
+        try:
+            return await memory_handler.get_relationship_context(
+                speaker_keys=keys,
+                max_cards=AgentConfig.RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS,
+                include_routing_id=True,
             )
-        return "\n".join(lines)
+        except Exception:
+            self._logger.warning("Failed to collect relationship context", exc_info=True)
+            return ""
 
     async def _write_internal_thought(self, content: str) -> None:
         """Record the thought as an internal monologue context event."""
