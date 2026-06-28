@@ -26,11 +26,11 @@ from ...core.providers import (
 from ...tools.search_tool import is_placeholder_api_key
 from ..base import BaseAgentConfig
 from .agents import (
-    DEFAULT_AGENT_NAME,
     AgentRegistryError,
     default_agent_dir,
     handle_agents,
     load_agent_registry,
+    management_root,
     select_agent,
 )
 from .channels import (
@@ -101,18 +101,18 @@ from .overview import STATUS_DISABLED, RuntimeOverview, build_runtime_overview
 from .terminal_ui import MenuOption, ReturnToLauncherHome, TerminalUI
 
 
-def _launcher_options(*, initialized: bool) -> list[MenuOption]:
+def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[MenuOption]:
     setup_title = "Setup"
     setup_description = (
         "Review and update your current setup."
         if initialized
         else "Create config, identity, workspace, memory, and tasks."
     )
-    return [
+    options = [
         MenuOption(
             key="agent",
             title="Agents",
-            description="Switch, create, or inspect managed agents.",
+            description="Create, switch, or inspect managed agents.",
         ),
         MenuOption(
             key="channel",
@@ -127,11 +127,6 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
             disabled=not initialized,
         ),
         MenuOption(
-            key="setup",
-            title=setup_title,
-            description=setup_description,
-        ),
-        MenuOption(
             key="help",
             title="Help",
             description="Learn the common xAgent commands and when to use them.",
@@ -142,6 +137,16 @@ def _launcher_options(*, initialized: bool) -> list[MenuOption]:
             description="Close the launcher.",
         ),
     ]
+    if has_agents:
+        options.insert(
+            3,
+            MenuOption(
+                key="setup",
+                title=setup_title,
+                description=setup_description,
+            ),
+        )
+    return options
 
 
 def _launcher_channel_options() -> list[MenuOption]:
@@ -449,13 +454,13 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     return content
 
 
-def _active_agent_context() -> tuple[str, Path]:
+def _active_agent_context() -> tuple[str, Path, bool]:
     try:
         registry = load_agent_registry()
         entry = registry.agents[registry.active_agent]
-        return entry.name, entry.path
+        return entry.name, entry.path, True
     except AgentRegistryError:
-        return DEFAULT_AGENT_NAME, default_agent_dir(DEFAULT_AGENT_NAME)
+        return "", management_root(), False
 
 
 def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
@@ -1749,10 +1754,10 @@ def _run_tasks_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
 
 def _agent_launcher_options(*, has_agents: bool) -> list[MenuOption]:
     return [
-        MenuOption("switch", "Switch Agent", "Choose the active agent.", disabled=not has_agents),
         MenuOption("create", "Create Agent", "Create a new managed agent."),
-        MenuOption("delete", "Delete Agent", "Delete an agent and all of its local data.", disabled=not has_agents),
+        MenuOption("switch", "Switch Agent", "Choose the active agent.", disabled=not has_agents),
         MenuOption("list", "List Agents", "Show registered agents.", disabled=not has_agents),
+        MenuOption("delete", "Delete Agent", "Delete an agent and all of its local data.", disabled=not has_agents),
         MenuOption("back", "Back", "Return to the main launcher."),
     ]
 
@@ -2050,13 +2055,13 @@ def _run_interactive_launcher() -> int:
     ui = TerminalUI()
 
     while True:
-        agent_name, config_dir = _active_agent_context()
+        _agent_name, config_dir, has_agents = _active_agent_context()
         overview = build_runtime_overview(config_dir)
         initialized = overview.initialized
         option = ui.select_menu(
             title=f"xAgent {_xagent_version_text()}",
             subtitle=_launcher_overview_subtitle(overview),
-            options=_launcher_options(initialized=initialized),
+            options=_launcher_options(initialized=initialized, has_agents=has_agents),
             footer="↑/↓ Move • Enter Select  •  q Exit",
         )
         if option is None or option.key == "exit":
@@ -2065,8 +2070,13 @@ def _run_interactive_launcher() -> int:
 
         if option.disabled:
             ui.clear()
+            message = (
+                "This workflow needs a configured runtime first. Choose Agents, then Create Agent."
+                if not has_agents
+                else "This workflow needs a configured runtime first. Choose Setup to create config.yaml and identity.md."
+            )
             ui.print_panel(
-                "This workflow needs a configured runtime first. Choose Setup to create config.yaml and identity.md.",
+                message,
                 title="Not Ready",
             )
             ui.pause()

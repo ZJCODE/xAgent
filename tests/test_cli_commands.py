@@ -67,7 +67,7 @@ from xagent.interfaces.cli.config_editor import (
     prepare_voice_wake_update,
     write_config,
 )
-from xagent.interfaces.cli.launcher import _agent_selection_options
+from xagent.interfaces.cli.launcher import _active_agent_context, _agent_launcher_options, _agent_selection_options
 from xagent.interfaces.cli.overview import STATUS_ERROR, build_runtime_overview
 from xagent.interfaces.cli.processes import StartResult
 
@@ -406,6 +406,30 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(options[0].title, "test (active)")
         self.assertEqual(options[-1].key, "back")
         self.assertEqual(options[-1].title, "Back")
+
+    def test_agent_launcher_options_prioritize_create(self):
+        with_agents = _agent_launcher_options(has_agents=True)
+        without_agents = _agent_launcher_options(has_agents=False)
+
+        self.assertEqual(
+            [option.title for option in with_agents],
+            ["Create Agent", "Switch Agent", "List Agents", "Delete Agent", "Back"],
+        )
+        self.assertFalse(with_agents[0].disabled)
+        self.assertFalse(without_agents[0].disabled)
+        self.assertTrue(without_agents[1].disabled)
+        self.assertTrue(without_agents[2].disabled)
+        self.assertTrue(without_agents[3].disabled)
+
+    def test_active_agent_context_uses_management_root_when_registry_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                agent_name, config_dir, has_agents = _active_agent_context()
+
+        self.assertEqual(agent_name, "")
+        self.assertEqual(config_dir, root)
+        self.assertFalse(has_agents)
 
     def test_agents_list_explains_empty_registry(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -844,13 +868,17 @@ class CLICommandTests(unittest.TestCase):
     def test_launcher_options_use_setup_after_initial_setup(self):
         initial_options = _launcher_options(initialized=False)
         reset_options = _launcher_options(initialized=True)
+        empty_options = _launcher_options(initialized=False, has_agents=False)
 
         self.assertEqual(initial_options[0].title, "Agents")
         self.assertEqual(reset_options[0].title, "Agents")
-        self.assertEqual(reset_options[1].title, "Setup")
-        self.assertEqual(reset_options[1].description, "Review and update your current setup.")
+        setup_option = next(option for option in reset_options if option.key == "setup")
+        self.assertEqual(setup_option.title, "Setup")
+        self.assertEqual(setup_option.description, "Review and update your current setup.")
         reset_titles = [option.title for option in reset_options]
+        empty_titles = [option.title for option in empty_options]
         self.assertIn("Help", reset_titles)
+        self.assertNotIn("Setup", empty_titles)
         self.assertNotIn("Doctor", reset_titles)
         self.assertNotIn("Version", reset_titles)
 
@@ -1916,14 +1944,57 @@ class CLICommandTests(unittest.TestCase):
         fake_ui = FakeUI()
 
         with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
-            with patch("xagent.interfaces.cli.launcher.build_runtime_overview", return_value=SimpleNamespace(initialized=True)):
-                with patch("xagent.interfaces.cli.launcher._launcher_overview_subtitle", return_value=""):
-                    with patch("xagent.interfaces.cli.launcher._run_resetup_launcher", return_value=0) as resetup_launcher:
-                        exit_code = _run_interactive_launcher()
+            with patch("xagent.interfaces.cli.launcher._active_agent_context", return_value=("work", Path("/tmp/work"), True)):
+                with patch("xagent.interfaces.cli.launcher.build_runtime_overview", return_value=SimpleNamespace(initialized=True)):
+                    with patch("xagent.interfaces.cli.launcher._launcher_overview_subtitle", return_value=""):
+                        with patch("xagent.interfaces.cli.launcher._run_resetup_launcher", return_value=0) as resetup_launcher:
+                            exit_code = _run_interactive_launcher()
 
         self.assertEqual(exit_code, 0)
         self.assertIn("Setup", fake_ui.option_titles)
         resetup_launcher.assert_called_once()
+
+    def test_interactive_launcher_hides_setup_when_no_agents_exist(self):
+        class FakeUI:
+            def __init__(self):
+                self.choices = iter([
+                    SimpleNamespace(key="exit", disabled=False),
+                ])
+                self.option_titles = []
+                self.subtitles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del title, footer
+                self.option_titles = [option.title for option in options]
+                self.subtitles.append(subtitle)
+                return next(self.choices)
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+                with patch("xagent.interfaces.cli.launcher._active_agent_context", return_value=("", root, False)):
+                    with patch("xagent.interfaces.cli.launcher.build_runtime_overview", return_value=SimpleNamespace(initialized=False)):
+                        with patch("xagent.interfaces.cli.launcher._launcher_overview_subtitle", return_value=f"Runtime: {root}"):
+                            with patch("xagent.interfaces.cli.launcher.handle_init", return_value=0) as handle_init_mock:
+                                exit_code = _run_interactive_launcher()
+
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("Setup", fake_ui.option_titles)
+        self.assertIn("Agents", fake_ui.option_titles)
+        self.assertEqual(fake_ui.subtitles[0], f"Runtime: {root}")
+        handle_init_mock.assert_not_called()
 
     def test_interactive_launcher_help_prints_command_guide(self):
         class FakeUI:
@@ -1952,8 +2023,9 @@ class CLICommandTests(unittest.TestCase):
         fake_ui = FakeUI()
 
         with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
-            with patch("xagent.interfaces.cli.runtime._runtime_is_initialized", return_value=True):
-                exit_code = _run_interactive_launcher()
+            with patch("xagent.interfaces.cli.launcher._active_agent_context", return_value=("work", Path("/tmp/work"), True)):
+                with patch("xagent.interfaces.cli.runtime._runtime_is_initialized", return_value=True):
+                    exit_code = _run_interactive_launcher()
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_ui.panels[0][0], "xAgent Help")
@@ -1993,10 +2065,11 @@ class CLICommandTests(unittest.TestCase):
         fake_ui = FakeUI()
 
         with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
-            with patch("xagent.interfaces.cli.launcher.build_runtime_overview", return_value=SimpleNamespace(initialized=False)):
-                with patch("xagent.interfaces.cli.launcher._launcher_overview_subtitle", return_value=""):
-                    with patch("xagent.interfaces.cli.launcher.handle_init", return_value=0) as handle_init_mock:
-                        exit_code = _run_interactive_launcher()
+            with patch("xagent.interfaces.cli.launcher._active_agent_context", return_value=("work", Path("/tmp/work"), True)):
+                with patch("xagent.interfaces.cli.launcher.build_runtime_overview", return_value=SimpleNamespace(initialized=False)):
+                    with patch("xagent.interfaces.cli.launcher._launcher_overview_subtitle", return_value=""):
+                        with patch("xagent.interfaces.cli.launcher.handle_init", return_value=0) as handle_init_mock:
+                            exit_code = _run_interactive_launcher()
 
         self.assertEqual(exit_code, 0)
         handle_init_mock.assert_called_once()
