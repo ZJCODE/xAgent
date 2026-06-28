@@ -138,7 +138,6 @@ class AgentConfig:
     # Probability of spontaneous thought per heartbeat tick.
     # 0=off, 1=very active. Suggested: 0.01~0.1
     SUBCONSCIOUS_ACTIVITY = 0.02
-    SUBCONSCIOUS_PURE_THOUGHT = True
     SUBCONSCIOUS_MAX_CONTACTS = 10
     SUBCONSCIOUS_QUIET_HOURS_START = 22  # 10 PM – no immediate sends after this
     SUBCONSCIOUS_QUIET_HOURS_END = 8    # 8 AM – resume immediate sends
@@ -282,7 +281,7 @@ class AgentConfig:
         "are actually live for you right now: someone you have not heard from in a while, a promise still "
         "open, a conversation left unfinished, something you noticed and kept turning over. Lean on your "
         "relationship recollections and recent experience so the thought is grounded in real standing and "
-        "history, not a generic prompt. Use tools only to understand, verify, or prepare context; do not "
+        "history, not a generic prompt. Tools are unavailable during subconscious thinking; do not "
         "send messages, create schedules, or route delivery from this turn. First let the inner thought "
         "emerge, then decide whether any part of it genuinely belongs outside, and to whom.\n"
         "\n"
@@ -353,7 +352,6 @@ class AgentConfig:
         "- `[speaker=Name][timestamp=Time][channel=Channel][room=RoomName]` — Name spoke in RoomName via Channel. `[speaker=ME]` — you said this in that room.\n"
         "- `[ambient context][timestamp=Time][channel=Channel]` — something observed or received via Channel, not a direct message.\n"
         "- `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` — something observed or received in RoomName via Channel.\n"
-        "- `[internal_monologue][timestamp=Time]` — your own internal thought, not spoken or sent.\n"
         "- `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.\n"
         "- Keep people, rooms, preferences, commitments, and experiences separate. Do not carry one person's private topic into another person's reply unless they clearly joined or referred to it.\n"
         "\n"

@@ -11,13 +11,14 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
     def test_diary_system_prompt_preserves_core_behavior_constraints(self):
         prompt = JournalLLMService.build_diary_system_prompt()
 
-        self.assertIn("first-person perspective", prompt)
-        self.assertIn("something I noticed, overheard, or received", prompt)
-        self.assertIn("my own experience stream", prompt)
+        self.assertIn('first-person ("I")', prompt)
+        self.assertIn("something you noticed, overheard, or received", prompt)
+        self.assertIn("your own experience stream", prompt)
         self.assertIn("not a user-owned log or searchable database", prompt)
         self.assertIn("[speaker=Name][timestamp=Time]", prompt)
-        self.assertIn("[speaker=ME][timestamp=Time]", prompt)
+        self.assertIn("[speaker=ME]", prompt)
         self.assertIn("[ambient context][timestamp=Time]", prompt)
+        self.assertNotIn("[internal_monologue]", prompt)
         self.assertIn("keep the source language", prompt)
         self.assertIn("synthesize the period's arc", prompt)
         self.assertIn("Keep people, rooms, preferences, commitments, and experiences separate", prompt)
@@ -145,7 +146,8 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
             "[speaker=alice][timestamp=2026-05-17 09:01:00]\nI'll send the document.",
             instance.calls[0]["messages"][0]["content"],
         )
-        self.assertIn("[speaker=ME][timestamp=Time]", instance.calls[0]["instructions"])
+        self.assertIn("[speaker=ME]", instance.calls[0]["instructions"])
+        self.assertNotIn("[internal_monologue]", instance.calls[0]["instructions"])
 
     async def test_generate_summary_uses_plain_text_output(self):
         class FakeModelClient:

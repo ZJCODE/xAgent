@@ -41,7 +41,6 @@ class Agent:
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
-        subconscious_pure_thought: bool = AgentConfig.SUBCONSCIOUS_PURE_THOUGHT,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.model_api = normalize_model_api(model_api)
@@ -51,7 +50,6 @@ class Agent:
         self.max_iter = max_iter
         self.max_concurrent_tools = max_concurrent_tools
         self.subconscious_activity = subconscious_activity
-        self.subconscious_pure_thought = bool(subconscious_pure_thought)
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client
         if self.client is None:
@@ -712,33 +710,20 @@ class Agent:
             source=event_metadata.get("source"),
         )
 
-    async def record_internal_thought(
+    async def record_subconscious_thought(
         self,
         content: str,
     ) -> AgentTurnResult:
-        """Record an internal monologue thought (not sent to any user).
-
-        The thought is stored as a context event with event_type
-        ``"internal_monologue"``, which the transcript formatter renders
-        as ``[internal_monologue][timestamp=...]``.  This allows the
-        thought to become part of the agent's memory stream (diary
-        compression) without interrupting the conversation.
-        """
-        event_msg = await self.message_handler.store_context_event(
-            context=content,
-            source="subconscious",
-            event_type="internal_monologue",
-            role=RoleType.ASSISTANT,
-        )
-        self._schedule_experience_write(
-            messages=[event_msg],
-        )
+        """Record a raw subconscious thought directly in the diary."""
+        note = str(content or "").strip()
+        if note:
+            await self.markdown_memory.append_daily(note)
         return AgentTurnResult(
-            kind="internal_thought",
+            kind="subconscious_thought",
             replied=False,
             reply=None,
-            event_id=event_msg.timestamp,
-            event_type="internal_monologue",
+            event_id=time.time(),
+            event_type="subconscious_thought",
             source="subconscious",
         )
 

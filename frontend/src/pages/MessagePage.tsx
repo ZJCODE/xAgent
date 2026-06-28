@@ -27,18 +27,10 @@ function roleClass(role: string): string {
 }
 
 function messageRoleClass(message: MessageItem): string {
-  // Internal monologue: context_event + assistant
-  if (message.type === "context_event" && message.role === "assistant") {
-    return "role-internal-monologue";
-  }
   return roleClass(message.role);
 }
 
 function messageRoleLabel(message: MessageItem): string {
-  // Internal monologue
-  if (message.type === "context_event" && message.role === "assistant") {
-    return "internal_monologue";
-  }
   return message.role;
 }
 

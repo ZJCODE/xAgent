@@ -456,8 +456,6 @@ class MessageHandler:
         content: str,
     ) -> List[str]:
         if entry_type == "observation":
-            if MessageHandler._is_internal_monologue(message):
-                return [MessageHandler._format_internal_thought_header(message), content]
             return [MessageHandler._format_context_event_header(message), content]
 
         lines = [
@@ -592,26 +590,6 @@ class MessageHandler:
         if message.role == RoleType.ASSISTANT:
             return "ME"
         return message.sender_id or message.role.value
-
-    @staticmethod
-    def _is_internal_monologue(message: Message) -> bool:
-        """Check whether a context event is an internal monologue thought.
-
-        Internal monologue is uniquely identified by the combination of
-        ``CONTEXT_EVENT`` type and ``ASSISTANT`` role — the agent
-        producing context for itself rather than receiving it from the
-        environment.
-        """
-        return (
-            message.type == MessageType.CONTEXT_EVENT
-            and message.role == RoleType.ASSISTANT
-        )
-
-    @staticmethod
-    def _format_internal_thought_header(message: Message) -> str:
-        """Format header for internal monologue: [internal_monologue][timestamp=Time]."""
-        timestamp = MessageHandler._format_transcript_timestamp(message)
-        return f"[internal_monologue][timestamp={timestamp}]"
 
     @staticmethod
     def _latest_current_user_message(

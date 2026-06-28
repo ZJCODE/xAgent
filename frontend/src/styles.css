@@ -1211,10 +1211,6 @@ input::placeholder {
   border-left-color: var(--info);
 }
 
-.message-row.role-internal-monologue {
-  border-left-color: #a78bfa;
-}
-
 .message-row-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1239,11 +1235,6 @@ input::placeholder {
 .meta-chip.role-observation {
   background: var(--info-soft);
   color: var(--info);
-}
-
-.meta-chip.role-internal-monologue {
-  background: #ede9fe;
-  color: #7c3aed;
 }
 
 .message-archive-media {

@@ -9,12 +9,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from xagent.core.config import AgentConfig
+from xagent.core.agent import Agent
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.handlers.model import ChatToolCall, ModelStreamEvent
 from xagent.schemas import RoleType
 from xagent.core.runtime.subconscious import (
-    SUBCONSCIOUS_SOURCE,
-    SUBCONSCIOUS_EVENT_TYPE,
     ContactEntry,
     SubconsciousLoop,
     load_contacts,
@@ -100,6 +99,22 @@ class ContactManagementTests(unittest.TestCase):
         result = resolve_contacts_path(workspace)
         self.assertEqual(result, workspace / "contacts.json")
 
+
+class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
+    async def test_record_subconscious_thought_appends_diary_without_message(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = Agent(client=object(), workspace=tmpdir)
+
+            result = await agent.record_subconscious_thought("  raw inner thought  ")
+
+            entries = await agent.markdown_memory.read_recent_dailies(days=1)
+            self.assertEqual(result.kind, "subconscious_thought")
+            self.assertEqual(result.event_type, "subconscious_thought")
+            self.assertEqual(await agent.message_storage.get_latest_message_cursor(), 0)
+            self.assertEqual(len(entries), 1)
+            self.assertIn("raw inner thought", entries[0][1])
+
+
 class SubconsciousLoopTests(unittest.TestCase):
     """Tests for the SubconsciousLoop class."""
 
@@ -134,13 +149,13 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent.max_history = AgentConfig.DEFAULT_MAX_HISTORY
         agent.max_iter = AgentConfig.DEFAULT_MAX_ITER
         agent.max_concurrent_tools = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
-        agent.subconscious_pure_thought = AgentConfig.SUBCONSCIOUS_PURE_THOUGHT
         agent._assistant_sender_id = "agent"
         memory_handler = MagicMock()
         memory_handler.get_recent_context.return_value = "Recent memory content."
         agent.memory_handler = memory_handler
         message_handler = MessageHandler(MagicMock(), system_prompt=agent.system_prompt)
         message_handler.get_recent_messages = AsyncMock(return_value=[])
+        message_handler.store_context_event = AsyncMock()
         agent.message_handler = message_handler
         self._set_model_json(agent, {
             "internal_content": "Just a thought.",
@@ -159,7 +174,7 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent.tool_executor.handle_tool_calls = AsyncMock(return_value=None)
         agent._workspace_context = MagicMock(return_value=AgentConfig.build_workspace_context("/tmp/workspace"))
         agent._skills_catalog_context = MagicMock(return_value="Available skill: test")
-        agent.record_internal_thought = AsyncMock()
+        agent.record_subconscious_thought = AsyncMock()
         return agent
 
     def test_should_trigger_disabled(self):
@@ -342,8 +357,8 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             self.assertEqual(deliverable, [])
 
-    def test_default_pure_thought_omits_tools_and_skills(self):
-        """Default subconscious turns keep identity but omit tool/skill capability layers."""
+    def test_subconscious_omits_tools_and_skills(self):
+        """Subconscious turns keep identity but omit tool/skill capability layers."""
         agent = self._make_agent_mock()
         agent.system_prompt = "I am a test identity."
         agent.message_handler.system_prompt = agent.system_prompt
@@ -373,61 +388,8 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertEqual(len(identities), 1)
             self.assertIn("I am a test identity.", identities[0]["content"])
 
-    def test_non_pure_thought_includes_tool_and_skill_layers(self):
-        """Disabling pure thought preserves the previous tool/skill-capable behavior."""
-        agent = self._make_agent_mock()
-        agent.subconscious_pure_thought = False
-        agent.system_prompt = "I am a test identity."
-        agent.message_handler.system_prompt = agent.system_prompt
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
-            loop._probability = 1.0
-            asyncio.run(loop.maybe_think())
-
-            instructions = agent.model_client.calls[0]["instructions"]
-
-            names = {i.get("name") for i in instructions}
-            self.assertIn(AgentConfig.CORE_INTERACTION_RULES_NAME, names)
-            self.assertIn(AgentConfig.TOOL_POLICY_NAME, names)
-            self.assertIn(AgentConfig.IDENTITY_CONTEXT_NAME, names)
-            self.assertIn(AgentConfig.WORKSPACE_CONTEXT_NAME, names)
-            self.assertIn(AgentConfig.SKILLS_CATALOG_NAME, names)
-            self.assertEqual(
-                agent.model_client.calls[0]["tool_specs"],
-                [{"type": "function", "function": {"name": "web_search"}}],
-            )
-            agent._workspace_context.assert_called_once()
-            agent._skills_catalog_context.assert_called_once()
-
-    def test_tool_call_loop_continues_until_json(self):
-        """Subconscious turns can use tools before returning final JSON."""
-        agent = self._make_agent_mock()
-        agent.subconscious_pure_thought = False
-        tool_call = ChatToolCall(call_id="call_1", name="web_search", arguments='{"query":"x"}')
-        self._set_model_events(agent, [
-            [ModelStreamEvent(type="tool_calls", tool_calls=[tool_call])],
-            [self._json_event({
-                "internal_content": "Tool result changed the thought.",
-                "worthy": False,
-                "recipient_hint": None,
-                "external_content": None,
-            })],
-        ])
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
-            loop._probability = 1.0
-
-            asyncio.run(loop.maybe_think())
-
-            agent.tool_executor.handle_tool_calls.assert_awaited_once()
-            self.assertEqual(len(agent.model_client.calls), 2)
-            agent.record_internal_thought.assert_called_once()
-            self.assertEqual(agent.record_internal_thought.call_args[0][0], "Tool result changed the thought.")
-
-    def test_pure_thought_tool_call_without_text_is_not_executed(self):
-        """Pure thought mode rejects tool-only model turns without executing tools."""
+    def test_tool_call_without_text_is_not_executed(self):
+        """Subconscious turns reject tool-only model turns without executing tools."""
         agent = self._make_agent_mock()
         tool_call = ChatToolCall(call_id="call_1", name="web_search", arguments='{"query":"x"}')
         self._set_model_events(agent, [
@@ -442,10 +404,11 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             agent.tool_executor.handle_tool_calls.assert_not_awaited()
             self.assertEqual(len(agent.model_client.calls), 1)
-            agent.record_internal_thought.assert_not_called()
+            agent.record_subconscious_thought.assert_not_called()
+            agent.message_handler.store_context_event.assert_not_called()
 
-    def test_pure_thought_ignores_tool_call_when_text_is_present(self):
-        """Pure thought mode parses returned JSON text and ignores stray tool calls."""
+    def test_tool_call_with_text_is_not_executed(self):
+        """Subconscious turns parse returned JSON text and ignore stray tool calls."""
         agent = self._make_agent_mock()
         tool_call = ChatToolCall(call_id="call_1", name="web_search", arguments='{"query":"x"}')
         self._set_model_events(agent, [
@@ -467,17 +430,18 @@ class SubconsciousLoopTests(unittest.TestCase):
             asyncio.run(loop.maybe_think())
 
             agent.tool_executor.handle_tool_calls.assert_not_awaited()
-            agent.record_internal_thought.assert_called_once()
-            self.assertEqual(agent.record_internal_thought.call_args[0][0], "Text still wins.")
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "Text still wins.")
 
-    def test_non_json_after_tool_loop_falls_back_to_internal_thought(self):
-        """Invalid final JSON does not trigger delivery after tool use."""
+    def test_non_json_with_tool_call_falls_back_to_subconscious_thought(self):
+        """Invalid final JSON text with a stray tool call is recorded without executing tools."""
         agent = self._make_agent_mock()
-        agent.subconscious_pure_thought = False
         tool_call = ChatToolCall(call_id="call_1", name="web_search", arguments='{"query":"x"}')
         self._set_model_events(agent, [
-            [ModelStreamEvent(type="tool_calls", tool_calls=[tool_call])],
-            [ModelStreamEvent(type="text", delta="not json")],
+            [
+                ModelStreamEvent(type="tool_calls", tool_calls=[tool_call]),
+                ModelStreamEvent(type="text", delta="not json"),
+            ],
         ])
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -492,9 +456,9 @@ class SubconsciousLoopTests(unittest.TestCase):
             with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
                 asyncio.run(loop.maybe_think())
 
-            agent.tool_executor.handle_tool_calls.assert_awaited_once()
-            agent.record_internal_thought.assert_called_once()
-            self.assertEqual(agent.record_internal_thought.call_args[0][0], "not json")
+            agent.tool_executor.handle_tool_calls.assert_not_awaited()
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "not json")
 
     def test_maybe_think_not_triggered(self):
         agent = self._make_agent_mock()
@@ -504,7 +468,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             asyncio.run(loop.maybe_think())
             self.assertEqual(agent.model_client.calls, [])
 
-    def test_maybe_think_unworthy_writes_internal_thought(self):
+    def test_maybe_think_unworthy_writes_subconscious_thought(self):
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
             "internal_content": "Hmm interesting...",
@@ -518,13 +482,14 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             asyncio.run(loop.maybe_think())
 
-            agent.record_internal_thought.assert_called_once()
-            call_args = agent.record_internal_thought.call_args
+            agent.record_subconscious_thought.assert_called_once()
+            call_args = agent.record_subconscious_thought.call_args
             self.assertEqual(call_args[0][0], "Hmm interesting...")
+            agent.message_handler.store_context_event.assert_not_called()
 
 
-    def test_nighttime_worthy_writes_internal_thought(self):
-        """During quiet hours, even worthy thoughts are written as internal thoughts."""
+    def test_nighttime_worthy_writes_subconscious_thought(self):
+        """During quiet hours, worthy thoughts are written to diary but not delivered."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
             "internal_content": "The timing matters, but this can wait.",
@@ -545,10 +510,10 @@ class SubconsciousLoopTests(unittest.TestCase):
             with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=False):
                 asyncio.run(loop.maybe_think())
 
-            # Should have written as internal thought, NOT delivered outward.
-            agent.record_internal_thought.assert_called_once()
-            call_args = agent.record_internal_thought.call_args
+            agent.record_subconscious_thought.assert_called_once()
+            call_args = agent.record_subconscious_thought.call_args
             self.assertEqual(call_args[0][0], "The timing matters, but this can wait.")
+            agent.message_handler.store_context_event.assert_not_called()
 
     def test_daytime_worthy_delivers_to_sink(self):
         """During appropriate hours, worthy thoughts are delivered directly."""
@@ -577,15 +542,20 @@ class SubconsciousLoopTests(unittest.TestCase):
             with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
                 asyncio.run(loop.maybe_think())
 
-            agent.record_internal_thought.assert_not_called()
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(
+                agent.record_subconscious_thought.call_args[0][0],
+                "This insight might help 张三 move the thread forward.",
+            )
             delivery_sink.assert_awaited_once()
             delivery = delivery_sink.await_args.args[0]
             self.assertEqual(delivery.content, "A daytime insight!")
             self.assertEqual(delivery.internal_content, "This insight might help 张三 move the thread forward.")
             self.assertEqual(delivery.recipient.channel, "feishu")
             self.assertEqual(delivery.recipient.user_id, "ou_123")
+            agent.message_handler.store_context_event.assert_not_called()
 
-    def test_undeliverable_channel_worthy_writes_internal_thought(self):
+    def test_undeliverable_channel_worthy_writes_subconscious_thought(self):
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
             "internal_content": "This should not pretend to reach Feishu.",
@@ -612,8 +582,9 @@ class SubconsciousLoopTests(unittest.TestCase):
                 asyncio.run(loop.maybe_think())
 
             delivery_sink.assert_not_awaited()
-            agent.record_internal_thought.assert_called_once()
-            self.assertEqual(agent.record_internal_thought.call_args[0][0], "This should not pretend to reach Feishu.")
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "This should not pretend to reach Feishu.")
+            agent.message_handler.store_context_event.assert_not_called()
 
     def test_hint_to_undeliverable_contact_does_not_fallback_to_other_contact(self):
         agent = self._make_agent_mock()
@@ -651,8 +622,8 @@ class SubconsciousLoopTests(unittest.TestCase):
                 asyncio.run(loop.maybe_think())
 
             delivery_sink.assert_not_awaited()
-            agent.record_internal_thought.assert_called_once()
-            self.assertEqual(agent.record_internal_thought.call_args[0][0], "This was meant for 张三 only.")
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "This was meant for 张三 only.")
 
     def test_empty_hint_defaults_to_most_recent_deliverable_contact(self):
         agent = self._make_agent_mock()
@@ -699,10 +670,14 @@ class SubconsciousLoopTests(unittest.TestCase):
             delivery = delivery_sink.await_args.args[0]
             self.assertEqual(delivery.recipient.channel, "api")
             self.assertEqual(delivery.recipient.user_id, "new_api_user")
-            agent.record_internal_thought.assert_not_called()
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(
+                agent.record_subconscious_thought.call_args[0][0],
+                "This can go to the current reachable contact.",
+            )
 
-    def test_delivery_sink_failure_writes_internal_thought(self):
-        """If direct delivery fails, the thought is retained as internal monologue."""
+    def test_delivery_sink_failure_keeps_subconscious_thought(self):
+        """If direct delivery fails, the already-recorded diary thought is retained."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
             "internal_content": "This should not be lost.",
@@ -730,11 +705,11 @@ class SubconsciousLoopTests(unittest.TestCase):
                 asyncio.run(loop.maybe_think())
 
             self.assertEqual(delivery_sink.await_count, 3)
-            agent.record_internal_thought.assert_called_once()
-            self.assertEqual(agent.record_internal_thought.call_args[0][0], "This should not be lost.")
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "This should not be lost.")
 
-    def test_delivery_sink_transient_failure_retries_without_internal_thought(self):
-        """A transient direct delivery failure is retried before falling back."""
+    def test_delivery_sink_transient_failure_retries_with_diary_thought(self):
+        """A transient direct delivery failure is retried while the thought remains in diary."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
             "internal_content": "This should still reach the user.",
@@ -762,10 +737,14 @@ class SubconsciousLoopTests(unittest.TestCase):
                 asyncio.run(loop.maybe_think())
 
             self.assertEqual(delivery_sink.await_count, 2)
-            agent.record_internal_thought.assert_not_called()
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(
+                agent.record_subconscious_thought.call_args[0][0],
+                "This should still reach the user.",
+            )
 
-    def test_worthy_without_recipient_writes_internal_thought(self):
-        """A worthy thought with no route records the internal thought only."""
+    def test_worthy_without_recipient_writes_subconscious_thought(self):
+        """A worthy thought with no route records the diary thought only."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
             "internal_content": "This is for someone, but I do not know who yet.",
@@ -780,11 +759,11 @@ class SubconsciousLoopTests(unittest.TestCase):
             with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
                 asyncio.run(loop.maybe_think())
 
-            agent.record_internal_thought.assert_called_once()
-            call_args = agent.record_internal_thought.call_args
+            agent.record_subconscious_thought.assert_called_once()
+            call_args = agent.record_subconscious_thought.call_args
             self.assertEqual(call_args[0][0], "This is for someone, but I do not know who yet.")
 
-    def test_worthy_without_external_content_writes_internal_thought(self):
+    def test_worthy_without_external_content_writes_subconscious_thought(self):
         """A worthy decision without outward wording does not deliver an empty message."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
@@ -805,80 +784,9 @@ class SubconsciousLoopTests(unittest.TestCase):
             with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
                 asyncio.run(loop.maybe_think())
 
-            agent.record_internal_thought.assert_called_once()
-            call_args = agent.record_internal_thought.call_args
+            agent.record_subconscious_thought.assert_called_once()
+            call_args = agent.record_subconscious_thought.call_args
             self.assertEqual(call_args[0][0], "There is a signal here, but it is not speakable yet.")
-
-
-class InternalThoughtFormatTests(unittest.TestCase):
-    """Verify the [internal_monologue] marker format for internal monologue."""
-
-    def test_internal_monologue_event_type(self):
-        self.assertEqual(SUBCONSCIOUS_EVENT_TYPE, "internal_monologue")
-
-    def test_context_event_metadata_for_internal_thought(self):
-        """Verify internal thoughts carry the right metadata."""
-        from xagent.schemas import Message
-        msg = Message.create_context_event(
-            content="A private thought",
-            source=SUBCONSCIOUS_SOURCE,
-            event_type=SUBCONSCIOUS_EVENT_TYPE,
-        )
-        self.assertEqual(msg.type.value, "context_event")
-        self.assertEqual(msg.metadata["event_type"], "internal_monologue")
-        self.assertEqual(msg.metadata["source"], "subconscious")
-
-    def test_internal_monologue_detection(self):
-        """Verify _is_internal_monologue correctly identifies such messages."""
-        from xagent.schemas import Message, MessageType
-        from xagent.core.handlers.message import MessageHandler
-
-        # Regular context event (ambient observation)
-        regular = Message.create_context_event(
-            content="Someone entered the room",
-            source="environment",
-            event_type="observation",
-        )
-        self.assertFalse(MessageHandler._is_internal_monologue(regular))
-
-        # Internal monologue (ASSISTANT role identifies it as the agent's own thought)
-        internal = Message.create_context_event(
-            content="I just realized something...",
-            source=SUBCONSCIOUS_SOURCE,
-            event_type=SUBCONSCIOUS_EVENT_TYPE,
-            role=RoleType.ASSISTANT,
-        )
-        self.assertTrue(MessageHandler._is_internal_monologue(internal))
-
-    def test_internal_thought_header_format(self):
-        """Verify the header format for internal thoughts."""
-        from xagent.schemas import Message
-        from xagent.core.handlers.message import MessageHandler
-
-        msg = Message.create_context_event(
-            content="Thinking...",
-            source=SUBCONSCIOUS_SOURCE,
-            event_type=SUBCONSCIOUS_EVENT_TYPE,
-        )
-        header = MessageHandler._format_internal_thought_header(msg)
-        self.assertTrue(header.startswith("[internal_monologue][timestamp="))
-        self.assertNotIn("[speaker=ME]", header)
-
-    def test_experience_entry_uses_internal_monologue_header(self):
-        """Verify _format_experience_entry uses the internal thought header."""
-        from xagent.schemas import Message
-        from xagent.core.handlers.message import MessageHandler
-
-        msg = Message.create_context_event(
-            content="A deep thought",
-            source=SUBCONSCIOUS_SOURCE,
-            event_type=SUBCONSCIOUS_EVENT_TYPE,
-            role=RoleType.ASSISTANT,
-        )
-        lines = MessageHandler._format_experience_entry("observation", msg, "A deep thought")
-        self.assertEqual(len(lines), 2)
-        self.assertTrue(lines[0].startswith("[internal_monologue][timestamp="))
-        self.assertNotIn("[speaker=ME]", lines[0])
 
 
 if __name__ == "__main__":

@@ -18,8 +18,6 @@ from .scheduler import _fsync_directory
 
 logger = logging.getLogger(__name__)
 
-SUBCONSCIOUS_SOURCE = "subconscious"
-SUBCONSCIOUS_EVENT_TYPE = "internal_monologue"
 CONTACTS_FILENAME = "contacts.json"
 SUBCONSCIOUS_DELIVERY_RETRIES = 2
 SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS = 0.5
@@ -152,9 +150,9 @@ class SubconsciousLoop:
 
     Each heartbeat tick has a small probability of triggering an
     subconscious event.  The agent generates a spontaneous thought and
-    decides whether it is worth sharing. Thoughts that are not shared
-    are recorded as internal monologue. Thoughts worth sharing are handed
-    to the runtime's direct delivery sink.
+    decides whether it is worth sharing. Raw inner thoughts are written
+    directly to the diary, and thoughts worth sharing are handed to the
+    runtime's direct delivery sink.
     """
 
     def __init__(
@@ -163,7 +161,6 @@ class SubconsciousLoop:
         *,
         workspace: Path,
         probability: Optional[float] = None,
-        pure_thought: Optional[bool] = None,
         delivery_sink: Optional[Callable[[SubconsciousDelivery], Awaitable[None] | None]] = None,
         deliverable_channels: Optional[Iterable[str]] = None,
         logger_: Optional[logging.Logger] = None,
@@ -179,11 +176,6 @@ class SubconsciousLoop:
             float(probability)
             if probability is not None
             else float(AgentConfig.SUBCONSCIOUS_ACTIVITY)
-        )
-        self._pure_thought = (
-            bool(pure_thought)
-            if pure_thought is not None
-            else bool(getattr(agent, "subconscious_pure_thought", AgentConfig.SUBCONSCIOUS_PURE_THOUGHT))
         )
         self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
@@ -254,14 +246,13 @@ class SubconsciousLoop:
         if not internal_content and not external_content:
             return
 
+        if internal_content:
+            await self._write_subconscious_thought(internal_content)
+
         if not worthy:
-            if internal_content:
-                await self._write_internal_thought(internal_content)
             return
 
         if not external_content:
-            if internal_content:
-                await self._write_internal_thought(internal_content)
             return
 
         await self._route_subconscious_thought(
@@ -276,7 +267,7 @@ class SubconsciousLoop:
 
     async def _generate_subconscious_thought(self) -> Dict[str, Any]:
         """Run a subconscious agent turn and parse the final JSON result."""
-        instructions, iteration_messages, input_messages, tool_specs = await self._build_subconscious_turn_context()
+        instructions, input_messages, tool_specs = await self._build_subconscious_turn_context()
 
         model_client = getattr(self._agent, "model_client", None)
         if model_client is None:
@@ -285,16 +276,6 @@ class SubconsciousLoop:
             raise RuntimeError("Agent model_client does not support model_turn_events()")
 
         max_iter = int(getattr(self._agent, "max_iter", AgentConfig.DEFAULT_MAX_ITER) or AgentConfig.DEFAULT_MAX_ITER)
-        max_concurrent_tools = int(
-            getattr(
-                self._agent,
-                "max_concurrent_tools",
-                AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-            )
-            or AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
-        )
-        tool_executor = getattr(self._agent, "tool_executor", None)
-        msg_handler = getattr(self._agent, "message_handler", None)
 
         for _ in range(max_iter):
             text_parts: List[str] = []
@@ -316,27 +297,11 @@ class SubconsciousLoop:
                     raise RuntimeError(f"Subconscious model error: {message or model_event.error}")
 
             text = "".join(text_parts).strip()
-            if tool_calls and self._pure_thought:
-                self._logger.warning("Subconscious pure thought returned tool calls; tools are disabled for this turn")
+            if tool_calls:
+                self._logger.warning("Subconscious returned tool calls; tools are unavailable for this turn")
                 if text:
                     return self._parse_subconscious_json(text)
-                raise RuntimeError("Subconscious pure thought returned tool calls without text")
-
-            if tool_calls:
-                if tool_executor is None:
-                    raise RuntimeError("Agent has no tool_executor")
-                await tool_executor.handle_tool_calls(
-                    tool_calls,
-                    iteration_messages,
-                    max_concurrent_tools,
-                )
-                if msg_handler is not None and callable(getattr(msg_handler, "sanitize_input_messages", None)):
-                    input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
-                else:
-                    from ..handlers.message import MessageHandler
-
-                    input_messages = MessageHandler.sanitize_input_messages(list(iteration_messages))
-                continue
+                raise RuntimeError("Subconscious returned tool calls without text")
 
             if text:
                 return self._parse_subconscious_json(text)
@@ -345,7 +310,7 @@ class SubconsciousLoop:
 
         raise RuntimeError(f"Subconscious thought failed after {max_iter} attempts")
 
-    async def _build_subconscious_turn_context(self) -> tuple[list[dict], list[dict], list[dict], list]:
+    async def _build_subconscious_turn_context(self) -> tuple[list[dict], list[dict], list]:
         """Build model input using the same layers as a normal agent turn."""
         message_handler = getattr(self._agent, "message_handler", None)
         if message_handler is None:
@@ -357,27 +322,11 @@ class SubconsciousLoop:
         memory_context = await self._collect_memory_context()
         relationship_context = await self._collect_relationship_context()
 
-        workspace_context = ""
-        skills_catalog = ""
-        tool_specs = []
-        tool_names: list[str] = []
-
-        if not self._pure_thought:
-            tool_manager = getattr(self._agent, "tool_manager", None)
-            tool_names = list(getattr(tool_manager, "_tools", {}) or {})
-            tool_specs = list(getattr(tool_manager, "cached_tool_specs", None) or [])
-            workspace_context_fn = getattr(self._agent, "_workspace_context", None)
-            if callable(workspace_context_fn):
-                workspace_context = workspace_context_fn(tool_names)
-            skills_catalog_fn = getattr(self._agent, "_skills_catalog_context", None)
-            if callable(skills_catalog_fn):
-                skills_catalog = skills_catalog_fn()
-
         instructions = message_handler.build_instruction_messages(
-            tool_names=tool_names,
-            skills_catalog=skills_catalog,
+            tool_names=[],
+            skills_catalog="",
             supports_vision=bool(getattr(self._agent, "supports_vision", True)),
-            workspace_context=workspace_context,
+            workspace_context="",
         )
         iteration_messages = message_handler.build_turn_context_messages(
             recent_messages,
@@ -390,7 +339,7 @@ class SubconsciousLoop:
             task_mode="subconscious_json",
         )
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
-        return instructions, iteration_messages, input_messages, tool_specs
+        return instructions, input_messages, []
 
     @staticmethod
     def _parse_subconscious_json(text: str) -> Dict[str, Any]:
@@ -463,28 +412,25 @@ class SubconsciousLoop:
             self._logger.warning("Failed to collect relationship context", exc_info=True)
             return ""
 
-    async def _write_internal_thought(self, content: str) -> None:
-        """Record the thought as an internal monologue context event."""
-        record_method = getattr(self._agent, "record_internal_thought", None)
+    async def _write_subconscious_thought(self, content: str) -> None:
+        """Record the raw inner thought directly in the diary."""
+        record_method = getattr(self._agent, "record_subconscious_thought", None)
         if callable(record_method):
-            await record_method(content)
-            self._logger.info("Internal thought recorded")
+            try:
+                await record_method(content)
+                self._logger.info("Subconscious thought recorded in diary")
+            except Exception:
+                self._logger.warning("Failed to record subconscious thought in diary", exc_info=True)
             return
-        # Fallback: store directly via message_handler
-        message_handler = getattr(self._agent, "message_handler", None)
-        if message_handler is None:
-            return
-        from ...schemas import Message, RoleType
 
-        msg = Message.create_context_event(
-            content=f"[{SUBCONSCIOUS_EVENT_TYPE}] {content}",
-            source=SUBCONSCIOUS_SOURCE,
-            event_type=SUBCONSCIOUS_EVENT_TYPE,
-            role=RoleType.ASSISTANT,
-        )
-        store = getattr(message_handler, "store_message", None)
-        if callable(store):
-            await store(msg)
+        memory = getattr(self._agent, "markdown_memory", None)
+        append_daily = getattr(memory, "append_daily", None)
+        if callable(append_daily):
+            try:
+                await append_daily(content.strip())
+                self._logger.info("Subconscious thought recorded in diary")
+            except Exception:
+                self._logger.warning("Failed to record subconscious thought in diary", exc_info=True)
 
     async def _route_subconscious_thought(
         self,
@@ -492,35 +438,26 @@ class SubconsciousLoop:
         internal_content: str,
         recipient_hint: Any,
     ) -> None:
-        """Route a worthy thought: deliver now, or write as internal thought.
+        """Route a worthy thought for direct delivery when possible.
 
-        During quiet hours (22:00 – 8:00) the thought is recorded as an
-        internal monologue instead of being delivered — the agent's sleep
-        thoughts become part of its memory without disturbing the user.
+        During quiet hours (22:00-8:00), delivery is skipped to avoid
+        disturbing the user. The inner thought has already been written
+        to the diary by the caller.
         """
         contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         recipient = self._pick_recipient(contacts, recipient_hint)
 
         if recipient is None:
-            self._logger.info("No suitable recipient – recording as internal thought")
-            if internal_content:
-                await self._write_internal_thought(internal_content)
+            self._logger.info("No suitable recipient for subconscious thought")
             return
 
         now = datetime.now()
         if not self._is_appropriate_time(now):
-            # Nighttime – don't disturb; let the thought become a memory
-            self._logger.info(
-                "Quiet hours – recording subconscious thought as internal thought"
-            )
-            if internal_content:
-                await self._write_internal_thought(internal_content)
+            self._logger.info("Quiet hours – skipping subconscious delivery")
             return
 
         if self._delivery_sink is None:
-            self._logger.info("No subconscious delivery sink – recording as internal thought")
-            if internal_content:
-                await self._write_internal_thought(internal_content)
+            self._logger.info("No subconscious delivery sink configured")
             return
 
         delivery = SubconsciousDelivery(
@@ -538,9 +475,7 @@ class SubconsciousLoop:
                 now.isoformat(sep=" "),
             )
         except Exception:
-            self._logger.warning("Subconscious delivery failed; recording internal thought", exc_info=True)
-            if internal_content:
-                await self._write_internal_thought(internal_content)
+            self._logger.warning("Subconscious delivery failed", exc_info=True)
 
     async def _deliver_with_retries(self, delivery: SubconsciousDelivery) -> None:
         """Deliver a subconscious thought, retrying transient sink failures."""

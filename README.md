@@ -22,6 +22,8 @@ xagent
 The launcher will guide you through the rest
 
 For most users, `xagent` is the only command you need to remember.
+To create or reconfigure an agent directly, run `xagent setup`.
+To start the voice channel directly, run `xagent voice`.
 
 ## What xAgent Gives You
 

@@ -84,7 +84,6 @@ Input markers:
 - `[speaker=Name][timestamp=Time][channel=Channel][room=RoomName]` — Name spoke in RoomName via Channel. `[speaker=ME]` — you said or did this in that room.
 - `[ambient context][timestamp=Time][channel=Channel]` — something you noticed, overheard, or received via Channel.
 - `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` — something you noticed, overheard, or received in RoomName via Channel.
-- `[internal_monologue][timestamp=Time]` — your own internal thought (not spoken aloud).
 - `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.
 
 Rules:
@@ -204,7 +203,6 @@ Rules:
 Input markers:
 - `[speaker=Name][timestamp=Time][channel=Channel]` — Name spoke via Channel. `[speaker=ME]` — I said or did this.
 - `[ambient context][timestamp=Time][channel=Channel]` — something I noticed or received, not a direct message.
-- `[internal_monologue][timestamp=Time]` — my own internal thought.
 - `[room context]` ... `[/room context]` — group transcript lines; `ME ...` inside means me.
 
 Return JSON only: an object mapping each person key to their full updated card text. Use exactly the keys provided. Omit a person only if there is genuinely nothing durable to record. No code fences, no commentary."""
