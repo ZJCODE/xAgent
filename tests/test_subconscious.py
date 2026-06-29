@@ -151,7 +151,7 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent.max_concurrent_tools = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
         agent._assistant_sender_id = "agent"
         memory_handler = MagicMock()
-        memory_handler.get_recent_context.return_value = "Recent memory content."
+        memory_handler.get_subconscious_context.return_value = "Recent memory content."
         agent.memory_handler = memory_handler
         message_handler = MessageHandler(MagicMock(), system_prompt=agent.system_prompt)
         message_handler.get_recent_messages = AsyncMock(return_value=[])
@@ -302,6 +302,10 @@ class SubconsciousLoopTests(unittest.TestCase):
             current_task = next(msg for msg in messages if msg.get("name") == AgentConfig.CURRENT_TASK_NAME)
             self.assertIn('mode="subconscious_json"', current_task["content"])
             self.assertIn("Return JSON only", current_task["content"])
+            self.assertIn("connect two older memories", current_task["content"])
+            self.assertIn("Do not stay stuck replaying the same thought", current_task["content"])
+            self.assertIn("empty internal_content", current_task["content"])
+            self.assertIn("Speaking outward is secondary", current_task["content"])
             self.assertNotIn("Known delivery contacts", current_task["content"])
 
     def test_recent_messages_empty_uses_named_recent_experience_layer(self):
@@ -319,6 +323,39 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("[No recent experience]", recent_experience["content"])
             recent_memory = next(msg for msg in messages if msg.get("name") == AgentConfig.RECENT_MEMORY_NAME)
             self.assertIn("Recent memory content", recent_memory["content"])
+
+    def test_subconscious_uses_wider_memory_context_when_available(self):
+        agent = self._make_agent_mock()
+        agent.memory_handler.get_subconscious_context = AsyncMock(
+            return_value="Recent daily diary plus longer-range summaries."
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            messages = agent.model_client.calls[0]["messages"]
+            recent_memory = next(msg for msg in messages if msg.get("name") == AgentConfig.RECENT_MEMORY_NAME)
+            self.assertIn("longer-range summaries", recent_memory["content"])
+            agent.memory_handler.get_subconscious_context.assert_awaited_once()
+
+    def test_collect_relationship_context_reads_store_cards_without_contacts(self):
+        agent = self._make_agent_mock()
+        memory_handler = MagicMock()
+        memory_handler.relationship_store.list_keys = AsyncMock(return_value=["feishu:alice"])
+        memory_handler.get_relationship_context = AsyncMock(return_value="## Alice\nAn older open thread.")
+        agent.memory_handler = memory_handler
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"feishu"})
+            context = asyncio.run(loop._collect_relationship_context())
+
+        self.assertIn("older open thread", context)
+        memory_handler.get_relationship_context.assert_awaited_once()
+        kwargs = memory_handler.get_relationship_context.await_args.kwargs
+        self.assertEqual(kwargs["speaker_keys"], ["feishu:alice"])
+        self.assertTrue(kwargs["include_routing_id"])
 
     def test_deliverable_filter_keeps_declared_channels_only(self):
         agent = self._make_agent_mock()
@@ -485,6 +522,30 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.record_subconscious_thought.assert_called_once()
             call_args = agent.record_subconscious_thought.call_args
             self.assertEqual(call_args[0][0], "Hmm interesting...")
+            agent.message_handler.store_context_event.assert_not_called()
+
+    def test_blank_subconscious_result_is_successful_noop(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
+            agent.record_subconscious_thought.assert_not_called()
+            delivery_sink.assert_not_awaited()
             agent.message_handler.store_context_event.assert_not_called()
 
 

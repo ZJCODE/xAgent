@@ -102,6 +102,31 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(today.isoformat(), ctx)
         self.assertIn("Today's diary entry", ctx)
 
+    async def test_get_subconscious_context_includes_latest_summaries(self):
+        today = date.today()
+        await self.memory.append_daily("Fresh inner diary note", target_date=today)
+        await self.memory.write_summary(
+            self.memory.weekly_path(date(2026, 6, 1), date(2026, 6, 7)),
+            "Weekly arc about unfinished work.",
+        )
+        await self.memory.write_summary(
+            self.memory.monthly_path(2026, 6),
+            "Monthly pattern about relationships.",
+        )
+        await self.memory.write_summary(
+            self.memory.yearly_path(2026),
+            "Yearly phase about long-running questions.",
+        )
+
+        ctx = await self.handler.get_subconscious_context(days=1)
+
+        self.assertIn("Recent daily diary", ctx)
+        self.assertIn("Fresh inner diary note", ctx)
+        self.assertIn("Longer-range diary summaries", ctx)
+        self.assertIn("Weekly arc about unfinished work", ctx)
+        self.assertIn("Monthly pattern about relationships", ctx)
+        self.assertIn("Yearly phase about long-running questions", ctx)
+
     def test_experience_record_preserves_timestamp(self):
         message = Message(
             role=RoleType.ASSISTANT,
@@ -606,9 +631,9 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         first_contents = [m["content"] for m in self.llm.diary_calls[0]["messages"]]
         self.assertEqual(len(first_contents), 20)
 
-        # Add 14 more messages so the cursor gap reaches threshold naturally.
+        # Add enough messages so the cursor gap reaches threshold naturally.
         # After first compression: _last_processed_message_id = 20.
-        # New messages 30-43 → latest = 44, unprocessed = 44-20 = 24 ≥ 14.
+        # New messages 30-43 -> latest = 44, unprocessed = 44-20 = 24 >= 16.
         for i in range(30, 44):
             self.storage.append(Message(
                 role=RoleType.USER,
@@ -617,8 +642,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 timestamp=1716000000.0 + i,
             ))
 
-        # Second compression: cursor-range (14, 34] = msgs 14-33
-        # Overlaps with first batch by window_overlap=6 (msgs 14-19)
+        # Second compression overlaps with the first batch by the configured
+        # window_overlap.
         second_llm = _FakeLLMService()
         handler.llm_service = second_llm
         wrote2 = await handler.run_maintenance(force=False)
@@ -626,11 +651,9 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         second_contents = [m["content"] for m in second_llm.diary_calls[0]["messages"]]
         self.assertEqual(len(second_contents), 20)
 
-        # Check overlap: last 6 of first batch should match first 6 of second batch
-        # First batch covers msgs 10-29; second batch covers msgs 24-43
-        # Overlap region: msgs 24-29
-        overlap_first = set(first_contents[-6:])
-        overlap_second = set(second_contents[:6])
+        overlap = handler.window_overlap
+        overlap_first = set(first_contents[-overlap:])
+        overlap_second = set(second_contents[:overlap])
         self.assertEqual(overlap_first, overlap_second,
                          f"Expected overlap: {sorted(overlap_first)} vs {sorted(overlap_second)}")
 

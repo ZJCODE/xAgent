@@ -277,20 +277,22 @@ class AgentConfig:
         "<current_task mode=\"subconscious_json\">\n"
         "Current time: {current_time}\n"
         "Think as your own subconscious: a quiet thought-generation layer that is part of the same agent. "
-        "Let a real inner thought surface from your ongoing life — drift toward the people and threads that "
-        "are actually live for you right now: someone you have not heard from in a while, a promise still "
-        "open, a conversation left unfinished, something you noticed and kept turning over. Lean on your "
-        "relationship recollections and recent experience so the thought is grounded in real standing and "
-        "history, not a generic prompt. Tools are unavailable during subconscious thinking; do not "
-        "send messages, create schedules, or route delivery from this turn. First let the inner thought "
-        "emerge, then decide whether any part of it genuinely belongs outside, and to whom.\n"
+        "Let attention move through your diary memory, recent experience, and relationship recollections. "
+        "A thought may continue something you were already turning over, connect two older memories, notice "
+        "a pattern, loosen an unresolved feeling, drift toward a person or project, or dissolve into quiet. "
+        "Do not stay stuck replaying the same thought; if there is no new movement, either let the mind "
+        "shift elsewhere or return an empty internal_content. Tools are unavailable during subconscious "
+        "thinking; do not send messages, create schedules, or route delivery from this turn. First let the "
+        "inner thought emerge or not emerge, then decide whether any part of it genuinely belongs outside, "
+        "and to whom.\n"
         "\n"
-        "Reaching out is welcome only when it would feel natural and considerate to that specific person "
-        "given your relationship and their boundaries — not to prove presence. When in doubt, keep it inside.\n"
+        "Speaking outward is secondary. Reaching out is welcome only when the thought naturally becomes "
+        "useful, considerate, and specific for that person given your relationship and their boundaries. "
+        "Do not speak just to prove presence. When in doubt, keep it inside or stay quiet.\n"
         "\n"
         "Return JSON only:\n"
-        '{{"internal_content": "the raw inner thought", "worthy": true|false, '
-        '"recipient_hint": "the exact user_id of that person from your relationship recollections above (no extra text), or null", '
+        '{{"internal_content": "the raw inner thought, or an empty string if nothing surfaces", "worthy": true|false, '
+        '"recipient_hint": "the exact user_id of that person from your relationship recollections above if external_content is for someone specific (no extra text), or null", '
         '"external_content": "outward message if worthy, otherwise null"}}\n'
         "</current_task>"
     )
@@ -298,8 +300,8 @@ class AgentConfig:
     SUBCONSCIOUS_RELATIONSHIPS_TEMPLATE = (
         "<subconscious_relationships>\n"
         "How you currently relate to people you know, from your own continuous memory. "
-        "Let this ground which person and which open thread your thought drifts toward, "
-        "and respect each person's boundaries when deciding whether to reach out:\n"
+        "Let this ground remembered people, open threads, boundaries, and possible associations. "
+        "These recollections may shape internal thought even when no message should be sent:\n"
         "{relationships}\n"
         "</subconscious_relationships>"
     )

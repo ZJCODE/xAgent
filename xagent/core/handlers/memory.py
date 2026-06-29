@@ -35,6 +35,8 @@ class MemoryHandler:
 
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
+    SUBCONSCIOUS_SUMMARY_SCOPES = ("weekly", "monthly", "yearly")
+    SUBCONSCIOUS_SUMMARY_CHARS_PER_SCOPE = 2000
 
     def __init__(
         self,
@@ -87,6 +89,57 @@ class MemoryHandler:
         for date_str, content in entries:
             sections.append(f"[{date_str}]\n{content.strip()}")
         return "\n\n".join(sections)
+
+    async def get_subconscious_context(self, days: int | None = None) -> str:
+        """Return memory context for subconscious turns.
+
+        Subconscious thinking should stay grounded in the same diary stream as
+        normal turns, but it benefits from a slightly wider time horizon than
+        the recent daily window.
+        """
+        sections: list[str] = []
+
+        recent = await self.get_recent_context(days=days)
+        if recent.strip():
+            sections.append("Recent daily diary:\n" + recent.strip())
+
+        summary_sections = await self._latest_summary_sections_for_subconscious()
+        if summary_sections:
+            sections.append("Longer-range diary summaries:\n" + "\n\n".join(summary_sections))
+
+        return "\n\n".join(sections)
+
+    async def _latest_summary_sections_for_subconscious(self) -> list[str]:
+        sections: list[str] = []
+        for scope in self.SUBCONSCIOUS_SUMMARY_SCOPES:
+            try:
+                files = await self.memory.list_files(scope=scope)
+            except Exception as exc:
+                logger.warning("Failed to list %s memory summaries: %s", scope, exc, exc_info=True)
+                continue
+
+            for file_name in reversed(files):
+                path = Path(file_name)
+                try:
+                    content = await self.memory.read_file(path)
+                except Exception as exc:
+                    logger.warning("Failed to read %s memory summary: %s", scope, exc, exc_info=True)
+                    continue
+                text = content.strip()
+                if not text:
+                    continue
+                label = path.stem
+                trimmed = self._trim_subconscious_summary(text)
+                sections.append(f"[{scope}: {label}]\n{trimmed}")
+                break
+        return sections
+
+    @classmethod
+    def _trim_subconscious_summary(cls, text: str) -> str:
+        limit = max(1, int(cls.SUBCONSCIOUS_SUMMARY_CHARS_PER_SCOPE))
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "\n[summary truncated]"
 
     # ------------------------------------------------------------------
     # Journal maintenance

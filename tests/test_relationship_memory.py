@@ -291,6 +291,29 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("[user_id: alice]", subconscious_view)
 
+    async def test_relationship_store_keys_can_feed_subconscious_context(self):
+        await self.store.write_card(
+            RelationshipCard(
+                key="feishu:alice",
+                body="An older thread about the trip is still open.",
+                display_name="Alice",
+                channel="feishu",
+                user_id="alice",
+            )
+        )
+        storage = _FakeMessageStorage()
+        handler = self._make_handler(storage, _FakeDiaryLLMService())
+
+        keys = await self.store.list_keys()
+        context = await handler.get_relationship_context(
+            speaker_keys=keys,
+            max_cards=AgentConfig.RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS,
+            include_routing_id=True,
+        )
+
+        self.assertIn("older thread about the trip", context)
+        self.assertIn("[user_id: alice]", context)
+
     async def test_maintenance_derives_relationship_cards(self):
         messages = [
             Message.create(content=f"message {index}", role=RoleType.USER, sender_id="alice")

@@ -379,29 +379,43 @@ class SubconsciousLoop:
         if memory_handler is None:
             return "(no memory available)"
         try:
-            ctx = memory_handler.get_recent_context()
+            ctx = memory_handler.get_subconscious_context()
             if inspect.isawaitable(ctx):
                 ctx = await ctx
             return ctx.strip() if ctx else "(no recent memory)"
         except Exception:
-            self._logger.warning("Failed to collect memory context", exc_info=True)
+            self._logger.warning("Failed to collect subconscious memory context", exc_info=True)
             return "(memory read failed)"
 
     async def _collect_relationship_context(self) -> str:
-        """Collect relationship cards for known contacts to ground the thought."""
+        """Collect relationship cards to ground subconscious thought."""
         memory_handler = getattr(self._agent, "memory_handler", None)
         if memory_handler is None or not callable(
             getattr(memory_handler, "get_relationship_context", None)
         ):
             return ""
         contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
-        if not contacts:
-            return ""
         from ...components.memory import RelationshipStore
 
         keys: list[str] = []
         for contact in contacts:
-            keys.append(RelationshipStore.make_key(contact.channel, contact.user_id))
+            self._append_unique_key(keys, RelationshipStore.make_key(contact.channel, contact.user_id))
+
+        relationship_store = getattr(memory_handler, "relationship_store", None)
+        list_keys = getattr(relationship_store, "list_keys", None)
+        if callable(list_keys):
+            try:
+                stored_keys = list_keys()
+                if inspect.isawaitable(stored_keys):
+                    stored_keys = await stored_keys
+                if isinstance(stored_keys, list):
+                    for key in stored_keys:
+                        self._append_unique_key(keys, str(key))
+            except Exception:
+                self._logger.warning("Failed to list relationship cards for subconscious", exc_info=True)
+
+        if not keys:
+            return ""
         try:
             return await memory_handler.get_relationship_context(
                 speaker_keys=keys,
@@ -411,6 +425,12 @@ class SubconsciousLoop:
         except Exception:
             self._logger.warning("Failed to collect relationship context", exc_info=True)
             return ""
+
+    @staticmethod
+    def _append_unique_key(keys: list[str], key: str) -> None:
+        normalized = (key or "").strip()
+        if normalized and normalized not in keys:
+            keys.append(normalized)
 
     async def _write_subconscious_thought(self, content: str) -> None:
         """Record the raw inner thought directly in the diary."""

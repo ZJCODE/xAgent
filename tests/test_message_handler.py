@@ -269,6 +269,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertNotIn("subconscious_contacts", current_task["content"])
         self.assertNotIn("Telos", current_task["content"])
         self.assertIn('mode="subconscious_json"', current_task["content"])
+        self.assertNotIn("subconscious_trace", {message["name"] for message in context_messages})
 
     def test_workspace_context_is_static_instruction_layer(self):
         handler = MessageHandler(
