@@ -302,7 +302,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             current_task = next(msg for msg in messages if msg.get("name") == AgentConfig.CURRENT_TASK_NAME)
             self.assertIn('mode="subconscious_json"', current_task["content"])
             self.assertIn("Return JSON only", current_task["content"])
-            self.assertIn("connect two older memories", current_task["content"])
+            self.assertIn("connect older memories", current_task["content"])
             self.assertIn("Do not force insight or replay the same thought without new movement", current_task["content"])
             self.assertIn("empty internal_content", current_task["content"])
             self.assertIn("let it become an outward message", current_task["content"])
