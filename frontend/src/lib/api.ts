@@ -14,6 +14,15 @@ import type {
   SkillsTreeResponse,
   TasksResponse,
   WorkspaceUploadResult,
+  ConfigPreview,
+  ConsoleAgentSummary,
+  ConsoleAgentsResponse,
+  ConsoleChannelState,
+  ConsoleConfigResponse,
+  ConsoleCreateAgentInput,
+  ConsoleLogResponse,
+  ConsoleOverviewResponse,
+  SetupSessionResponse,
 } from "../types";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -152,4 +161,159 @@ export async function deleteTask(taskId: string): Promise<{ status: string; dele
 
 export function workspaceBlobUrl(path: string): string {
   return `/api/workspace/blob?path=${encodeURIComponent(path)}`;
+}
+
+function agentPath(agentName: string, suffix: string): string {
+  return `/api/console/agents/${encodeURIComponent(agentName)}${suffix}`;
+}
+
+export async function getConsoleAgents(): Promise<ConsoleAgentsResponse> {
+  return requestJson("/api/console/agents");
+}
+
+export async function createConsoleAgent(input: ConsoleCreateAgentInput): Promise<ConsoleAgentsResponse & { status: string }> {
+  return requestJson("/api/console/agents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateConsoleAgent(name: string, input: { title?: string }): Promise<{ status: string; agent: ConsoleAgentSummary }> {
+  return requestJson(agentPath(name, ""), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function selectConsoleAgent(name: string): Promise<{ status: string; active_agent: string }> {
+  return requestJson(agentPath(name, "/select"), { method: "POST" });
+}
+
+export async function deleteConsoleAgent(name: string, stopRunningChannels = false): Promise<{ status: string; deleted: unknown }> {
+  return requestJson(`${agentPath(name, "")}?stop_running_channels=${stopRunningChannels ? "true" : "false"}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getConsoleOverview(name: string): Promise<ConsoleOverviewResponse> {
+  return requestJson(agentPath(name, "/overview"));
+}
+
+export async function getConsoleIdentity(name: string): Promise<AgentIdentity> {
+  return requestJson(agentPath(name, "/identity"));
+}
+
+export async function updateConsoleIdentity(name: string, identity: string): Promise<AgentIdentity> {
+  return requestJson(agentPath(name, "/identity"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identity }),
+  });
+}
+
+export async function getConsoleConfig(name: string): Promise<ConsoleConfigResponse> {
+  return requestJson(agentPath(name, "/config"));
+}
+
+export async function previewConsoleConfig(name: string, config: Record<string, unknown>): Promise<ConfigPreview> {
+  return requestJson(agentPath(name, "/config/preview"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config }),
+  });
+}
+
+export async function updateConsoleConfig(name: string, config: Record<string, unknown>): Promise<ConsoleConfigResponse> {
+  return requestJson(agentPath(name, "/config"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config }),
+  });
+}
+
+export async function getConsoleChannels(name: string): Promise<{ channels: ConsoleChannelState[] }> {
+  return requestJson(agentPath(name, "/channels"));
+}
+
+export async function runConsoleChannelAction(name: string, channel: string, action: "start" | "stop" | "restart"): Promise<{ status: string; channel: ConsoleChannelState }> {
+  return requestJson(agentPath(name, `/channels/${encodeURIComponent(channel)}/${action}`), { method: "POST" });
+}
+
+export async function getConsoleChannelLogs(name: string, channel: string, lines = 120): Promise<ConsoleLogResponse> {
+  return requestJson(agentPath(name, `/channels/${encodeURIComponent(channel)}/logs?lines=${lines}`));
+}
+
+export async function startConsoleSetupSession(name: string, input: Record<string, unknown>): Promise<SetupSessionResponse> {
+  return requestJson(agentPath(name, "/setup-sessions"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getConsoleSetupSessionEvents(sessionId: string): Promise<{ session_id: string; events: import("../types").SetupSessionEvent[] }> {
+  return requestJson(`/api/console/setup-sessions/${encodeURIComponent(sessionId)}/events`);
+}
+
+export async function getConsoleMemoryTree(name: string): Promise<{ tree: FileNode[] }> {
+  return requestJson(agentPath(name, "/memory/tree"));
+}
+
+export async function readConsoleMemoryFile(name: string, path: string): Promise<FileReadResult> {
+  return requestJson(`${agentPath(name, "/memory/read")}?path=${encodeURIComponent(path)}`);
+}
+
+export async function searchConsoleMemory(name: string, query: string): Promise<{ query: string; results: SearchResult[] }> {
+  return requestJson(`${agentPath(name, "/memory/search")}?query=${encodeURIComponent(query)}`);
+}
+
+export async function getConsoleWorkspaceTree(name: string): Promise<{ root: string; tree: FileNode[] }> {
+  return requestJson(agentPath(name, "/workspace/tree"));
+}
+
+export async function readConsoleWorkspaceFile(name: string, path: string): Promise<FileReadResult> {
+  return requestJson(`${agentPath(name, "/workspace/read")}?path=${encodeURIComponent(path)}`);
+}
+
+export async function uploadConsoleWorkspaceFile(name: string, file: File, path?: string): Promise<WorkspaceUploadResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (path) formData.append("path", path);
+  return requestJson(agentPath(name, "/workspace/upload"), { method: "POST", body: formData });
+}
+
+export async function getConsoleMessages(name: string, count: number, offset: number): Promise<MessagesResponse> {
+  return requestJson(`${agentPath(name, "/messages")}?count=${count}&offset=${offset}`);
+}
+
+export async function getConsoleMessagesStats(name: string): Promise<MessagesStats> {
+  return requestJson(agentPath(name, "/messages/stats"));
+}
+
+export async function getConsoleSkillsInfo(name: string): Promise<SkillsInfo> {
+  return requestJson(agentPath(name, "/skills/info"));
+}
+
+export async function getConsoleSkillsTree(name: string): Promise<SkillsTreeResponse> {
+  return requestJson(agentPath(name, "/skills/tree"));
+}
+
+export async function getConsoleTasks(name: string): Promise<TasksResponse> {
+  return requestJson(agentPath(name, "/tasks"));
+}
+
+export async function deleteConsoleTask(name: string, taskId: string): Promise<{ status: string; deleted: unknown }> {
+  return requestJson(`${agentPath(name, "/tasks/delete")}?task_id=${encodeURIComponent(taskId)}`, { method: "DELETE" });
+}
+
+export function consoleWorkspaceBlobUrl(agentName: string, path: string): string {
+  return agentPath(agentName, `/workspace/blob?path=${encodeURIComponent(path)}`);
+}
+
+export function consoleWebSocketUrl(path: string): string {
+  const url = new URL(path, window.location.origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
 }

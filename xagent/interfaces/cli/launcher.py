@@ -368,6 +368,7 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
             disabled=not channel_ready,
         ),
         MenuOption("stop", "Stop", "Stop this channel."),
+        MenuOption("status", "Status", "Show this channel's process status."),
         MenuOption(
             "restart",
             "Restart",
@@ -466,18 +467,13 @@ def _active_agent_context() -> tuple[str, Path, bool]:
 def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
     lines = [f"Runtime: {overview.config_dir}"]
     visible_items = [item for item in overview.items if item.name not in {"Config", "Identity", "Data"}]
-    active_items = [item for item in visible_items if item.status != STATUS_DISABLED]
-    disabled_names = [item.name for item in visible_items if item.status == STATUS_DISABLED]
-    if active_items:
+    if visible_items:
         lines.append("")
-    for item in active_items:
+    for item in visible_items:
         line = f"{item.name:<10} {item.value}"
         if item.name in {"Web UI", "Voice", "Feishu", "Weixin"} and item.value == "running" and item.detail:
             line += f"  {item.detail}"
         lines.append(line)
-    if disabled_names:
-        lines.append("")
-        lines.append(f"Not configured: {', '.join(disabled_names)}")
     return "\n".join(lines)
 
 
@@ -1168,7 +1164,11 @@ def _run_voice_nested_config(ui: TerminalUI, config_dir: Path, config: dict[str,
         current_key = _current_voice_nested_api_key(config, section)
         has_existing = choice.key == current and bool(current_key) and not is_placeholder_api_key(current_key)
         section_label = "STT" if section == "stt" else "TTS"
-        subtitle = "Leave blank to keep the existing key." if has_existing else ""
+        subtitle = (
+            "Leave blank to keep the existing key."
+            if has_existing
+            else f"{choice.key.title()} voice {section_label} needs its own API key for the current model provider."
+        )
         value = ui.ask_text(
             f"{choice.key.title()} API key",
             secret=True,
@@ -1343,7 +1343,6 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     show_next_steps=False,
                 )
             ) == 0:
-                ui.pause("Press Enter to return to the launcher")
                 raise ReturnToLauncherHome()
         elif option.key == "weixin":
             if handle_init_weixin(
@@ -1358,7 +1357,6 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     force=_weixin_channel_is_configured(config_dir),
                 )
             ) == 0:
-                ui.pause("Press Enter to return to the launcher")
                 raise ReturnToLauncherHome()
         elif option.key == "voice":
             _run_voice_config_launcher(ui, config_dir)

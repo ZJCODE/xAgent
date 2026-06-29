@@ -46,6 +46,15 @@ def register_spa_routes(app: FastAPI, *, static_dir: Path, logger: logging.Logge
         async def serve_tasks():
             return await serve_spa_index()
 
+        @app.get("/agents", include_in_schema=False)
+        async def serve_agents():
+            return await serve_spa_index()
+
+        @app.get("/agents/{path:path}", include_in_schema=False)
+        async def serve_agent_console(path: str):
+            del path
+            return await serve_spa_index()
+
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
         logger.info("Web UI available at /")
     else:

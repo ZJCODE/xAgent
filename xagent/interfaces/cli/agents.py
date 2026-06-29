@@ -151,11 +151,12 @@ def empty_agent_registry(*, active_agent: str = "") -> AgentRegistry:
 
 
 def allocate_api_port(*, root: Optional[Path] = None) -> int:
-    """Return the lowest unused API port >= ``BaseAgentConfig.DEFAULT_PORT``.
+    """Return the lowest unused agent API port.
 
     Reads every registered agent's config.yaml and collects existing
     ``channels.api.port`` values, then returns the first port >=
-    ``DEFAULT_PORT`` (8010) not in that set.
+    ``DEFAULT_PORT + 1``. ``DEFAULT_PORT`` is reserved for the global
+    Web Console.
     """
     from .channels import api_config, load_config_file
 
@@ -163,7 +164,7 @@ def allocate_api_port(*, root: Optional[Path] = None) -> int:
     try:
         registry = load_agent_registry(root=root)
     except AgentRegistryError:
-        return BaseAgentConfig.DEFAULT_PORT
+        return BaseAgentConfig.DEFAULT_PORT + 1
 
     for entry in registry.agents.values():
         try:
@@ -174,7 +175,7 @@ def allocate_api_port(*, root: Optional[Path] = None) -> int:
         if isinstance(port_value, int):
             used_ports.add(port_value)
 
-    port = BaseAgentConfig.DEFAULT_PORT
+    port = BaseAgentConfig.DEFAULT_PORT + 1
     while port in used_ports:
         port += 1
     return port

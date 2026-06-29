@@ -2804,25 +2804,24 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(enabled_channels_from_config(config), ["voice"])
 
-    def test_web_runs_api_channel_and_opens_browser_by_default(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
-            args = argparse.Namespace(
-                config_dir=tmpdir,
-                host=None,
-                port=None,
-                open_browser=True,
-                max_concurrent_chats=None,
-                queue_timeout=None,
-                chat_timeout=None,
-            )
+    def test_web_runs_global_console(self):
+        args = argparse.Namespace(
+            config_dir=None,
+            host=None,
+            port=None,
+            open_browser=True,
+            max_concurrent_chats=None,
+            queue_timeout=None,
+            chat_timeout=None,
+        )
+        server_instance = MagicMock()
 
-            with patch("xagent.interfaces.cli.runtime._run_api_channel", return_value=0) as runner:
-                exit_code = handle_web(args)
+        with patch("xagent.interfaces.server.ConsoleHTTPServer", return_value=server_instance) as server_class:
+            exit_code = handle_web(args)
 
         self.assertEqual(exit_code, 0)
-        runner.assert_called_once()
-        self.assertTrue(runner.call_args.args[0].open_browser)
+        server_class.assert_called_once_with(enable_web=True)
+        server_instance.run.assert_called_once_with(host=None, port=None, open_browser=True)
 
     def test_start_defaults_to_feishu_when_only_feishu_is_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2893,6 +2892,8 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         server_class.assert_called_once_with(
             config_dir="./agent-dir",
+            enable_web=False,
+            enable_admin=False,
             max_concurrent_chats=2,
             chat_queue_timeout=3.5,
             chat_timeout=9.5,
@@ -2927,7 +2928,7 @@ class CLICommandTests(unittest.TestCase):
                 exit_code = handle_run_channel_internal(args)
 
         self.assertEqual(exit_code, 0)
-        server_class.assert_called_once_with(config_dir=tmpdir)
+        server_class.assert_called_once_with(config_dir=tmpdir, enable_web=False, enable_admin=False)
         server_instance.run.assert_called_once_with(
             host="127.0.0.1",
             port=8010,

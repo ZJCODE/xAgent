@@ -77,11 +77,13 @@ class AgentHTTPServer(BaseAgentRunner):
         config_dir: Optional[str] = None,
         agent: Optional[Agent] = None,
         enable_web: bool = True,
+        enable_admin: bool = True,
         max_concurrent_chats: int = AgentConfig.DEFAULT_HTTP_MAX_CONCURRENT_CHATS,
         chat_queue_timeout: float = AgentConfig.DEFAULT_HTTP_QUEUE_TIMEOUT,
         chat_timeout: float = AgentConfig.DEFAULT_HTTP_CHAT_TIMEOUT,
     ):
         self._enable_web = enable_web
+        self._enable_admin = enable_admin
         self._chat_semaphore = asyncio.Semaphore(max(1, int(max_concurrent_chats)))
         self._chat_queue_timeout = max(0.001, float(chat_queue_timeout))
         self._chat_timeout = max(0.001, float(chat_timeout))
@@ -776,12 +778,13 @@ class AgentHTTPServer(BaseAgentRunner):
 
     def _add_routes(self, app: FastAPI) -> None:
         register_runtime_routes(app, self)
-        register_admin_routes(
-            app,
-            self,
-            workspace_text_limit=_WORKSPACE_TEXT_READ_LIMIT,
-            workspace_search_text_limit=_WORKSPACE_SEARCH_TEXT_LIMIT,
-        )
+        if self._enable_admin:
+            register_admin_routes(
+                app,
+                self,
+                workspace_text_limit=_WORKSPACE_TEXT_READ_LIMIT,
+                workspace_search_text_limit=_WORKSPACE_SEARCH_TEXT_LIMIT,
+            )
 
     def run(self, host: str = None, port: int = None, open_browser: bool = False) -> None:
         host = host if host is not None else BaseAgentConfig.DEFAULT_HOST
@@ -791,6 +794,7 @@ class AgentHTTPServer(BaseAgentRunner):
         self.logger.info("Model: %s", self.agent.model)
         self.logger.info("Tools: %d loaded", len(self.agent.tools))
         self.logger.info("Web UI: %s", "enabled at /" if self._enable_web else "disabled (--no-web)")
+        self.logger.info("Admin API: %s", "enabled" if self._enable_admin else "disabled")
 
         if open_browser and self._enable_web:
             import threading

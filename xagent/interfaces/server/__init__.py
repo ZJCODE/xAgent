@@ -6,6 +6,7 @@ by its routes.
 from __future__ import annotations
 
 from .app import AgentHTTPServer
+from .console import ConsoleHTTPServer
 from .models import (
     AgentInput,
     ChatAttachmentInput,
@@ -21,6 +22,7 @@ from .models import (
 
 __all__ = [
     "AgentHTTPServer",
+    "ConsoleHTTPServer",
     "AgentInput",
     "ChatAttachmentInput",
     "ChatImageInput",

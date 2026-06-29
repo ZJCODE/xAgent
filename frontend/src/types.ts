@@ -261,3 +261,110 @@ export interface SkillStateResponse {
   status: string;
   skill: SkillMetadata;
 }
+
+export type ConsoleRouteTab = "overview" | "chat" | "channels" | "config" | "identity" | "data" | "logs";
+export type ConsoleDataTab = "memory" | "messages" | "workspace" | "skills" | "tasks";
+
+export interface ConsoleChannelState {
+  channel: "api" | "voice" | "feishu" | "weixin" | string;
+  configured: boolean;
+  enabled: boolean;
+  status: "running" | "stopped" | "disabled" | string;
+  pid?: number | null;
+  target?: string;
+  pid_path?: string;
+  log_path?: string;
+  recent_log?: string;
+  restart_required?: boolean;
+}
+
+export interface ConsoleAgentSummary {
+  name: string;
+  title: string;
+  path: string;
+  active: boolean;
+  initialized: boolean;
+  headline: string;
+  provider?: string;
+  model?: string;
+  issues: string[];
+  channels: ConsoleChannelState[];
+}
+
+export interface ConsoleAgentsResponse {
+  active_agent: string;
+  agents: ConsoleAgentSummary[];
+}
+
+export interface ConsoleOverviewItem {
+  name: string;
+  value: string;
+  status: string;
+  tone: "ok" | "idle" | "error" | string;
+  detail?: string;
+}
+
+export interface ConsoleOverviewResponse {
+  agent: ConsoleAgentSummary;
+  overview: {
+    config_dir: string;
+    initialized: boolean;
+    headline: string;
+    items: ConsoleOverviewItem[];
+  };
+  missing_secrets: string[];
+}
+
+export interface ConfigPreviewChange {
+  path: string;
+  before: string;
+  after: string;
+}
+
+export interface ConfigPreview {
+  valid: boolean;
+  changes: ConfigPreviewChange[];
+  errors: string[];
+  restart_required_channels: string[];
+}
+
+export interface ConsoleConfigResponse {
+  path: string;
+  config: Record<string, unknown>;
+  missing_secrets: string[];
+  preview?: ConfigPreview;
+}
+
+export interface ConsoleLogResponse {
+  channel: string;
+  log_path: string;
+  content: string;
+}
+
+export interface ConsoleCreateAgentInput {
+  name: string;
+  title?: string;
+  make_active?: boolean;
+  identity: string;
+  model: Record<string, unknown>;
+  capabilities?: Record<string, unknown>;
+  voice?: Record<string, unknown>;
+  feishu?: Record<string, unknown>;
+}
+
+export interface SetupSessionEvent {
+  timestamp?: number;
+  phase: string;
+  message?: string;
+  auth_url?: string;
+  qr_url?: string;
+  expires_at?: string;
+  result?: unknown;
+  error?: string;
+}
+
+export interface SetupSessionResponse {
+  session_id: string;
+  kind: string;
+  events: SetupSessionEvent[];
+}

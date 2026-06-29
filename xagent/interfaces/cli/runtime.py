@@ -117,11 +117,11 @@ def handle_server(args: argparse.Namespace) -> int:
 
 
 def handle_web(args: argparse.Namespace) -> int:
-    try:
-        config = load_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-    return _run_api_channel(args, config)
+    from ..server import ConsoleHTTPServer
+
+    server = ConsoleHTTPServer(enable_web=True)
+    server.run(host=args.host, port=args.port, open_browser=args.open_browser)
+    return 0
 
 
 def _channel_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
@@ -191,6 +191,8 @@ def _api_runtime_values(
     raw_config_dir = getattr(args, "config_dir", None)
     server_kwargs: dict[str, Any] = {
         "config_dir": raw_config_dir or str(runtime_dir(args)),
+        "enable_web": False,
+        "enable_admin": False,
     }
 
     runtime_mapping = (
