@@ -1324,6 +1324,34 @@ input::placeholder {
   grid-row: span 2;
 }
 
+.agent-tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.agent-tab {
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 160ms ease, border-color 160ms ease;
+  font-size: 13px;
+}
+
+.agent-tab:hover {
+  color: var(--text);
+}
+
+.agent-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
 .identity-editor {
   min-height: 48vh;
   padding: 12px;
@@ -1468,11 +1496,7 @@ input::placeholder {
   }
 
   .nav-link span {
-    display: block;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: none;
   }
 
   .status-cluster {

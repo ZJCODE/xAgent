@@ -5,11 +5,13 @@ import {
   clearMemory,
   clearMessages,
   clearWorkspace,
+  getAgentConfig,
   getAgentIdentity,
   getAgentInfo,
+  updateAgentConfig,
   updateAgentIdentity,
 } from "../lib/api";
-import type { AgentIdentity, AgentInfo } from "../types";
+import type { AgentConfig, AgentIdentity, AgentInfo } from "../types";
 
 function stringValue(value: unknown): string {
   return typeof value === "string" && value.trim() ? value : "";
@@ -48,8 +50,18 @@ export function AgentPage() {
   const [editorValue, setEditorValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [activeTab, setActiveTab] = useState<"identity" | "config">("identity");
+  const [configData, setConfigData] = useState<AgentConfig | null>(null);
+  const [configEditorValue, setConfigEditorValue] = useState("");
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [configNotice, setConfigNotice] = useState("");
 
   const dirty = useMemo(() => editorValue !== (identity?.identity || ""), [editorValue, identity]);
+  const dirtyConfig = useMemo(
+    () => configEditorValue !== (configData?.config || ""),
+    [configEditorValue, configData],
+  );
   const editable = Boolean(info?.identity_editable);
 
   const load = async () => {
@@ -62,6 +74,19 @@ export function AgentPage() {
       setInfo(agentInfo);
       setIdentity(identityData);
       setEditorValue(identityData?.identity || agentInfo.identity || "");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const loadConfig = async () => {
+    if (configLoaded) return;
+    try {
+      const data = await getAgentConfig();
+      setConfigData(data);
+      setConfigEditorValue(data.config);
+      setConfigLoaded(true);
+      setConfigNotice("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -90,6 +115,27 @@ export function AgentPage() {
     }
   };
 
+  const saveConfig = async () => {
+    const value = configEditorValue.trim();
+    if (!value) {
+      setError("Config cannot be empty");
+      return;
+    }
+    setConfigSaving(true);
+    setError("");
+    setConfigNotice("");
+    try {
+      const updated = await updateAgentConfig(value);
+      setConfigData(updated);
+      setConfigEditorValue(updated.config);
+      setConfigNotice("Config saved. Provider, model, search, and image generation changes require a restart to take effect.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
   const runClearMemory = async () => {
     if (!window.confirm("Clear all memory files?")) return;
     await clearMemory();
@@ -112,10 +158,9 @@ export function AgentPage() {
         title="Agent"
         subtitle="Runtime identity and local maintenance"
         actions={
-          <Button type="button" onClick={load}>
-            <RefreshCw size={15} />
-            Refresh
-          </Button>
+          <IconButton type="button" onClick={load} title="Refresh">
+            <RefreshCw size={16} />
+          </IconButton>
         }
       />
       {error ? <div className="error-strip">{error}</div> : null}
@@ -140,32 +185,93 @@ export function AgentPage() {
         </Panel>
 
         <Panel className="identity-panel">
-          <PanelHeader
-            title="identity.md"
-            meta={identity?.path || info?.identity_file}
-            actions={
-            <div className="toolbar-actions">
-              <Button type="button" disabled={!editable || !dirty || saving} onClick={saveIdentity}>
-                <Save size={15} />
-                Save
-              </Button>
-              <IconButton
-                type="button"
-                disabled={!dirty || saving}
-                onClick={() => setEditorValue(identity?.identity || "")}
-                title="Revert"
-              >
-                <RotateCcw size={16} />
-              </IconButton>
-            </div>
-            }
-          />
-          <textarea
-            className="identity-editor"
-            value={editorValue}
-            disabled={!editable || saving}
-            onChange={(event) => setEditorValue(event.target.value)}
-          />
+          <div className="agent-tab-bar">
+            <button
+              type="button"
+              className={`agent-tab ${activeTab === "identity" ? "active" : ""}`}
+              onClick={() => {
+                setActiveTab("identity");
+                setError("");
+                setConfigNotice("");
+              }}
+            >
+              identity.md
+            </button>
+            <button
+              type="button"
+              className={`agent-tab ${activeTab === "config" ? "active" : ""}`}
+              onClick={() => {
+                setActiveTab("config");
+                setError("");
+                if (!configLoaded) loadConfig();
+              }}
+            >
+              config.yaml
+            </button>
+          </div>
+
+          {activeTab === "identity" && (
+            <>
+              <PanelHeader
+                title="identity.md"
+                meta={identity?.path || info?.identity_file}
+                actions={
+                  <div className="toolbar-actions">
+                    <Button type="button" disabled={!editable || !dirty || saving} onClick={saveIdentity}>
+                      <Save size={15} />
+                      Save
+                    </Button>
+                    <IconButton
+                      type="button"
+                      disabled={!dirty || saving}
+                      onClick={() => setEditorValue(identity?.identity || "")}
+                      title="Revert"
+                    >
+                      <RotateCcw size={16} />
+                    </IconButton>
+                  </div>
+                }
+              />
+              <textarea
+                className="identity-editor"
+                value={editorValue}
+                disabled={!editable || saving}
+                onChange={(event) => setEditorValue(event.target.value)}
+              />
+            </>
+          )}
+
+          {activeTab === "config" && (
+            <>
+              <PanelHeader
+                title="config.yaml"
+                meta={configData?.path}
+                actions={
+                  <div className="toolbar-actions">
+                    <Button type="button" disabled={!dirtyConfig || configSaving} onClick={saveConfig}>
+                      <Save size={15} />
+                      Save
+                    </Button>
+                    <IconButton
+                      type="button"
+                      disabled={!dirtyConfig || configSaving}
+                      onClick={() => setConfigEditorValue(configData?.config || "")}
+                      title="Revert"
+                    >
+                      <RotateCcw size={16} />
+                    </IconButton>
+                  </div>
+                }
+              />
+              {configNotice && <div className="success-strip">{configNotice}</div>}
+              <textarea
+                className="identity-editor"
+                value={configEditorValue}
+                disabled={configSaving}
+                onChange={(event) => setConfigEditorValue(event.target.value)}
+              />
+            </>
+          )}
         </Panel>
 
         <Panel className="danger-panel">

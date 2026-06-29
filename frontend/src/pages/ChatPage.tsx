@@ -1,4 +1,4 @@
-import { Eye, FileIcon, Paperclip, Send, Trash2, X } from "lucide-react";
+import { Eye, FileIcon, Paperclip, Send, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Markdown } from "../components/Markdown";
 import { Button, EmptyState, IconButton } from "../components/ui";
@@ -128,7 +128,7 @@ function PendingAttachmentPreview({ attachment, onRemove }: { attachment: Attach
 }
 
 function ChatPanel({ panel }: { panel: ChatPanelState }) {
-  const { updateSettings, addAttachments, removeAttachment, sendMessage, sendObservation, clearVisiblePanels } = useChat();
+  const { updateSettings, addAttachments, removeAttachment, sendMessage, sendObservation } = useChat();
   const [messageText, setMessageText] = useState("");
   const [observeText, setObserveText] = useState("");
   const [observeOpen, setObserveOpen] = useState(false);
@@ -169,26 +169,6 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
               className="inline-input"
             />
           </label>
-        </div>
-        <div className="panel-settings-right">
-          <label className="setting-toggle">
-            <span>Stream</span>
-            <input
-              type="checkbox"
-              checked={panel.settings.stream}
-              onChange={(event) => updateSettings(panel.id, { stream: event.target.checked })}
-            />
-            <span className="toggle-track" />
-          </label>
-          <IconButton
-            type="button"
-            onClick={clearVisiblePanels}
-            title="Clear chat"
-            aria-label="Clear chat"
-            disabled={!panel.messages.length}
-          >
-            <Trash2 size={15} />
-          </IconButton>
         </div>
       </div>
 

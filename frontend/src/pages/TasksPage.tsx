@@ -1,6 +1,6 @@
 import { CalendarClock, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Button, EmptyState, PageShell, PageToolbar, StatusBadge } from "../components/ui";
+import { Button, EmptyState, IconButton, PageShell, PageToolbar, StatusBadge } from "../components/ui";
 import { deleteTask, getTasks } from "../lib/api";
 import type { ScheduledTaskItem, TasksResponse } from "../types";
 
@@ -87,10 +87,9 @@ export function TasksPage() {
         actions={
           <>
             <StatusBadge tone="info">{activeCount} active</StatusBadge>
-            <Button type="button" onClick={() => void load()} disabled={loading}>
-              <RefreshCw size={15} />
-              Refresh
-            </Button>
+            <IconButton type="button" onClick={() => void load()} disabled={loading} title="Refresh">
+              <RefreshCw size={16} />
+            </IconButton>
           </>
         }
       />

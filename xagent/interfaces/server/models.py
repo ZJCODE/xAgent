@@ -76,6 +76,14 @@ class IdentityInput(BaseModel):
     identity: str
 
 
+class ConfigInput(BaseModel):
+    """Request body for updating config.yaml."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    config: str
+
+
 class WorkspaceWriteInput(BaseModel):
     """Request body for writing a text file in workspace/."""
 

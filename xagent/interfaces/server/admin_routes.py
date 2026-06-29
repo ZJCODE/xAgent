@@ -10,9 +10,11 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+import yaml as pyyaml
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 
-from .models import IdentityInput, SkillCreateInput, SkillStateInput, SkillWriteInput, WorkspaceWriteInput
+from ...interfaces.cli.config_editor import validate_config, write_config
+from .models import ConfigInput, IdentityInput, SkillCreateInput, SkillStateInput, SkillWriteInput, WorkspaceWriteInput
 from .serializers import message_item, message_search_result
 from ...core.runtime import delete_scheduled_task, list_task_records
 from ...schemas.attachment import (
@@ -31,6 +33,36 @@ from ...utils.image_utils import (
 
 if TYPE_CHECKING:
     from .app import AgentHTTPServer
+
+
+SENSITIVE_FIELD_SUFFIXES = {"api_key", "secret_key", "app_secret"}
+MASK_SENTINEL = "****"
+
+
+def _mask_sensitive_fields(data: dict) -> dict:
+    """Return a deep copy with sensitive values replaced by MASK_SENTINEL."""
+    masked: dict = {}
+    for key, value in data.items():
+        if key in SENSITIVE_FIELD_SUFFIXES and isinstance(value, str) and value:
+            masked[key] = MASK_SENTINEL
+        elif isinstance(value, dict):
+            masked[key] = _mask_sensitive_fields(value)
+        else:
+            masked[key] = value
+    return masked
+
+
+def _unmask_sensitive_fields(new_data: dict, current_data: dict) -> None:
+    """Restore MASK_SENTINEL values from current_data in-place."""
+    for key in list(new_data.keys()):
+        if key in SENSITIVE_FIELD_SUFFIXES and new_data.get(key) == MASK_SENTINEL:
+            if isinstance(current_data, dict):
+                current_value = current_data.get(key)
+                if current_value:
+                    new_data[key] = current_value
+    for key in new_data:
+        if isinstance(new_data[key], dict) and isinstance(current_data.get(key), dict):
+            _unmask_sensitive_fields(new_data[key], current_data[key])
 
 
 def register_admin_routes(
@@ -138,6 +170,58 @@ def register_admin_routes(
             "path": str(identity_path),
             "filename": identity_path.name,
             "modified": identity_path.stat().st_mtime,
+        }
+
+    @app.get("/api/agent/config", tags=["Monitoring"])
+    async def agent_config():
+        config_path = Path(server.config_path).expanduser().resolve()
+        if not config_path.is_file():
+            raise HTTPException(status_code=404, detail="config.yaml not found")
+
+        masked = _mask_sensitive_fields(server.config)
+        yaml_str = pyyaml.safe_dump(masked, sort_keys=False, allow_unicode=False)
+
+        return {
+            "config": yaml_str,
+            "path": str(config_path),
+            "filename": config_path.name,
+            "modified": config_path.stat().st_mtime,
+        }
+
+    @app.put("/api/agent/config", tags=["Monitoring"])
+    async def update_agent_config(input_data: ConfigInput):
+        try:
+            new_data = pyyaml.safe_load(input_data.config)
+        except pyyaml.YAMLError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
+
+        if not isinstance(new_data, dict):
+            raise HTTPException(status_code=400, detail="Config must be a mapping (dictionary)")
+
+        _unmask_sensitive_fields(new_data, server.config)
+
+        try:
+            validate_config(new_data)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        try:
+            write_config(server.config_dir, new_data)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        server.config = new_data
+
+        config_path = Path(server.config_path).expanduser().resolve()
+        masked = _mask_sensitive_fields(new_data)
+        masked_yaml = pyyaml.safe_dump(masked, sort_keys=False, allow_unicode=False)
+
+        return {
+            "status": "ok",
+            "config": masked_yaml,
+            "path": str(config_path),
+            "filename": config_path.name,
+            "modified": config_path.stat().st_mtime,
         }
 
     @app.get("/api/memory/tree", tags=["Monitoring"])

@@ -122,6 +122,13 @@ export interface AgentIdentity {
   modified: number;
 }
 
+export interface AgentConfig {
+  config: string;
+  path: string;
+  filename: string;
+  modified: number;
+}
+
 export interface FileNode {
   name: string;
   path: string;

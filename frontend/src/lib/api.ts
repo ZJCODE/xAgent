@@ -1,4 +1,5 @@
 import type {
+  AgentConfig,
   AgentIdentity,
   AgentInfo,
   FileReadResult,
@@ -43,6 +44,18 @@ export async function updateAgentIdentity(identity: string): Promise<AgentIdenti
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ identity }),
+  });
+}
+
+export async function getAgentConfig(): Promise<AgentConfig> {
+  return requestJson("/api/agent/config");
+}
+
+export async function updateAgentConfig(config: string): Promise<AgentConfig> {
+  return requestJson("/api/agent/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config }),
   });
 }
 
