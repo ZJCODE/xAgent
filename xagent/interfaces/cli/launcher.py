@@ -149,7 +149,15 @@ def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[Men
     return options
 
 
-def _launcher_channel_options() -> list[MenuOption]:
+def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
+    def _running(channel: str) -> bool:
+        return running_pid(managed_paths(config_dir, channel).pid_path) is not None
+
+    voice_running = _running(CHANNEL_VOICE)
+    api_running = _running(CHANNEL_API)
+    feishu_running = _running(CHANNEL_FEISHU)
+    weixin_running = _running(CHANNEL_WEIXIN)
+
     return [
         MenuOption(
             key="chat",
@@ -158,22 +166,22 @@ def _launcher_channel_options() -> list[MenuOption]:
         ),
         MenuOption(
             key="voice",
-            title="Voice",
+            title="Voice (running)" if voice_running else "Voice",
             description="Manage the microphone/speaker channel.",
         ),
         MenuOption(
             key=CHANNEL_API,
-            title="Web",
+            title="Web (running)" if api_running else "Web",
             description="Open or manage the HTTP, WebSocket, and browser workspace.",
         ),
         MenuOption(
             key=CHANNEL_FEISHU,
-            title="Feishu",
+            title="Feishu (running)" if feishu_running else "Feishu",
             description="Configure or manage the Feishu bot channel.",
         ),
         MenuOption(
             key=CHANNEL_WEIXIN,
-            title="Weixin",
+            title="Weixin (running)" if weixin_running else "Weixin",
             description="Configure or manage the Weixin DM channel.",
         ),
         MenuOption(key="back", title="Back", description="Return to the main launcher."),
@@ -1999,7 +2007,7 @@ def _run_channel_launcher(config_dir: Path) -> int:
             channel_option = ui.select_menu(
                 title="xAgent Channel",
                 subtitle="Choose how you want to enter or manage the runtime.",
-                options=_launcher_channel_options(),
+                options=_launcher_channel_options(config_dir),
                 footer="↑/↓ Move • Enter Select  •  q Back",
             )
             if channel_option is None or channel_option.key == "back":
