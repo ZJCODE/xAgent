@@ -8,10 +8,21 @@ import json
 import logging
 import os
 import random
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX platforms
+    msvcrt = None
 
 from ..config import AgentConfig
 from .scheduler import _fsync_directory
@@ -101,6 +112,36 @@ def save_contacts(contacts_file: Path, contacts: List[ContactEntry]) -> None:
     _fsync_directory(contacts_file.parent)
 
 
+@contextmanager
+def _contacts_process_lock(contacts_file: Path):
+    """Cross-process exclusive lock protecting contacts.json read-modify-write.
+
+    Uses the same flock / msvcrt pattern as MemoryHandler so the lock is
+    automatically released if the process exits or crashes.
+    """
+    lock_path = contacts_file.with_name(contacts_file.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        else:
+            lock_handle.seek(0)
+            if not lock_handle.read(1):
+                lock_handle.write("\0")
+                lock_handle.flush()
+            lock_handle.seek(0)
+            msvcrt.locking(lock_handle.fileno(), msvcrt.LK_LOCK, 1)
+        yield
+    finally:
+        if fcntl is not None:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        else:
+            lock_handle.seek(0)
+            msvcrt.locking(lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
+        lock_handle.close()
+
+
 def upsert_contact(
     contacts_file: Path,
     channel: str,
@@ -108,36 +149,37 @@ def upsert_contact(
     target: Dict[str, Any],
 ) -> None:
     """Record or update a contact after a user interaction."""
-    contacts = load_contacts(contacts_file)
-    now_iso = datetime.now().replace(microsecond=0).isoformat(sep=" ")
-    updated = False
-    for c in contacts:
-        if c.channel == channel and c.user_id == user_id:
-            # Update in place by rebuilding the list
-            updated = True
-            break
-    if updated:
-        contacts = [
-            ContactEntry(
+    with _contacts_process_lock(contacts_file):
+        contacts = load_contacts(contacts_file)
+        now_iso = datetime.now().replace(microsecond=0).isoformat(sep=" ")
+        updated = False
+        for c in contacts:
+            if c.channel == channel and c.user_id == user_id:
+                # Update in place by rebuilding the list
+                updated = True
+                break
+        if updated:
+            contacts = [
+                ContactEntry(
+                    channel=channel,
+                    user_id=user_id,
+                    target=dict(target),
+                    last_seen=now_iso,
+                    interaction_count=c.interaction_count + 1,
+                )
+                if c.channel == channel and c.user_id == user_id
+                else c
+                for c in contacts
+            ]
+        else:
+            contacts.append(ContactEntry(
                 channel=channel,
                 user_id=user_id,
                 target=dict(target),
                 last_seen=now_iso,
-                interaction_count=c.interaction_count + 1,
-            )
-            if c.channel == channel and c.user_id == user_id
-            else c
-            for c in contacts
-        ]
-    else:
-        contacts.append(ContactEntry(
-            channel=channel,
-            user_id=user_id,
-            target=dict(target),
-            last_seen=now_iso,
-            interaction_count=1,
-        ))
-    save_contacts(contacts_file, contacts)
+                interaction_count=1,
+            ))
+        save_contacts(contacts_file, contacts)
 
 
 def resolve_contacts_path(workspace: Path) -> Path:
