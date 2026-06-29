@@ -35,7 +35,7 @@ class MemoryHandler:
 
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
-    SUBCONSCIOUS_SUMMARY_SCOPES = ("weekly", "monthly", "yearly")
+    SUBCONSCIOUS_SUMMARY_SCOPES = ("yearly", "monthly", "weekly")
     SUBCONSCIOUS_SUMMARY_CHARS_PER_SCOPE = 2000
 
     def __init__(
@@ -99,13 +99,13 @@ class MemoryHandler:
         """
         sections: list[str] = []
 
-        recent = await self.get_recent_context(days=days)
-        if recent.strip():
-            sections.append("Recent daily diary:\n" + recent.strip())
-
         summary_sections = await self._latest_summary_sections_for_subconscious()
         if summary_sections:
             sections.append("Longer-range diary summaries:\n" + "\n\n".join(summary_sections))
+
+        recent = await self.get_recent_context(days=days)
+        if recent.strip():
+            sections.append("Recent daily diary:\n" + recent.strip())
 
         return "\n\n".join(sections)
 
