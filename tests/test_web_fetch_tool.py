@@ -34,67 +34,67 @@ class WebFetchToolCreationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("url", spec["function"]["parameters"]["properties"])
 
 
-class URLValidationTests(unittest.TestCase):
+class URLValidationTests(unittest.IsolatedAsyncioTestCase):
     """Tests for URL validation and SSRF prevention."""
 
-    def test_valid_https_url(self):
-        result = _validate_url("https://example.com/page")
+    async def test_valid_https_url(self):
+        result = await _validate_url("https://example.com/page")
         self.assertEqual(result, "https://example.com/page")
 
-    def test_valid_http_url(self):
-        result = _validate_url("http://example.com")
+    async def test_valid_http_url(self):
+        result = await _validate_url("http://example.com")
         self.assertEqual(result, "http://example.com")
 
-    def test_strips_whitespace(self):
-        result = _validate_url("  https://example.com  ")
+    async def test_strips_whitespace(self):
+        result = await _validate_url("  https://example.com  ")
         self.assertEqual(result, "https://example.com")
 
-    def test_rejects_empty_url(self):
+    async def test_rejects_empty_url(self):
         with self.assertRaises(ValueError):
-            _validate_url("")
+            await _validate_url("")
 
-    def test_rejects_whitespace_only_url(self):
+    async def test_rejects_whitespace_only_url(self):
         with self.assertRaises(ValueError):
-            _validate_url("   ")
+            await _validate_url("   ")
 
-    def test_rejects_file_scheme(self):
+    async def test_rejects_file_scheme(self):
         with self.assertRaises(ValueError) as ctx:
-            _validate_url("file:///etc/passwd")
+            await _validate_url("file:///etc/passwd")
         self.assertIn("Unsupported URL scheme", str(ctx.exception))
 
-    def test_rejects_javascript_scheme(self):
+    async def test_rejects_javascript_scheme(self):
         with self.assertRaises(ValueError) as ctx:
-            _validate_url("javascript:alert(1)")
+            await _validate_url("javascript:alert(1)")
         self.assertIn("Unsupported URL scheme", str(ctx.exception))
 
-    def test_rejects_no_hostname(self):
+    async def test_rejects_no_hostname(self):
         with self.assertRaises(ValueError):
-            _validate_url("https:///path")
+            await _validate_url("https:///path")
 
-    def test_rejects_loopback_ip(self):
+    async def test_rejects_loopback_ip(self):
         with self.assertRaises(ValueError) as ctx:
-            _validate_url("http://127.0.0.1:8080/admin")
+            await _validate_url("http://127.0.0.1:8080/admin")
         self.assertIn("private/reserved IP", str(ctx.exception))
 
-    def test_rejects_private_ip_10(self):
+    async def test_rejects_private_ip_10(self):
         with self.assertRaises(ValueError):
-            _validate_url("http://10.0.0.1/secret")
+            await _validate_url("http://10.0.0.1/secret")
 
-    def test_rejects_private_ip_192_168(self):
+    async def test_rejects_private_ip_192_168(self):
         with self.assertRaises(ValueError):
-            _validate_url("http://192.168.1.1/admin")
+            await _validate_url("http://192.168.1.1/admin")
 
-    def test_rejects_private_ip_172_16(self):
+    async def test_rejects_private_ip_172_16(self):
         with self.assertRaises(ValueError):
-            _validate_url("http://172.16.0.1/api")
+            await _validate_url("http://172.16.0.1/api")
 
-    def test_rejects_link_local(self):
+    async def test_rejects_link_local(self):
         with self.assertRaises(ValueError):
-            _validate_url("http://169.254.1.1/")
+            await _validate_url("http://169.254.1.1/")
 
 
 class IPCheckTests(unittest.TestCase):
-    """Tests for _is_private_or_reserved_ip and _resolve_to_private."""
+    """Tests for _is_private_or_reserved_ip (sync) and _resolve_to_private (async)."""
 
     def test_loopback_is_private(self):
         self.assertTrue(_is_private_or_reserved_ip("127.0.0.1"))
@@ -109,12 +109,16 @@ class IPCheckTests(unittest.TestCase):
         self.assertFalse(_is_private_or_reserved_ip("8.8.8.8"))
         self.assertFalse(_is_private_or_reserved_ip("1.1.1.1"))
 
-    def test_localhost_resolves_to_private(self):
-        ip = _resolve_to_private("localhost")
+
+class ResolveToPrivateTests(unittest.IsolatedAsyncioTestCase):
+    """Tests for the async _resolve_to_private function."""
+
+    async def test_localhost_resolves_to_private(self):
+        ip = await _resolve_to_private("localhost")
         self.assertIsNotNone(ip)
 
-    def test_public_domain_does_not_resolve_to_private(self):
-        ip = _resolve_to_private("example.com")
+    async def test_public_domain_does_not_resolve_to_private(self):
+        ip = await _resolve_to_private("example.com")
         self.assertIsNone(ip)
 
 

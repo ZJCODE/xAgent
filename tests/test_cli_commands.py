@@ -352,10 +352,9 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(list_args.agents_action, "list")
         self.assertTrue(list_args.json_output)
 
-        create_args = build_parser().parse_args(["agents", "create", "work", "--title", "Work"])
+        create_args = build_parser().parse_args(["agents", "create", "work"])
         self.assertEqual(create_args.agents_action, "create")
         self.assertEqual(create_args.name, "work")
-        self.assertEqual(create_args.title, "Work")
 
         select_args = build_parser().parse_args(["agents", "select", "work"])
         self.assertEqual(select_args.agents_action, "select")
@@ -906,10 +905,12 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Voice      running  soniox pid 1357", subtitle)
         self.assertIn("Web UI     running  127.0.0.1:8010 pid 26807", subtitle)
         self.assertIn("Feishu     running  pid 72069", subtitle)
-        self.assertIn("Weixin     not set", subtitle)
+        self.assertIn("Not configured: Image, Weixin", subtitle)
 
     def test_launcher_channel_options_are_entry_points(self):
-        options = _launcher_channel_options()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            options = _launcher_channel_options(Path(tmpdir))
         titles = [option.title for option in options]
 
         self.assertEqual(titles, ["Chat", "Voice", "Web", "Feishu", "Weixin", "Back"])
@@ -1501,6 +1502,7 @@ class CLICommandTests(unittest.TestCase):
                 self.choices = iter([
                     SimpleNamespace(key="feishu"),
                 ])
+                self.pause_messages = []
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, options, footer
@@ -1512,7 +1514,7 @@ class CLICommandTests(unittest.TestCase):
                 return None
 
             def pause(self, message="Press Enter to continue"):
-                raise AssertionError(f"Unexpected pause: {message}")
+                self.pause_messages.append(message)
 
             def print_panel(self, *args, **kwargs):
                 raise AssertionError("No error panel expected")
@@ -1526,6 +1528,8 @@ class CLICommandTests(unittest.TestCase):
             with patch("xagent.interfaces.cli.launcher.handle_init_feishu", return_value=0):
                 with self.assertRaises(ReturnToLauncherHome):
                     _run_partial_update_launcher(fake_ui, config_dir)
+
+        self.assertIn("Press Enter to return to the launcher", fake_ui.pause_messages)
 
     def test_voice_wake_launcher_clears_before_inline_prompt(self):
         class FakeUI:
@@ -1845,7 +1849,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(
             fake_ui.ask_text_calls,
-            [("Qwen API key", True, "Qwen voice STT needs its own API key for the current model provider.")],
+            [("Qwen API key", True, "")],
         )
         apply_update.assert_called_once()
         update = apply_update.call_args.args[2]
@@ -1862,7 +1866,6 @@ class CLICommandTests(unittest.TestCase):
         self.assertFalse(actions["setup"].disabled)
         self.assertTrue(actions["start"].disabled)
         self.assertTrue(actions["restart"].disabled)
-        self.assertFalse(actions["status"].disabled)
 
     def test_managed_channel_actions_disable_web_start_when_web_ui_is_off(self):
         with tempfile.TemporaryDirectory() as tmpdir:
