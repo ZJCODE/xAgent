@@ -1087,13 +1087,22 @@ input::placeholder {
 .skill-hero-status {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
 }
 
+.status-dot-chip {
+  flex: none;
+  min-height: 22px;
+  padding: 0 7px;
+  font-weight: 600;
+  font-size: 11px;
+}
+
 .status-dot-chip::before {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   flex: 0 0 auto;
   border-radius: 999px;
   background: currentColor;
