@@ -306,6 +306,8 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("Do not stay stuck replaying the same thought", current_task["content"])
             self.assertIn("empty internal_content", current_task["content"])
             self.assertIn("Speaking outward is secondary", current_task["content"])
+            self.assertIn("Write internal_content and external_content in the language used by the recent user conversation", current_task["content"])
+            self.assertIn("Keep the JSON keys exactly as specified", current_task["content"])
             self.assertNotIn("Known delivery contacts", current_task["content"])
 
     def test_recent_messages_empty_uses_named_recent_experience_layer(self):

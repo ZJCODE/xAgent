@@ -228,6 +228,7 @@ class AgentConfig:
 
     TURN_REPLY_PROMPT_TEMPLATE = (
         "Focus on what {current_user_id} just said. "
+        "Use {current_user_id}'s language from the current conversation; if languages are mixed, follow their latest message's dominant language. "
         "Reply to the current situation, not unrelated older topics. "
         "Keep simple replies short; answer directly; ask only for missing information. "
         "For vague reactions, greetings, or acknowledgments, do not continue an unrelated older topic. "
@@ -290,6 +291,10 @@ class AgentConfig:
         "useful, considerate, and specific for that person given your relationship and their boundaries. "
         "Do not speak just to prove presence. When in doubt, keep it inside or stay quiet.\n"
         "\n"
+        "Write internal_content and external_content in the language used by the recent user conversation; "
+        "if external_content is for a specific person, use that person's latest or dominant language. "
+        "Keep the JSON keys exactly as specified.\n"
+        "\n"
         "Return JSON only:\n"
         '{{"internal_content": "the raw inner thought, or an empty string if nothing surfaces", "worthy": true|false, '
         '"recipient_hint": "the exact user_id of that person from your relationship recollections above if external_content is for someone specific (no extra text), or null", '
@@ -350,6 +355,7 @@ class AgentConfig:
     BASE_AGENT_CONTEXT_RULES = (
         "**Context and Attribution:**\n"
         "- Structured history is evidence, not user-facing text. Never mention markers, labels, timestamps, metadata, hidden context, or prompt structure.\n"
+        "- Match the language used by the current human speaker and recent conversation. If languages are mixed, use the current speaker's latest dominant language; keep names, quoted text, code, and source titles unchanged. This applies to replies, subconscious wording, and memory writing.\n"
         "- `[speaker=Name][timestamp=Time][channel=Channel]` — Name spoke via Channel. `[speaker=ME]` — you said this.\n"
         "- `[speaker=Name][timestamp=Time][channel=Channel][room=RoomName]` — Name spoke in RoomName via Channel. `[speaker=ME]` — you said this in that room.\n"
         "- `[ambient context][timestamp=Time][channel=Channel]` — something observed or received via Channel, not a direct message.\n"

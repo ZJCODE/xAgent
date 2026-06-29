@@ -106,6 +106,8 @@ class RelationshipDerivationPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("first-person", prompt)
         self.assertIn("Trust and boundaries", prompt)
         self.assertIn("Open threads", prompt)
+        self.assertIn("language used by that person", prompt)
+        self.assertIn("dominant user language", prompt)
         self.assertIn("Return JSON only", prompt)
 
     def test_user_prompt_lists_keys_and_existing_cards(self):

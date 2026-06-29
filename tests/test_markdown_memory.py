@@ -3,7 +3,7 @@
 import asyncio
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,6 +25,18 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(path.exists())
         text = path.read_text()
         self.assertIn("Hello world", text)
+
+    async def test_append_daily_uses_date_time_heading_and_plain_body(self):
+        target = date(2026, 6, 28)
+        with patch("xagent.components.memory.markdown_memory.datetime") as mock_datetime:
+            mock_datetime.now.return_value = datetime(2026, 6, 28, 9, 38)
+            await self.memory.append_daily("Plain diary body", target_date=target)
+
+        text = await self.memory.read_file(self.memory.daily_path(target))
+
+        self.assertIn("## 2026-06-28 09:38", text)
+        self.assertIn("\n\nPlain diary body\n", text)
+        self.assertNotIn("## 09:38", text)
 
     async def test_append_daily_appends_multiple_entries(self):
         today = date.today()

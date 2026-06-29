@@ -40,7 +40,7 @@ class JournalLLMService:
 
         transcript = self._format_transcript(messages)
         system_prompt = self.build_diary_system_prompt()
-        user_prompt = self.build_diary_user_prompt(transcript)
+        user_prompt = self.build_diary_user_prompt(transcript, journal_date=journal_date)
 
         try:
             content = await self._call_text(
@@ -50,7 +50,7 @@ class JournalLLMService:
             return self._normalize_content(content)
         except Exception as exception:
             self.logger.error("Error formatting diary entry: %s", exception)
-            return self._fallback_entry(messages)
+            raise
 
     async def generate_summary(
         self,
@@ -88,18 +88,22 @@ Input markers:
 
 Rules:
 - Treat the transcript as your own experience stream, not a user-owned log or searchable database.
-- Use "I"; keep the source language; synthesize the period's arc instead of replaying a transcript.
+- Use "I"; write in the language used by the users in the transcript; if languages are mixed, follow the dominant or most relevant user's language for this diary entry; synthesize the period's arc instead of replaying a transcript. Preserve names, quoted text, code, and exact user wording when needed.
 - Keep people, rooms, preferences, commitments, and experiences separate.
 - First-person words in non-ME entries belong to that speaker, not to you.
 - Ambient context is not a direct request unless it says it was addressed to you.
 - Use timestamps only for ordering and attribution. Do not repeat markers, metadata, or timestamps.
+- The memory writer manually adds a `## YYYY-MM-DD HH:MM` heading. Return the diary body only; do not include `#` or `##` headings, date headings, or timestamp headings.
 - Preserve durable details and uncertainty. Aim for 100-300 characters for brief sources, 200-500 for substantial sources.
 
 - Return only the diary entry text. No advice, JSON, code fences, or explanatory prose."""
 
     @staticmethod
-    def build_diary_user_prompt(transcript: str) -> str:
-        return f"""Write a diary entry from this transcript:
+    def build_diary_user_prompt(transcript: str, journal_date: Optional[str] = None) -> str:
+        date_hint = f" for {journal_date}" if journal_date else ""
+        return f"""Write a diary entry{date_hint} from this transcript.
+
+The storage layer will add the markdown date/time heading; return only the body content.
 
 {transcript}"""
 
@@ -109,10 +113,10 @@ Rules:
 
 Rules:
 - The source is my memory as an independent individual, not user-owned records.
-- Use "I"; keep the source language; synthesize themes, decisions, commitments, preferences, emotional shifts, and durable changes.
+- Use "I"; write in the language used by the users in the source diary entries. If languages are mixed, follow the dominant or period-relevant user language. Preserve names, quoted text, code, and exact user wording when needed.
 - Preserve attribution. Keep people, rooms, plans, and experiences attached to the right source.
 - Treat generic labels such as "User A" or "User B" as local unless continuity is explicit.
-- Use `# YYYY-MM-DD` and `## HH:MM` only for chronology; do not repeat headings unless useful.
+- The source may contain manually added `# YYYY-MM-DD` wrappers and `## YYYY-MM-DD HH:MM` entry headings. Use them only for chronology; do not repeat those headings in the summary unless useful.
 - Keep uncertainty visible.
 
 Period focus:
@@ -188,7 +192,7 @@ Period focus:
 
 For each person listed, update their card from the new experience: carry forward what still holds, revise what changed, drop what is now wrong.
 
-Keep each card first-person ("I"), in the person's own language where natural, covering only durable, useful things:
+Keep each card first-person ("I"), in the language that person uses with you where natural, covering only durable, useful things:
 - Who they are to me and how we relate — closeness, tone, current standing.
 - Trust and boundaries — what they asked me to keep private, what feels safe to share with them.
 - Shared history that matters — how we met, recurring themes, references between us.
@@ -197,6 +201,7 @@ Keep each card first-person ("I"), in the person's own language where natural, c
 
 Rules:
 - These are my own impressions. First-person words in the transcript that are not mine (`[speaker=ME]`) belong to that speaker.
+- Write each card in the language used by that person in the conversation when there is enough signal; otherwise follow the dominant user language in the transcript. Preserve names, quoted text, code, and exact user wording when needed.
 - Stay grounded in what actually happened; keep uncertainty visible; do not invent closeness or facts.
 - No advice to a reader, no meta commentary, no headings boilerplate. Keep each card roughly 60-400 characters.
 
@@ -398,7 +403,3 @@ New experience:
         while lines and lines[-1] == "":
             lines.pop()
         return "\n".join(lines)
-
-    @staticmethod
-    def _fallback_entry(messages: List[dict]) -> str:
-        return JournalLLMService._format_transcript(messages)

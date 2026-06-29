@@ -19,11 +19,16 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[speaker=ME]", prompt)
         self.assertIn("[ambient context][timestamp=Time]", prompt)
         self.assertNotIn("[internal_monologue]", prompt)
-        self.assertIn("keep the source language", prompt)
+        self.assertIn("write in the language used by the users in the transcript", prompt)
+        self.assertIn("dominant or most relevant user's language", prompt)
+        self.assertIn("Preserve names, quoted text, code", prompt)
         self.assertIn("synthesize the period's arc", prompt)
         self.assertIn("Keep people, rooms, preferences, commitments, and experiences separate", prompt)
         self.assertIn("First-person words in non-ME entries belong to that speaker", prompt)
         self.assertIn("Use timestamps only for ordering and attribution", prompt)
+        self.assertIn("manually adds a `## YYYY-MM-DD HH:MM` heading", prompt)
+        self.assertIn("Return the diary body only", prompt)
+        self.assertIn("do not include `#` or `##` headings", prompt)
         self.assertIn("Preserve durable details and uncertainty", prompt)
         self.assertIn("No advice, JSON, code fences, or explanatory prose", prompt)
         self.assertIn("Return only the diary entry text", prompt)
@@ -38,14 +43,18 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("in first person", prompt)
         self.assertIn("my memory as an independent individual", prompt)
         self.assertIn("not user-owned records", prompt)
-        self.assertIn("keep the source language", prompt)
+        self.assertIn("write in the language used by the users in the source diary entries", prompt)
+        self.assertIn("dominant or period-relevant user language", prompt)
+        self.assertIn("Preserve names, quoted text, code", prompt)
         self.assertIn("# YYYY-MM-DD", prompt)
-        self.assertIn("## HH:MM", prompt)
+        self.assertIn("## YYYY-MM-DD HH:MM", prompt)
         self.assertIn("Preserve attribution", prompt)
         self.assertIn("Keep people, rooms, plans, and experiences attached to the right source", prompt)
         self.assertIn('generic labels such as "User A" or "User B"', prompt)
         self.assertIn("# YYYY-MM-DD", prompt)
-        self.assertIn("## HH:MM", prompt)
+        self.assertIn("## YYYY-MM-DD HH:MM", prompt)
+        self.assertIn("manually added", prompt)
+        self.assertIn("do not repeat those headings", prompt)
         self.assertIn("Keep uncertainty visible", prompt)
         self.assertIn("Weekly: main arc, key people", prompt)
         self.assertIn("Monthly: broader themes", prompt)
@@ -95,9 +104,11 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
     def test_build_diary_user_prompt_uses_single_period_transcript(self):
         prompt = JournalLLMService.build_diary_user_prompt(
             transcript="[speaker=ME][timestamp=2026-06-09 09:00:00]\nNew period content.",
+            journal_date="2026-06-09",
         )
 
-        self.assertIn("Write a diary entry from this transcript", prompt)
+        self.assertIn("Write a diary entry for 2026-06-09 from this transcript", prompt)
+        self.assertIn("storage layer will add the markdown date/time heading", prompt)
         self.assertIn("New period content.", prompt)
 
     async def test_format_diary_entry_uses_plain_text_and_forwards_model_api(self):
@@ -147,7 +158,34 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
             instance.calls[0]["messages"][0]["content"],
         )
         self.assertIn("[speaker=ME]", instance.calls[0]["instructions"])
+        self.assertIn("Return the diary body only", instance.calls[0]["instructions"])
+        self.assertIn("storage layer will add the markdown date/time heading", instance.calls[0]["messages"][0]["content"])
         self.assertNotIn("[internal_monologue]", instance.calls[0]["instructions"])
+
+    async def test_format_diary_entry_raises_instead_of_returning_raw_transcript_on_model_error(self):
+        class FakeModelClient:
+            async def call(self, **kwargs):
+                raise RuntimeError("model unavailable")
+
+        service = JournalLLMService(
+            client=object(),
+            model="gpt-test",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        with patch("xagent.core.handlers.model.ModelClient", lambda **kwargs: FakeModelClient()):
+            with self.assertRaises(RuntimeError):
+                await service.format_diary_entry(
+                    messages=[
+                        {
+                            "role": "user",
+                            "sender_id": "alice",
+                            "content": "raw source should not be used as diary fallback",
+                            "timestamp": "2026-05-17 09:01:00",
+                        }
+                    ],
+                    journal_date="2026-05-17",
+                )
 
     async def test_generate_summary_uses_plain_text_output(self):
         class FakeModelClient:

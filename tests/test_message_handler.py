@@ -162,6 +162,8 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         self.assertEqual([message["role"] for message in messages], ["system", "system", "system"])
         self.assertIn("CORE INTERACTION RULES", messages[0]["content"])
+        self.assertIn("Match the language used by the current human speaker", messages[0]["content"])
+        self.assertIn("subconscious wording, and memory writing", messages[0]["content"])
         self.assertIn("<tool_policy>", messages[1]["content"])
         self.assertLess(
             messages[1]["content"].index("Shell Command Execution"),
@@ -236,6 +238,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Current speaker: Joy", context_messages[2]["content"])
         self.assertIn("Current time: 2026-05-14 09:30", context_messages[2]["content"])
         self.assertIn("what Joy just said", context_messages[2]["content"])
+        self.assertIn("Use Joy's language from the current conversation", context_messages[2]["content"])
         self.assertIn("Keep simple replies short", context_messages[2]["content"])
         self.assertIn("Never rely on Markdown image embeds", context_messages[2]["content"])
 
