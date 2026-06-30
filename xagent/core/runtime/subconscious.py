@@ -369,6 +369,7 @@ class SubconsciousLoop:
             skills_catalog="",
             supports_vision=bool(getattr(self._agent, "supports_vision", True)),
             workspace_context="",
+            is_subconscious=True,
         )
         iteration_messages = message_handler.build_turn_context_messages(
             recent_messages,

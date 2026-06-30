@@ -834,11 +834,19 @@ class MessageHandler:
         skills_catalog: str = "",
         supports_vision: bool = True,
         workspace_context: str = "",
+        is_subconscious: bool = False,
     ) -> list[dict]:
-        """Build static named system layers for the model input."""
+        """Build static named system layers for the model input.
+
+        When *is_subconscious* is True a private-reflection notice is
+        appended to the core prompt so the model knows it cannot execute
+        tasks or use tools during this turn.
+        """
         core_prompt = AgentConfig.BASE_AGENT_PROMPT.strip()
         if not supports_vision:
             core_prompt = core_prompt + AgentConfig.NO_VISION_NOTICE.rstrip()
+        if is_subconscious:
+            core_prompt = core_prompt + AgentConfig.SUBCONSCIOUS_MODE_NOTICE.rstrip()
         messages = [{
             "role": "system",
             "name": AgentConfig.CORE_INTERACTION_RULES_NAME,

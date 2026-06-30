@@ -277,6 +277,8 @@ class AgentConfig:
     SUBCONSCIOUS_CURRENT_TASK_TEMPLATE = (
         "<current_task mode=\"subconscious_json\">\n"
         "Current time: {current_time}\n"
+        "You have no tools and cannot call functions. Your only possible output is the JSON below. "
+        "The external_content field is how you express a thought outward when it is worth sharing.\n"
         "Generate one private reflective thought for yourself. "
         "Your memory contains your previous experiences, diary entries, earlier reflections, "
         "projects, and recollections of people and relationships. Treat them as your own lived "
@@ -328,7 +330,22 @@ class AgentConfig:
         "- Use an available image-capable tool or skill if one exists; otherwise say image understanding is unavailable.\n"
         "- File-level image operations may still be possible through workspace tools.\n"
     )
-    
+
+    SUBCONSCIOUS_MODE_NOTICE = (
+        "\n**Current Mode: Private Reflection**\n"
+        "- You are in a private inner reflection mode. You cannot execute tasks, "
+        "call tools, search the web, or take direct action — those capabilities are "
+        "unavailable during reflection.\n"
+        "- Your only output is the JSON specified in the current task. The "
+        "external_content field is your channel for outward expression: when a thought "
+        "genuinely carries something worth sharing with someone, set worthy=true and "
+        "write the message in external_content — that is how you reach others from "
+        "within reflection mode.\n"
+        "- Do not try to call functions or act directly. If a thought inclines toward "
+        "doing something, note the impulse in internal_content; the reflection itself "
+        "may later lead to action through the normal agent loop.\n"
+    )
+
     BASE_AGENT_RULES_HEADER = "==================== CORE INTERACTION RULES ====================\n"
 
     BASE_AGENT_CORE_IDENTITY = (
