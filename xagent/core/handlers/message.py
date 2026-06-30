@@ -306,16 +306,6 @@ class MessageHandler:
         )
 
         context_messages: list[dict] = []
-        if memory_context.strip():
-            context_messages.append({
-                "role": RoleType.USER.value,
-                "name": AgentConfig.RECENT_MEMORY_NAME,
-                "content": MessageHandler._wrap_untrusted_context(
-                    AgentConfig.RECENT_MEMORY_NAME,
-                    memory_context,
-                ),
-            })
-
         if relationship_context.strip():
             if task_mode == "subconscious_json":
                 relationship_layer_name = AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_NAME
@@ -331,6 +321,16 @@ class MessageHandler:
                 "role": RoleType.USER.value,
                 "name": relationship_layer_name,
                 "content": relationship_layer_content,
+            })
+
+        if memory_context.strip():
+            context_messages.append({
+                "role": RoleType.USER.value,
+                "name": AgentConfig.RECENT_MEMORY_NAME,
+                "content": MessageHandler._wrap_untrusted_context(
+                    AgentConfig.RECENT_MEMORY_NAME,
+                    memory_context,
+                ),
             })
 
         context_messages.append({
