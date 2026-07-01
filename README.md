@@ -5,29 +5,19 @@
 
 xAgent is a local-first personal AI agent. Use it from the terminal, Web UI, voice, Feishu, or Weixin, and manage everything from one interactive launcher.
 
-## Install
-
-**One command, works everywhere:**
+## Quick Start
 
 ```bash
+# Install (or update)
 curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bash
-```
 
-Or if you already have Python 3.10+:
-
-```bash
-pip install myxagent
-```
-
-## Start
-
-Run:
-
-```bash
+# Run
 xagent
 ```
 
-The launcher will guide you through the rest
+> Already have Python 3.10+? `pip install myxagent` works too.
+
+The launcher will guide you through the rest.
 
 For most users, `xagent` is the only command you need to remember.
 To create or reconfigure an agent directly, run `xagent setup`.
