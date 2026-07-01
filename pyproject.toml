@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "myxagent"
 version = "0.3.2"
-description = "Multi-Modal AI Agent System"
+description = "Independent AI Agent with Persistent First-Person Memory and Multi-User Interaction"
 readme = { file = "README.md", content-type = "text/markdown" }
 license-files = ["LICENSE*"]
 authors = [{ name = "ZJun", email = "zhangjun310@live.com" }]
