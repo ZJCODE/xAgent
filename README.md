@@ -3,58 +3,50 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-xAgent is a local-first personal AI agent. Use it from the terminal, Web UI, voice, Feishu, or Weixin, and manage everything from one interactive launcher.
+xAgent is a local-first AI agent with its own identity, memory, and life. Use it from the terminal, Web UI, voice, Feishu, or Weixin, and manage everything from one interactive launcher.
+
+## Quick Start
 
 ## Quick Start
 
 ```bash
-# Install (or update)
+# Install
 curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bash
 
-# Run
+# Launch
 xagent
 ```
 
-> Already have Python 3.10+? `pip install myxagent` works too.
+Or install with pip:
+
+```bash
+pip install myxagent
+```
 
 The launcher will guide you through the rest.
 
-For most users, `xagent` is the only command you need to remember.
-To create or reconfigure an agent directly, run `xagent setup`.
-To start the voice channel directly, run `xagent voice`.
-
-## What xAgent Gives You
-
-- A terminal chat for quick conversations.
-- A Web UI for longer conversations, files, memory, tasks, skills, and workspace browsing.
-- A voice channel for microphone and speaker interaction.
-- Background channels for Web/API, voice, Feishu, and Weixin.
-- Multiple named agents, each with its own identity, memory, workspace, tasks, skills, logs, and channel state.
-
 ## Local Data
 
-xAgent stores your agents locally under:
+All agent data is stored locally under:
 
 ```text
 ~/.xagent/agents/
 ```
 
-Each agent has its own config, identity, memory, messages, workspace, skills, tasks, logs, and channel process files.
+Each agent has its own identity, memory, diary, workspace, skills, tasks, logs, and channel state.
 
 ## Contributing
 
-xAgent is open source and in active development. Issues, bug reports, and pull requests are welcome.
-
-- Repository: https://github.com/ZJCODE/xagent
-- Issues: https://github.com/ZJCODE/xagent/issues
-
-For local development:
+Contributions are welcome.
 
 ```bash
 python -m pip install -e .
 python -m pytest
 ```
 
+- Repository: https://github.com/ZJCODE/xagent
+- Issues: https://github.com/ZJCODE/xagent/issues
+
 ## License
 
-xAgent is released under the MIT License. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
