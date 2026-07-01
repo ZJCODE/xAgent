@@ -48,6 +48,7 @@ from xagent.interfaces.cli import (
     handle_init_feishu,
     handle_logs,
     handle_memory,
+    handle_messages,
     handle_observe,
     handle_restart,
     handle_run_channel_internal,
@@ -58,6 +59,8 @@ from xagent.interfaces.cli import (
     handle_web,
     main,
 )
+from xagent.components.message import MessageStorage
+from xagent.schemas import Message, RoleType
 from xagent.interfaces.cli.config_editor import (
     prepare_image_generation_provider_update,
     prepare_model_provider_update,
@@ -227,6 +230,26 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.messages_command, "list")
         self.assertEqual(args.count, 7)
         self.assertEqual(args.offset, 0)
+
+    def test_messages_list_prints_chinese_without_ascii_escapes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            storage = MessageStorage(path=str(Path(tmpdir) / "messages" / "messages.sqlite3"))
+            asyncio.run(storage.add_messages(Message.create("中文消息", role=RoleType.USER, sender_id="alice")))
+            args = SimpleNamespace(
+                config_dir=tmpdir,
+                messages_command="list",
+                count=10,
+                offset=0,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = handle_messages(args)
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("中文消息", output)
+        self.assertNotIn("\\u4e2d\\u6587", output)
 
     def test_chat_events_print_structured_attachment_paths(self):
         class FakeAgent:

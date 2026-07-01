@@ -922,7 +922,7 @@ def handle_messages(args: argparse.Namespace) -> int:
             for message in messages:
                 item = message.model_dump(mode="json") if hasattr(message, "model_dump") else str(message)
                 payload.append(item)
-            print(json.dumps(payload, indent=2, sort_keys=True))
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
 
         if args.messages_command == "clear":
