@@ -33,18 +33,6 @@ All agent data is stored locally under:
 
 Each agent has its own identity, memory, diary, workspace, skills, tasks, logs, and channel state.
 
-## Contributing
-
-Contributions are welcome.
-
-```bash
-python -m pip install -e .
-python -m pytest
-```
-
-- Repository: https://github.com/ZJCODE/xagent
-- Issues: https://github.com/ZJCODE/xagent/issues
-
 ## License
 
 MIT. See [LICENSE](LICENSE).
