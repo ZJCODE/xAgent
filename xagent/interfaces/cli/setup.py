@@ -1660,6 +1660,12 @@ def _print_feishu_post_setup(
     summary.append("- im:message.group_at_msg.include_bot:readonly\n")
     summary.append("- contact:user.base:readonly\n")
     summary.append("- admin:app.info:readonly\n")
+    summary.append("\n")
+    summary.append("⚠️  contact:user.base:readonly requires TWO steps:\n")
+    summary.append("   1. Enable the permission in Permissions → Permission List\n")
+    summary.append("   2. Configure scope in Permissions → Contact Scope\n")
+    summary.append("      (select all employees / specific departments / specific users)\n")
+    summary.append("   Without step 2, group chat users show as \"Feishu User\" instead of names.\n")
     summary.append("\nIf you only need direct chats right now, you can skip the group permission work and start the bot immediately.")
     ui.print_panel(summary, title="Feishu Ready", leading_blank_line=True)
 

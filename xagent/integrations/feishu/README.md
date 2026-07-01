@@ -42,8 +42,24 @@ Configure your Feishu bot
 3. Add extra permissions:
     * im:message.group_msg (for group chats)
     * im:message.group_at_msg.include_bot:readonly (for group @mentions from users and bots)
-    * contact:user.base:readonly (for user display names)
+    * contact:user.base:readonly (for user display names — **see note below**)
     * admin:app.info:readonly (for other bot or agent display names)
+
+   > ⚠️ **Critical: `contact:user.base:readonly` requires two steps:**
+   >
+   > 1. **Enable the permission** — in Permissions → Permission List, add the scope.
+   > 2. **Configure the contact visibility scope** — in Permissions → Contact Scope,
+   >    select which users / departments the app can see. Available options: all
+   >    employees, specific departments, or specific individuals.
+   >
+   > If you only enable the permission without configuring the scope, the Contact
+   > API will return permission-denied errors. Group chat users will appear as
+   > `Feishu User(ou_xxx)` instead of their real names. This is the most common
+   > misconfiguration — when in doubt, check the scope first.
+   >
+   > Note: after changing contact scope, you must **re-publish** the app version
+   > and have workspace admins **re-approve** the updated permissions.
+
 4. Copy your App ID and App Secret.
 
 
