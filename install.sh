@@ -90,11 +90,22 @@ ensure_path() {
     fi
 }
 
+# --- Upgrade ---
+upgrade_xagent() {
+    step "Checking for updates..."
+    if command -v uv &>/dev/null && uv tool list 2>/dev/null | grep -q myxagent; then
+        uv tool upgrade myxagent
+    else
+        pip3 install --upgrade --user myxagent
+    fi
+}
+
 # --- Main ---
 if command -v xagent &>/dev/null; then
+    upgrade_xagent
     echo ""
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${GREEN}  xAgent is already installed!${NC}"
+    echo -e "${GREEN}  xAgent is up to date!${NC}"
     echo ""
     echo -e "  Run   ${CYAN}xagent${NC}"
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
