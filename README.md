@@ -7,6 +7,14 @@ xAgent is a local-first personal AI agent. Use it from the terminal, Web UI, voi
 
 ## Install
 
+**One command, works everywhere:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bash
+```
+
+Or if you already have Python 3.10+:
+
 ```bash
 pip install myxagent
 ```
