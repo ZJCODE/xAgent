@@ -113,7 +113,7 @@ class TaskApiTests(unittest.TestCase):
                     created_at=datetime(2026, 6, 25, 9, 0, 0),
                 )
 
-                with self.assertRaisesRegex(ValueError, "HTTP runtime cannot deliver"):
+                with self.assertRaisesRegex(ValueError, "api runtime cannot deliver"):
                     await server.deliver_subconscious_message(delivery)
 
         import asyncio
@@ -206,7 +206,7 @@ class TaskApiTests(unittest.TestCase):
                 async def capture_broadcast(task_record, content, *, stored_message=None, attachments=None):
                     delivered.append((task_record.task_type, content, stored_message, attachments))
 
-                server._broadcast_scheduled_message = capture_broadcast
+                server.api.delivery.broadcast_scheduled_message = capture_broadcast
                 await server._dispatch_scheduled_task(record)
 
             self.assertEqual(delivered, [("agent", "agent scheduled result", None, [])])
@@ -238,7 +238,7 @@ class TaskApiTests(unittest.TestCase):
                 async def capture_broadcast(task_record, content, *, stored_message=None, attachments=None):
                     delivered.append((task_record.task_type, content, stored_message, attachments))
 
-                server._broadcast_scheduled_message = capture_broadcast
+                server.api.delivery.broadcast_scheduled_message = capture_broadcast
                 await server._dispatch_scheduled_task(record)
 
             self.assertEqual(delivered, [("agent", "", None, [agent.attachment])])

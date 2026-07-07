@@ -10,12 +10,13 @@ from pydantic import ValidationError
 
 from .models import AgentInput, ChatInput, ObserveInput
 from .serializers import response_payload
+from ...integrations.api.constants import CLIENT_HTTP, CLIENT_WS
 
 if TYPE_CHECKING:
-    from .app import AgentHTTPServer
+    from ...integrations.api.adapter import ApiChannelAdapter
 
 
-def register_runtime_routes(app: FastAPI, server: "AgentHTTPServer") -> None:
+def register_runtime_routes(app: FastAPI, adapter: "ApiChannelAdapter") -> None:
     @app.get("/i/health", tags=["Health"])
     async def health_check():
         return "ok"
@@ -26,53 +27,57 @@ def register_runtime_routes(app: FastAPI, server: "AgentHTTPServer") -> None:
 
     @app.post("/chat")
     async def chat(input_data: ChatInput):
-        server.logger.info("Chat request from %s", input_data.user_id)
+        adapter.logger.info("Chat request from %s", input_data.user_id)
         try:
-            response = await server._run_chat_with_limits(input_data)
+            response = await adapter.chat.run_chat(input_data, client=CLIENT_HTTP)
             return {"reply": response_payload(response)}
         except HTTPException:
             raise
         except Exception as exc:
-            server.logger.error("Agent processing error for %s: %s", input_data.user_id, exc)
+            adapter.logger.error("Agent processing error for %s: %s", input_data.user_id, exc)
             raise HTTPException(status_code=500, detail=f"Agent processing error: {str(exc)}")
 
     @app.websocket("/ws/chat")
     async def websocket_chat(websocket: WebSocket):
         await websocket.accept()
-        server.logger.info("WebSocket chat connected")
+        adapter.logger.info("WebSocket chat connected")
 
         while True:
             try:
                 raw_payload = await websocket.receive_json()
                 input_data = AgentInput.model_validate(raw_payload)
-                server.logger.info(
+                adapter.logger.info(
                     "WebSocket chat request from %s, stream=%s",
                     input_data.user_id,
                     input_data.stream,
                 )
-                await server._send_websocket_chat_events(websocket, input_data)
+                await adapter.chat.send_websocket_chat_events(
+                    websocket,
+                    input_data,
+                    client=CLIENT_WS,
+                )
             except WebSocketDisconnect:
-                server.logger.info("WebSocket chat disconnected")
+                adapter.logger.info("WebSocket chat disconnected")
                 break
             except json.JSONDecodeError as exc:
-                server.logger.warning("Invalid WebSocket chat JSON: %s", exc)
-                await server._send_websocket_error(
+                adapter.logger.warning("Invalid WebSocket chat JSON: %s", exc)
+                await adapter.chat.send_websocket_error(
                     websocket,
                     "Invalid JSON payload.",
                     status_code=400,
                     details=str(exc),
                 )
             except ValidationError as exc:
-                server.logger.warning("Invalid WebSocket chat payload: %s", exc)
-                await server._send_websocket_error(
+                adapter.logger.warning("Invalid WebSocket chat payload: %s", exc)
+                await adapter.chat.send_websocket_error(
                     websocket,
                     "Invalid chat payload.",
                     status_code=422,
                     details=exc.errors(),
                 )
             except Exception as exc:
-                server.logger.error("Unexpected WebSocket chat error: %s", exc)
-                await server._send_websocket_error(
+                adapter.logger.error("Unexpected WebSocket chat error: %s", exc)
+                await adapter.chat.send_websocket_error(
                     websocket,
                     f"Agent processing error: {str(exc)}",
                 )
@@ -80,40 +85,40 @@ def register_runtime_routes(app: FastAPI, server: "AgentHTTPServer") -> None:
     @app.websocket("/ws/observe")
     async def websocket_observe(websocket: WebSocket):
         await websocket.accept()
-        server.logger.info("WebSocket observe connected")
+        adapter.logger.info("WebSocket observe connected")
 
         while True:
             try:
                 raw_payload = await websocket.receive_json()
                 input_data = ObserveInput.model_validate(raw_payload)
-                server.logger.info(
+                adapter.logger.info(
                     "WebSocket observe request: source=%s, type=%s",
                     input_data.source,
                     input_data.event_type,
                 )
-                await server._send_websocket_observe_events(websocket, input_data)
+                await adapter.chat.send_websocket_observe_events(websocket, input_data)
             except WebSocketDisconnect:
-                server.logger.info("WebSocket observe disconnected")
+                adapter.logger.info("WebSocket observe disconnected")
                 break
             except json.JSONDecodeError as exc:
-                server.logger.warning("Invalid WebSocket observe JSON: %s", exc)
-                await server._send_websocket_error(
+                adapter.logger.warning("Invalid WebSocket observe JSON: %s", exc)
+                await adapter.chat.send_websocket_error(
                     websocket,
                     "Invalid JSON payload.",
                     status_code=400,
                     details=str(exc),
                 )
             except ValidationError as exc:
-                server.logger.warning("Invalid WebSocket observe payload: %s", exc)
-                await server._send_websocket_error(
+                adapter.logger.warning("Invalid WebSocket observe payload: %s", exc)
+                await adapter.chat.send_websocket_error(
                     websocket,
                     "Invalid observe payload.",
                     status_code=422,
                     details=exc.errors(),
                 )
             except Exception as exc:
-                server.logger.error("Unexpected WebSocket observe error: %s", exc)
-                await server._send_websocket_error(
+                adapter.logger.error("Unexpected WebSocket observe error: %s", exc)
+                await adapter.chat.send_websocket_error(
                     websocket,
                     f"Agent observe error: {str(exc)}",
                 )
@@ -122,30 +127,30 @@ def register_runtime_routes(app: FastAPI, server: "AgentHTTPServer") -> None:
     async def websocket_tasks(websocket: WebSocket):
         user_id = (websocket.query_params.get("user_id") or "web_user").strip() or "web_user"
         await websocket.accept()
-        await server._register_task_subscriber(user_id, websocket)
-        server.logger.info("Scheduled task WebSocket connected for %s", user_id)
+        await adapter.delivery.register_subscriber(user_id, websocket)
+        adapter.logger.info("Scheduled task WebSocket connected for %s", user_id)
         try:
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:
-            server.logger.info("Scheduled task WebSocket disconnected for %s", user_id)
+            adapter.logger.info("Scheduled task WebSocket disconnected for %s", user_id)
         finally:
-            await server._unregister_task_subscriber(user_id, websocket)
+            await adapter.delivery.unregister_subscriber(user_id, websocket)
 
     @app.post("/observe")
     async def observe(input_data: ObserveInput):
-        server.logger.info(
+        adapter.logger.info(
             "Observation request: source=%s, type=%s",
             input_data.source,
             input_data.event_type,
         )
         try:
-            response = await server._run_observe_with_limits(input_data)
+            response = await adapter.chat.run_observe(input_data)
             return response_payload(response)
         except HTTPException:
             raise
         except Exception as exc:
-            server.logger.error(
+            adapter.logger.error(
                 "Agent observe error: source=%s type=%s error=%s",
                 input_data.source,
                 input_data.event_type,
@@ -155,13 +160,13 @@ def register_runtime_routes(app: FastAPI, server: "AgentHTTPServer") -> None:
 
     @app.post("/clear_messages")
     async def clear_messages():
-        server.logger.info("Clear messages request")
+        adapter.logger.info("Clear messages request")
         try:
-            await server.message_storage.clear_messages()
+            await adapter.agent.message_storage.clear_messages()
             return {
                 "status": "success",
                 "message": "Message stream cleared",
             }
         except Exception as exc:
-            server.logger.error("Failed to clear messages: %s", exc)
+            adapter.logger.error("Failed to clear messages: %s", exc)
             raise HTTPException(status_code=500, detail=f"Failed to clear messages: {str(exc)}")

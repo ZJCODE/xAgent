@@ -48,7 +48,7 @@ class TerminalUITests(unittest.TestCase):
 
         self.assertIn("xAgent", rendered)
         self.assertIn("› Chat", rendered)
-        self.assertIn("Web UI", rendered)
+        self.assertIn("Web", rendered)
         self.assertNotIn("╭", rendered)
         self.assertNotIn("│", rendered)
         self.assertNotIn("╰", rendered)

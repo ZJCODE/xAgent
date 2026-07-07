@@ -1,12 +1,8 @@
-import asyncio
-import json
 import logging
 import tempfile
-import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket
@@ -15,60 +11,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from ..base import BaseAgentConfig, BaseAgentRunner
 from .files import WorkspaceFileService
 from .admin_routes import register_admin_routes
-from .models import (
-    AgentInput,
-    ChatInput,
-    ChatAttachmentInput,
-    ChatImageInput,
-    IdentityInput,
-    ObserveInput,
-    SkillCreateInput,
-    SkillStateInput,
-    SkillWriteInput,
-    WorkspaceWriteInput,
-)
-from .runtime_routes import register_runtime_routes
-from .serializers import message_item, message_search_result, response_payload
+from .models import ChatInput
 from ...components.skills import SkillsStorageLocal
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
-    AsyncTaskScheduler,
-    ScheduledDeliveryContext,
     SubconsciousDelivery,
     create_runtime_heartbeat,
-    list_active_task_views,
     resolve_contacts_path,
-    scheduled_delivery_context,
-    upsert_contact,
 )
-from ...schemas.attachment import (
-    MAX_ATTACHMENT_BYTES,
-    MAX_MESSAGE_ATTACHMENT_BYTES,
-    attachment_image_sources,
-    dedupe_attachments,
-)
-from ...tools.image_generation_tool import normalize_image_generation_provider
-from ...utils.image_utils import (
-    MAX_IMAGE_BYTES,
-    MAX_IMAGES_PER_MESSAGE,
-    SUPPORTED_UPLOAD_IMAGE_MIME_TYPES,
-    data_uri_to_bytes,
-    workspace_blob_url,
-)
+from ...integrations.api import ApiChannelAdapter, ChatLimits, input_attachments, input_image_sources
 
 _WORKSPACE_TEXT_READ_LIMIT = 1_000_000
 _WORKSPACE_SEARCH_TEXT_LIMIT = 2_000_000
 
 
-@dataclass(frozen=True)
-class _ScheduledTaskResult:
-    content: str
-    attachments: List[Dict[str, Any]] = field(default_factory=list)
-
-
 class AgentHTTPServer(BaseAgentRunner):
-    """HTTP server for xAgent."""
+    """HTTP server for the api transport channel."""
 
     def __init__(
         self,
@@ -78,25 +37,18 @@ class AgentHTTPServer(BaseAgentRunner):
         chat_queue_timeout: float = AgentConfig.DEFAULT_HTTP_QUEUE_TIMEOUT,
         chat_timeout: float = AgentConfig.DEFAULT_HTTP_CHAT_TIMEOUT,
     ):
-        self._chat_semaphore = asyncio.Semaphore(max(1, int(max_concurrent_chats)))
-        self._chat_queue_timeout = max(0.001, float(chat_queue_timeout))
-        self._chat_timeout = max(0.001, float(chat_timeout))
-
         if agent is not None:
             self.agent = agent
-            # Resolve config directory from agent, param, or default.
             config_dir_path = Path(
                 getattr(agent, "config_dir", None) or config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR
             ).expanduser().resolve()
             self.config_dir = config_dir_path
             self.config_path = config_dir_path / BaseAgentConfig.CONFIG_FILENAME
             self.identity_path = config_dir_path / BaseAgentConfig.IDENTITY_FILENAME
-            # Load config from disk if available; fall back to empty dict.
             try:
                 self.config = self._load_config(self.config_path)
             except Exception:
                 self.config = {}
-            # Load identity from disk if available; fall back to agent attribute.
             try:
                 self.identity = self._load_identity(self.identity_path)
             except Exception:
@@ -109,17 +61,27 @@ class AgentHTTPServer(BaseAgentRunner):
                 self._temporary_runtime = tempfile.TemporaryDirectory(prefix="xagent-runtime-")
                 runtime_root = self._temporary_runtime.name
             self.workspace = Path(runtime_root).expanduser().resolve()
-            self.workspace_dir = Path(getattr(self.agent, "workspace_dir", self.workspace / BaseAgentConfig.WORKSPACE_DIRNAME)).expanduser().resolve()
+            self.workspace_dir = Path(
+                getattr(self.agent, "workspace_dir", self.workspace / BaseAgentConfig.WORKSPACE_DIRNAME)
+            ).expanduser().resolve()
             self.tasks_dir = self.workspace / BaseAgentConfig.TASKS_DIRNAME
             self.tasks_dir.mkdir(parents=True, exist_ok=True)
         else:
             super().__init__(config_dir=config_dir)
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
-        self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._contacts_file = resolve_contacts_path(self.workspace)
-        self._task_subscribers: dict[str, set[WebSocket]] = {}
-        self._task_subscribers_lock = asyncio.Lock()
+        contacts_file = resolve_contacts_path(self.workspace)
+        self.api = ApiChannelAdapter(
+            self.agent,
+            contacts_file=contacts_file,
+            tasks_dir=self.tasks_dir,
+            limits=ChatLimits(
+                max_concurrent_chats=max_concurrent_chats,
+                chat_queue_timeout=chat_queue_timeout,
+                chat_timeout=chat_timeout,
+            ),
+            logger=self.logger,
+        )
         self.app = self._create_app()
         self.app.add_middleware(
             CORSMiddleware,
@@ -129,298 +91,17 @@ class AgentHTTPServer(BaseAgentRunner):
             allow_headers=["*"],
         )
 
-    async def _acquire_chat_slot(self) -> None:
-        try:
-            await asyncio.wait_for(
-                self._chat_semaphore.acquire(),
-                timeout=self._chat_queue_timeout,
-            )
-        except asyncio.TimeoutError as exc:
-            raise HTTPException(
-                status_code=429,
-                detail="Too many concurrent chat requests; try again later.",
-            ) from exc
+    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        await self.api.deliver_subconscious_message(delivery)
 
-    async def _call_agent(self, input_data: ChatInput):
-        attachments = self._input_attachments(input_data)
-        image_sources = self._input_image_sources(input_data, attachments=attachments)
+    async def _register_task_subscriber(self, user_id: str, websocket: WebSocket) -> None:
+        await self.api.delivery.register_subscriber(user_id, websocket)
 
-        # Record contact for subconscious thought routing
-        try:
-            upsert_contact(
-                self._contacts_file,
-                channel="api",
-                user_id=input_data.user_id,
-                target={"user_id": input_data.user_id},
-            )
-        except Exception:
-            self.logger.debug("Failed to record contact for subconscious", exc_info=True)
-
-        context = self._scheduled_delivery_context(input_data, channel="api")
-        with scheduled_delivery_context(context):
-            return await self.agent(
-                user_message=input_data.user_message,
-                user_id=input_data.user_id,
-                image_source=image_sources,
-                attachments=attachments,
-                channel="api",
-            )
-
-    async def _call_observe(self, input_data: ObserveInput):
-        return await self.agent.observe(
-            context=input_data.context,
-            source=input_data.source or "environment",
-            event_type=input_data.event_type or "observation",
-            metadata=input_data.metadata,
-        )
-
-    async def _run_chat_with_limits(self, input_data: ChatInput):
-        await self._acquire_chat_slot()
-        try:
-            deadline = time.monotonic() + self._chat_timeout
-            return await self._await_before_deadline(
-                self._call_agent(input_data),
-                deadline,
-            )
-        except asyncio.TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="Agent chat timed out.") from exc
-        finally:
-            self._chat_semaphore.release()
-
-    async def _run_observe_with_limits(self, input_data: ObserveInput):
-        await self._acquire_chat_slot()
-        try:
-            deadline = time.monotonic() + self._chat_timeout
-            return await self._await_before_deadline(
-                self._call_observe(input_data),
-                deadline,
-            )
-        except asyncio.TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="Agent observe timed out.") from exc
-        finally:
-            self._chat_semaphore.release()
-
-    async def _chat_event_stream(self, input_data: AgentInput):
-        acquired = False
-        done_sent = False
-        try:
-            await self._acquire_chat_slot()
-            acquired = True
-            deadline = time.monotonic() + self._chat_timeout
-
-            chat_events = getattr(self.agent, "chat_events", None)
-            if not callable(chat_events):
-                raise RuntimeError("Agent does not support chat_events().")
-            attachments = self._input_attachments(input_data)
-
-            # Record contact for subconscious thought routing
-            try:
-                upsert_contact(
-                    self._contacts_file,
-                    channel="api",
-                    user_id=input_data.user_id,
-                    target={"user_id": input_data.user_id},
-                )
-            except Exception:
-                self.logger.debug("Failed to record contact for subconscious", exc_info=True)
-
-            context = self._scheduled_delivery_context(input_data, channel="api")
-            with scheduled_delivery_context(context):
-                response = chat_events(
-                    user_message=input_data.user_message,
-                    user_id=input_data.user_id,
-                    image_source=self._input_image_sources(input_data, attachments=attachments),
-                    attachments=attachments,
-                    stream=bool(input_data.stream),
-                    channel="api",
-                )
-                async for event in self._iterate_before_deadline(response, deadline):
-                    if event.get("type") == "done":
-                        done_sent = True
-                    yield event
-        except HTTPException as exc:
-            self.logger.warning("WebSocket chat rejected for %s: %s", input_data.user_id, exc.detail)
-            yield {"type": "error", "error": exc.detail, "status_code": exc.status_code}
-        except asyncio.TimeoutError:
-            self.logger.error("WebSocket chat timed out for %s", input_data.user_id)
-            yield {"type": "error", "error": "Agent chat timed out.", "status_code": 504}
-        except Exception as exc:
-            self.logger.error("WebSocket chat event error for %s: %s", input_data.user_id, exc)
-            yield {"type": "error", "error": str(exc)}
-        finally:
-            if acquired:
-                self._chat_semaphore.release()
-        if not done_sent:
-            yield {"type": "done"}
-
-    async def _send_websocket_chat_events(self, websocket: WebSocket, input_data: AgentInput) -> None:
-        async for event in self._chat_event_stream(input_data):
-            await websocket.send_json(event)
-
-    async def _send_websocket_observe_events(self, websocket: WebSocket, input_data: ObserveInput) -> None:
-        try:
-            response = await self._run_observe_with_limits(input_data)
-            await websocket.send_json({
-                "type": "result",
-                "result": response_payload(response),
-            })
-        except HTTPException as exc:
-            self.logger.warning(
-                "WebSocket observe rejected: source=%s type=%s detail=%s",
-                input_data.source,
-                input_data.event_type,
-                exc.detail,
-            )
-            await websocket.send_json({
-                "type": "error",
-                "error": exc.detail,
-                "status_code": exc.status_code,
-            })
-        except Exception as exc:
-            self.logger.error(
-                "WebSocket observe error: source=%s type=%s error=%s",
-                input_data.source,
-                input_data.event_type,
-                exc,
-            )
-            await websocket.send_json({
-                "type": "error",
-                "error": f"Agent observe error: {str(exc)}",
-            })
-        finally:
-            await websocket.send_json({"type": "done"})
-
-    @staticmethod
-    def _scheduled_delivery_context(input_data: ChatInput, *, channel: str) -> ScheduledDeliveryContext:
-        return ScheduledDeliveryContext(
-            channel=channel,
-            user_id=input_data.user_id,
-            target={"user_id": input_data.user_id},
-            metadata={"source": channel},
-        )
-
-    def _can_handle_scheduled_task(self, task) -> bool:
-        if task.kind != "task":
-            return False
-        target_channel = task.delivery_channel
-        return target_channel == "api"
+    async def _unregister_task_subscriber(self, user_id: str, websocket: WebSocket) -> None:
+        await self.api.delivery.unregister_subscriber(user_id, websocket)
 
     async def _dispatch_scheduled_task(self, task) -> None:
-        result = await self._scheduled_task_result(task)
-        if not result.content and not result.attachments:
-            raise ValueError("scheduled task produced no content")
-        metadata = {
-            "scheduled_task": {
-                "id": task.task_id,
-                "name": task.name,
-                "type": task.task_type,
-                "run_at": task.run_at.isoformat(sep=" "),
-                "delivery": task.delivery,
-            }
-        }
-        stored_message = None
-        if task.task_type == "message":
-            message_handler = getattr(self.agent, "message_handler", None)
-            store_model_reply = getattr(message_handler, "store_model_reply", None)
-            if callable(store_model_reply):
-                stored_message = await store_model_reply(
-                    result.content,
-                    getattr(self.agent, "_assistant_sender_id", "agent"),
-                    metadata=metadata,
-                    attachments=result.attachments,
-                    channel="api",
-                    recipient_id=task.delivery_user_id or str(task.target.get("user_id") or ""),
-                )
-        await self._broadcast_scheduled_message(
-            task,
-            result.content,
-            stored_message=stored_message,
-            attachments=result.attachments,
-        )
-
-    async def _scheduled_task_result(self, task) -> _ScheduledTaskResult:
-        task_type = task.task_type
-        if task_type == "message":
-            return _ScheduledTaskResult(task.content.strip())
-        if task_type != "agent":
-            raise ValueError(f"unsupported scheduled task type: {task_type}")
-
-        user_id = task.delivery_user_id or str(task.target.get("user_id") or AgentConfig.DEFAULT_USER_ID)
-        prompt = AgentConfig.scheduled_agent_prompt(task.content)
-        context = ScheduledDeliveryContext(
-            channel=task.delivery_channel,
-            user_id=user_id,
-            target=task.delivery.get("target") if isinstance(task.delivery.get("target"), dict) else {},
-            metadata={
-                "source": "scheduled_task",
-                "task_id": task.task_id,
-                "task_name": task.name,
-                "task_type": task.task_type,
-            },
-        )
-        await self._acquire_chat_slot()
-        try:
-            deadline = time.monotonic() + self._chat_timeout
-            with scheduled_delivery_context(context):
-                chat_events = getattr(self.agent, "chat_events", None)
-                if callable(chat_events):
-                    return await self._scheduled_agent_event_result(
-                        chat_events,
-                        prompt=prompt,
-                        user_id=user_id,
-                        deadline=deadline,
-                    )
-
-                chat = getattr(self.agent, "chat", None)
-                if not callable(chat):
-                    raise RuntimeError("Agent does not support chat_events() or chat().")
-                response = await self._await_before_deadline(
-                    chat(
-                        user_message=prompt,
-                        user_id=user_id,
-                    ),
-                    deadline,
-                )
-        finally:
-            self._chat_semaphore.release()
-        return self._scheduled_response_result(response)
-
-    async def _scheduled_agent_event_result(
-        self,
-        chat_events,
-        *,
-        prompt: str,
-        user_id: str,
-        deadline: float,
-    ) -> _ScheduledTaskResult:
-        final_content = ""
-        final_attachments: List[Dict[str, Any]] = []
-        last_error = ""
-        async for event in self._iterate_before_deadline(
-            chat_events(
-                user_message=prompt,
-                user_id=user_id,
-                stream=False,
-            ),
-            deadline,
-        ):
-            event_type = event.get("type")
-            if event_type == "message_done" and str(event.get("phase") or "final") == "final":
-                final_content = str(event.get("content") or "").strip()
-                raw_attachments = event.get("attachments")
-                final_attachments = dedupe_attachments(raw_attachments if isinstance(raw_attachments, list) else [])
-            elif event_type == "error":
-                last_error = str(event.get("error") or "").strip()
-        if final_content or final_attachments:
-            return _ScheduledTaskResult(final_content, final_attachments)
-        return _ScheduledTaskResult(last_error)
-
-    @staticmethod
-    def _scheduled_response_result(response: Any) -> _ScheduledTaskResult:
-        result = response_payload(response)
-        if isinstance(result, str):
-            return _ScheduledTaskResult(result.strip())
-        return _ScheduledTaskResult(json.dumps(result, ensure_ascii=False).strip())
+        await self.api.tasks.dispatch(task)
 
     async def _broadcast_scheduled_message(
         self,
@@ -428,208 +109,22 @@ class AgentHTTPServer(BaseAgentRunner):
         content: str,
         *,
         stored_message=None,
-        attachments: Optional[List[Dict[str, Any]]] = None,
+        attachments=None,
     ) -> None:
-        target = task.target
-        user_id = str(target.get("user_id") or task.delivery_user_id or "")
-        if not user_id:
-            return
-        normalized_attachments = dedupe_attachments(list(attachments or []))
-        payload: Dict[str, Any] = {
-            "type": "scheduled_message",
-            "content": content,
-            "task": task.to_dict(),
-        }
-        if normalized_attachments:
-            payload["attachments"] = normalized_attachments
-        if stored_message is not None:
-            payload["message"] = message_item(stored_message)
-
-        async with self._task_subscribers_lock:
-            subscribers = list(self._task_subscribers.get(user_id, set()))
-        stale: list[WebSocket] = []
-        for websocket in subscribers:
-            try:
-                await websocket.send_json(payload)
-            except Exception:
-                stale.append(websocket)
-        if stale:
-            async with self._task_subscribers_lock:
-                registered = self._task_subscribers.get(user_id)
-                if registered is not None:
-                    for websocket in stale:
-                        registered.discard(websocket)
-                    if not registered:
-                        self._task_subscribers.pop(user_id, None)
-
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        if delivery.recipient.channel != "api":
-            raise ValueError(f"HTTP runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        target = delivery.recipient.target
-        user_id = str(target.get("user_id") or delivery.recipient.user_id or "").strip()
-        if not user_id:
-            raise ValueError("subconscious delivery is missing user_id")
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        stored_message = None
-        if callable(store_model_reply):
-            stored_message = await store_model_reply(
-                delivery.content,
-                getattr(self.agent, "_assistant_sender_id", "agent"),
-                metadata={
-                    "subconscious": {
-                        "source": "subconscious",
-                        "created_at": delivery.created_at.isoformat(sep=" "),
-                        "recipient": {
-                            "channel": delivery.recipient.channel,
-                            "user_id": delivery.recipient.user_id,
-                            "target": delivery.recipient.target,
-                        },
-                    }
-                },
-                channel=delivery.recipient.channel,
-                recipient_id=user_id,
-            )
-        payload: Dict[str, Any] = {
-            "type": "subconscious_message",
-            "content": delivery.content,
-            "subconscious": {
-                "created_at": delivery.created_at.isoformat(sep=" "),
-            },
-        }
-        if stored_message is not None:
-            payload["message"] = message_item(stored_message)
-
-        async with self._task_subscribers_lock:
-            subscribers = list(self._task_subscribers.get(user_id, set()))
-        stale: list[WebSocket] = []
-        for websocket in subscribers:
-            try:
-                await websocket.send_json(payload)
-            except Exception:
-                stale.append(websocket)
-        if stale:
-            async with self._task_subscribers_lock:
-                registered = self._task_subscribers.get(user_id)
-                if registered is not None:
-                    for websocket in stale:
-                        registered.discard(websocket)
-                    if not registered:
-                        self._task_subscribers.pop(user_id, None)
-
-    async def _register_task_subscriber(self, user_id: str, websocket: WebSocket) -> None:
-        async with self._task_subscribers_lock:
-            self._task_subscribers.setdefault(user_id, set()).add(websocket)
-
-    async def _unregister_task_subscriber(self, user_id: str, websocket: WebSocket) -> None:
-        async with self._task_subscribers_lock:
-            subscribers = self._task_subscribers.get(user_id)
-            if subscribers is None:
-                return
-            subscribers.discard(websocket)
-            if not subscribers:
-                self._task_subscribers.pop(user_id, None)
-
-    async def _send_websocket_error(
-        self,
-        websocket: WebSocket,
-        error: str,
-        *,
-        status_code: Optional[int] = None,
-        details: Optional[Any] = None,
-    ) -> None:
-        payload: Dict[str, Any] = {"type": "error", "error": error}
-        if status_code is not None:
-            payload["status_code"] = status_code
-        if details is not None:
-            payload["details"] = details
-        await websocket.send_json(payload)
-        await websocket.send_json({"type": "done"})
-
-    async def _await_before_deadline(self, awaitable, deadline: float):
-        return await asyncio.wait_for(awaitable, timeout=self._remaining_time(deadline))
-
-    async def _iterate_before_deadline(self, response, deadline: float):
-        iterator = response.__aiter__()
-        while True:
-            try:
-                yield await asyncio.wait_for(
-                    iterator.__anext__(),
-                    timeout=self._remaining_time(deadline),
-                )
-            except StopAsyncIteration:
-                break
+        await self.api.delivery.broadcast_scheduled_message(
+            task,
+            content,
+            stored_message=stored_message,
+            attachments=attachments,
+        )
 
     @staticmethod
-    def _input_image_sources(
-        input_data: ChatInput,
-        *,
-        attachments: Optional[List[Dict[str, Any]]] = None,
-    ) -> Optional[Union[str, List[str]]]:
-        sources: List[str] = []
-        raw_source = input_data.image_source
-        if raw_source:
-            if isinstance(raw_source, list):
-                sources.extend(str(item) for item in raw_source if str(item or "").strip())
-            else:
-                sources.append(str(raw_source))
-        for image in input_data.images or []:
-            source = image.blob_url or image.external_url or image.workspace_path or ""
-            if source:
-                sources.append(source)
-        sources.extend(attachment_image_sources(attachments or []))
-        deduped_sources: List[str] = []
-        seen_sources: set[str] = set()
-        for source in sources:
-            normalized = str(source or "").strip()
-            if normalized and normalized not in seen_sources:
-                seen_sources.add(normalized)
-                deduped_sources.append(normalized)
-        sources = deduped_sources
-        if not sources:
-            return None
-        if len(sources) > MAX_IMAGES_PER_MESSAGE:
-            raise HTTPException(
-                status_code=413,
-                detail=f"At most {MAX_IMAGES_PER_MESSAGE} images are allowed per message",
-            )
-        for source in sources:
-            if str(source).startswith("data:image/"):
-                try:
-                    data_uri_to_bytes(source)
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return sources[0] if len(sources) == 1 else sources
+    def _input_image_sources(input_data: ChatInput, *, attachments=None):
+        return input_image_sources(input_data, attachments=attachments)
 
     @staticmethod
-    def _input_attachments(input_data: ChatInput) -> Optional[List[Dict[str, Any]]]:
-        raw_attachments: List[Dict[str, Any]] = []
-        for attachment in input_data.attachments or []:
-            raw_attachments.append(attachment.model_dump(exclude_none=True))
-        for image in input_data.images or []:
-            raw_attachments.append({
-                "kind": "image",
-                "path": image.workspace_path,
-                "blob_url": image.blob_url,
-                "mime_type": image.mime_type,
-                "file_name": image.original_name,
-                "size_bytes": image.size_bytes,
-                "client": "web",
-            })
-        attachments = dedupe_attachments(raw_attachments)
-        if not attachments:
-            return None
-        total_size = sum(int(attachment.get("size_bytes") or 0) for attachment in attachments)
-        if total_size > MAX_MESSAGE_ATTACHMENT_BYTES:
-            raise HTTPException(status_code=413, detail="Message attachments exceed 200MB")
-        return attachments
-
-    @staticmethod
-    def _remaining_time(deadline: float) -> float:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise asyncio.TimeoutError
-        return remaining
+    def _input_attachments(input_data: ChatInput):
+        return input_attachments(input_data)
 
     def _get_memory_root(self) -> Path:
         memory = self.agent.markdown_memory
@@ -737,14 +232,8 @@ class AgentHTTPServer(BaseAgentRunner):
             self.agent,
             self.config.get("runtime") if isinstance(self.config, dict) else None,
             logger_=self.logger,
-            subconscious_delivery_sink=self.deliver_subconscious_message,
+            subconscious_delivery_sink=self.api.deliver_subconscious_message,
             subconscious_deliverable_channels={"api"},
-        )
-        task_scheduler = AsyncTaskScheduler(
-            self.tasks_dir,
-            can_handle=self._can_handle_scheduled_task,
-            dispatch=self._dispatch_scheduled_task,
-            logger_=self.logger,
         )
         try:
             if heartbeat is not None:
@@ -753,20 +242,16 @@ class AgentHTTPServer(BaseAgentRunner):
                     "Runtime heartbeat started (interval=%ss)",
                     heartbeat.interval_seconds,
                 )
-            self._task_scheduler = task_scheduler
-            await task_scheduler.start()
-            self.logger.info("Scheduled task runtime started: tasks=%s", self.tasks_dir)
+            await self.api.start()
             yield
         finally:
-            await task_scheduler.stop()
-            self._task_scheduler = None
-            self.logger.info("Scheduled task runtime stopped")
+            await self.api.stop()
             if heartbeat is not None:
                 await heartbeat.stop()
                 self.logger.info("Runtime heartbeat stopped")
 
     def _add_routes(self, app: FastAPI) -> None:
-        register_runtime_routes(app, self)
+        self.api.register_routes(app)
         register_admin_routes(
             app,
             self,
