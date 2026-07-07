@@ -6,6 +6,7 @@ import argparse
 import sys
 
 from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
+from .clients import CLIENT_WEB
 from . import agents, runtime, setup
 
 
@@ -35,11 +36,12 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "",
             "Use Now:",
             "  chat        Chat in the terminal",
-            "  web         Open the Web UI for this session",
+            "  client      Manage local clients (browser UI)",
             "  voice       Use microphone / speaker mode for this session",
             "",
             "Keep Running:",
-            "  api         Web/API channel: start, stop, restart, status, logs, open",
+            "  api         API channel: start, stop, restart, status, logs",
+            "  client web  Web client: start, stop, restart, status, logs, open",
             "  voice       Voice channel: start, stop, restart, status, logs",
             "  feishu      Feishu bot: setup, start, stop, restart, status, logs",
             "  weixin      Weixin DM: setup, start, stop, restart, status, logs",
@@ -60,9 +62,9 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent agents create work",
             "  xagent agents select work",
             '  xagent chat "Help me plan today"',
-            "  xagent web",
-            "  xagent voice start",
             "  xagent api start",
+            "  xagent client web start",
+            "  xagent client web open",
             "  xagent status",
             "  xagent api logs -f",
             "  xagent voice logs -f",
@@ -119,23 +121,9 @@ def _add_channel_argument(
     )
 
 
-def _add_api_runtime_arguments(
-    parser: argparse.ArgumentParser,
-    *,
-    open_by_default: bool = False,
-) -> None:
+def _add_api_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--host", default=None, help="API host override")
     parser.add_argument("--port", type=int, default=None, help="API port override")
-    if open_by_default:
-        parser.add_argument(
-            "--open",
-            action=argparse.BooleanOptionalAction,
-            default=True,
-            dest="open_browser",
-            help="Open the API web UI",
-        )
-    else:
-        parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the API web UI")
     parser.add_argument(
         "--max-concurrent-chats",
         type=int,
@@ -154,6 +142,22 @@ def _add_api_runtime_arguments(
         default=None,
         help="Seconds before a chat or observe request times out",
     )
+
+
+def _add_web_client_arguments(parser: argparse.ArgumentParser, *, open_by_default: bool = False) -> None:
+    parser.add_argument("--host", default=None, help="Web client host override")
+    parser.add_argument("--port", type=int, default=None, help="Web client port override")
+    parser.add_argument("--api-url", dest="api_url", default=None, help="Upstream api channel URL")
+    if open_by_default:
+        parser.add_argument(
+            "--open",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            dest="open_browser",
+            help="Open the web client in a browser",
+        )
+    else:
+        parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the web client in a browser")
 
 
 def _add_voice_runtime_arguments(
@@ -247,19 +251,12 @@ def _add_channel_lifecycle_subparsers(
     *,
     dest: str,
     has_setup: bool = False,
-    has_open: bool = False,
 ) -> None:
-    """Register start / stop / status / logs / restart (and optionally setup / open)
+    """Register start / stop / status / logs / restart (and optionally setup)
     as sub-actions under a top-level channel parser."""
 
     sub = parent_parser.add_subparsers(dest=dest, metavar="<action>")
     sub.required = True
-
-    if has_open:
-        open_parser = sub.add_parser("open", help="Start API in foreground and open the browser")
-        _add_agent_argument(open_parser)
-        _add_api_runtime_arguments(open_parser, open_by_default=True)
-        open_parser.set_defaults(handler=runtime.handle_web)
 
     if has_setup and channel == CHANNEL_FEISHU:
         setup_parser = sub.add_parser("setup", help="Enable or reconfigure the Feishu channel")
@@ -296,6 +293,40 @@ def _add_channel_lifecycle_subparsers(
     logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
     logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
     logs_parser.set_defaults(handler=runtime.handle_logs, channels=[channel])
+
+
+def _add_web_client_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> None:
+    sub = parent_parser.add_subparsers(dest="client_web_action", metavar="<action>")
+    sub.required = True
+
+    open_parser = sub.add_parser("open", help="Open the running web client in a browser")
+    _add_agent_argument(open_parser)
+    open_parser.set_defaults(handler=runtime.handle_client_web_open)
+
+    start_parser = sub.add_parser("start", help="Start the web client in the background")
+    _add_agent_argument(start_parser)
+    _add_web_client_arguments(start_parser)
+    start_parser.set_defaults(handler=runtime.handle_client_start, clients=[CLIENT_WEB])
+
+    stop_parser = sub.add_parser("stop", help="Stop the background web client")
+    _add_agent_argument(stop_parser)
+    stop_parser.set_defaults(handler=runtime.handle_client_stop, clients=[CLIENT_WEB])
+
+    restart_parser = sub.add_parser("restart", help="Restart the background web client")
+    _add_agent_argument(restart_parser)
+    _add_web_client_arguments(restart_parser)
+    restart_parser.set_defaults(handler=runtime.handle_client_restart, clients=[CLIENT_WEB])
+
+    status_parser = sub.add_parser("status", help="Show web client status")
+    _add_agent_argument(status_parser)
+    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    status_parser.set_defaults(handler=runtime.handle_client_status, clients=[CLIENT_WEB])
+
+    logs_parser = sub.add_parser("logs", help="Show web client logs")
+    _add_agent_argument(logs_parser)
+    logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
+    logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
+    logs_parser.set_defaults(handler=runtime.handle_client_logs, clients=[CLIENT_WEB])
 
 
 def _hide_subparser_choice(subparsers: argparse._SubParsersAction, name: str) -> None:
@@ -369,18 +400,20 @@ def build_parser() -> argparse.ArgumentParser:
     voice_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
     voice_logs.set_defaults(handler=runtime.handle_logs, channels=[CHANNEL_VOICE])
 
-    web_parser = subparsers.add_parser("web", help="Open the web UI")
-    _add_agent_argument(web_parser)
-    _add_api_runtime_arguments(web_parser, open_by_default=True)
-    web_parser.set_defaults(handler=runtime.handle_web)
-
     # ------------------------------------------------------------------
     # Channels
     # ------------------------------------------------------------------
 
-    api_parser = subparsers.add_parser("api", help="Manage the API / Web UI background service")
-    _add_channel_lifecycle_subparsers(api_parser, CHANNEL_API, dest="api_action", has_open=True)
+    api_parser = subparsers.add_parser("api", help="Manage the HTTP/WebSocket API channel")
+    _add_channel_lifecycle_subparsers(api_parser, CHANNEL_API, dest="api_action")
     _show_help_on_missing_action(api_parser)
+
+    client_parser = subparsers.add_parser("client", help="Manage local xAgent clients")
+    client_sub = client_parser.add_subparsers(dest="client_target", metavar="<client>")
+    client_sub.required = True
+    web_client_parser = client_sub.add_parser(CLIENT_WEB, help="Browser web client")
+    _add_web_client_lifecycle_subparsers(web_client_parser)
+    _show_help_on_missing_action(client_parser)
 
     feishu_parser = subparsers.add_parser("feishu", help="Manage the Feishu bot")
     _add_channel_lifecycle_subparsers(feishu_parser, CHANNEL_FEISHU, dest="feishu_action", has_setup=True)
@@ -519,5 +552,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_voice_runtime_arguments(internal_run)
     internal_run.set_defaults(handler=runtime.handle_run_channel_internal)
     _hide_subparser_choice(subparsers, "_run-channel")
+
+    internal_client = subparsers.add_parser("_run-client", help=argparse.SUPPRESS)
+    internal_client.add_argument("client", choices=(CLIENT_WEB,))
+    _add_agent_argument(internal_client)
+    internal_client.add_argument("--config-dir", dest="config_dir", default=None, help=argparse.SUPPRESS)
+    _add_web_client_arguments(internal_client)
+    internal_client.set_defaults(handler=runtime.handle_run_client_internal)
+    _hide_subparser_choice(subparsers, "_run-client")
 
     return parser

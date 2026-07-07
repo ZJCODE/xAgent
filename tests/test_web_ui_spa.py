@@ -22,31 +22,18 @@ class FakeAgent:
         return "ok"
 
 
-class WebUISpaTests(unittest.IsolatedAsyncioTestCase):
+class ApiServerRouteTests(unittest.IsolatedAsyncioTestCase):
     async def _client(self, server: AgentHTTPServer):
         transport = httpx.ASGITransport(app=server.app)
         return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
-    async def test_web_ui_routes_return_same_spa_shell(self):
-        server = AgentHTTPServer(agent=FakeAgent(), enable_web=True)
+    async def test_api_server_does_not_serve_spa_routes(self):
+        server = AgentHTTPServer(agent=FakeAgent())
 
         async with await self._client(server) as client:
-            index = await client.get("/")
-            routes = [
-                await client.get("/memory"),
-                await client.get("/message"),
-                await client.get("/workspace"),
-                await client.get("/skills"),
-                await client.get("/tasks"),
-                await client.get("/agent"),
-            ]
+            response = await client.get("/")
 
-        self.assertEqual(index.status_code, 200)
-        self.assertIn("text/html", index.headers["content-type"])
-        self.assertIn('<div id="root"', index.text)
-        for response in routes:
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.text, index.text)
+        self.assertEqual(response.status_code, 404)
 
     async def test_chat_input_rejects_too_many_images(self):
         input_data = ChatInput(

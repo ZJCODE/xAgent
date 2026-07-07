@@ -264,7 +264,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           size_bytes: uploaded.size,
           file_name: uploaded.name || file.name,
           original_name: file.name,
-          source_channel: "web",
+          client: "web",
         };
         patchPanel(panelId, (panel) => {
           if (panel.pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) return panel;

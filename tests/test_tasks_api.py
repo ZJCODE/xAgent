@@ -68,13 +68,13 @@ class TaskApiTests(unittest.TestCase):
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 agent = _TaskAgent(Path(tmpdir))
-                server = AgentHTTPServer(agent=agent, enable_web=False)
+                server = AgentHTTPServer(agent=agent)
                 subscriber = _Subscriber()
                 await server._register_task_subscriber("web_user", subscriber)
                 delivery = SubconsciousDelivery(
                     content="A direct subconscious note",
                     recipient=ContactEntry(
-                        channel="web",
+                        channel="api",
                         user_id="web_user",
                         target={"user_id": "web_user"},
                         last_seen="2026-06-25 09:00:00",
@@ -100,7 +100,7 @@ class TaskApiTests(unittest.TestCase):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 agent = _TaskAgent(Path(tmpdir))
-                server = AgentHTTPServer(agent=agent, enable_web=False)
+                server = AgentHTTPServer(agent=agent)
                 delivery = SubconsciousDelivery(
                     content="A direct subconscious note",
                     recipient=ContactEntry(
@@ -123,13 +123,13 @@ class TaskApiTests(unittest.TestCase):
     def test_list_and_delete_task(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = _TaskAgent(Path(tmpdir))
-            server = AgentHTTPServer(agent=agent, enable_web=False)
+            server = AgentHTTPServer(agent=agent)
             task = enqueue_scheduled_task(
                 task_type="message",
                 content="走两步",
                 run_at="2099-01-01 00:00:00",
                 tasks_dir=server.tasks_dir,
-                channel="web",
+                channel="api",
                 target={"user_id": "web_user"},
                 user_id="web_user",
                 title="Reminder",
@@ -139,7 +139,7 @@ class TaskApiTests(unittest.TestCase):
                 self.assertEqual(listed.status_code, 200)
                 self.assertEqual(listed.json()["total"], 1)
                 self.assertEqual(listed.json()["tasks"][0]["task_id"], task.task_id)
-                self.assertEqual(listed.json()["tasks"][0]["channel"], "web")
+                self.assertEqual(listed.json()["tasks"][0]["channel"], "api")
                 self.assertEqual(listed.json()["tasks"][0]["status"], "active")
 
                 deleted = client.delete(f"/api/tasks/delete?task_id={task.task_id}")
@@ -152,13 +152,13 @@ class TaskApiTests(unittest.TestCase):
     def test_list_weekly_task_includes_weekdays(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = _TaskAgent(Path(tmpdir))
-            server = AgentHTTPServer(agent=agent, enable_web=False)
+            server = AgentHTTPServer(agent=agent)
             task = enqueue_scheduled_task(
                 task_type="message",
                 content="喝茶",
                 run_at="2099-01-07 13:28:00",
                 tasks_dir=server.tasks_dir,
-                channel="web",
+                channel="api",
                 target={"user_id": "web_user"},
                 user_id="web_user",
                 title="喝茶提醒",
@@ -177,7 +177,7 @@ class TaskApiTests(unittest.TestCase):
     def test_create_task_endpoint_is_not_exposed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = _TaskAgent(Path(tmpdir))
-            server = AgentHTTPServer(agent=agent, enable_web=False)
+            server = AgentHTTPServer(agent=agent)
             with TestClient(server.app) as client:
                 response = client.post(
                     "/api/tasks/create",
@@ -189,13 +189,13 @@ class TaskApiTests(unittest.TestCase):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 agent = _TaskAgent(Path(tmpdir))
-                server = AgentHTTPServer(agent=agent, enable_web=False)
+                server = AgentHTTPServer(agent=agent)
                 enqueue_scheduled_task(
                     task_type="agent",
                     content="Check system temperature",
                     run_at="2026-06-01 14:30:00",
                     tasks_dir=server.tasks_dir,
-                    channel="web",
+                    channel="api",
                     target={"user_id": "web_user"},
                     user_id="web_user",
                     title="Temperature Check",
@@ -221,13 +221,13 @@ class TaskApiTests(unittest.TestCase):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 agent = _AttachmentTaskAgent(Path(tmpdir))
-                server = AgentHTTPServer(agent=agent, enable_web=False)
+                server = AgentHTTPServer(agent=agent)
                 enqueue_scheduled_task(
                     task_type="agent",
                     content="Generate a pointillism image",
                     run_at="2026-06-01 18:00:00",
                     tasks_dir=server.tasks_dir,
-                    channel="web",
+                    channel="api",
                     target={"user_id": "web_user"},
                     user_id="web_user",
                     title="Image Check",

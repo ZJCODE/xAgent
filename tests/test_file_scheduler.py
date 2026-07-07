@@ -22,7 +22,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 content="走两步",
                 run_at=run_at,
                 tasks_dir=tmpdir,
-                channel="web",
+                channel="api",
                 target={"user_id": "web_user"},
                 user_id="web_user",
                 title="Reminder",
@@ -33,8 +33,8 @@ class ScheduledTaskTests(unittest.TestCase):
         self.assertEqual(records[0].kind, "task")
         self.assertEqual(records[0].task_type, "message")
         self.assertEqual(records[0].content, "走两步")
-        self.assertEqual(records[0].target["channel"], "web")
-        self.assertEqual(records[0].delivery["channel"], "web")
+        self.assertEqual(records[0].target["channel"], "api")
+        self.assertEqual(records[0].delivery["channel"], "api")
 
     def test_async_scheduler_dispatches_only_handleable_due_tasks(self):
         async def run_test():
@@ -45,7 +45,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     content="web reminder",
                     run_at=run_at,
                     tasks_dir=tmpdir,
-                    channel="web",
+                    channel="api",
                     target={"user_id": "web_user"},
                     user_id="web_user",
                 )
@@ -61,7 +61,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 delivered = []
                 scheduler = AsyncTaskScheduler(
                     tmpdir,
-                    can_handle=lambda task: task.delivery_channel == "web",
+                    can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.content),
                     now_provider=lambda: run_at,
                 )
@@ -86,13 +86,13 @@ class ScheduledTaskTests(unittest.TestCase):
                     content="Check system temperature",
                     run_at=run_at,
                     tasks_dir=tmpdir,
-                    channel="web",
+                    channel="api",
                     target={"user_id": "web_user"},
                     user_id="web_user",
                 )
                 scheduler = AsyncTaskScheduler(
                     tmpdir,
-                    can_handle=lambda task: task.delivery_channel == "web",
+                    can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=_raise_dispatch_error,
                     now_provider=lambda: run_at,
                 )
@@ -118,7 +118,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     content="写日报",
                     run_at=datetime(2026, 6, 1, 10, 0, 0),
                     tasks_dir=tmpdir,
-                    channel="web",
+                    channel="api",
                     target={"user_id": "web_user"},
                     user_id="web_user",
                     recurrence=[{"kind": "daily", "time": "10:00:00"}],
@@ -127,7 +127,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 delivered = []
                 scheduler = AsyncTaskScheduler(
                     tmpdir,
-                    can_handle=lambda task: task.delivery_channel == "web",
+                    can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.content),
                     now_provider=lambda: datetime(2026, 6, 3, 15, 0, 0),
                 )
@@ -154,7 +154,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     content="喝茶",
                     run_at=datetime(2026, 6, 3, 13, 28, 0),
                     tasks_dir=tmpdir,
-                    channel="web",
+                    channel="api",
                     target={"user_id": "web_user"},
                     user_id="web_user",
                     recurrence=[{"kind": "weekly", "time": "13:28:00", "weekdays": ["wed", "fri"]}],
@@ -163,7 +163,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 delivered = []
                 scheduler = AsyncTaskScheduler(
                     tmpdir,
-                    can_handle=lambda task: task.delivery_channel == "web",
+                    can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.content),
                     now_provider=lambda: datetime(2026, 6, 5, 14, 0, 0),
                 )
@@ -190,7 +190,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     content="写日报",
                     run_at=datetime(2026, 6, 1, 10, 0, 0),
                     tasks_dir=tmpdir,
-                    channel="web",
+                    channel="api",
                     target={"user_id": "web_user"},
                     user_id="web_user",
                     recurrence=[{"kind": "daily", "time": "10:00:00"}],
@@ -198,7 +198,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 )
                 scheduler = AsyncTaskScheduler(
                     tmpdir,
-                    can_handle=lambda task: task.delivery_channel == "web",
+                    can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=_raise_dispatch_error,
                     now_provider=lambda: datetime(2026, 6, 1, 10, 0, 0),
                 )
@@ -226,7 +226,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     content="走路",
                     run_at=datetime(2026, 6, 3, 14, 28, 0),
                     tasks_dir=tmpdir,
-                    channel="web",
+                    channel="api",
                     target={"user_id": "web_user"},
                     user_id="web_user",
                     recurrence=[{"kind": "weekly", "time": "14:28:00", "weekdays": ["wed", "fri"]}],
@@ -234,7 +234,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 )
                 scheduler = AsyncTaskScheduler(
                     tmpdir,
-                    can_handle=lambda task: task.delivery_channel == "web",
+                    can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=_raise_dispatch_error,
                     now_provider=lambda: datetime(2026, 6, 3, 14, 28, 0),
                 )

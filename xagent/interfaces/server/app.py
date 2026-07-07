@@ -29,7 +29,6 @@ from .models import (
 )
 from .runtime_routes import register_runtime_routes
 from .serializers import message_item, message_search_result, response_payload
-from .web import register_spa_routes
 from ...components.skills import SkillsStorageLocal
 from ...core.agent import Agent
 from ...core.config import AgentConfig
@@ -58,7 +57,6 @@ from ...utils.image_utils import (
     workspace_blob_url,
 )
 
-_STATIC_DIR = Path(__file__).parent.parent / "static"
 _WORKSPACE_TEXT_READ_LIMIT = 1_000_000
 _WORKSPACE_SEARCH_TEXT_LIMIT = 2_000_000
 
@@ -76,12 +74,10 @@ class AgentHTTPServer(BaseAgentRunner):
         self,
         config_dir: Optional[str] = None,
         agent: Optional[Agent] = None,
-        enable_web: bool = True,
         max_concurrent_chats: int = AgentConfig.DEFAULT_HTTP_MAX_CONCURRENT_CHATS,
         chat_queue_timeout: float = AgentConfig.DEFAULT_HTTP_QUEUE_TIMEOUT,
         chat_timeout: float = AgentConfig.DEFAULT_HTTP_CHAT_TIMEOUT,
     ):
-        self._enable_web = enable_web
         self._chat_semaphore = asyncio.Semaphore(max(1, int(max_concurrent_chats)))
         self._chat_queue_timeout = max(0.001, float(chat_queue_timeout))
         self._chat_timeout = max(0.001, float(chat_timeout))
@@ -167,7 +163,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 user_id=input_data.user_id,
                 image_source=image_sources,
                 attachments=attachments,
-                channel="web",
+                channel="api",
             )
 
     async def _call_observe(self, input_data: ObserveInput):
@@ -221,14 +217,14 @@ class AgentHTTPServer(BaseAgentRunner):
             try:
                 upsert_contact(
                     self._contacts_file,
-                    channel="web",
+                    channel="api",
                     user_id=input_data.user_id,
                     target={"user_id": input_data.user_id},
                 )
             except Exception:
                 self.logger.debug("Failed to record contact for subconscious", exc_info=True)
 
-            context = self._scheduled_delivery_context(input_data, channel="web")
+            context = self._scheduled_delivery_context(input_data, channel="api")
             with scheduled_delivery_context(context):
                 response = chat_events(
                     user_message=input_data.user_message,
@@ -236,7 +232,7 @@ class AgentHTTPServer(BaseAgentRunner):
                     image_source=self._input_image_sources(input_data, attachments=attachments),
                     attachments=attachments,
                     stream=bool(input_data.stream),
-                    channel="web",
+                    channel="api",
                 )
                 async for event in self._iterate_before_deadline(response, deadline):
                     if event.get("type") == "done":
@@ -307,7 +303,7 @@ class AgentHTTPServer(BaseAgentRunner):
         if task.kind != "task":
             return False
         target_channel = task.delivery_channel
-        return target_channel in {"api", "web"}
+        return target_channel == "api"
 
     async def _dispatch_scheduled_task(self, task) -> None:
         result = await self._scheduled_task_result(task)
@@ -332,7 +328,7 @@ class AgentHTTPServer(BaseAgentRunner):
                     getattr(self.agent, "_assistant_sender_id", "agent"),
                     metadata=metadata,
                     attachments=result.attachments,
-                    channel="web",
+                    channel="api",
                     recipient_id=task.delivery_user_id or str(task.target.get("user_id") or ""),
                 )
         await self._broadcast_scheduled_message(
@@ -467,7 +463,7 @@ class AgentHTTPServer(BaseAgentRunner):
                         self._task_subscribers.pop(user_id, None)
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        if delivery.recipient.channel not in {"api", "web"}:
+        if delivery.recipient.channel != "api":
             raise ValueError(f"HTTP runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
         target = delivery.recipient.target
         user_id = str(target.get("user_id") or delivery.recipient.user_id or "").strip()
@@ -618,7 +614,7 @@ class AgentHTTPServer(BaseAgentRunner):
                 "mime_type": image.mime_type,
                 "file_name": image.original_name,
                 "size_bytes": image.size_bytes,
-                "source_channel": "web",
+                "client": "web",
             })
         attachments = dedupe_attachments(raw_attachments)
         if not attachments:
@@ -733,8 +729,6 @@ class AgentHTTPServer(BaseAgentRunner):
             lifespan=self._lifespan,
         )
         self._add_routes(app)
-        if self._enable_web:
-            self._add_web_ui(app)
         return app
 
     @asynccontextmanager
@@ -744,7 +738,7 @@ class AgentHTTPServer(BaseAgentRunner):
             self.config.get("runtime") if isinstance(self.config, dict) else None,
             logger_=self.logger,
             subconscious_delivery_sink=self.deliver_subconscious_message,
-            subconscious_deliverable_channels={"api", "web"},
+            subconscious_deliverable_channels={"api"},
         )
         task_scheduler = AsyncTaskScheduler(
             self.tasks_dir,
@@ -771,9 +765,6 @@ class AgentHTTPServer(BaseAgentRunner):
                 await heartbeat.stop()
                 self.logger.info("Runtime heartbeat stopped")
 
-    def _add_web_ui(self, app: FastAPI) -> None:
-        register_spa_routes(app, static_dir=_STATIC_DIR, logger=self.logger)
-
     def _add_routes(self, app: FastAPI) -> None:
         register_runtime_routes(app, self)
         register_admin_routes(
@@ -783,31 +774,12 @@ class AgentHTTPServer(BaseAgentRunner):
             workspace_search_text_limit=_WORKSPACE_SEARCH_TEXT_LIMIT,
         )
 
-    def run(self, host: str = None, port: int = None, open_browser: bool = False) -> None:
+    def run(self, host: str = None, port: int = None) -> None:
         host = host if host is not None else BaseAgentConfig.DEFAULT_HOST
         port = port if port is not None else BaseAgentConfig.DEFAULT_PORT
 
-        self.logger.info("Starting xAgent HTTP Server on %s:%s", host, port)
+        self.logger.info("Starting xAgent API Server on %s:%s", host, port)
         self.logger.info("Model: %s", self.agent.model)
         self.logger.info("Tools: %d loaded", len(self.agent.tools))
-        self.logger.info("Web UI: %s", "enabled at /" if self._enable_web else "disabled (--no-web)")
-
-        if open_browser and self._enable_web:
-            import threading
-            import webbrowser
-
-            browse_host = host
-
-            # 0.0.0.0 不能直接用于浏览器访问
-            if browse_host == "0.0.0.0":
-                browse_host = "127.0.0.1"
-
-            # IPv6 浏览器 URL 需要 []
-            if ":" in browse_host and not browse_host.startswith("["):
-                browse_host = f"[{browse_host}]"
-
-            url = f"http://{browse_host}:{port}"
-
-            threading.Timer(1.5, lambda: webbrowser.open(url)).start()
 
         uvicorn.run(self.app, host=host, port=port)

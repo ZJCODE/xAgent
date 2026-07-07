@@ -17,7 +17,7 @@ Run the frontend dev server:
 npm run dev
 ```
 
-The dev server proxies API and WebSocket requests to `http://127.0.0.1:8010`, so run `xagent web` separately when testing against a real agent.
+The dev server proxies API and WebSocket requests to `http://127.0.0.1:8010`, so run `xagent api start` separately when testing against a real agent.
 
 ## Build Static Assets
 

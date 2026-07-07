@@ -130,7 +130,6 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
         agent = BlockingAgent()
         server = AgentHTTPServer(
             agent=agent,
-            enable_web=False,
             max_concurrent_chats=1,
             chat_queue_timeout=0.05,
             chat_timeout=1.0,
@@ -160,7 +159,6 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
         agent = BlockingAgent()
         server = AgentHTTPServer(
             agent=agent,
-            enable_web=False,
             max_concurrent_chats=1,
             chat_queue_timeout=1.0,
             chat_timeout=0.05,
@@ -177,7 +175,7 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(agent.cancelled)
 
     async def test_chat_rejects_stream_field(self):
-        server = AgentHTTPServer(agent=FastStreamingAgent(), enable_web=False)
+        server = AgentHTTPServer(agent=FastStreamingAgent())
 
         async with await self._client(server) as client:
             response = await client.post("/chat", json={
@@ -189,7 +187,7 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 422)
 
     async def test_chat_is_final_only_http_json(self):
-        server = AgentHTTPServer(agent=EventStreamingAgent(), enable_web=False)
+        server = AgentHTTPServer(agent=EventStreamingAgent())
         async with await self._client(server) as client:
             response = await client.post("/chat", json={
                 "user_id": "alice",
@@ -201,7 +199,7 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_observe_endpoint_returns_ingestion_result(self):
         agent = ObservingAgent()
-        server = AgentHTTPServer(agent=agent, enable_web=False)
+        server = AgentHTTPServer(agent=agent)
 
         async with await self._client(server) as client:
             response = await client.post("/observe", json={
@@ -241,7 +239,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
 
         agent = FlushTrackingAgent()
         heartbeat = FakeHeartbeat()
-        server = AgentHTTPServer(agent=agent, enable_web=False)
+        server = AgentHTTPServer(agent=agent)
 
         with patch("xagent.interfaces.server.app.create_runtime_heartbeat", return_value=heartbeat) as factory:
             with TestClient(server.app):
@@ -253,7 +251,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
         self.assertFalse(agent.flushed)
 
     def test_websocket_chat_stream_false_returns_done_boundaries(self):
-        server = AgentHTTPServer(agent=FastStreamingAgent(), enable_web=False)
+        server = AgentHTTPServer(agent=FastStreamingAgent())
 
         with TestClient(server.app) as client:
             with client.websocket_connect("/ws/chat") as websocket:
@@ -277,7 +275,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
                 self.assertEqual(websocket.receive_json(), {"type": "done"})
 
     def test_websocket_chat_stream_true_emits_deltas_and_done(self):
-        server = AgentHTTPServer(agent=FastStreamingAgent(), enable_web=False)
+        server = AgentHTTPServer(agent=FastStreamingAgent())
 
         with TestClient(server.app) as client:
             with client.websocket_connect("/ws/chat") as websocket:
@@ -313,7 +311,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
                 self.assertEqual(websocket.receive_json(), {"type": "done"})
 
     def test_websocket_chat_emits_structured_events(self):
-        server = AgentHTTPServer(agent=EventStreamingAgent(), enable_web=False)
+        server = AgentHTTPServer(agent=EventStreamingAgent())
 
         with TestClient(server.app) as client:
             with client.websocket_connect("/ws/chat") as websocket:
@@ -372,7 +370,6 @@ class AgentWebSocketServerTests(unittest.TestCase):
     def test_websocket_chat_timeout_emits_error_and_done(self):
         server = AgentHTTPServer(
             agent=SlowStreamingAgent(),
-            enable_web=False,
             max_concurrent_chats=1,
             chat_queue_timeout=1.0,
             chat_timeout=0.05,
@@ -406,7 +403,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
 
     def test_websocket_observe_returns_result_and_done(self):
         agent = ObservingAgent()
-        server = AgentHTTPServer(agent=agent, enable_web=False)
+        server = AgentHTTPServer(agent=agent)
 
         with TestClient(server.app) as client:
             with client.websocket_connect("/ws/observe") as websocket:

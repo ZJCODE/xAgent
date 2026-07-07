@@ -22,6 +22,7 @@ from .channels import (
     voice_config,
     weixin_config,
 )
+from .clients import CLIENT_WEB, client_paths, web_client_config, web_client_public_url
 from .processes import managed_paths, running_pid
 
 
@@ -109,6 +110,7 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
                 _image_item(config),
                 _voice_item(config_dir, config),
                 _service_item(config_dir, CHANNEL_API, api_config(config)),
+                _web_client_item(config_dir, config),
                 _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config)),
                 _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config)),
             )
@@ -227,10 +229,10 @@ def _service_item(config_dir: Path, channel: str, config: dict[str, Any]) -> Ove
     if channel == CHANNEL_WEIXIN and not config.get("account_id"):
         return OverviewItem("Weixin", "not set", STATUS_DISABLED, "Setup")
     if channel == CHANNEL_API and config.get("enabled", True) is False:
-        return OverviewItem("Web UI", "off", STATUS_DISABLED, "Resetup")
+        return OverviewItem("API", "off", STATUS_DISABLED, "Resetup")
     paths = managed_paths(config_dir, channel)
     pid = running_pid(paths.pid_path)
-    title = {CHANNEL_API: "Web UI", CHANNEL_FEISHU: "Feishu", CHANNEL_WEIXIN: "Weixin"}.get(channel, channel)
+    title = {CHANNEL_API: "API", CHANNEL_FEISHU: "Feishu", CHANNEL_WEIXIN: "Weixin"}.get(channel, channel)
     if pid is None:
         detail = ""
         if channel == CHANNEL_API:
@@ -239,6 +241,30 @@ def _service_item(config_dir: Path, channel: str, config: dict[str, Any]) -> Ove
     if channel == CHANNEL_API:
         return OverviewItem(title, "running", STATUS_OK, f"{_api_service_target(config)} pid {pid}")
     return OverviewItem(title, "running", STATUS_OK, f"pid {pid}")
+
+
+def _web_client_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
+    web_cfg = web_client_config(config)
+    if not web_cfg.get("enabled", True):
+        return OverviewItem("Web", "off", STATUS_DISABLED, "clients.web")
+    paths = client_paths(config_dir, CLIENT_WEB)
+    pid = running_pid(paths.pid_path)
+    api_target = web_cfg.get("api_url", "").removeprefix("http://").removeprefix("https://")
+    detail = f"{_web_client_target(web_cfg)} → api {api_target}".strip()
+    if pid is None:
+        return OverviewItem("Web", "stopped", STATUS_IDLE, detail)
+    return OverviewItem("Web", "running", STATUS_OK, f"{detail} pid {pid}")
+
+
+def _web_client_target(web_cfg: dict[str, Any]) -> str:
+    host = str(web_cfg.get("host") or BaseAgentConfig.DEFAULT_HOST).strip() or BaseAgentConfig.DEFAULT_HOST
+    port = str(web_cfg.get("port") or (BaseAgentConfig.DEFAULT_PORT + 1)).strip()
+    browse_host = host
+    if browse_host == "0.0.0.0":
+        browse_host = "127.0.0.1"
+    if ":" in browse_host and not browse_host.startswith("["):
+        browse_host = f"[{browse_host}]"
+    return f"{browse_host}:{port}"
 
 
 def _data_item(config_dir: Path) -> OverviewItem:

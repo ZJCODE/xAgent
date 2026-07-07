@@ -45,7 +45,6 @@ class SkillsApiTests(unittest.IsolatedAsyncioTestCase):
         workspace_dir.mkdir()
         server = AgentHTTPServer(
             agent=SkillsAgent(memory_root=memory_root, workspace_dir=workspace_dir),
-            enable_web=False,
         )
         server.workspace = root
         server.workspace_dir = workspace_dir

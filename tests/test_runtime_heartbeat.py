@@ -91,11 +91,11 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
             heartbeat = create_runtime_heartbeat(
                 _Agent(tmpdir),
                 {"heartbeat_enabled": True, "heartbeat_interval_seconds": 1},
-                subconscious_deliverable_channels={"api", "web"},
+                subconscious_deliverable_channels={"api"},
             )
 
         self.assertIsNotNone(heartbeat)
-        self.assertEqual(heartbeat._subconscious_loop._deliverable_channels, {"api", "web"})
+        self.assertEqual(heartbeat._subconscious_loop._deliverable_channels, {"api"})
 
 
 class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):

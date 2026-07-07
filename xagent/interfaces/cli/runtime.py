@@ -31,6 +31,14 @@ from .channels import (
     voice_config,
     weixin_config,
 )
+from .clients import (
+    CLIENT_WEB,
+    ClientSelectionError,
+    client_paths,
+    normalize_client_values,
+    web_client_config,
+    web_client_public_url,
+)
 from .chat import AgentCLI
 from .paths import config_path, identity_path, load_runtime_config, runtime_dir
 from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
@@ -102,7 +110,6 @@ def handle_server(args: argparse.Namespace) -> int:
     raw_config_dir = getattr(args, "config_dir", None)
     server_kwargs = {
         "config_dir": raw_config_dir or str(runtime_dir(args)),
-        "enable_web": not args.no_web,
     }
     if args.max_concurrent_chats is not None:
         server_kwargs["max_concurrent_chats"] = args.max_concurrent_chats
@@ -112,16 +119,29 @@ def handle_server(args: argparse.Namespace) -> int:
         server_kwargs["chat_timeout"] = args.chat_timeout
 
     server = AgentHTTPServer(**server_kwargs)
-    server.run(host=args.host, port=args.port, open_browser=args.open_browser)
+    server.run(host=args.host, port=args.port)
     return 0
 
 
-def handle_web(args: argparse.Namespace) -> int:
-    try:
-        config = load_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-    return _run_api_channel(args, config)
+def _client_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
+    values = getattr(args, "clients", None)
+    if values is None:
+        return None
+    if isinstance(values, str):
+        return [values]
+    return list(values)
+
+
+def _select_clients(args: argparse.Namespace, *, default: str) -> tuple[list[str], dict[str, Any]]:
+    config = load_runtime_config(args)
+    values = _client_arg_values(args)
+    clients = normalize_client_values(values, default=default)
+    return clients, config
+
+
+def _handle_client_error(exc: ClientSelectionError) -> int:
+    print(f"Error: {exc}")
+    return 1
 
 
 def _channel_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
@@ -166,8 +186,6 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
         value = getattr(args, attr, None)
         if value is not None:
             command.extend([flag, str(value)])
-    if getattr(args, "open_browser", False):
-        command.append("--open")
     if channel == CHANNEL_VOICE:
         user_id = getattr(args, "user_id", None)
         if user_id:
@@ -183,10 +201,27 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
     return command
 
 
+def _client_command(client: str, args: argparse.Namespace) -> list[str]:
+    command = [sys.executable, "-m", "xagent.interfaces.cli", "_run-client", client]
+    config_dir = getattr(args, "config_dir", None)
+    if config_dir:
+        command.extend(["--config-dir", config_dir])
+    else:
+        command.extend(["--agent", resolve_agent_name(getattr(args, "agent", None))])
+
+    for flag, attr in (("--host", "host"), ("--port", "port"), ("--api-url", "api_url")):
+        value = getattr(args, attr, None)
+        if value is not None:
+            command.extend([flag, str(value)])
+    if getattr(args, "open_browser", False):
+        command.append("--open")
+    return command
+
+
 def _api_runtime_values(
     args: argparse.Namespace,
     config: dict[str, Any],
-) -> tuple[dict[str, Any], Optional[str], Optional[int], bool]:
+) -> tuple[dict[str, Any], Optional[str], Optional[int]]:
     api_cfg = api_config(config)
     raw_config_dir = getattr(args, "config_dir", None)
     server_kwargs: dict[str, Any] = {
@@ -209,17 +244,40 @@ def _api_runtime_values(
     port = getattr(args, "port", None)
     if port is None:
         port = api_cfg.get("port")
-    open_browser = bool(getattr(args, "open_browser", False))
-    return server_kwargs, host, port, open_browser
+    return server_kwargs, host, port
 
 
 def _run_api_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
     from ..server import AgentHTTPServer
 
-    server_kwargs, host, port, open_browser = _api_runtime_values(args, config)
+    server_kwargs, host, port = _api_runtime_values(args, config)
     server = AgentHTTPServer(**server_kwargs)
     print(f"xAgent api channel ready (model={server.agent.model}).")
-    server.run(host=host, port=port, open_browser=open_browser)
+    server.run(host=host, port=port)
+    return 0
+
+
+def _web_client_runtime_values(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+) -> tuple[str, int, str, bool]:
+    web_cfg = web_client_config(config)
+    host = getattr(args, "host", None) or web_cfg.get("host")
+    port = getattr(args, "port", None)
+    if port is None:
+        port = web_cfg.get("port")
+    api_url = str(getattr(args, "api_url", None) or web_cfg.get("api_url") or "").strip()
+    open_browser = bool(getattr(args, "open_browser", False))
+    return str(host), int(port), api_url, open_browser
+
+
+def _run_web_client(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    from ..clients.web import WebClientServer
+
+    host, port, api_url, open_browser = _web_client_runtime_values(args, config)
+    server = WebClientServer(host=host, port=port, api_url=api_url)
+    print(f"xAgent web client ready at http://{host}:{port} (api={api_url}).")
+    server.run(open_browser=open_browser)
     return 0
 
 
@@ -514,12 +572,29 @@ def _run_channel(channel: str, args: argparse.Namespace, config: dict[str, Any])
     return 1
 
 
+def _run_client(client: str, args: argparse.Namespace, config: dict[str, Any]) -> int:
+    if client == CLIENT_WEB:
+        return _run_web_client(args, config)
+    print(f"Unknown client: {client}")
+    return 1
+
+
 def handle_run_channel_internal(args: argparse.Namespace) -> int:
     try:
         config = load_runtime_config(args)
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
     return _run_channel(args.channel, args, config)
+
+
+def handle_run_client_internal(args: argparse.Namespace) -> int:
+    try:
+        config = load_runtime_config(args)
+    except (ChannelSelectionError, ClientSelectionError) as exc:
+        if isinstance(exc, ClientSelectionError):
+            return _handle_client_error(exc)
+        return _handle_channel_error(exc)
+    return _run_client(args.client, args, config)
 
 
 def handle_run(args: argparse.Namespace) -> int:
@@ -704,7 +779,201 @@ def handle_status_all(args: argparse.Namespace) -> int:
         print(f"{row['channel']}: {row['status']}{pid_text}")
         print(f"  pid: {row['pid_path']}")
         print(f"  log: {row['log_path']}")
+
+    client_rows: list[dict[str, Any]] = []
+    web_cfg = web_client_config(config)
+    if web_cfg.get("enabled", True):
+        paths = client_paths(config_dir, CLIENT_WEB)
+        pid = running_pid(paths.pid_path)
+        client_rows.append({
+            "client": CLIENT_WEB,
+            "status": "running" if pid is not None else "stopped",
+            "pid": pid,
+            "pid_path": str(paths.pid_path),
+            "log_path": str(paths.log_path),
+            "url": web_client_public_url(config),
+        })
+
+    if client_rows:
+        print()
+        print("Clients:")
+        for row in client_rows:
+            pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
+            print(f"{row['client']}: {row['status']}{pid_text}")
+            print(f"  url: {row['url']}")
+            print(f"  pid: {row['pid_path']}")
+            print(f"  log: {row['log_path']}")
     return 0
+
+
+def _start_background_client(args: argparse.Namespace, *, client: str, config_dir: Path | None = None) -> bool:
+    runtime_root = config_dir or runtime_dir(args)
+    paths = client_paths(runtime_root, client)
+    result = start_background(
+        _client_command(client, args),
+        pid_path=paths.pid_path,
+        log_path=paths.log_path,
+    )
+    if result.ok:
+        print(f"Started {client} client in background (pid={result.pid}).")
+        print(f"Logs: {paths.log_path}")
+        return True
+
+    print(f"Failed to start {client} client: {result.error}")
+    if result.recent_output:
+        print(result.recent_output)
+    return False
+
+
+def handle_client_start(args: argparse.Namespace) -> int:
+    try:
+        clients, _config = _select_clients(args, default=CLIENT_WEB)
+    except (ChannelSelectionError, ClientSelectionError) as exc:
+        if isinstance(exc, ClientSelectionError):
+            return _handle_client_error(exc)
+        return _handle_channel_error(exc)
+
+    ok = True
+    config_dir = runtime_dir(args)
+    for client in clients:
+        if not _start_background_client(args, client=client, config_dir=config_dir):
+            ok = False
+    return 0 if ok else 1
+
+
+def handle_client_stop(args: argparse.Namespace) -> int:
+    try:
+        clients, _config = _select_clients(args, default=CLIENT_WEB)
+    except (ChannelSelectionError, ClientSelectionError) as exc:
+        if isinstance(exc, ClientSelectionError):
+            return _handle_client_error(exc)
+        return _handle_channel_error(exc)
+
+    ok = True
+    config_dir = runtime_dir(args)
+    for client in clients:
+        paths = client_paths(config_dir, client)
+        stopped, message = stop_managed_process(paths.pid_path)
+        ok = ok and stopped
+        print(f"{client}: {message}")
+    return 0 if ok else 1
+
+
+def handle_client_restart(args: argparse.Namespace) -> int:
+    try:
+        clients, _config = _select_clients(args, default=CLIENT_WEB)
+    except (ChannelSelectionError, ClientSelectionError) as exc:
+        if isinstance(exc, ClientSelectionError):
+            return _handle_client_error(exc)
+        return _handle_channel_error(exc)
+
+    ok = True
+    config_dir = runtime_dir(args)
+    restart_values = dict(vars(args))
+
+    for client in clients:
+        paths = client_paths(config_dir, client)
+        stopped, message = stop_managed_process(paths.pid_path)
+        print(f"{client}: {message}")
+        if not stopped:
+            ok = False
+            continue
+        restart_values["clients"] = [client]
+        restart_args = argparse.Namespace(**restart_values)
+        if not _start_background_client(restart_args, client=client, config_dir=config_dir):
+            ok = False
+
+    return 0 if ok else 1
+
+
+def handle_client_status(args: argparse.Namespace) -> int:
+    try:
+        clients, config = _select_clients(args, default=CLIENT_WEB)
+    except (ChannelSelectionError, ClientSelectionError) as exc:
+        if isinstance(exc, ClientSelectionError):
+            return _handle_client_error(exc)
+        return _handle_channel_error(exc)
+
+    config_dir = runtime_dir(args)
+    rows: list[dict[str, Any]] = []
+    for client in clients:
+        paths = client_paths(config_dir, client)
+        pid = running_pid(paths.pid_path)
+        row = {
+            "client": client,
+            "status": "running" if pid is not None else "stopped",
+            "pid": pid,
+            "pid_path": str(paths.pid_path),
+            "log_path": str(paths.log_path),
+        }
+        if client == CLIENT_WEB:
+            row["url"] = web_client_public_url(config)
+        rows.append(row)
+
+    if getattr(args, "json_output", False):
+        print(json.dumps({"clients": rows}, indent=2, sort_keys=True))
+        return 0
+
+    for row in rows:
+        pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
+        print(f"{row['client']}: {row['status']}{pid_text}")
+        if row.get("url"):
+            print(f"  url: {row['url']}")
+        print(f"  pid: {row['pid_path']}")
+        print(f"  log: {row['log_path']}")
+    return 0
+
+
+def handle_client_logs(args: argparse.Namespace) -> int:
+    try:
+        clients, _config = _select_clients(args, default=CLIENT_WEB)
+    except (ChannelSelectionError, ClientSelectionError) as exc:
+        if isinstance(exc, ClientSelectionError):
+            return _handle_client_error(exc)
+        return _handle_channel_error(exc)
+
+    if getattr(args, "follow", False) and len(clients) != 1:
+        print("--follow requires exactly one client")
+        return 1
+
+    config_dir = runtime_dir(args)
+    lines = max(1, int(getattr(args, "lines", 80)))
+    for client in clients:
+        paths = client_paths(config_dir, client)
+        print(f"==> {client} ({paths.log_path})")
+        if getattr(args, "follow", False):
+            _follow_log(paths.log_path)
+            return 0
+        text = tail_text(paths.log_path, max_lines=lines)
+        print(text or "(no log output)")
+    return 0
+
+
+def handle_client_web_open(args: argparse.Namespace) -> int:
+    import webbrowser
+
+    try:
+        config = load_runtime_config(args)
+    except ChannelSelectionError as exc:
+        return _handle_channel_error(exc)
+
+    web_cfg = web_client_config(config)
+    if not web_cfg.get("enabled", True):
+        print("Web client is disabled in config (clients.web.enabled=false).")
+        return 1
+
+    config_dir = runtime_dir(args)
+    paths = client_paths(config_dir, CLIENT_WEB)
+    if running_pid(paths.pid_path) is None:
+        print("Web client is not running. Start it with: xagent client web start")
+        return 1
+
+    url = web_client_public_url(config)
+    if webbrowser.open(url):
+        print(f"Opened: {url}")
+        return 0
+    print(f"Failed to open: {url}")
+    return 1
 
 
 def _follow_log(path: Path) -> None:
@@ -1043,15 +1312,16 @@ def print_quick_start() -> None:
         print("")
     print("Use now:")
     print("  xagent chat                     Chat in the terminal")
-    print("  xagent web                      Open the Web UI")
+    print("  xagent client web open          Open the browser web client")
     print("  xagent voice                    Use microphone / speaker mode")
     print("")
     print("Keep running:")
-    print("  xagent api start                Start Web/API channel")
+    print("  xagent api start                Start the api channel")
+    print("  xagent client web start         Start the browser web client")
     print("  xagent voice start              Start voice channel")
-    print("  xagent status                   Show channel status")
-    print("  xagent api logs -f              Follow Web/API logs")
-    print("  xagent voice logs -f            Follow voice logs")
+    print("  xagent status                   Show channel and client status")
+    print("  xagent api logs -f              Follow api channel logs")
+    print("  xagent client web logs -f       Follow web client logs")
     print("")
     print("Setup and inspect:")
     print("  xagent setup                    Reconfigure the active agent")

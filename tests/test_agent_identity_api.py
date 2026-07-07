@@ -51,7 +51,6 @@ class AgentIdentityApiTests(unittest.IsolatedAsyncioTestCase):
 
         server = AgentHTTPServer(
             agent=IdentityAgent(identity=identity, memory_root=memory_root),
-            enable_web=False,
         )
         server.workspace = root
         server.identity_path = identity_path

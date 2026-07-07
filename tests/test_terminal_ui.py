@@ -39,7 +39,7 @@ class TerminalUITests(unittest.TestCase):
                 subtitle="Runtime ready",
                 options=[
                     MenuOption("chat", "Chat", "Talk with the configured agent."),
-                    MenuOption("web", "Web UI", "Open the browser workspace."),
+                    MenuOption("web", "Web", "Manage the browser client."),
                 ],
                 footer="↑/↓ move  •  enter select  •  esc quit",
                 selected=0,
