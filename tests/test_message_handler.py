@@ -296,7 +296,6 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         context_messages = MessageHandler.build_turn_context_messages(
             messages,
             current_user_id="Joy",
-            workspace_context=workspace_context,
             current_time="2026-05-14 09:30",
         )
 

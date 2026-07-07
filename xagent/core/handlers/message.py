@@ -208,7 +208,6 @@ class MessageHandler:
             conversation_messages,
             max_messages=max_messages,
         )
-        budgeted_messages = [msg for msg, _ in budgeted_entries]
         budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
             observation_messages,
             max_events=max_context_events,
@@ -259,11 +258,6 @@ class MessageHandler:
         transcript_lines.append(AgentConfig.build_turn_reply_prompt(current_user_id))
 
         transcript_text = "\n".join(transcript_lines).strip()
-
-        # print("=== Built transcript message content ===")
-        # print(transcript_text)
-        # print("=== End transcript message content ===")
-
         return {"role": RoleType.USER.value, "content": transcript_text}
 
     @staticmethod
@@ -272,7 +266,6 @@ class MessageHandler:
         current_user_id: str,
         memory_context: str = "",
         relationship_context: str = "",
-        workspace_context: str = "",
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
         current_date: Optional[str] = None,
@@ -295,7 +288,6 @@ class MessageHandler:
             conversation_messages,
             max_messages=max_messages,
         )
-        budgeted_messages = [msg for msg, _ in budgeted_entries]
         budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
             observation_messages,
             max_events=max_context_events,

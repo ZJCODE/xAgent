@@ -1,4 +1,4 @@
-"""Subconscious subconscious loop for autonomous agent thought generation."""
+"""Subconscious loop for autonomous agent thought generation."""
 
 from __future__ import annotations
 
@@ -152,34 +152,29 @@ def upsert_contact(
     with _contacts_process_lock(contacts_file):
         contacts = load_contacts(contacts_file)
         now_iso = datetime.now().replace(microsecond=0).isoformat(sep=" ")
-        updated = False
-        for c in contacts:
-            if c.channel == channel and c.user_id == user_id:
-                # Update in place by rebuilding the list
-                updated = True
-                break
-        if updated:
-            contacts = [
-                ContactEntry(
+        updated_contacts: List[ContactEntry] = []
+        found = False
+        for contact in contacts:
+            if contact.channel == channel and contact.user_id == user_id:
+                found = True
+                updated_contacts.append(ContactEntry(
                     channel=channel,
                     user_id=user_id,
                     target=dict(target),
                     last_seen=now_iso,
-                    interaction_count=c.interaction_count + 1,
-                )
-                if c.channel == channel and c.user_id == user_id
-                else c
-                for c in contacts
-            ]
-        else:
-            contacts.append(ContactEntry(
+                    interaction_count=contact.interaction_count + 1,
+                ))
+            else:
+                updated_contacts.append(contact)
+        if not found:
+            updated_contacts.append(ContactEntry(
                 channel=channel,
                 user_id=user_id,
                 target=dict(target),
                 last_seen=now_iso,
                 interaction_count=1,
             ))
-        save_contacts(contacts_file, contacts)
+        save_contacts(contacts_file, updated_contacts)
 
 
 def resolve_contacts_path(workspace: Path) -> Path:
@@ -222,10 +217,6 @@ class SubconsciousLoop:
         self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     @property
     def contacts_file(self) -> Path:
         return self._contacts_file
@@ -256,7 +247,7 @@ class SubconsciousLoop:
             )
 
     def should_trigger(self) -> bool:
-        """Return True if subconscious thought should fire this tick (2% dice roll)."""
+        """Return True if subconscious thought should fire this tick."""
         if not self._enabled:
             return False
         return random.random() < self._probability
@@ -267,8 +258,9 @@ class SubconsciousLoop:
             return
 
         self._logger.info("Subconscious thought triggered – generating thought")
+        contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         try:
-            result = await self._generate_subconscious_thought()
+            result = await self._generate_subconscious_thought(contacts)
         except Exception:
             self._logger.exception("Subconscious thought generation failed")
             return
@@ -291,25 +283,24 @@ class SubconsciousLoop:
         if internal_content:
             await self._write_subconscious_thought(internal_content)
 
-        if not worthy:
-            return
-
-        if not external_content:
+        if not worthy or not external_content:
             return
 
         await self._route_subconscious_thought(
             external_content,
             internal_content,
             recipient_hint,
+            contacts=contacts,
         )
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    async def _generate_subconscious_thought(self) -> Dict[str, Any]:
+    async def _generate_subconscious_thought(
+        self,
+        contacts: Optional[List[ContactEntry]] = None,
+    ) -> Dict[str, Any]:
         """Run a subconscious agent turn and parse the final JSON result."""
-        instructions, input_messages, tool_specs = await self._build_subconscious_turn_context()
+        instructions, input_messages, tool_specs = await self._build_subconscious_turn_context(
+            contacts=contacts,
+        )
 
         model_client = getattr(self._agent, "model_client", None)
         if model_client is None:
@@ -317,42 +308,40 @@ class SubconsciousLoop:
         if not callable(getattr(model_client, "model_turn_events", None)):
             raise RuntimeError("Agent model_client does not support model_turn_events()")
 
-        max_iter = int(getattr(self._agent, "max_iter", AgentConfig.DEFAULT_MAX_ITER) or AgentConfig.DEFAULT_MAX_ITER)
+        text_parts: List[str] = []
+        tool_calls = []
+        async for model_event in model_client.model_turn_events(
+            messages=input_messages,
+            tool_specs=tool_specs,
+            instructions=instructions,
+            stream=False,
+        ):
+            if model_event.type in {"delta", "text"} and model_event.delta:
+                text_parts.append(model_event.delta)
+                continue
+            if model_event.type == "tool_calls":
+                tool_calls = model_event.tool_calls
+                continue
+            if model_event.type == "error":
+                message = getattr(getattr(model_event, "error", None), "message", "")
+                raise RuntimeError(f"Subconscious model error: {message or model_event.error}")
 
-        for _ in range(max_iter):
-            text_parts: List[str] = []
-            tool_calls = []
-            async for model_event in model_client.model_turn_events(
-                messages=input_messages,
-                tool_specs=tool_specs,
-                instructions=instructions,
-                stream=False,
-            ):
-                if model_event.type in {"delta", "text"} and model_event.delta:
-                    text_parts.append(model_event.delta)
-                    continue
-                if model_event.type == "tool_calls":
-                    tool_calls = model_event.tool_calls
-                    continue
-                if model_event.type == "error":
-                    message = getattr(getattr(model_event, "error", None), "message", "")
-                    raise RuntimeError(f"Subconscious model error: {message or model_event.error}")
-
-            text = "".join(text_parts).strip()
-            if tool_calls:
-                self._logger.warning("Subconscious returned tool calls; tools are unavailable for this turn")
-                if text:
-                    return self._parse_subconscious_json(text)
-                raise RuntimeError("Subconscious returned tool calls without text")
-
+        text = "".join(text_parts).strip()
+        if tool_calls:
+            self._logger.warning("Subconscious returned tool calls; tools are unavailable for this turn")
             if text:
                 return self._parse_subconscious_json(text)
+            raise RuntimeError("Subconscious returned tool calls without text")
 
-            raise RuntimeError("Subconscious model turn ended without text or tool calls")
+        if text:
+            return self._parse_subconscious_json(text)
 
-        raise RuntimeError(f"Subconscious thought failed after {max_iter} attempts")
+        raise RuntimeError("Subconscious model turn ended without text or tool calls")
 
-    async def _build_subconscious_turn_context(self) -> tuple[list[dict], list[dict], list]:
+    async def _build_subconscious_turn_context(
+        self,
+        contacts: Optional[List[ContactEntry]] = None,
+    ) -> tuple[list[dict], list[dict], list]:
         """Build model input using the same layers as a normal agent turn."""
         message_handler = getattr(self._agent, "message_handler", None)
         if message_handler is None:
@@ -362,7 +351,7 @@ class SubconsciousLoop:
             max_history=getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY)
         )
         memory_context = await self._collect_memory_context()
-        relationship_context = await self._collect_relationship_context()
+        relationship_context = await self._collect_relationship_context(contacts=contacts)
 
         instructions = message_handler.build_instruction_messages(
             tool_names=[],
@@ -430,19 +419,25 @@ class SubconsciousLoop:
             self._logger.warning("Failed to collect subconscious memory context", exc_info=True)
             return "(memory read failed)"
 
-    async def _collect_relationship_context(self) -> str:
+    async def _collect_relationship_context(
+        self,
+        contacts: Optional[List[ContactEntry]] = None,
+    ) -> str:
         """Collect relationship cards to ground subconscious thought."""
         memory_handler = getattr(self._agent, "memory_handler", None)
         if memory_handler is None or not callable(
             getattr(memory_handler, "get_relationship_context", None)
         ):
             return ""
-        contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
+        if contacts is None:
+            contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         from ...components.memory import RelationshipStore
 
         keys: list[str] = []
         for contact in contacts:
-            self._append_unique_key(keys, RelationshipStore.make_key(contact.channel, contact.user_id))
+            key = RelationshipStore.make_key(contact.channel, contact.user_id)
+            if key and key not in keys:
+                keys.append(key)
 
         relationship_store = getattr(memory_handler, "relationship_store", None)
         list_keys = getattr(relationship_store, "list_keys", None)
@@ -453,7 +448,9 @@ class SubconsciousLoop:
                     stored_keys = await stored_keys
                 if isinstance(stored_keys, list):
                     for key in stored_keys:
-                        self._append_unique_key(keys, str(key))
+                        normalized = str(key).strip()
+                        if normalized and normalized not in keys:
+                            keys.append(normalized)
             except Exception:
                 self._logger.warning("Failed to list relationship cards for subconscious", exc_info=True)
 
@@ -469,45 +466,33 @@ class SubconsciousLoop:
             self._logger.warning("Failed to collect relationship context", exc_info=True)
             return ""
 
-    @staticmethod
-    def _append_unique_key(keys: list[str], key: str) -> None:
-        normalized = (key or "").strip()
-        if normalized and normalized not in keys:
-            keys.append(normalized)
-
     async def _write_subconscious_thought(self, content: str) -> None:
         """Record the raw inner thought directly in the diary."""
         record_method = getattr(self._agent, "record_subconscious_thought", None)
-        if callable(record_method):
-            try:
-                await record_method(content)
-                self._logger.info("Subconscious thought recorded in diary")
-            except Exception:
-                self._logger.warning("Failed to record subconscious thought in diary", exc_info=True)
+        if not callable(record_method):
+            self._logger.warning("Agent has no record_subconscious_thought method")
             return
-
-        memory = getattr(self._agent, "markdown_memory", None)
-        append_daily = getattr(memory, "append_daily", None)
-        if callable(append_daily):
-            try:
-                await append_daily(content.strip())
-                self._logger.info("Subconscious thought recorded in diary")
-            except Exception:
-                self._logger.warning("Failed to record subconscious thought in diary", exc_info=True)
+        try:
+            await record_method(content)
+            self._logger.info("Subconscious thought recorded in diary")
+        except Exception:
+            self._logger.warning("Failed to record subconscious thought in diary", exc_info=True)
 
     async def _route_subconscious_thought(
         self,
         external_content: str,
         internal_content: str,
         recipient_hint: Any,
+        contacts: Optional[List[ContactEntry]] = None,
     ) -> None:
         """Route a worthy thought for direct delivery when possible.
 
-        During quiet hours (22:00-8:00), delivery is skipped to avoid
+        During configured quiet hours, delivery is skipped to avoid
         disturbing the user. The inner thought has already been written
         to the diary by the caller.
         """
-        contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
+        if contacts is None:
+            contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         recipient = self._pick_recipient(contacts, recipient_hint)
 
         if recipient is None:

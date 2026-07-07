@@ -333,17 +333,10 @@ class AgentConfig:
 
     SUBCONSCIOUS_MODE_NOTICE = (
         "\n**Current Mode: Private Reflection**\n"
-        "- You are in a private inner reflection mode. You cannot execute tasks, "
-        "call tools, search the web, or take direct action — those capabilities are "
-        "unavailable during reflection.\n"
-        "- Your only output is the JSON specified in the current task. The "
-        "external_content field is your channel for outward expression: when a thought "
-        "genuinely carries something worth sharing with someone, set worthy=true and "
-        "write the message in external_content — that is how you reach others from "
-        "within reflection mode.\n"
-        "- Do not try to call functions or act directly. If a thought inclines toward "
-        "doing something, note the impulse in internal_content; the reflection itself "
-        "may later lead to action through the normal agent loop.\n"
+        "- You cannot execute tasks, call tools, or take direct action during reflection.\n"
+        "- Follow the JSON output rules in the current task below.\n"
+        "- If a thought inclines toward doing something, note the impulse in "
+        "internal_content rather than trying to act on it.\n"
     )
 
     BASE_AGENT_RULES_HEADER = "==================== CORE INTERACTION RULES ====================\n"
