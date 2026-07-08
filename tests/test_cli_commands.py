@@ -741,6 +741,24 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(args.api_url, "http://127.0.0.1:8010")
         self.assertEqual(args.clients, ["web"])
 
+    def test_parser_supports_client_desktop_command(self):
+        args = build_parser().parse_args([
+            "client",
+            "desktop",
+            "start",
+            "--agent",
+            "work",
+            "--api-url",
+            "http://127.0.0.1:8010",
+        ])
+
+        self.assertEqual(args.command, "client")
+        self.assertEqual(args.client_target, "desktop")
+        self.assertEqual(args.client_desktop_action, "start")
+        self.assertEqual(args.agent, "work")
+        self.assertEqual(args.api_url, "http://127.0.0.1:8010")
+        self.assertEqual(args.clients, ["desktop"])
+
     def test_parser_supports_channel_lifecycle_commands(self):
         args = build_parser().parse_args([
             "api",
@@ -982,7 +1000,7 @@ class CLICommandTests(unittest.TestCase):
                 options = _launcher_client_options(Path(tmpdir))
         titles = [option.title for option in options]
 
-        self.assertEqual(titles, ["Web", "Back"])
+        self.assertEqual(titles, ["Web", "Desktop", "Back"])
 
     def test_channel_launcher_start_chooses_channel_before_action(self):
         class FakeUI:

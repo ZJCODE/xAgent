@@ -22,7 +22,7 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .clients import CLIENT_WEB, DEFAULT_WEB_CLIENT_PORT, client_paths, web_client_config
+from .clients import CLIENT_DESKTOP, CLIENT_WEB, DEFAULT_WEB_CLIENT_PORT, client_paths, web_client_config
 from .processes import managed_paths, running_pid
 
 
@@ -111,6 +111,7 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
                 _voice_item(config_dir, config),
                 _service_item(config_dir, CHANNEL_API, api_config(config)),
                 _web_client_item(config_dir, config),
+                _desktop_client_item(config_dir, config),
                 _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config)),
                 _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config)),
             )
@@ -254,6 +255,19 @@ def _web_client_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
     if pid is None:
         return OverviewItem("Web", "stopped", STATUS_IDLE, detail)
     return OverviewItem("Web", "running", STATUS_OK, f"{detail} pid {pid}")
+
+
+def _desktop_client_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
+    del config_dir
+    web_cfg = web_client_config(config)
+    if not web_cfg.get("enabled", True):
+        return OverviewItem("Desktop", "off", STATUS_DISABLED, "clients.web")
+    paths = client_paths(CLIENT_DESKTOP)
+    pid = running_pid(paths.pid_path)
+    detail = _web_client_target(web_cfg)
+    if pid is None:
+        return OverviewItem("Desktop", "stopped", STATUS_IDLE, detail)
+    return OverviewItem("Desktop", "running", STATUS_OK, f"{detail} pid {pid}")
 
 
 def _web_client_target(web_cfg: dict[str, Any]) -> str:

@@ -16,7 +16,8 @@ from .processes import ManagedProcessPaths
 
 
 CLIENT_WEB = "web"
-VALID_CLIENTS = {CLIENT_WEB}
+CLIENT_DESKTOP = "desktop"
+VALID_CLIENTS = {CLIENT_WEB, CLIENT_DESKTOP}
 DEFAULT_WEB_CLIENT_PORT = 1415
 
 
@@ -109,6 +110,7 @@ def api_url_to_ws_url(api_url: str) -> str:
 
 
 __all__ = [
+    "CLIENT_DESKTOP",
     "CLIENT_WEB",
     "DEFAULT_WEB_CLIENT_PORT",
     "VALID_CLIENTS",

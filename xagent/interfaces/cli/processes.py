@@ -7,7 +7,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 
 DEFAULT_STARTUP_TIMEOUT = 2.0
@@ -136,6 +136,7 @@ def start_background(
     pid_path: Path,
     log_path: Path,
     startup_timeout: float = DEFAULT_STARTUP_TIMEOUT,
+    extra_env: Optional[Mapping[str, str]] = None,
 ) -> StartResult:
     """Start a detached process, write its PID, and verify it survives startup."""
     existing_pid = running_pid(pid_path)
@@ -143,7 +144,7 @@ def start_background(
         return StartResult(ok=False, pid=existing_pid, error=f"already running (pid={existing_pid})")
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", **(dict(extra_env) if extra_env else {})}
     with log_path.open("ab") as log_handle:
         try:
             process = subprocess.Popen(
