@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { AgentSessionProvider } from "./context/AgentSessionContext";
 import { ChatProvider, useChat } from "./context/ChatContext";
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import { getHealth } from "./lib/api";
@@ -86,9 +87,11 @@ function RoutedApp() {
 export default function App() {
   return (
     <ThemeProvider>
-      <ChatProvider>
-        <RoutedApp />
-      </ChatProvider>
+      <AgentSessionProvider>
+        <ChatProvider>
+          <RoutedApp />
+        </ChatProvider>
+      </AgentSessionProvider>
     </ThemeProvider>
   );
 }

@@ -29,6 +29,7 @@ export interface AttachmentAsset {
   source_message_id?: string;
   source_resource_id?: string;
   source_resource_type?: string;
+  client?: string;
 }
 
 export interface ImageAsset extends AttachmentAsset {
@@ -113,6 +114,22 @@ export interface AgentInfo {
   identity_path?: string;
   identity_editable?: boolean;
   system_prompt?: string;
+}
+
+export interface AgentSummary {
+  name: string;
+  title: string;
+  path: string;
+  active: boolean;
+  selected: boolean;
+  initialized: boolean;
+  channel_running: boolean;
+}
+
+export interface AgentsResponse {
+  active_agent: string;
+  selected_agent: string;
+  agents: AgentSummary[];
 }
 
 export interface AgentIdentity {

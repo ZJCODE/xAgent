@@ -2,6 +2,7 @@ import type {
   AgentConfig,
   AgentIdentity,
   AgentInfo,
+  AgentsResponse,
   FileReadResult,
   FileNode,
   MessageSearchResponse,
@@ -29,6 +30,18 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function getHealth(): Promise<{ status: string; service: string }> {
   return requestJson("/health", { signal: AbortSignal.timeout(5000) });
+}
+
+export async function getAgents(): Promise<AgentsResponse> {
+  return requestJson("/api/agents");
+}
+
+export async function selectAgent(name: string): Promise<AgentsResponse> {
+  return requestJson("/api/agents/select", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
 }
 
 export async function getAgentInfo(): Promise<AgentInfo> {

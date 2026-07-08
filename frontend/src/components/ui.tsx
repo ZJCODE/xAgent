@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import { Search } from "lucide-react";
 import { classNames } from "../lib/format";
 
@@ -20,12 +20,17 @@ export function StatusBadge({
   children,
   tone = "neutral",
   className,
+  ...rest
 }: {
   children: ReactNode;
   tone?: "neutral" | "good" | "info" | "danger" | "muted";
   className?: string;
-}) {
-  return <span className={classNames("status-badge", `status-badge-${tone}`, className)}>{children}</span>;
+} & Omit<HTMLAttributes<HTMLSpanElement>, "className" | "children">) {
+  return (
+    <span className={classNames("status-badge", `status-badge-${tone}`, className)} {...rest}>
+      {children}
+    </span>
+  );
 }
 
 export function PageShell({ children, className }: { children: ReactNode; className?: string }) {

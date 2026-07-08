@@ -12,6 +12,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { useAgentSession } from "../context/AgentSessionContext";
 import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
 import type { RoutePath } from "../types";
@@ -45,6 +46,7 @@ export function AppLayout({
   children,
 }: AppLayoutProps) {
   const { dark } = useTheme();
+  const { agents, selectedAgent, switchAgent } = useAgentSession();
 
   return (
     <div className="app-shell">
@@ -56,6 +58,23 @@ export function AppLayout({
             <span>Agent workspace</span>
           </div>
         </div>
+        {agents.length > 0 ? (
+          <div className="agent-switcher">
+            <label htmlFor="agent-switcher-select">Agent</label>
+            <select
+              id="agent-switcher-select"
+              value={selectedAgent}
+              onChange={(event) => void switchAgent(event.target.value)}
+            >
+              {agents.map((agent) => (
+                <option key={agent.name} value={agent.name}>
+                  {agent.title}
+                  {agent.channel_running ? " \u25CF" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         <nav className="app-nav" aria-label="Primary">
           {navItems.map((item) => (
             <button
@@ -74,9 +93,12 @@ export function AppLayout({
       <div className="app-main">
         <header className="app-topbar">
           <div className="status-cluster">
-            <StatusBadge tone={health === "online" ? "good" : health === "offline" ? "danger" : "muted"}>
+            <StatusBadge
+              tone={health === "online" ? "good" : health === "offline" ? "danger" : "muted"}
+              title="Reflects the selected agent's api channel (chat). Other tabs work independently."
+            >
               {health === "online" ? <Wifi size={14} /> : <WifiOff size={14} />}
-              {health === "checking" ? "Checking" : health === "online" ? "Online" : "Offline"}
+              {health === "checking" ? "Checking" : health === "online" ? "API Online" : "API Offline"}
             </StatusBadge>
             <StatusBadge tone={chatStatus === "sending" ? "info" : "muted"}>
               <Activity size={14} />
