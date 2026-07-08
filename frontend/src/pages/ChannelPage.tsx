@@ -90,23 +90,23 @@ function ChannelRow({
           disabled={!channel.can_start || actionBusy}
           onClick={() => onStart(channel.id)}
         >
-          <Play size={15} />
-          {pending === "start" ? "Starting" : "Start"}
-        </Button>
-        <Button
-          type="button"
-          disabled={!channel.can_stop || actionBusy}
-          onClick={() => onStop(channel.id)}
-        >
-          <Square size={15} />
-          {pending === "stop" ? "Stopping" : "Stop"}
-        </Button>
-        <Button
-          type="button"
-          disabled={logsBusy}
-          onClick={() => onLogs(channel.id)}
-        >
-          <FileText size={15} />
+            <Play size={13} />
+            {pending === "start" ? "Starting" : "Start"}
+          </Button>
+          <Button
+            type="button"
+            disabled={!channel.can_stop || actionBusy}
+            onClick={() => onStop(channel.id)}
+          >
+            <Square size={13} />
+            {pending === "stop" ? "Stopping" : "Stop"}
+          </Button>
+          <Button
+            type="button"
+            disabled={logsBusy}
+            onClick={() => onLogs(channel.id)}
+          >
+            <FileText size={13} />
           {logsBusy ? "Loading" : "Logs"}
         </Button>
       </div>

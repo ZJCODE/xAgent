@@ -250,8 +250,7 @@ def _web_client_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
         return OverviewItem("Web", "off", STATUS_DISABLED, "clients.web")
     paths = client_paths(CLIENT_WEB)
     pid = running_pid(paths.pid_path)
-    api_target = web_cfg.get("api_url", "").removeprefix("http://").removeprefix("https://")
-    detail = f"{_web_client_target(web_cfg)} → api {api_target}".strip()
+    detail = _web_client_target(web_cfg)
     if pid is None:
         return OverviewItem("Web", "stopped", STATUS_IDLE, detail)
     return OverviewItem("Web", "running", STATUS_OK, f"{detail} pid {pid}")
