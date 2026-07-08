@@ -6,7 +6,7 @@ const os = require("os");
 const path = require("path");
 
 const DEFAULT_POLL_MS = 500;
-const DEFAULT_TIMEOUT_MS = 45000;
+const DEFAULT_TIMEOUT_MS = 6000;
 const DEFAULT_INITIAL_PROBE_MS = 2500;
 const DEFAULT_API_WAIT_MS = 5000;
 const INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh";

@@ -38,6 +38,10 @@ class DesktopBootstrapTests(unittest.TestCase):
         self.assertIn("curl -fsSL", value)
         self.assertIn("install.sh", value)
 
+    def test_default_web_start_timeout_is_six_seconds(self):
+        value = _run_bootstrap("console.log(JSON.stringify(bootstrap.DEFAULT_TIMEOUT_MS))")
+        self.assertEqual(value, 6000)
+
     def test_conda_install_candidates_include_anaconda_home_bin(self):
         candidates = _run_bootstrap("console.log(JSON.stringify(bootstrap.condaInstallCandidates('xagent')))")
         self.assertIsInstance(candidates, list)
