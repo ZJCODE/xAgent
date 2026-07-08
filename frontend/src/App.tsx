@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AgentSessionProvider, useAgentSession } from "./context/AgentSessionContext";
-import { ChatProvider, useChat } from "./context/ChatContext";
-import { ThemeProvider, useTheme } from "./context/ThemeContext";
-import { getHealth } from "./lib/api";
+import { ChatProvider } from "./context/ChatContext";
+import { ThemeProvider } from "./context/ThemeContext";
 import type { RoutePath } from "./types";
 import { AgentPage } from "./pages/AgentPage";
 import { ChannelPage } from "./pages/ChannelPage";
@@ -22,10 +21,7 @@ function normalizeRoute(pathname: string): RoutePath {
 
 function RoutedApp() {
   const [route, setRoute] = useState<RoutePath>(() => normalizeRoute(window.location.pathname));
-  const [health, setHealth] = useState<"checking" | "online" | "offline">("checking");
-  const { toggleTheme } = useTheme();
-  const { status } = useChat();
-  const { agents, selectedAgent, loading: agentsLoading, refresh: refreshAgents } = useAgentSession();
+  const { refresh: refreshAgents } = useAgentSession();
 
   useEffect(() => {
     const onPopState = () => setRoute(normalizeRoute(window.location.pathname));
@@ -37,31 +33,6 @@ function RoutedApp() {
     const interval = window.setInterval(() => void refreshAgents(), 5000);
     return () => window.clearInterval(interval);
   }, [refreshAgents]);
-
-  useEffect(() => {
-    if (agentsLoading) {
-      setHealth("checking");
-      return;
-    }
-
-    const selected = agents.find((agent) => agent.name === selectedAgent);
-    if (selected?.channel_running) {
-      setHealth("online");
-      return;
-    }
-
-    let cancelled = false;
-    getHealth()
-      .then(() => {
-        if (!cancelled) setHealth("online");
-      })
-      .catch(() => {
-        if (!cancelled) setHealth("offline");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [agents, selectedAgent, agentsLoading]);
 
   const navigate = (nextRoute: RoutePath) => {
     if (nextRoute === route) return;
@@ -92,13 +63,7 @@ function RoutedApp() {
   }, [route]);
 
   return (
-    <AppLayout
-      route={route}
-      health={health}
-      chatStatus={status}
-      onNavigate={navigate}
-      onToggleTheme={toggleTheme}
-    >
+    <AppLayout route={route} onNavigate={navigate}>
       {page}
     </AppLayout>
   );

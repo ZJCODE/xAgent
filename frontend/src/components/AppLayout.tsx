@@ -9,22 +9,17 @@ import {
   Package,
   RadioTower,
   Sun,
-  Wifi,
-  WifiOff,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
 import type { RoutePath } from "../types";
 import { AgentSwitcher } from "./AgentSwitcher";
-import { IconButton, StatusBadge } from "./ui";
+import { IconButton } from "./ui";
 
 interface AppLayoutProps {
   route: RoutePath;
-  health: "checking" | "online" | "offline";
-  chatStatus: "idle" | "sending";
   onNavigate: (route: RoutePath) => void;
-  onToggleTheme: () => void;
   children: ReactNode;
 }
 
@@ -39,15 +34,8 @@ const navItems: Array<{ route: RoutePath; label: string; icon: ReactNode }> = [
   { route: "/agent", label: "Agent", icon: <Bot size={15} /> },
 ];
 
-export function AppLayout({
-  route,
-  health,
-  chatStatus,
-  onNavigate,
-  onToggleTheme,
-  children,
-}: AppLayoutProps) {
-  const { dark } = useTheme();
+export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
+  const { dark, toggleTheme } = useTheme();
 
   return (
     <div className="app-shell">
@@ -66,29 +54,14 @@ export function AppLayout({
             </button>
           ))}
         </nav>
+        <div className="sidebar-footer">
+          <IconButton type="button" onClick={toggleTheme} title="Toggle theme" aria-label="Toggle theme">
+            {dark ? <Sun size={16} /> : <Moon size={16} />}
+          </IconButton>
+        </div>
       </aside>
 
       <div className="app-main">
-        <header className="app-topbar">
-          <div className="status-cluster">
-            <StatusBadge
-              tone={health === "online" ? "good" : health === "offline" ? "danger" : "muted"}
-              title="Reflects the selected agent's api channel (chat). Other tabs work independently."
-            >
-              {health === "online" ? <Wifi size={14} /> : <WifiOff size={14} />}
-              {health === "checking" ? "Checking" : health === "online" ? "API Online" : "API Offline"}
-            </StatusBadge>
-            <StatusBadge tone={chatStatus === "sending" ? "info" : "muted"}>
-              <Activity size={14} />
-              {chatStatus === "sending" ? "Chat running" : "Chat idle"}
-            </StatusBadge>
-          </div>
-          <div className="topbar-actions">
-            <IconButton type="button" onClick={onToggleTheme} title="Toggle theme" aria-label="Toggle theme">
-              {dark ? <Sun size={16} /> : <Moon size={16} />}
-            </IconButton>
-          </div>
-        </header>
         <main className="app-content">{children}</main>
       </div>
     </div>

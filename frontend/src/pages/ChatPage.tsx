@@ -1,10 +1,11 @@
-import { Eye, FileIcon, Paperclip, Play, RadioTower, Send, X } from "lucide-react";
+import { Activity, Eye, FileIcon, Paperclip, Play, RadioTower, Send, Wifi, WifiOff, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "../components/Markdown";
-import { Button, EmptyState, IconButton } from "../components/ui";
+import { Button, EmptyState, IconButton, StatusBadge } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { useChat } from "../context/ChatContext";
 import { useApiChannel } from "../lib/useApiChannel";
+import { useApiHealth } from "../lib/useApiHealth";
 import { classNames, formatBytes } from "../lib/format";
 import type { AttachmentAsset, ChannelStatus, ChatPanelState } from "../types";
 
@@ -228,7 +229,8 @@ function ChatPanel({
   statusReady: boolean;
   channelBlock?: ReactNode;
 }) {
-  const { updateSettings, addAttachments, removeAttachment, sendMessage, sendObservation } = useChat();
+  const { updateSettings, addAttachments, removeAttachment, sendMessage, sendObservation, status: chatStatus } = useChat();
+  const health = useApiHealth();
   const [messageText, setMessageText] = useState("");
   const [observeText, setObserveText] = useState("");
   const [observeOpen, setObserveOpen] = useState(false);
@@ -271,6 +273,26 @@ function ChatPanel({
               className="inline-input"
             />
           </label>
+        </div>
+        <div className="panel-settings-right chat-status-cluster">
+          <StatusBadge
+            tone={health === "online" ? "good" : health === "offline" ? "danger" : "muted"}
+            className="chat-status-badge"
+            title="Reflects the selected agent's api channel (chat). Other tabs work independently."
+          >
+            {health === "online" ? <Wifi size={14} /> : <WifiOff size={14} />}
+            <span className="status-badge-label">
+              {health === "checking" ? "Checking" : health === "online" ? "API Online" : "API Offline"}
+            </span>
+          </StatusBadge>
+          <StatusBadge
+            tone={chatStatus === "sending" ? "info" : "muted"}
+            className="chat-status-badge"
+            title={chatStatus === "sending" ? "Chat running" : "Chat idle"}
+          >
+            <Activity size={14} />
+            <span className="status-badge-label">{chatStatus === "sending" ? "Chat running" : "Chat idle"}</span>
+          </StatusBadge>
         </div>
       </div>
 

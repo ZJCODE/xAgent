@@ -264,11 +264,6 @@ export function ChannelPage() {
       <PageToolbar
         title="Channels"
         subtitle={selectedAgent ? `Selected agent: ${selectedAgent}` : data?.config_dir}
-        actions={
-          <IconButton type="button" onClick={load} title="Refresh">
-            <RefreshCw size={16} />
-          </IconButton>
-        }
       />
       {error ? <div className="error-strip">{error}</div> : null}
       {notice ? <div className="success-strip">{notice}</div> : null}

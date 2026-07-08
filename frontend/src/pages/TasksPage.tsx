@@ -1,6 +1,6 @@
-import { CalendarClock, RefreshCw, Trash2 } from "lucide-react";
+import { CalendarClock, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Button, EmptyState, IconButton, PageShell, PageToolbar, StatusBadge } from "../components/ui";
+import { Button, EmptyState, PageShell, PageToolbar } from "../components/ui";
 import { deleteTask, getTasks } from "../lib/api";
 import type { ScheduledTaskItem, TasksResponse } from "../types";
 
@@ -50,7 +50,6 @@ export function TasksPage() {
   const [error, setError] = useState("");
 
   const tasks = useMemo(() => data?.tasks || [], [data]);
-  const activeCount = tasks.length;
 
   const load = async () => {
     setLoading(true);
@@ -81,18 +80,7 @@ export function TasksPage() {
 
   return (
     <PageShell>
-      <PageToolbar
-        title="Tasks"
-        subtitle={data?.root || "tasks"}
-        actions={
-          <>
-            <StatusBadge tone="info">{activeCount} active</StatusBadge>
-            <IconButton type="button" onClick={() => void load()} disabled={loading} title="Refresh">
-              <RefreshCw size={16} />
-            </IconButton>
-          </>
-        }
-      />
+      <PageToolbar title="Tasks" subtitle={data?.root || "tasks"} />
 
       <div className="tasks-layout">
         <section className="task-list-panel">

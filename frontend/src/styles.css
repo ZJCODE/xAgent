@@ -110,6 +110,7 @@ input {
 
 .app-sidebar {
   display: flex;
+  height: 100%;
   min-height: 0;
   flex-direction: column;
   border-right: 1px solid var(--border);
@@ -558,19 +559,14 @@ input {
   flex-direction: column;
 }
 
-.app-topbar {
+.sidebar-footer {
   display: flex;
-  min-height: 58px;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-app);
-  padding: 0 22px;
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  padding: 12px 6px 0;
 }
 
-.status-cluster,
-.topbar-actions,
 .page-toolbar-actions,
 .toolbar-actions,
 .panel-header-actions,
@@ -973,6 +969,15 @@ input::placeholder {
 
 .chat-toolbar {
   background: var(--bg-app);
+}
+
+.chat-status-cluster {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.chat-status-badge .status-badge-label {
+  white-space: nowrap;
 }
 
 .panel-settings-left,
@@ -2081,6 +2086,7 @@ input::placeholder {
   }
 
   .app-sidebar {
+    height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--border);
     padding: 10px 14px;
@@ -2088,8 +2094,15 @@ input::placeholder {
 
   .app-nav {
     display: flex;
+    flex: none;
     overflow-x: auto;
     padding-bottom: 2px;
+  }
+
+  .sidebar-footer {
+    margin-top: 0;
+    border-top: 0;
+    padding: 0 6px;
   }
 
   .nav-link {
@@ -2097,16 +2110,13 @@ input::placeholder {
     flex: 0 0 auto;
   }
 
-  .page-toolbar,
-  .app-topbar {
+  .page-toolbar {
     align-items: stretch;
     flex-direction: column;
     padding: 12px 14px;
   }
 
-  .page-toolbar-actions,
-  .topbar-actions,
-  .status-cluster {
+  .page-toolbar-actions {
     justify-content: flex-start;
   }
 
@@ -2134,22 +2144,35 @@ input::placeholder {
 
   .app-sidebar {
     order: 2;
+    display: grid;
+    height: auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
     padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--border);
     border-bottom: 0;
   }
 
-  .app-topbar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    min-height: auto;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
+  .agent-switcher {
+    grid-column: 1;
+    grid-row: 1;
+    padding-bottom: 8px;
+  }
+
+  .sidebar-footer {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: start;
+    margin-top: 0;
+    border-top: 0;
+    padding: 18px 0 0;
   }
 
   .app-nav {
     display: grid;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    flex: none;
     grid-template-columns: repeat(8, minmax(0, 1fr));
     gap: 2px;
     overflow: visible;
@@ -2178,32 +2201,25 @@ input::placeholder {
     display: none;
   }
 
-  .status-cluster {
-    display: flex;
-    flex: 1;
+  .chat-status-cluster {
     flex-wrap: nowrap;
     gap: 6px;
     overflow: hidden;
   }
 
-  .status-cluster .status-badge {
+  .chat-status-badge {
     min-width: 0;
     padding: 0 7px;
     font-size: 11px;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
-  .status-cluster .status-badge svg {
-    flex: 0 0 auto;
+  .chat-status-badge .status-badge-label {
+    display: none;
   }
 
-  .topbar-actions {
-    display: flex;
+  .chat-status-badge svg {
     flex: 0 0 auto;
-    flex-wrap: nowrap;
-    margin-left: auto;
   }
 
   .page-toolbar {

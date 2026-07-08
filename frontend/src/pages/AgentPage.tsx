@@ -1,4 +1,4 @@
-import { RefreshCw, Save, RotateCcw, Trash2 } from "lucide-react";
+import { Save, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Button, EmptyState, IconButton, PageShell, PageToolbar, Panel, PanelHeader } from "../components/ui";
@@ -46,6 +46,40 @@ function MaintenanceRow({
   );
 }
 
+function FieldLike({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="wizard-field">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+type MaintenanceAction = "memory" | "messages" | "workspace";
+
+const MAINTENANCE_COPY: Record<
+  MaintenanceAction,
+  { title: string; description: string; confirmLabel: string; path?: (info: AgentInfo | null) => string | undefined }
+> = {
+  memory: {
+    title: "Clear memory?",
+    description: "This permanently removes all stored memory files for this agent.",
+    confirmLabel: "Clear memory",
+    path: (info) => info?.memory_dir,
+  },
+  messages: {
+    title: "Clear messages?",
+    description: "This permanently removes all message history for this agent and reloads runtime info.",
+    confirmLabel: "Clear messages",
+  },
+  workspace: {
+    title: "Clear workspace?",
+    description: "This permanently removes all files from the local workspace.",
+    confirmLabel: "Clear workspace",
+    path: (info) => info?.workspace_dir,
+  },
+};
+
 export function AgentPage() {
   const { agents, selectedAgent, deleteAgent } = useAgentSession();
   const currentAgent = agents.find((agent) => agent.name === selectedAgent);
@@ -63,6 +97,9 @@ export function AgentPage() {
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [maintenanceOpen, setMaintenanceOpen] = useState<MaintenanceAction | null>(null);
+  const [maintenanceAcknowledged, setMaintenanceAcknowledged] = useState(false);
+  const [maintenanceClearing, setMaintenanceClearing] = useState(false);
 
   const dirty = useMemo(() => editorValue !== (identity?.identity || ""), [editorValue, identity]);
   const dirtyConfig = useMemo(
@@ -150,20 +187,24 @@ export function AgentPage() {
     }
   };
 
-  const runClearMemory = async () => {
-    if (!window.confirm("Clear all memory files?")) return;
-    await clearMemory();
-  };
-
-  const runClearMessages = async () => {
-    if (!window.confirm("Clear all messages?")) return;
-    await clearMessages();
-    await load();
-  };
-
-  const runClearWorkspace = async () => {
-    if (!window.confirm("Clear all workspace files?")) return;
-    await clearWorkspace();
+  const runMaintenanceClear = async () => {
+    if (!maintenanceOpen || !maintenanceAcknowledged) return;
+    setMaintenanceClearing(true);
+    setError("");
+    try {
+      if (maintenanceOpen === "memory") await clearMemory();
+      if (maintenanceOpen === "messages") {
+        await clearMessages();
+        await load();
+      }
+      if (maintenanceOpen === "workspace") await clearWorkspace();
+      setMaintenanceOpen(null);
+      setMaintenanceAcknowledged(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMaintenanceClearing(false);
+    }
   };
 
   const runDeleteAgent = async () => {
@@ -194,18 +235,6 @@ export function AgentPage() {
       <PageToolbar
         title="Agent"
         subtitle="Runtime identity and local maintenance"
-        actions={
-          <IconButton
-            type="button"
-            onClick={() => {
-              void load();
-              if (activeTab === "config") void loadConfig();
-            }}
-            title="Refresh"
-          >
-            <RefreshCw size={16} />
-          </IconButton>
-        }
       />
       {error ? <div className="error-strip">{error}</div> : null}
 
@@ -323,17 +352,17 @@ export function AgentPage() {
             <MaintenanceRow
               title="Memory"
               description="Remove stored memory files."
-              onClear={runClearMemory}
+              onClear={() => setMaintenanceOpen("memory")}
             />
             <MaintenanceRow
               title="Messages"
               description="Remove message history and reload runtime info."
-              onClear={runClearMessages}
+              onClear={() => setMaintenanceOpen("messages")}
             />
             <MaintenanceRow
               title="Workspace"
               description="Remove files from the local workspace."
-              onClear={runClearWorkspace}
+              onClear={() => setMaintenanceOpen("workspace")}
             />
             <div className="maintenance-row">
               <div>
@@ -351,6 +380,38 @@ export function AgentPage() {
           </div>
         </Panel>
       </div>
+
+      {maintenanceOpen ? (
+        <ConfirmDialog
+          open
+          title={MAINTENANCE_COPY[maintenanceOpen].title}
+          description={
+            <>
+              <p>{MAINTENANCE_COPY[maintenanceOpen].description}</p>
+              {MAINTENANCE_COPY[maintenanceOpen].path?.(info) ? (
+                <code className="confirm-path">{MAINTENANCE_COPY[maintenanceOpen].path?.(info)}</code>
+              ) : null}
+            </>
+          }
+          confirmLabel={maintenanceClearing ? "Clearing..." : MAINTENANCE_COPY[maintenanceOpen].confirmLabel}
+          confirmDisabled={maintenanceClearing || !maintenanceAcknowledged}
+          onCancel={() => {
+            if (maintenanceClearing) return;
+            setMaintenanceOpen(null);
+            setMaintenanceAcknowledged(false);
+          }}
+          onConfirm={() => void runMaintenanceClear()}
+        >
+          <label className="wizard-checkbox">
+            <input
+              type="checkbox"
+              checked={maintenanceAcknowledged}
+              onChange={(event) => setMaintenanceAcknowledged(event.target.checked)}
+            />
+            <span>I understand this cannot be undone</span>
+          </label>
+        </ConfirmDialog>
+      ) : null}
 
       <ConfirmDialog
         open={deleteOpen}
@@ -395,14 +456,5 @@ export function AgentPage() {
         </FieldLike>
       </ConfirmDialog>
     </PageShell>
-  );
-}
-
-function FieldLike({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="wizard-field">
-      <span>{label}</span>
-      {children}
-    </label>
   );
 }
