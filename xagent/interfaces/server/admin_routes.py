@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import mimetypes
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import yaml as pyyaml
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -32,11 +31,14 @@ from ...utils.image_utils import (
 )
 
 if TYPE_CHECKING:
-    from .app import AgentHTTPServer
+    from .admin_service import AdminService
 
 
 SENSITIVE_FIELD_SUFFIXES = {"api_key", "secret_key", "app_secret"}
 MASK_SENTINEL = "****"
+
+WORKSPACE_TEXT_READ_LIMIT = 1_000_000
+WORKSPACE_SEARCH_TEXT_LIMIT = 2_000_000
 
 
 def _mask_sensitive_fields(data: dict) -> dict:
@@ -67,13 +69,14 @@ def _unmask_sensitive_fields(new_data: dict, current_data: dict) -> None:
 
 def register_admin_routes(
     app: FastAPI,
-    server: "AgentHTTPServer",
+    resolve_admin: Callable[[], "AdminService"],
     *,
-    workspace_text_limit: int,
-    workspace_search_text_limit: int,
+    workspace_text_limit: int = WORKSPACE_TEXT_READ_LIMIT,
+    workspace_search_text_limit: int = WORKSPACE_SEARCH_TEXT_LIMIT,
 ) -> None:
     @app.get("/api/agent/info", tags=["Monitoring"])
     async def agent_info():
+        server = resolve_admin()
         memory_dir = str(server._get_memory_root())
         storage_info = server.message_storage.get_stream_info() if hasattr(server.message_storage, "get_stream_info") else {}
         identity = server._get_agent_identity()
@@ -122,6 +125,7 @@ def register_admin_routes(
 
     @app.get("/api/tasks", tags=["Monitoring"])
     async def tasks_list():
+        server = resolve_admin()
         tasks = [record.to_task_view() for record in list_task_records(server.tasks_dir)]
         return {
             "root": str(server.tasks_dir),
@@ -131,6 +135,7 @@ def register_admin_routes(
 
     @app.delete("/api/tasks/delete", tags=["Monitoring"])
     async def tasks_delete(task_id: str = Query(..., description="Stable scheduled task id")):
+        server = resolve_admin()
         try:
             task = delete_scheduled_task(server.tasks_dir, task_id)
         except FileNotFoundError as exc:
@@ -141,6 +146,7 @@ def register_admin_routes(
 
     @app.get("/api/agent/identity", tags=["Monitoring"])
     async def agent_identity():
+        server = resolve_admin()
         identity_path = server._get_identity_path()
         if not identity_path.is_file():
             raise HTTPException(status_code=404, detail="identity.md not found")
@@ -154,6 +160,7 @@ def register_admin_routes(
 
     @app.put("/api/agent/identity", tags=["Monitoring"])
     async def update_agent_identity(input_data: IdentityInput):
+        server = resolve_admin()
         identity = input_data.identity.strip()
         if not identity:
             raise HTTPException(status_code=400, detail="Identity cannot be empty")
@@ -174,6 +181,7 @@ def register_admin_routes(
 
     @app.get("/api/agent/config", tags=["Monitoring"])
     async def agent_config():
+        server = resolve_admin()
         config_path = Path(server.config_path).expanduser().resolve()
         if not config_path.is_file():
             raise HTTPException(status_code=404, detail="config.yaml not found")
@@ -190,6 +198,7 @@ def register_admin_routes(
 
     @app.put("/api/agent/config", tags=["Monitoring"])
     async def update_agent_config(input_data: ConfigInput):
+        server = resolve_admin()
         try:
             new_data = pyyaml.safe_load(input_data.config)
         except pyyaml.YAMLError as e:
@@ -226,6 +235,7 @@ def register_admin_routes(
 
     @app.get("/api/memory/tree", tags=["Monitoring"])
     async def memory_tree():
+        server = resolve_admin()
         memory_dir = server._get_memory_root()
         if not memory_dir.is_dir():
             return {"tree": []}
@@ -267,6 +277,7 @@ def register_admin_routes(
 
     @app.get("/api/memory/read", tags=["Monitoring"])
     async def memory_read(path: str = Query(..., description="Relative path inside memory directory")):
+        server = resolve_admin()
         memory_dir = server._get_memory_root()
         requested = (memory_dir / path).resolve()
         if not requested.is_relative_to(memory_dir):
@@ -288,6 +299,7 @@ def register_admin_routes(
         query: str = Query(..., min_length=1, description="Search text for memory file names or file content"),
         limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
     ):
+        server = resolve_admin()
         memory_dir = server._get_memory_root()
         needle = query.strip().lower()
         results: List[Dict[str, Any]] = []
@@ -338,6 +350,7 @@ def register_admin_routes(
 
     @app.get("/api/workspace/tree", tags=["Monitoring"])
     async def workspace_tree():
+        server = resolve_admin()
         workspace_files = server._workspace_files()
         return {
             "root": str(workspace_files.root),
@@ -346,10 +359,12 @@ def register_admin_routes(
 
     @app.get("/api/workspace/read", tags=["Monitoring"])
     async def workspace_read(path: str = Query(..., description="Relative path inside workspace directory")):
+        server = resolve_admin()
         return server._workspace_files().read(path, text_limit=workspace_text_limit)
 
     @app.get("/api/workspace/blob", tags=["Monitoring"])
     async def workspace_blob(path: str = Query(..., description="Relative path inside workspace directory")):
+        server = resolve_admin()
         requested = server._workspace_files().resolve_path(path)
         if not requested.is_file():
             raise HTTPException(status_code=404, detail="File not found")
@@ -363,11 +378,13 @@ def register_admin_routes(
         query: str = Query(..., min_length=1, description="Search text for workspace file names or file content"),
         limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
     ):
+        server = resolve_admin()
         results = server._workspace_files().search(query, limit=limit, text_limit=workspace_search_text_limit)
         return {"query": query, "results": results}
 
     @app.post("/api/workspace/clear", tags=["Monitoring"])
     async def workspace_clear():
+        server = resolve_admin()
         deleted_count = server._workspace_files().clear()
         return {
             "status": "ok",
@@ -377,6 +394,7 @@ def register_admin_routes(
 
     @app.put("/api/workspace/write", tags=["Monitoring"])
     async def workspace_write(input_data: WorkspaceWriteInput):
+        server = resolve_admin()
         metadata = server._workspace_files().write_text(
             input_data.path,
             content=input_data.content,
@@ -389,6 +407,7 @@ def register_admin_routes(
         path: str = Query(..., description="Relative path inside workspace directory"),
         recursive: bool = Query(False, description="Allow deleting non-empty directories"),
     ):
+        server = resolve_admin()
         metadata = server._workspace_files().delete(path, recursive=recursive)
         return {"status": "ok", "deleted": metadata}
 
@@ -397,6 +416,7 @@ def register_admin_routes(
         file: UploadFile = File(...),
         path: str = Form("", description="Optional relative target path or directory inside workspace"),
     ):
+        server = resolve_admin()
         workspace_files = server._workspace_files()
         raw_target = path.strip()
         filename = safe_attachment_filename(file.filename or "upload.bin")
@@ -434,6 +454,7 @@ def register_admin_routes(
 
     @app.get("/api/skills/info", tags=["Monitoring"])
     async def skills_info():
+        server = resolve_admin()
         try:
             return server._get_skills_storage().info()
         except Exception as exc:
@@ -441,6 +462,7 @@ def register_admin_routes(
 
     @app.get("/api/skills/tree", tags=["Monitoring"])
     async def skills_tree():
+        server = resolve_admin()
         storage = server._get_skills_storage()
         return {
             "root": str(storage.root),
@@ -450,6 +472,7 @@ def register_admin_routes(
 
     @app.get("/api/skills/read", tags=["Monitoring"])
     async def skills_read(path: str = Query(..., description="Relative path inside skills directory")):
+        server = resolve_admin()
         try:
             return server._get_skills_storage().read_file(path)
         except Exception as exc:
@@ -460,6 +483,7 @@ def register_admin_routes(
         query: str = Query(..., min_length=1, description="Search text for skill file names or file content"),
         limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
     ):
+        server = resolve_admin()
         try:
             return server._get_skills_storage().search(query, limit=limit)
         except Exception as exc:
@@ -467,6 +491,7 @@ def register_admin_routes(
 
     @app.post("/api/skills/create", tags=["Monitoring"])
     async def skills_create(input_data: SkillCreateInput):
+        server = resolve_admin()
         try:
             skill = server._get_skills_storage().create_skill(
                 name=input_data.name.strip(),
@@ -483,6 +508,7 @@ def register_admin_routes(
 
     @app.put("/api/skills/write", tags=["Monitoring"])
     async def skills_write(input_data: SkillWriteInput):
+        server = resolve_admin()
         try:
             result = server._get_skills_storage().write_file(
                 input_data.path,
@@ -498,6 +524,7 @@ def register_admin_routes(
         path: str = Query(..., description="Relative path inside skills directory"),
         recursive: bool = Query(False, description="Allow deleting directories recursively"),
     ):
+        server = resolve_admin()
         try:
             deleted = server._get_skills_storage().delete_path(path, recursive=recursive)
             return {"status": "ok", "deleted": deleted}
@@ -506,6 +533,7 @@ def register_admin_routes(
 
     @app.put("/api/skills/state", tags=["Monitoring"])
     async def skills_state(input_data: SkillStateInput):
+        server = resolve_admin()
         try:
             skill = server._get_skills_storage().set_enabled(input_data.name, input_data.enabled)
             return {"status": "ok", "skill": skill.to_dict()}
@@ -514,6 +542,7 @@ def register_admin_routes(
 
     @app.get("/api/skills/validate", tags=["Monitoring"])
     async def skills_validate(name: Optional[str] = Query(None, description="Optional skill name to validate")):
+        server = resolve_admin()
         try:
             storage = server._get_skills_storage()
             if name:
@@ -527,6 +556,7 @@ def register_admin_routes(
         count: int = Query(50, ge=1, le=500, description="Number of messages to retrieve"),
         offset: int = Query(0, ge=0, description="Number of recent messages to skip"),
     ):
+        server = resolve_admin()
         total = await server.message_storage.get_message_count()
         messages = await server.message_storage.get_messages(count=count, offset=offset)
         items = [message_item(msg) for msg in messages]
@@ -544,6 +574,7 @@ def register_admin_routes(
         query: str = Query(..., min_length=1, description="Search text for message content and metadata"),
         limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
     ):
+        server = resolve_admin()
         total = await server.message_storage.get_message_count()
         if total <= 0 or not hasattr(server.message_storage, "get_messages"):
             return {"query": query, "results": []}
@@ -562,6 +593,7 @@ def register_admin_routes(
 
     @app.post("/api/memory/clear", tags=["Monitoring"])
     async def memory_clear():
+        server = resolve_admin()
         memory_dir = server._get_memory_root()
         try:
             shutil.rmtree(memory_dir)
@@ -572,6 +604,7 @@ def register_admin_routes(
 
     @app.get("/api/messages/stats", tags=["Monitoring"])
     async def messages_stats():
+        server = resolve_admin()
         total = await server.message_storage.get_message_count()
         storage_info = server.message_storage.get_stream_info() if hasattr(server.message_storage, "get_stream_info") else {}
         result: Dict[str, Any] = {"total": total, "storage": storage_info}
@@ -584,6 +617,18 @@ def register_admin_routes(
             if newest:
                 result["latest_timestamp"] = newest[0].timestamp
         return result
+
+    @app.post("/clear_messages", tags=["Monitoring"])
+    async def clear_messages():
+        server = resolve_admin()
+        try:
+            await server.message_storage.clear_messages()
+            return {
+                "status": "success",
+                "message": "Message stream cleared",
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to clear messages: {str(exc)}")
 
 
 def _content_addressed_upload_name(filename: str, content: bytes) -> str:

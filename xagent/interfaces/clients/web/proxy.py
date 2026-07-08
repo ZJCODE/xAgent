@@ -1,10 +1,10 @@
-"""Reverse proxy from the web client to the api channel."""
+"""Reverse proxy from the web client to the currently selected agent's api channel."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Iterable
+from typing import Callable
 from urllib.parse import urljoin
 
 import httpx
@@ -24,35 +24,31 @@ _HOP_BY_HOP_HEADERS = {
     "upgrade",
 }
 
-_PROXY_HTTP_PREFIXES = (
-    "/api/",
-    "/api",
-    "/chat",
-    "/observe",
-    "/clear_messages",
-    "/health",
-    "/i/health",
-)
 
+def register_api_proxy(
+    app: FastAPI,
+    *,
+    resolve_api_url: Callable[[], str],
+    logger: logging.Logger | None = None,
+) -> None:
+    """Forward chat/observe/health traffic to whichever agent is currently selected.
 
-def register_api_proxy(app: FastAPI, *, api_url: str, logger: logging.Logger | None = None) -> None:
-    """Forward API traffic from the web client to the configured api channel."""
+    ``/api/*`` and ``/clear_messages`` are intentionally NOT proxied here — they
+    are served locally by the admin routes mounted directly on the web client,
+    so those tabs work without any api channel running. Only the routes that
+    require a live model/tool-executing agent are forwarded: chat, observe,
+    the scheduled-task/subconscious push socket, and health checks.
+    """
     logger = logger or logging.getLogger(__name__)
-    upstream = api_url.rstrip("/")
-    ws_upstream = api_url_to_ws_url(upstream)
-
-    @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
-    async def proxy_api(request: Request, path: str):
-        target = f"{upstream}/api/{path}"
-        return await _proxy_http_request(request, target)
 
     def _make_root_proxy(route_path: str):
         async def handler(request: Request):
+            upstream = resolve_api_url().rstrip("/")
             return await _proxy_http_request(request, f"{upstream}{route_path}")
 
         return handler
 
-    for route_path in ("/chat", "/observe", "/clear_messages", "/health", "/i/health"):
+    for route_path in ("/chat", "/observe", "/health", "/i/health"):
         app.add_api_route(
             route_path,
             _make_root_proxy(route_path),
@@ -63,6 +59,8 @@ def register_api_proxy(app: FastAPI, *, api_url: str, logger: logging.Logger | N
     @app.websocket("/ws/{path:path}")
     async def proxy_websocket(websocket: WebSocket, path: str):
         await websocket.accept()
+        upstream = resolve_api_url().rstrip("/")
+        ws_upstream = api_url_to_ws_url(upstream)
         query = websocket.scope.get("query_string", b"").decode()
         target = urljoin(f"{ws_upstream}/", f"ws/{path}")
         if query:
@@ -84,7 +82,7 @@ def register_api_proxy(app: FastAPI, *, api_url: str, logger: logging.Logger | N
             if websocket.client_state.name == "CONNECTED":
                 await websocket.close(code=1011, reason=str(exc))
 
-    logger.info("Proxying API requests to %s", upstream)
+    logger.info("Proxying chat/observe traffic to the currently selected agent's api channel")
 
 
 async def _proxy_http_request(request: Request, target: str) -> Response:

@@ -16,7 +16,7 @@ from typing import Any, Optional, Sequence
 
 from ...core.runtime import create_runtime_heartbeat
 from ..base import BaseAgentConfig, BaseAgentRunner
-from .agents import resolve_agent_name
+from .agents import AgentRegistryError, resolve_agent_name
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
@@ -260,7 +260,7 @@ def _run_api_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
 def _web_client_runtime_values(
     args: argparse.Namespace,
     config: dict[str, Any],
-) -> tuple[str, int, str, bool]:
+) -> tuple[str, int, str, bool, str, Optional[str]]:
     web_cfg = web_client_config(config)
     host = getattr(args, "host", None) or web_cfg.get("host")
     port = getattr(args, "port", None)
@@ -268,14 +268,32 @@ def _web_client_runtime_values(
         port = web_cfg.get("port")
     api_url = str(getattr(args, "api_url", None) or web_cfg.get("api_url") or "").strip()
     open_browser = bool(getattr(args, "open_browser", False))
-    return str(host), int(port), api_url, open_browser
+
+    raw_config_dir = getattr(args, "config_dir", None)
+    config_dir = raw_config_dir or str(runtime_dir(args))
+    initial_agent: Optional[str] = None
+    if not raw_config_dir:
+        # Only resolve an agent name when config_dir came from the agent
+        # registry (not an explicit --config-dir override), so the two stay
+        # consistent — see WebAgentSession's ad-hoc mode otherwise.
+        try:
+            initial_agent = resolve_agent_name(getattr(args, "agent", None))
+        except AgentRegistryError:
+            initial_agent = None
+    return str(host), int(port), api_url, open_browser, config_dir, initial_agent
 
 
 def _run_web_client(args: argparse.Namespace, config: dict[str, Any]) -> int:
     from ..clients.web import WebClientServer
 
-    host, port, api_url, open_browser = _web_client_runtime_values(args, config)
-    server = WebClientServer(host=host, port=port, api_url=api_url)
+    host, port, api_url, open_browser, config_dir, initial_agent = _web_client_runtime_values(args, config)
+    server = WebClientServer(
+        host=host,
+        port=port,
+        api_url=api_url,
+        config_dir=config_dir,
+        initial_agent=initial_agent,
+    )
     print(f"xAgent web client ready at http://{host}:{port} (api={api_url}).")
     server.run(open_browser=open_browser)
     return 0

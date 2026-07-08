@@ -3014,6 +3014,8 @@ class CLICommandTests(unittest.TestCase):
             host="127.0.0.1",
             port=8011,
             api_url="http://127.0.0.1:8010",
+            config_dir="./agent-dir",
+            initial_agent=None,
         )
         server_instance.run.assert_called_once_with(open_browser=True)
 

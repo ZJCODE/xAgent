@@ -157,16 +157,3 @@ def register_runtime_routes(app: FastAPI, adapter: "ApiChannelAdapter") -> None:
                 exc,
             )
             raise HTTPException(status_code=500, detail=f"Agent observe error: {str(exc)}")
-
-    @app.post("/clear_messages")
-    async def clear_messages():
-        adapter.logger.info("Clear messages request")
-        try:
-            await adapter.agent.message_storage.clear_messages()
-            return {
-                "status": "success",
-                "message": "Message stream cleared",
-            }
-        except Exception as exc:
-            adapter.logger.error("Failed to clear messages: %s", exc)
-            raise HTTPException(status_code=500, detail=f"Failed to clear messages: {str(exc)}")

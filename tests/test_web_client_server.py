@@ -2,16 +2,29 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
-from unittest.mock import MagicMock
+from pathlib import Path
 
+import yaml
 from fastapi.testclient import TestClient
 
+from xagent.interfaces.cli.agents import register_agent
 from xagent.interfaces.clients.web import WebClientServer
 
 
-class FakeAgent:
-    model = "test-model"
+def _write_agent(path: Path, *, model: str, port: int) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    config = {
+        "provider": {
+            "name": "openai",
+            "api_key": "test-key",
+            "model": model,
+        },
+        "channels": {"api": {"host": "127.0.0.1", "port": port}},
+    }
+    (path / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    (path / "identity.md").write_text("# Identity\n\nTest agent.\n", encoding="utf-8")
 
 
 class WebClientServerTests(unittest.IsolatedAsyncioTestCase):
@@ -27,3 +40,68 @@ class WebClientServerTests(unittest.IsolatedAsyncioTestCase):
             response = client.get(path)
             self.assertEqual(response.status_code, 200, path)
             self.assertIn("text/html", response.headers.get("content-type", ""))
+
+
+class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.agent_a_path = self.root / "agents" / "agent_a"
+        self.agent_b_path = self.root / "agents" / "agent_b"
+        _write_agent(self.agent_a_path, model="agent-a-model", port=8010)
+        _write_agent(self.agent_b_path, model="agent-b-model", port=9010)
+        register_agent("agent_a", path=self.agent_a_path, make_active=True, root=self.root)
+        register_agent("agent_b", path=self.agent_b_path, root=self.root)
+
+    def _server(self) -> WebClientServer:
+        return WebClientServer(
+            host="127.0.0.1",
+            port=8011,
+            api_url="http://127.0.0.1:8010",
+            config_dir=str(self.agent_a_path),
+            initial_agent="agent_a",
+            registry_root=self.root,
+        )
+
+    async def test_list_agents_endpoint_reports_both_agents(self):
+        client = TestClient(self._server().app)
+
+        response = client.get("/api/agents")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        names = {row["name"] for row in payload["agents"]}
+        self.assertEqual(names, {"agent_a", "agent_b"})
+        self.assertEqual(payload["selected_agent"], "agent_a")
+        self.assertEqual(payload["active_agent"], "agent_a")
+
+    async def test_admin_routes_follow_the_selected_agent(self):
+        client = TestClient(self._server().app)
+
+        initial = client.get("/api/agent/info")
+        self.assertEqual(initial.status_code, 200)
+        self.assertEqual(initial.json()["model"], "agent-a-model")
+
+        select_response = client.post("/api/agents/select", json={"name": "agent_b"})
+        self.assertEqual(select_response.status_code, 200)
+        self.assertEqual(select_response.json()["selected_agent"], "agent_b")
+
+        switched = client.get("/api/agent/info")
+        self.assertEqual(switched.status_code, 200)
+        self.assertEqual(switched.json()["model"], "agent-b-model")
+
+    async def test_select_unknown_agent_returns_400(self):
+        client = TestClient(self._server().app)
+
+        response = client.post("/api/agents/select", json={"name": "nope"})
+
+        self.assertEqual(response.status_code, 400)
+
+    async def test_clear_messages_is_served_locally_without_a_channel(self):
+        client = TestClient(self._server().app)
+
+        response = client.post("/clear_messages")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "success")
