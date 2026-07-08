@@ -85,8 +85,8 @@ class WebAgentSessionTests(unittest.TestCase):
         admin_b = session.get_current_admin()
 
         self.assertIsNot(admin_a_first, admin_b)
-        self.assertEqual(Path(admin_a_first.config_dir), self.agent_a_path)
-        self.assertEqual(Path(admin_b.config_dir), self.agent_b_path)
+        self.assertEqual(Path(admin_a_first.config_dir).resolve(), self.agent_a_path.resolve())
+        self.assertEqual(Path(admin_b.config_dir).resolve(), self.agent_b_path.resolve())
 
         session.select("agent_a")
         self.assertIs(session.get_current_admin(), admin_a_first)

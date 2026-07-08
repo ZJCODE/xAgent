@@ -22,7 +22,7 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .clients import CLIENT_WEB, client_paths, web_client_config, web_client_public_url
+from .clients import CLIENT_WEB, DEFAULT_WEB_CLIENT_PORT, client_paths, web_client_config
 from .processes import managed_paths, running_pid
 
 
@@ -244,10 +244,11 @@ def _service_item(config_dir: Path, channel: str, config: dict[str, Any]) -> Ove
 
 
 def _web_client_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
+    del config_dir
     web_cfg = web_client_config(config)
     if not web_cfg.get("enabled", True):
         return OverviewItem("Web", "off", STATUS_DISABLED, "clients.web")
-    paths = client_paths(config_dir, CLIENT_WEB)
+    paths = client_paths(CLIENT_WEB)
     pid = running_pid(paths.pid_path)
     api_target = web_cfg.get("api_url", "").removeprefix("http://").removeprefix("https://")
     detail = f"{_web_client_target(web_cfg)} → api {api_target}".strip()
@@ -258,7 +259,7 @@ def _web_client_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
 
 def _web_client_target(web_cfg: dict[str, Any]) -> str:
     host = str(web_cfg.get("host") or BaseAgentConfig.DEFAULT_HOST).strip() or BaseAgentConfig.DEFAULT_HOST
-    port = str(web_cfg.get("port") or (BaseAgentConfig.DEFAULT_PORT + 1)).strip()
+    port = str(web_cfg.get("port") or DEFAULT_WEB_CLIENT_PORT).strip()
     browse_host = host
     if browse_host == "0.0.0.0":
         browse_host = "127.0.0.1"

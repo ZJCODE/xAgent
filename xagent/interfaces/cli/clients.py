@@ -10,12 +10,14 @@ from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 from ..base import BaseAgentConfig
+from .agents import management_root
 from .channels import api_config, load_config_file
 from .processes import ManagedProcessPaths
 
 
 CLIENT_WEB = "web"
 VALID_CLIENTS = {CLIENT_WEB}
+DEFAULT_WEB_CLIENT_PORT = 1415
 
 
 class ClientSelectionError(ValueError):
@@ -23,22 +25,18 @@ class ClientSelectionError(ValueError):
 
 
 def web_client_config(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Return normalized ``clients.web`` settings merged with API defaults."""
+    """Return normalized global web client settings merged with API defaults."""
     clients = config.get("clients") if isinstance(config, Mapping) else None
     web_cfg = clients.get(CLIENT_WEB) if isinstance(clients, Mapping) else None
     web_cfg = dict(web_cfg) if isinstance(web_cfg, Mapping) else {}
 
     api_cfg = api_config(config)
-    host = str(web_cfg.get("host") or BaseAgentConfig.DEFAULT_HOST).strip() or BaseAgentConfig.DEFAULT_HOST
-    port = web_cfg.get("port")
-    if port is None:
-        port = BaseAgentConfig.DEFAULT_PORT + 1
     api_url = str(web_cfg.get("api_url") or "").strip() or _default_api_url(api_cfg)
 
     return {
         "enabled": bool(web_cfg.get("enabled", True)),
-        "host": host,
-        "port": int(port),
+        "host": BaseAgentConfig.DEFAULT_HOST,
+        "port": DEFAULT_WEB_CLIENT_PORT,
         "api_url": api_url.rstrip("/"),
     }
 
@@ -54,13 +52,19 @@ def _default_api_url(api_cfg: Mapping[str, Any]) -> str:
     return f"http://{browse_host}:{port}"
 
 
-def client_paths(config_dir: Path, client: str) -> ManagedProcessPaths:
-    """Return PID and log paths for a managed client process."""
+def client_runtime_root() -> Path:
+    """Return the global runtime root for local UI clients."""
+    return management_root()
+
+
+def client_paths(client: str, *, root: Optional[Path] = None) -> ManagedProcessPaths:
+    """Return global PID and log paths for a managed client process."""
     if client not in VALID_CLIENTS:
         raise ClientSelectionError(f"Unknown client {client!r}. Expected one of: {', '.join(sorted(VALID_CLIENTS))}.")
+    runtime_root = (root or client_runtime_root()).expanduser().resolve()
     return ManagedProcessPaths(
-        pid_path=config_dir / "run" / "clients" / f"{client}.pid",
-        log_path=config_dir / "logs" / "clients" / f"{client}.log",
+        pid_path=runtime_root / "run" / "clients" / f"{client}.pid",
+        log_path=runtime_root / "logs" / "clients" / f"{client}.log",
     )
 
 
@@ -106,9 +110,11 @@ def api_url_to_ws_url(api_url: str) -> str:
 
 __all__ = [
     "CLIENT_WEB",
+    "DEFAULT_WEB_CLIENT_PORT",
     "VALID_CLIENTS",
     "ClientSelectionError",
     "client_paths",
+    "client_runtime_root",
     "load_config_file",
     "normalize_client_values",
     "web_client_config",

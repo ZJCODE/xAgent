@@ -801,7 +801,7 @@ def handle_status_all(args: argparse.Namespace) -> int:
     client_rows: list[dict[str, Any]] = []
     web_cfg = web_client_config(config)
     if web_cfg.get("enabled", True):
-        paths = client_paths(config_dir, CLIENT_WEB)
+        paths = client_paths(CLIENT_WEB)
         pid = running_pid(paths.pid_path)
         client_rows.append({
             "client": CLIENT_WEB,
@@ -825,8 +825,8 @@ def handle_status_all(args: argparse.Namespace) -> int:
 
 
 def _start_background_client(args: argparse.Namespace, *, client: str, config_dir: Path | None = None) -> bool:
-    runtime_root = config_dir or runtime_dir(args)
-    paths = client_paths(runtime_root, client)
+    del config_dir
+    paths = client_paths(client)
     result = start_background(
         _client_command(client, args),
         pid_path=paths.pid_path,
@@ -852,9 +852,8 @@ def handle_client_start(args: argparse.Namespace) -> int:
         return _handle_channel_error(exc)
 
     ok = True
-    config_dir = runtime_dir(args)
     for client in clients:
-        if not _start_background_client(args, client=client, config_dir=config_dir):
+        if not _start_background_client(args, client=client):
             ok = False
     return 0 if ok else 1
 
@@ -868,9 +867,8 @@ def handle_client_stop(args: argparse.Namespace) -> int:
         return _handle_channel_error(exc)
 
     ok = True
-    config_dir = runtime_dir(args)
     for client in clients:
-        paths = client_paths(config_dir, client)
+        paths = client_paths(client)
         stopped, message = stop_managed_process(paths.pid_path)
         ok = ok and stopped
         print(f"{client}: {message}")
@@ -886,11 +884,10 @@ def handle_client_restart(args: argparse.Namespace) -> int:
         return _handle_channel_error(exc)
 
     ok = True
-    config_dir = runtime_dir(args)
     restart_values = dict(vars(args))
 
     for client in clients:
-        paths = client_paths(config_dir, client)
+        paths = client_paths(client)
         stopped, message = stop_managed_process(paths.pid_path)
         print(f"{client}: {message}")
         if not stopped:
@@ -898,7 +895,7 @@ def handle_client_restart(args: argparse.Namespace) -> int:
             continue
         restart_values["clients"] = [client]
         restart_args = argparse.Namespace(**restart_values)
-        if not _start_background_client(restart_args, client=client, config_dir=config_dir):
+        if not _start_background_client(restart_args, client=client):
             ok = False
 
     return 0 if ok else 1
@@ -912,10 +909,9 @@ def handle_client_status(args: argparse.Namespace) -> int:
             return _handle_client_error(exc)
         return _handle_channel_error(exc)
 
-    config_dir = runtime_dir(args)
     rows: list[dict[str, Any]] = []
     for client in clients:
-        paths = client_paths(config_dir, client)
+        paths = client_paths(client)
         pid = running_pid(paths.pid_path)
         row = {
             "client": client,
@@ -954,10 +950,9 @@ def handle_client_logs(args: argparse.Namespace) -> int:
         print("--follow requires exactly one client")
         return 1
 
-    config_dir = runtime_dir(args)
     lines = max(1, int(getattr(args, "lines", 80)))
     for client in clients:
-        paths = client_paths(config_dir, client)
+        paths = client_paths(client)
         print(f"==> {client} ({paths.log_path})")
         if getattr(args, "follow", False):
             _follow_log(paths.log_path)
@@ -980,8 +975,7 @@ def handle_client_web_open(args: argparse.Namespace) -> int:
         print("Web client is disabled in config (clients.web.enabled=false).")
         return 1
 
-    config_dir = runtime_dir(args)
-    paths = client_paths(config_dir, CLIENT_WEB)
+    paths = client_paths(CLIENT_WEB)
     if running_pid(paths.pid_path) is None:
         print("Web client is not running. Start it with: xagent client web start")
         return 1

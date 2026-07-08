@@ -44,7 +44,7 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .clients import CLIENT_WEB, client_paths, web_client_config, web_client_public_url
+from .clients import CLIENT_WEB, client_paths, web_client_config
 from .runtime import (
     _launcher_args,
     _xagent_version_text,
@@ -202,7 +202,8 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
 
 
 def _launcher_client_options(config_dir: Path) -> list[MenuOption]:
-    web_running = running_pid(client_paths(config_dir, CLIENT_WEB).pid_path) is not None
+    del config_dir
+    web_running = running_pid(client_paths(CLIENT_WEB).pid_path) is not None
 
     return [
         MenuOption(
@@ -366,7 +367,8 @@ def _web_client_is_enabled(config_dir: Path) -> bool:
 
 
 def _web_client_is_running(config_dir: Path) -> bool:
-    return running_pid(client_paths(config_dir, CLIENT_WEB).pid_path) is not None
+    del config_dir
+    return running_pid(client_paths(CLIENT_WEB).pid_path) is not None
 
 
 def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]:

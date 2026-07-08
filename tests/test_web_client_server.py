@@ -31,7 +31,7 @@ class WebClientServerTests(unittest.IsolatedAsyncioTestCase):
     async def test_web_client_serves_spa_shell(self):
         server = WebClientServer(
             host="127.0.0.1",
-            port=8011,
+            port=1415,
             api_url="http://127.0.0.1:8010",
         )
         client = TestClient(server.app)
@@ -57,7 +57,7 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
     def _server(self) -> WebClientServer:
         return WebClientServer(
             host="127.0.0.1",
-            port=8011,
+            port=1415,
             api_url="http://127.0.0.1:8010",
             config_dir=str(self.agent_a_path),
             initial_agent="agent_a",
