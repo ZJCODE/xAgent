@@ -488,7 +488,7 @@ def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
         runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
         voice_data = voice_config(runner.config)
         if not voice_data or voice_data.get("enabled") is False:
-            print("Voice channel is not configured. Run: xagent setup")
+            print("Voice channel is not configured. Run: xagent voice setup")
             return 1
 
         from ..voice.config import VoiceChannelConfig
@@ -1337,6 +1337,7 @@ def print_quick_start() -> None:
     print("")
     print("Setup and inspect:")
     print("  xagent setup                    Reconfigure the active agent")
+    print("  xagent voice setup              Configure the voice channel")
     print("  xagent agents list              List agents")
     print("  xagent agents select work       Switch active agent")
     print("  xagent config validate          Validate config.yaml")

@@ -26,6 +26,10 @@ class ReturnToLauncherHome(Exception):
     """Raised when a launcher menu requests a jump back to the main home screen."""
 
 
+class SetupCancelled(Exception):
+    """Raised when a setup wizard returns to its parent menu without saving."""
+
+
 def rich_terminal_available(*, stdin=None, stdout=None) -> bool:
     """Return whether the process can use the Rich/readchar interactive UI."""
     stdin_stream = stdin or sys.stdin

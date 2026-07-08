@@ -22,11 +22,15 @@ from xagent.interfaces.cli.agents import (
     resolve_agent_runtime_dir,
     select_agent,
 )
+from xagent.interfaces.cli.setup import SETUP_EXIT_CANCELLED
 from xagent.interfaces.cli import (
     AgentCLI,
     FeishuInitSelection,
     InitSelection,
     ReturnToLauncherHome,
+    SetupCancelled,
+    VoiceInitSelection,
+    WeixinInitSelection,
     _run_inspect_launcher,
     _run_interactive_launcher,
     _run_channel_launcher,
@@ -48,6 +52,8 @@ from xagent.interfaces.cli import (
     handle_chat,
     handle_init,
     handle_init_feishu,
+    handle_init_voice,
+    handle_init_weixin,
     handle_logs,
     handle_memory,
     handle_messages,
@@ -773,6 +779,26 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(voice.user_id, "alice")
         self.assertEqual(voice.input_device, "auto")
 
+        voice_setup = build_parser().parse_args([
+            "voice",
+            "setup",
+            "--provider",
+            "qwen",
+            "--api-key",
+            "voice-key",
+            "--force",
+            "--no-wake",
+            "--interruptions",
+        ])
+        self.assertEqual(voice_setup.command, "voice")
+        self.assertEqual(voice_setup.voice_action, "setup")
+        self.assertIs(voice_setup.handler, handle_init_voice)
+        self.assertEqual(voice_setup.provider, "qwen")
+        self.assertEqual(voice_setup.api_key, "voice-key")
+        self.assertTrue(voice_setup.force)
+        self.assertFalse(voice_setup.wake)
+        self.assertTrue(voice_setup.interruptions)
+
     def test_service_command_is_removed(self):
         with self.assertRaises(SystemExit):
             build_parser().parse_args(["service", "start", "api"])
@@ -966,7 +992,10 @@ class CLICommandTests(unittest.TestCase):
                     SimpleNamespace(key="back"),
                 ])
                 self.channel_option_titles = []
-                self.action_choices = iter([SimpleNamespace(key="start")])
+                self.action_choices = iter([
+                    SimpleNamespace(key="start"),
+                    SimpleNamespace(key="back"),
+                ])
                 self.action_option_titles = []
 
             def select_menu(self, *, title, subtitle, options, footer):
@@ -1059,7 +1088,10 @@ class CLICommandTests(unittest.TestCase):
                     SimpleNamespace(key="feishu", title="Feishu"),
                     SimpleNamespace(key="back"),
                 ])
-                self.action_choices = iter([SimpleNamespace(key="setup")])
+                self.action_choices = iter([
+                    SimpleNamespace(key="setup"),
+                    SimpleNamespace(key="back"),
+                ])
                 self.action_option_titles = []
 
             def select_menu(self, *, title, subtitle, options, footer):
@@ -1095,6 +1127,8 @@ class CLICommandTests(unittest.TestCase):
         args = init_feishu.call_args.args[0]
         self.assertEqual(args.config_dir, tmpdir)
         self.assertFalse(args.force)
+        self.assertFalse(args.show_intro)
+        self.assertFalse(args.show_next_steps)
 
     def test_channel_launcher_feishu_hides_setup_when_configured(self):
         class FakeUI:
@@ -1103,7 +1137,10 @@ class CLICommandTests(unittest.TestCase):
                     SimpleNamespace(key="feishu", title="Feishu"),
                     SimpleNamespace(key="back"),
                 ])
-                self.action_choices = iter([SimpleNamespace(key="status")])
+                self.action_choices = iter([
+                    SimpleNamespace(key="status"),
+                    SimpleNamespace(key="back"),
+                ])
                 self.action_option_titles = []
 
             def select_menu(self, *, title, subtitle, options, footer):
@@ -1632,16 +1669,21 @@ class CLICommandTests(unittest.TestCase):
     def test_partial_update_feishu_success_returns_to_home(self):
         class FakeUI:
             def __init__(self):
-                self.choices = iter([
+                self.edit_choices = iter([
                     SimpleNamespace(key="feishu"),
+                ])
+                self.feishu_choices = iter([
+                    SimpleNamespace(key="setup"),
                 ])
                 self.pause_messages = []
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, options, footer
-                if title != "xAgent Setup / Edit Setup":
-                    raise AssertionError(f"Unexpected menu: {title}")
-                return next(self.choices)
+                if title == "xAgent Setup / Edit Setup":
+                    return next(self.edit_choices)
+                if title == "xAgent Setup / Feishu":
+                    return next(self.feishu_choices)
+                raise AssertionError(f"Unexpected menu: {title}")
 
             def clear(self):
                 return None
@@ -1658,11 +1700,110 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir, feishu=True)
             config_dir = Path(tmpdir)
 
-            with patch("xagent.interfaces.cli.launcher.handle_init_feishu", return_value=0):
+            with patch("xagent.interfaces.cli.launcher.handle_init_feishu", return_value=0) as init_feishu:
                 with self.assertRaises(ReturnToLauncherHome):
                     _run_partial_update_launcher(fake_ui, config_dir)
 
+        init_args = init_feishu.call_args.args[0]
+        self.assertFalse(init_args.show_intro)
+        self.assertFalse(init_args.show_next_steps)
+        self.assertTrue(init_args.force)
         self.assertIn("Press Enter to return to the launcher", fake_ui.pause_messages)
+
+    def test_partial_update_feishu_back_skips_pause(self):
+        class FakeUI:
+            def __init__(self):
+                self.edit_choices = iter([
+                    SimpleNamespace(key="feishu"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.feishu_choices = iter([
+                    SimpleNamespace(key="setup"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.pause_calls = []
+                self.menu_titles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, options, footer
+                self.menu_titles.append(title)
+                if title == "xAgent Setup / Edit Setup":
+                    return next(self.edit_choices)
+                if title == "xAgent Setup / Feishu":
+                    return next(self.feishu_choices)
+                raise AssertionError(f"Unexpected menu: {title}")
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                self.pause_calls.append(message)
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        fake_ui = FakeUI()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+            config_dir = Path(tmpdir)
+
+            with patch("xagent.interfaces.cli.launcher.handle_init_feishu", return_value=SETUP_EXIT_CANCELLED):
+                _run_partial_update_launcher(fake_ui, config_dir)
+
+        self.assertEqual(fake_ui.pause_calls, [])
+        self.assertEqual(
+            [title for title in fake_ui.menu_titles if title == "xAgent Setup / Feishu"],
+            ["xAgent Setup / Feishu", "xAgent Setup / Feishu"],
+        )
+
+    def test_channel_launcher_feishu_setup_back_skips_pause(self):
+        class FakeUI:
+            def __init__(self):
+                self.channel_choices = iter([
+                    SimpleNamespace(key="feishu", title="Feishu"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.action_choices = iter([
+                    SimpleNamespace(key="setup"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.pause_calls = []
+                self.feishu_menu_titles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title == "xAgent Channel":
+                    return next(self.channel_choices)
+                if title == "xAgent Channel / Feishu":
+                    self.feishu_menu_titles.append(title)
+                    return next(self.action_choices)
+                raise AssertionError(f"Unexpected menu: {title}")
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                self.pause_calls.append(message)
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No panel expected")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            fake_ui = FakeUI()
+
+            with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+                with patch(
+                    "xagent.interfaces.cli.launcher.handle_init_feishu",
+                    return_value=SETUP_EXIT_CANCELLED,
+                ) as init_feishu:
+                    exit_code = _run_channel_launcher(Path(tmpdir))
+
+        self.assertEqual(exit_code, 0)
+        init_feishu.assert_called_once()
+        self.assertEqual(fake_ui.pause_calls, [])
+        self.assertEqual(len(fake_ui.feishu_menu_titles), 2)
 
     def test_voice_wake_launcher_clears_before_inline_prompt(self):
         class FakeUI:
@@ -2423,6 +2564,197 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         wizard.assert_called_once_with(ui=terminal_ui.return_value)
 
+    def test_init_voice_uses_terminal_wizard(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                agent=None,
+                provider=None,
+                api_key=None,
+                stt_provider=None,
+                stt_api_key=None,
+                tts_provider=None,
+                tts_api_key=None,
+                wake=None,
+                wake_phrases=None,
+                exit_phrases=None,
+                interruptions=None,
+                force=False,
+            )
+            selection = VoiceInitSelection(voice_provider="soniox", voice_api_key="voice-key")
+
+            with patch("xagent.interfaces.cli.setup.TerminalUI") as terminal_ui:
+                with patch(
+                    "xagent.interfaces.cli.setup.collect_voice_init_selection_terminal_ui",
+                    return_value=selection,
+                ) as wizard:
+                    with patch("xagent.interfaces.cli.setup._print_voice_post_setup"):
+                        exit_code = handle_init_voice(args)
+
+        self.assertEqual(exit_code, 0)
+        wizard.assert_called_once_with(args=args, config=unittest.mock.ANY, ui=terminal_ui.return_value)
+
+    def test_init_voice_updates_only_voice_channel(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, feishu=True)
+            identity_path = Path(tmpdir) / "identity.md"
+            before_identity = identity_path.read_text(encoding="utf-8")
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                agent="work",
+                provider="qwen",
+                api_key="voice-key",
+                stt_provider=None,
+                stt_api_key=None,
+                tts_provider=None,
+                tts_api_key=None,
+                wake=False,
+                wake_phrases=None,
+                exit_phrases=None,
+                interruptions=True,
+                force=False,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = handle_init_voice(args)
+
+            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
+            after_identity = identity_path.read_text(encoding="utf-8")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(after_identity, before_identity)
+        self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
+        self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_test")
+        self.assertEqual(config["channels"]["voice"]["provider"], "qwen")
+        self.assertEqual(config["channels"]["voice"]["stt"]["api_key"], "voice-key")
+        self.assertEqual(config["channels"]["voice"]["stt"]["model"], "qwen3-asr-flash-realtime")
+        self.assertEqual(config["channels"]["voice"]["tts"]["api_key"], "voice-key")
+        self.assertEqual(config["channels"]["voice"]["tts"]["voice"], "Cherry")
+        self.assertTrue(config["channels"]["voice"]["enable_interruptions"])
+        output = stdout.getvalue()
+        self.assertIn("xagent voice start --agent work", output)
+        self.assertIn("xagent voice logs -f --agent work", output)
+
+    def test_init_voice_requires_force_for_existing_voice_channel(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, voice=True)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                agent=None,
+                provider="qwen",
+                api_key="new-key",
+                stt_provider=None,
+                stt_api_key=None,
+                tts_provider=None,
+                tts_api_key=None,
+                wake=False,
+                wake_phrases=None,
+                exit_phrases=None,
+                interruptions=False,
+                force=False,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = handle_init_voice(args)
+
+            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(config["channels"]["voice"]["provider"], "soniox")
+        self.assertIn("xagent voice setup --force", stdout.getvalue())
+
+    def test_channel_setup_intro_shows_runtime_and_config(self):
+        class FakeUI:
+            interactive = True
+
+            def __init__(self):
+                self.panels = []
+
+            def print_panel(self, message, *, title=None, **kwargs):
+                del kwargs
+                self.panels.append((title, str(message)))
+
+            def record(self, *args, **kwargs):
+                del args, kwargs
+
+            def ask_secret(self, *args, **kwargs):
+                del args, kwargs
+                return ""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_file = Path(tmpdir).resolve() / "config.yaml"
+            expected_runtime = f"Runtime: {Path(tmpdir).resolve()}"
+            expected_config = f"Config: {config_file}"
+            voice_ui = FakeUI()
+            feishu_ui = FakeUI()
+            weixin_ui = FakeUI()
+
+            voice_args = argparse.Namespace(
+                config_dir=tmpdir,
+                agent=None,
+                provider="soniox",
+                api_key="voice-key",
+                stt_provider=None,
+                stt_api_key=None,
+                tts_provider=None,
+                tts_api_key=None,
+                wake=False,
+                wake_phrases=None,
+                exit_phrases=None,
+                interruptions=False,
+                force=False,
+            )
+            feishu_args = argparse.Namespace(
+                config_dir=tmpdir,
+                agent=None,
+                app_id="cli_test",
+                app_secret="secret",
+                manual=False,
+                force=False,
+                stream=None,
+                group_fetch_limit=None,
+                group_reply_only_when_mentioned=None,
+            )
+            weixin_args = argparse.Namespace(
+                config_dir=tmpdir,
+                agent=None,
+                base_url=None,
+                cdn_base_url=None,
+                bot_type="3",
+                owner_only=True,
+                allow_users=None,
+                media_enabled=True,
+                force=False,
+            )
+
+            with patch("xagent.interfaces.cli.setup.TerminalUI", return_value=voice_ui):
+                with patch("xagent.interfaces.cli.setup._print_voice_post_setup"):
+                    self.assertEqual(handle_init_voice(voice_args), 0)
+
+            with patch("xagent.interfaces.cli.setup.TerminalUI", return_value=feishu_ui):
+                with patch("xagent.interfaces.cli.setup._print_feishu_post_setup"):
+                    self.assertEqual(handle_init_feishu(feishu_args), 0)
+
+            with patch("xagent.interfaces.cli.setup.TerminalUI", return_value=weixin_ui):
+                with patch(
+                    "xagent.interfaces.cli.setup.collect_weixin_init_selection_terminal_ui",
+                    return_value=WeixinInitSelection(
+                        account_id="bot@im.bot",
+                        owner_user_id="owner",
+                        base_url="http://127.0.0.1:9000",
+                        cdn_base_url="http://127.0.0.1:9000",
+                    ),
+                ):
+                    with patch("xagent.interfaces.cli.setup._print_weixin_post_setup"):
+                        self.assertEqual(handle_init_weixin(weixin_args), 0)
+
+        for ui, title in ((voice_ui, "Voice Setup"), (feishu_ui, "Feishu Setup"), (weixin_ui, "Weixin Setup")):
+            panel_text = "\n".join(message for panel_title, message in ui.panels if panel_title == title)
+            self.assertIn(expected_runtime, panel_text)
+            self.assertIn(expected_config, panel_text)
+
     def test_init_feishu_uses_terminal_wizard(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
@@ -2567,29 +2899,18 @@ class CLICommandTests(unittest.TestCase):
 
             def __init__(self):
                 self.select_labels = []
-                self.menu_titles = []
-                self.records = []
                 self.app_access_titles = []
-                self.app_access_footer = ""
-
-            def select_menu(self, *, title, subtitle, options, footer):
-                del subtitle
-                self.menu_titles.append(title)
-                if title == "App Access":
-                    self.app_access_titles = [option.title for option in options]
-                    self.app_access_footer = footer
-                    return SimpleNamespace(key="one_click", title="Create new Feishu app")
-                raise AssertionError(f"Unexpected menu step: {title}")
 
             def select(self, *, label, subtitle="", options, default_index=0):
-                del subtitle, options, default_index
+                del subtitle, default_index
                 self.select_labels.append(label)
-                if label == "Group Routing":
-                    return SimpleNamespace(key="mentions")
+                if label == "App Access":
+                    self.app_access_titles = [option.title for option in options]
+                    return SimpleNamespace(key="one_click", title="Create new Feishu app")
                 raise AssertionError(f"Unexpected wizard step: {label}")
 
             def record(self, label, value, *, skipped=False):
-                self.records.append((label, value, skipped))
+                del label, value, skipped
 
             def ask_text(self, *args, **kwargs):
                 raise AssertionError("Optional text questions should be skipped")
@@ -2619,10 +2940,12 @@ class CLICommandTests(unittest.TestCase):
         with patch("xagent.interfaces.cli.setup._register_feishu_app_via_qr", return_value=("cli_qr_app", "qr_secret")):
             selection = collect_feishu_init_selection_terminal_ui(args=args, ui=ui)
 
-        self.assertEqual(ui.menu_titles, ["App Access"])
-        self.assertEqual(ui.select_labels, [])
-        self.assertEqual(ui.app_access_titles, ["Create new Feishu app", "Use existing App ID / App Secret", "Back"])
-        self.assertEqual(ui.app_access_footer, "↑/↓ Move • Enter Select  •  q Back")
+        self.assertEqual(ui.select_labels, ["App Access"])
+        self.assertEqual(ui.app_access_titles, [
+            "Create new Feishu app",
+            "Use existing App ID / App Secret",
+            "Back",
+        ])
         self.assertEqual(selection.app_id, "cli_qr_app")
         self.assertEqual(selection.app_secret, "qr_secret")
         self.assertIs(selection.stream, False)
@@ -2635,14 +2958,11 @@ class CLICommandTests(unittest.TestCase):
         class FakeUI:
             interactive = True
 
-            def select_menu(self, *, title, subtitle, options, footer):
-                del subtitle, options, footer
-                if title != "App Access":
-                    raise AssertionError(f"Unexpected menu step: {title}")
+            def select(self, *, label, subtitle="", options, default_index=0):
+                del subtitle, options, default_index
+                if label != "App Access":
+                    raise AssertionError(f"Unexpected wizard step: {label}")
                 return SimpleNamespace(key="back", title="Back")
-
-            def record(self, *args, **kwargs):
-                raise AssertionError("No record expected")
 
         args = argparse.Namespace(
             config_dir=".",
@@ -2656,7 +2976,7 @@ class CLICommandTests(unittest.TestCase):
             group_reply_only_when_mentioned=None,
         )
 
-        with self.assertRaises(KeyboardInterrupt):
+        with self.assertRaises(SetupCancelled):
             collect_feishu_init_selection_terminal_ui(args=args, ui=FakeUI())
 
     def test_init_feishu_one_click_cancelled_leaves_config_untouched(self):

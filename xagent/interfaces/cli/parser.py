@@ -67,6 +67,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent client web open",
             "  xagent status",
             "  xagent api logs -f",
+            "  xagent voice setup",
             "  xagent voice logs -f",
             "  xagent feishu setup",
             "  xagent feishu start",
@@ -245,6 +246,31 @@ def _add_weixin_setup_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force", action="store_true", help="Overwrite existing channels.weixin config and refresh QR login")
 
 
+def _add_voice_setup_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_agent_argument(parser)
+    parser.add_argument("--provider", choices=("soniox", "qwen", "custom"), default=None, help="Voice provider")
+    parser.add_argument("--api-key", dest="api_key", default=None, help="Voice provider API key")
+    parser.add_argument("--stt-provider", choices=("soniox", "qwen"), default=None, help="STT provider for custom voice")
+    parser.add_argument("--stt-api-key", dest="stt_api_key", default=None, help="STT provider API key")
+    parser.add_argument("--tts-provider", choices=("soniox", "qwen"), default=None, help="TTS provider for custom voice")
+    parser.add_argument("--tts-api-key", dest="tts_api_key", default=None, help="TTS provider API key")
+    parser.add_argument(
+        "--wake",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable wake phrases for voice",
+    )
+    parser.add_argument("--wake-phrases", default=None, help="Comma-separated wake phrases")
+    parser.add_argument("--exit-phrases", default=None, help="Comma-separated exit phrases")
+    parser.add_argument(
+        "--interruptions",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable voice interruptions",
+    )
+    parser.add_argument("--force", action="store_true", help="Overwrite existing channels.voice config")
+
+
 def _add_channel_lifecycle_subparsers(
     parent_parser: argparse.ArgumentParser,
     channel: str,
@@ -374,6 +400,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_voice_runtime_arguments(voice_parser, include_list_devices=True)
     voice_parser.set_defaults(handler=runtime.handle_voice)
     voice_sub = voice_parser.add_subparsers(dest="voice_action", metavar="<action>")
+
+    voice_setup = voice_sub.add_parser("setup", help="Enable or reconfigure the voice channel")
+    _add_voice_setup_arguments(voice_setup)
+    voice_setup.set_defaults(handler=setup.handle_init_voice)
 
     voice_start = voice_sub.add_parser("start", help="Start the voice channel in the background")
     _add_agent_argument(voice_start)

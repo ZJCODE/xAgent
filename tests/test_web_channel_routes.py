@@ -74,7 +74,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows["api"]["status"], "stopped")
         self.assertTrue(rows["api"]["ready"])
         self.assertEqual(rows["voice"]["status"], "disabled")
-        self.assertEqual(rows["voice"]["setup_hint"], "xagent setup")
+        self.assertEqual(rows["voice"]["setup_hint"], "xagent voice setup")
         self.assertEqual(rows["feishu"]["setup_hint"], "xagent feishu setup")
         self.assertEqual(rows["weixin"]["setup_hint"], "xagent weixin setup")
 

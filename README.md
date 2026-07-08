@@ -18,7 +18,7 @@ xagent
 Or install with pip:
 
 ```bash
-pip install --upgrade myxagent
+pip install myxagent --upgrade
 ```
 
 The launcher will guide you through the rest.

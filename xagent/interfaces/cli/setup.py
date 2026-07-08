@@ -36,7 +36,10 @@ from ...tools.search_tool import is_placeholder_api_key
 from ..base import BaseAgentConfig
 from .agents import allocate_api_port
 from .paths import config_path as _config_path, runtime_dir as _runtime_dir, setup_runtime_dir as _setup_runtime_dir
-from .terminal_ui import MenuOption, ReturnToLauncherHome, TerminalUI
+from .terminal_ui import MenuOption, ReturnToLauncherHome, SetupCancelled, TerminalUI
+
+
+SETUP_EXIT_CANCELLED = 130
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,22 @@ class WeixinInitSelection:
     owner_only: bool = True
     allow_users: tuple[str, ...] = ()
     media_enabled: bool = True
+
+
+@dataclass(frozen=True)
+class VoiceInitSelection:
+    """Interactive choices used to configure the local voice channel."""
+
+    voice_provider: str
+    voice_api_key: str = ""
+    voice_stt_provider: str = ""
+    voice_stt_api_key: str = ""
+    voice_tts_provider: str = ""
+    voice_tts_api_key: str = ""
+    voice_enable_interruptions: bool = False
+    voice_wake_enabled: bool = False
+    voice_wake_phrases: Tuple[str, ...] = ()
+    voice_exit_phrases: Tuple[str, ...] = ()
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -271,6 +290,53 @@ def _default_init_selection() -> InitSelection:
     )
 
 
+def _voice_channel_config(selection: InitSelection | VoiceInitSelection) -> dict[str, Any]:
+    voice_provider = selection.voice_provider or "soniox"
+    wake_phrases = list(selection.voice_wake_phrases) or list(DEFAULT_WAKE_PHRASES)
+    exit_phrases = list(selection.voice_exit_phrases) or list(DEFAULT_EXIT_PHRASES)
+    voice_config: dict[str, Any] = {
+        "provider": voice_provider,
+        "enable_interruptions": selection.voice_enable_interruptions,
+        "audio": {
+            "input": "auto",
+            "output": "auto",
+        },
+        "wake": {
+            "enabled": selection.voice_wake_enabled,
+            "wake_phrases": wake_phrases,
+            "exit_phrases": exit_phrases,
+            "match_mode": "prefix",
+            "idle_timeout_seconds": 60,
+        },
+    }
+    if voice_provider == "custom":
+        stt_provider = selection.voice_stt_provider or "soniox"
+        tts_provider = selection.voice_tts_provider or "qwen"
+        stt_defaults = _voice_defaults_for_provider(stt_provider)["stt"]
+        tts_defaults = _voice_defaults_for_provider(tts_provider)["tts"]
+        voice_config["stt"] = {
+            "provider": stt_provider,
+            "api_key": selection.voice_stt_api_key.strip() or _voice_api_key_placeholder(stt_provider),
+            **stt_defaults,
+        }
+        voice_config["tts"] = {
+            "provider": tts_provider,
+            "api_key": selection.voice_tts_api_key.strip() or _voice_api_key_placeholder(tts_provider),
+            **tts_defaults,
+        }
+    else:
+        voice_api_key = selection.voice_api_key.strip() or _voice_api_key_placeholder(voice_provider)
+        voice_defaults = _voice_defaults_for_provider(voice_provider)
+        voice_config["stt"] = {
+            "api_key": voice_api_key,
+            **voice_defaults["stt"],
+        }
+        voice_config["tts"] = {
+            "api_key": voice_api_key,
+            **voice_defaults["tts"],
+        }
+    return voice_config
+
 
 def _config_yaml(selection: InitSelection, port: int) -> str:
     provider_config = {
@@ -299,51 +365,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
         },
     }
     if selection.voice_enabled:
-        voice_provider = selection.voice_provider or "soniox"
-        wake_phrases = list(selection.voice_wake_phrases) or list(DEFAULT_WAKE_PHRASES)
-        exit_phrases = list(selection.voice_exit_phrases) or list(DEFAULT_EXIT_PHRASES)
-        voice_config = {
-            "provider": voice_provider,
-            "enable_interruptions": selection.voice_enable_interruptions,
-            "audio": {
-                "input": "auto",
-                "output": "auto",
-            },
-            "wake": {
-                "enabled": selection.voice_wake_enabled,
-                "wake_phrases": wake_phrases,
-                "exit_phrases": exit_phrases,
-                "match_mode": "prefix",
-                "idle_timeout_seconds": 60,
-            },
-        }
-        if voice_provider == "custom":
-            stt_provider = selection.voice_stt_provider or "soniox"
-            tts_provider = selection.voice_tts_provider or "qwen"
-            stt_defaults = _voice_defaults_for_provider(stt_provider)["stt"]
-            tts_defaults = _voice_defaults_for_provider(tts_provider)["tts"]
-            voice_config["stt"] = {
-                "provider": stt_provider,
-                "api_key": selection.voice_stt_api_key.strip() or _voice_api_key_placeholder(stt_provider),
-                **stt_defaults,
-            }
-            voice_config["tts"] = {
-                "provider": tts_provider,
-                "api_key": selection.voice_tts_api_key.strip() or _voice_api_key_placeholder(tts_provider),
-                **tts_defaults,
-            }
-        else:
-            voice_api_key = selection.voice_api_key.strip() or _voice_api_key_placeholder(voice_provider)
-            voice_defaults = _voice_defaults_for_provider(voice_provider)
-            voice_config["stt"] = {
-                "api_key": voice_api_key,
-                **voice_defaults["stt"],
-            }
-            voice_config["tts"] = {
-                "api_key": voice_api_key,
-                **voice_defaults["tts"],
-            }
-        config["channels"]["voice"] = voice_config
+        config["channels"]["voice"] = _voice_channel_config(selection)
     search_config = {"provider": selection.search_provider or "none"}
     if search_config["provider"] in {"openai", "qwen", "minimax"}:
         search_config["api_key"] = _feature_api_key_value(
@@ -1457,6 +1479,286 @@ def handle_init(args: argparse.Namespace) -> int:
     return 0 if result.wrote_files else 1
 
 
+def _config_provider_name(config: dict[str, Any]) -> str:
+    provider_cfg = config.get("provider")
+    if isinstance(provider_cfg, dict):
+        return str(provider_cfg.get("name") or "").strip()
+    return ""
+
+
+def _config_provider_api_key(config: dict[str, Any]) -> str:
+    provider_cfg = config.get("provider")
+    if isinstance(provider_cfg, dict):
+        return str(provider_cfg.get("api_key") or "").strip()
+    return ""
+
+
+def _arg_text(args: argparse.Namespace, name: str) -> str:
+    return str(getattr(args, name, "") or "").strip()
+
+
+def collect_voice_init_selection_terminal_ui(
+    *,
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    ui: Optional[TerminalUI] = None,
+    secret_input_func: Callable[[str], str] = getpass.getpass,
+) -> VoiceInitSelection:
+    wizard_ui = ui or TerminalUI()
+    ask_secret = wizard_ui.ask_secret if wizard_ui.interactive else secret_input_func
+    model_provider = _config_provider_name(config)
+    model_api_key = _config_provider_api_key(config)
+
+    voice_provider = _arg_text(args, "provider")
+    if voice_provider:
+        if voice_provider not in {"soniox", "qwen", "custom"}:
+            raise ValueError("--provider must be one of: soniox, qwen, custom")
+        if wizard_ui.interactive:
+            wizard_ui.record("Voice Provider", voice_provider)
+    else:
+        voice_provider = _terminal_select_option(
+            wizard_ui,
+            "Voice Provider",
+            ("soniox", "qwen", "custom"),
+            descriptions={
+                "soniox": "Use Soniox voice runtime defaults.",
+                "qwen": "Use Qwen voice runtime defaults.",
+                "custom": "Pick separate STT and TTS providers.",
+            },
+            default_index=0,
+            subtitle="Choose the voice runtime to configure.",
+        )
+
+    voice_api_key = _arg_text(args, "api_key")
+    voice_stt_provider = _arg_text(args, "stt_provider")
+    voice_stt_api_key = _arg_text(args, "stt_api_key")
+    voice_tts_provider = _arg_text(args, "tts_provider")
+    voice_tts_api_key = _arg_text(args, "tts_api_key")
+
+    if voice_provider == "custom":
+        if voice_stt_provider:
+            if voice_stt_provider not in VOICE_CUSTOM_PROVIDERS:
+                raise ValueError("--stt-provider must be one of: soniox, qwen")
+            if wizard_ui.interactive:
+                wizard_ui.record("STT Provider", voice_stt_provider)
+        else:
+            voice_stt_provider = _terminal_select_option(
+                wizard_ui,
+                "STT Provider",
+                VOICE_CUSTOM_PROVIDERS,
+                default_index=0,
+            )
+        if not voice_stt_api_key:
+            voice_stt_api_key = _prompt_voice_api_key(
+                voice_stt_provider,
+                provider=model_provider,
+                main_api_key=model_api_key,
+                purpose="STT",
+                secret_input_func=ask_secret,
+            )
+
+        if voice_tts_provider:
+            if voice_tts_provider not in VOICE_CUSTOM_PROVIDERS:
+                raise ValueError("--tts-provider must be one of: soniox, qwen")
+            if wizard_ui.interactive:
+                wizard_ui.record("TTS Provider", voice_tts_provider)
+        else:
+            voice_tts_provider = _terminal_select_option(
+                wizard_ui,
+                "TTS Provider",
+                VOICE_CUSTOM_PROVIDERS,
+                default_index=0,
+            )
+        if not voice_tts_api_key:
+            voice_tts_api_key = _prompt_voice_api_key(
+                voice_tts_provider,
+                provider=model_provider,
+                main_api_key=model_api_key,
+                purpose="TTS",
+                secret_input_func=ask_secret,
+            )
+    elif not voice_api_key:
+        voice_api_key = _prompt_voice_api_key(
+            voice_provider,
+            provider=model_provider,
+            main_api_key=model_api_key,
+            secret_input_func=ask_secret,
+        )
+
+    wake_enabled_arg = getattr(args, "wake", None)
+    if wake_enabled_arg is None:
+        voice_wake_enabled = _terminal_prompt_yes_no(wizard_ui, "Enable wake phrases for voice?", default=False)
+    else:
+        voice_wake_enabled = bool(wake_enabled_arg)
+    voice_wake_phrases = tuple(_phrase_list(_arg_text(args, "wake_phrases")))
+    voice_exit_phrases = tuple(_phrase_list(_arg_text(args, "exit_phrases")))
+    if voice_wake_enabled:
+        if not voice_wake_phrases:
+            voice_wake_phrases = tuple(
+                _phrase_list(
+                    _terminal_prompt_text(
+                        wizard_ui,
+                        "Wake Phrases",
+                        default=_phrase_prompt_default(DEFAULT_WAKE_PHRASES),
+                    )
+                )
+                or DEFAULT_WAKE_PHRASES
+            )
+        if not voice_exit_phrases:
+            voice_exit_phrases = tuple(
+                _phrase_list(
+                    _terminal_prompt_text(
+                        wizard_ui,
+                        "Exit Phrases",
+                        default=_phrase_prompt_default(DEFAULT_EXIT_PHRASES),
+                    )
+                )
+                or DEFAULT_EXIT_PHRASES
+            )
+
+    interruptions_arg = getattr(args, "interruptions", None)
+    if interruptions_arg is None:
+        voice_enable_interruptions = _terminal_prompt_yes_no(wizard_ui, "Enable voice interruptions?", default=False)
+    else:
+        voice_enable_interruptions = bool(interruptions_arg)
+
+    return VoiceInitSelection(
+        voice_provider=voice_provider,
+        voice_api_key=voice_api_key,
+        voice_stt_provider=voice_stt_provider,
+        voice_stt_api_key=voice_stt_api_key,
+        voice_tts_provider=voice_tts_provider,
+        voice_tts_api_key=voice_tts_api_key,
+        voice_enable_interruptions=voice_enable_interruptions,
+        voice_wake_enabled=voice_wake_enabled,
+        voice_wake_phrases=voice_wake_phrases,
+        voice_exit_phrases=voice_exit_phrases,
+    )
+
+
+def _print_voice_post_setup(
+    config_path: Path,
+    selection: VoiceInitSelection,
+    *,
+    agent_name: str | None = None,
+) -> None:
+    config_dir = config_path.parent
+    ui = TerminalUI()
+    summary = Text()
+    summary.append(f"Voice channel updated in {config_path}\n\n")
+    summary.append("Configured behavior:\n")
+    summary.append(f"- Provider: {selection.voice_provider}\n")
+    summary.append(f"- Wake phrases: {'Enabled' if selection.voice_wake_enabled else 'Disabled'}\n")
+    summary.append(f"- Interruptions: {'Enabled' if selection.voice_enable_interruptions else 'Disabled'}\n")
+    ui.print_panel(summary, title="Voice Ready", leading_blank_line=True)
+
+    start = _format_init_command("xagent voice start", config_dir=config_dir, agent_name=agent_name)
+    status = _format_init_command("xagent voice status", config_dir=config_dir, agent_name=agent_name)
+    logs = _format_init_command("xagent voice logs -f", config_dir=config_dir, agent_name=agent_name)
+    next_steps = Text()
+    next_steps.append("Run next:\n")
+    next_steps.append("start   ")
+    next_steps.append(start, style="cyan")
+    next_steps.append("\n        Start only the voice channel.\n")
+    next_steps.append("status  ")
+    next_steps.append(status, style="cyan")
+    next_steps.append("\n        Check PID, logs, and whether the channel is running.\n")
+    next_steps.append("logs    ")
+    next_steps.append(logs, style="cyan")
+    next_steps.append("\n        Follow the voice channel log live.\n")
+    ui.print_panel(next_steps, title="Next Steps")
+
+
+def _setup_exit_on_cancel(ui: TerminalUI, args: argparse.Namespace, *, channel: str) -> int:
+    display_name = channel.capitalize()
+    if getattr(args, "show_intro", True):
+        ui.print_panel(
+            f"{display_name} setup cancelled before writing config.",
+            title=f"{display_name} Setup Cancelled",
+        )
+        return 1
+    return SETUP_EXIT_CANCELLED
+
+
+def _print_channel_setup_intro(
+    ui: TerminalUI,
+    *,
+    channel: str,
+    config_file: Path,
+    replacing: bool = False,
+    extra_lines: Sequence[str] = (),
+) -> None:
+    display_name = channel.capitalize()
+    intro_lines = [
+        f"Runtime: {config_file.parent}",
+        f"Config: {config_file}",
+    ]
+    if replacing:
+        intro_lines.append(f"Existing channels.{channel} settings will be replaced.")
+    intro_lines.extend(extra_lines)
+    ui.print_panel("\n".join(intro_lines), title=f"{display_name} Setup", leading_blank_line=True)
+
+
+def handle_init_voice(args: argparse.Namespace) -> int:
+    ui = TerminalUI()
+    config_file = _config_path(args)
+    agent_name = getattr(args, "agent", None)
+    init_command = _format_init_command("xagent setup", config_dir=config_file.parent, agent_name=agent_name)
+    if not config_file.is_file():
+        ui.print_panel(
+            f"Config not found: {config_file}\nRun {init_command} first, then return to Voice setup.",
+            title="Voice Setup Stopped",
+        )
+        return 1
+
+    try:
+        with config_file.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+    except yaml.YAMLError as exc:
+        ui.print_panel(f"Invalid YAML in {config_file}: {exc}", title="Voice Setup Stopped", border_style="red")
+        return 1
+    if not isinstance(config, dict):
+        ui.print_panel(f"Configuration must be a mapping: {config_file}", title="Voice Setup Stopped", border_style="red")
+        return 1
+
+    channels_cfg = config.setdefault("channels", {})
+    if not isinstance(channels_cfg, dict):
+        ui.print_panel("channels must be a dictionary", title="Voice Setup Stopped", border_style="red")
+        return 1
+    if "voice" in channels_cfg and not getattr(args, "force", False):
+        force_command = _format_init_command(
+            "xagent voice setup --force",
+            config_dir=config_file.parent,
+            agent_name=agent_name,
+        )
+        ui.print_panel(
+            f"channels.voice already exists in {config_file}.\nRun {force_command} to overwrite the Voice channel settings.",
+            title="Voice Setup Stopped",
+        )
+        return 1
+
+    _print_channel_setup_intro(
+        ui,
+        channel="voice",
+        config_file=config_file,
+        replacing="voice" in channels_cfg,
+    )
+
+    try:
+        selection = collect_voice_init_selection_terminal_ui(args=args, config=config, ui=ui)
+    except (KeyboardInterrupt, ReturnToLauncherHome):
+        ui.print_panel("Voice setup cancelled before writing config.", title="Voice Setup Cancelled")
+        return 1
+    except ValueError as exc:
+        ui.print_panel(str(exc), title="Voice Setup Stopped", border_style="red")
+        return 1
+
+    channels_cfg["voice"] = _voice_channel_config(selection)
+    config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
+    _print_voice_post_setup(config_file, selection, agent_name=agent_name)
+    return 0
+
+
 def _feishu_channel_config(selection: FeishuInitSelection) -> dict[str, Any]:
     config: dict[str, Any] = {
         "app_id": selection.app_id,
@@ -1489,8 +1791,8 @@ def collect_feishu_init_selection_terminal_ui(
         if interactive:
             wizard_ui.record("App Access", "Use existing App ID / App Secret")
     elif interactive:
-        choice = wizard_ui.select_menu(
-            title="App Access",
+        choice = wizard_ui.select(
+            label="App Access",
             subtitle="Choose how xAgent should get the Feishu credentials.",
             options=[
                 MenuOption(
@@ -1509,12 +1811,11 @@ def collect_feishu_init_selection_terminal_ui(
                     "Cancel Feishu setup and return.",
                 ),
             ],
-            footer="↑/↓ Move • Enter Select  •  q Back",
+            default_index=0,
         )
         if choice is None or choice.key == "back":
-            raise KeyboardInterrupt()
+            raise SetupCancelled()
         credential_mode = choice.key
-        wizard_ui.record("App Access", choice.title)
     else:
         credential_mode = "one_click"
 
@@ -1821,19 +2122,22 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
         )
         return 1
 
-    intro_lines = [
-        f"Runtime: {config_file.parent}",
-        f"Config: {config_file}",
-    ]
-    if "feishu" in channels_cfg:
-        intro_lines.append("Existing channels.feishu settings will be replaced.")
-    ui.print_panel("\n".join(intro_lines), title="Feishu Setup", leading_blank_line=True)
+    if getattr(args, "show_intro", True):
+        _print_channel_setup_intro(
+            ui,
+            channel="feishu",
+            config_file=config_file,
+            replacing="feishu" in channels_cfg,
+        )
 
     try:
         selection = collect_feishu_init_selection_terminal_ui(args=args, ui=ui)
-    except (KeyboardInterrupt, ReturnToLauncherHome):
-        ui.print_panel("Feishu setup cancelled before writing config.", title="Feishu Setup Cancelled")
-        return 1
+    except SetupCancelled:
+        return _setup_exit_on_cancel(ui, args, channel="feishu")
+    except ReturnToLauncherHome:
+        raise
+    except KeyboardInterrupt:
+        return _setup_exit_on_cancel(ui, args, channel="feishu")
     if selection is None:
         return 1
 
@@ -1947,6 +2251,7 @@ def _print_weixin_post_setup(
     selection: WeixinInitSelection,
     *,
     agent_name: str | None = None,
+    show_next_steps: bool = True,
 ) -> None:
     config_dir = config_path.parent
     ui = TerminalUI()
@@ -1959,22 +2264,23 @@ def _print_weixin_post_setup(
     summary.append(f"- Media: {'Enabled' if selection.media_enabled else 'Disabled'}\n")
     ui.print_panel(summary, title="Weixin Ready", leading_blank_line=True)
 
-    start = _format_init_command("xagent weixin start", config_dir=config_dir, agent_name=agent_name)
-    status = _format_init_command("xagent weixin status", config_dir=config_dir, agent_name=agent_name)
-    logs = _format_init_command("xagent weixin logs -f", config_dir=config_dir, agent_name=agent_name)
-    next_steps = Text()
-    next_steps.append("Run next:\n")
-    next_steps.append("start   ")
-    next_steps.append(start, style="cyan")
-    next_steps.append("\n        Start only the Weixin DM channel.\n")
-    next_steps.append("status  ")
-    next_steps.append(status, style="cyan")
-    next_steps.append("\n        Check PID, logs, and whether the channel is running.\n")
-    next_steps.append("logs    ")
-    next_steps.append(logs, style="cyan")
-    next_steps.append("\n        Follow the Weixin channel log live.\n")
-    next_steps.append("\nOnly direct messages are supported. Group messages are ignored.")
-    ui.print_panel(next_steps, title="Next Steps")
+    if show_next_steps:
+        start = _format_init_command("xagent weixin start", config_dir=config_dir, agent_name=agent_name)
+        status = _format_init_command("xagent weixin status", config_dir=config_dir, agent_name=agent_name)
+        logs = _format_init_command("xagent weixin logs -f", config_dir=config_dir, agent_name=agent_name)
+        next_steps = Text()
+        next_steps.append("Run next:\n")
+        next_steps.append("start   ")
+        next_steps.append(start, style="cyan")
+        next_steps.append("\n        Start only the Weixin DM channel.\n")
+        next_steps.append("status  ")
+        next_steps.append(status, style="cyan")
+        next_steps.append("\n        Check PID, logs, and whether the channel is running.\n")
+        next_steps.append("logs    ")
+        next_steps.append(logs, style="cyan")
+        next_steps.append("\n        Follow the Weixin channel log live.\n")
+        next_steps.append("\nOnly direct messages are supported. Group messages are ignored.")
+        ui.print_panel(next_steps, title="Next Steps")
 
 
 def handle_init_weixin(args: argparse.Namespace) -> int:
@@ -2015,23 +2321,34 @@ def handle_init_weixin(args: argparse.Namespace) -> int:
         )
         return 1
 
-    ui.print_panel(
-        f"Runtime: {config_file.parent}\nConfig: {config_file}\nThis will open a Weixin iLink QR login.",
-        title="Weixin Setup",
-        leading_blank_line=True,
-    )
+    if getattr(args, "show_intro", True):
+        _print_channel_setup_intro(
+            ui,
+            channel="weixin",
+            config_file=config_file,
+            replacing="weixin" in channels_cfg,
+            extra_lines=("This will open a Weixin iLink QR login.",),
+        )
     try:
         selection = collect_weixin_init_selection_terminal_ui(args=args, ui=ui)
+    except SetupCancelled:
+        return _setup_exit_on_cancel(ui, args, channel="weixin")
+    except ReturnToLauncherHome:
+        raise
     except KeyboardInterrupt:
-        ui.print_panel("Weixin setup cancelled before writing config.", title="Weixin Setup Cancelled")
-        return 1
+        return _setup_exit_on_cancel(ui, args, channel="weixin")
     if selection is None:
         return 1
 
     _ensure_api_port(channels_cfg)
     channels_cfg["weixin"] = _weixin_channel_config(selection)
     config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
-    _print_weixin_post_setup(config_file, selection, agent_name=agent_name)
+    _print_weixin_post_setup(
+        config_file,
+        selection,
+        agent_name=agent_name,
+        show_next_steps=getattr(args, "show_next_steps", True),
+    )
     return 0
 
 

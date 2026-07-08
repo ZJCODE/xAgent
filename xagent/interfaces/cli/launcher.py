@@ -82,6 +82,7 @@ from .setup import (
     OPENAI_MODELS,
     QWEN_MODELS,
     SEARCH_PROVIDERS,
+    SETUP_EXIT_CANCELLED,
     _format_init_command,
     handle_init,
     handle_init_feishu,
@@ -528,6 +529,9 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command("xagent voice start", config_dir=config_dir), style="cyan")
     content.append("\n    Start the voice channel.\n")
     content.append("  ")
+    content.append(_format_init_command("xagent voice setup", config_dir=config_dir), style="cyan")
+    content.append("\n    Configure the voice channel.\n")
+    content.append("  ")
     content.append(_format_init_command("xagent status", config_dir=config_dir), style="cyan")
     content.append("\n    Show all configured channel processes.\n")
     content.append("  ")
@@ -607,6 +611,8 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                     allow_users=None,
                     media_enabled=True,
                     force=False,
+                    show_intro=False,
+                    show_next_steps=False,
                 )
             )
         return handle_init_feishu(
@@ -619,6 +625,7 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                 stream=None,
                 group_fetch_limit=None,
                 group_reply_only_when_mentioned=None,
+                show_intro=False,
                 show_next_steps=False,
             )
         )
@@ -791,6 +798,130 @@ def _voice_summary_subtitle(config: dict[str, Any]) -> str:
         tts_provider = _current_voice_nested_provider(config, "tts") if voice else "none"
         return f"Provider mode: {mode}\nSTT: {stt_provider}\nTTS: {tts_provider}"
     return f"Provider mode: {mode}\nProvider: {_current_voice_provider(config)}"
+
+
+def _feishu_config_subtitle(config_dir: Path) -> str:
+    if not _feishu_channel_is_configured(config_dir):
+        return "Feishu is not configured yet."
+    data = feishu_config(_launcher_config_snapshot(config_dir))
+    app_id = str(data.get("app_id") or "").strip()
+    return f"Configured App ID: {app_id}" if app_id else "Feishu is configured."
+
+
+def _weixin_config_subtitle(config_dir: Path) -> str:
+    if not _weixin_channel_is_configured(config_dir):
+        return "Weixin is not configured yet."
+    data = weixin_config(_launcher_config_snapshot(config_dir))
+    account_id = str(data.get("account_id") or "").strip()
+    return f"Configured account: {account_id}" if account_id else "Weixin is configured."
+
+
+def _launcher_feishu_setup_args(config_dir: Path):
+    return _launcher_args(
+        config_dir=str(config_dir),
+        app_id=None,
+        app_secret=None,
+        manual=False,
+        force=_feishu_channel_is_configured(config_dir),
+        stream=None,
+        group_fetch_limit=None,
+        group_reply_only_when_mentioned=None,
+        show_intro=False,
+        show_next_steps=False,
+    )
+
+
+def _launcher_weixin_setup_args(config_dir: Path):
+    return _launcher_args(
+        config_dir=str(config_dir),
+        base_url=None,
+        cdn_base_url=None,
+        bot_type="3",
+        owner_only=True,
+        allow_users=None,
+        media_enabled=True,
+        force=_weixin_channel_is_configured(config_dir),
+        show_intro=False,
+        show_next_steps=False,
+    )
+
+
+def _run_feishu_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    while True:
+        option = ui.select_menu(
+            title="xAgent Setup / Feishu",
+            subtitle=_feishu_config_subtitle(config_dir),
+            options=[
+                MenuOption(
+                    "setup",
+                    "Configure",
+                    "Create or replace the Feishu bot credentials.",
+                ),
+                MenuOption("back", "Back", "Return to Edit Setup."),
+            ],
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            return
+        ui.clear()
+        result = handle_init_feishu(_launcher_feishu_setup_args(config_dir))
+        if result == SETUP_EXIT_CANCELLED:
+            continue
+        if result == 0:
+            ui.pause("Press Enter to return to the launcher")
+            raise ReturnToLauncherHome()
+
+
+def _run_weixin_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    while True:
+        option = ui.select_menu(
+            title="xAgent Setup / Weixin",
+            subtitle=_weixin_config_subtitle(config_dir),
+            options=[
+                MenuOption(
+                    "setup",
+                    "Configure",
+                    "Scan WeChat to create or refresh the Weixin DM channel.",
+                ),
+                MenuOption("back", "Back", "Return to Edit Setup."),
+            ],
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            return
+        ui.clear()
+        result = handle_init_weixin(_launcher_weixin_setup_args(config_dir))
+        if result == SETUP_EXIT_CANCELLED:
+            continue
+        if result == 0:
+            ui.pause("Press Enter to return to the launcher")
+            raise ReturnToLauncherHome()
+
+
+def _run_managed_channel_launcher(
+    ui: TerminalUI,
+    config_dir: Path,
+    channel: str,
+    *,
+    channel_title: str,
+) -> None:
+    while True:
+        option = ui.select_menu(
+            title=f"xAgent Channel / {channel_title}",
+            subtitle=f"Runtime: {config_dir}",
+            options=_managed_channel_actions(config_dir, channel),
+            footer="↑/↓ Move • Enter Select  •  q Back",
+        )
+        if option is None or option.key == "back":
+            ui.clear()
+            return
+        ui.clear()
+        exit_code = _run_managed_channel_action(config_dir, channel, str(option.key))
+        if exit_code == SETUP_EXIT_CANCELLED:
+            continue
+        if exit_code != 0:
+            ui.print_panel(f"Channel action exited with status {exit_code}.", title="Channel")
+        ui.pause(f"Press Enter to return to {channel_title}")
 
 
 def _existing_voice_provider_api_key(config: dict[str, Any], provider: str) -> Optional[str]:
@@ -1429,36 +1560,9 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
         elif option.key == "search":
             should_pause = _run_search_config_launcher(ui, config_dir)
         elif option.key == "feishu":
-            if handle_init_feishu(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    app_id=None,
-                    app_secret=None,
-                    manual=False,
-                    force=_feishu_channel_is_configured(config_dir),
-                    stream=None,
-                    group_fetch_limit=None,
-                    group_reply_only_when_mentioned=None,
-                    show_next_steps=False,
-                )
-            ) == 0:
-                ui.pause("Press Enter to return to the launcher")
-                raise ReturnToLauncherHome()
+            _run_feishu_config_launcher(ui, config_dir)
         elif option.key == "weixin":
-            if handle_init_weixin(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    base_url=None,
-                    cdn_base_url=None,
-                    bot_type="3",
-                    owner_only=True,
-                    allow_users=None,
-                    media_enabled=True,
-                    force=_weixin_channel_is_configured(config_dir),
-                )
-            ) == 0:
-                ui.pause("Press Enter to return to the launcher")
-                raise ReturnToLauncherHome()
+            _run_weixin_config_launcher(ui, config_dir)
         elif option.key == "voice":
             _run_voice_config_launcher(ui, config_dir)
         elif option.key == "image":
@@ -2129,20 +2233,13 @@ def _run_channel_launcher(config_dir: Path) -> int:
                 continue
 
             channel_title = getattr(channel_option, "title", str(channel_option.key).title())
-            option = ui.select_menu(
-                title=f"xAgent Channel / {channel_title}",
-                subtitle=f"Runtime: {config_dir}",
-                options=_managed_channel_actions(config_dir, str(channel_option.key)),
-                footer="↑/↓ Move • Enter Select  •  q Back",
-            )
-            if option is None or option.key == "back":
-                continue
             ui.clear()
-            exit_code = _run_managed_channel_action(config_dir, str(channel_option.key), str(option.key))
-
-            if exit_code != 0:
-                ui.print_panel(f"Channel action exited with status {exit_code}.", title="Channel")
-            ui.pause("Press Enter to return to Channel")
+            _run_managed_channel_launcher(
+                ui,
+                config_dir,
+                str(channel_option.key),
+                channel_title=channel_title,
+            )
     except ReturnToLauncherHome:
         ui.clear()
         return 0

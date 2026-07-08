@@ -32,7 +32,7 @@ CHANNEL_LABELS: dict[str, str] = {
 }
 MANAGED_CHANNELS: tuple[str, ...] = (CHANNEL_API, CHANNEL_VOICE, CHANNEL_FEISHU, CHANNEL_WEIXIN)
 SETUP_HINTS: dict[str, str] = {
-    CHANNEL_VOICE: "xagent setup",
+    CHANNEL_VOICE: "xagent voice setup",
     CHANNEL_FEISHU: "xagent feishu setup",
     CHANNEL_WEIXIN: "xagent weixin setup",
 }
