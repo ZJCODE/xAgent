@@ -27,7 +27,14 @@ from ...cli.agents import (
     load_agent_registry_or_empty,
     validate_agent_name,
 )
-from ...cli.setup import build_setup_schema, init_selection_from_mapping
+from ...cli.setup import (
+    ChannelSetupError,
+    SETUP_CHANNELS,
+    apply_channel_setup,
+    build_channel_setup_schema,
+    build_setup_schema,
+    init_selection_from_mapping,
+)
 from ...cli.channels import CHANNEL_API, load_config_file
 from ...cli.clients import web_client_config
 from ...cli.processes import managed_paths, running_pid
@@ -208,6 +215,13 @@ class WebAgentSession:
         self._admin_cache[name] = admin
         return admin
 
+    def invalidate_admin_cache(self, name: Optional[str] = None) -> None:
+        """Drop cached admin state so the next request reloads files from disk."""
+        if name is None:
+            name = self._resolve_agent_name()
+        if name:
+            self._admin_cache.pop(name, None)
+
     def get_current_api_url(self) -> str:
         name = self._resolve_agent_name()
         if name is None:
@@ -217,3 +231,36 @@ class WebAgentSession:
         entry_path = self._entry_path(name)
         cfg = _safe_load_config(entry_path)
         return web_client_config(cfg)["api_url"]
+
+    def channel_setup_schema(self, channel: str) -> Dict[str, Any]:
+        normalized = str(channel or "").strip().lower()
+        if normalized not in SETUP_CHANNELS:
+            raise HTTPException(status_code=404, detail=f"Unknown channel: {channel}")
+        config_dir = self.get_current_config_dir()
+        config = _safe_load_config(config_dir)
+        return build_channel_setup_schema(normalized, config)
+
+    def apply_channel_setup(
+        self,
+        channel: str,
+        *,
+        selection_data: Dict[str, Any],
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        normalized = str(channel or "").strip().lower()
+        if normalized not in SETUP_CHANNELS:
+            raise HTTPException(status_code=404, detail=f"Unknown channel: {channel}")
+        config_dir = self.get_current_config_dir()
+        try:
+            result = apply_channel_setup(
+                channel=normalized,
+                config_dir=config_dir,
+                selection_data=selection_data,
+                force=force,
+            )
+        except ChannelSetupError as exc:
+            message = str(exc)
+            status_code = 409 if "already exists" in message else 400
+            raise HTTPException(status_code=status_code, detail=message) from exc
+        self.invalidate_admin_cache()
+        return result

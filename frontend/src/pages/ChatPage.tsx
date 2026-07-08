@@ -142,7 +142,7 @@ function ChatChannelBlocked({
   onStart: () => void;
   variant: "empty" | "banner";
 }) {
-  const needsSetup = Boolean(channel && !channel.ready && channel.setup_hint);
+  const needsSetup = Boolean(channel && !channel.ready);
   const isError = channel?.status === "error";
   const title = needsSetup
     ? "API channel needs setup"
@@ -150,30 +150,17 @@ function ChatChannelBlocked({
       ? "API channel needs attention"
       : "API channel is stopped";
   const description = needsSetup
-    ? "Run the setup command below, then start the channel from Chat."
+    ? "Open the Channels page to finish setup, then start the API channel here."
     : isError
       ? channel?.detail || "Try starting the channel again."
       : "Start the API channel to send messages in Chat.";
 
-  const copySetup = async (hint: string) => {
-    try {
-      await navigator.clipboard.writeText(hint);
-    } catch {
-      // Clipboard access is best-effort in the browser.
-    }
-  };
-
   const actions = (
     <div className="chat-channel-actions">
-      {needsSetup && channel?.setup_hint ? (
-        <button
-          type="button"
-          className="channel-setup-command"
-          title={`Click to copy: ${channel.setup_hint}`}
-          onClick={() => void copySetup(channel.setup_hint)}
-        >
-          {channel.setup_hint}
-        </button>
+      {needsSetup ? (
+        <a className="chat-channel-link" href="/channels">
+          Open Channels
+        </a>
       ) : (
         <Button
           type="button"
@@ -197,15 +184,10 @@ function ChatChannelBlocked({
           {error ? <span className="chat-channel-error">{error}</span> : null}
         </div>
         <div className="chat-channel-banner-actions">
-          {needsSetup && channel?.setup_hint ? (
-            <button
-              type="button"
-              className="channel-setup-command"
-              title={`Click to copy: ${channel.setup_hint}`}
-              onClick={() => void copySetup(channel.setup_hint)}
-            >
-              Copy setup command
-            </button>
+          {needsSetup ? (
+            <a className="chat-channel-link" href="/channels">
+              Open Channels
+            </a>
           ) : (
             <Button
               type="button"

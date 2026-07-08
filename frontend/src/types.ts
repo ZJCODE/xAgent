@@ -137,6 +137,94 @@ export interface ChannelLogsResponse {
   lines: number;
 }
 
+export type SetupChannelId = Extract<ChannelId, "voice" | "feishu" | "weixin">;
+
+export interface VoiceSelectionInput {
+  voice_enabled?: boolean;
+  voice_provider: string;
+  voice_api_key: string;
+  voice_stt_provider: string;
+  voice_stt_api_key: string;
+  voice_tts_provider: string;
+  voice_tts_api_key: string;
+  voice_enable_interruptions: boolean;
+  voice_wake_enabled: boolean;
+  voice_wake_phrases: string[];
+  voice_exit_phrases: string[];
+}
+
+export interface VoiceSetupSchema {
+  voice_providers: SetupOption[];
+  voice_custom_providers: string[];
+  defaults: {
+    voice_provider: string;
+    voice_stt_provider: string;
+    voice_tts_provider: string;
+    wake_phrases: string[];
+    exit_phrases: string[];
+    voice_wake_enabled: boolean;
+    voice_enable_interruptions: boolean;
+  };
+  placeholders: Record<string, string>;
+  inherit_api_key_from: {
+    provider: string;
+    can_inherit_qwen_key: boolean;
+  };
+  configured: boolean;
+  can_force: boolean;
+}
+
+export interface FeishuSetupSchema {
+  credential_modes: SetupOption[];
+  defaults: {
+    credential_mode: string;
+    stream: boolean;
+    group_fetch_limit: number;
+    group_reply_only_when_mentioned: boolean;
+  };
+  configured: boolean;
+  can_force: boolean;
+}
+
+export interface WeixinSetupSchema {
+  defaults: {
+    base_url: string;
+    cdn_base_url: string;
+    owner_only: boolean;
+    allow_users: string[];
+    media_enabled: boolean;
+  };
+  configured: boolean;
+  can_force: boolean;
+}
+
+export type ChannelSetupSchema = VoiceSetupSchema | FeishuSetupSchema | WeixinSetupSchema;
+
+export interface ChannelSetupInput {
+  force: boolean;
+  selection: Record<string, unknown>;
+}
+
+export interface ChannelSetupResponse {
+  status: string;
+  setup: {
+    channel: string;
+    config_path: string;
+    configured: boolean;
+  };
+  channel: ChannelStatus;
+}
+
+export interface QrSessionResponse {
+  session_id: string;
+  channel: string;
+  status: string;
+  qr_url?: string | null;
+  expire_in?: number | null;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+}
+
 export interface AgentInfo {
   provider?: string;
   model: string;

@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useReducer, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { getAgentNameAvailability, getAgentSetupSchema } from "../lib/api";
 import { classNames } from "../lib/format";
 import type { AgentSetupSchema, CreateAgentInput, InitSelectionInput } from "../types";
+import { VoiceSetupFields } from "./VoiceSetupFields";
+import { WizardField } from "./WizardField";
 import { Button } from "./ui";
 
 const NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
@@ -103,16 +105,6 @@ function supportsLangfuse(provider: string, modelApi: string) {
 function visibleSteps(selection: InitSelectionInput): StepId[] {
   return STEP_ORDER.filter(
     (id) => id !== "observability" || supportsLangfuse(selection.provider, selection.model_api),
-  );
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <label className="wizard-field">
-      <span>{label}</span>
-      {hint ? <small>{hint}</small> : null}
-      {children}
-    </label>
   );
 }
 
@@ -327,19 +319,19 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
 
           {!loadingSchema && currentStepId === "basics" ? (
             <div className="wizard-grid wizard-grid-narrow">
-              <Field label="Agent name" hint="Lowercase letters, digits, hyphens, or underscores.">
+              <WizardField label="Agent name" hint="Lowercase letters, digits, hyphens, or underscores.">
                 <input
                   value={state.name}
                   placeholder="work-agent"
                   onChange={(event) => dispatch({ type: "patch", patch: { name: event.target.value } })}
                 />
-              </Field>
+              </WizardField>
             </div>
           ) : null}
 
           {!loadingSchema && currentStepId === "provider" && schema ? (
             <div className="wizard-grid">
-              <Field label="Provider">
+              <WizardField label="Provider">
                 <select
                   value={state.selection.provider}
                   onChange={(event) => onProviderChange(event.target.value)}
@@ -350,9 +342,9 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                     </option>
                   ))}
                 </select>
-              </Field>
+              </WizardField>
               {state.selection.provider !== "custom" ? (
-                <Field label="Model">
+                <WizardField label="Model">
                   <select
                     value={state.selection.model}
                     onChange={(event) =>
@@ -365,10 +357,10 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                       </option>
                     ))}
                   </select>
-                </Field>
+                </WizardField>
               ) : (
                 <>
-                  <Field label="Model API">
+                  <WizardField label="Model API">
                     <select value={state.selection.model_api} onChange={(event) => onModelApiChange(event.target.value)}>
                       {schema.custom_model_apis.map((modelApi) => (
                         <option key={modelApi} value={modelApi}>
@@ -376,16 +368,16 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                         </option>
                       ))}
                     </select>
-                  </Field>
-                  <Field label="Base URL">
+                  </WizardField>
+                  <WizardField label="Base URL">
                     <input
                       value={state.selection.base_url}
                       onChange={(event) =>
                         dispatch({ type: "patch-selection", patch: { base_url: event.target.value } })
                       }
                     />
-                  </Field>
-                  <Field label="Model name">
+                  </WizardField>
+                  <WizardField label="Model name">
                     <input
                       value={state.selection.model}
                       placeholder={schema.placeholders.model}
@@ -393,7 +385,7 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                         dispatch({ type: "patch-selection", patch: { model: event.target.value } })
                       }
                     />
-                  </Field>
+                  </WizardField>
                   <label className="wizard-checkbox">
                     <input
                       type="checkbox"
@@ -409,7 +401,7 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                   </label>
                 </>
               )}
-              <Field label="API key" hint="Leave blank to fill in later on the Agent page.">
+              <WizardField label="API key" hint="Leave blank to fill in later on the Agent page.">
                 <input
                   type="password"
                   value={state.selection.api_key}
@@ -418,13 +410,13 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                     dispatch({ type: "patch-selection", patch: { api_key: event.target.value } })
                   }
                 />
-              </Field>
+              </WizardField>
             </div>
           ) : null}
 
           {!loadingSchema && currentStepId === "tools" && schema ? (
             <div className="wizard-grid">
-              <Field label="Search provider">
+              <WizardField label="Search provider">
                 <select
                   value={state.selection.search_provider}
                   onChange={(event) =>
@@ -437,10 +429,10 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                     </option>
                   ))}
                 </select>
-              </Field>
+              </WizardField>
               {state.selection.search_provider !== "none" &&
               state.selection.search_provider !== state.selection.provider ? (
-                <Field label="Search API key">
+                <WizardField label="Search API key">
                   <input
                     type="password"
                     value={state.selection.search_api_key}
@@ -449,9 +441,9 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                       dispatch({ type: "patch-selection", patch: { search_api_key: event.target.value } })
                     }
                   />
-                </Field>
+                </WizardField>
               ) : null}
-              <Field label="Image generation">
+              <WizardField label="Image generation">
                 <select
                   value={state.selection.image_generation_provider}
                   onChange={(event) =>
@@ -467,10 +459,10 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                     </option>
                   ))}
                 </select>
-              </Field>
+              </WizardField>
               {state.selection.image_generation_provider !== "none" &&
               state.selection.image_generation_provider !== state.selection.provider ? (
-                <Field label="Image generation API key">
+                <WizardField label="Image generation API key">
                   <input
                     type="password"
                     value={state.selection.image_generation_api_key}
@@ -482,7 +474,7 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                       })
                     }
                   />
-                </Field>
+                </WizardField>
               ) : null}
             </div>
           ) : null}
@@ -504,7 +496,7 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
               </label>
               {state.selection.observability_enabled ? (
                 <>
-                  <Field label="Langfuse public key">
+                  <WizardField label="Langfuse public key">
                     <input
                       value={state.selection.langfuse_public_key}
                       onChange={(event) =>
@@ -514,8 +506,8 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                         })
                       }
                     />
-                  </Field>
-                  <Field label="Langfuse secret key">
+                  </WizardField>
+                  <WizardField label="Langfuse secret key">
                     <input
                       type="password"
                       value={state.selection.langfuse_secret_key}
@@ -527,8 +519,8 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                         })
                       }
                     />
-                  </Field>
-                  <Field label="Langfuse base URL">
+                  </WizardField>
+                  <WizardField label="Langfuse base URL">
                     <input
                       value={state.selection.langfuse_base_url}
                       onChange={(event) =>
@@ -538,197 +530,24 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                         })
                       }
                     />
-                  </Field>
+                  </WizardField>
                 </>
               ) : null}
             </div>
           ) : null}
 
           {!loadingSchema && currentStepId === "voice" && schema ? (
-            <div className="wizard-grid">
-              <label className="wizard-checkbox">
-                <input
-                  type="checkbox"
-                  checked={state.selection.voice_enabled}
-                  onChange={(event) =>
-                    dispatch({
-                      type: "patch-selection",
-                      patch: {
-                        voice_enabled: event.target.checked,
-                        voice_provider: event.target.checked
-                          ? state.selection.voice_provider === "none"
-                            ? "soniox"
-                            : state.selection.voice_provider
-                          : "none",
-                      },
-                    })
-                  }
-                />
-                <span>Enable voice mode</span>
-              </label>
-              {state.selection.voice_enabled ? (
-                <>
-                  <Field label="Voice provider">
-                    <select
-                      value={state.selection.voice_provider}
-                      onChange={(event) =>
-                        dispatch({ type: "patch-selection", patch: { voice_provider: event.target.value } })
-                      }
-                    >
-                      {schema.voice_providers
-                        .filter((provider) => provider.id !== "none")
-                        .map((provider) => (
-                          <option key={provider.id} value={provider.id}>
-                            {provider.id}
-                          </option>
-                        ))}
-                    </select>
-                  </Field>
-                  {state.selection.voice_provider === "custom" ? (
-                    <>
-                      <Field label="STT provider">
-                        <select
-                          value={state.selection.voice_stt_provider}
-                          onChange={(event) =>
-                            dispatch({
-                              type: "patch-selection",
-                              patch: { voice_stt_provider: event.target.value },
-                            })
-                          }
-                        >
-                          {schema.voice_custom_providers.map((provider) => (
-                            <option key={provider} value={provider}>
-                              {provider}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
-                      <Field label="STT API key">
-                        <input
-                          type="password"
-                          value={state.selection.voice_stt_api_key}
-                          autoComplete="off"
-                          onChange={(event) =>
-                            dispatch({
-                              type: "patch-selection",
-                              patch: { voice_stt_api_key: event.target.value },
-                            })
-                          }
-                        />
-                      </Field>
-                      <Field label="TTS provider">
-                        <select
-                          value={state.selection.voice_tts_provider}
-                          onChange={(event) =>
-                            dispatch({
-                              type: "patch-selection",
-                              patch: { voice_tts_provider: event.target.value },
-                            })
-                          }
-                        >
-                          {schema.voice_custom_providers.map((provider) => (
-                            <option key={provider} value={provider}>
-                              {provider}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
-                      <Field label="TTS API key">
-                        <input
-                          type="password"
-                          value={state.selection.voice_tts_api_key}
-                          autoComplete="off"
-                          onChange={(event) =>
-                            dispatch({
-                              type: "patch-selection",
-                              patch: { voice_tts_api_key: event.target.value },
-                            })
-                          }
-                        />
-                      </Field>
-                    </>
-                  ) : (
-                    <Field label="Voice API key">
-                      <input
-                        type="password"
-                        value={state.selection.voice_api_key}
-                        autoComplete="off"
-                        onChange={(event) =>
-                          dispatch({ type: "patch-selection", patch: { voice_api_key: event.target.value } })
-                        }
-                      />
-                    </Field>
-                  )}
-                  <label className="wizard-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={state.selection.voice_wake_enabled}
-                      onChange={(event) =>
-                        dispatch({
-                          type: "patch-selection",
-                          patch: { voice_wake_enabled: event.target.checked },
-                        })
-                      }
-                    />
-                    <span>Enable wake phrases</span>
-                  </label>
-                  {state.selection.voice_wake_enabled ? (
-                    <>
-                      <Field label="Wake phrases" hint="Comma-separated.">
-                        <input
-                          value={state.selection.voice_wake_phrases.join(", ")}
-                          onChange={(event) =>
-                            dispatch({
-                              type: "patch-selection",
-                              patch: {
-                                voice_wake_phrases: event.target.value
-                                  .split(",")
-                                  .map((part) => part.trim())
-                                  .filter(Boolean),
-                              },
-                            })
-                          }
-                        />
-                      </Field>
-                      <Field label="Exit phrases" hint="Comma-separated.">
-                        <input
-                          value={state.selection.voice_exit_phrases.join(", ")}
-                          onChange={(event) =>
-                            dispatch({
-                              type: "patch-selection",
-                              patch: {
-                                voice_exit_phrases: event.target.value
-                                  .split(",")
-                                  .map((part) => part.trim())
-                                  .filter(Boolean),
-                              },
-                            })
-                          }
-                        />
-                      </Field>
-                    </>
-                  ) : null}
-                  <label className="wizard-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={state.selection.voice_enable_interruptions}
-                      onChange={(event) =>
-                        dispatch({
-                          type: "patch-selection",
-                          patch: { voice_enable_interruptions: event.target.checked },
-                        })
-                      }
-                    />
-                    <span>Allow interruptions</span>
-                  </label>
-                </>
-              ) : null}
-            </div>
+            <VoiceSetupFields
+              schema={schema}
+              selection={state.selection}
+              onChange={(patch) => dispatch({ type: "patch-selection", patch })}
+              showEnableToggle
+            />
           ) : null}
 
           {!loadingSchema && currentStepId === "identity" ? (
             <div className="wizard-grid">
-              <Field label="Identity">
+              <WizardField label="Identity">
                 <textarea
                   className="identity-editor"
                   value={state.selection.identity}
@@ -736,7 +555,7 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                     dispatch({ type: "patch-selection", patch: { identity: event.target.value } })
                   }
                 />
-              </Field>
+              </WizardField>
               <div className="wizard-review">
                 <h4>Review</h4>
                 <ul>

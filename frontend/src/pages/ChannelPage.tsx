@@ -1,5 +1,6 @@
-import { FileText, Play, RefreshCw, Square, X } from "lucide-react";
+import { FileText, Play, RefreshCw, Square, Wrench, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ChannelSetupWizard } from "../components/ChannelSetupWizard";
 import { Button, IconButton, PageShell, PageToolbar, Panel, StatusBadge } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
 import {
@@ -8,9 +9,15 @@ import {
   startChannel,
   stopChannel,
 } from "../lib/api";
-import type { ChannelId, ChannelStatus, ChannelsResponse, ChannelRuntimeStatus } from "../types";
+import type { ChannelId, ChannelStatus, ChannelsResponse, ChannelRuntimeStatus, SetupChannelId } from "../types";
 
 type PendingAction = "start" | "stop" | "logs";
+
+const SETUP_CHANNELS = new Set<ChannelId>(["voice", "feishu", "weixin"]);
+
+function isSetupChannel(channel: ChannelId): channel is SetupChannelId {
+  return SETUP_CHANNELS.has(channel);
+}
 
 function statusTone(status: ChannelRuntimeStatus): "good" | "danger" | "muted" | "info" {
   if (status === "running") return "good";
@@ -28,23 +35,28 @@ function statusLabel(channel: ChannelStatus): string {
 
 function ChannelStatusMeta({
   channel,
-  onCopySetup,
+  onSetup,
 }: {
   channel: ChannelStatus;
-  onCopySetup: (hint: string) => void;
+  onSetup: (channel: SetupChannelId) => void;
 }) {
-  if (!channel.ready && channel.setup_hint) {
+  if (!channel.ready && isSetupChannel(channel.id)) {
+    const setupId = channel.id;
     return (
-      <button
+      <Button
         type="button"
-        className="status-badge status-badge-muted channel-setup-command"
-        title={`Click to copy: ${channel.setup_hint}`}
-        aria-label={`Copy setup command: ${channel.setup_hint}`}
-        onClick={() => onCopySetup(channel.setup_hint)}
+        variant="primary"
+        className="channel-setup-button"
+        onClick={() => onSetup(setupId)}
       >
-        {channel.setup_hint}
-      </button>
+        <Wrench size={13} />
+        Set up
+      </Button>
     );
+  }
+
+  if (!channel.ready) {
+    return <StatusBadge tone="muted">Not configured</StatusBadge>;
   }
 
   return <StatusBadge tone={statusTone(channel.status)}>{statusLabel(channel)}</StatusBadge>;
@@ -59,7 +71,7 @@ function ChannelRow({
   onLogs,
   onRefreshLogs,
   onCloseLogs,
-  onCopySetup,
+  onSetup,
 }: {
   channel: ChannelStatus;
   pending?: PendingAction;
@@ -69,7 +81,7 @@ function ChannelRow({
   onLogs: (channel: ChannelId) => void;
   onRefreshLogs: (channel: ChannelId) => void;
   onCloseLogs: (channel: ChannelId) => void;
-  onCopySetup: (hint: string) => void;
+  onSetup: (channel: SetupChannelId) => void;
 }) {
   const actionBusy = Boolean(pending && pending !== "logs");
   const logsBusy = pending === "logs";
@@ -79,7 +91,7 @@ function ChannelRow({
       <header className="channel-row-header">
         <h3 className="channel-row-title">{channel.label}</h3>
         <div className="channel-row-meta">
-          <ChannelStatusMeta channel={channel} onCopySetup={onCopySetup} />
+          <ChannelStatusMeta channel={channel} onSetup={onSetup} />
         </div>
       </header>
 
@@ -149,6 +161,7 @@ export function ChannelPage() {
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState<Partial<Record<ChannelId, PendingAction>>>({});
   const [logs, setLogs] = useState<Partial<Record<ChannelId, string>>>({});
+  const [setupChannelId, setSetupChannelId] = useState<SetupChannelId | null>(null);
   const logRequestsRef = useRef<Partial<Record<ChannelId, boolean>>>({});
 
   const channels = useMemo(() => data?.channels || [], [data]);
@@ -233,16 +246,6 @@ export function ChannelPage() {
     });
   };
 
-  const copySetup = async (hint: string) => {
-    setError("");
-    try {
-      await navigator.clipboard.writeText(hint);
-      setNotice(`Copied: ${hint}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
   useEffect(() => {
     const openChannels = Object.keys(logs) as ChannelId[];
     if (!openChannels.length) return undefined;
@@ -282,10 +285,23 @@ export function ChannelPage() {
             onLogs={(id) => void toggleLogs(id)}
             onRefreshLogs={(id) => void loadLogs(id)}
             onCloseLogs={closeLogs}
-            onCopySetup={(hint) => void copySetup(hint)}
+            onSetup={setSetupChannelId}
           />
         ))}
       </div>
+
+      {setupChannelId ? (
+        <ChannelSetupWizard
+          channel={setupChannelId}
+          open={Boolean(setupChannelId)}
+          onClose={() => setSetupChannelId(null)}
+          onComplete={() => {
+            setNotice(`${setupChannelId} setup complete.`);
+            void load();
+            void refreshAgents();
+          }}
+        />
+      ) : null}
     </PageShell>
   );
 }

@@ -378,6 +378,318 @@ def build_setup_schema() -> dict[str, Any]:
     }
 
 
+SETUP_CHANNELS = frozenset({"voice", "feishu", "weixin"})
+
+
+class ChannelSetupError(ValueError):
+    """Raised when channel setup preconditions fail or config cannot be written."""
+
+
+def _channel_configured(config: dict[str, Any], channel: str) -> bool:
+    channels_cfg = config.get("channels")
+    if not isinstance(channels_cfg, dict):
+        return False
+    data = channels_cfg.get(channel)
+    if not isinstance(data, dict):
+        return False
+    if channel == "voice":
+        return bool(data) and data.get("enabled") is not False
+    if channel == "feishu":
+        return bool(data.get("app_id") and data.get("app_secret"))
+    if channel == "weixin":
+        return bool(data.get("account_id"))
+    return False
+
+
+def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
+    """Return wizard metadata for the web voice channel setup client."""
+    model_provider = _config_provider_name(config)
+    model_api_key = _config_provider_api_key(config)
+    can_inherit_qwen_key = (
+        model_provider == PROVIDER_QWEN
+        and model_api_key
+        and model_api_key != API_KEY_PLACEHOLDER
+    )
+    return {
+        "voice_providers": [
+            {"id": provider, "description": _VOICE_PROVIDER_DESCRIPTIONS.get(provider, "")}
+            for provider in VOICE_PROVIDERS
+            if provider != "none"
+        ],
+        "voice_custom_providers": list(VOICE_CUSTOM_PROVIDERS),
+        "defaults": {
+            "voice_provider": "soniox",
+            "voice_stt_provider": VOICE_CUSTOM_PROVIDERS[0],
+            "voice_tts_provider": VOICE_CUSTOM_PROVIDERS[0],
+            "wake_phrases": list(DEFAULT_WAKE_PHRASES),
+            "exit_phrases": list(DEFAULT_EXIT_PHRASES),
+            "voice_wake_enabled": False,
+            "voice_enable_interruptions": False,
+        },
+        "placeholders": {
+            "soniox_api_key": SONIOX_KEY_PLACEHOLDER,
+            "qwen_voice_api_key": QWEN_KEY_PLACEHOLDER,
+        },
+        "inherit_api_key_from": {
+            "provider": model_provider,
+            "can_inherit_qwen_key": can_inherit_qwen_key,
+        },
+        "configured": _channel_configured(config, "voice"),
+        "can_force": True,
+    }
+
+
+def build_feishu_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
+    """Return wizard metadata for the web Feishu channel setup client."""
+    return {
+        "credential_modes": [
+            {
+                "id": "one_click",
+                "label": "Create new Feishu app",
+                "description": "Recommended. Create a new Feishu app and authorize it.",
+            },
+            {
+                "id": "manual",
+                "label": "Use existing App ID / App Secret",
+                "description": "Paste credentials from an app you already created in the Feishu developer console.",
+            },
+        ],
+        "defaults": {
+            "credential_mode": "one_click",
+            "stream": False,
+            "group_fetch_limit": 10,
+            "group_reply_only_when_mentioned": False,
+        },
+        "configured": _channel_configured(config, "feishu"),
+        "can_force": True,
+    }
+
+
+def build_weixin_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
+    """Return wizard metadata for the web Weixin channel setup client."""
+    from ...integrations.weixin.config import ILINK_BASE_URL, WEIXIN_CDN_BASE_URL
+
+    return {
+        "defaults": {
+            "base_url": ILINK_BASE_URL,
+            "cdn_base_url": WEIXIN_CDN_BASE_URL,
+            "owner_only": True,
+            "allow_users": [],
+            "media_enabled": True,
+        },
+        "configured": _channel_configured(config, "weixin"),
+        "can_force": True,
+    }
+
+
+def build_channel_setup_schema(channel: str, config: dict[str, Any]) -> dict[str, Any]:
+    """Return wizard metadata for a specific channel setup flow."""
+    normalized = str(channel or "").strip().lower()
+    if normalized == "voice":
+        return build_voice_setup_schema(config)
+    if normalized == "feishu":
+        return build_feishu_setup_schema(config)
+    if normalized == "weixin":
+        return build_weixin_setup_schema(config)
+    raise ChannelSetupError(f"Unknown channel: {channel}")
+
+
+def _resolve_voice_api_key(
+    voice_provider: str,
+    *,
+    explicit_api_key: str,
+    model_provider: str,
+    model_api_key: str,
+) -> str:
+    configured = explicit_api_key.strip()
+    if configured:
+        return configured
+    if voice_provider == "qwen" and normalize_provider_name(model_provider) == PROVIDER_QWEN:
+        return model_api_key if model_api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
+    return _voice_api_key_placeholder(voice_provider)
+
+
+def voice_init_selection_from_mapping(
+    data: Mapping[str, Any],
+    *,
+    config: dict[str, Any],
+) -> VoiceInitSelection:
+    """Build a ``VoiceInitSelection`` from API/JSON input."""
+    model_provider = _config_provider_name(config)
+    model_api_key = _config_provider_api_key(config)
+
+    voice_provider = str(data.get("voice_provider") or "soniox").strip() or "soniox"
+    if voice_provider not in {"soniox", "qwen", "custom"}:
+        raise ChannelSetupError("voice_provider must be one of: soniox, qwen, custom")
+
+    voice_api_key = str(data.get("voice_api_key") or "").strip()
+    voice_stt_provider = str(data.get("voice_stt_provider") or VOICE_CUSTOM_PROVIDERS[0]).strip()
+    voice_stt_api_key = str(data.get("voice_stt_api_key") or "").strip()
+    voice_tts_provider = str(data.get("voice_tts_provider") or VOICE_CUSTOM_PROVIDERS[0]).strip()
+    voice_tts_api_key = str(data.get("voice_tts_api_key") or "").strip()
+
+    if voice_provider == "custom":
+        if voice_stt_provider not in VOICE_CUSTOM_PROVIDERS:
+            raise ChannelSetupError("voice_stt_provider must be one of: soniox, qwen")
+        if voice_tts_provider not in VOICE_CUSTOM_PROVIDERS:
+            raise ChannelSetupError("voice_tts_provider must be one of: soniox, qwen")
+        voice_stt_api_key = _resolve_voice_api_key(
+            voice_stt_provider,
+            explicit_api_key=voice_stt_api_key,
+            model_provider=model_provider,
+            model_api_key=model_api_key,
+        )
+        voice_tts_api_key = _resolve_voice_api_key(
+            voice_tts_provider,
+            explicit_api_key=voice_tts_api_key,
+            model_provider=model_provider,
+            model_api_key=model_api_key,
+        )
+    else:
+        voice_api_key = _resolve_voice_api_key(
+            voice_provider,
+            explicit_api_key=voice_api_key,
+            model_provider=model_provider,
+            model_api_key=model_api_key,
+        )
+
+    voice_wake_enabled = bool(data.get("voice_wake_enabled", False))
+    voice_wake_phrases = _phrase_tuple(data.get("voice_wake_phrases"))
+    voice_exit_phrases = _phrase_tuple(data.get("voice_exit_phrases"))
+    if voice_wake_enabled:
+        if not voice_wake_phrases:
+            voice_wake_phrases = DEFAULT_WAKE_PHRASES
+        if not voice_exit_phrases:
+            voice_exit_phrases = DEFAULT_EXIT_PHRASES
+
+    return VoiceInitSelection(
+        voice_provider=voice_provider,
+        voice_api_key=voice_api_key,
+        voice_stt_provider=voice_stt_provider,
+        voice_stt_api_key=voice_stt_api_key,
+        voice_tts_provider=voice_tts_provider,
+        voice_tts_api_key=voice_tts_api_key,
+        voice_enable_interruptions=bool(data.get("voice_enable_interruptions", False)),
+        voice_wake_enabled=voice_wake_enabled,
+        voice_wake_phrases=voice_wake_phrases,
+        voice_exit_phrases=voice_exit_phrases,
+    )
+
+
+def feishu_init_selection_from_mapping(data: Mapping[str, Any]) -> FeishuInitSelection:
+    """Build a ``FeishuInitSelection`` from API/JSON input."""
+    credential_mode = str(data.get("credential_mode") or "manual").strip() or "manual"
+    if credential_mode not in {"one_click", "manual"}:
+        raise ChannelSetupError("credential_mode must be one of: one_click, manual")
+
+    app_id = str(data.get("app_id") or "").strip()
+    app_secret = str(data.get("app_secret") or "").strip()
+    if not app_id or not app_secret:
+        raise ChannelSetupError("app_id and app_secret are required")
+
+    group_fetch_limit = int(data.get("group_fetch_limit", 10))
+    if group_fetch_limit < 0:
+        raise ChannelSetupError("group_fetch_limit must be >= 0")
+
+    return FeishuInitSelection(
+        app_id=app_id,
+        app_secret=app_secret,
+        stream=bool(data.get("stream", False)),
+        group_fetch_limit=group_fetch_limit,
+        group_reply_only_when_mentioned=bool(data.get("group_reply_only_when_mentioned", False)),
+        credential_mode=credential_mode,
+    )
+
+
+def weixin_init_selection_from_mapping(data: Mapping[str, Any]) -> WeixinInitSelection:
+    """Build a ``WeixinInitSelection`` from API/JSON input."""
+    from ...integrations.weixin.config import ILINK_BASE_URL, WEIXIN_CDN_BASE_URL
+
+    account_id = str(data.get("account_id") or "").strip()
+    owner_user_id = str(data.get("owner_user_id") or "").strip()
+    if not account_id or not owner_user_id:
+        raise ChannelSetupError("account_id and owner_user_id are required")
+
+    base_url = str(data.get("base_url") or ILINK_BASE_URL).strip().rstrip("/") or ILINK_BASE_URL
+    cdn_base_url = str(data.get("cdn_base_url") or WEIXIN_CDN_BASE_URL).strip().rstrip("/") or WEIXIN_CDN_BASE_URL
+    allow_users = _normalize_repeated_values(data.get("allow_users"))
+
+    return WeixinInitSelection(
+        account_id=account_id,
+        owner_user_id=owner_user_id,
+        base_url=base_url,
+        cdn_base_url=cdn_base_url,
+        owner_only=bool(data.get("owner_only", True)),
+        allow_users=allow_users,
+        media_enabled=bool(data.get("media_enabled", True)),
+    )
+
+
+def _load_agent_config_file(config_dir: Path) -> tuple[Path, dict[str, Any]]:
+    config_file = config_dir / BaseAgentConfig.CONFIG_FILENAME
+    if not config_file.is_file():
+        raise ChannelSetupError(
+            f"Config not found: {config_file}. Create an agent first, then return to channel setup."
+        )
+    try:
+        with config_file.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+    except yaml.YAMLError as exc:
+        raise ChannelSetupError(f"Invalid YAML in {config_file}: {exc}") from exc
+    if not isinstance(config, dict):
+        raise ChannelSetupError(f"Configuration must be a mapping: {config_file}")
+    return config_file, config
+
+
+def apply_channel_setup(
+    *,
+    channel: str,
+    config_dir: Path,
+    selection_data: Mapping[str, Any],
+    force: bool = False,
+) -> dict[str, Any]:
+    """Apply channel setup to an existing agent config directory."""
+    normalized = str(channel or "").strip().lower()
+    if normalized not in SETUP_CHANNELS:
+        raise ChannelSetupError(f"Unknown channel: {channel}")
+
+    config_dir = config_dir.expanduser().resolve()
+    config_file, config = _load_agent_config_file(config_dir)
+    channels_cfg = config.setdefault("channels", {})
+    if not isinstance(channels_cfg, dict):
+        raise ChannelSetupError("channels must be a dictionary")
+
+    if normalized in channels_cfg and not force:
+        raise ChannelSetupError(
+            f"channels.{normalized} already exists. Set force=true to overwrite."
+        )
+
+    if normalized == "voice":
+        selection = voice_init_selection_from_mapping(selection_data, config=config)
+        channels_cfg["voice"] = _voice_channel_config(selection)
+    elif normalized == "feishu":
+        selection = feishu_init_selection_from_mapping(selection_data)
+        _ensure_api_port(channels_cfg)
+        channels_cfg["feishu"] = _feishu_channel_config(selection)
+    else:
+        selection = weixin_init_selection_from_mapping(selection_data)
+        credentials_data = selection_data.get("credentials")
+        if isinstance(credentials_data, dict):
+            from ...integrations.weixin.state import WeixinCredentials, WeixinStateStore
+
+            store = WeixinStateStore(config_dir)
+            store.save_credentials(WeixinCredentials.from_dict(credentials_data))
+        _ensure_api_port(channels_cfg)
+        channels_cfg["weixin"] = _weixin_channel_config(selection)
+
+    config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
+    return {
+        "channel": normalized,
+        "config_path": str(config_file),
+        "configured": True,
+    }
+
+
 def _search_api_key_placeholder(provider: str) -> str:
     if provider == "openai":
         return OPENAI_SEARCH_API_KEY_PLACEHOLDER
@@ -1925,8 +2237,19 @@ def handle_init_voice(args: argparse.Namespace) -> int:
         ui.print_panel(str(exc), title="Voice Setup Stopped", border_style="red")
         return 1
 
-    channels_cfg["voice"] = _voice_channel_config(selection)
-    config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
+    from dataclasses import asdict
+
+    try:
+        apply_channel_setup(
+            channel="voice",
+            config_dir=config_file.parent,
+            selection_data=asdict(selection),
+            force=bool(getattr(args, "force", False)),
+        )
+    except ChannelSetupError as exc:
+        ui.print_panel(str(exc), title="Voice Setup Stopped", border_style="red")
+        return 1
+
     _print_voice_post_setup(config_file, selection, agent_name=agent_name)
     return 0
 
@@ -2162,7 +2485,13 @@ def _print_feishu_post_setup(
         ui.print_panel(next_steps, title="Next Steps")
 
 
-def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
+def _register_feishu_app_via_qr(
+    *,
+    on_qr_update: Optional[Callable[[str, Optional[int]], None]] = None,
+    on_status: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[Any] = None,
+    source: str = "xagent-cli",
+) -> Optional[Tuple[str, str]]:
     try:
         from lark_oapi import register_app
         from lark_oapi.scene.registration import (
@@ -2171,19 +2500,28 @@ def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
             RegisterAppError,
         )
     except ImportError:
-        print("One-click registration requires lark-oapi>=1.5.5.")
-        print("Upgrade with: pip install -U 'lark-oapi>=1.5.5'")
-        print("Or rerun with --manual to enter the App ID/Secret yourself.")
+        message = "One-click registration requires lark-oapi>=1.5.5."
+        if on_status is None:
+            print(message)
+            print("Upgrade with: pip install -U 'lark-oapi>=1.5.5'")
+            print("Or rerun with --manual to enter the App ID/Secret yourself.")
+        else:
+            on_status("error")
         return None
 
     import threading
 
-    cancel_event = threading.Event()
+    local_cancel = cancel_event or threading.Event()
 
     def on_qr_code(qr_payload: Any) -> None:
         url, expire_in, user_code = _normalize_feishu_qr_payload(qr_payload)
         expiry_label = _format_feishu_expiry(expire_in)
         del user_code, expiry_label
+
+        if on_qr_update is not None:
+            if url:
+                on_qr_update(url, expire_in)
+            return
 
         if not url:
             print("\nFeishu returned an authorization step, but no browser link was included.")
@@ -2204,41 +2542,60 @@ def _register_feishu_app_via_qr() -> Optional[Tuple[str, str]]:
     def on_status_change(info: dict) -> None:
         status = info.get("status")
         if status == "domain_switched":
-            print("Switched to Lark Suite domain, continuing...")
+            if on_status is not None:
+                on_status("domain_switched")
+            else:
+                print("Switched to Lark Suite domain, continuing...")
 
     try:
         result = register_app(
             on_qr_code=on_qr_code,
             on_status_change=on_status_change,
-            source="xagent-cli",
-            cancel_event=cancel_event,
+            source=source,
+            cancel_event=local_cancel,
         )
     except KeyboardInterrupt:
-        cancel_event.set()
-        print("\nRegistration cancelled.")
+        local_cancel.set()
+        if on_status is not None:
+            on_status("cancelled")
+        else:
+            print("\nRegistration cancelled.")
         return None
     except AppAccessDeniedError:
-        print("\nAuthorization was denied. Ask a Feishu admin to approve the app, then retry.")
+        if on_status is not None:
+            on_status("denied")
+        else:
+            print("\nAuthorization was denied. Ask a Feishu admin to approve the app, then retry.")
         return None
     except AppExpiredError:
-        print("\nThe authorization request expired. Rerun `xagent feishu setup` to try again.")
+        if on_status is not None:
+            on_status("expired")
+        else:
+            print("\nThe authorization request expired. Rerun `xagent feishu setup` to try again.")
         return None
     except RegisterAppError as exc:
         error, description = (exc.args + ("", ""))[:2]
-        print(f"\nRegistration failed: {error} {description}".rstrip())
+        if on_status is not None:
+            on_status(f"error:{error} {description}".strip())
+        else:
+            print(f"\nRegistration failed: {error} {description}".rstrip())
         return None
 
     app_id = str(result.get("client_id") or "").strip()
     app_secret = str(result.get("client_secret") or "").strip()
     if not app_id or not app_secret:
-        print("\nRegistration did not return credentials. Rerun with --manual to enter them yourself.")
+        if on_status is not None:
+            on_status("error:no_credentials")
+        else:
+            print("\nRegistration did not return credentials. Rerun with --manual to enter them yourself.")
         return None
 
     user_info = result.get("user_info") or {}
     user_name = user_info.get("name") or user_info.get("en_name")
-    if user_name:
-        print(f"\nAuthorized by {user_name}.")
-    print(f"Created Feishu app: {app_id}")
+    if on_status is None:
+        if user_name:
+            print(f"\nAuthorized by {user_name}.")
+        print(f"Created Feishu app: {app_id}")
     return app_id, app_secret
 
 
@@ -2313,10 +2670,19 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
     if selection is None:
         return 1
 
-    _ensure_api_port(channels_cfg)
-    channels_cfg["feishu"] = _feishu_channel_config(selection)
+    from dataclasses import asdict
 
-    config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
+    try:
+        apply_channel_setup(
+            channel="feishu",
+            config_dir=config_file.parent,
+            selection_data=asdict(selection),
+            force=bool(args.force),
+        )
+    except ChannelSetupError as exc:
+        ui.print_panel(str(exc), title="Feishu Setup Stopped", border_style="red")
+        return 1
+
     _print_feishu_post_setup(
         config_file,
         selection,
@@ -2512,9 +2878,19 @@ def handle_init_weixin(args: argparse.Namespace) -> int:
     if selection is None:
         return 1
 
-    _ensure_api_port(channels_cfg)
-    channels_cfg["weixin"] = _weixin_channel_config(selection)
-    config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
+    from dataclasses import asdict
+
+    try:
+        apply_channel_setup(
+            channel="weixin",
+            config_dir=config_file.parent,
+            selection_data=asdict(selection),
+            force=bool(getattr(args, "force", False)),
+        )
+    except ChannelSetupError as exc:
+        ui.print_panel(str(exc), title="Weixin Setup Stopped", border_style="red")
+        return 1
+
     _print_weixin_post_setup(
         config_file,
         selection,

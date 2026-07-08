@@ -9,7 +9,15 @@ import type {
   ChannelActionResponse,
   ChannelId,
   ChannelLogsResponse,
+  ChannelSetupInput,
+  ChannelSetupResponse,
+  ChannelSetupSchema,
   ChannelsResponse,
+  FeishuSetupSchema,
+  QrSessionResponse,
+  SetupChannelId,
+  VoiceSetupSchema,
+  WeixinSetupSchema,
   FileReadResult,
   FileNode,
   MessageSearchResponse,
@@ -225,6 +233,41 @@ export async function restartChannel(channel: ChannelId): Promise<ChannelActionR
 
 export async function getChannelLogs(channel: ChannelId, lines = 80): Promise<ChannelLogsResponse> {
   return requestJson(`/api/channels/${channel}/logs?lines=${lines}`);
+}
+
+export async function getChannelSetupSchema(channel: SetupChannelId): Promise<ChannelSetupSchema> {
+  return requestJson(`/api/channels/${channel}/setup-schema`);
+}
+
+export async function setupChannel(
+  channel: SetupChannelId,
+  input: ChannelSetupInput,
+): Promise<ChannelSetupResponse> {
+  return requestJson(`/api/channels/${channel}/setup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function startChannelQr(channel: Extract<ChannelId, "feishu" | "weixin">): Promise<QrSessionResponse> {
+  return requestJson(`/api/channels/${channel}/qr/start`, { method: "POST" });
+}
+
+export async function pollChannelQr(
+  channel: Extract<ChannelId, "feishu" | "weixin">,
+  sessionId: string,
+): Promise<QrSessionResponse> {
+  return requestJson(`/api/channels/${channel}/qr/${encodeURIComponent(sessionId)}`);
+}
+
+export async function cancelChannelQr(
+  channel: Extract<ChannelId, "feishu" | "weixin">,
+  sessionId: string,
+): Promise<{ status: string; session_id: string }> {
+  return requestJson(`/api/channels/${channel}/qr/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
 }
 
 export function workspaceBlobUrl(path: string): string {

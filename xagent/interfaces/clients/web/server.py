@@ -57,7 +57,7 @@ class WebClientServer:
             version="1.0.0",
         )
         register_agent_session_routes(app, self.session)
-        register_channel_routes(app, self.session.get_current_config_dir)
+        register_channel_routes(app, self.session)
         register_admin_routes(app, self.session.get_current_admin)
         register_api_proxy(app, resolve_api_url=self.session.get_current_api_url, logger=self.logger)
         register_spa_routes(app, static_dir=self.static_dir, logger=self.logger)

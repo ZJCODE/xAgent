@@ -74,9 +74,8 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows["api"]["status"], "stopped")
         self.assertTrue(rows["api"]["ready"])
         self.assertEqual(rows["voice"]["status"], "disabled")
-        self.assertEqual(rows["voice"]["setup_hint"], "xagent voice setup")
-        self.assertEqual(rows["feishu"]["setup_hint"], "xagent feishu setup")
-        self.assertEqual(rows["weixin"]["setup_hint"], "xagent weixin setup")
+        self.assertEqual(rows["feishu"]["setup_hint"], "")
+        self.assertEqual(rows["weixin"]["setup_hint"], "")
 
     async def test_start_uses_selected_agent_config_dir(self):
         self.server.session.select("agent_b")
@@ -129,6 +128,148 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         stop.assert_called_once_with(self.agent_b_path.resolve() / "run" / "feishu.pid")
         self.assertEqual(start.call_args.kwargs["pid_path"], self.agent_b_path.resolve() / "run" / "feishu.pid")
+
+    async def test_voice_setup_schema_reports_unconfigured_state(self):
+        async with await self._client() as client:
+            response = await client.get("/api/channels/voice/setup-schema")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["configured"])
+        self.assertIn("soniox", {row["id"] for row in payload["voice_providers"]})
+
+    async def test_voice_setup_writes_config_for_selected_agent(self):
+        async with await self._client() as client:
+            response = await client.post(
+                "/api/channels/voice/setup",
+                json={
+                    "force": False,
+                    "selection": {
+                        "voice_provider": "soniox",
+                        "voice_api_key": "voice-test-key",
+                        "voice_wake_enabled": False,
+                        "voice_enable_interruptions": False,
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertTrue(body["channel"]["ready"])
+
+        config = yaml.safe_load((self.agent_a_path / "config.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(config["channels"]["voice"]["provider"], "soniox")
+
+    async def test_feishu_manual_setup_writes_credentials(self):
+        async with await self._client() as client:
+            response = await client.post(
+                "/api/channels/feishu/setup",
+                json={
+                    "force": False,
+                    "selection": {
+                        "credential_mode": "manual",
+                        "app_id": "web_app",
+                        "app_secret": "web_secret",
+                        "stream": True,
+                        "group_fetch_limit": 5,
+                        "group_reply_only_when_mentioned": True,
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        config = yaml.safe_load((self.agent_a_path / "config.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(config["channels"]["feishu"]["app_id"], "web_app")
+        self.assertEqual(config["channels"]["feishu"]["app_secret"], "web_secret")
+        self.assertIs(config["channels"]["feishu"]["stream"], True)
+
+    async def test_voice_setup_conflict_without_force_returns_409(self):
+        async with await self._client() as client:
+            first = await client.post(
+                "/api/channels/voice/setup",
+                json={"force": False, "selection": {"voice_provider": "soniox"}},
+            )
+            second = await client.post(
+                "/api/channels/voice/setup",
+                json={"force": False, "selection": {"voice_provider": "qwen"}},
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 409)
+
+    async def test_voice_setup_invalidates_cached_admin_config(self):
+        async with await self._client() as client:
+            initial = await client.get("/api/agent/config")
+            self.assertEqual(initial.status_code, 200)
+            self.assertNotIn("voice:", initial.json()["config"])
+
+            await client.post(
+                "/api/channels/voice/setup",
+                json={
+                    "force": False,
+                    "selection": {
+                        "voice_provider": "soniox",
+                        "voice_api_key": "voice-test-key",
+                    },
+                },
+            )
+
+            updated = await client.get("/api/agent/config")
+            self.assertEqual(updated.status_code, 200)
+            self.assertIn("voice:", updated.json()["config"])
+
+    async def test_start_channel_qr_returns_session_payload(self):
+        with patch(
+            "xagent.interfaces.clients.web.qr_sessions.ChannelQrSessionManager.start_feishu",
+        ) as start_feishu:
+            from xagent.interfaces.clients.web.qr_sessions import ChannelQrSession
+
+            start_feishu.return_value = ChannelQrSession(
+                id="sess_test",
+                channel="feishu",
+                status="pending",
+            )
+            async with await self._client() as client:
+                response = await client.post("/api/channels/feishu/qr/start")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["session_id"], "sess_test")
+
+    async def test_start_weixin_qr_populates_qr_url(self):
+        import asyncio
+        import time
+        from unittest.mock import patch
+
+        async def fake_qr_login(**kwargs):
+            render = kwargs.get("render_qr_url")
+            if render is not None:
+                render("https://liteapp.weixin.qq.com/q/test?qrcode=abc")
+            await asyncio.sleep(3600)
+
+        with patch(
+            "xagent.integrations.weixin.client.qr_login",
+            side_effect=fake_qr_login,
+        ):
+            async with await self._client() as client:
+                response = await client.post("/api/channels/weixin/qr/start")
+                self.assertEqual(response.status_code, 200)
+                session_id = response.json()["session_id"]
+
+                deadline = time.monotonic() + 3.0
+                qr_url = None
+                while time.monotonic() < deadline:
+                    poll = await client.get(f"/api/channels/weixin/qr/{session_id}")
+                    self.assertEqual(poll.status_code, 200)
+                    body = poll.json()
+                    if body.get("qr_url"):
+                        qr_url = body["qr_url"]
+                        break
+                    await asyncio.sleep(0.1)
+
+                await client.delete(f"/api/channels/weixin/qr/{session_id}")
+
+        self.assertEqual(qr_url, "https://liteapp.weixin.qq.com/q/test?qrcode=abc")
 
 
 if __name__ == "__main__":

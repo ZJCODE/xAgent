@@ -58,7 +58,6 @@ export function AgentPage() {
   const [configData, setConfigData] = useState<AgentConfig | null>(null);
   const [configEditorValue, setConfigEditorValue] = useState("");
   const [configSaving, setConfigSaving] = useState(false);
-  const [configLoaded, setConfigLoaded] = useState(false);
   const [configNotice, setConfigNotice] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
@@ -88,12 +87,10 @@ export function AgentPage() {
   };
 
   const loadConfig = async () => {
-    if (configLoaded) return;
     try {
       const data = await getAgentConfig();
       setConfigData(data);
       setConfigEditorValue(data.config);
-      setConfigLoaded(true);
       setConfigNotice("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -101,8 +98,17 @@ export function AgentPage() {
   };
 
   useEffect(() => {
+    setConfigData(null);
+    setConfigEditorValue("");
+    setConfigNotice("");
     void load();
-  }, []);
+  }, [selectedAgent]);
+
+  useEffect(() => {
+    if (activeTab === "config") {
+      void loadConfig();
+    }
+  }, [activeTab, selectedAgent]);
 
   const saveIdentity = async () => {
     const value = editorValue.trim();
@@ -189,7 +195,14 @@ export function AgentPage() {
         title="Agent"
         subtitle="Runtime identity and local maintenance"
         actions={
-          <IconButton type="button" onClick={load} title="Refresh">
+          <IconButton
+            type="button"
+            onClick={() => {
+              void load();
+              if (activeTab === "config") void loadConfig();
+            }}
+            title="Refresh"
+          >
             <RefreshCw size={16} />
           </IconButton>
         }
@@ -234,7 +247,6 @@ export function AgentPage() {
               onClick={() => {
                 setActiveTab("config");
                 setError("");
-                if (!configLoaded) loadConfig();
               }}
             >
               config.yaml

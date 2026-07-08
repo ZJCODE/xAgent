@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from ...base import BaseAgentConfig
 from ...cli.channels import (
@@ -21,8 +22,11 @@ from ...cli.channels import (
     weixin_config,
 )
 from ...cli.processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
+from .qr_sessions import get_qr_session_manager
+from .session import WebAgentSession
 
 ChannelId = Literal["api", "voice", "feishu", "weixin"]
+SetupChannelId = Literal["voice", "feishu", "weixin"]
 
 CHANNEL_LABELS: dict[str, str] = {
     CHANNEL_API: "API",
@@ -31,14 +35,26 @@ CHANNEL_LABELS: dict[str, str] = {
     CHANNEL_WEIXIN: "Weixin",
 }
 MANAGED_CHANNELS: tuple[str, ...] = (CHANNEL_API, CHANNEL_VOICE, CHANNEL_FEISHU, CHANNEL_WEIXIN)
-SETUP_HINTS: dict[str, str] = {
-    CHANNEL_VOICE: "xagent voice setup",
-    CHANNEL_FEISHU: "xagent feishu setup",
-    CHANNEL_WEIXIN: "xagent weixin setup",
-}
+SETUP_CHANNELS: tuple[str, ...] = (CHANNEL_VOICE, CHANNEL_FEISHU, CHANNEL_WEIXIN)
+
+class ChannelSetupInput(BaseModel):
+    force: bool = False
+    selection: dict[str, Any] = Field(default_factory=dict)
 
 
-def register_channel_routes(app: FastAPI, resolve_config_dir: Callable[[], Path]) -> None:
+def register_channel_routes(
+    app: FastAPI,
+    session_or_resolver: WebAgentSession | Callable[[], Path],
+) -> None:
+    if isinstance(session_or_resolver, WebAgentSession):
+        session = session_or_resolver
+
+        def resolve_config_dir() -> Path:
+            return session.get_current_config_dir()
+    else:
+        session = None
+        resolve_config_dir = session_or_resolver
+
     @app.get("/api/channels", tags=["Channels"])
     async def list_channels():
         config_dir = resolve_config_dir().expanduser().resolve()
@@ -48,6 +64,59 @@ def register_channel_routes(app: FastAPI, resolve_config_dir: Callable[[], Path]
             "channels": [_channel_status(config_dir, config, channel) for channel in MANAGED_CHANNELS],
         }
 
+    if session is not None:
+        @app.get("/api/channels/{channel}/setup-schema", tags=["Channels"])
+        async def channel_setup_schema(channel: str):
+            return session.channel_setup_schema(channel)
+
+        @app.post("/api/channels/{channel}/setup", tags=["Channels"])
+        async def channel_setup(channel: str, input_data: ChannelSetupInput):
+            normalized = _normalize_setup_channel(channel)
+            result = session.apply_channel_setup(
+                normalized,
+                selection_data=input_data.selection,
+                force=input_data.force,
+            )
+            config_dir = resolve_config_dir().expanduser().resolve()
+            config = _safe_load_config(config_dir)
+            return {
+                "status": "ok",
+                "setup": result,
+                "channel": _channel_status(config_dir, config, normalized),
+            }
+
+        @app.post("/api/channels/{channel}/qr/start", tags=["Channels"])
+        async def start_channel_qr(channel: str):
+            normalized = _normalize_setup_channel(channel)
+            if normalized not in {CHANNEL_FEISHU, CHANNEL_WEIXIN}:
+                raise HTTPException(status_code=400, detail=f"{normalized} does not use QR setup")
+            manager = get_qr_session_manager()
+            if normalized == CHANNEL_FEISHU:
+                qr_session = manager.start_feishu()
+            else:
+                config_dir = resolve_config_dir().expanduser().resolve()
+                qr_session = manager.start_weixin(config_dir=config_dir)
+            return qr_session.to_dict()
+
+        @app.get("/api/channels/{channel}/qr/{session_id}", tags=["Channels"])
+        async def poll_channel_qr(channel: str, session_id: str):
+            normalized = _normalize_setup_channel(channel)
+            manager = get_qr_session_manager()
+            qr_session = manager.get(session_id)
+            if qr_session is None or qr_session.channel != normalized:
+                raise HTTPException(status_code=404, detail="QR session not found")
+            return qr_session.to_dict()
+
+        @app.delete("/api/channels/{channel}/qr/{session_id}", tags=["Channels"])
+        async def cancel_channel_qr(channel: str, session_id: str):
+            normalized = _normalize_setup_channel(channel)
+            manager = get_qr_session_manager()
+            qr_session = manager.get(session_id)
+            if qr_session is None or qr_session.channel != normalized:
+                raise HTTPException(status_code=404, detail="QR session not found")
+            manager.cancel(session_id)
+            return {"status": "ok", "session_id": session_id}
+
     @app.post("/api/channels/{channel}/start", tags=["Channels"])
     async def start_channel(channel: str):
         channel = _normalize_channel(channel)
@@ -55,7 +124,10 @@ def register_channel_routes(app: FastAPI, resolve_config_dir: Callable[[], Path]
         config = _safe_load_config(config_dir)
         status = _channel_status(config_dir, config, channel)
         if not status["ready"]:
-            raise HTTPException(status_code=400, detail=status.get("setup_hint") or f"{status['label']} is not ready")
+            raise HTTPException(
+                status_code=400,
+                detail=f"{status['label']} is not configured. Set it up from the Channels page.",
+            )
         if status["pid"] is not None:
             return {"status": "ok", "message": f"{channel} already running", "channel": status}
 
@@ -92,7 +164,10 @@ def register_channel_routes(app: FastAPI, resolve_config_dir: Callable[[], Path]
         config = _safe_load_config(config_dir)
         status = _channel_status(config_dir, config, channel)
         if not status["ready"]:
-            raise HTTPException(status_code=400, detail=status.get("setup_hint") or f"{status['label']} is not ready")
+            raise HTTPException(
+                status_code=400,
+                detail=f"{status['label']} is not configured. Set it up from the Channels page.",
+            )
 
         paths = managed_paths(config_dir, channel)
         stopped, message = stop_managed_process(paths.pid_path)
@@ -133,6 +208,13 @@ def _normalize_channel(channel: str) -> str:
     return normalized
 
 
+def _normalize_setup_channel(channel: str) -> str:
+    normalized = str(channel or "").strip().lower()
+    if normalized not in SETUP_CHANNELS:
+        raise HTTPException(status_code=404, detail=f"Unknown channel: {channel}")
+    return normalized
+
+
 def _safe_load_config(config_dir: Path) -> dict[str, Any]:
     try:
         return load_config_file(config_dir)
@@ -155,7 +237,7 @@ def _channel_command(channel: str, config_dir: Path) -> list[str]:
 def _channel_status(config_dir: Path, config: dict[str, Any], channel: str) -> dict[str, Any]:
     paths = managed_paths(config_dir, channel)
     pid = running_pid(paths.pid_path)
-    configured, ready, detail, setup_hint = _readiness(config, channel)
+    configured, ready, detail, _setup_hint = _readiness(config, channel)
     runtime_status = "running" if pid is not None else "stopped"
     if not ready:
         runtime_status = "disabled" if not configured else "error"
@@ -175,7 +257,7 @@ def _channel_status(config_dir: Path, config: dict[str, Any], channel: str) -> d
         "can_start": ready and pid is None,
         "can_stop": pid is not None,
         "can_restart": ready,
-        "setup_hint": setup_hint,
+        "setup_hint": "",
     }
 
 
@@ -190,19 +272,19 @@ def _readiness(config: dict[str, Any], channel: str) -> tuple[bool, bool, str, s
         data = voice_config(config)
         configured = bool(data) and data.get("enabled") is not False
         provider = str(data.get("provider") or "custom").strip() if isinstance(data, dict) and data else ""
-        return configured, configured, provider, "" if configured else SETUP_HINTS[channel]
+        return configured, configured, provider, ""
 
     if channel == CHANNEL_FEISHU:
         data = feishu_config(config)
         configured = bool(data.get("app_id") and data.get("app_secret"))
         detail = f"app {data.get('app_id')}" if data.get("app_id") else ""
-        return configured, configured, detail, "" if configured else SETUP_HINTS[channel]
+        return configured, configured, detail, ""
 
     if channel == CHANNEL_WEIXIN:
         data = weixin_config(config)
         configured = bool(data.get("account_id"))
         detail = f"account {data.get('account_id')}" if data.get("account_id") else ""
-        return configured, configured, detail, "" if configured else SETUP_HINTS[channel]
+        return configured, configured, detail, ""
 
     return False, False, "", ""
 
