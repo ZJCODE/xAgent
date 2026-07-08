@@ -25,9 +25,9 @@ interface AppLayoutProps {
 
 const navItems: Array<{ route: RoutePath; label: string; icon: ReactNode }> = [
   { route: "/", label: "Chat", icon: <MessageSquareText size={15} /> },
-  { route: "/memory", label: "Memory", icon: <Database size={15} /> },
   { route: "/message", label: "Messages", icon: <Activity size={15} /> },
   { route: "/workspace", label: "Workspace", icon: <Files size={15} /> },
+  { route: "/memory", label: "Memory", icon: <Database size={15} /> },
   { route: "/skills", label: "Skills", icon: <Package size={15} /> },
   { route: "/tasks", label: "Tasks", icon: <ListTodo size={15} /> },
   { route: "/channels", label: "Channels", icon: <RadioTower size={15} /> },
