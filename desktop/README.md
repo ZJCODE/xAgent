@@ -34,7 +34,8 @@ cd desktop
 npm install
 
 npm run build        # current platform
-npm run build:mac    # .dmg
+npm run build:mac           # .dmg (signed if a cert is available)
+npm run build:mac:unsigned  # .dmg without code signing (local dev)
 npm run build:win    # NSIS .exe (run on Windows or CI)
 npm run build:linux  # .AppImage
 npm run build:all    # mac + win + linux (usually CI only)
@@ -57,6 +58,19 @@ Place custom icons in `desktop/build/` before building:
 - `icon.png` — Linux (512×512 recommended)
 
 Without these files, electron-builder falls back to the default Electron icon.
+
+### macOS signing stuck?
+
+If the build hangs at `signing file=dist/mac-arm64/xAgent.app`:
+
+1. **Check Keychain** — macOS may be waiting for your password. Open **Keychain Access**, unlock the login keychain, and look for a hidden prompt.
+2. **Cancel and rebuild unsigned** (fine for local testing):
+   ```bash
+   npm run build:mac:unsigned
+   ```
+3. **Certificate type** — `Apple Development` is for local dev only. Public releases need **Developer ID Application** plus notarization.
+
+Unsigned `.app` / `.dmg` still runs locally; Gatekeeper may warn on first open (right-click → Open).
 
 ## Publish to GitHub Releases
 

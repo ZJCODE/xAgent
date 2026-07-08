@@ -9,6 +9,7 @@
     "start": "electron .",
     "build": "electron-builder --publish never",
     "build:mac": "electron-builder --mac dmg --publish never",
+    "build:mac:unsigned": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --publish never",
     "build:win": "electron-builder --win nsis --publish never",
     "build:linux": "electron-builder --linux AppImage --publish never",
     "build:all": "electron-builder -mwl --publish never"
@@ -56,7 +57,7 @@
     }
   },
   "devDependencies": {
-    "electron": "^34.5.8",
-    "electron-builder": "^25.1.8"
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3"
   }
 }
