@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AgentSessionProvider } from "./context/AgentSessionContext";
+import { AgentSessionProvider, useAgentSession } from "./context/AgentSessionContext";
 import { ChatProvider, useChat } from "./context/ChatContext";
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import { getHealth } from "./lib/api";
@@ -24,6 +24,7 @@ function RoutedApp() {
   const [health, setHealth] = useState<"checking" | "online" | "offline">("checking");
   const { toggleTheme } = useTheme();
   const { status } = useChat();
+  const { agents, selectedAgent, loading: agentsLoading, refresh: refreshAgents } = useAgentSession();
 
   useEffect(() => {
     const onPopState = () => setRoute(normalizeRoute(window.location.pathname));
@@ -32,6 +33,22 @@ function RoutedApp() {
   }, []);
 
   useEffect(() => {
+    const interval = window.setInterval(() => void refreshAgents(), 5000);
+    return () => window.clearInterval(interval);
+  }, [refreshAgents]);
+
+  useEffect(() => {
+    if (agentsLoading) {
+      setHealth("checking");
+      return;
+    }
+
+    const selected = agents.find((agent) => agent.name === selectedAgent);
+    if (selected?.channel_running) {
+      setHealth("online");
+      return;
+    }
+
     let cancelled = false;
     getHealth()
       .then(() => {
@@ -43,7 +60,7 @@ function RoutedApp() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [agents, selectedAgent, agentsLoading]);
 
   const navigate = (nextRoute: RoutePath) => {
     if (nextRoute === route) return;

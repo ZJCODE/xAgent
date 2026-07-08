@@ -69,7 +69,6 @@ export function AppLayout({
               {agents.map((agent) => (
                 <option key={agent.name} value={agent.name}>
                   {agent.title}
-                  {agent.channel_running ? " \u25CF" : ""}
                 </option>
               ))}
             </select>
