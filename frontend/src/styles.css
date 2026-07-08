@@ -1389,27 +1389,44 @@ input::placeholder {
 }
 
 .channel-list {
+  --channel-page-gutter: 20px;
+  --channel-list-gap: 16px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
   align-content: start;
-  gap: 16px;
+  gap: var(--channel-list-gap);
   min-height: 0;
   overflow-y: auto;
-  padding: 20px;
+  padding: var(--channel-page-gutter);
 }
 
 .channel-row {
+  --channel-pad: 16px;
+  --channel-gap: 16px;
+  --channel-action-size: 40px;
   position: relative;
   display: grid;
-  min-height: 160px;
-  align-content: space-between;
-  gap: 18px;
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "header"
+    "actions";
+  align-content: start;
+  gap: var(--channel-gap);
+  min-height: calc(var(--channel-pad) * 2 + 28px + var(--channel-gap) + var(--channel-action-size));
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 8px;
   background: linear-gradient(180deg, var(--bg-surface), var(--bg-surface-subtle));
   box-shadow: var(--shadow-soft);
-  padding: 18px;
+  padding: var(--channel-pad);
+}
+
+.channel-row:has(.channel-log-panel) {
+  grid-template-rows: auto auto auto;
+  grid-template-areas:
+    "header"
+    "actions"
+    "logs";
 }
 
 .channel-row::before {
@@ -1435,73 +1452,91 @@ input::placeholder {
   background: var(--border-strong);
 }
 
-.channel-row-main {
+.channel-row-header {
   display: grid;
-  gap: 18px;
+  grid-area: header;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: 12px;
+  min-height: 28px;
 }
 
-.channel-title-block {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.channel-title-block h3 {
+.channel-row-title {
   margin: 0;
-  font-size: 17px;
-  font-weight: 740;
-  line-height: 1.25;
-}
-
-.channel-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  gap: 8px;
-}
-
-.channel-actions .ui-button:not(.ui-icon-button) {
-  min-width: 86px;
-}
-
-.channel-hint code {
   min-width: 0;
+  font-size: 16px;
+  font-weight: 720;
+  line-height: 28px;
+  letter-spacing: -0.01em;
+}
+
+.channel-row-meta {
+  display: flex;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.channel-row-meta .status-badge,
+.channel-row-meta .channel-setup-command {
+  max-width: 100%;
+}
+
+.channel-setup-command {
+  max-width: 100%;
   overflow: hidden;
-  color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  border: 1px solid var(--border);
+  background: var(--bg-surface-subtle);
+  color: var(--text-muted);
+  padding: 0 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 640;
+  line-height: 26px;
+  cursor: pointer;
 }
 
-.channel-hint {
-  display: inline-flex;
-  width: fit-content;
-  max-width: 100%;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: 8px;
-  background: var(--bg-surface);
-  padding: 8px 10px;
+.channel-setup-command:hover {
+  color: var(--text);
+}
+
+.channel-row-actions {
+  display: grid;
+  grid-area: actions;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-self: end;
+}
+
+.channel-row-actions .ui-button:not(.ui-icon-button) {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--channel-action-size);
+  padding: 0 8px;
+  font-size: 13px;
 }
 
 .channel-log-panel {
   display: grid;
-  gap: 8px;
+  grid-area: logs;
+  gap: 12px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 8px;
   background: var(--bg-surface);
-  padding: 10px;
+  padding: 12px;
 }
 
 .channel-log-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
+  min-height: 30px;
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 680;
+  line-height: 1.2;
 }
 
 .channel-log-actions {
@@ -1515,15 +1550,15 @@ input::placeholder {
 }
 
 .channel-log-output {
-  max-height: 260px;
+  max-height: 240px;
   overflow: auto;
   margin: 0;
   border-top: 1px solid var(--border);
   color: var(--text);
-  padding: 10px 0 0;
+  padding: 12px 0 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.5;
   white-space: pre-wrap;
 }
 
@@ -1573,14 +1608,6 @@ input::placeholder {
 
   .identity-panel {
     grid-row: auto;
-  }
-
-  .channel-row-main {
-    grid-template-columns: 1fr;
-  }
-
-  .channel-actions {
-    justify-content: flex-start;
   }
 }
 
@@ -1828,6 +1855,29 @@ input::placeholder {
 
   .task-row {
     grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .channel-list {
+    --channel-page-gutter: 16px;
+    --channel-list-gap: 12px;
+  }
+
+  .channel-row {
+    --channel-pad: 12px;
+    --channel-gap: 12px;
+  }
+
+  .channel-row-header {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .channel-row-meta {
+    justify-content: flex-start;
+  }
+
+  .channel-row-actions .ui-button:not(.ui-icon-button) {
+    min-height: var(--channel-action-size);
   }
 
   .task-row .ui-button-danger {

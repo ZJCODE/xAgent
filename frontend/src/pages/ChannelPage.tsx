@@ -20,11 +20,34 @@ function statusTone(status: ChannelRuntimeStatus): "good" | "danger" | "muted" |
 }
 
 function statusLabel(channel: ChannelStatus): string {
-  if (!channel.configured) return "Not configured";
   if (channel.status === "running") return "Running";
   if (channel.status === "stopped") return "Stopped";
   if (channel.status === "error") return "Needs attention";
   return "Disabled";
+}
+
+function ChannelStatusMeta({
+  channel,
+  onCopySetup,
+}: {
+  channel: ChannelStatus;
+  onCopySetup: (hint: string) => void;
+}) {
+  if (!channel.ready && channel.setup_hint) {
+    return (
+      <button
+        type="button"
+        className="status-badge status-badge-muted channel-setup-command"
+        title={`Click to copy: ${channel.setup_hint}`}
+        aria-label={`Copy setup command: ${channel.setup_hint}`}
+        onClick={() => onCopySetup(channel.setup_hint)}
+      >
+        {channel.setup_hint}
+      </button>
+    );
+  }
+
+  return <StatusBadge tone={statusTone(channel.status)}>{statusLabel(channel)}</StatusBadge>;
 }
 
 function ChannelRow({
@@ -36,6 +59,7 @@ function ChannelRow({
   onLogs,
   onRefreshLogs,
   onCloseLogs,
+  onCopySetup,
 }: {
   channel: ChannelStatus;
   pending?: PendingAction;
@@ -45,52 +69,47 @@ function ChannelRow({
   onLogs: (channel: ChannelId) => void;
   onRefreshLogs: (channel: ChannelId) => void;
   onCloseLogs: (channel: ChannelId) => void;
+  onCopySetup: (hint: string) => void;
 }) {
   const actionBusy = Boolean(pending && pending !== "logs");
   const logsBusy = pending === "logs";
   const logsOpen = logs !== undefined;
   return (
     <Panel className={`channel-row channel-row-${channel.status}`} aria-busy={Boolean(pending)}>
-      <div className="channel-row-main">
-        <div className="channel-title-block">
-          <h3>{channel.label}</h3>
-          <StatusBadge tone={statusTone(channel.status)}>{statusLabel(channel)}</StatusBadge>
+      <header className="channel-row-header">
+        <h3 className="channel-row-title">{channel.label}</h3>
+        <div className="channel-row-meta">
+          <ChannelStatusMeta channel={channel} onCopySetup={onCopySetup} />
         </div>
+      </header>
 
-        <div className="channel-actions">
-          <Button
-            type="button"
-            variant="primary"
-            disabled={!channel.can_start || actionBusy}
-            onClick={() => onStart(channel.id)}
-          >
-            <Play size={14} />
-            {pending === "start" ? "Starting" : "Start"}
-          </Button>
-          <Button
-            type="button"
-            disabled={!channel.can_stop || actionBusy}
-            onClick={() => onStop(channel.id)}
-          >
-            <Square size={14} />
-            {pending === "stop" ? "Stopping" : "Stop"}
-          </Button>
-          <Button
-            type="button"
-            disabled={logsBusy}
-            onClick={() => onLogs(channel.id)}
-          >
-            <FileText size={14} />
-            {logsBusy ? "Loading" : logsOpen ? "Hide logs" : "Logs"}
-          </Button>
-        </div>
+      <div className="channel-row-actions">
+        <Button
+          type="button"
+          variant="primary"
+          disabled={!channel.can_start || actionBusy}
+          onClick={() => onStart(channel.id)}
+        >
+          <Play size={15} />
+          {pending === "start" ? "Starting" : "Start"}
+        </Button>
+        <Button
+          type="button"
+          disabled={!channel.can_stop || actionBusy}
+          onClick={() => onStop(channel.id)}
+        >
+          <Square size={15} />
+          {pending === "stop" ? "Stopping" : "Stop"}
+        </Button>
+        <Button
+          type="button"
+          disabled={logsBusy}
+          onClick={() => onLogs(channel.id)}
+        >
+          <FileText size={15} />
+          {logsBusy ? "Loading" : "Logs"}
+        </Button>
       </div>
-
-      {!channel.ready && channel.setup_hint ? (
-        <div className="channel-hint">
-          <code>{channel.setup_hint}</code>
-        </div>
-      ) : null}
 
       {logsOpen ? (
         <div className="channel-log-panel">
@@ -214,6 +233,16 @@ export function ChannelPage() {
     });
   };
 
+  const copySetup = async (hint: string) => {
+    setError("");
+    try {
+      await navigator.clipboard.writeText(hint);
+      setNotice(`Copied: ${hint}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   useEffect(() => {
     const openChannels = Object.keys(logs) as ChannelId[];
     if (!openChannels.length) return undefined;
@@ -253,6 +282,7 @@ export function ChannelPage() {
             onLogs={(id) => void toggleLogs(id)}
             onRefreshLogs={(id) => void loadLogs(id)}
             onCloseLogs={closeLogs}
+            onCopySetup={(hint) => void copySetup(hint)}
           />
         ))}
       </div>
