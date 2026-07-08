@@ -118,17 +118,398 @@ input {
 }
 
 .agent-switcher {
+  position: relative;
   display: grid;
-  gap: 4px;
+  gap: 6px;
   padding: 0 6px 14px;
 }
 
-.agent-switcher label {
+.agent-switcher-label {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 640;
   text-transform: uppercase;
   letter-spacing: 0.02em;
+}
+
+.agent-switcher-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.agent-switcher-trigger.open,
+.agent-switcher-trigger:hover {
+  border-color: var(--border-strong);
+}
+
+.agent-switcher-trigger.muted {
+  color: var(--text-muted);
+}
+
+.agent-switcher-current {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-switcher-current strong,
+.agent-switcher-option-copy strong {
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.agent-switcher-current span,
+.agent-switcher-option-copy span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.agent-switcher-menu {
+  position: absolute;
+  top: calc(100% - 4px);
+  right: 6px;
+  left: 6px;
+  z-index: 30;
+  display: grid;
+  gap: 2px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-soft);
+  padding: 4px;
+}
+
+.agent-switcher-option,
+.agent-switcher-new {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.agent-switcher-option:hover,
+.agent-switcher-new:hover {
+  background: var(--bg-surface-muted);
+}
+
+.agent-switcher-option.selected {
+  background: var(--accent-soft);
+}
+
+.agent-switcher-option-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-switcher-option-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.agent-switcher-badge {
+  font-size: 10px;
+}
+
+.agent-switcher-new {
+  color: var(--accent);
+  font-weight: 560;
+}
+
+.agent-switcher-empty {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface-muted);
+  padding: 12px;
+  text-align: center;
+}
+
+.agent-switcher-empty-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  margin: 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+}
+
+.agent-switcher-empty-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 640;
+}
+
+.agent-switcher-empty-copy {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.agent-switcher-empty-button {
+  width: 100%;
+  margin-top: 2px;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 18, 22, 0.48);
+}
+
+.modal-card {
+  width: min(720px, 100%);
+  max-height: min(90vh, 900px);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.modal-header,
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.modal-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3 {
+  margin: 0;
+}
+
+.modal-footer {
+  border-top: 1px solid var(--border);
+}
+
+.modal-footer-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.modal-body {
+  overflow: auto;
+  padding: 18px;
+}
+
+.wizard-modal {
+  width: min(820px, 100%);
+}
+
+.wizard-header-block {
+  border-bottom: 1px solid var(--border);
+  padding: 16px 18px 12px;
+}
+
+.wizard-subtitle {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 0 0;
+}
+
+.wizard-step-chip {
+  border-radius: 999px;
+  background: var(--bg-surface-muted);
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 4px 10px;
+}
+
+.wizard-step-chip.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.wizard-step-chip.done {
+  color: var(--text);
+}
+
+.wizard-body {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+}
+
+.wizard-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.wizard-grid-narrow {
+  max-width: 420px;
+}
+
+.wizard-field {
+  display: grid;
+  gap: 6px;
+}
+
+.wizard-field span {
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.wizard-field small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.wizard-field input,
+.wizard-field select,
+.wizard-field textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface-subtle);
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.wizard-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.wizard-review {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg-surface-subtle);
+}
+
+.wizard-review h4 {
+  margin: 0 0 8px;
+}
+
+.wizard-review ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.wizard-warning {
+  margin-top: 12px;
+}
+
+.confirm-dialog {
+  width: min(480px, 100%);
+}
+
+.confirm-dialog .modal-header {
+  padding: 18px 22px 16px;
+}
+
+.confirm-dialog .modal-header h3 {
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.confirm-dialog-body {
+  display: grid;
+  gap: 20px;
+  padding: 20px 22px 24px;
+}
+
+.confirm-dialog-description {
+  display: grid;
+  gap: 12px;
+}
+
+.confirm-dialog-description p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.confirm-dialog-form {
+  display: grid;
+  gap: 16px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.confirm-dialog-form .wizard-field {
+  gap: 8px;
+}
+
+.confirm-dialog-form .wizard-checkbox {
+  align-items: flex-start;
+  line-height: 1.45;
+}
+
+.confirm-dialog-form .wizard-checkbox input {
+  margin-top: 2px;
+}
+
+.confirm-dialog .modal-footer {
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px 18px;
+}
+
+.confirm-path {
+  display: block;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface-muted);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.warning-strip {
+  border-radius: 8px;
+  background: var(--info-soft);
+  color: var(--info);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .agent-switcher select {
@@ -478,6 +859,10 @@ input::placeholder {
 .empty-state span {
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.agent-page .empty-state {
+  flex: 1;
 }
 
 .single-chat-grid,

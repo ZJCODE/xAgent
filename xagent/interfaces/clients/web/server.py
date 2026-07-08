@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from ...server.admin_routes import register_admin_routes
+from ...cli.agents import management_root
 from .agent_routes import register_agent_session_routes
 from .channel_routes import register_channel_routes
 from .proxy import register_api_proxy
@@ -42,7 +43,7 @@ class WebClientServer:
         self.static_dir = static_dir or _STATIC_DIR
         self.logger = logging.getLogger(self.__class__.__name__)
         self.session = WebAgentSession(
-            initial_config_dir=Path(config_dir).expanduser().resolve() if config_dir else Path.cwd(),
+            initial_config_dir=Path(config_dir).expanduser().resolve() if config_dir else management_root(),
             initial_agent_name=initial_agent,
             initial_api_url=self.api_url,
             registry_root=registry_root,

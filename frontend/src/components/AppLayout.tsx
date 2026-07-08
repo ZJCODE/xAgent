@@ -13,10 +13,10 @@ import {
   WifiOff,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useAgentSession } from "../context/AgentSessionContext";
 import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
 import type { RoutePath } from "../types";
+import { AgentSwitcher } from "./AgentSwitcher";
 import { IconButton, StatusBadge } from "./ui";
 
 interface AppLayoutProps {
@@ -48,27 +48,11 @@ export function AppLayout({
   children,
 }: AppLayoutProps) {
   const { dark } = useTheme();
-  const { agents, selectedAgent, switchAgent } = useAgentSession();
 
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
-        {agents.length > 0 ? (
-          <div className="agent-switcher">
-            <label htmlFor="agent-switcher-select">Agent</label>
-            <select
-              id="agent-switcher-select"
-              value={selectedAgent}
-              onChange={(event) => void switchAgent(event.target.value)}
-            >
-              {agents.map((agent) => (
-                <option key={agent.name} value={agent.name}>
-                  {agent.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : null}
+        <AgentSwitcher />
         <nav className="app-nav" aria-label="Primary">
           {navItems.map((item) => (
             <button

@@ -311,6 +311,91 @@ def _delete_confirmation_text(name: str, path: Path, *, action: str) -> str:
     )
 
 
+def agent_directory_has_contents(path: Path) -> bool:
+    return _directory_has_contents(path)
+
+
+def create_managed_agent(
+    name: str,
+    *,
+    selection: Any,
+    title: Optional[str] = None,
+    replace_existing: bool = False,
+    make_active: bool = True,
+    root: Optional[Path] = None,
+) -> AgentRegistry:
+    """Create a managed agent directory, register it, and optionally make it active."""
+    from .setup import InitSelection, init_agent_directory
+
+    if not isinstance(selection, InitSelection):
+        raise AgentRegistryError("Agent setup selection is invalid.")
+
+    root_path = root or management_root()
+    normalized = validate_agent_name(name)
+    path = default_agent_dir(normalized, root=root_path)
+    registry = load_agent_registry_or_empty(root=root_path)
+    if normalized in registry.agents:
+        raise AgentRegistryError(f"Agent {normalized!r} is already registered.")
+    if _directory_has_contents(path):
+        if not replace_existing:
+            raise AgentRegistryError(
+                f"Agent directory already exists at {path}. "
+                "Set replace_existing to true to replace it."
+            )
+        delete_agent_directory(path, root=root_path)
+
+    result = init_agent_directory(
+        str(path),
+        force=False,
+        selection=selection,
+        quiet=True,
+        registry_root=root_path,
+    )
+    if not result.wrote_files:
+        raise AgentRegistryError("Failed to initialize agent directory.")
+
+    register_agent(
+        normalized,
+        path=path,
+        title=title,
+        make_active=make_active and not registry.agents,
+        root=root_path,
+    )
+    if make_active:
+        return select_agent(normalized, root=root_path)
+    return load_agent_registry(root=root_path)
+
+
+def delete_managed_agent(
+    name: str,
+    *,
+    root: Optional[Path] = None,
+    stop_channels: bool = True,
+) -> tuple[AgentRegistry, AgentEntry]:
+    """Remove a managed agent from the registry and delete its data directory."""
+    from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
+    from .processes import managed_paths, running_pid, stop_managed_process
+
+    root_path = root or management_root()
+    registry = load_agent_registry(root=root_path)
+    normalized = validate_agent_name(name)
+    entry = registry.agents.get(normalized)
+    if entry is None:
+        raise AgentRegistryError(f"Unknown agent {normalized!r}. Run `xagent agents list` to see available agents.")
+
+    if stop_channels:
+        for channel in (CHANNEL_API, CHANNEL_VOICE, CHANNEL_FEISHU, CHANNEL_WEIXIN):
+            pid_path = managed_paths(entry.path, channel).pid_path
+            if running_pid(pid_path) is None:
+                continue
+            stopped, message = stop_managed_process(pid_path)
+            if not stopped:
+                raise AgentRegistryError(f"Failed to stop {channel} channel: {message}")
+
+    delete_agent_directory(entry.path, root=root_path)
+    return remove_agent(normalized, root=root_path)
+
+
 def agent_registry_rows(registry: AgentRegistry) -> list[dict[str, Any]]:
     return [
         {
@@ -421,8 +506,8 @@ def handle_agents(args: argparse.Namespace) -> int:
             ):
                 print("Remove cancelled.")
                 return 1
-            deleted = delete_agent_directory(entry.path)
-            _registry, removed = remove_agent(name)
+            _registry, removed = delete_managed_agent(name)
+            deleted = not removed.path.exists()
             print(f"Removed agent: {removed.name}")
             if deleted:
                 print(f"Deleted data: {removed.path}")
@@ -445,17 +530,15 @@ def handle_agents(args: argparse.Namespace) -> int:
                     print("Create cancelled.")
                     return 1
                 delete_agent_directory(path)
-            from .setup import collect_init_selection_terminal_ui, init_agent_directory
+            from .setup import collect_init_selection_terminal_ui
 
             selection = collect_init_selection_terminal_ui()
-            result = init_agent_directory(str(path), force=False, selection=selection)
-            if not result.wrote_files:
-                return 1
-            updated = register_agent(
+            create_managed_agent(
                 name,
-                path=path,
+                selection=selection,
                 make_active=not registry.agents,
             )
+            updated = load_agent_registry()
             active_note = " active" if updated.active_agent == name else ""
             print(f"Created{active_note} agent {name}: {path}")
             return 0

@@ -477,6 +477,31 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("No agents are registered yet.", output)
         self.assertIn("xagent agents create default", output)
 
+    def test_client_web_start_works_with_empty_registry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            args = argparse.Namespace(
+                config_dir=None,
+                agent=None,
+                clients=[CLIENT_WEB],
+                host=None,
+                port=None,
+                api_url=None,
+                open_browser=False,
+            )
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                with patch(
+                    "xagent.interfaces.cli.runtime.start_background",
+                    return_value=StartResult(ok=True, pid=4321),
+                ) as starter:
+                    exit_code = handle_client_start(args)
+
+        self.assertEqual(exit_code, 0)
+        command = starter.call_args.args[0]
+        self.assertIn("--config-dir", command)
+        config_dir_index = command.index("--config-dir") + 1
+        self.assertEqual(Path(command[config_dir_index]).resolve(), root)
+
     def test_agents_remove_deletes_managed_directory_with_confirmation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir).resolve()

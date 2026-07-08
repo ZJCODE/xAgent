@@ -20,9 +20,14 @@ from fastapi import HTTPException
 from ...base import BaseAgentConfig
 from ...cli.agents import (
     AgentRegistryError,
+    agent_directory_has_contents,
+    create_managed_agent,
+    default_agent_dir,
+    delete_managed_agent,
     load_agent_registry_or_empty,
     validate_agent_name,
 )
+from ...cli.setup import build_setup_schema, init_selection_from_mapping
 from ...cli.channels import CHANNEL_API, load_config_file
 from ...cli.clients import web_client_config
 from ...cli.processes import managed_paths, running_pid
@@ -64,7 +69,6 @@ class WebAgentSession:
         self._initial_api_url = initial_api_url
         self._current_name: Optional[str] = initial_agent_name
         self._admin_cache: Dict[str, AdminService] = {}
-        self._ad_hoc_admin: Optional[AdminService] = None
 
     def _load_registry(self):
         return load_agent_registry_or_empty(root=self._registry_root)
@@ -108,6 +112,51 @@ class WebAgentSession:
         self._current_name = normalized
         return self.snapshot()
 
+    def check_name_availability(self, name: str) -> Dict[str, Any]:
+        normalized = validate_agent_name(name)
+        registry = self._load_registry()
+        path = default_agent_dir(normalized, root=self._registry_root)
+        return {
+            "name": normalized,
+            "registered": normalized in registry.agents,
+            "directory_exists": agent_directory_has_contents(path),
+            "path": str(path),
+        }
+
+    def setup_schema(self) -> Dict[str, Any]:
+        return build_setup_schema()
+
+    def create_agent(
+        self,
+        *,
+        name: str,
+        title: Optional[str] = None,
+        replace_existing: bool = False,
+        selection_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        selection = init_selection_from_mapping(selection_data)
+        create_managed_agent(
+            name,
+            selection=selection,
+            title=title,
+            replace_existing=replace_existing,
+            make_active=True,
+            root=self._registry_root,
+        )
+        self._current_name = validate_agent_name(name)
+        return self.snapshot()
+
+    def delete_agent(self, name: str, *, confirm: str) -> Dict[str, Any]:
+        normalized = validate_agent_name(name)
+        if confirm != normalized:
+            raise AgentRegistryError("Confirmation name does not match the agent to delete.")
+        delete_managed_agent(normalized, root=self._registry_root, stop_channels=True)
+        self._admin_cache.pop(normalized, None)
+        registry = self._load_registry()
+        if self._current_name == normalized:
+            self._current_name = registry.active_agent or None
+        return self.snapshot()
+
     def _entry_path(self, name: str) -> Path:
         registry = self._load_registry()
         entry = registry.agents.get(name)
@@ -115,10 +164,26 @@ class WebAgentSession:
             raise AgentRegistryError(f"Unknown agent {name!r}.")
         return entry.path
 
+    def _no_agents_http_error(self) -> HTTPException:
+        return HTTPException(
+            status_code=404,
+            detail="No agents are registered. Create an agent to use this feature.",
+        )
+
+    def _resolve_agent_name(self) -> Optional[str]:
+        registry = self._load_registry()
+        if not registry.agents:
+            return None
+        if self._current_name and self._current_name in registry.agents:
+            return self._current_name
+        if registry.active_agent and registry.active_agent in registry.agents:
+            return registry.active_agent
+        return next(iter(sorted(registry.agents)))
+
     def get_current_config_dir(self) -> Path:
-        name = self._current_name
+        name = self._resolve_agent_name()
         if name is None:
-            return self._initial_config_dir
+            raise self._no_agents_http_error()
         return self._entry_path(name).expanduser().resolve()
 
     @staticmethod
@@ -132,11 +197,9 @@ class WebAgentSession:
             ) from exc
 
     def get_current_admin(self) -> AdminService:
-        name = self._current_name
+        name = self._resolve_agent_name()
         if name is None:
-            if self._ad_hoc_admin is None:
-                self._ad_hoc_admin = self._build_admin(self._initial_config_dir)
-            return self._ad_hoc_admin
+            raise self._no_agents_http_error()
         cached = self._admin_cache.get(name)
         if cached is not None:
             return cached
@@ -146,8 +209,10 @@ class WebAgentSession:
         return admin
 
     def get_current_api_url(self) -> str:
-        name = self._current_name
-        if name is None or name == self._initial_agent_name:
+        name = self._resolve_agent_name()
+        if name is None:
+            return self._initial_api_url
+        if name == self._initial_agent_name and self._initial_api_url:
             return self._initial_api_url
         entry_path = self._entry_path(name)
         cfg = _safe_load_config(entry_path)

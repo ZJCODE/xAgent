@@ -2,7 +2,10 @@ import type {
   AgentConfig,
   AgentIdentity,
   AgentInfo,
+  AgentNameAvailability,
+  AgentSetupSchema,
   AgentsResponse,
+  CreateAgentInput,
   ChannelActionResponse,
   ChannelId,
   ChannelLogsResponse,
@@ -45,6 +48,30 @@ export async function selectAgent(name: string): Promise<AgentsResponse> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
+  });
+}
+
+export async function getAgentSetupSchema(): Promise<AgentSetupSchema> {
+  return requestJson("/api/agents/setup-schema");
+}
+
+export async function getAgentNameAvailability(name: string): Promise<AgentNameAvailability> {
+  return requestJson(`/api/agents/availability?name=${encodeURIComponent(name)}`);
+}
+
+export async function createAgent(input: CreateAgentInput): Promise<AgentsResponse> {
+  return requestJson("/api/agents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteAgent(name: string, confirm: string): Promise<AgentsResponse> {
+  return requestJson(`/api/agents/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm }),
   });
 }
 

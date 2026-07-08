@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { getAgents, selectAgent } from "../lib/api";
-import type { AgentSummary } from "../types";
+import { createAgent, deleteAgent, getAgents, selectAgent } from "../lib/api";
+import type { AgentSummary, CreateAgentInput } from "../types";
 
 interface AgentSessionContextValue {
   agents: AgentSummary[];
@@ -9,6 +9,8 @@ interface AgentSessionContextValue {
   loading: boolean;
   error: string;
   switchAgent: (name: string) => Promise<void>;
+  createAgent: (input: CreateAgentInput) => Promise<void>;
+  deleteAgent: (name: string, confirm: string) => Promise<void>;
   refresh: () => Promise<void>;
 }
 
@@ -42,14 +44,32 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
   const switchAgent = useCallback(async (name: string) => {
     if (name === selectedAgent) return;
     await selectAgent(name);
-    // A full reload keeps every page's local state consistent with the
-    // newly selected agent, rather than trying to reset each page's state.
     window.location.reload();
   }, [selectedAgent]);
 
+  const createAgentEntry = useCallback(async (input: CreateAgentInput) => {
+    await createAgent(input);
+    window.location.reload();
+  }, []);
+
+  const deleteAgentEntry = useCallback(async (name: string, confirm: string) => {
+    await deleteAgent(name, confirm);
+    window.location.reload();
+  }, []);
+
   const value = useMemo(
-    () => ({ agents, selectedAgent, activeAgent, loading, error, switchAgent, refresh }),
-    [agents, selectedAgent, activeAgent, loading, error, switchAgent, refresh],
+    () => ({
+      agents,
+      selectedAgent,
+      activeAgent,
+      loading,
+      error,
+      switchAgent,
+      createAgent: createAgentEntry,
+      deleteAgent: deleteAgentEntry,
+      refresh,
+    }),
+    [agents, selectedAgent, activeAgent, loading, error, switchAgent, createAgentEntry, deleteAgentEntry, refresh],
   );
 
   return <AgentSessionContext.Provider value={value}>{children}</AgentSessionContext.Provider>;

@@ -16,7 +16,7 @@ from typing import Any, Optional, Sequence
 
 from ...core.runtime import create_runtime_heartbeat
 from ..base import BaseAgentConfig, BaseAgentRunner
-from .agents import AgentRegistryError, resolve_agent_name
+from .agents import AgentRegistryError, management_root, resolve_agent_name
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
@@ -41,7 +41,14 @@ from .clients import (
     web_client_public_url,
 )
 from .chat import AgentCLI
-from .paths import config_path, identity_path, load_runtime_config, runtime_dir
+from .paths import (
+    config_path,
+    identity_path,
+    load_client_runtime_config,
+    load_runtime_config,
+    runtime_dir,
+    runtime_dir_or_management_root,
+)
 from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
 
 
@@ -134,7 +141,7 @@ def _client_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
 
 
 def _select_clients(args: argparse.Namespace, *, default: str) -> tuple[list[str], dict[str, Any]]:
-    config = load_runtime_config(args)
+    config = load_client_runtime_config(args)
     values = _client_arg_values(args)
     clients = normalize_client_values(values, default=default)
     return clients, config
@@ -202,13 +209,24 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
     return command
 
 
-def _client_command(client: str, args: argparse.Namespace) -> list[str]:
-    command = [sys.executable, "-m", "xagent.interfaces.cli", "_run-client", client]
+def _client_spawn_target(args: argparse.Namespace) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(config_dir, agent_name)`` for a managed client subprocess."""
     config_dir = getattr(args, "config_dir", None)
     if config_dir:
+        return str(config_dir), None
+    try:
+        return None, resolve_agent_name(getattr(args, "agent", None))
+    except AgentRegistryError:
+        return str(management_root()), None
+
+
+def _client_command(client: str, args: argparse.Namespace) -> list[str]:
+    command = [sys.executable, "-m", "xagent.interfaces.cli", "_run-client", client]
+    config_dir, agent_name = _client_spawn_target(args)
+    if config_dir:
         command.extend(["--config-dir", config_dir])
-    else:
-        command.extend(["--agent", resolve_agent_name(getattr(args, "agent", None))])
+    elif agent_name:
+        command.extend(["--agent", agent_name])
 
     for flag, attr in (("--host", "host"), ("--port", "port"), ("--api-url", "api_url")):
         value = getattr(args, attr, None)
@@ -271,12 +289,9 @@ def _web_client_runtime_values(
     open_browser = bool(getattr(args, "open_browser", False))
 
     raw_config_dir = getattr(args, "config_dir", None)
-    config_dir = raw_config_dir or str(runtime_dir(args))
+    config_dir = raw_config_dir or str(runtime_dir_or_management_root(args))
     initial_agent: Optional[str] = None
     if not raw_config_dir:
-        # Only resolve an agent name when config_dir came from the agent
-        # registry (not an explicit --config-dir override), so the two stay
-        # consistent — see WebAgentSession's ad-hoc mode otherwise.
         try:
             initial_agent = resolve_agent_name(getattr(args, "agent", None))
         except AgentRegistryError:
@@ -608,7 +623,7 @@ def handle_run_channel_internal(args: argparse.Namespace) -> int:
 
 def handle_run_client_internal(args: argparse.Namespace) -> int:
     try:
-        config = load_runtime_config(args)
+        config = load_client_runtime_config(args)
     except (ChannelSelectionError, ClientSelectionError) as exc:
         if isinstance(exc, ClientSelectionError):
             return _handle_client_error(exc)
@@ -1034,7 +1049,7 @@ def handle_client_desktop_open(args: argparse.Namespace) -> int:
     )
 
     try:
-        config = load_runtime_config(args)
+        config = load_client_runtime_config(args)
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
@@ -1067,7 +1082,7 @@ def handle_client_web_open(args: argparse.Namespace) -> int:
     import webbrowser
 
     try:
-        config = load_runtime_config(args)
+        config = load_client_runtime_config(args)
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 

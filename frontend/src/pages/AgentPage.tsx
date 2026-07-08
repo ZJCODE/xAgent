@@ -1,6 +1,8 @@
 import { RefreshCw, Save, RotateCcw, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { Button, IconButton, PageShell, PageToolbar, Panel, PanelHeader } from "../components/ui";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Button, EmptyState, IconButton, PageShell, PageToolbar, Panel, PanelHeader } from "../components/ui";
+import { useAgentSession } from "../context/AgentSessionContext";
 import {
   clearMemory,
   clearMessages,
@@ -45,6 +47,8 @@ function MaintenanceRow({
 }
 
 export function AgentPage() {
+  const { agents, selectedAgent, deleteAgent } = useAgentSession();
+  const currentAgent = agents.find((agent) => agent.name === selectedAgent);
   const [info, setInfo] = useState<AgentInfo | null>(null);
   const [identity, setIdentity] = useState<AgentIdentity | null>(null);
   const [editorValue, setEditorValue] = useState("");
@@ -56,6 +60,10 @@ export function AgentPage() {
   const [configSaving, setConfigSaving] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [configNotice, setConfigNotice] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const dirty = useMemo(() => editorValue !== (identity?.identity || ""), [editorValue, identity]);
   const dirtyConfig = useMemo(
@@ -151,6 +159,29 @@ export function AgentPage() {
     if (!window.confirm("Clear all workspace files?")) return;
     await clearWorkspace();
   };
+
+  const runDeleteAgent = async () => {
+    if (!selectedAgent || deleteConfirm !== selectedAgent || !deleteAcknowledged) return;
+    setDeleting(true);
+    setError("");
+    try {
+      await deleteAgent(selectedAgent, deleteConfirm);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setDeleting(false);
+    }
+  };
+
+  if (!selectedAgent) {
+    return (
+      <PageShell className="agent-page">
+        <PageToolbar title="Agent" subtitle="Runtime identity and local maintenance" />
+        <EmptyState title="No agent selected">
+          Create an agent from the sidebar to configure identity, config, and maintenance options.
+        </EmptyState>
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell className="agent-page">
@@ -292,9 +323,74 @@ export function AgentPage() {
               description="Remove files from the local workspace."
               onClear={runClearWorkspace}
             />
+            <div className="maintenance-row">
+              <div>
+                <h4>Delete agent</h4>
+                <p>
+                  Permanently remove {selectedAgent || "this agent"} and all local data at{" "}
+                  {currentAgent?.path || "its directory"}.
+                </p>
+              </div>
+              <Button type="button" variant="danger" disabled={!selectedAgent} onClick={() => setDeleteOpen(true)}>
+                <Trash2 size={14} />
+                Delete
+              </Button>
+            </div>
           </div>
         </Panel>
       </div>
+
+      <ConfirmDialog
+        open={deleteOpen}
+        title={`Delete agent "${selectedAgent}"?`}
+        description={
+          <>
+            {currentAgent?.channel_running ? (
+              <div className="warning-strip">The API channel is running. It will be stopped before deletion.</div>
+            ) : null}
+            <p>
+              This permanently removes config, identity, memory, messages, workspace, skills, tasks, and run state at:
+            </p>
+            <code className="confirm-path">{currentAgent?.path}</code>
+          </>
+        }
+        confirmLabel={deleting ? "Deleting..." : "Delete agent"}
+        confirmDisabled={
+          deleting || deleteConfirm !== selectedAgent || !deleteAcknowledged || !selectedAgent
+        }
+        onCancel={() => {
+          if (deleting) return;
+          setDeleteOpen(false);
+          setDeleteConfirm("");
+          setDeleteAcknowledged(false);
+        }}
+        onConfirm={() => void runDeleteAgent()}
+      >
+        <label className="wizard-checkbox">
+          <input
+            type="checkbox"
+            checked={deleteAcknowledged}
+            onChange={(event) => setDeleteAcknowledged(event.target.checked)}
+          />
+          <span>I understand this cannot be undone</span>
+        </label>
+        <FieldLike label="Type agent name to confirm">
+          <input
+            value={deleteConfirm}
+            placeholder={selectedAgent}
+            onChange={(event) => setDeleteConfirm(event.target.value)}
+          />
+        </FieldLike>
+      </ConfirmDialog>
     </PageShell>
+  );
+}
+
+function FieldLike({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="wizard-field">
+      <span>{label}</span>
+      {children}
+    </label>
   );
 }

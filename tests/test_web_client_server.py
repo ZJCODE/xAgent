@@ -105,3 +105,116 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "success")
+
+    async def test_setup_schema_endpoint_returns_providers_and_models(self):
+        client = TestClient(self._server().app)
+
+        response = client.get("/api/agents/setup-schema")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("openai", {row["id"] for row in payload["providers"]})
+        self.assertIn("gpt-5.4-mini", payload["models"]["openai"])
+        self.assertIn("identity", payload["defaults"])
+
+    async def test_create_agent_endpoint_registers_and_selects_new_agent(self):
+        client = TestClient(self._server().app)
+        payload = {
+            "name": "agent_c",
+            "title": "Agent C",
+            "replace_existing": False,
+            "selection": {
+                "provider": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "test-key",
+                "model": "gpt-5.4-mini",
+                "identity": "# Identity\n\nCreated from web.\n",
+            },
+        }
+
+        response = client.post("/api/agents", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        names = {row["name"] for row in body["agents"]}
+        self.assertIn("agent_c", names)
+        self.assertEqual(body["selected_agent"], "agent_c")
+        self.assertEqual(body["active_agent"], "agent_c")
+
+        info = client.get("/api/agent/info")
+        self.assertEqual(info.status_code, 200)
+        self.assertEqual(info.json()["model"], "gpt-5.4-mini")
+
+    async def test_create_duplicate_agent_returns_400(self):
+        client = TestClient(self._server().app)
+        payload = {
+            "name": "agent_a",
+            "selection": {
+                "provider": "openai",
+                "model": "gpt-5.4-mini",
+                "identity": "# Identity\n\nDuplicate.\n",
+            },
+        }
+
+        response = client.post("/api/agents", json=payload)
+
+        self.assertEqual(response.status_code, 400)
+
+    async def test_delete_agent_requires_matching_confirmation(self):
+        client = TestClient(self._server().app)
+
+        response = client.request(
+            "DELETE",
+            "/api/agents/agent_b",
+            json={"confirm": "wrong"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    async def test_delete_agent_removes_registry_entry_and_switches_selection(self):
+        client = TestClient(self._server().app)
+        client.post("/api/agents/select", json={"name": "agent_b"})
+
+        response = client.request(
+            "DELETE",
+            "/api/agents/agent_b",
+            json={"confirm": "agent_b"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        names = {row["name"] for row in body["agents"]}
+        self.assertEqual(names, {"agent_a"})
+        self.assertEqual(body["selected_agent"], "agent_a")
+
+
+class WebClientEmptyRegistryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+
+    async def test_web_client_serves_ui_with_empty_registry(self):
+        server = WebClientServer(
+            host="127.0.0.1",
+            port=1415,
+            api_url="http://127.0.0.1:8010",
+            config_dir=str(self.root),
+            registry_root=self.root,
+        )
+        client = TestClient(server.app)
+
+        agents_response = client.get("/api/agents")
+        self.assertEqual(agents_response.status_code, 200)
+        payload = agents_response.json()
+        self.assertEqual(payload["agents"], [])
+        self.assertEqual(payload["selected_agent"], "")
+
+        schema_response = client.get("/api/agents/setup-schema")
+        self.assertEqual(schema_response.status_code, 200)
+
+        shell_response = client.get("/")
+        self.assertEqual(shell_response.status_code, 200)
+
+        admin_response = client.get("/api/agent/info")
+        self.assertEqual(admin_response.status_code, 404)

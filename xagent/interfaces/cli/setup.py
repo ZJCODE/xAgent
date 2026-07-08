@@ -9,7 +9,7 @@ import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence, Tuple
+from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import yaml
@@ -208,6 +208,174 @@ VOICE_CUSTOM_PROVIDERS = (
 )
 DEFAULT_WAKE_PHRASES = ("xAgent",)
 DEFAULT_EXIT_PHRASES = ("exit", "stop", "goodbye", "that's all", "never mind")
+
+_PROVIDER_DESCRIPTIONS = {
+    PROVIDER_OPENAI: "GPT family via the OpenAI platform.",
+    PROVIDER_DEEPSEEK: "DeepSeek chat and coding models.",
+    PROVIDER_MINIMAX: "MiniMax models via the Anthropic-style API.",
+    PROVIDER_QWEN: "Qwen models via DashScope-compatible APIs.",
+    PROVIDER_ANTHROPIC: "Claude models via Anthropic Messages.",
+    PROVIDER_CUSTOM: "Bring your own OpenAI, Responses, or Anthropic endpoint.",
+}
+
+_PROVIDER_LABELS = {
+    PROVIDER_OPENAI: "OpenAI",
+    PROVIDER_DEEPSEEK: "DeepSeek",
+    PROVIDER_MINIMAX: "MiniMax",
+    PROVIDER_QWEN: "Qwen",
+    PROVIDER_ANTHROPIC: "Anthropic",
+    PROVIDER_CUSTOM: "Custom",
+}
+
+_SEARCH_PROVIDER_DESCRIPTIONS = {
+    "none": "Do not enable a provider-native web search tool.",
+    "openai": "Use OpenAI web search.",
+    "qwen": "Use Qwen web search via DashScope.",
+    "minimax": "Use MiniMax web search.",
+}
+
+_IMAGE_GENERATION_DESCRIPTIONS = {
+    "none": "Do not enable image generation.",
+    "openai": "Use OpenAI image generation.",
+    "minimax": "Use MiniMax image generation.",
+    "qwen": "Use Qwen image generation via DashScope.",
+}
+
+_VOICE_PROVIDER_DESCRIPTIONS = {
+    "none": "Disable voice features.",
+    "soniox": "Use Soniox voice runtime defaults.",
+    "qwen": "Use Qwen voice runtime defaults.",
+    "custom": "Pick separate STT and TTS providers.",
+}
+
+
+def _phrase_tuple(value: Any) -> Tuple[str, ...]:
+    if isinstance(value, str):
+        return tuple(part.strip() for part in value.split(",") if part.strip())
+    if isinstance(value, (list, tuple)):
+        return tuple(str(part).strip() for part in value if str(part).strip())
+    return ()
+
+
+def init_selection_from_mapping(data: Mapping[str, Any]) -> InitSelection:
+    """Build an ``InitSelection`` from API/JSON input."""
+    provider = normalize_provider_name(str(data.get("provider") or PROVIDER_OPENAI))
+    selected_model = str(data.get("model") or MODEL_PLACEHOLDER).strip() or MODEL_PLACEHOLDER
+    model = MODEL_PLACEHOLDER if selected_model == "Decide later" else selected_model
+
+    base_url = str(data.get("base_url") or "").strip()
+    if not base_url:
+        if provider == PROVIDER_CUSTOM:
+            model_api = str(data.get("model_api") or MODEL_API_OPENAI_CHAT_COMPLETIONS)
+            base_url = (
+                CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER
+                if model_api == MODEL_API_ANTHROPIC_MESSAGES
+                else CUSTOM_OPENAI_BASE_URL_PLACEHOLDER
+            )
+        else:
+            base_url = provider_base_url(provider)
+
+    voice_enabled = bool(data.get("voice_enabled", False))
+    voice_provider = str(data.get("voice_provider") or "none").strip() or "none"
+    if voice_enabled and voice_provider == "none":
+        voice_provider = "soniox"
+
+    return InitSelection(
+        provider=provider,
+        model_api=str(data.get("model_api") or ""),
+        supports_vision=bool(data.get("supports_vision", False)),
+        base_url=base_url,
+        api_key=str(data.get("api_key") or API_KEY_PLACEHOLDER).strip() or API_KEY_PLACEHOLDER,
+        model=model,
+        identity=str(data.get("identity") or _default_identity_markdown()),
+        search_provider=str(data.get("search_provider") or "none"),
+        search_api_key=str(data.get("search_api_key") or ""),
+        image_generation_provider=str(data.get("image_generation_provider") or "none"),
+        image_generation_api_key=str(data.get("image_generation_api_key") or ""),
+        observability_enabled=bool(data.get("observability_enabled", False)),
+        langfuse_public_key=str(data.get("langfuse_public_key") or ""),
+        langfuse_secret_key=str(data.get("langfuse_secret_key") or ""),
+        langfuse_base_url=str(data.get("langfuse_base_url") or LANGFUSE_BASE_URL),
+        voice_enabled=voice_enabled,
+        voice_provider=voice_provider,
+        voice_api_key=str(data.get("voice_api_key") or ""),
+        voice_stt_provider=str(data.get("voice_stt_provider") or ""),
+        voice_stt_api_key=str(data.get("voice_stt_api_key") or ""),
+        voice_tts_provider=str(data.get("voice_tts_provider") or ""),
+        voice_tts_api_key=str(data.get("voice_tts_api_key") or ""),
+        voice_enable_interruptions=bool(data.get("voice_enable_interruptions", False)),
+        voice_wake_enabled=bool(data.get("voice_wake_enabled", False)),
+        voice_wake_phrases=_phrase_tuple(data.get("voice_wake_phrases")) or DEFAULT_WAKE_PHRASES,
+        voice_exit_phrases=_phrase_tuple(data.get("voice_exit_phrases")) or DEFAULT_EXIT_PHRASES,
+    )
+
+
+def build_setup_schema() -> dict[str, Any]:
+    """Return wizard metadata for the web client."""
+    return {
+        "providers": [
+            {
+                "id": provider,
+                "label": _PROVIDER_LABELS.get(provider, provider),
+                "description": _PROVIDER_DESCRIPTIONS.get(provider, ""),
+            }
+            for provider in KNOWN_PROVIDERS
+        ],
+        "models": {
+            PROVIDER_OPENAI: list(OPENAI_MODELS),
+            PROVIDER_ANTHROPIC: list(ANTHROPIC_MODELS),
+            PROVIDER_DEEPSEEK: list(DEEPSEEK_MODELS),
+            PROVIDER_MINIMAX: list(MINIMAX_MODELS),
+            PROVIDER_QWEN: list(QWEN_MODELS),
+            PROVIDER_CUSTOM: ["Decide later"],
+        },
+        "provider_base_urls": {
+            PROVIDER_OPENAI: OPENAI_BASE_URL,
+            PROVIDER_DEEPSEEK: DEEPSEEK_BASE_URL,
+            PROVIDER_ANTHROPIC: ANTHROPIC_BASE_URL,
+            PROVIDER_MINIMAX: MINIMAX_BASE_URL,
+            PROVIDER_QWEN: QWEN_BASE_URL,
+            PROVIDER_CUSTOM: CUSTOM_OPENAI_BASE_URL_PLACEHOLDER,
+        },
+        "custom_model_apis": [
+            MODEL_API_OPENAI_CHAT_COMPLETIONS,
+            MODEL_API_OPENAI_RESPONSES,
+            MODEL_API_ANTHROPIC_MESSAGES,
+        ],
+        "search_providers": [
+            {"id": provider, "description": _SEARCH_PROVIDER_DESCRIPTIONS.get(provider, "")}
+            for provider in SEARCH_PROVIDERS
+        ],
+        "image_generation_providers": [
+            {"id": provider, "description": _IMAGE_GENERATION_DESCRIPTIONS.get(provider, "")}
+            for provider in IMAGE_GENERATION_PROVIDERS
+        ],
+        "voice_providers": [
+            {"id": provider, "description": _VOICE_PROVIDER_DESCRIPTIONS.get(provider, "")}
+            for provider in VOICE_PROVIDERS
+        ],
+        "voice_custom_providers": list(VOICE_CUSTOM_PROVIDERS),
+        "defaults": {
+            "identity": _default_identity_markdown(),
+            "wake_phrases": list(DEFAULT_WAKE_PHRASES),
+            "exit_phrases": list(DEFAULT_EXIT_PHRASES),
+        },
+        "placeholders": {
+            "api_key": API_KEY_PLACEHOLDER,
+            "model": MODEL_PLACEHOLDER,
+            "langfuse_public_key": LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
+            "langfuse_secret_key": LANGFUSE_SECRET_KEY_PLACEHOLDER,
+            "langfuse_base_url": LANGFUSE_BASE_URL,
+            "openai_search_api_key": OPENAI_SEARCH_API_KEY_PLACEHOLDER,
+            "qwen_search_api_key": QWEN_SEARCH_API_KEY_PLACEHOLDER,
+            "openai_image_api_key": OPENAI_IMAGE_API_KEY_PLACEHOLDER,
+            "minimax_image_api_key": MINIMAX_IMAGE_API_KEY_PLACEHOLDER,
+            "qwen_image_api_key": QWEN_IMAGE_API_KEY_PLACEHOLDER,
+            "soniox_api_key": SONIOX_KEY_PLACEHOLDER,
+            "qwen_voice_api_key": QWEN_KEY_PLACEHOLDER,
+        },
+        "name_pattern": "^[a-z][a-z0-9_-]*$",
+    }
 
 
 def _search_api_key_placeholder(provider: str) -> str:
@@ -1276,6 +1444,8 @@ def init_agent_directory(
     force: bool = False,
     selection: Optional[InitSelection] = None,
     clear_runtime_data: bool = False,
+    quiet: bool = False,
+    registry_root: Optional[Path] = None,
 ) -> InitResult:
     resolved_dir = Path(config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
     resolved_dir.mkdir(parents=True, exist_ok=True)
@@ -1291,14 +1461,15 @@ def init_agent_directory(
     conflicts = tuple(path for path in managed_paths if path.exists())
 
     if conflicts and not force:
-        TerminalUI().print_panel(
-            "\n".join([
-                "xAgent init found existing managed files.",
-                *(f"Existing: {path}" for path in conflicts),
-                "Re-run with --force to overwrite config.yaml and identity.md.",
-            ]),
-            title="Init Stopped",
-        )
+        if not quiet:
+            TerminalUI().print_panel(
+                "\n".join([
+                    "xAgent init found existing managed files.",
+                    *(f"Existing: {path}" for path in conflicts),
+                    "Re-run with --force to overwrite config.yaml and identity.md.",
+                ]),
+                title="Init Stopped",
+            )
         return InitResult(
             config_path=config_file,
             identity_path=identity_file,
@@ -1321,24 +1492,25 @@ def init_agent_directory(
     tasks_dir.mkdir(parents=True, exist_ok=True)
 
     selection = selection or _default_init_selection()
-    port = allocate_api_port()
+    port = allocate_api_port(root=registry_root)
     config_file.write_text(_config_yaml(selection, port=port), encoding="utf-8")
     identity_file.write_text(selection.identity, encoding="utf-8")
 
-    TerminalUI().print_panel(
-        "\n".join([
-            "xAgent project files written successfully.",
-            f"Config: {config_file}",
-            f"Identity: {identity_file}",
-            f"Memory: {memory_dir}",
-            f"Messages: {messages_dir}",
-            f"Workspace: {workspace_dir}",
-            f"Skills: {skills_dir}",
-            f"Tasks: {tasks_dir}",
-        ]),
-        title="xAgent Ready",
-        leading_blank_line=True,
-    )
+    if not quiet:
+        TerminalUI().print_panel(
+            "\n".join([
+                "xAgent project files written successfully.",
+                f"Config: {config_file}",
+                f"Identity: {identity_file}",
+                f"Memory: {memory_dir}",
+                f"Messages: {messages_dir}",
+                f"Workspace: {workspace_dir}",
+                f"Skills: {skills_dir}",
+                f"Tasks: {tasks_dir}",
+            ]),
+            title="xAgent Ready",
+            leading_blank_line=True,
+        )
     return InitResult(
         config_path=config_file,
         identity_path=identity_file,
