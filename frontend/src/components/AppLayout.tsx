@@ -7,6 +7,7 @@ import {
   MessageSquareText,
   Moon,
   Package,
+  RadioTower,
   Sun,
   Wifi,
   WifiOff,
@@ -34,6 +35,7 @@ const navItems: Array<{ route: RoutePath; label: string; icon: ReactNode }> = [
   { route: "/workspace", label: "Workspace", icon: <Files size={15} /> },
   { route: "/skills", label: "Skills", icon: <Package size={15} /> },
   { route: "/tasks", label: "Tasks", icon: <ListTodo size={15} /> },
+  { route: "/channels", label: "Channels", icon: <RadioTower size={15} /> },
   { route: "/agent", label: "Agent", icon: <Bot size={15} /> },
 ];
 

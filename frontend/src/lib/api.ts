@@ -3,6 +3,10 @@ import type {
   AgentIdentity,
   AgentInfo,
   AgentsResponse,
+  ChannelActionResponse,
+  ChannelId,
+  ChannelLogsResponse,
+  ChannelsResponse,
   FileReadResult,
   FileNode,
   MessageSearchResponse,
@@ -174,6 +178,26 @@ export async function getTasks(): Promise<TasksResponse> {
 
 export async function deleteTask(taskId: string): Promise<{ status: string; deleted: unknown }> {
   return requestJson(`/api/tasks/delete?task_id=${encodeURIComponent(taskId)}`, { method: "DELETE" });
+}
+
+export async function getChannels(): Promise<ChannelsResponse> {
+  return requestJson("/api/channels");
+}
+
+export async function startChannel(channel: ChannelId): Promise<ChannelActionResponse> {
+  return requestJson(`/api/channels/${channel}/start`, { method: "POST" });
+}
+
+export async function stopChannel(channel: ChannelId): Promise<ChannelActionResponse> {
+  return requestJson(`/api/channels/${channel}/stop`, { method: "POST" });
+}
+
+export async function restartChannel(channel: ChannelId): Promise<ChannelActionResponse> {
+  return requestJson(`/api/channels/${channel}/restart`, { method: "POST" });
+}
+
+export async function getChannelLogs(channel: ChannelId, lines = 80): Promise<ChannelLogsResponse> {
+  return requestJson(`/api/channels/${channel}/logs?lines=${lines}`);
 }
 
 export function workspaceBlobUrl(path: string): string {

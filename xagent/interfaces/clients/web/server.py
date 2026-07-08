@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from ...server.admin_routes import register_admin_routes
 from .agent_routes import register_agent_session_routes
+from .channel_routes import register_channel_routes
 from .proxy import register_api_proxy
 from .session import WebAgentSession
 from .spa import register_spa_routes
@@ -55,6 +56,7 @@ class WebClientServer:
             version="1.0.0",
         )
         register_agent_session_routes(app, self.session)
+        register_channel_routes(app, self.session.get_current_config_dir)
         register_admin_routes(app, self.session.get_current_admin)
         register_api_proxy(app, resolve_api_url=self.session.get_current_api_url, logger=self.logger)
         register_spa_routes(app, static_dir=self.static_dir, logger=self.logger)

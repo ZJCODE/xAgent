@@ -91,6 +91,15 @@ class WebAgentSessionTests(unittest.TestCase):
         session.select("agent_a")
         self.assertIs(session.get_current_admin(), admin_a_first)
 
+    def test_get_current_config_dir_tracks_selected_agent(self):
+        session = self._session()
+
+        self.assertEqual(session.get_current_config_dir(), self.agent_a_path.resolve())
+
+        session.select("agent_b")
+
+        self.assertEqual(session.get_current_config_dir(), self.agent_b_path.resolve())
+
     def test_get_current_api_url_uses_initial_override_then_recomputes_per_agent(self):
         session = self._session()
 

@@ -26,7 +26,7 @@ def register_spa_routes(app: FastAPI, *, static_dir: Path | None = None, logger:
             return FileResponse(str(index), media_type="text/html")
         raise HTTPException(status_code=404, detail="Web client UI not found")
 
-    for route in ("/", "/memory", "/workspace", "/message", "/agent", "/skills", "/tasks"):
+    for route in ("/", "/memory", "/workspace", "/message", "/agent", "/skills", "/tasks", "/channels"):
         app.add_api_route(route, serve_spa_index, methods=["GET"], include_in_schema=False)
 
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")

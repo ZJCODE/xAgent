@@ -115,6 +115,12 @@ class WebAgentSession:
             raise AgentRegistryError(f"Unknown agent {name!r}.")
         return entry.path
 
+    def get_current_config_dir(self) -> Path:
+        name = self._current_name
+        if name is None:
+            return self._initial_config_dir
+        return self._entry_path(name).expanduser().resolve()
+
     @staticmethod
     def _build_admin(config_dir: Path) -> AdminService:
         try:

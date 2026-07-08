@@ -1,4 +1,4 @@
-export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/agent";
+export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/channels" | "/agent";
 
 export type ChatRole = "user" | "assistant" | "observation";
 
@@ -97,6 +97,44 @@ export interface TasksResponse {
   root: string;
   tasks: ScheduledTaskItem[];
   total: number;
+}
+
+export type ChannelId = "api" | "voice" | "feishu" | "weixin";
+
+export type ChannelRuntimeStatus = "running" | "stopped" | "disabled" | "error";
+
+export interface ChannelStatus {
+  id: ChannelId;
+  label: string;
+  status: ChannelRuntimeStatus;
+  configured: boolean;
+  ready: boolean;
+  pid: number | null;
+  detail: string;
+  pid_path: string;
+  log_path: string;
+  can_start: boolean;
+  can_stop: boolean;
+  can_restart: boolean;
+  setup_hint: string;
+}
+
+export interface ChannelsResponse {
+  config_dir: string;
+  channels: ChannelStatus[];
+}
+
+export interface ChannelActionResponse {
+  status: string;
+  message: string;
+  channel: ChannelStatus;
+}
+
+export interface ChannelLogsResponse {
+  channel: ChannelId;
+  log_path: string;
+  text: string;
+  lines: number;
 }
 
 export interface AgentInfo {
