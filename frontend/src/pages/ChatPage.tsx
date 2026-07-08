@@ -1,10 +1,12 @@
-import { Eye, FileIcon, Paperclip, Send, X } from "lucide-react";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { Eye, FileIcon, Paperclip, Play, RadioTower, Send, X } from "lucide-react";
+import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "../components/Markdown";
 import { Button, EmptyState, IconButton } from "../components/ui";
+import { useAgentSession } from "../context/AgentSessionContext";
 import { useChat } from "../context/ChatContext";
+import { useApiChannel } from "../lib/useApiChannel";
 import { classNames, formatBytes } from "../lib/format";
-import type { AttachmentAsset, ChatPanelState } from "../types";
+import type { AttachmentAsset, ChannelStatus, ChatPanelState } from "../types";
 
 function attachmentUrl(attachment: AttachmentAsset): string {
   return attachment.blob_url || (attachment.path ? `/api/workspace/blob?path=${encodeURIComponent(attachment.path)}` : "");
@@ -127,7 +129,123 @@ function PendingAttachmentPreview({ attachment, onRemove }: { attachment: Attach
   );
 }
 
-function ChatPanel({ panel }: { panel: ChatPanelState }) {
+function ChatChannelBlocked({
+  channel,
+  starting,
+  error,
+  onStart,
+  variant,
+}: {
+  channel: ChannelStatus | null;
+  starting: boolean;
+  error: string;
+  onStart: () => void;
+  variant: "empty" | "banner";
+}) {
+  const needsSetup = Boolean(channel && !channel.ready && channel.setup_hint);
+  const isError = channel?.status === "error";
+  const title = needsSetup
+    ? "API channel needs setup"
+    : isError
+      ? "API channel needs attention"
+      : "API channel is stopped";
+  const description = needsSetup
+    ? "Run the setup command below, then start the channel from Chat."
+    : isError
+      ? channel?.detail || "Try starting the channel again."
+      : "Start the API channel to send messages in Chat.";
+
+  const copySetup = async (hint: string) => {
+    try {
+      await navigator.clipboard.writeText(hint);
+    } catch {
+      // Clipboard access is best-effort in the browser.
+    }
+  };
+
+  const actions = (
+    <div className="chat-channel-actions">
+      {needsSetup && channel?.setup_hint ? (
+        <button
+          type="button"
+          className="channel-setup-command"
+          title={`Click to copy: ${channel.setup_hint}`}
+          onClick={() => void copySetup(channel.setup_hint)}
+        >
+          {channel.setup_hint}
+        </button>
+      ) : (
+        <Button
+          type="button"
+          variant="primary"
+          disabled={!channel?.can_start || starting}
+          onClick={onStart}
+        >
+          <Play size={14} />
+          {starting ? "Starting..." : "Start API channel"}
+        </Button>
+      )}
+    </div>
+  );
+
+  if (variant === "banner") {
+    return (
+      <div className="chat-channel-banner" role="status">
+        <div className="chat-channel-banner-copy">
+          <p>{title}</p>
+          <span>{description}</span>
+          {error ? <span className="chat-channel-error">{error}</span> : null}
+        </div>
+        <div className="chat-channel-banner-actions">
+          {needsSetup && channel?.setup_hint ? (
+            <button
+              type="button"
+              className="channel-setup-command"
+              title={`Click to copy: ${channel.setup_hint}`}
+              onClick={() => void copySetup(channel.setup_hint)}
+            >
+              Copy setup command
+            </button>
+          ) : (
+            <Button
+              type="button"
+              variant="primary"
+              disabled={!channel?.can_start || starting}
+              onClick={onStart}
+            >
+              <Play size={13} />
+              {starting ? "Starting..." : "Start"}
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="empty-state chat-channel-empty">
+      <div className="empty-state-icon" aria-hidden="true">
+        <RadioTower size={24} />
+      </div>
+      <p>{title}</p>
+      <span>{description}</span>
+      {error ? <span className="chat-channel-error">{error}</span> : null}
+      {actions}
+    </div>
+  );
+}
+
+function ChatPanel({
+  panel,
+  chatEnabled,
+  statusReady,
+  channelBlock,
+}: {
+  panel: ChatPanelState;
+  chatEnabled: boolean;
+  statusReady: boolean;
+  channelBlock?: ReactNode;
+}) {
   const { updateSettings, addAttachments, removeAttachment, sendMessage, sendObservation } = useChat();
   const [messageText, setMessageText] = useState("");
   const [observeText, setObserveText] = useState("");
@@ -142,6 +260,7 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
 
   const submitMessage = (event?: FormEvent) => {
     event?.preventDefault();
+    if (!chatEnabled) return;
     const text = messageText.trim();
     if (!text && !panel.pendingAttachments.length) return;
     setMessageText("");
@@ -150,6 +269,7 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
 
   const submitObservation = (event?: FormEvent) => {
     event?.preventDefault();
+    if (!chatEnabled) return;
     const text = observeText.trim();
     if (!text) return;
     setObserveText("");
@@ -175,10 +295,16 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
       <div ref={scrollRef} className="fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4">
         {panel.messages.length ? (
           panel.messages.map((message) => <ChatMessageView key={message.id} message={message} />)
-        ) : (
+        ) : !statusReady ? (
+          <EmptyState icon={<RadioTower size={24} />} title="Checking API channel">
+            Loading channel status...
+          </EmptyState>
+        ) : chatEnabled ? (
           <EmptyState icon={<Send size={24} />} title="Start a message stream">
             Type a message and press Enter to send.
           </EmptyState>
+        ) : (
+          channelBlock
         )}
       </div>
 
@@ -200,14 +326,14 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
             rows={1}
             placeholder="Observe context..."
             value={observeText}
-            disabled={panel.sending}
+            disabled={!statusReady || !chatEnabled || panel.sending}
             onChange={(event) => setObserveText(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) submitObservation(event);
             }}
           />
           <div className="observe-actions">
-            <Button type="submit" variant="secondary" disabled={panel.sending || !observeText.trim()}>
+            <Button type="submit" variant="secondary" disabled={!statusReady || !chatEnabled || panel.sending || !observeText.trim()}>
               Observe
             </Button>
             <IconButton
@@ -225,12 +351,14 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
         </form>
       ) : null}
 
-      <form onSubmit={submitMessage} className="composer-row">
+      {!chatEnabled && statusReady && panel.messages.length ? channelBlock : null}
+
+      <form onSubmit={submitMessage} className={classNames("composer-row", (!statusReady || !chatEnabled) && "is-disabled")}>
         <textarea
           rows={1}
-          placeholder="Message xAgent..."
+          placeholder={!statusReady ? "Checking API channel..." : chatEnabled ? "Message xAgent..." : "Start the API channel to chat..."}
           value={messageText}
-          disabled={panel.sending}
+          disabled={!statusReady || !chatEnabled || panel.sending}
           onChange={(event) => setMessageText(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) submitMessage(event);
@@ -243,7 +371,7 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
             onClick={() => setObserveOpen((value) => !value)}
             title="Add observation"
             aria-label="Add observation"
-            disabled={panel.sending}
+            disabled={!statusReady || !chatEnabled || panel.sending}
           >
             <Eye size={18} />
           </IconButton>
@@ -252,7 +380,7 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
             className="composer-upload-button"
             onClick={() => fileInputRef.current?.click()}
             title="Attach files"
-            disabled={panel.sending}
+            disabled={!statusReady || !chatEnabled || panel.sending}
           >
             <Paperclip size={18} />
           </IconButton>
@@ -266,7 +394,14 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
               event.currentTarget.value = "";
             }}
           />
-          <Button type="submit" variant="primary" className="send-button" disabled={panel.sending || (!messageText.trim() && !panel.pendingAttachments.length)}>
+          <Button
+            type="submit"
+            variant="primary"
+            className="send-button"
+            disabled={
+              !statusReady || !chatEnabled || panel.sending || (!messageText.trim() && !panel.pendingAttachments.length)
+            }
+          >
             <Send size={16} />
             Send
           </Button>
@@ -277,11 +412,41 @@ function ChatPanel({ panel }: { panel: ChatPanelState }) {
 }
 
 export function ChatPage() {
+  const { loading: agentsLoading } = useAgentSession();
   const { panel } = useChat();
+  const { apiChannel, loading: channelLoading, starting, error, start } = useApiChannel();
+
+  const statusReady = !agentsLoading && !channelLoading;
+  const chatEnabled = apiChannel?.status === "running";
+
+  const channelBlock = statusReady && !chatEnabled ? (
+    <ChatChannelBlocked
+      channel={apiChannel}
+      starting={starting}
+      error={error}
+      onStart={() => void start()}
+      variant="empty"
+    />
+  ) : null;
+
+  const channelBanner = statusReady && !chatEnabled ? (
+    <ChatChannelBlocked
+      channel={apiChannel}
+      starting={starting}
+      error={error}
+      onStart={() => void start()}
+      variant="banner"
+    />
+  ) : null;
 
   return (
     <div className="h-full min-h-0 single-chat-grid">
-      <ChatPanel panel={panel} />
+      <ChatPanel
+        panel={panel}
+        chatEnabled={chatEnabled}
+        statusReady={statusReady}
+        channelBlock={panel.messages.length ? channelBanner : channelBlock}
+      />
     </div>
   );
 }
