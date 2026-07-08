@@ -41,7 +41,6 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "",
             "Keep Running:",
             "  api         API channel: start, stop, restart, status, logs",
-            "  client web  Web client: start, stop, restart, status, logs, open",
             "  voice       Voice channel: start, stop, restart, status, logs",
             "  feishu      Feishu bot: setup, start, stop, restart, status, logs",
             "  weixin      Weixin DM: setup, start, stop, restart, status, logs",
