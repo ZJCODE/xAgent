@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -56,6 +57,17 @@ class DeleteAgentInput(BaseModel):
 
 
 def register_agent_session_routes(app: FastAPI, session: WebAgentSession) -> None:
+    @app.get("/api/health", tags=["Health"])
+    async def web_client_health():
+        api_reachable = False
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), trust_env=False) as client:
+                response = await client.get(f"{session.get_current_api_url().rstrip('/')}/health")
+                api_reachable = response.status_code == 200
+        except Exception:
+            api_reachable = False
+        return {"status": "ok", "web": True, "api_reachable": api_reachable}
+
     @app.get("/api/agents", tags=["Agents"])
     async def list_agents():
         return session.snapshot()

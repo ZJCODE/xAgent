@@ -9,13 +9,15 @@ import {
   Package,
   RadioTower,
   Sun,
+  WifiOff,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { useConnectivity } from "../context/ConnectivityContext";
 import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
 import type { RoutePath } from "../types";
 import { AgentSwitcher } from "./AgentSwitcher";
-import { IconButton } from "./ui";
+import { Button, IconButton } from "./ui";
 
 interface AppLayoutProps {
   route: RoutePath;
@@ -36,6 +38,8 @@ const navItems: Array<{ route: RoutePath; label: string; icon: ReactNode }> = [
 
 export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
   const { dark, toggleTheme } = useTheme();
+  const { webStatus, retry } = useConnectivity();
+  const showConnectivityBanner = webStatus === "offline";
 
   return (
     <div className="app-shell">
@@ -62,6 +66,15 @@ export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
       </aside>
 
       <div className="app-main">
+        {showConnectivityBanner ? (
+          <div className="connectivity-banner" role="status">
+            <WifiOff size={15} />
+            <span>Cannot reach the local xAgent service.</span>
+            <Button type="button" variant="secondary" className="connectivity-banner-button" onClick={() => void retry()}>
+              Retry
+            </Button>
+          </div>
+        ) : null}
         <main className="app-content">{children}</main>
       </div>
     </div>

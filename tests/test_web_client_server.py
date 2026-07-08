@@ -64,6 +64,17 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
             registry_root=self.root,
         )
 
+    async def test_web_client_health_reports_api_reachability(self):
+        client = TestClient(self._server().app)
+
+        response = client.get("/api/health")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["web"])
+        self.assertIn("api_reachable", payload)
+
     async def test_list_agents_endpoint_reports_both_agents(self):
         client = TestClient(self._server().app)
 

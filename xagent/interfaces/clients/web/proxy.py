@@ -73,7 +73,11 @@ def register_api_proxy(
             raise RuntimeError("websockets package is required") from exc
 
         try:
-            async with websockets.connect(target) as upstream_ws:
+            try:
+                upstream_connection = websockets.connect(target, proxy=None)
+            except TypeError:
+                upstream_connection = websockets.connect(target)
+            async with upstream_connection as upstream_ws:
                 await _relay_websockets(websocket, upstream_ws)
         except WebSocketDisconnect:
             logger.debug("Web client websocket disconnected")
@@ -94,7 +98,7 @@ async def _proxy_http_request(request: Request, target: str) -> Response:
     body = await request.body()
     params = list(request.query_params.multi_items())
 
-    async with httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(300.0)) as client:
+    async with httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(300.0), trust_env=False) as client:
         upstream_response = await client.request(
             request.method,
             target,

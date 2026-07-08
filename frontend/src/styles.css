@@ -1792,6 +1792,70 @@ input::placeholder {
   color: var(--success);
 }
 
+.connectivity-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--danger-soft);
+  color: var(--danger);
+  padding: 10px 16px;
+  font-size: 13px;
+}
+
+.connectivity-banner-button {
+  margin-left: auto;
+}
+
+.welcome-page {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: 32px;
+}
+
+.welcome-card {
+  max-width: 520px;
+  text-align: center;
+  padding: 40px 32px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+
+.welcome-card h1 {
+  margin: 16px 0 10px;
+  font-size: 28px;
+  letter-spacing: -0.03em;
+}
+
+.welcome-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  color: var(--accent);
+}
+
+.welcome-copy {
+  margin: 0 0 18px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.spin-icon {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .agent-grid {
   display: grid;
   grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.45fr);

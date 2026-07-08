@@ -6,7 +6,7 @@ import { Button, StatusBadge } from "./ui";
 import { CreateAgentWizard } from "./CreateAgentWizard";
 
 export function AgentSwitcher() {
-  const { agents, selectedAgent, loading, switchAgent } = useAgentSession();
+  const { agents, selectedAgent, loading, error, refresh, switchAgent } = useAgentSession();
   const [open, setOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -41,6 +41,24 @@ export function AgentSwitcher() {
     );
   }
 
+  if (error) {
+    return (
+      <div className="agent-switcher">
+        <span className="agent-switcher-label">Agent</span>
+        <div className="agent-switcher-empty">
+          <div className="agent-switcher-empty-icon" aria-hidden="true">
+            <Bot size={18} />
+          </div>
+          <p className="agent-switcher-empty-title">Cannot reach service</p>
+          <p className="agent-switcher-empty-copy">{error}</p>
+          <Button type="button" variant="primary" className="agent-switcher-empty-button" onClick={() => void refresh()}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   if (agents.length === 0) {
     return (
       <div className="agent-switcher">
@@ -49,8 +67,8 @@ export function AgentSwitcher() {
           <div className="agent-switcher-empty-icon" aria-hidden="true">
             <Bot size={18} />
           </div>
-          <p className="agent-switcher-empty-title">No agents yet</p>
-          <p className="agent-switcher-empty-copy">Create an agent to get started</p>
+          <p className="agent-switcher-empty-title">Create your first agent</p>
+          <p className="agent-switcher-empty-copy">Set up an agent to start chatting and managing channels.</p>
           <Button type="button" variant="primary" className="agent-switcher-empty-button" onClick={openWizard}>
             <Plus size={14} />
             Create agent

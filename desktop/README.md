@@ -2,14 +2,36 @@
 
 Electron shell for the xAgent web UI. The desktop app loads the configured web UI URL (`http://127.0.0.1:1415` by default) inside a native window.
 
-`pip install myxagent` does **not** bundle Electron. End users install the desktop app from GitHub Releases; the CLI opens it with `xagent client desktop open`.
+`pip install myxagent` does **not** bundle Electron. End users install the desktop app from GitHub Releases.
+
+## Install for end users
+
+1. Install the Python backend once:
+
+```bash
+pip install myxagent
+```
+
+2. Download the desktop app from [GitHub Releases](https://github.com/ZJCODE/xagent/releases) and install it:
+   - **macOS**: open the `.dmg` and drag xAgent to Applications
+   - **Windows**: run the installer
+   - **Linux**: `chmod +x` the AppImage and move it to `~/.local/bin/xagent-desktop`
+
+3. Open xAgent from Applications (or your desktop shortcut).
+
+The desktop app will:
+
+- show a startup screen while it connects
+- start the local web UI automatically if needed
+- start the API channel automatically when possible
+- guide you through creating your first agent if none exist yet
+
+If the backend is not installed yet, the app shows an install guide instead of a blank window.
 
 ## Prerequisites
 
 - Node.js 20+ and npm — **build only**
-- At runtime, a web UI server must be reachable at `XAGENT_WEB_URL` (default `http://127.0.0.1:1415`)
-
-After the window opens, use **Channels** in the app to start the API channel (or other integrations) for the selected agent. You do not need to start those channels from the terminal first.
+- At runtime, `myxagent` must be installed so the desktop app can start the local web UI server
 
 ## Development
 
@@ -24,6 +46,7 @@ Environment variables:
 ```bash
 export XAGENT_WEB_URL=http://127.0.0.1:1415
 export XAGENT_APP_TITLE=xAgent
+export XAGENT_SKIP_BOOTSTRAP=1   # optional: skip auto-start when web UI is already running
 npm start
 ```
 
@@ -126,10 +149,15 @@ Native window for the xAgent web UI.
 
 ```bash
 pip install myxagent
+```
+
+Then open the installed desktop app. You can also use:
+
+```bash
 xagent client desktop open
 ```
 
-In the app, open **Channels** and start the API channel for your agent when needed.
+The desktop app starts the web UI and API channel automatically when possible.
 
 Override the installed app path with:
 
@@ -145,11 +173,11 @@ Without `gh`, create the release in the GitHub UI and upload the same artifacts 
 ### 5. Verify after publish
 
 1. Install the artifact on a clean machine (or VM)
-2. Run `xagent client desktop open`
-3. In the app, open **Channels** and click **Start** on the API channel for your agent
-4. Confirm Chat and other agent features work
+2. Run `pip install myxagent`
+3. Open the installed desktop app from Applications
+4. Confirm the startup screen appears, then Chat or the first-agent wizard loads
 
-## CLI integration
+## CLI integration (advanced)
 
 | Command | Description |
 |---------|-------------|
@@ -157,6 +185,8 @@ Without `gh`, create the release in the GitHub UI and upload the same artifacts 
 | `xagent client desktop open` | Open or focus the desktop window |
 | `xagent client desktop stop` | Stop the background desktop process |
 | `xagent client desktop status` | Show desktop client status |
+
+Most users do not need these commands if they open the installed desktop app directly.
 
 Installed app lookup order:
 
@@ -170,7 +200,7 @@ Installed app lookup order:
 
 ```text
 desktop/
-  electron/          # main process + preload
+  electron/          # main process, bootstrap, splash/setup pages, preload
   build/             # icons and other build resources
   dist/              # build output (gitignored)
   node_modules/      # dependencies (gitignored)

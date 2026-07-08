@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AgentSessionProvider, useAgentSession } from "./context/AgentSessionContext";
 import { ChatProvider } from "./context/ChatContext";
+import { ConnectivityProvider } from "./context/ConnectivityContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import type { RoutePath } from "./types";
 import { AgentPage } from "./pages/AgentPage";
@@ -10,6 +11,7 @@ import { MemoryPage } from "./pages/MemoryPage";
 import { MessagePage } from "./pages/MessagePage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { TasksPage } from "./pages/TasksPage";
+import { WelcomePage } from "./pages/WelcomePage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import { AppLayout } from "./components/AppLayout";
 
@@ -21,7 +23,8 @@ function normalizeRoute(pathname: string): RoutePath {
 
 function RoutedApp() {
   const [route, setRoute] = useState<RoutePath>(() => normalizeRoute(window.location.pathname));
-  const { refresh: refreshAgents } = useAgentSession();
+  const { agents, loading, refresh: refreshAgents } = useAgentSession();
+  const showWelcome = route === "/" && !loading && agents.length === 0;
 
   useEffect(() => {
     const onPopState = () => setRoute(normalizeRoute(window.location.pathname));
@@ -58,9 +61,9 @@ function RoutedApp() {
         return <AgentPage />;
       case "/":
       default:
-        return <ChatPage />;
+        return showWelcome ? <WelcomePage /> : <ChatPage />;
     }
-  }, [route]);
+  }, [route, showWelcome]);
 
   return (
     <AppLayout route={route} onNavigate={navigate}>
@@ -72,11 +75,13 @@ function RoutedApp() {
 export default function App() {
   return (
     <ThemeProvider>
-      <AgentSessionProvider>
-        <ChatProvider>
-          <RoutedApp />
-        </ChatProvider>
-      </AgentSessionProvider>
+      <ConnectivityProvider>
+        <AgentSessionProvider>
+          <ChatProvider>
+            <RoutedApp />
+          </ChatProvider>
+        </AgentSessionProvider>
+      </ConnectivityProvider>
     </ThemeProvider>
   );
 }

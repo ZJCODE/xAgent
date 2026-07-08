@@ -133,16 +133,57 @@ function PendingAttachmentPreview({ attachment, onRemove }: { attachment: Attach
 function ChatChannelBlocked({
   channel,
   starting,
+  loading,
   error,
   onStart,
+  onRetry,
   variant,
 }: {
   channel: ChannelStatus | null;
   starting: boolean;
+  loading: boolean;
   error: string;
   onStart: () => void;
+  onRetry: () => void;
   variant: "empty" | "banner";
 }) {
+  if (!channel && loading) {
+    const connecting = (
+      <EmptyState icon={<RadioTower size={24} />} title="Connecting to API channel">
+        Loading channel status...
+      </EmptyState>
+    );
+    if (variant === "banner") {
+      return <div className="chat-channel-banner" role="status">{connecting}</div>;
+    }
+    return connecting;
+  }
+
+  if (!channel && error) {
+    const unreachable = (
+      <div className="empty-state chat-channel-empty">
+        <div className="empty-state-icon" aria-hidden="true">
+          <RadioTower size={24} />
+        </div>
+        <p>Cannot reach channel service</p>
+        <span>{error}</span>
+        <div className="chat-channel-actions">
+          <Button type="button" variant="primary" onClick={onRetry}>
+            Retry
+          </Button>
+          <Button type="button" variant="secondary" disabled={starting} onClick={onStart}>
+            <Play size={14} />
+            {starting ? "Starting..." : "Start API channel"}
+          </Button>
+        </div>
+      </div>
+    );
+    if (variant === "banner") {
+      return <div className="chat-channel-banner" role="status">{unreachable}</div>;
+    }
+    return unreachable;
+  }
+
   const needsSetup = Boolean(channel && !channel.ready);
   const isError = channel?.status === "error";
   const title = needsSetup
@@ -155,6 +196,7 @@ function ChatChannelBlocked({
     : isError
       ? channel?.detail || "Try starting the channel again."
       : "Start the API channel to send messages in Chat.";
+  const canStart = starting ? false : channel == null || channel.can_start;
 
   const actions = (
     <div className="chat-channel-actions">
@@ -166,7 +208,7 @@ function ChatChannelBlocked({
         <Button
           type="button"
           variant="primary"
-          disabled={!channel?.can_start || starting}
+          disabled={!canStart}
           onClick={onStart}
         >
           <Play size={14} />
@@ -193,7 +235,7 @@ function ChatChannelBlocked({
             <Button
               type="button"
               variant="primary"
-              disabled={!channel?.can_start || starting}
+              disabled={!canStart}
               onClick={onStart}
             >
               <Play size={13} />
@@ -418,7 +460,7 @@ function ChatPanel({
 export function ChatPage() {
   const { loading: agentsLoading } = useAgentSession();
   const { panel } = useChat();
-  const { apiChannel, loading: channelLoading, starting, error, start } = useApiChannel();
+  const { apiChannel, loading: channelLoading, starting, error, start, refresh } = useApiChannel();
 
   const statusReady = !agentsLoading && !channelLoading;
   const chatEnabled = apiChannel?.status === "running";
@@ -427,8 +469,10 @@ export function ChatPage() {
     <ChatChannelBlocked
       channel={apiChannel}
       starting={starting}
+      loading={channelLoading}
       error={error}
       onStart={() => void start()}
+      onRetry={() => void refresh()}
       variant="empty"
     />
   ) : null;
@@ -437,8 +481,10 @@ export function ChatPage() {
     <ChatChannelBlocked
       channel={apiChannel}
       starting={starting}
+      loading={channelLoading}
       error={error}
       onStart={() => void start()}
+      onRetry={() => void refresh()}
       variant="banner"
     />
   ) : null;
