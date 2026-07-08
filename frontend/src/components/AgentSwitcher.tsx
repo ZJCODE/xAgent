@@ -1,4 +1,4 @@
-import { Bot, Check, ChevronDown, Plus } from "lucide-react";
+import { Bot, ChevronDown, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { classNames } from "../lib/format";
@@ -100,7 +100,6 @@ export function AgentSwitcher() {
                     Running
                   </StatusBadge>
                 ) : null}
-                {agent.selected ? <Check size={14} /> : null}
               </div>
             </button>
           ))}
