@@ -237,7 +237,7 @@
           if (payload.type === "done") {
             setBusy(false);
             if (payload.ok) {
-              setFeedback("Install finished. Opening xAgent...", "ok");
+              setFeedback("Install finished. Click Retry connection to open xAgent.", "ok");
               return;
             }
             setFeedback(payload.error || "Install failed. Retry or copy the command and run it manually.", "error");

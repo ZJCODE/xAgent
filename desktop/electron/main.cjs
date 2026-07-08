@@ -59,6 +59,9 @@ async function beginBootstrap(window) {
   if (!window || window.isDestroyed()) {
     return;
   }
+  if (installPromise) {
+    return;
+  }
 
   bootstrapComplete = false;
   await loadLocalPage(window, SPLASH_URL);
@@ -87,6 +90,9 @@ async function beginBootstrap(window) {
 }
 
 function ensureBootstrap(window) {
+  if (installPromise) {
+    return installPromise;
+  }
   if (SKIP_BOOTSTRAP) {
     bootstrapComplete = true;
     return window.loadURL(resolveWebUrl());
@@ -155,6 +161,9 @@ ipcMain.handle("bootstrap:retry", async () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
+  if (installPromise) {
+    return;
+  }
   await ensureBootstrap(mainWindow);
 });
 
@@ -187,7 +196,6 @@ ipcMain.handle("bootstrap:install-backend", async () => {
     }
 
     sendInstallProgress(window, { type: "done", ok: true });
-    await ensureBootstrap(window);
     return { ok: true };
   })().finally(() => {
     installPromise = null;
