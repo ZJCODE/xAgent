@@ -23,15 +23,6 @@ pip install myxagent --upgrade
 
 The launcher will guide you through the rest.
 
-### Desktop app
-
-For a native window on macOS, Windows, or Linux:
-
-1. `pip install myxagent`
-2. Install the desktop app from [GitHub Releases](https://github.com/ZJCODE/xagent/releases)
-3. Open xAgent from Applications
-
-The desktop app starts the local web UI and API channel automatically. See [desktop/README.md](desktop/README.md) for details.
 
 ## Local Data
 
