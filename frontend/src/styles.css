@@ -117,39 +117,6 @@ input {
   padding: 18px 14px;
 }
 
-.brand-block {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 2px 6px 18px;
-}
-
-.brand-mark {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--text);
-  color: var(--bg-surface);
-  font-weight: 760;
-}
-
-.brand-block h1 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 720;
-  line-height: 1.2;
-}
-
-.brand-block span {
-  display: block;
-  margin-top: 2px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
 .agent-switcher {
   display: grid;
   gap: 4px;
@@ -1433,10 +1400,6 @@ input::placeholder {
     padding: 10px 14px;
   }
 
-  .brand-block {
-    padding-bottom: 10px;
-  }
-
   .app-nav {
     display: flex;
     overflow-x: auto;
@@ -1497,10 +1460,6 @@ input::placeholder {
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
-  }
-
-  .brand-block {
-    display: none;
   }
 
   .app-nav {

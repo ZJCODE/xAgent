@@ -51,13 +51,6 @@ export function AppLayout({
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
-        <div className="brand-block">
-          <div className="brand-mark">x</div>
-          <div>
-            <h1>xAgent</h1>
-            <span>Agent workspace</span>
-          </div>
-        </div>
         {agents.length > 0 ? (
           <div className="agent-switcher">
             <label htmlFor="agent-switcher-select">Agent</label>
@@ -68,7 +61,7 @@ export function AppLayout({
             >
               {agents.map((agent) => (
                 <option key={agent.name} value={agent.name}>
-                  {agent.title}
+                  {agent.name}
                 </option>
               ))}
             </select>
