@@ -30,11 +30,13 @@ from xagent.interfaces.cli import (
     _run_inspect_launcher,
     _run_interactive_launcher,
     _run_channel_launcher,
+    _run_client_launcher,
     _run_partial_update_launcher,
     _run_resetup_launcher,
     _format_cli_attachments,
     _format_cli_workspace_links,
     _launcher_channel_options,
+    _launcher_client_options,
     _launcher_help_content,
     _launcher_overview_subtitle,
     _launcher_options,
@@ -900,6 +902,7 @@ class CLICommandTests(unittest.TestCase):
         reset_titles = [option.title for option in reset_options]
         empty_titles = [option.title for option in empty_options]
         self.assertIn("Help", reset_titles)
+        self.assertIn("Client", reset_titles)
         self.assertNotIn("Setup", empty_titles)
         self.assertNotIn("Doctor", reset_titles)
         self.assertNotIn("Version", reset_titles)
@@ -939,8 +942,17 @@ class CLICommandTests(unittest.TestCase):
             options = _launcher_channel_options(Path(tmpdir))
         titles = [option.title for option in options]
 
-        self.assertEqual(titles, ["Chat", "Voice", "API", "Web", "Feishu", "Weixin", "Back"])
+        self.assertEqual(titles, ["Chat", "Voice", "API", "Feishu", "Weixin", "Back"])
         self.assertNotIn("All", titles)
+        self.assertNotIn("Web", titles)
+
+    def test_launcher_client_options_are_entry_points(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            options = _launcher_client_options(Path(tmpdir))
+        titles = [option.title for option in options]
+
+        self.assertEqual(titles, ["Web", "Back"])
 
     def test_channel_launcher_start_chooses_channel_before_action(self):
         class FakeUI:
@@ -980,7 +992,7 @@ class CLICommandTests(unittest.TestCase):
                 exit_code = _run_channel_launcher(Path("/tmp/xagent"))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_ui.channel_option_titles[:6], ["Chat", "Voice", "API", "Web", "Feishu", "Weixin"])
+        self.assertEqual(fake_ui.channel_option_titles[:5], ["Chat", "Voice", "API", "Feishu", "Weixin"])
         self.assertIn("Start", fake_ui.action_option_titles)
         self.assertNotIn("Start Background", fake_ui.action_option_titles)
         self.assertNotIn("Open Web UI", fake_ui.action_option_titles)
@@ -988,6 +1000,51 @@ class CLICommandTests(unittest.TestCase):
         starter.assert_called_once()
         args = starter.call_args.args[0]
         self.assertEqual(args.channels, ["api"])
+        self.assertEqual(args.config_dir, "/tmp/xagent")
+
+    def test_client_launcher_start_chooses_client_before_action(self):
+        class FakeUI:
+            def __init__(self):
+                self.client_choices = iter([
+                    SimpleNamespace(key=CLIENT_WEB, title="Web"),
+                    SimpleNamespace(key="back"),
+                ])
+                self.client_option_titles = []
+                self.action_choices = iter([SimpleNamespace(key="start")])
+                self.action_option_titles = []
+
+            def select_menu(self, *, title, subtitle, options, footer):
+                del subtitle, footer
+                if title == "xAgent Client":
+                    self.client_option_titles = [option.title for option in options]
+                    return next(self.client_choices)
+                if title == "xAgent Client / Web":
+                    self.action_option_titles = [option.title for option in options]
+                    return next(self.action_choices)
+                raise AssertionError(f"Unexpected menu: {title}")
+
+            def clear(self):
+                return None
+
+            def pause(self, message="Press Enter to continue"):
+                del message
+                return None
+
+            def print_panel(self, *args, **kwargs):
+                raise AssertionError("No error panel expected")
+
+        fake_ui = FakeUI()
+
+        with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
+            with patch("xagent.interfaces.cli.launcher.handle_client_start", return_value=0) as starter:
+                exit_code = _run_client_launcher(Path("/tmp/xagent"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_ui.client_option_titles, ["Web", "Back"])
+        self.assertIn("Start", fake_ui.action_option_titles)
+        starter.assert_called_once()
+        args = starter.call_args.args[0]
+        self.assertEqual(args.clients, [CLIENT_WEB])
         self.assertEqual(args.config_dir, "/tmp/xagent")
 
     def test_channel_launcher_feishu_setup_runs_init_feishu_when_missing(self):

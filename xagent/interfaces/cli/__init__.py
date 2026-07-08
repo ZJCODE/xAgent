@@ -24,11 +24,13 @@ from .chat import (
 from .agents import AgentRegistryError, handle_agents
 from .launcher import (
     _launcher_channel_options,
+    _launcher_client_options,
     _launcher_help_content,
     _launcher_options,
     _launcher_overview_subtitle,
     _run_agent_launcher,
     _run_channel_launcher,
+    _run_client_launcher,
     _run_inspect_launcher,
     _run_interactive_launcher,
     _run_model_config_launcher,

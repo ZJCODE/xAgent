@@ -124,7 +124,13 @@ def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[Men
         MenuOption(
             key="channel",
             title="Channel",
-            description="Open chat, Web UI, Feishu, and voice entry points.",
+            description="Open chat, API, Feishu, Weixin, and voice entry points.",
+            disabled=not initialized,
+        ),
+        MenuOption(
+            key="client",
+            title="Client",
+            description="Manage local clients, such as the browser web client.",
             disabled=not initialized,
         ),
         MenuOption(
@@ -146,7 +152,7 @@ def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[Men
     ]
     if has_agents:
         options.insert(
-            3,
+            4,
             MenuOption(
                 key="setup",
                 title=setup_title,
@@ -162,7 +168,6 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
 
     voice_running = _running(CHANNEL_VOICE)
     api_running = _running(CHANNEL_API)
-    web_running = running_pid(client_paths(config_dir, CLIENT_WEB).pid_path) is not None
     feishu_running = _running(CHANNEL_FEISHU)
     weixin_running = _running(CHANNEL_WEIXIN)
 
@@ -183,11 +188,6 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
             description="Manage the HTTP/WebSocket api channel.",
         ),
         MenuOption(
-            key=CLIENT_WEB,
-            title="Web (running)" if web_running else "Web",
-            description="Manage the browser client (requires a running api channel).",
-        ),
-        MenuOption(
             key=CHANNEL_FEISHU,
             title="Feishu (running)" if feishu_running else "Feishu",
             description="Configure or manage the Feishu bot channel.",
@@ -196,6 +196,19 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
             key=CHANNEL_WEIXIN,
             title="Weixin (running)" if weixin_running else "Weixin",
             description="Configure or manage the Weixin DM channel.",
+        ),
+        MenuOption(key="back", title="Back", description="Return to the main launcher."),
+    ]
+
+
+def _launcher_client_options(config_dir: Path) -> list[MenuOption]:
+    web_running = running_pid(client_paths(config_dir, CLIENT_WEB).pid_path) is not None
+
+    return [
+        MenuOption(
+            key=CLIENT_WEB,
+            title="Web (running)" if web_running else "Web",
+            description="Manage the browser client (requires a running api channel).",
         ),
         MenuOption(key="back", title="Back", description="Return to the main launcher."),
     ]
@@ -2113,23 +2126,6 @@ def _run_channel_launcher(config_dir: Path) -> int:
                 _run_voice_channel_launcher(ui, config_dir)
                 continue
 
-            if channel_option.key == CLIENT_WEB:
-                channel_title = "Web"
-                option = ui.select_menu(
-                    title=f"xAgent Client / {channel_title}",
-                    subtitle=f"Runtime: {config_dir}",
-                    options=_managed_client_actions(config_dir, CLIENT_WEB),
-                    footer="↑/↓ Move • Enter Select  •  q Back",
-                )
-                if option is None or option.key == "back":
-                    continue
-                ui.clear()
-                exit_code = _run_managed_client_action(config_dir, CLIENT_WEB, str(option.key))
-                if exit_code != 0:
-                    ui.print_panel(f"Client action exited with status {exit_code}.", title="Client")
-                ui.pause("Press Enter to return to Channel")
-                continue
-
             channel_title = getattr(channel_option, "title", str(channel_option.key).title())
             option = ui.select_menu(
                 title=f"xAgent Channel / {channel_title}",
@@ -2145,6 +2141,41 @@ def _run_channel_launcher(config_dir: Path) -> int:
             if exit_code != 0:
                 ui.print_panel(f"Channel action exited with status {exit_code}.", title="Channel")
             ui.pause("Press Enter to return to Channel")
+    except ReturnToLauncherHome:
+        ui.clear()
+        return 0
+
+
+def _run_client_launcher(config_dir: Path) -> int:
+    ui = TerminalUI()
+
+    try:
+        while True:
+            client_option = ui.select_menu(
+                title="xAgent Client",
+                subtitle="Choose a local client to manage.",
+                options=_launcher_client_options(config_dir),
+                footer="↑/↓ Move • Enter Select  •  q Back",
+            )
+            if client_option is None or client_option.key == "back":
+                ui.clear()
+                return 0
+
+            client_key = str(client_option.key)
+            client_title = "Web" if client_key == CLIENT_WEB else client_key.title()
+            option = ui.select_menu(
+                title=f"xAgent Client / {client_title}",
+                subtitle=f"Runtime: {config_dir}",
+                options=_managed_client_actions(config_dir, client_key),
+                footer="↑/↓ Move • Enter Select  •  q Back",
+            )
+            if option is None or option.key == "back":
+                continue
+            ui.clear()
+            exit_code = _run_managed_client_action(config_dir, client_key, str(option.key))
+            if exit_code != 0:
+                ui.print_panel(f"Client action exited with status {exit_code}.", title="Client")
+            ui.pause("Press Enter to return to Client")
     except ReturnToLauncherHome:
         ui.clear()
         return 0
@@ -2196,6 +2227,9 @@ def _run_interactive_launcher() -> int:
                 continue
         elif option.key == "channel":
             _run_channel_launcher(config_dir)
+            continue
+        elif option.key == "client":
+            _run_client_launcher(config_dir)
             continue
         elif option.key == "inspect":
             _run_inspect_launcher(config_dir)
