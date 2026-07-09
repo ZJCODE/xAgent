@@ -43,7 +43,38 @@ has_command() {
     command -v "$1" >/dev/null 2>&1
 }
 
+PATH_CONFIGURED=0
+
+append_path_block() {
+    local file="$1"
+    local create_if_missing="$2"
+    shift 2
+
+    [ -n "$file" ] || return 0
+    if [ ! -f "$file" ]; then
+        if [ "$create_if_missing" != "1" ]; then
+            return 0
+        fi
+        mkdir -p "$(dirname "$file")"
+        touch "$file"
+    fi
+
+    if grep -q "# xAgent PATH" "$file"; then
+        return 0
+    fi
+
+    {
+        echo ""
+        echo "# xAgent PATH"
+        printf '%s\n' "$@"
+    } >> "$file"
+    PATH_CONFIGURED=1
+    info "Added $BINDIR to PATH in $file"
+}
+
 ensure_path() {
+    PATH_CONFIGURED=0
+
     case ":$PATH:" in
         *":$BINDIR:"*) ;;
         *)
@@ -57,32 +88,25 @@ ensure_path() {
         return 0
     fi
 
-    local bashrc="$HOME/.bashrc"
-    local zshrc="$HOME/.zshrc"
-    local fishrc="$HOME/.config/fish/config.fish"
+    append_path_block "$HOME/.bashrc" 0 "export PATH=\"$BINDIR:\$PATH\""
+    append_path_block "$HOME/.bash_profile" 0 "export PATH=\"$BINDIR:\$PATH\""
+    append_path_block "$HOME/.profile" 0 "export PATH=\"$BINDIR:\$PATH\""
+    append_path_block "$HOME/.zshrc" 0 "export PATH=\"$BINDIR:\$PATH\""
+    append_path_block "$HOME/.zprofile" 0 "export PATH=\"$BINDIR:\$PATH\""
+    append_path_block "$HOME/.config/fish/config.fish" 0 "fish_add_path \"$BINDIR\""
 
-    if [ -f "$bashrc" ] && ! grep -q "# xAgent PATH" "$bashrc"; then
-        {
-            echo ""
-            echo "# xAgent PATH"
-            echo "export PATH=\"$BINDIR:\$PATH\""
-        } >> "$bashrc"
-    fi
-
-    if [ -f "$zshrc" ] && ! grep -q "# xAgent PATH" "$zshrc"; then
-        {
-            echo ""
-            echo "# xAgent PATH"
-            echo "export PATH=\"$BINDIR:\$PATH\""
-        } >> "$zshrc"
-    fi
-
-    if [ -f "$fishrc" ] && ! grep -q "# xAgent PATH" "$fishrc"; then
-        {
-            echo ""
-            echo "# xAgent PATH"
-            echo "fish_add_path \"$BINDIR\""
-        } >> "$fishrc"
+    if [ "$PATH_CONFIGURED" -eq 0 ]; then
+        case "${SHELL:-}" in
+            */fish)
+                append_path_block "$HOME/.config/fish/config.fish" 1 "fish_add_path \"$BINDIR\""
+                ;;
+            */zsh)
+                append_path_block "$HOME/.zshrc" 1 "export PATH=\"$BINDIR:\$PATH\""
+                ;;
+            *)
+                append_path_block "$HOME/.bashrc" 1 "export PATH=\"$BINDIR:\$PATH\""
+                ;;
+        esac
     fi
 }
 
@@ -163,6 +187,14 @@ success_message() {
     echo -e "${GREEN}  xAgent installed successfully!${NC}"
     echo ""
     echo -e "  Run   ${CYAN}${COMMAND_NAME}${NC}"
+    echo ""
+    if [ "${XAGENT_NO_PATH_MODIFY:-0}" != "1" ]; then
+        if [ "$PATH_CONFIGURED" -eq 1 ]; then
+            echo -e "  ${YELLOW}Open a new terminal to pick up PATH changes.${NC}"
+        fi
+        echo -e "  To run ${CYAN}${COMMAND_NAME}${NC} in this terminal:"
+        echo -e "    ${CYAN}export PATH=\"$BINDIR:\$PATH\"${NC}"
+    fi
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
