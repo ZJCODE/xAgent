@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
-from .clients import CLIENT_DESKTOP, CLIENT_WEB
+from .clients import CLIENT_WEB
 from . import agents, runtime, setup
 
 
@@ -64,8 +64,6 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent api start",
             "  xagent client web start",
             "  xagent client web open",
-            "  xagent client desktop start",
-            "  xagent client desktop open",
             "  xagent status",
             "  xagent api logs -f",
             "  xagent voice setup",
@@ -356,41 +354,6 @@ def _add_web_client_lifecycle_subparsers(parent_parser: argparse.ArgumentParser)
     logs_parser.set_defaults(handler=runtime.handle_client_logs, clients=[CLIENT_WEB])
 
 
-def _add_desktop_client_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> None:
-    sub = parent_parser.add_subparsers(dest="client_desktop_action", metavar="<action>")
-    sub.required = True
-
-    open_parser = sub.add_parser("open", help="Open or focus the Electron desktop client")
-    _add_agent_argument(open_parser)
-    open_parser.add_argument("--api-url", dest="api_url", default=None, help="Upstream api channel URL")
-    open_parser.set_defaults(handler=runtime.handle_client_desktop_open)
-
-    start_parser = sub.add_parser("start", help="Start the Electron desktop client in the background")
-    _add_agent_argument(start_parser)
-    start_parser.add_argument("--api-url", dest="api_url", default=None, help="Upstream api channel URL")
-    start_parser.set_defaults(handler=runtime.handle_client_start, clients=[CLIENT_DESKTOP])
-
-    stop_parser = sub.add_parser("stop", help="Stop the background desktop client")
-    _add_agent_argument(stop_parser)
-    stop_parser.set_defaults(handler=runtime.handle_client_stop, clients=[CLIENT_DESKTOP])
-
-    restart_parser = sub.add_parser("restart", help="Restart the background desktop client")
-    _add_agent_argument(restart_parser)
-    restart_parser.add_argument("--api-url", dest="api_url", default=None, help="Upstream api channel URL")
-    restart_parser.set_defaults(handler=runtime.handle_client_restart, clients=[CLIENT_DESKTOP])
-
-    status_parser = sub.add_parser("status", help="Show desktop client status")
-    _add_agent_argument(status_parser)
-    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    status_parser.set_defaults(handler=runtime.handle_client_status, clients=[CLIENT_DESKTOP])
-
-    logs_parser = sub.add_parser("logs", help="Show desktop client logs")
-    _add_agent_argument(logs_parser)
-    logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    logs_parser.set_defaults(handler=runtime.handle_client_logs, clients=[CLIENT_DESKTOP])
-
-
 def _hide_subparser_choice(subparsers: argparse._SubParsersAction, name: str) -> None:
     subparsers._choices_actions = [
         action for action in subparsers._choices_actions if action.dest != name
@@ -479,8 +442,6 @@ def build_parser() -> argparse.ArgumentParser:
     client_sub.required = True
     web_client_parser = client_sub.add_parser(CLIENT_WEB, help="Browser web client")
     _add_web_client_lifecycle_subparsers(web_client_parser)
-    desktop_client_parser = client_sub.add_parser(CLIENT_DESKTOP, help="Electron desktop client")
-    _add_desktop_client_lifecycle_subparsers(desktop_client_parser)
     _show_help_on_missing_action(client_parser)
 
     feishu_parser = subparsers.add_parser("feishu", help="Manage the Feishu bot")

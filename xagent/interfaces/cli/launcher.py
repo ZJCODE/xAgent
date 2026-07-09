@@ -44,14 +44,13 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .clients import CLIENT_DESKTOP, CLIENT_WEB, client_paths, web_client_config
+from .clients import CLIENT_WEB, client_paths, web_client_config
 from .runtime import (
     _launcher_args,
     _xagent_version_text,
     handle_chat,
     handle_client_logs,
     handle_client_restart,
-    handle_client_desktop_open,
     handle_client_start,
     handle_client_status,
     handle_client_stop,
@@ -202,25 +201,15 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
     ]
 
 
-def _desktop_client_is_running() -> bool:
-    return running_pid(client_paths(CLIENT_DESKTOP).pid_path) is not None
-
-
 def _launcher_client_options(config_dir: Path) -> list[MenuOption]:
     del config_dir
     web_running = running_pid(client_paths(CLIENT_WEB).pid_path) is not None
-    desktop_running = _desktop_client_is_running()
 
     return [
         MenuOption(
             key=CLIENT_WEB,
             title="Web (running)" if web_running else "Web",
             description="Manage the browser client (requires a running api channel).",
-        ),
-        MenuOption(
-            key=CLIENT_DESKTOP,
-            title="Desktop (running)" if desktop_running else "Desktop",
-            description="Manage the Electron desktop client (starts the web UI backend if needed).",
         ),
         MenuOption(key="back", title="Back", description="Return to the main launcher."),
     ]
@@ -459,44 +448,14 @@ def _managed_client_actions(config_dir: Path, client: str) -> list[MenuOption]:
             MenuOption("back", "Back", "Return to Channel."),
         ]
 
-    if client == CLIENT_DESKTOP:
-        client_ready = _web_client_is_enabled(config_dir)
-        client_running = client_ready and _desktop_client_is_running()
-        unavailable_description = "Enable clients.web before starting the desktop client."
-        if not client_ready:
-            open_description = "Enable clients.web before opening the desktop client."
-        else:
-            open_description = "Open or focus the desktop client."
-
-        return [
-            MenuOption("open", "Open", open_description, disabled=not client_ready),
-            MenuOption(
-                "start",
-                "Start",
-                "Start the desktop client." if client_ready else unavailable_description,
-                disabled=not client_ready,
-            ),
-            MenuOption("stop", "Stop", "Stop the desktop client."),
-            MenuOption(
-                "restart",
-                "Restart",
-                "Restart the desktop client." if client_ready else unavailable_description,
-                disabled=not client_ready,
-            ),
-            MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
-            MenuOption("back", "Back", "Return to Channel."),
-        ]
-
     return [MenuOption("back", "Back", "Return to Channel.")]
 
 
 def _run_managed_client_action(config_dir: Path, client: str, action: str) -> int:
-    if client not in {CLIENT_WEB, CLIENT_DESKTOP}:
+    if client != CLIENT_WEB:
         print(f"Unknown client: {client}")
         return 1
     if action == "open":
-        if client == CLIENT_DESKTOP:
-            return handle_client_desktop_open(_launcher_args(config_dir=str(config_dir)))
         return handle_client_web_open(_launcher_args(config_dir=str(config_dir)))
     if action == "start":
         return handle_client_start(
@@ -566,12 +525,6 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command("xagent client web open", config_dir=config_dir), style="cyan")
     content.append("\n    Open the running web client in your browser.\n")
     content.append("  ")
-    content.append(_format_init_command("xagent client desktop start", config_dir=config_dir), style="cyan")
-    content.append("\n    Start the Electron desktop client.\n")
-    content.append("  ")
-    content.append(_format_init_command("xagent client desktop open", config_dir=config_dir), style="cyan")
-    content.append("\n    Open or focus the desktop client.\n")
-    content.append("  ")
     content.append(_format_init_command("xagent voice start", config_dir=config_dir), style="cyan")
     content.append("\n    Start the voice channel.\n")
     content.append("  ")
@@ -634,7 +587,7 @@ def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
         lines.append("")
     for item in active_items:
         line = f"{item.name:<10} {item.value}"
-        if item.name in {"API", "Web", "Desktop", "Voice", "Feishu", "Weixin"} and item.value == "running" and item.detail:
+        if item.name in {"API", "Web", "Voice", "Feishu", "Weixin"} and item.value == "running" and item.detail:
             line += f"  {item.detail}"
         lines.append(line)
     if disabled_names:

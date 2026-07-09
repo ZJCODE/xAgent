@@ -19,7 +19,7 @@ export function WelcomePage() {
   if (webStatus === "offline") {
     return (
       <EmptyState icon={<RadioTower size={24} />} title="Cannot reach xAgent">
-        <p className="welcome-copy">The desktop app could not connect to the local xAgent service.</p>
+        <p className="welcome-copy">Could not connect to the local xAgent service.</p>
         <Button type="button" variant="primary" onClick={() => void retry()}>
           Retry connection
         </Button>

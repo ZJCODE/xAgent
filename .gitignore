@@ -36,16 +36,6 @@ frontend/dist/
 frontend/.turbo/
 frontend/.cache/
 frontend/*.tsbuildinfo
-# Desktop
-desktop/node_modules/
-desktop/dist/
-desktop/out/
-desktop/.cache/
-desktop/.electron-builder-cache/
-desktop/*.dmg
-desktop/*.exe
-desktop/*.AppImage
-desktop/*.blockmap
 # Test and coverage
 htmlcov/
 .coverage

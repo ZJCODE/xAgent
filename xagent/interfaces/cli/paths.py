@@ -33,7 +33,7 @@ def load_runtime_config(args: Any) -> dict[str, Any]:
 
 
 def load_client_runtime_config(args: Any) -> dict[str, Any]:
-    """Load config for web/desktop clients even when no agents are registered."""
+    """Load config for web clients even when no agents are registered."""
     return load_config_file(runtime_dir_or_management_root(args))
 
 

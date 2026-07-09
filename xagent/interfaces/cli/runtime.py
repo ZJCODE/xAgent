@@ -32,7 +32,6 @@ from .channels import (
     weixin_config,
 )
 from .clients import (
-    CLIENT_DESKTOP,
     CLIENT_WEB,
     ClientSelectionError,
     client_paths,
@@ -840,60 +839,6 @@ def handle_status_all(args: argparse.Namespace) -> int:
     return 0
 
 
-def _ensure_web_client_running(args: argparse.Namespace, config: dict[str, Any]) -> bool:
-    paths = client_paths(CLIENT_WEB)
-    if running_pid(paths.pid_path) is not None:
-        return True
-    print("Starting web client for the desktop UI...")
-    return _start_background_client(args, client=CLIENT_WEB)
-
-
-def _start_background_desktop(args: argparse.Namespace, config: dict[str, Any]) -> bool:
-    from ..clients.desktop_launcher import (
-        DesktopClientError,
-        desktop_dependencies_ready,
-        desktop_launch_command,
-        desktop_launch_env,
-        desktop_setup_hint,
-    )
-
-    web_cfg = web_client_config(config)
-    if not web_cfg.get("enabled", True):
-        print("Web client is disabled in config (clients.web.enabled=false).")
-        return False
-    if not desktop_dependencies_ready():
-        print(f"Desktop dependencies are missing. Run: {desktop_setup_hint()}")
-        return False
-    if not _ensure_web_client_running(args, config):
-        return False
-
-    api_url = getattr(args, "api_url", None)
-    paths = client_paths(CLIENT_DESKTOP)
-    try:
-        command = desktop_launch_command(config, api_url=api_url)
-        extra_env = desktop_launch_env(config, api_url=api_url)
-    except DesktopClientError as exc:
-        print(str(exc))
-        return False
-
-    result = start_background(
-        command,
-        pid_path=paths.pid_path,
-        log_path=paths.log_path,
-        extra_env=extra_env,
-    )
-    if result.ok:
-        print(f"Started {CLIENT_DESKTOP} client in background (pid={result.pid}).")
-        print(f"UI: {web_client_public_url(config)}")
-        print(f"Logs: {paths.log_path}")
-        return True
-
-    print(f"Failed to start {CLIENT_DESKTOP} client: {result.error}")
-    if result.recent_output:
-        print(result.recent_output)
-    return False
-
-
 def _start_background_client(args: argparse.Namespace, *, client: str, config_dir: Path | None = None) -> bool:
     del config_dir
     paths = client_paths(client)
@@ -915,7 +860,7 @@ def _start_background_client(args: argparse.Namespace, *, client: str, config_di
 
 def handle_client_start(args: argparse.Namespace) -> int:
     try:
-        clients, config = _select_clients(args, default=CLIENT_WEB)
+        clients, _config = _select_clients(args, default=CLIENT_WEB)
     except (ChannelSelectionError, ClientSelectionError) as exc:
         if isinstance(exc, ClientSelectionError):
             return _handle_client_error(exc)
@@ -923,10 +868,7 @@ def handle_client_start(args: argparse.Namespace) -> int:
 
     ok = True
     for client in clients:
-        if client == CLIENT_DESKTOP:
-            if not _start_background_desktop(args, config):
-                ok = False
-        elif not _start_background_client(args, client=client):
+        if not _start_background_client(args, client=client):
             ok = False
     return 0 if ok else 1
 
@@ -950,7 +892,7 @@ def handle_client_stop(args: argparse.Namespace) -> int:
 
 def handle_client_restart(args: argparse.Namespace) -> int:
     try:
-        clients, config = _select_clients(args, default=CLIENT_WEB)
+        clients, _config = _select_clients(args, default=CLIENT_WEB)
     except (ChannelSelectionError, ClientSelectionError) as exc:
         if isinstance(exc, ClientSelectionError):
             return _handle_client_error(exc)
@@ -968,10 +910,7 @@ def handle_client_restart(args: argparse.Namespace) -> int:
             continue
         restart_values["clients"] = [client]
         restart_args = argparse.Namespace(**restart_values)
-        if client == CLIENT_DESKTOP:
-            if not _start_background_desktop(restart_args, config):
-                ok = False
-        elif not _start_background_client(restart_args, client=client):
+        if not _start_background_client(restart_args, client=client):
             ok = False
 
     return 0 if ok else 1
@@ -997,8 +936,6 @@ def handle_client_status(args: argparse.Namespace) -> int:
             "log_path": str(paths.log_path),
         }
         if client == CLIENT_WEB:
-            row["url"] = web_client_public_url(config)
-        if client == CLIENT_DESKTOP:
             row["url"] = web_client_public_url(config)
         rows.append(row)
 
@@ -1037,44 +974,6 @@ def handle_client_logs(args: argparse.Namespace) -> int:
             return 0
         text = tail_text(paths.log_path, max_lines=lines)
         print(text or "(no log output)")
-    return 0
-
-
-def handle_client_desktop_open(args: argparse.Namespace) -> int:
-    from ..clients.desktop_launcher import (
-        DesktopClientError,
-        desktop_dependencies_ready,
-        desktop_setup_hint,
-        launch_desktop_client,
-    )
-
-    try:
-        config = load_client_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    if not web_client_config(config).get("enabled", True):
-        print("Web client is disabled in config (clients.web.enabled=false).")
-        return 1
-    if not desktop_dependencies_ready():
-        print(f"Desktop dependencies are missing. Run: {desktop_setup_hint()}")
-        return 1
-    if not _ensure_web_client_running(args, config):
-        return 1
-
-    api_url = getattr(args, "api_url", None)
-    paths = client_paths(CLIENT_DESKTOP)
-    existing_pid = running_pid(paths.pid_path)
-    if existing_pid is None:
-        return 0 if _start_background_desktop(args, config) else 1
-
-    try:
-        launch_desktop_client(config, api_url=api_url, wait=False)
-    except DesktopClientError as exc:
-        print(str(exc))
-        return 1
-
-    print(f"Focused desktop client (pid={existing_pid}).")
     return 0
 
 
@@ -1441,13 +1340,11 @@ def print_quick_start() -> None:
     print("Use now:")
     print("  xagent chat                     Chat in the terminal")
     print("  xagent client web open          Open the browser web client")
-    print("  xagent client desktop open      Open the Electron desktop client")
     print("  xagent voice                    Use microphone / speaker mode")
     print("")
     print("Keep running:")
     print("  xagent api start                Start the api channel")
     print("  xagent client web start         Start the browser web client")
-    print("  xagent client desktop start     Start the Electron desktop client")
     print("  xagent voice start              Start voice channel")
     print("  xagent status                   Show channel and client status")
     print("  xagent api logs -f              Follow api channel logs")
