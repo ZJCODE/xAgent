@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import tempfile
@@ -61,9 +60,7 @@ class InstallScriptTests(unittest.TestCase):
 
             self.assertFalse((home / "python_calls.log").exists())
             self.assertIn("tool install --force myxagent --python 3.12", uv_log.read_text(encoding="utf-8"))
-
-            manifest = json.loads((home / ".xagent" / "cli.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["command"], [str(home / ".local" / "bin" / "xagent")])
+            self.assertFalse((home / ".xagent" / "cli.json").exists())
 
     def test_installer_adds_bindir_to_shell_profile(self):
         with tempfile.TemporaryDirectory() as tmpdir:
