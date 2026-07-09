@@ -41,6 +41,18 @@ class WebClientServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200, path)
             self.assertIn("text/html", response.headers.get("content-type", ""))
 
+    async def test_web_client_requires_ui_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            static_dir = Path(tmp) / "static"
+            static_dir.mkdir()
+            with self.assertRaises(FileNotFoundError):
+                WebClientServer(
+                    host="127.0.0.1",
+                    port=1415,
+                    api_url="http://127.0.0.1:8010",
+                    static_dir=static_dir,
+                )
+
 
 class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

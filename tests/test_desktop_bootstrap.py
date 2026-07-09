@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -11,28 +13,22 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = REPO_ROOT / "desktop" / "electron" / "bootstrap.cjs"
 
 
-def _run_bootstrap(expression: str) -> object:
+def _run_bootstrap(expression: str, *, env: dict[str, str] | None = None) -> object:
+    run_env = dict(os.environ)
+    if env:
+        run_env.update(env)
     completed = subprocess.run(
         ["node", "-e", f"const bootstrap = require({json.dumps(str(BOOTSTRAP))}); {expression}"],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
         text=True,
+        env=run_env,
     )
     return json.loads(completed.stdout.strip() or "null")
 
 
 class DesktopBootstrapTests(unittest.TestCase):
-    def test_resolve_xagent_commands_includes_python_module_fallback(self):
-        commands = _run_bootstrap("console.log(JSON.stringify(bootstrap.resolveXagentCommands()))")
-        self.assertIsInstance(commands, list)
-        self.assertTrue(commands)
-        joined = [" ".join(command) for command in commands]
-        self.assertTrue(
-            any("client web start" in command for command in joined)
-            or any("xagent.interfaces.cli" in command for command in joined)
-        )
-
     def test_install_command_uses_official_install_script(self):
         value = _run_bootstrap("console.log(JSON.stringify(bootstrap.INSTALL_COMMAND))")
         self.assertIn("curl -fsSL", value)
@@ -42,44 +38,73 @@ class DesktopBootstrapTests(unittest.TestCase):
         value = _run_bootstrap("console.log(JSON.stringify(bootstrap.DEFAULT_TIMEOUT_MS))")
         self.assertEqual(value, 6000)
 
-    def test_conda_install_candidates_include_anaconda_home_bin(self):
-        candidates = _run_bootstrap("console.log(JSON.stringify(bootstrap.condaInstallCandidates('xagent')))")
-        self.assertIsInstance(candidates, list)
-        home = Path.home()
-        self.assertIn(str(home / "anaconda3" / "bin" / "xagent"), candidates)
+    def test_configured_xagent_command_reads_manifest_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            python = home / "Python Bin" / "python3"
+            python.parent.mkdir(parents=True)
+            python.write_text("#!/bin/sh\n")
+            manifest = home / ".xagent" / "cli.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({"command": [str(python), "-m", "xagent"]}))
 
-    def test_find_xagent_binary_checks_conda_candidate(self):
-        expression = """
-        const fs = require('fs');
-        const os = require('os');
-        const path = require('path');
-        const candidate = path.join(os.homedir(), 'anaconda3', 'bin', 'xagent');
-        const original = bootstrap.findXagentBinary;
-        bootstrap.findXagentBinary = () => {
-          if (fs.existsSync(candidate)) return candidate;
-          return original();
-        };
-        console.log(JSON.stringify(bootstrap.findXagentBinary()));
-        """
-        value = _run_bootstrap(expression)
-        candidate = str(Path.home() / "anaconda3" / "bin" / "xagent")
-        if Path(candidate).is_file():
-            self.assertEqual(value, candidate)
-        else:
-            self.assertTrue(value is None or isinstance(value, str))
+            value = _run_bootstrap(
+                "console.log(JSON.stringify(bootstrap.configuredXagentCommand()))",
+                env={"HOME": str(home), "USERPROFILE": str(home)},
+            )
+            self.assertEqual(value, [str(python), "-m", "xagent"])
 
-    def test_find_python_returns_string_or_null(self):
-        value = _run_bootstrap("console.log(JSON.stringify(bootstrap.findPython()))")
-        self.assertTrue(value is None or isinstance(value, str))
+    def test_configured_xagent_command_returns_null_without_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            value = _run_bootstrap(
+                "console.log(JSON.stringify(bootstrap.configuredXagentCommand()))",
+                env={"HOME": tmp, "USERPROFILE": tmp, "XAGENT_BINARY": ""},
+            )
+            self.assertIsNone(value)
 
-    def test_enriched_env_bypasses_proxy_for_loopback_hosts(self):
+    def test_configured_xagent_command_honors_env_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            override = home / "custom-xagent"
+            override.write_text("#!/bin/sh\n")
+            value = _run_bootstrap(
+                "console.log(JSON.stringify(bootstrap.configuredXagentCommand()))",
+                env={"HOME": str(home), "USERPROFILE": str(home), "XAGENT_BINARY": str(override)},
+            )
+            self.assertEqual(value, [str(override)])
+
+    def test_resolve_xagent_command_appends_web_start_to_manifest_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            python = home / "Python Bin" / "python3"
+            python.parent.mkdir(parents=True)
+            python.write_text("#!/bin/sh\n")
+            manifest = home / ".xagent" / "cli.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({"command": [str(python), "-m", "xagent"]}))
+
+            command = _run_bootstrap(
+                "console.log(JSON.stringify(bootstrap.resolveXagentCommand()))",
+                env={"HOME": str(home), "USERPROFILE": str(home)},
+            )
+            self.assertEqual(command, [str(python), "-m", "xagent", "client", "web", "start"])
+
+    def test_resolve_xagent_command_null_without_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            command = _run_bootstrap(
+                "console.log(JSON.stringify(bootstrap.resolveXagentCommand()))",
+                env={"HOME": tmp, "USERPROFILE": tmp, "XAGENT_BINARY": ""},
+            )
+            self.assertIsNone(command)
+
+    def test_child_process_env_bypasses_proxy_for_loopback_hosts(self):
         value = _run_bootstrap(
             """
             const originalUpper = process.env.NO_PROXY;
             const originalLower = process.env.no_proxy;
             process.env.NO_PROXY = 'example.com,127.0.0.1';
             delete process.env.no_proxy;
-            const env = bootstrap.enrichedPathEnv();
+            const env = bootstrap.childProcessEnv();
             if (originalUpper === undefined) {
               delete process.env.NO_PROXY;
             } else {
@@ -105,29 +130,25 @@ class DesktopBootstrapTests(unittest.TestCase):
             """
             (async () => {
               let started = false;
-              let fetchCount = 0;
+              let shellCount = 0;
               const statuses = [];
-              const fetchWebHealth = async () => {
-                fetchCount += 1;
-                if (!started) {
-                  return null;
-                }
-                return { status: 'ok', web: true, api_reachable: true };
+              const fetchWebShell = async () => {
+                shellCount += 1;
+                return started;
               };
               const result = await bootstrap.runBootstrap('http://127.0.0.1:1415', {
                 initialProbeMs: 1,
                 timeoutMs: 1000,
                 pollMs: 1,
                 onStatus: (status) => statuses.push(status.title || status),
-                fetchWebHealth,
-                fetchWebShell: async () => false,
-                resolveXagentCommands: () => [['/tmp/xagent', 'client', 'web', 'start']],
-                startWebClient: (commands) => {
+                fetchWebShell,
+                resolveXagentCommand: () => ['/tmp/xagent', 'client', 'web', 'start'],
+                startWebClient: (command) => {
                   started = true;
-                  return commands.length === 1;
+                  return command.length === 4;
                 },
               });
-              console.log(JSON.stringify({ result, fetchCount, statuses }));
+              console.log(JSON.stringify({ result, shellCount, statuses }));
             })().catch((error) => {
               console.error(error);
               process.exit(1);
@@ -135,7 +156,7 @@ class DesktopBootstrapTests(unittest.TestCase):
             """
         )
         self.assertEqual(value["result"], {"ok": True})
-        self.assertGreaterEqual(value["fetchCount"], 2)
+        self.assertGreaterEqual(value["shellCount"], 1)
         self.assertIn("Locating xAgent", value["statuses"])
         self.assertIn("Starting web service", value["statuses"])
 
@@ -148,9 +169,8 @@ class DesktopBootstrapTests(unittest.TestCase):
                 initialProbeMs: 1,
                 timeoutMs: 1000,
                 pollMs: 1,
-                fetchWebHealth: async () => null,
                 fetchWebShell: async () => false,
-                resolveXagentCommands: () => [],
+                resolveXagentCommand: () => null,
                 startWebClient: () => {
                   startCalled = true;
                   return true;
@@ -166,29 +186,48 @@ class DesktopBootstrapTests(unittest.TestCase):
         self.assertEqual(value["result"], {"ok": False, "reason": "missing-xagent"})
         self.assertFalse(value["startCalled"])
 
-    def test_run_bootstrap_enters_when_health_is_blocked_but_web_shell_loads(self):
+    def test_run_bootstrap_reports_web_timeout_when_shell_never_loads(self):
         value = _run_bootstrap(
             """
             (async () => {
               let startWebCalled = false;
-              let startApiCalled = false;
               const result = await bootstrap.runBootstrap('http://127.0.0.1:1415', {
-                initialProbeMs: 1,
-                apiWaitMs: 1,
+                initialProbeMs: 5,
+                timeoutMs: 20,
                 pollMs: 1,
-                fetchWebHealth: async () => null,
-                fetchWebShell: async () => true,
-                resolveXagentCommands: () => [['/tmp/xagent', 'client', 'web', 'start']],
+                fetchWebShell: async () => false,
+                resolveXagentCommand: () => ['/tmp/xagent', 'client', 'web', 'start'],
                 startWebClient: () => {
                   startWebCalled = true;
                   return true;
                 },
-                startApiChannel: () => {
-                  startApiCalled = true;
+              });
+              console.log(JSON.stringify({ result, startWebCalled }));
+            })().catch((error) => {
+              console.error(error);
+              process.exit(1);
+            });
+            """
+        )
+        self.assertEqual(value["result"], {"ok": False, "reason": "web-timeout"})
+        self.assertTrue(value["startWebCalled"])
+
+    def test_run_bootstrap_enters_when_web_shell_loads(self):
+        value = _run_bootstrap(
+            """
+            (async () => {
+              let startWebCalled = false;
+              const result = await bootstrap.runBootstrap('http://127.0.0.1:1415', {
+                initialProbeMs: 1,
+                pollMs: 1,
+                fetchWebShell: async () => true,
+                resolveXagentCommand: () => ['/tmp/xagent', 'client', 'web', 'start'],
+                startWebClient: () => {
+                  startWebCalled = true;
                   return true;
                 },
               });
-              console.log(JSON.stringify({ result, startWebCalled, startApiCalled }));
+              console.log(JSON.stringify({ result, startWebCalled }));
             })().catch((error) => {
               console.error(error);
               process.exit(1);
@@ -197,7 +236,6 @@ class DesktopBootstrapTests(unittest.TestCase):
         )
         self.assertEqual(value["result"], {"ok": True})
         self.assertFalse(value["startWebCalled"])
-        self.assertTrue(value["startApiCalled"])
 
 
 if __name__ == "__main__":

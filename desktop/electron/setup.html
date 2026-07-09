@@ -171,8 +171,8 @@
     <div class="card">
       <h1>Install the xAgent backend</h1>
       <p class="lead">
-        The desktop app needs the Python backend installed once on this Mac. After that, you can open xAgent from
-        Applications like any other app.
+        The desktop app needs the Python backend (the <code style="display:inline;padding:2px 6px;margin:0">xagent</code>
+        command) installed once. After it is installed, the app continues automatically.
       </p>
       <p class="hint">Use Install now to download and run the official install script inside the app.</p>
       <code id="install-command">curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bash</code>
@@ -237,7 +237,11 @@
           if (payload.type === "done") {
             setBusy(false);
             if (payload.ok) {
-              setFeedback("Install finished. Click Retry connection to open xAgent.", "ok");
+              setFeedback("Install finished. Connecting to xAgent...", "ok");
+              setStatus("Connecting to xAgent", "Starting the backend the app just installed");
+              if (window.xagentDesktop?.retryBootstrap) {
+                window.xagentDesktop.retryBootstrap();
+              }
               return;
             }
             setFeedback(payload.error || "Install failed. Retry or copy the command and run it manually.", "error");
@@ -287,7 +291,7 @@
 
       retryButton.addEventListener("click", () => {
         setFeedback("Checking environment again...", "");
-        setStatus("Checking environment", "Looking for the xAgent backend on this Mac");
+        setStatus("Checking environment", "Looking for the xAgent backend");
         if (window.xagentDesktop?.retryBootstrap) {
           window.xagentDesktop.retryBootstrap();
           return;

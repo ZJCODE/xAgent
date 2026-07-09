@@ -22,6 +22,7 @@ from .chat import (
     _format_cli_workspace_links,
 )
 from .agents import AgentRegistryError, handle_agents
+from .install_manifest import record_cli_location
 from .launcher import (
     _launcher_channel_options,
     _launcher_client_options,
@@ -142,6 +143,7 @@ __all__ = [
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    record_cli_location()
     if argv is None:
         argv = sys.argv[1:]
     if not argv:

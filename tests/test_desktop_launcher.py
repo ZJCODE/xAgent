@@ -18,7 +18,8 @@ class DesktopLauncherTests(unittest.TestCase):
         self.assertTrue((desktop_dir / "electron" / "main.cjs").is_file())
 
     def test_desktop_setup_hint_mentions_release_or_build(self):
-        hint = desktop_setup_hint()
+        with patch("xagent.interfaces.clients.desktop_launcher.packaged_desktop_app", return_value=None):
+            hint = desktop_setup_hint()
         self.assertTrue("GitHub Releases" in hint or "npm run build" in hint)
 
     def test_packaged_desktop_app_honors_override_env(self):

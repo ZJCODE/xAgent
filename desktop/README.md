@@ -6,10 +6,15 @@ Electron shell for the xAgent web UI. The desktop app loads the configured web U
 
 ## Install for end users
 
-1. Install the Python backend once:
+1. Install the Python backend once, using either method:
 
 ```bash
-pip install myxagent
+# Recommended
+curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bash
+
+# Or with pip (use --user so the CLI lands on a standard path)
+python3 -m pip install --user --upgrade myxagent
+python3 -m xagent
 ```
 
 2. Download the desktop app from [GitHub Releases](https://github.com/ZJCODE/xagent/releases) and install it:
@@ -23,10 +28,20 @@ The desktop app will:
 
 - show a startup screen while it connects
 - start the local web UI automatically if needed
-- start the API channel automatically when possible
+- let the web UI manage API/channel startup when the user chats or opens Channels
 - guide you through creating your first agent if none exist yet
 
 If the backend is not installed yet, the app shows an install guide instead of a blank window.
+
+## How the app finds the backend
+
+GUI apps do not inherit the terminal's `PATH`, virtualenv, or conda environment, so the desktop app does not search for `xagent`. It reads a single file, `~/.xagent/cli.json`, that records how to launch the CLI:
+
+- The `xagent` CLI writes this file on every run (see `record_cli_location`).
+- `install.sh` writes it after a successful install.
+- Set `XAGENT_BINARY` to override the recorded path (useful for debugging or non-standard installs).
+
+If the file is missing, run `xagent` or `python3 -m xagent` once in a terminal, or reinstall via `install.sh`, then reopen the app. When the file is absent, the app shows the install guide instead of a blank window.
 
 ## Prerequisites
 
@@ -148,7 +163,8 @@ Native window for the xAgent web UI.
 ### Use with pip
 
 ```bash
-pip install myxagent
+python3 -m pip install --user --upgrade myxagent
+python3 -m xagent
 ```
 
 Then open the installed desktop app. You can also use:
@@ -157,7 +173,7 @@ Then open the installed desktop app. You can also use:
 xagent client desktop open
 ```
 
-The desktop app starts the web UI and API channel automatically when possible.
+The desktop app starts the web UI automatically when possible. The API channel is started from Chat or Channels when needed.
 
 Override the installed app path with:
 
@@ -173,9 +189,10 @@ Without `gh`, create the release in the GitHub UI and upload the same artifacts 
 ### 5. Verify after publish
 
 1. Install the artifact on a clean machine (or VM)
-2. Run `pip install myxagent`
-3. Open the installed desktop app from Applications
-4. Confirm the startup screen appears, then Chat or the first-agent wizard loads
+2. Run `python3 -m pip install --user --upgrade myxagent`
+3. Run `python3 -m xagent`
+4. Open the installed desktop app from Applications
+5. Confirm the startup screen appears, then Chat or the first-agent wizard loads
 
 ## CLI integration (advanced)
 

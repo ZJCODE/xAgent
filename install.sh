@@ -165,11 +165,40 @@ upgrade_xagent() {
     fi
 }
 
+# Record the absolute CLI path so GUI clients (the desktop app) can find it
+# without inheriting the terminal's PATH. Mirrors record_cli_location() in the
+# Python CLI; both write the same ~/.xagent/cli.json contract.
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+write_cli_manifest() {
+    local binary
+    binary="$(command -v "$COMMAND_NAME" 2>/dev/null || true)"
+    [ -z "$binary" ] && binary="$BINDIR/$COMMAND_NAME"
+    [ -x "$binary" ] || return 0
+
+    local manifest_dir="$HOME/.xagent"
+    local manifest="$manifest_dir/cli.json"
+    mkdir -p "$manifest_dir" || return 0
+
+    local updated_at
+    updated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")"
+
+    local binary_json updated_at_json
+    binary_json="$(json_escape "$binary")"
+    updated_at_json="$(json_escape "$updated_at")"
+
+    printf '{\n  "command": ["%s"],\n  "binary": "%s",\n  "updated_at": "%s"\n}\n' "$binary_json" "$binary_json" "$updated_at_json" > "$manifest" || return 0
+    info "Recorded CLI launch command in $manifest"
+}
+
 verify_install() {
     ensure_path
 
     if has_command "$COMMAND_NAME"; then
         info "$COMMAND_NAME is available."
+        write_cli_manifest
     else
         warn "$PACKAGE_NAME was installed, but '$COMMAND_NAME' is not available on PATH yet."
         warn "Run this command, then try again:"

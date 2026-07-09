@@ -41,6 +41,12 @@ class WebClientServer:
         self.port = int(port)
         self.api_url = api_url.rstrip("/")
         self.static_dir = static_dir or _STATIC_DIR
+        index_path = self.static_dir / "index.html"
+        if not index_path.is_file():
+            raise FileNotFoundError(
+                f"Web client UI assets missing at {self.static_dir}. "
+                "Reinstall the backend with: pip install --user --force-reinstall myxagent"
+            )
         self.logger = logging.getLogger(self.__class__.__name__)
         self.session = WebAgentSession(
             initial_config_dir=Path(config_dir).expanduser().resolve() if config_dir else management_root(),

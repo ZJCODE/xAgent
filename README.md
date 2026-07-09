@@ -18,10 +18,17 @@ xagent
 Or install with pip:
 
 ```bash
-pip install myxagent --upgrade
+python3 -m pip install --user --upgrade myxagent
+python3 -m xagent
 ```
 
-The launcher will guide you through the rest.
+If the `xagent` command is on your `PATH`, you can run `xagent` directly. The launcher will guide you through the rest.
+
+## Desktop app
+
+The desktop app is a separate download from [GitHub Releases](https://github.com/ZJCODE/xagent/releases); `pip install myxagent` installs only the Python backend, not the desktop shell.
+
+The desktop app does not search your shell environment. It reads `~/.xagent/cli.json`, written by `install.sh` or the CLI, to start the local web UI when needed. To point the desktop app at a specific binary for debugging, set `XAGENT_BINARY`.
 
 
 ## Local Data
