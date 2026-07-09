@@ -6,7 +6,6 @@ import argparse
 import sys
 
 from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
-from .clients import CLIENT_WEB
 from . import agents, runtime, setup
 
 
@@ -36,7 +35,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "",
             "Use Now:",
             "  chat        Chat in the terminal",
-            "  client      Manage local clients (browser UI)",
+            "  web         Manage the browser web UI",
             "  voice       Use microphone / speaker mode for this session",
             "",
             "Keep Running:",
@@ -62,8 +61,8 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent agents select work",
             '  xagent chat "Help me plan today"',
             "  xagent api start",
-            "  xagent client web start",
-            "  xagent client web open",
+            "  xagent web start",
+            "  xagent web open",
             "  xagent status",
             "  xagent api logs -f",
             "  xagent voice setup",
@@ -320,38 +319,38 @@ def _add_channel_lifecycle_subparsers(
     logs_parser.set_defaults(handler=runtime.handle_logs, channels=[channel])
 
 
-def _add_web_client_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> None:
-    sub = parent_parser.add_subparsers(dest="client_web_action", metavar="<action>")
+def _add_web_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> None:
+    sub = parent_parser.add_subparsers(dest="web_action", metavar="<action>")
     sub.required = True
 
     open_parser = sub.add_parser("open", help="Open the running web client in a browser")
     _add_agent_argument(open_parser)
-    open_parser.set_defaults(handler=runtime.handle_client_web_open)
+    open_parser.set_defaults(handler=runtime.handle_web_open)
 
     start_parser = sub.add_parser("start", help="Start the web client in the background")
     _add_agent_argument(start_parser)
     _add_web_client_arguments(start_parser)
-    start_parser.set_defaults(handler=runtime.handle_client_start, clients=[CLIENT_WEB])
+    start_parser.set_defaults(handler=runtime.handle_web_start)
 
     stop_parser = sub.add_parser("stop", help="Stop the background web client")
     _add_agent_argument(stop_parser)
-    stop_parser.set_defaults(handler=runtime.handle_client_stop, clients=[CLIENT_WEB])
+    stop_parser.set_defaults(handler=runtime.handle_web_stop)
 
     restart_parser = sub.add_parser("restart", help="Restart the background web client")
     _add_agent_argument(restart_parser)
     _add_web_client_arguments(restart_parser)
-    restart_parser.set_defaults(handler=runtime.handle_client_restart, clients=[CLIENT_WEB])
+    restart_parser.set_defaults(handler=runtime.handle_web_restart)
 
     status_parser = sub.add_parser("status", help="Show web client status")
     _add_agent_argument(status_parser)
     status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    status_parser.set_defaults(handler=runtime.handle_client_status, clients=[CLIENT_WEB])
+    status_parser.set_defaults(handler=runtime.handle_web_status)
 
     logs_parser = sub.add_parser("logs", help="Show web client logs")
     _add_agent_argument(logs_parser)
     logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
     logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    logs_parser.set_defaults(handler=runtime.handle_client_logs, clients=[CLIENT_WEB])
+    logs_parser.set_defaults(handler=runtime.handle_web_logs)
 
 
 def _hide_subparser_choice(subparsers: argparse._SubParsersAction, name: str) -> None:
@@ -437,12 +436,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_channel_lifecycle_subparsers(api_parser, CHANNEL_API, dest="api_action")
     _show_help_on_missing_action(api_parser)
 
-    client_parser = subparsers.add_parser("client", help="Manage local xAgent clients")
-    client_sub = client_parser.add_subparsers(dest="client_target", metavar="<client>")
-    client_sub.required = True
-    web_client_parser = client_sub.add_parser(CLIENT_WEB, help="Browser web client")
-    _add_web_client_lifecycle_subparsers(web_client_parser)
-    _show_help_on_missing_action(client_parser)
+    web_parser = subparsers.add_parser("web", help="Manage the browser web client")
+    _add_web_lifecycle_subparsers(web_parser)
+    _show_help_on_missing_action(web_parser)
 
     feishu_parser = subparsers.add_parser("feishu", help="Manage the Feishu bot")
     _add_channel_lifecycle_subparsers(feishu_parser, CHANNEL_FEISHU, dest="feishu_action", has_setup=True)
@@ -582,12 +578,11 @@ def build_parser() -> argparse.ArgumentParser:
     internal_run.set_defaults(handler=runtime.handle_run_channel_internal)
     _hide_subparser_choice(subparsers, "_run-channel")
 
-    internal_client = subparsers.add_parser("_run-client", help=argparse.SUPPRESS)
-    internal_client.add_argument("client", choices=(CLIENT_WEB,))
-    _add_agent_argument(internal_client)
-    internal_client.add_argument("--config-dir", dest="config_dir", default=None, help=argparse.SUPPRESS)
-    _add_web_client_arguments(internal_client)
-    internal_client.set_defaults(handler=runtime.handle_run_client_internal)
-    _hide_subparser_choice(subparsers, "_run-client")
+    internal_web = subparsers.add_parser("_run-web", help=argparse.SUPPRESS)
+    _add_agent_argument(internal_web)
+    internal_web.add_argument("--config-dir", dest="config_dir", default=None, help=argparse.SUPPRESS)
+    _add_web_client_arguments(internal_web)
+    internal_web.set_defaults(handler=runtime.handle_run_web_internal)
+    _hide_subparser_choice(subparsers, "_run-web")
 
     return parser

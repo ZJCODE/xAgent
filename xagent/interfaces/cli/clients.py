@@ -1,12 +1,9 @@
-"""Client names and configuration for xAgent UI clients.
+"""Configuration and process paths for the built-in browser web client."""
 
-Clients are *not* channels. They are independent applications that call into
-transport channels (typically ``channels.api``).
-"""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional
 from urllib.parse import urlparse
 
 from ..base import BaseAgentConfig
@@ -16,12 +13,7 @@ from .processes import ManagedProcessPaths
 
 
 CLIENT_WEB = "web"
-VALID_CLIENTS = {CLIENT_WEB}
 DEFAULT_WEB_CLIENT_PORT = 1415
-
-
-class ClientSelectionError(ValueError):
-    """Raised when a user provided an invalid client selection."""
 
 
 def web_client_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -52,43 +44,18 @@ def _default_api_url(api_cfg: Mapping[str, Any]) -> str:
     return f"http://{browse_host}:{port}"
 
 
-def client_runtime_root() -> Path:
-    """Return the global runtime root for local UI clients."""
+def web_client_runtime_root() -> Path:
+    """Return the global runtime root for the web client process."""
     return management_root()
 
 
-def client_paths(client: str, *, root: Optional[Path] = None) -> ManagedProcessPaths:
-    """Return global PID and log paths for a managed client process."""
-    if client not in VALID_CLIENTS:
-        raise ClientSelectionError(f"Unknown client {client!r}. Expected one of: {', '.join(sorted(VALID_CLIENTS))}.")
-    runtime_root = (root or client_runtime_root()).expanduser().resolve()
+def web_client_paths(*, root: Optional[Path] = None) -> ManagedProcessPaths:
+    """Return global PID and log paths for the managed web client process."""
+    runtime_root = (root or web_client_runtime_root()).expanduser().resolve()
     return ManagedProcessPaths(
-        pid_path=runtime_root / "run" / "clients" / f"{client}.pid",
-        log_path=runtime_root / "logs" / "clients" / f"{client}.log",
+        pid_path=runtime_root / "run" / "clients" / f"{CLIENT_WEB}.pid",
+        log_path=runtime_root / "logs" / "clients" / f"{CLIENT_WEB}.log",
     )
-
-
-def normalize_client_values(
-    values: Optional[Sequence[str]],
-    *,
-    default: str,
-) -> list[str]:
-    """Normalize comma-separated client values."""
-    raw_values: Sequence[str] = values if values else (default,)
-    selected: list[str] = []
-    for raw_value in raw_values:
-        for token in str(raw_value).split(","):
-            client = token.strip().lower()
-            if not client:
-                continue
-            if client not in VALID_CLIENTS:
-                valid = ", ".join(sorted(VALID_CLIENTS))
-                raise ClientSelectionError(f"Unknown client {client!r}. Expected one of: {valid}.")
-            if client not in selected:
-                selected.append(client)
-    if not selected:
-        raise ClientSelectionError("No client selected.")
-    return selected
 
 
 def web_client_public_url(config: Mapping[str, Any]) -> str:
@@ -111,13 +78,10 @@ def api_url_to_ws_url(api_url: str) -> str:
 __all__ = [
     "CLIENT_WEB",
     "DEFAULT_WEB_CLIENT_PORT",
-    "VALID_CLIENTS",
-    "ClientSelectionError",
-    "client_paths",
-    "client_runtime_root",
-    "load_config_file",
-    "normalize_client_values",
-    "web_client_config",
-    "web_client_public_url",
     "api_url_to_ws_url",
+    "load_config_file",
+    "web_client_config",
+    "web_client_paths",
+    "web_client_public_url",
+    "web_client_runtime_root",
 ]

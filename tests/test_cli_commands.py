@@ -34,13 +34,12 @@ from xagent.interfaces.cli import (
     _run_inspect_launcher,
     _run_interactive_launcher,
     _run_channel_launcher,
-    _run_client_launcher,
+    _run_web_launcher,
     _run_partial_update_launcher,
     _run_resetup_launcher,
     _format_cli_attachments,
     _format_cli_workspace_links,
     _launcher_channel_options,
-    _launcher_client_options,
     _launcher_help_content,
     _launcher_overview_subtitle,
     _launcher_options,
@@ -60,17 +59,17 @@ from xagent.interfaces.cli import (
     handle_observe,
     handle_restart,
     handle_run_channel_internal,
-    handle_run_client_internal,
-    handle_client_start,
-    handle_client_status,
-    handle_client_web_open,
+    handle_run_web_internal,
+    handle_web_start,
+    handle_web_status,
+    handle_web_open,
     handle_start,
     handle_status,
     handle_stop,
     handle_voice,
     main,
 )
-from xagent.interfaces.cli.clients import CLIENT_WEB, DEFAULT_WEB_CLIENT_PORT, web_client_config
+from xagent.interfaces.cli.clients import DEFAULT_WEB_CLIENT_PORT, web_client_config
 from xagent.components.message import MessageStorage
 from xagent.schemas import Message, RoleType
 from xagent.interfaces.cli.config_editor import (
@@ -477,13 +476,12 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("No agents are registered yet.", output)
         self.assertIn("xagent agents create default", output)
 
-    def test_client_web_start_works_with_empty_registry(self):
+    def test_web_start_works_with_empty_registry(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir).resolve()
             args = argparse.Namespace(
                 config_dir=None,
                 agent=None,
-                clients=[CLIENT_WEB],
                 host=None,
                 port=None,
                 api_url=None,
@@ -494,7 +492,7 @@ class CLICommandTests(unittest.TestCase):
                     "xagent.interfaces.cli.runtime.start_background",
                     return_value=StartResult(ok=True, pid=4321),
                 ) as starter:
-                    exit_code = handle_client_start(args)
+                    exit_code = handle_web_start(args)
 
         self.assertEqual(exit_code, 0)
         command = starter.call_args.args[0]
@@ -741,9 +739,8 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("single reply", output)
         self.assertNotIn("正在写入退出前记忆", output)
 
-    def test_parser_supports_client_web_command(self):
+    def test_parser_supports_web_command(self):
         args = build_parser().parse_args([
-            "client",
             "web",
             "start",
             "--agent",
@@ -756,15 +753,13 @@ class CLICommandTests(unittest.TestCase):
             "http://127.0.0.1:8010",
         ])
 
-        self.assertEqual(args.command, "client")
-        self.assertEqual(args.client_target, "web")
-        self.assertEqual(args.client_web_action, "start")
+        self.assertEqual(args.command, "web")
+        self.assertEqual(args.web_action, "start")
         self.assertEqual(args.agent, "work")
         self.assertFalse(getattr(args, "open_browser", False))
         self.assertEqual(args.host, "127.0.0.1")
         self.assertEqual(args.port, 1415)
         self.assertEqual(args.api_url, "http://127.0.0.1:8010")
-        self.assertEqual(args.clients, ["web"])
 
     def test_parser_supports_channel_lifecycle_commands(self):
         args = build_parser().parse_args([
@@ -932,7 +927,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("First time?", output)
         self.assertIn("xagent agents create default", output)
         self.assertIn("xagent chat", output)
-        self.assertIn("xagent client web start", output)
+        self.assertIn("xagent web start", output)
 
     def test_main_uses_interactive_launcher_when_terminal_ui_is_available(self):
         with patch("xagent.interfaces.cli.rich_terminal_available", return_value=True):
@@ -955,13 +950,13 @@ class CLICommandTests(unittest.TestCase):
         reset_titles = [option.title for option in reset_options]
         empty_titles = [option.title for option in empty_options]
         self.assertIn("Help", reset_titles)
-        self.assertIn("Client", reset_titles)
+        self.assertIn("Web UI", reset_titles)
         self.assertNotIn("Setup", empty_titles)
         self.assertNotIn("Doctor", reset_titles)
         self.assertNotIn("Version", reset_titles)
 
-        client_option = next(option for option in initial_options if option.key == "client")
-        self.assertFalse(client_option.disabled)
+        web_option = next(option for option in initial_options if option.key == "web")
+        self.assertFalse(web_option.disabled)
         channel_option = next(option for option in initial_options if option.key == "channel")
         self.assertTrue(channel_option.disabled)
 
@@ -1005,14 +1000,16 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("All", titles)
         self.assertNotIn("Web", titles)
 
-    def test_launcher_client_options_are_entry_points(self):
+    def test_launcher_web_actions_are_entry_points(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
+            from xagent.interfaces.cli.launcher import _web_client_actions
+
             with patch("xagent.interfaces.cli.launcher.running_pid", return_value=None):
-                options = _launcher_client_options(Path(tmpdir))
+                options = _web_client_actions(Path(tmpdir))
         titles = [option.title for option in options]
 
-        self.assertEqual(titles, ["Web", "Back"])
+        self.assertEqual(titles, ["Open", "Start", "Stop", "Restart", "Logs", "Back"])
 
     def test_channel_launcher_start_chooses_channel_before_action(self):
         class FakeUI:
@@ -1058,30 +1055,21 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(fake_ui.channel_option_titles[:5], ["Chat", "Voice", "API", "Feishu", "Weixin"])
         self.assertIn("Start", fake_ui.action_option_titles)
         self.assertNotIn("Start Background", fake_ui.action_option_titles)
-        self.assertNotIn("Open Web UI", fake_ui.action_option_titles)
         self.assertNotIn("Start API", fake_ui.action_option_titles)
         starter.assert_called_once()
         args = starter.call_args.args[0]
         self.assertEqual(args.channels, ["api"])
         self.assertEqual(args.config_dir, "/tmp/xagent")
 
-    def test_client_launcher_start_chooses_client_before_action(self):
+    def test_web_launcher_start_runs_directly(self):
         class FakeUI:
             def __init__(self):
-                self.client_choices = iter([
-                    SimpleNamespace(key=CLIENT_WEB, title="Web"),
-                    SimpleNamespace(key="back"),
-                ])
-                self.client_option_titles = []
-                self.action_choices = iter([SimpleNamespace(key="start")])
+                self.action_choices = iter([SimpleNamespace(key="start"), SimpleNamespace(key="back")])
                 self.action_option_titles = []
 
             def select_menu(self, *, title, subtitle, options, footer):
                 del subtitle, footer
-                if title == "xAgent Client":
-                    self.client_option_titles = [option.title for option in options]
-                    return next(self.client_choices)
-                if title == "xAgent Client / Web":
+                if title == "xAgent Web UI":
                     self.action_option_titles = [option.title for option in options]
                     return next(self.action_choices)
                 raise AssertionError(f"Unexpected menu: {title}")
@@ -1100,15 +1088,13 @@ class CLICommandTests(unittest.TestCase):
 
         with patch("xagent.interfaces.cli.launcher.running_pid", return_value=None):
             with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
-                with patch("xagent.interfaces.cli.launcher.handle_client_start", return_value=0) as starter:
-                    exit_code = _run_client_launcher(Path("/tmp/xagent"))
+                with patch("xagent.interfaces.cli.launcher.handle_web_start", return_value=0) as starter:
+                    exit_code = _run_web_launcher(Path("/tmp/xagent"))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_ui.client_option_titles, ["Web", "Back"])
         self.assertIn("Start", fake_ui.action_option_titles)
         starter.assert_called_once()
         args = starter.call_args.args[0]
-        self.assertEqual(args.clients, [CLIENT_WEB])
         self.assertEqual(args.config_dir, "/tmp/xagent")
 
     def test_channel_launcher_feishu_setup_runs_init_feishu_when_missing(self):
@@ -1270,7 +1256,7 @@ class CLICommandTests(unittest.TestCase):
             def fake_running_pid(path):
                 return 4321 if path == expected_pid_path else None
 
-            with patch("xagent.interfaces.cli.clients.management_root", return_value=root):
+            with patch("xagent.interfaces.cli.clients.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.overview.running_pid", side_effect=fake_running_pid):
                     overview_a = build_runtime_overview(agent_a)
                     overview_b = build_runtime_overview(agent_b)
@@ -1282,18 +1268,20 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn(f"127.0.0.1:{DEFAULT_WEB_CLIENT_PORT}", web_a.detail)
         self.assertIn(f"127.0.0.1:{DEFAULT_WEB_CLIENT_PORT}", web_b.detail)
 
-    def test_launcher_client_options_use_global_web_client_pid_path(self):
+    def test_launcher_web_actions_use_global_web_client_pid_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "home"
             agent_dir = Path(tmpdir) / "agents" / "work"
             expected_pid_path = root.resolve() / "run" / "clients" / "web.pid"
 
-            with patch("xagent.interfaces.cli.clients.management_root", return_value=root):
+            from xagent.interfaces.cli.launcher import _web_client_actions
+
+            with patch("xagent.interfaces.cli.clients.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.launcher.running_pid", return_value=4321) as pid_check:
-                    options = _launcher_client_options(agent_dir)
+                    options = _web_client_actions(agent_dir)
 
         self.assertEqual(pid_check.call_args.args[0], expected_pid_path)
-        self.assertEqual(options[0].title, "Web (running)")
+        self.assertFalse(options[0].disabled)
 
     def test_runtime_overview_shows_voice_channel_status(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2187,38 +2175,38 @@ class CLICommandTests(unittest.TestCase):
         self.assertTrue(actions["restart"].disabled)
         self.assertFalse(actions["logs"].disabled)
 
-    def test_managed_client_actions_disable_open_until_web_client_is_running(self):
+    def test_web_client_actions_disable_open_until_web_client_is_running(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
 
-            from xagent.interfaces.cli.launcher import _managed_client_actions
+            from xagent.interfaces.cli.launcher import _web_client_actions
 
             with patch("xagent.interfaces.cli.launcher.running_pid", return_value=None):
-                stopped_actions = {option.key: option for option in _managed_client_actions(Path(tmpdir), CLIENT_WEB)}
+                stopped_actions = {option.key: option for option in _web_client_actions(Path(tmpdir))}
             with patch("xagent.interfaces.cli.launcher.running_pid", return_value=4321):
-                running_actions = {option.key: option for option in _managed_client_actions(Path(tmpdir), CLIENT_WEB)}
+                running_actions = {option.key: option for option in _web_client_actions(Path(tmpdir))}
 
         self.assertTrue(stopped_actions["open"].disabled)
         self.assertFalse(stopped_actions["start"].disabled)
         self.assertFalse(running_actions["open"].disabled)
 
-    def test_managed_client_open_only_opens_running_web_client(self):
+    def test_web_client_open_only_opens_running_web_client(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
             root = Path(tmpdir) / "home"
             config_dir = Path(tmpdir)
             expected_pid_path = root.resolve() / "run" / "clients" / "web.pid"
 
-            from xagent.interfaces.cli.launcher import _run_managed_client_action
+            from xagent.interfaces.cli.launcher import _run_web_action
 
-            with patch("xagent.interfaces.cli.clients.management_root", return_value=root):
+            with patch("xagent.interfaces.cli.clients.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.runtime.running_pid", return_value=None) as stopped_pid_check:
                     with patch("xagent.interfaces.cli.launcher.webbrowser.open") as stopped_browser_open:
-                        stopped_exit = _run_managed_client_action(config_dir, CLIENT_WEB, "open")
+                        stopped_exit = _run_web_action(config_dir, "open")
 
                 with patch("xagent.interfaces.cli.runtime.running_pid", return_value=4321) as running_pid_check:
                     with patch("xagent.interfaces.cli.launcher.webbrowser.open", return_value=True) as browser_open:
-                        running_exit = _run_managed_client_action(config_dir, CLIENT_WEB, "open")
+                        running_exit = _run_web_action(config_dir, "open")
 
         self.assertEqual(stopped_exit, 1)
         self.assertEqual(stopped_pid_check.call_args.args[0], expected_pid_path)
@@ -2346,7 +2334,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Inspect:", fake_ui.panels[0][1])
         self.assertIn("xagent setup", fake_ui.panels[0][1])
         self.assertIn("xagent api start", fake_ui.panels[0][1])
-        self.assertIn("xagent client web start", fake_ui.panels[0][1])
+        self.assertIn("xagent web start", fake_ui.panels[0][1])
         self.assertIn("xagent voice logs -f", fake_ui.panels[0][1])
         self.assertIn("xagent memory list --days 7", fake_ui.panels[0][1])
         self.assertNotIn("starts the API channel in the foreground", fake_ui.panels[0][1])
@@ -2407,7 +2395,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Inspect:", help_text)
         self.assertIn("Advanced:", help_text)
         self.assertIn("Common Flows:", help_text)
-        self.assertIn("  client", help_text)
+        self.assertIn("  web", help_text)
         self.assertIn("  voice", help_text)
         self.assertIn("  agents", help_text)
         self.assertIn("  api", help_text)
@@ -2515,7 +2503,7 @@ class CLICommandTests(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("Pick how you want to use it next", output)
         self.assertIn("xagent chat --agent work", output)
-        self.assertIn("xagent client web start --agent work", output)
+        self.assertIn("xagent web start --agent work", output)
         self.assertIn("xagent api start --agent work", output)
         self.assertIn("xagent feishu setup --agent work", output)
         self.assertIn("xagent feishu start --agent work", output)
@@ -3317,7 +3305,6 @@ class CLICommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True)
             args = argparse.Namespace(
-                client=CLIENT_WEB,
                 config_dir=tmpdir,
                 host=None,
                 port=None,
@@ -3326,7 +3313,7 @@ class CLICommandTests(unittest.TestCase):
             )
 
             with patch("xagent.interfaces.cli.runtime._run_web_client", return_value=0) as runner:
-                exit_code = handle_run_client_internal(args)
+                exit_code = handle_run_web_internal(args)
 
         self.assertEqual(exit_code, 0)
         runner.assert_called_once()
@@ -3338,16 +3325,15 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(str(agent_dir))
             args = argparse.Namespace(
                 config_dir=str(agent_dir),
-                clients=[CLIENT_WEB],
                 host=None,
                 port=None,
                 api_url=None,
                 open_browser=False,
             )
 
-            with patch("xagent.interfaces.cli.clients.management_root", return_value=root):
+            with patch("xagent.interfaces.cli.clients.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.runtime.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
-                    exit_code = handle_client_start(args)
+                    exit_code = handle_web_start(args)
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(starter.call_args.kwargs["pid_path"], root.resolve() / "run" / "clients" / "web.pid")
@@ -3360,15 +3346,15 @@ class CLICommandTests(unittest.TestCase):
             agent_b = Path(tmpdir) / "agents" / "b"
             _write_runtime(str(agent_a))
             _write_runtime(str(agent_b))
-            args_a = argparse.Namespace(config_dir=str(agent_a), clients=[CLIENT_WEB], json_output=True)
-            args_b = argparse.Namespace(config_dir=str(agent_b), clients=[CLIENT_WEB], json_output=True)
+            args_a = argparse.Namespace(config_dir=str(agent_a), json_output=True)
+            args_b = argparse.Namespace(config_dir=str(agent_b), json_output=True)
 
-            with patch("xagent.interfaces.cli.clients.management_root", return_value=root):
+            with patch("xagent.interfaces.cli.clients.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.runtime.running_pid", return_value=4321) as pid_check:
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout_a:
-                        exit_a = handle_client_status(args_a)
+                        exit_a = handle_web_status(args_a)
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout_b:
-                        exit_b = handle_client_status(args_b)
+                        exit_b = handle_web_status(args_b)
 
         self.assertEqual(exit_a, 0)
         self.assertEqual(exit_b, 0)
@@ -3456,9 +3442,8 @@ class CLICommandTests(unittest.TestCase):
             port=8010,
         )
 
-    def test_run_client_web_passes_options_to_server(self):
+    def test_run_web_passes_options_to_server(self):
         args = argparse.Namespace(
-            client=CLIENT_WEB,
             config_dir="./agent-dir",
             host="127.0.0.1",
             port=1415,
@@ -3468,8 +3453,8 @@ class CLICommandTests(unittest.TestCase):
         server_instance = MagicMock()
 
         with patch("xagent.interfaces.clients.web.WebClientServer", return_value=server_instance) as server_class:
-            with patch("xagent.interfaces.cli.runtime.load_runtime_config", return_value={}):
-                exit_code = handle_run_client_internal(args)
+            with patch("xagent.interfaces.cli.runtime.load_client_runtime_config", return_value={}):
+                exit_code = handle_run_web_internal(args)
 
         self.assertEqual(exit_code, 0)
         server_class.assert_called_once_with(

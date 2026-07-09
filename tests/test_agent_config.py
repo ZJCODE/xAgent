@@ -410,7 +410,6 @@ provider:
             self.assertEqual(config["search"]["provider"], "none")
             self.assertEqual(config["image_generation"]["provider"], "none")
             self.assertNotIn("enabled", config["channels"]["api"])
-            self.assertNotIn("web_ui", config["channels"]["api"])
             self.assertEqual(config["channels"]["api"]["host"], "127.0.0.1")
             self.assertIsInstance(config["channels"]["api"]["port"], int)
             self.assertGreaterEqual(config["channels"]["api"]["port"], 8010)

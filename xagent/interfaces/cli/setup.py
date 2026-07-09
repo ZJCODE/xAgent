@@ -1859,7 +1859,7 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection, agent_
         ),
         (
             "web",
-            _format_init_command("xagent client web start", config_dir=config_dir, agent_name=agent_name),
+            _format_init_command("xagent web start", config_dir=config_dir, agent_name=agent_name),
             "Start the browser web client (requires a running api channel).",
         ),
         (

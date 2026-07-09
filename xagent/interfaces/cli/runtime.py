@@ -33,10 +33,8 @@ from .channels import (
 )
 from .clients import (
     CLIENT_WEB,
-    ClientSelectionError,
-    client_paths,
-    normalize_client_values,
     web_client_config,
+    web_client_paths,
     web_client_public_url,
 )
 from .chat import AgentCLI
@@ -130,27 +128,6 @@ def handle_server(args: argparse.Namespace) -> int:
     return 0
 
 
-def _client_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
-    values = getattr(args, "clients", None)
-    if values is None:
-        return None
-    if isinstance(values, str):
-        return [values]
-    return list(values)
-
-
-def _select_clients(args: argparse.Namespace, *, default: str) -> tuple[list[str], dict[str, Any]]:
-    config = load_client_runtime_config(args)
-    values = _client_arg_values(args)
-    clients = normalize_client_values(values, default=default)
-    return clients, config
-
-
-def _handle_client_error(exc: ClientSelectionError) -> int:
-    print(f"Error: {exc}")
-    return 1
-
-
 def _channel_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
     values = getattr(args, "channels", None)
     if values is None:
@@ -208,8 +185,8 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
     return command
 
 
-def _client_spawn_target(args: argparse.Namespace) -> tuple[Optional[str], Optional[str]]:
-    """Return ``(config_dir, agent_name)`` for a managed client subprocess."""
+def _web_spawn_target(args: argparse.Namespace) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(config_dir, agent_name)`` for a managed web client subprocess."""
     config_dir = getattr(args, "config_dir", None)
     if config_dir:
         return str(config_dir), None
@@ -219,9 +196,9 @@ def _client_spawn_target(args: argparse.Namespace) -> tuple[Optional[str], Optio
         return str(management_root()), None
 
 
-def _client_command(client: str, args: argparse.Namespace) -> list[str]:
-    command = [sys.executable, "-m", "xagent.interfaces.cli", "_run-client", client]
-    config_dir, agent_name = _client_spawn_target(args)
+def _web_command(args: argparse.Namespace) -> list[str]:
+    command = [sys.executable, "-m", "xagent.interfaces.cli", "_run-web"]
+    config_dir, agent_name = _web_spawn_target(args)
     if config_dir:
         command.extend(["--config-dir", config_dir])
     elif agent_name:
@@ -605,13 +582,6 @@ def _run_channel(channel: str, args: argparse.Namespace, config: dict[str, Any])
     return 1
 
 
-def _run_client(client: str, args: argparse.Namespace, config: dict[str, Any]) -> int:
-    if client == CLIENT_WEB:
-        return _run_web_client(args, config)
-    print(f"Unknown client: {client}")
-    return 1
-
-
 def handle_run_channel_internal(args: argparse.Namespace) -> int:
     try:
         config = load_runtime_config(args)
@@ -620,14 +590,12 @@ def handle_run_channel_internal(args: argparse.Namespace) -> int:
     return _run_channel(args.channel, args, config)
 
 
-def handle_run_client_internal(args: argparse.Namespace) -> int:
+def handle_run_web_internal(args: argparse.Namespace) -> int:
     try:
         config = load_client_runtime_config(args)
-    except (ChannelSelectionError, ClientSelectionError) as exc:
-        if isinstance(exc, ClientSelectionError):
-            return _handle_client_error(exc)
+    except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
-    return _run_client(args.client, args, config)
+    return _run_web_client(args, config)
 
 
 def handle_run(args: argparse.Namespace) -> int:
@@ -813,171 +781,106 @@ def handle_status_all(args: argparse.Namespace) -> int:
         print(f"  pid: {row['pid_path']}")
         print(f"  log: {row['log_path']}")
 
-    client_rows: list[dict[str, Any]] = []
     web_cfg = web_client_config(config)
     if web_cfg.get("enabled", True):
-        paths = client_paths(CLIENT_WEB)
+        paths = web_client_paths()
         pid = running_pid(paths.pid_path)
-        client_rows.append({
-            "client": CLIENT_WEB,
-            "status": "running" if pid is not None else "stopped",
-            "pid": pid,
-            "pid_path": str(paths.pid_path),
-            "log_path": str(paths.log_path),
-            "url": web_client_public_url(config),
-        })
-
-    if client_rows:
         print()
-        print("Clients:")
-        for row in client_rows:
-            pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
-            print(f"{row['client']}: {row['status']}{pid_text}")
-            print(f"  url: {row['url']}")
-            print(f"  pid: {row['pid_path']}")
-            print(f"  log: {row['log_path']}")
+        print("Web client:")
+        pid_text = f" pid={pid}" if pid is not None else ""
+        status = "running" if pid is not None else "stopped"
+        print(f"  status: {status}{pid_text}")
+        print(f"  url: {web_client_public_url(config)}")
+        print(f"  pid: {paths.pid_path}")
+        print(f"  log: {paths.log_path}")
     return 0
 
 
-def _start_background_client(args: argparse.Namespace, *, client: str, config_dir: Path | None = None) -> bool:
-    del config_dir
-    paths = client_paths(client)
+def _start_background_web(args: argparse.Namespace) -> bool:
+    paths = web_client_paths()
     result = start_background(
-        _client_command(client, args),
+        _web_command(args),
         pid_path=paths.pid_path,
         log_path=paths.log_path,
     )
     if result.ok:
-        print(f"Started {client} client in background (pid={result.pid}).")
+        print(f"Started web client in background (pid={result.pid}).")
         print(f"Logs: {paths.log_path}")
         return True
 
-    print(f"Failed to start {client} client: {result.error}")
+    print(f"Failed to start web client: {result.error}")
     if result.recent_output:
         print(result.recent_output)
     return False
 
 
-def handle_client_start(args: argparse.Namespace) -> int:
+def handle_web_start(args: argparse.Namespace) -> int:
     try:
-        clients, _config = _select_clients(args, default=CLIENT_WEB)
-    except (ChannelSelectionError, ClientSelectionError) as exc:
-        if isinstance(exc, ClientSelectionError):
-            return _handle_client_error(exc)
+        load_client_runtime_config(args)
+    except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
-    ok = True
-    for client in clients:
-        if not _start_background_client(args, client=client):
-            ok = False
-    return 0 if ok else 1
+    return 0 if _start_background_web(args) else 1
 
 
-def handle_client_stop(args: argparse.Namespace) -> int:
+def handle_web_stop(args: argparse.Namespace) -> int:
+    paths = web_client_paths()
+    stopped, message = stop_managed_process(paths.pid_path)
+    print(f"web: {message}")
+    return 0 if stopped else 1
+
+
+def handle_web_restart(args: argparse.Namespace) -> int:
+    paths = web_client_paths()
+    stopped, message = stop_managed_process(paths.pid_path)
+    print(f"web: {message}")
+    if not stopped:
+        return 1
+    return 0 if _start_background_web(args) else 1
+
+
+def handle_web_status(args: argparse.Namespace) -> int:
     try:
-        clients, _config = _select_clients(args, default=CLIENT_WEB)
-    except (ChannelSelectionError, ClientSelectionError) as exc:
-        if isinstance(exc, ClientSelectionError):
-            return _handle_client_error(exc)
+        config = load_client_runtime_config(args)
+    except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
-    ok = True
-    for client in clients:
-        paths = client_paths(client)
-        stopped, message = stop_managed_process(paths.pid_path)
-        ok = ok and stopped
-        print(f"{client}: {message}")
-    return 0 if ok else 1
-
-
-def handle_client_restart(args: argparse.Namespace) -> int:
-    try:
-        clients, _config = _select_clients(args, default=CLIENT_WEB)
-    except (ChannelSelectionError, ClientSelectionError) as exc:
-        if isinstance(exc, ClientSelectionError):
-            return _handle_client_error(exc)
-        return _handle_channel_error(exc)
-
-    ok = True
-    restart_values = dict(vars(args))
-
-    for client in clients:
-        paths = client_paths(client)
-        stopped, message = stop_managed_process(paths.pid_path)
-        print(f"{client}: {message}")
-        if not stopped:
-            ok = False
-            continue
-        restart_values["clients"] = [client]
-        restart_args = argparse.Namespace(**restart_values)
-        if not _start_background_client(restart_args, client=client):
-            ok = False
-
-    return 0 if ok else 1
-
-
-def handle_client_status(args: argparse.Namespace) -> int:
-    try:
-        clients, config = _select_clients(args, default=CLIENT_WEB)
-    except (ChannelSelectionError, ClientSelectionError) as exc:
-        if isinstance(exc, ClientSelectionError):
-            return _handle_client_error(exc)
-        return _handle_channel_error(exc)
-
-    rows: list[dict[str, Any]] = []
-    for client in clients:
-        paths = client_paths(client)
-        pid = running_pid(paths.pid_path)
-        row = {
-            "client": client,
-            "status": "running" if pid is not None else "stopped",
-            "pid": pid,
-            "pid_path": str(paths.pid_path),
-            "log_path": str(paths.log_path),
-        }
-        if client == CLIENT_WEB:
-            row["url"] = web_client_public_url(config)
-        rows.append(row)
+    paths = web_client_paths()
+    pid = running_pid(paths.pid_path)
+    row = {
+        "client": CLIENT_WEB,
+        "status": "running" if pid is not None else "stopped",
+        "pid": pid,
+        "pid_path": str(paths.pid_path),
+        "log_path": str(paths.log_path),
+        "url": web_client_public_url(config),
+    }
 
     if getattr(args, "json_output", False):
-        print(json.dumps({"clients": rows}, indent=2, sort_keys=True))
+        print(json.dumps({"web": row}, indent=2, sort_keys=True))
         return 0
 
-    for row in rows:
-        pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
-        print(f"{row['client']}: {row['status']}{pid_text}")
-        if row.get("url"):
-            print(f"  url: {row['url']}")
-        print(f"  pid: {row['pid_path']}")
-        print(f"  log: {row['log_path']}")
+    pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
+    print(f"web: {row['status']}{pid_text}")
+    print(f"  url: {row['url']}")
+    print(f"  pid: {row['pid_path']}")
+    print(f"  log: {row['log_path']}")
     return 0
 
 
-def handle_client_logs(args: argparse.Namespace) -> int:
-    try:
-        clients, _config = _select_clients(args, default=CLIENT_WEB)
-    except (ChannelSelectionError, ClientSelectionError) as exc:
-        if isinstance(exc, ClientSelectionError):
-            return _handle_client_error(exc)
-        return _handle_channel_error(exc)
-
-    if getattr(args, "follow", False) and len(clients) != 1:
-        print("--follow requires exactly one client")
-        return 1
-
+def handle_web_logs(args: argparse.Namespace) -> int:
+    paths = web_client_paths()
     lines = max(1, int(getattr(args, "lines", 80)))
-    for client in clients:
-        paths = client_paths(client)
-        print(f"==> {client} ({paths.log_path})")
-        if getattr(args, "follow", False):
-            _follow_log(paths.log_path)
-            return 0
-        text = tail_text(paths.log_path, max_lines=lines)
-        print(text or "(no log output)")
+    print(f"==> web ({paths.log_path})")
+    if getattr(args, "follow", False):
+        _follow_log(paths.log_path)
+        return 0
+    text = tail_text(paths.log_path, max_lines=lines)
+    print(text or "(no log output)")
     return 0
 
 
-def handle_client_web_open(args: argparse.Namespace) -> int:
+def handle_web_open(args: argparse.Namespace) -> int:
     import webbrowser
 
     try:
@@ -990,9 +893,9 @@ def handle_client_web_open(args: argparse.Namespace) -> int:
         print("Web client is disabled in config (clients.web.enabled=false).")
         return 1
 
-    paths = client_paths(CLIENT_WEB)
+    paths = web_client_paths()
     if running_pid(paths.pid_path) is None:
-        print("Web client is not running. Start it with: xagent client web start")
+        print("Web client is not running. Start it with: xagent web start")
         return 1
 
     url = web_client_public_url(config)
@@ -1339,16 +1242,16 @@ def print_quick_start() -> None:
         print("")
     print("Use now:")
     print("  xagent chat                     Chat in the terminal")
-    print("  xagent client web open          Open the browser web client")
+    print("  xagent web open                 Open the browser web client")
     print("  xagent voice                    Use microphone / speaker mode")
     print("")
     print("Keep running:")
     print("  xagent api start                Start the api channel")
-    print("  xagent client web start         Start the browser web client")
+    print("  xagent web start                Start the browser web client")
     print("  xagent voice start              Start voice channel")
     print("  xagent status                   Show channel and client status")
     print("  xagent api logs -f              Follow api channel logs")
-    print("  xagent client web logs -f       Follow web client logs")
+    print("  xagent web logs -f              Follow web client logs")
     print("")
     print("Setup and inspect:")
     print("  xagent setup                    Reconfigure the active agent")

@@ -22,7 +22,7 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .clients import CLIENT_WEB, DEFAULT_WEB_CLIENT_PORT, client_paths, web_client_config
+from .clients import DEFAULT_WEB_CLIENT_PORT, web_client_config, web_client_paths
 from .processes import managed_paths, running_pid
 
 
@@ -248,7 +248,7 @@ def _web_client_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
     web_cfg = web_client_config(config)
     if not web_cfg.get("enabled", True):
         return OverviewItem("Web", "off", STATUS_DISABLED, "clients.web")
-    paths = client_paths(CLIENT_WEB)
+    paths = web_client_paths()
     pid = running_pid(paths.pid_path)
     detail = _web_client_target(web_cfg)
     if pid is None:

@@ -44,17 +44,17 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .clients import CLIENT_WEB, client_paths, web_client_config
+from .clients import web_client_config, web_client_paths
 from .runtime import (
     _launcher_args,
     _xagent_version_text,
     handle_chat,
-    handle_client_logs,
-    handle_client_restart,
-    handle_client_start,
-    handle_client_status,
-    handle_client_stop,
-    handle_client_web_open,
+    handle_web_logs,
+    handle_web_restart,
+    handle_web_start,
+    handle_web_status,
+    handle_web_stop,
+    handle_web_open,
     handle_config,
     handle_identity,
     handle_messages,
@@ -129,9 +129,9 @@ def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[Men
             disabled=not initialized,
         ),
         MenuOption(
-            key="client",
-            title="Client",
-            description="Manage local clients, such as the browser web client.",
+            key="web",
+            title="Web UI",
+            description="Manage the browser web client.",
         ),
         MenuOption(
             key="inspect",
@@ -201,18 +201,72 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
     ]
 
 
-def _launcher_client_options(config_dir: Path) -> list[MenuOption]:
-    del config_dir
-    web_running = running_pid(client_paths(CLIENT_WEB).pid_path) is not None
+def _web_client_actions(config_dir: Path) -> list[MenuOption]:
+    client_ready = _web_client_is_enabled(config_dir)
+    client_running = client_ready and _web_client_is_running(config_dir)
+    unavailable_description = "Enable clients.web before starting the web client."
+    if not client_ready:
+        open_description = "Enable clients.web before opening the browser client."
+    elif not client_running:
+        open_description = "Start the web client before opening it."
+    else:
+        open_description = "Open the running web client in your browser."
 
     return [
+        MenuOption("open", "Open", open_description, disabled=not client_running),
         MenuOption(
-            key=CLIENT_WEB,
-            title="Web (running)" if web_running else "Web",
-            description="Manage the browser client (requires a running api channel).",
+            "start",
+            "Start",
+            "Start the web client." if client_ready else unavailable_description,
+            disabled=not client_ready,
         ),
-        MenuOption(key="back", title="Back", description="Return to the main launcher."),
+        MenuOption("stop", "Stop", "Stop the web client."),
+        MenuOption(
+            "restart",
+            "Restart",
+            "Restart the web client." if client_ready else unavailable_description,
+            disabled=not client_ready,
+        ),
+        MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
+        MenuOption("back", "Back", "Return to the main launcher."),
     ]
+
+
+def _run_web_action(config_dir: Path, action: str) -> int:
+    if action == "open":
+        return handle_web_open(_launcher_args(config_dir=str(config_dir)))
+    if action == "start":
+        return handle_web_start(
+            _launcher_args(
+                config_dir=str(config_dir),
+                host=None,
+                port=None,
+                api_url=None,
+                open_browser=False,
+            )
+        )
+    if action == "stop":
+        return handle_web_stop(_launcher_args(config_dir=str(config_dir)))
+    if action == "restart":
+        return handle_web_restart(
+            _launcher_args(
+                config_dir=str(config_dir),
+                host=None,
+                port=None,
+                api_url=None,
+                open_browser=False,
+            )
+        )
+    if action == "logs":
+        return handle_web_logs(
+            _launcher_args(
+                config_dir=str(config_dir),
+                lines=80,
+                follow=False,
+            )
+        )
+    print(f"Unknown web client action: {action}")
+    return 1
 
 
 def _launcher_config_snapshot(config_dir: Path) -> dict[str, Any]:
@@ -368,7 +422,7 @@ def _web_client_is_enabled(config_dir: Path) -> bool:
 
 def _web_client_is_running(config_dir: Path) -> bool:
     del config_dir
-    return running_pid(client_paths(CLIENT_WEB).pid_path) is not None
+    return running_pid(web_client_paths().pid_path) is not None
 
 
 def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]:
@@ -417,83 +471,6 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
     return actions
 
 
-def _managed_client_actions(config_dir: Path, client: str) -> list[MenuOption]:
-    if client == CLIENT_WEB:
-        client_ready = _web_client_is_enabled(config_dir)
-        client_running = client_ready and _web_client_is_running(config_dir)
-        unavailable_description = "Enable clients.web before starting the web client."
-        if not client_ready:
-            open_description = "Enable clients.web before opening the browser client."
-        elif not client_running:
-            open_description = "Start the web client before opening it."
-        else:
-            open_description = "Open the running web client in your browser."
-
-        return [
-            MenuOption("open", "Open", open_description, disabled=not client_running),
-            MenuOption(
-                "start",
-                "Start",
-                "Start the web client." if client_ready else unavailable_description,
-                disabled=not client_ready,
-            ),
-            MenuOption("stop", "Stop", "Stop the web client."),
-            MenuOption(
-                "restart",
-                "Restart",
-                "Restart the web client." if client_ready else unavailable_description,
-                disabled=not client_ready,
-            ),
-            MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
-            MenuOption("back", "Back", "Return to Channel."),
-        ]
-
-    return [MenuOption("back", "Back", "Return to Channel.")]
-
-
-def _run_managed_client_action(config_dir: Path, client: str, action: str) -> int:
-    if client != CLIENT_WEB:
-        print(f"Unknown client: {client}")
-        return 1
-    if action == "open":
-        return handle_client_web_open(_launcher_args(config_dir=str(config_dir)))
-    if action == "start":
-        return handle_client_start(
-            _launcher_args(
-                config_dir=str(config_dir),
-                clients=[client],
-                host=None,
-                port=None,
-                api_url=None,
-                open_browser=False,
-            )
-        )
-    if action == "stop":
-        return handle_client_stop(_launcher_args(config_dir=str(config_dir), clients=[client]))
-    if action == "restart":
-        return handle_client_restart(
-            _launcher_args(
-                config_dir=str(config_dir),
-                clients=[client],
-                host=None,
-                port=None,
-                api_url=None,
-                open_browser=False,
-            )
-        )
-    if action == "logs":
-        return handle_client_logs(
-            _launcher_args(
-                config_dir=str(config_dir),
-                clients=[client],
-                lines=80,
-                follow=False,
-            )
-        )
-    print(f"Unknown client action: {action}")
-    return 1
-
-
 def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     setup_command = "xagent setup --force" if initialized else "xagent setup"
     content = Text()
@@ -519,10 +496,10 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command("xagent api start", config_dir=config_dir), style="cyan")
     content.append("\n    Start the api channel.\n")
     content.append("  ")
-    content.append(_format_init_command("xagent client web start", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent web start", config_dir=config_dir), style="cyan")
     content.append("\n    Start the browser web client.\n")
     content.append("  ")
-    content.append(_format_init_command("xagent client web open", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent web open", config_dir=config_dir), style="cyan")
     content.append("\n    Open the running web client in your browser.\n")
     content.append("  ")
     content.append(_format_init_command("xagent voice start", config_dir=config_dir), style="cyan")
@@ -2244,36 +2221,25 @@ def _run_channel_launcher(config_dir: Path) -> int:
         return 0
 
 
-def _run_client_launcher(config_dir: Path) -> int:
+def _run_web_launcher(config_dir: Path) -> int:
     ui = TerminalUI()
 
     try:
         while True:
-            client_option = ui.select_menu(
-                title="xAgent Client",
-                subtitle="Choose a local client to manage.",
-                options=_launcher_client_options(config_dir),
-                footer="↑/↓ Move • Enter Select  •  q Back",
-            )
-            if client_option is None or client_option.key == "back":
-                ui.clear()
-                return 0
-
-            client_key = str(client_option.key)
-            client_title = "Web" if client_key == CLIENT_WEB else client_key.title()
             option = ui.select_menu(
-                title=f"xAgent Client / {client_title}",
+                title="xAgent Web UI",
                 subtitle=f"Runtime: {config_dir}",
-                options=_managed_client_actions(config_dir, client_key),
+                options=_web_client_actions(config_dir),
                 footer="↑/↓ Move • Enter Select  •  q Back",
             )
             if option is None or option.key == "back":
-                continue
+                ui.clear()
+                return 0
             ui.clear()
-            exit_code = _run_managed_client_action(config_dir, client_key, str(option.key))
+            exit_code = _run_web_action(config_dir, str(option.key))
             if exit_code != 0:
-                ui.print_panel(f"Client action exited with status {exit_code}.", title="Client")
-            ui.pause("Press Enter to return to Client")
+                ui.print_panel(f"Web client action exited with status {exit_code}.", title="Web UI")
+            ui.pause("Press Enter to return to Web UI")
     except ReturnToLauncherHome:
         ui.clear()
         return 0
@@ -2326,8 +2292,8 @@ def _run_interactive_launcher() -> int:
         elif option.key == "channel":
             _run_channel_launcher(config_dir)
             continue
-        elif option.key == "client":
-            _run_client_launcher(config_dir)
+        elif option.key == "web":
+            _run_web_launcher(config_dir)
             continue
         elif option.key == "inspect":
             _run_inspect_launcher(config_dir)

@@ -20,7 +20,7 @@ npm run dev
 The dev server proxies API and WebSocket requests to the built-in web client at `http://127.0.0.1:1415`, so start it before running the frontend:
 
 ```bash
-xagent client web start
+xagent web start
 ```
 
 Then run the frontend dev server in another terminal. The web client proxies chat traffic to whichever agent's API channel is currently selected.
