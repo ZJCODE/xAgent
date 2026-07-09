@@ -5,6 +5,7 @@ import asyncio
 import base64
 import json
 import secrets
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -38,6 +39,10 @@ class WeixinApiError(RuntimeError):
 
 class WeixinSessionExpired(WeixinApiError):
     """Raised when iLink reports the bot token/session is expired."""
+
+
+class QrLoginCancelled(WeixinApiError):
+    """Raised when a QR login flow is cancelled by the caller."""
 
 
 @dataclass(frozen=True)
@@ -279,6 +284,18 @@ class WeixinClient:
         return headers
 
 
+def _raise_if_qr_login_cancelled(cancel_event: Optional[threading.Event]) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise QrLoginCancelled("Weixin QR login cancelled.")
+
+
+async def _sleep_with_qr_cancel(seconds: float, cancel_event: Optional[threading.Event]) -> None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        _raise_if_qr_login_cancelled(cancel_event)
+        await asyncio.sleep(min(0.25, deadline - time.monotonic()))
+
+
 async def qr_login(
     *,
     base_url: str = ILINK_BASE_URL,
@@ -288,8 +305,10 @@ async def qr_login(
     log: Optional[Callable[[str], None]] = None,
     render_qr_url: Optional[Callable[[str], None]] = None,
     http_client: Optional[httpx.AsyncClient] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> WeixinCredentials:
     logger = log or (lambda message: None)
+    _raise_if_qr_login_cancelled(cancel_event)
     async with WeixinClient(base_url=base_url, channel_version=channel_version, http_client=http_client) as client:
         qr = await client.get_bot_qrcode(bot_type=bot_type)
         _emit_qr(qr.qrcode_url or qr.qrcode, logger, render_qr_url)
@@ -299,6 +318,7 @@ async def qr_login(
         refresh_count = 0
 
         while time.monotonic() < deadline:
+            _raise_if_qr_login_cancelled(cancel_event)
             status_payload = await client.get_qrcode_status(qrcode_value)
             status = str(status_payload.get("status") or "wait")
             if status != last_status:
@@ -328,7 +348,7 @@ async def qr_login(
                 qrcode_value = qr.qrcode
                 _emit_qr(qr.qrcode_url or qr.qrcode, logger, render_qr_url)
 
-            await asyncio.sleep(1.5)
+            await _sleep_with_qr_cancel(1.5, cancel_event)
 
     raise WeixinApiError("Weixin QR login timed out")
 

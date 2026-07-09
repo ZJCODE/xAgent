@@ -16,16 +16,34 @@ export function QrAuthPanel({ channel, onConfirmed, onError }: QrAuthPanelProps)
   const [session, setSession] = useState<QrSessionResponse | null>(null);
   const [statusText, setStatusText] = useState("Starting QR session...");
   const confirmedRef = useRef(false);
+  const sessionIdRef = useRef<string | null>(null);
+  const cancelRequestedRef = useRef(false);
+
+  const cancelActiveSession = (activeChannel: typeof channel) => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId || cancelRequestedRef.current) return;
+    cancelRequestedRef.current = true;
+    sessionIdRef.current = null;
+    void cancelChannelQr(activeChannel, sessionId);
+  };
 
   useEffect(() => {
     confirmedRef.current = false;
+    cancelRequestedRef.current = false;
+    sessionIdRef.current = null;
+    setSession(null);
     let cancelled = false;
-    let pollTimer: number | undefined;
 
     const begin = async () => {
       try {
         const started = await startChannelQr(channel);
-        if (cancelled) return;
+        if (cancelled) {
+          if (started.session_id) {
+            void cancelChannelQr(channel, started.session_id);
+          }
+          return;
+        }
+        sessionIdRef.current = started.session_id;
         setSession(started);
         setStatusText("Waiting for scan...");
       } catch (err) {
@@ -39,13 +57,9 @@ export function QrAuthPanel({ channel, onConfirmed, onError }: QrAuthPanelProps)
 
     return () => {
       cancelled = true;
-      if (pollTimer) window.clearInterval(pollTimer);
-      if (session?.session_id) {
-        void cancelChannelQr(channel, session.session_id);
-      }
+      cancelActiveSession(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channel]);
+  }, [channel, onError]);
 
   useEffect(() => {
     if (!session?.session_id) return undefined;
@@ -84,7 +98,10 @@ export function QrAuthPanel({ channel, onConfirmed, onError }: QrAuthPanelProps)
       void poll();
     }, 2000);
 
-    return () => window.clearInterval(interval);
+    return () => {
+      window.clearInterval(interval);
+      cancelActiveSession(channel);
+    };
   }, [channel, onConfirmed, onError, session?.session_id]);
 
   return (

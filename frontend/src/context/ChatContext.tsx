@@ -109,6 +109,49 @@ function scheduledMessagePayload(message: unknown): ScheduledMessagePayload | un
   return message && typeof message === "object" ? (message as ScheduledMessagePayload) : undefined;
 }
 
+function pushMessageMeta(event: ChatEvent): string {
+  if (event.type === "subconscious_message") return "Subconscious";
+  return event.task?.title || "Scheduled";
+}
+
+function appendPushMessage(patchPanel: (panelId: PanelId, updater: (panel: ChatPanelState) => ChatPanelState) => void, event: ChatEvent) {
+  if (event.type !== "scheduled_message" && event.type !== "subconscious_message") return;
+  const scheduledMessage = scheduledMessagePayload(event.message);
+  const fallbackMessageContent = typeof event.message === "string" ? event.message : scheduledMessage?.content;
+  const content = String(event.content ?? fallbackMessageContent ?? "").trim();
+  const attachments = Array.isArray(event.attachments)
+    ? event.attachments
+    : Array.isArray(scheduledMessage?.attachments)
+      ? scheduledMessage.attachments
+      : undefined;
+  const imageUrls = attachments
+    ? attachmentImageUrls(attachments)
+    : Array.isArray(scheduledMessage?.images)
+      ? imageAssetUrls(scheduledMessage.images)
+      : undefined;
+  const imageCount = imageUrls ? imageUrls.length || undefined : scheduledMessage?.image_count;
+  const attachmentCount = attachments ? attachments.length || undefined : scheduledMessage?.attachment_count;
+  if (!content && !imageUrls?.length && !attachments?.length && !imageCount && !attachmentCount) return;
+  patchPanel("single", (current) => ({
+    ...current,
+    messages: [
+      ...current.messages,
+      {
+        id: makeId(event.type === "subconscious_message" ? "subconscious" : "scheduled"),
+        role: "assistant",
+        content,
+        images: imageUrls,
+        imageCount,
+        attachments,
+        attachmentCount,
+        meta: pushMessageMeta(event),
+      },
+    ],
+  }));
+}
+
+const TASKS_WS_MAX_RECONNECT_MS = 30_000;
+
 function createPanel(panelId: PanelId): ChatPanelState {
   const savedSettings = readJson<Partial<ChatSettings>>(GLOBAL_SETTINGS_KEY, {});
   return {
@@ -171,53 +214,55 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const userId = panel.settings.userId || "web_user";
-    const socket = new WebSocket(webSocketUrl(`/ws/tasks?user_id=${encodeURIComponent(userId)}`));
+    let disposed = false;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | undefined;
+    let reconnectAttempt = 0;
 
-    socket.addEventListener("message", (event) => {
-      let parsed: ChatEvent;
-      try {
-        parsed = JSON.parse(event.data) as ChatEvent;
-      } catch {
-        return;
-      }
-      if (parsed.type !== "scheduled_message") return;
-      const scheduledMessage = scheduledMessagePayload(parsed.message);
-      const fallbackMessageContent = typeof parsed.message === "string" ? parsed.message : scheduledMessage?.content;
-      const content = String(parsed.content ?? fallbackMessageContent ?? "").trim();
-      const attachments = Array.isArray(parsed.attachments)
-        ? parsed.attachments
-        : Array.isArray(scheduledMessage?.attachments)
-          ? scheduledMessage.attachments
-          : undefined;
-      const imageUrls = attachments
-        ? attachmentImageUrls(attachments)
-        : Array.isArray(scheduledMessage?.images)
-          ? imageAssetUrls(scheduledMessage.images)
-          : undefined;
-      const imageCount = imageUrls ? imageUrls.length || undefined : scheduledMessage?.image_count;
-      const attachmentCount = attachments ? attachments.length || undefined : scheduledMessage?.attachment_count;
-      if (!content && !imageUrls?.length && !attachments?.length && !imageCount && !attachmentCount) return;
-      patchPanel("single", (current) => ({
-        ...current,
-        messages: [
-          ...current.messages,
-          {
-            id: makeId("scheduled"),
-            role: "assistant",
-            content,
-            images: imageUrls,
-            imageCount,
-            attachments,
-            attachmentCount,
-            meta: parsed.task?.title || "Scheduled",
-          },
-        ],
-      }));
-    });
+    const scheduleReconnect = () => {
+      if (disposed || reconnectTimer !== undefined) return;
+      const delay = Math.min(1000 * 2 ** reconnectAttempt, TASKS_WS_MAX_RECONNECT_MS);
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = undefined;
+        connect();
+      }, delay);
+    };
 
-    socket.addEventListener("error", () => undefined);
+    const connect = () => {
+      if (disposed) return;
+      socket = new WebSocket(webSocketUrl(`/ws/tasks?user_id=${encodeURIComponent(userId)}`));
+
+      socket.addEventListener("open", () => {
+        reconnectAttempt = 0;
+      });
+
+      socket.addEventListener("message", (event) => {
+        let parsed: ChatEvent;
+        try {
+          parsed = JSON.parse(event.data) as ChatEvent;
+        } catch {
+          return;
+        }
+        appendPushMessage(patchPanel, parsed);
+      });
+
+      socket.addEventListener("close", () => {
+        socket = null;
+        if (!disposed) scheduleReconnect();
+      });
+
+      socket.addEventListener("error", () => undefined);
+    };
+
+    connect();
+
     return () => {
-      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+      disposed = true;
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer);
+      }
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
         socket.close(1000);
       }
     };

@@ -164,7 +164,7 @@ class ChannelQrSessionManager:
         cancel_event: threading.Event,
     ) -> None:
         del config_dir
-        from xagent.integrations.weixin.client import qr_login
+        from xagent.integrations.weixin.client import QrLoginCancelled, qr_login
         from xagent.integrations.weixin.config import ILINK_BASE_URL, WEIXIN_CDN_BASE_URL
 
         if cancel_event.is_set():
@@ -187,8 +187,13 @@ class ChannelQrSessionManager:
                     base_url=ILINK_BASE_URL,
                     log=log,
                     render_qr_url=render_qr,
+                    cancel_event=cancel_event,
                 )
             )
+        except QrLoginCancelled:
+            session.status = "cancelled"
+            session.error = "Weixin login cancelled."
+            return
         except Exception as exc:
             if cancel_event.is_set():
                 session.status = "cancelled"

@@ -56,7 +56,6 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
             config_dir=str(self.agent_a_path),
             initial_agent="agent_a",
             registry_root=self.root,
-            static_dir=self.root / "missing-static",
         )
 
     async def _client(self):
@@ -235,6 +234,19 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["session_id"], "sess_test")
+
+    async def test_cancel_channel_qr_marks_session_cancelled(self):
+        from xagent.interfaces.clients.web.qr_sessions import get_qr_session_manager
+
+        manager = get_qr_session_manager()
+        with patch.object(manager, "_run_feishu_registration", lambda session, cancel_event: None):
+            session = manager.start_feishu()
+        async with await self._client() as client:
+            response = await client.delete(f"/api/channels/feishu/qr/{session.id}")
+            self.assertEqual(response.status_code, 200)
+            poll = await client.get(f"/api/channels/feishu/qr/{session.id}")
+        self.assertEqual(poll.status_code, 200)
+        self.assertEqual(poll.json()["status"], "cancelled")
 
     async def test_start_weixin_qr_populates_qr_url(self):
         import asyncio
