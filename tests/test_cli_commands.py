@@ -978,6 +978,11 @@ class CLICommandTests(unittest.TestCase):
         self.assertNotIn("Doctor", reset_titles)
         self.assertNotIn("Version", reset_titles)
 
+        client_option = next(option for option in initial_options if option.key == "client")
+        self.assertFalse(client_option.disabled)
+        channel_option = next(option for option in initial_options if option.key == "channel")
+        self.assertTrue(channel_option.disabled)
+
     def test_launcher_overview_subtitle_keeps_only_name_and_value(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True)

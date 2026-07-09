@@ -133,7 +133,6 @@ def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[Men
             key="client",
             title="Client",
             description="Manage local clients, such as the browser web client.",
-            disabled=not initialized,
         ),
         MenuOption(
             key="inspect",
