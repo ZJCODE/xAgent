@@ -15,7 +15,6 @@ curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bas
 xagent
 ```
 
-
 ## Local Data
 
 All agent data is stored locally under:
@@ -25,6 +24,15 @@ All agent data is stored locally under:
 ```
 
 Each agent has its own identity, memory, diary, workspace, skills, tasks, logs, and channel state.
+
+## Uninstall
+
+```bash
+uv tool uninstall myxagent
+```
+
+This removes the CLI installed by `install.sh`. Your local data under `~/.xagent/` is not deleted.
+
 
 ## License
 
