@@ -43,44 +43,6 @@ has_command() {
     command -v "$1" >/dev/null 2>&1
 }
 
-has_python310() {
-    has_command python3 || return 1
-    python3 - <<'PY'
-import sys
-raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
-PY
-}
-
-ensure_pip() {
-    if python3 -m pip --version >/dev/null 2>&1; then
-        return 0
-    fi
-
-    step "pip not found, trying ensurepip..."
-    python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
-
-    if python3 -m pip --version >/dev/null 2>&1; then
-        return 0
-    fi
-
-    if has_command apt-get; then
-        if has_command sudo; then
-            step "Installing python3-pip via apt..."
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq python3-pip
-        else
-            error "pip is missing and sudo is unavailable. Please install python3-pip manually."
-        fi
-    elif has_command brew; then
-        step "Installing Python via Homebrew..."
-        brew install python
-    else
-        error "Cannot install pip automatically. Please install pip manually and retry."
-    fi
-
-    python3 -m pip --version >/dev/null 2>&1 || error "pip installation failed."
-}
-
 ensure_path() {
     case ":$PATH:" in
         *":$BINDIR:"*) ;;
@@ -124,13 +86,6 @@ ensure_path() {
     fi
 }
 
-install_via_pip() {
-    ensure_pip
-    step "Installing $PACKAGE_NAME via pip..."
-    python3 -m pip install --upgrade --user "$PACKAGE_NAME"
-    ensure_path
-}
-
 install_uv_if_needed() {
     if has_command uv; then
         return 0
@@ -142,27 +97,21 @@ install_uv_if_needed() {
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
 
-    has_command uv || error "uv installation failed. Please install Python 3.10+ manually."
+    has_command uv || error "uv installation failed. Please install uv manually and retry."
 }
 
 install_via_uv() {
     install_uv_if_needed
     step "Installing $PACKAGE_NAME via uv using Python $PYTHON_VERSION..."
-    uv tool install --force "$PACKAGE_NAME" --python "$PYTHON_VERSION"
+    mkdir -p "$BINDIR"
+    UV_TOOL_BIN_DIR="$BINDIR" uv tool install --force "$PACKAGE_NAME" --python "$PYTHON_VERSION"
     ensure_path
 }
 
 upgrade_xagent() {
     step "Checking for updates..."
 
-    if has_command uv && uv tool list 2>/dev/null | grep -q "$PACKAGE_NAME"; then
-        uv tool install --force "$PACKAGE_NAME" --python "$PYTHON_VERSION"
-    elif has_python310; then
-        ensure_pip
-        python3 -m pip install --upgrade --user "$PACKAGE_NAME"
-    else
-        install_via_uv
-    fi
+    install_via_uv
 }
 
 # Record the absolute CLI path so GUI clients (the desktop app) can find it
@@ -228,13 +177,8 @@ main() {
         exit 0
     fi
 
-    if has_python310; then
-        info "Python 3.10+ detected; installing via pip."
-        install_via_pip
-    else
-        info "Python 3.10+ not found; installing via uv."
-        install_via_uv
-    fi
+    info "Installing isolated CLI tool via uv."
+    install_via_uv
 
     verify_install
     success_message
