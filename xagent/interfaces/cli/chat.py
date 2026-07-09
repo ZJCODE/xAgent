@@ -163,18 +163,6 @@ class AgentCLI(BaseAgentRunner):
                     ui.print_panel("Enter a message to chat with the agent.", title="Empty Input")
                     continue
 
-                if not hasattr(self.agent, "chat_events"):
-                    response = await self.agent(
-                        user_message=user_input,
-                        user_id=user_id,
-                    )
-                    ui.print_panel(
-                        self._format_cli_output(response),
-                        title="xAgent",
-                        border_style="green",
-                    )
-                    continue
-
                 await self._print_chat_events_terminal_ui(
                     ui=ui,
                     user_message=user_input,

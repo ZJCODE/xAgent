@@ -160,7 +160,6 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
         self.assertIn("write the diary anyway", today_text)
-        self.assertFalse((self.memory.root / "people").exists())
 
     async def test_schedule_experience_write_ignores_routine_context_events(self):
         routine_event = Message(

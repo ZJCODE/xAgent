@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 from xagent.interfaces.cli.agents import AgentRegistryError, register_agent
-from xagent.interfaces.clients.web.session import WebAgentSession
+from xagent.interfaces.web.session import WebAgentSession
 
 
 def _write_agent(path: Path, *, port: int) -> None:

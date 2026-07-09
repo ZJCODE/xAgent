@@ -2354,9 +2354,8 @@ class FeishuAdapter:
             raise ValueError(f"unsupported scheduled Feishu task type: {task_type}")
 
         chat_events = getattr(self.agent, "chat_events", None)
-        chat = getattr(self.agent, "chat", None)
-        if not callable(chat_events) and not callable(chat):
-            raise RuntimeError("Agent does not support chat_events() or chat().")
+        if not callable(chat_events):
+            raise RuntimeError("Agent does not support chat_events().")
         user_id = task.delivery_user_id or str(task.target.get("sender_id") or AgentConfig.DEFAULT_USER_ID)
         context = ScheduledDeliveryContext(
             channel="feishu",
@@ -2370,19 +2369,11 @@ class FeishuAdapter:
             },
         )
         with scheduled_delivery_context(context):
-            if callable(chat_events):
-                return await self._scheduled_task_event_result(
-                    chat_events,
-                    prompt=AgentConfig.scheduled_agent_prompt(task.content),
-                    user_id=user_id,
-                )
-
-            assert callable(chat)
-            response = await chat(
-                user_message=AgentConfig.scheduled_agent_prompt(task.content),
+            return await self._scheduled_task_event_result(
+                chat_events,
+                prompt=AgentConfig.scheduled_agent_prompt(task.content),
                 user_id=user_id,
             )
-        return _FeishuScheduledTaskResult(self._stringify_scheduled_agent_response(response).strip())
 
     async def _scheduled_task_event_result(
         self,

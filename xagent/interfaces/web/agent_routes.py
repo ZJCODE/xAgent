@@ -8,7 +8,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from ...cli.agents import AgentRegistryError
+from ..cli.agents import AgentRegistryError
 from .session import WebAgentSession
 
 

@@ -11,7 +11,7 @@ import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from starlette.responses import Response
 
-from ...cli.clients import api_url_to_ws_url
+from ..cli.web_client import api_url_to_ws_url
 
 _HOP_BY_HOP_HEADERS = {
     "connection",

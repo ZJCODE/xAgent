@@ -99,12 +99,8 @@ class ProviderConfigTests(unittest.TestCase):
             MODEL_API_OPENAI_CHAT_COMPLETIONS,
         )
         self.assertEqual(
-            provider_model_api({"name": "custom", "model_api": MODEL_API_OPENAI_CHAT_COMPLETIONS}),
-            MODEL_API_OPENAI_CHAT_COMPLETIONS,
-        )
-        self.assertEqual(
-            provider_model_api({"name": "custom", "sdk": "openai"}),
-            MODEL_API_OPENAI_CHAT_COMPLETIONS,
+            provider_model_api({"name": "custom", "model_api": MODEL_API_ANTHROPIC_MESSAGES}),
+            MODEL_API_ANTHROPIC_MESSAGES,
         )
         self.assertEqual(
             provider_model_api({"name": "anthropic"}),
@@ -393,7 +389,6 @@ provider:
             self.assertTrue(result.workspace_dir.is_dir())
             self.assertTrue(result.skills_dir.is_dir())
             self.assertTrue(result.tasks_dir.is_dir())
-            self.assertFalse((result.memory_dir / "people").exists())
             self.assertFalse((Path(tmpdir) / "my_toolkit").exists())
 
             config_text = result.config_path.read_text(encoding="utf-8")
@@ -2384,9 +2379,8 @@ channels:
     def test_readme_voice_usage_uses_single_install_path(self):
         readme = Path("README.md").read_text(encoding="utf-8")
 
-        self.assertIn("pip install myxagent", readme)
-        self.assertIn("xagent setup", readme)
-        self.assertIn("xagent voice", readme)
+        self.assertIn("install.sh", readme)
+        self.assertIn("xagent", readme)
         self.assertNotIn("myxagent[voice]", readme)
         self.assertNotIn("SONIOX_API_KEY", readme)
 

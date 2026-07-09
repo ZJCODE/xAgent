@@ -9,8 +9,8 @@ from typing import Any, Callable, Literal
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ...base import BaseAgentConfig
-from ...cli.channels import (
+from ..base import BaseAgentConfig
+from ..cli.channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
     CHANNEL_VOICE,
@@ -21,7 +21,7 @@ from ...cli.channels import (
     voice_config,
     weixin_config,
 )
-from ...cli.processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
+from ..cli.processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
 from .qr_sessions import get_qr_session_manager
 from .session import WebAgentSession
 

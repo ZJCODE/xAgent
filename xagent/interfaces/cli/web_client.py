@@ -12,14 +12,12 @@ from .channels import api_config, load_config_file
 from .processes import ManagedProcessPaths
 
 
-CLIENT_WEB = "web"
 DEFAULT_WEB_CLIENT_PORT = 1415
 
 
 def web_client_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """Return normalized global web client settings merged with API defaults."""
-    clients = config.get("clients") if isinstance(config, Mapping) else None
-    web_cfg = clients.get(CLIENT_WEB) if isinstance(clients, Mapping) else None
+    web_cfg = config.get("web") if isinstance(config, Mapping) else None
     web_cfg = dict(web_cfg) if isinstance(web_cfg, Mapping) else {}
 
     api_cfg = api_config(config)
@@ -53,8 +51,8 @@ def web_client_paths(*, root: Optional[Path] = None) -> ManagedProcessPaths:
     """Return global PID and log paths for the managed web client process."""
     runtime_root = (root or web_client_runtime_root()).expanduser().resolve()
     return ManagedProcessPaths(
-        pid_path=runtime_root / "run" / "clients" / f"{CLIENT_WEB}.pid",
-        log_path=runtime_root / "logs" / "clients" / f"{CLIENT_WEB}.log",
+        pid_path=runtime_root / "run" / "web.pid",
+        log_path=runtime_root / "logs" / "web.log",
     )
 
 
@@ -76,7 +74,6 @@ def api_url_to_ws_url(api_url: str) -> str:
 
 
 __all__ = [
-    "CLIENT_WEB",
     "DEFAULT_WEB_CLIENT_PORT",
     "api_url_to_ws_url",
     "load_config_file",

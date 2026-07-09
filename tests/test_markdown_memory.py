@@ -119,21 +119,6 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         root = Path(self.memory_dir)
         for sub in ("daily", "weekly", "monthly", "yearly"):
             self.assertTrue((root / sub).is_dir())
-        self.assertFalse((root / "people").exists())
-
-    async def test_all_scope_excludes_legacy_people_directory(self):
-        legacy_people = Path(self.memory_dir) / "people"
-        legacy_people.mkdir()
-        (legacy_people / "alice.md").write_text("legacy profile marker", encoding="utf-8")
-        await self.memory.append_daily("time memory marker")
-
-        all_results = await self.memory.search_keyword("legacy profile marker", scope="all")
-        invalid_people_scope_results = await self.memory.search_keyword("legacy profile marker", scope="people")
-        files = await self.memory.list_files("all")
-
-        self.assertEqual(all_results.strip(), "")
-        self.assertEqual(invalid_people_scope_results.strip(), "")
-        self.assertTrue(all("/people/" not in item for item in files))
 
     async def test_regular_file_io_does_not_spawn_subprocesses(self):
         d = date.today()

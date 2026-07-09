@@ -124,6 +124,37 @@ class CapturingModelClient:
         self.calls = []
         self.instructions_calls = []
 
+    async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
+        self.calls.append(messages)
+        self.instructions_calls.append(instructions)
+        reply_type, response = self.responses.pop(0)
+        if reply_type == ReplyType.SIMPLE_REPLY:
+            text = str(response)
+            if stream:
+                yield ModelStreamEvent(type="delta", delta=text)
+            else:
+                yield ModelStreamEvent(type="delta", delta=text)
+            return
+        if reply_type == ReplyType.TOOL_CALL:
+            tool_calls = response
+            if isinstance(tool_calls, list) and tool_calls and hasattr(tool_calls[0], "name"):
+                chat_tool_calls = [
+                    ChatToolCall(
+                        call_id=getattr(tool_call, "call_id", "call-1"),
+                        name=tool_call.name,
+                        arguments=getattr(tool_call, "arguments", "{}"),
+                    )
+                    for tool_call in tool_calls
+                ]
+            else:
+                chat_tool_calls = tool_calls
+            yield ModelStreamEvent(type="tool_calls", tool_calls=chat_tool_calls)
+            return
+        if reply_type == ReplyType.ERROR:
+            yield ModelStreamEvent(type="error", error=response)
+            return
+        raise AssertionError(f"Unexpected reply type: {reply_type}")
+
     async def call(self, messages, tool_specs, instructions=None, stream=False, store_reply=None):
         self.calls.append(messages)
         self.instructions_calls.append(instructions)

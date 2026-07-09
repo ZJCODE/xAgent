@@ -70,22 +70,10 @@ def normalize_model_api(model_api: Optional[str]) -> str:
     return normalized
 
 
-def legacy_sdk_model_api(sdk: Optional[str]) -> str:
-    normalized = str(sdk or "").strip().lower()
-    if normalized == "openai":
-        return MODEL_API_OPENAI_CHAT_COMPLETIONS
-    if normalized == "anthropic":
-        return MODEL_API_ANTHROPIC_MESSAGES
-    raise ValueError("provider.sdk must be one of: openai, anthropic")
-
-
 def _model_api_from_hint(model_api: Optional[str]) -> str:
     if model_api is None:
         return MODEL_API_OPENAI_CHAT_COMPLETIONS
-    try:
-        return normalize_model_api(model_api)
-    except ValueError:
-        return legacy_sdk_model_api(model_api)
+    return normalize_model_api(model_api)
 
 
 def provider_base_url(provider_name: str, model_api: Optional[str] = None) -> str:
@@ -123,10 +111,6 @@ def provider_model_api(provider_cfg: dict[str, Any]) -> str:
     configured_model_api = provider_cfg.get("model_api")
     if configured_model_api is not None:
         return normalize_model_api(configured_model_api)
-
-    legacy_sdk = provider_cfg.get("sdk")
-    if legacy_sdk is not None:
-        return legacy_sdk_model_api(legacy_sdk)
 
     provider = normalize_provider_name(provider_cfg.get("name"))
     if provider in PROVIDER_MODEL_APIS:

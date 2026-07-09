@@ -28,6 +28,16 @@ class _TaskAgent:
         self.chat_calls.append(kwargs)
         return "agent scheduled result"
 
+    async def chat_events(self, **kwargs):
+        self.chat_calls.append(kwargs)
+        yield {
+            "type": "message_done",
+            "message_id": "scheduled-agent",
+            "phase": "final",
+            "content": "agent scheduled result",
+        }
+        yield {"type": "done"}
+
     async def flush_memory(self):
         return None
 

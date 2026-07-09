@@ -9,7 +9,6 @@ from anthropic import AsyncAnthropic
 from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..core.providers import (
-    legacy_sdk_model_api,
     model_api_uses_anthropic_client,
     normalize_provider_name,
     normalize_model_api,
@@ -170,6 +169,7 @@ class BaseAgentRunner:
             "channels",
             "runtime",
             "observability",
+            "web",
         }
         unsupported_keys = sorted(set(config) - allowed_config_keys)
         if unsupported_keys:
@@ -190,6 +190,20 @@ class BaseAgentRunner:
                 from .voice.config import VoiceChannelConfig
 
                 VoiceChannelConfig.from_dict(voice_cfg)
+
+        web_cfg = config.get("web")
+        if web_cfg is not None:
+            if not isinstance(web_cfg, dict):
+                raise ValueError("web must be a dictionary")
+            allowed_web_keys = {"enabled", "api_url"}
+            unsupported_web_keys = sorted(set(web_cfg) - allowed_web_keys)
+            if unsupported_web_keys:
+                joined_keys = ", ".join(unsupported_web_keys)
+                raise ValueError(f"Unsupported web key(s): {joined_keys}")
+            if "enabled" in web_cfg and not isinstance(web_cfg["enabled"], bool):
+                raise ValueError("web.enabled must be a boolean")
+            if "api_url" in web_cfg and not isinstance(web_cfg["api_url"], str):
+                raise ValueError("web.api_url must be a string")
 
         runtime_cfg = config.get("runtime")
         if runtime_cfg is not None and not isinstance(runtime_cfg, dict):
@@ -329,7 +343,6 @@ class BaseAgentRunner:
     def _validate_provider_config(provider_cfg: Dict[str, Any]) -> None:
         allowed_provider_keys = {
             "name",
-            "sdk",
             "model_api",
             "base_url",
             "api_key",
@@ -345,14 +358,8 @@ class BaseAgentRunner:
         provider_name = normalize_provider_name(provider_cfg.get("name"))
         if "model_api" in provider_cfg:
             normalize_model_api(provider_cfg.get("model_api"))
-        if "sdk" in provider_cfg:
-            legacy_sdk_model_api(provider_cfg.get("sdk"))
-        if "model_api" in provider_cfg and "sdk" in provider_cfg:
-            raise ValueError("Use provider.model_api or legacy provider.sdk, not both")
-        if provider_name == "custom" and "model_api" not in provider_cfg and "sdk" not in provider_cfg:
+        if provider_name == "custom" and "model_api" not in provider_cfg:
             raise ValueError("provider.model_api is required when provider.name is custom")
-        if provider_name and provider_name != "custom" and "sdk" in provider_cfg:
-            raise ValueError("provider.sdk is only supported when provider.name is custom")
         if provider_name and provider_name != "custom" and "model_api" in provider_cfg:
             raise ValueError("provider.model_api is only supported when provider.name is custom")
         if "supports_vision" in provider_cfg:

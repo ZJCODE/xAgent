@@ -12,7 +12,7 @@ import yaml
 
 from xagent.interfaces.cli.agents import register_agent
 from xagent.interfaces.cli.processes import StartResult
-from xagent.interfaces.clients.web.server import WebClientServer
+from xagent.interfaces.web.server import WebClientServer
 
 
 def _write_agent(path: Path, *, port: int, include_integrations: bool = True) -> None:
@@ -63,7 +63,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
     async def test_list_channels_reports_unconfigured_integrations(self):
-        with patch("xagent.interfaces.clients.web.channel_routes.running_pid", return_value=None):
+        with patch("xagent.interfaces.web.channel_routes.running_pid", return_value=None):
             async with await self._client() as client:
                 response = await client.get("/api/channels")
 
@@ -79,10 +79,10 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_uses_selected_agent_config_dir(self):
         self.server.session.select("agent_b")
         with patch(
-            "xagent.interfaces.clients.web.channel_routes.running_pid",
+            "xagent.interfaces.web.channel_routes.running_pid",
             side_effect=[None, 4321],
         ), patch(
-            "xagent.interfaces.clients.web.channel_routes.start_background",
+            "xagent.interfaces.web.channel_routes.start_background",
             return_value=StartResult(ok=True, pid=4321),
         ) as start:
             async with await self._client() as client:
@@ -97,10 +97,10 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_stop_uses_selected_agent_pid_path(self):
         self.server.session.select("agent_b")
         with patch(
-            "xagent.interfaces.clients.web.channel_routes.running_pid",
+            "xagent.interfaces.web.channel_routes.running_pid",
             return_value=None,
         ), patch(
-            "xagent.interfaces.clients.web.channel_routes.stop_managed_process",
+            "xagent.interfaces.web.channel_routes.stop_managed_process",
             return_value=(True, "stopped (pid=4321)"),
         ) as stop:
             async with await self._client() as client:
@@ -112,13 +112,13 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_restart_stops_then_starts_selected_channel(self):
         self.server.session.select("agent_b")
         with patch(
-            "xagent.interfaces.clients.web.channel_routes.running_pid",
+            "xagent.interfaces.web.channel_routes.running_pid",
             side_effect=[1111, 2222],
         ), patch(
-            "xagent.interfaces.clients.web.channel_routes.stop_managed_process",
+            "xagent.interfaces.web.channel_routes.stop_managed_process",
             return_value=(True, "stopped (pid=1111)"),
         ) as stop, patch(
-            "xagent.interfaces.clients.web.channel_routes.start_background",
+            "xagent.interfaces.web.channel_routes.start_background",
             return_value=StartResult(ok=True, pid=2222),
         ) as start:
             async with await self._client() as client:
@@ -220,9 +220,9 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_start_channel_qr_returns_session_payload(self):
         with patch(
-            "xagent.interfaces.clients.web.qr_sessions.ChannelQrSessionManager.start_feishu",
+            "xagent.interfaces.web.qr_sessions.ChannelQrSessionManager.start_feishu",
         ) as start_feishu:
-            from xagent.interfaces.clients.web.qr_sessions import ChannelQrSession
+            from xagent.interfaces.web.qr_sessions import ChannelQrSession
 
             start_feishu.return_value = ChannelQrSession(
                 id="sess_test",
@@ -236,7 +236,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()["session_id"], "sess_test")
 
     async def test_cancel_channel_qr_marks_session_cancelled(self):
-        from xagent.interfaces.clients.web.qr_sessions import get_qr_session_manager
+        from xagent.interfaces.web.qr_sessions import get_qr_session_manager
 
         manager = get_qr_session_manager()
         with patch.object(manager, "_run_feishu_registration", lambda session, cancel_event: None):

@@ -815,7 +815,7 @@ class ModelClient:
         store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a streaming model response."""
-        return await self._collect_legacy_stream_result(
+        return await self._collect_stream_result(
             self._iter_chat_turn_events(response),
             store_reply,
         )
@@ -826,7 +826,7 @@ class ModelClient:
         store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a streaming OpenAI Responses API response."""
-        return await self._collect_legacy_stream_result(
+        return await self._collect_stream_result(
             self._iter_responses_turn_events(response),
             store_reply,
         )
@@ -837,17 +837,17 @@ class ModelClient:
         store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
         """Handle a streaming Anthropic Messages response."""
-        return await self._collect_legacy_stream_result(
+        return await self._collect_stream_result(
             self._iter_anthropic_turn_events(response),
             store_reply,
         )
 
-    async def _collect_legacy_stream_result(
+    async def _collect_stream_result(
         self,
         events: AsyncGenerator[ModelStreamEvent, None],
         store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
-        """Collect model stream events into the legacy ReplyType contract."""
+        """Collect model stream events into the ReplyType contract."""
         text_parts: list[str] = []
         async for event in events:
             if event.type in {"delta", "text"} and event.delta:

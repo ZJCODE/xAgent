@@ -44,7 +44,7 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .clients import web_client_config, web_client_paths
+from .web_client import web_client_config, web_client_paths
 from .runtime import (
     _launcher_args,
     _xagent_version_text,
@@ -204,9 +204,9 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
 def _web_client_actions(config_dir: Path) -> list[MenuOption]:
     client_ready = _web_client_is_enabled(config_dir)
     client_running = client_ready and _web_client_is_running(config_dir)
-    unavailable_description = "Enable clients.web before starting the web client."
+    unavailable_description = "Enable web before starting the web client."
     if not client_ready:
-        open_description = "Enable clients.web before opening the browser client."
+        open_description = "Enable web before opening the browser client."
     elif not client_running:
         open_description = "Start the web client before opening it."
     else:

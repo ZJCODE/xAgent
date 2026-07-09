@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from ...base import BaseAgentConfig
-from ...cli.agents import (
+from ..base import BaseAgentConfig
+from ..cli.agents import (
     AgentRegistryError,
     agent_directory_has_contents,
     create_managed_agent,
@@ -27,7 +27,7 @@ from ...cli.agents import (
     load_agent_registry_or_empty,
     validate_agent_name,
 )
-from ...cli.setup import (
+from ..cli.setup import (
     ChannelSetupError,
     SETUP_CHANNELS,
     apply_channel_setup,
@@ -35,10 +35,10 @@ from ...cli.setup import (
     build_setup_schema,
     init_selection_from_mapping,
 )
-from ...cli.channels import CHANNEL_API, load_config_file
-from ...cli.clients import web_client_config
-from ...cli.processes import managed_paths, running_pid
-from ...server.admin_service import AdminService
+from ..cli.channels import CHANNEL_API, load_config_file
+from ..cli.web_client import web_client_config
+from ..cli.processes import managed_paths, running_pid
+from ..server.admin_service import AdminService
 
 
 def _is_agent_initialized(path: Path) -> bool:

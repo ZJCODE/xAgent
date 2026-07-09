@@ -100,30 +100,19 @@ class TaskDispatchService:
         )
         await self.chat.acquire_slot()
         try:
+            chat_events = getattr(self.agent, "chat_events", None)
+            if not callable(chat_events):
+                raise RuntimeError("Agent does not support chat_events().")
             deadline = time.monotonic() + self.chat._chat_timeout
             with scheduled_delivery_context(context):
-                chat_events = getattr(self.agent, "chat_events", None)
-                if callable(chat_events):
-                    return await self._scheduled_agent_event_result(
-                        chat_events,
-                        prompt=prompt,
-                        user_id=user_id,
-                        deadline=deadline,
-                    )
-
-                chat = getattr(self.agent, "chat", None)
-                if not callable(chat):
-                    raise RuntimeError("Agent does not support chat_events() or chat().")
-                response = await self.chat._await_before_deadline(
-                    chat(
-                        user_message=prompt,
-                        user_id=user_id,
-                    ),
-                    deadline,
+                return await self._scheduled_agent_event_result(
+                    chat_events,
+                    prompt=prompt,
+                    user_id=user_id,
+                    deadline=deadline,
                 )
         finally:
             self.chat.release_slot()
-        return self._scheduled_response_result(response)
 
     async def _scheduled_agent_event_result(
         self,

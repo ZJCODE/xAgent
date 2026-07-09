@@ -11,15 +11,15 @@ from typing import Optional
 import uvicorn
 from fastapi import FastAPI
 
-from ...server.admin_routes import register_admin_routes
-from ...cli.agents import management_root
+from ..server.admin_routes import register_admin_routes
+from ..cli.agents import management_root
 from .agent_routes import register_agent_session_routes
 from .channel_routes import register_channel_routes
 from .proxy import register_api_proxy
 from .session import WebAgentSession
 from .spa import register_spa_routes
 
-_STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
+_STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 
 
 class WebClientServer:

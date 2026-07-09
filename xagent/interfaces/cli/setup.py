@@ -843,6 +843,9 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
                 "port": port,
             }
         },
+        "web": {
+            "api_url": f"http://127.0.0.1:{port}",
+        },
     }
     if selection.voice_enabled:
         config["channels"]["voice"] = _voice_channel_config(selection)
@@ -1229,16 +1232,27 @@ def _terminal_prompt_multiline_identity(ui: TerminalUI) -> str:
     return _format_identity_markdown(text)
 
 
-def collect_init_selection_terminal_ui(
-    *,
-    ui: Optional[TerminalUI] = None,
-    secret_input_func: Callable[[str], str] = getpass.getpass,
-) -> InitSelection:
-    wizard_ui = ui or TerminalUI()
-    ask_secret = wizard_ui.ask_secret if wizard_ui.interactive else secret_input_func
+@dataclass(frozen=True)
+class InitPromptSurface:
+    """Prompt callbacks shared by terminal and plain init flows."""
 
-    provider = _terminal_select_option(
-        wizard_ui,
+    select_option: Callable[..., str]
+    select_model_option: Callable[..., str]
+    select_custom_model_api: Callable[[], str]
+    prompt_text: Callable[..., str]
+    prompt_yes_no: Callable[..., bool]
+    ask_secret: Callable[[str], str]
+    prompt_multiline_identity: Callable[[], str]
+    select_search_provider: Callable[[str], str]
+    select_image_generation_provider: Callable[[str], str]
+    collect_voice_startup: Callable[[], Tuple[bool, Tuple[str, ...], Tuple[str, ...], bool]]
+    on_start: Callable[[], None] = lambda: None
+
+
+def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
+    surface.on_start()
+
+    provider = surface.select_option(
         "Provider",
         KNOWN_PROVIDERS,
         descriptions={
@@ -1255,8 +1269,7 @@ def collect_init_selection_terminal_ui(
     supports_vision = False
 
     if provider == PROVIDER_OPENAI:
-        selected_model = _terminal_select_model_option(
-            wizard_ui,
+        selected_model = surface.select_model_option(
             "OpenAI Model",
             OPENAI_MODELS,
             descriptions={
@@ -1270,68 +1283,52 @@ def collect_init_selection_terminal_ui(
         )
         base_url = OPENAI_BASE_URL
     elif provider == PROVIDER_ANTHROPIC:
-        selected_model = _terminal_select_model_option(
-            wizard_ui,
+        selected_model = surface.select_model_option(
             "Anthropic Model",
             ANTHROPIC_MODELS,
             default_index=0,
         )
         base_url = ANTHROPIC_BASE_URL
     elif provider == PROVIDER_DEEPSEEK:
-        selected_model = _terminal_select_model_option(
-            wizard_ui,
+        selected_model = surface.select_model_option(
             "DeepSeek Model",
             DEEPSEEK_MODELS,
             default_index=0,
         )
         base_url = DEEPSEEK_BASE_URL
     elif provider == PROVIDER_MINIMAX:
-        selected_model = _terminal_select_model_option(
-            wizard_ui,
+        selected_model = surface.select_model_option(
             "MiniMax Model",
             MINIMAX_MODELS,
             default_index=0,
         )
         base_url = MINIMAX_BASE_URL
     elif provider == PROVIDER_QWEN:
-        selected_model = _terminal_select_model_option(
-            wizard_ui,
+        selected_model = surface.select_model_option(
             "Qwen Model",
             QWEN_MODELS,
             default_index=1,
         )
         base_url = QWEN_BASE_URL
     else:
-        model_api = _terminal_select_option(
-            wizard_ui,
-            "Custom Provider Model API",
-            (
-                MODEL_API_OPENAI_CHAT_COMPLETIONS,
-                MODEL_API_OPENAI_RESPONSES,
-                MODEL_API_ANTHROPIC_MESSAGES,
-            ),
-            default_index=0,
-            subtitle="Select the wire protocol your custom provider speaks.",
-        )
+        model_api = surface.select_custom_model_api()
         selected_model = "Decide later"
         default_base_url = (
             CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER
             if model_api == MODEL_API_ANTHROPIC_MESSAGES
             else CUSTOM_OPENAI_BASE_URL_PLACEHOLDER
         )
-        base_url = _terminal_prompt_text(
-            wizard_ui,
+        base_url = surface.prompt_text(
             "Custom provider base URL",
             default=default_base_url,
         )
-        supports_vision = _terminal_prompt_yes_no(
-            wizard_ui,
+        supports_vision = surface.prompt_yes_no(
             "Does this custom provider support image URL input?",
             default=False,
         )
 
     model = MODEL_PLACEHOLDER if selected_model == "Decide later" else selected_model
-    api_key = ask_secret("API key (leave blank to fill in later): ").strip() or API_KEY_PLACEHOLDER
+    api_key = surface.ask_secret("API key (leave blank to fill in later): ").strip() or API_KEY_PLACEHOLDER
 
     provider_api_cfg = {"name": provider}
     if model_api:
@@ -1343,63 +1340,38 @@ def collect_init_selection_terminal_ui(
     langfuse_secret_key = ""
     langfuse_base_url = ""
     if model_api_uses_openai_client(selected_model_api):
-        observability_enabled = _terminal_prompt_yes_no(
-            wizard_ui,
+        observability_enabled = surface.prompt_yes_no(
             "Enable Langfuse observability?",
             default=False,
         )
     if observability_enabled:
-        langfuse_public_key = _terminal_prompt_text(
-            wizard_ui,
+        langfuse_public_key = surface.prompt_text(
             "Langfuse public key",
             default=LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
         )
         langfuse_secret_key = (
-            ask_secret("Langfuse secret key (leave blank to fill in later): ").strip()
+            surface.ask_secret("Langfuse secret key (leave blank to fill in later): ").strip()
             or LANGFUSE_SECRET_KEY_PLACEHOLDER
         )
-        langfuse_base_url = _terminal_prompt_text(
-            wizard_ui,
+        langfuse_base_url = surface.prompt_text(
             "Langfuse base URL",
             default=LANGFUSE_BASE_URL,
         )
 
-    search_provider = _terminal_select_option(
-        wizard_ui,
-        "Search Provider",
-        SEARCH_PROVIDERS,
-        descriptions={
-            "none": "Do not enable a provider-native web search tool.",
-            "openai": "Use OpenAI web search.",
-            "qwen": "Use Qwen web search via DashScope.",
-            "minimax": "Use MiniMax web search.",
-        },
-        default_index=0,
-    )
+    search_provider = surface.select_search_provider(provider)
     search_api_key = ""
     if search_provider in {"openai", "qwen", "minimax"} and search_provider != provider:
-        search_api_key = _prompt_search_api_key(search_provider, secret_input_func=ask_secret)
+        search_api_key = _prompt_search_api_key(search_provider, secret_input_func=surface.ask_secret)
 
-    image_generation_provider = _terminal_select_option(
-        wizard_ui,
-        "Image Generation Provider",
-        IMAGE_GENERATION_PROVIDERS,
-        descriptions={
-            "none": "Do not enable image generation.",
-            "openai": "Use OpenAI image generation.",
-            "minimax": "Use MiniMax image generation.",
-            "qwen": "Use Qwen image generation via DashScope.",
-        },
-        default_index=0,
-    )
+    image_generation_provider = surface.select_image_generation_provider(provider)
     image_generation_api_key = ""
     if image_generation_provider in {"openai", "minimax", "qwen"} and image_generation_provider != provider:
         image_generation_api_key = _prompt_image_generation_api_key(
             image_generation_provider,
-            secret_input_func=ask_secret,
+            secret_input_func=surface.ask_secret,
         )
 
-    voice_enabled = _terminal_prompt_yes_no(wizard_ui, "Enable voice mode?", default=False)
+    voice_enabled = surface.prompt_yes_no("Enable voice mode?", default=False)
     voice_provider = "none"
     voice_api_key = ""
     voice_stt_provider = ""
@@ -1412,8 +1384,7 @@ def collect_init_selection_terminal_ui(
     voice_exit_phrases: tuple[str, ...] = ()
 
     if voice_enabled:
-        voice_provider = _terminal_select_option(
-            wizard_ui,
+        voice_provider = surface.select_option(
             "Voice Provider",
             VOICE_PROVIDERS,
             descriptions={
@@ -1428,8 +1399,7 @@ def collect_init_selection_terminal_ui(
 
     if voice_enabled:
         if voice_provider == "custom":
-            voice_stt_provider = _terminal_select_option(
-                wizard_ui,
+            voice_stt_provider = surface.select_option(
                 "STT Provider",
                 VOICE_CUSTOM_PROVIDERS,
                 default_index=0,
@@ -1439,10 +1409,9 @@ def collect_init_selection_terminal_ui(
                 provider=provider,
                 main_api_key=api_key,
                 purpose="STT",
-                secret_input_func=ask_secret,
+                secret_input_func=surface.ask_secret,
             )
-            voice_tts_provider = _terminal_select_option(
-                wizard_ui,
+            voice_tts_provider = surface.select_option(
                 "TTS Provider",
                 VOICE_CUSTOM_PROVIDERS,
                 default_index=0,
@@ -1452,7 +1421,7 @@ def collect_init_selection_terminal_ui(
                 provider=provider,
                 main_api_key=api_key,
                 purpose="TTS",
-                secret_input_func=ask_secret,
+                secret_input_func=surface.ask_secret,
             )
         elif voice_provider == "qwen" and provider == PROVIDER_QWEN:
             voice_api_key = api_key if api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
@@ -1461,23 +1430,16 @@ def collect_init_selection_terminal_ui(
                 voice_provider,
                 provider=provider,
                 main_api_key=api_key,
-                secret_input_func=ask_secret,
+                secret_input_func=surface.ask_secret,
             )
         (
             voice_wake_enabled,
             voice_wake_phrases,
             voice_exit_phrases,
             voice_enable_interruptions,
-        ) = _collect_voice_startup_preferences(
-            prompt_yes_no=lambda prompt: _terminal_prompt_yes_no(wizard_ui, prompt, default=False),
-            prompt_text=lambda prompt, default: wizard_ui.ask_text(
-                prompt,
-                default=default,
-                subtitle="Separate phrases with commas.",
-            ),
-        )
+        ) = surface.collect_voice_startup()
 
-    identity = _terminal_prompt_multiline_identity(wizard_ui)
+    identity = surface.prompt_multiline_identity()
 
     return InitSelection(
         provider=provider,
@@ -1506,6 +1468,93 @@ def collect_init_selection_terminal_ui(
         voice_wake_enabled=voice_wake_enabled,
         voice_wake_phrases=voice_wake_phrases,
         voice_exit_phrases=voice_exit_phrases,
+    )
+
+
+def collect_init_selection_terminal_ui(
+    *,
+    ui: Optional[TerminalUI] = None,
+    secret_input_func: Callable[[str], str] = getpass.getpass,
+) -> InitSelection:
+    wizard_ui = ui or TerminalUI()
+    ask_secret = wizard_ui.ask_secret if wizard_ui.interactive else secret_input_func
+
+    def select_option(title, options, **kwargs):
+        return _terminal_select_option(wizard_ui, title, options, **kwargs)
+
+    def select_model_option(title, models, **kwargs):
+        return _terminal_select_model_option(wizard_ui, title, models, **kwargs)
+
+    def select_custom_model_api() -> str:
+        return _terminal_select_option(
+            wizard_ui,
+            "Custom Provider Model API",
+            (
+                MODEL_API_OPENAI_CHAT_COMPLETIONS,
+                MODEL_API_OPENAI_RESPONSES,
+                MODEL_API_ANTHROPIC_MESSAGES,
+            ),
+            default_index=0,
+            subtitle="Select the wire protocol your custom provider speaks.",
+        )
+
+    def prompt_text(label: str, *, default: str = "") -> str:
+        return _terminal_prompt_text(wizard_ui, label, default=default)
+
+    def prompt_yes_no(label: str, *, default: bool = False) -> bool:
+        return _terminal_prompt_yes_no(wizard_ui, label, default=default)
+
+    def select_search_provider(provider_name: str) -> str:
+        del provider_name
+        return select_option(
+            "Search Provider",
+            SEARCH_PROVIDERS,
+            descriptions={
+                "none": "Do not enable a provider-native web search tool.",
+                "openai": "Use OpenAI web search.",
+                "qwen": "Use Qwen web search via DashScope.",
+                "minimax": "Use MiniMax web search.",
+            },
+            default_index=0,
+        )
+
+    def select_image_generation_provider(provider_name: str) -> str:
+        del provider_name
+        return select_option(
+            "Image Generation Provider",
+            IMAGE_GENERATION_PROVIDERS,
+            descriptions={
+                "none": "Do not enable image generation.",
+                "openai": "Use OpenAI image generation.",
+                "minimax": "Use MiniMax image generation.",
+                "qwen": "Use Qwen image generation via DashScope.",
+            },
+            default_index=0,
+        )
+
+    def collect_voice_startup():
+        return _collect_voice_startup_preferences(
+            prompt_yes_no=lambda prompt: prompt_yes_no(prompt, default=False),
+            prompt_text=lambda prompt, default: wizard_ui.ask_text(
+                prompt,
+                default=default,
+                subtitle="Separate phrases with commas.",
+            ),
+        )
+
+    return _collect_init_selection_core(
+        InitPromptSurface(
+            select_option=select_option,
+            select_model_option=select_model_option,
+            select_custom_model_api=select_custom_model_api,
+            prompt_text=prompt_text,
+            prompt_yes_no=prompt_yes_no,
+            ask_secret=ask_secret,
+            prompt_multiline_identity=lambda: _terminal_prompt_multiline_identity(wizard_ui),
+            select_search_provider=select_search_provider,
+            select_image_generation_provider=select_image_generation_provider,
+            collect_voice_startup=collect_voice_startup,
+        )
     )
 
 
@@ -1514,239 +1563,56 @@ def collect_init_selection(
     input_func: Callable[[str], str] = input,
     secret_input_func: Callable[[str], str] = getpass.getpass,
 ) -> InitSelection:
-    print("\nxAgent init")
-    print("Configure the runtime first; files will be written after these choices.")
+    def on_start() -> None:
+        print("\nxAgent init")
+        print("Configure the runtime first; files will be written after these choices.")
 
-    provider = _select_option(
-        "Provider",
-        KNOWN_PROVIDERS,
-        input_func=input_func,
-    )
-    model_api = ""
-    supports_vision = False
+    def select_option(title, options, **kwargs):
+        kwargs.pop("descriptions", None)
+        kwargs.pop("subtitle", None)
+        kwargs.setdefault("input_func", input_func)
+        return _select_option(title, options, **kwargs)
 
-    if provider == PROVIDER_OPENAI:
-        selected_model = _select_model_option(
-            "OpenAI model",
-            OPENAI_MODELS,
-            default_index=1,
-            input_func=input_func,
-        )
-        base_url = OPENAI_BASE_URL
-    elif provider == PROVIDER_ANTHROPIC:
-        selected_model = _select_model_option(
-            "Anthropic model",
-            ANTHROPIC_MODELS,
-            default_index=0,
-            input_func=input_func,
-        )
-        base_url = ANTHROPIC_BASE_URL
-    elif provider == PROVIDER_DEEPSEEK:
-        selected_model = _select_model_option(
-            "DeepSeek model",
-            DEEPSEEK_MODELS,
-            default_index=0,
-            input_func=input_func,
-        )
-        base_url = DEEPSEEK_BASE_URL
-    elif provider == PROVIDER_MINIMAX:
-        selected_model = _select_model_option(
-            "MiniMax model",
-            MINIMAX_MODELS,
-            default_index=0,
-            input_func=input_func,
-        )
-        base_url = MINIMAX_BASE_URL
-    elif provider == PROVIDER_QWEN:
-        selected_model = _select_model_option(
-            "Qwen model",
-            QWEN_MODELS,
-            default_index=1,
-            input_func=input_func,
-        )
-        base_url = QWEN_BASE_URL
-    else:
-        model_api = _select_custom_model_api(input_func=input_func)
-        selected_model = "Decide later"
-        default_base_url = (
-            CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER
-            if model_api == MODEL_API_ANTHROPIC_MESSAGES
-            else CUSTOM_OPENAI_BASE_URL_PLACEHOLDER
-        )
-        base_url = _prompt_text(
-            "Custom provider base URL",
-            default=default_base_url,
-            input_func=input_func,
-        )
-        supports_vision = _prompt_yes_no(
-            "Does this custom provider support image URL input?",
-            default=False,
-            input_func=input_func,
+    def select_model_option(title, models, **kwargs):
+        kwargs.pop("descriptions", None)
+        kwargs.setdefault("input_func", input_func)
+        return _select_model_option(title, models, **kwargs)
+
+    def select_custom_model_api() -> str:
+        return _select_custom_model_api(input_func=input_func)
+
+    def prompt_text(label: str, *, default: str = "") -> str:
+        return _prompt_text(label, default=default, input_func=input_func)
+
+    def prompt_yes_no(label: str, *, default: bool = False) -> bool:
+        return _prompt_yes_no(label, default=default, input_func=input_func)
+
+    def select_search_provider(provider_name: str) -> str:
+        return _select_search_provider(provider_name, input_func=input_func)
+
+    def select_image_generation_provider(provider_name: str) -> str:
+        return _select_image_generation_provider(provider_name, input_func=input_func)
+
+    def collect_voice_startup():
+        return _collect_voice_startup_preferences(
+            prompt_yes_no=lambda prompt: prompt_yes_no(prompt, default=False),
+            prompt_text=lambda prompt, default: prompt_text(prompt, default=default),
         )
 
-    model = MODEL_PLACEHOLDER if selected_model == "Decide later" else selected_model
-    api_key = secret_input_func("API key (leave blank to fill in later): ").strip()
-    if not api_key:
-        api_key = API_KEY_PLACEHOLDER
-
-    provider_api_cfg = {"name": provider}
-    if model_api:
-        provider_api_cfg["model_api"] = model_api
-    selected_model_api = provider_model_api(provider_api_cfg)
-    observability_enabled = False
-    langfuse_public_key = ""
-    langfuse_secret_key = ""
-    langfuse_base_url = ""
-    if model_api_uses_openai_client(selected_model_api):
-        observability_enabled = _prompt_yes_no(
-            "Enable Langfuse observability?",
-            default=False,
-            input_func=input_func,
+    return _collect_init_selection_core(
+        InitPromptSurface(
+            select_option=select_option,
+            select_model_option=select_model_option,
+            select_custom_model_api=select_custom_model_api,
+            prompt_text=prompt_text,
+            prompt_yes_no=prompt_yes_no,
+            ask_secret=secret_input_func,
+            prompt_multiline_identity=lambda: _prompt_multiline_identity(input_func=input_func),
+            select_search_provider=select_search_provider,
+            select_image_generation_provider=select_image_generation_provider,
+            collect_voice_startup=collect_voice_startup,
+            on_start=on_start,
         )
-    if observability_enabled:
-        langfuse_public_key = _prompt_text(
-            "Langfuse public key",
-            default=LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
-            input_func=input_func,
-        )
-        langfuse_secret_key = secret_input_func(
-            "Langfuse secret key (leave blank to fill in later): "
-        ).strip()
-        if not langfuse_secret_key:
-            langfuse_secret_key = LANGFUSE_SECRET_KEY_PLACEHOLDER
-        langfuse_base_url = _prompt_text(
-            "Langfuse base URL",
-            default=LANGFUSE_BASE_URL,
-            input_func=input_func,
-        )
-
-    search_provider = _select_search_provider(provider, input_func=input_func)
-    search_api_key = ""
-    if search_provider in {"openai", "qwen", "minimax"} and search_provider != provider:
-        search_api_key = _prompt_search_api_key(
-            search_provider,
-            secret_input_func=secret_input_func,
-        )
-
-    image_generation_provider = _select_image_generation_provider(provider, input_func=input_func)
-    image_generation_api_key = ""
-    if image_generation_provider == "openai" and provider != PROVIDER_OPENAI:
-        image_generation_api_key = _prompt_image_generation_api_key(
-            image_generation_provider,
-            secret_input_func=secret_input_func,
-        )
-    elif image_generation_provider == "minimax" and provider != PROVIDER_MINIMAX:
-        image_generation_api_key = _prompt_image_generation_api_key(
-            image_generation_provider,
-            secret_input_func=secret_input_func,
-        )
-    elif image_generation_provider == "qwen" and provider != PROVIDER_QWEN:
-        image_generation_api_key = _prompt_image_generation_api_key(
-            image_generation_provider,
-            secret_input_func=secret_input_func,
-        )
-
-    voice_enabled = False
-    voice_provider = "none"
-    voice_api_key = ""
-    voice_stt_provider = ""
-    voice_stt_api_key = ""
-    voice_tts_provider = ""
-    voice_tts_api_key = ""
-    voice_enable_interruptions = False
-    voice_wake_enabled = False
-    voice_wake_phrases: tuple[str, ...] = ()
-    voice_exit_phrases: tuple[str, ...] = ()
-
-    voice_enabled = _prompt_yes_no(
-        "Enable voice mode?",
-        default=False,
-        input_func=input_func,
-    )
-    if voice_enabled:
-        voice_provider = _select_option(
-            "Voice provider",
-            VOICE_PROVIDERS,
-            default_index=1,
-            input_func=input_func,
-        )
-        voice_enabled = voice_provider != "none"
-    if voice_enabled:
-        if voice_provider == "custom":
-            voice_stt_provider = _select_option(
-                "STT provider",
-                VOICE_CUSTOM_PROVIDERS,
-                default_index=0,
-                input_func=input_func,
-            )
-            voice_stt_api_key = _prompt_voice_api_key(
-                voice_stt_provider,
-                provider=provider,
-                main_api_key=api_key,
-                purpose="STT",
-                secret_input_func=secret_input_func,
-            )
-            voice_tts_provider = _select_option(
-                "TTS provider",
-                VOICE_CUSTOM_PROVIDERS,
-                default_index=0,
-                input_func=input_func,
-            )
-            voice_tts_api_key = _prompt_voice_api_key(
-                voice_tts_provider,
-                provider=provider,
-                main_api_key=api_key,
-                purpose="TTS",
-                secret_input_func=secret_input_func,
-            )
-        elif voice_provider == "qwen" and provider == PROVIDER_QWEN:
-            voice_api_key = api_key if api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
-        else:
-            voice_api_key = _prompt_voice_api_key(
-                voice_provider,
-                provider=provider,
-                main_api_key=api_key,
-                secret_input_func=secret_input_func,
-            )
-        (
-            voice_wake_enabled,
-            voice_wake_phrases,
-            voice_exit_phrases,
-            voice_enable_interruptions,
-        ) = _collect_voice_startup_preferences(
-            prompt_yes_no=lambda prompt: _prompt_yes_no(prompt, default=False, input_func=input_func),
-            prompt_text=lambda prompt, default: _prompt_text(prompt, default=default, input_func=input_func),
-        )
-
-    identity = _prompt_multiline_identity(input_func=input_func)
-
-    return InitSelection(
-        provider=provider,
-        model_api=model_api,
-        supports_vision=supports_vision,
-        base_url=base_url,
-        api_key=api_key,
-        model=model,
-        identity=identity,
-        search_provider=search_provider,
-        search_api_key=search_api_key,
-        image_generation_provider=image_generation_provider,
-        image_generation_api_key=image_generation_api_key,
-        observability_enabled=observability_enabled,
-        langfuse_public_key=langfuse_public_key,
-        langfuse_secret_key=langfuse_secret_key,
-        langfuse_base_url=langfuse_base_url,
-        voice_enabled=voice_enabled,
-        voice_provider=voice_provider,
-        voice_api_key=voice_api_key,
-        voice_stt_provider=voice_stt_provider,
-        voice_stt_api_key=voice_stt_api_key,
-        voice_tts_provider=voice_tts_provider,
-        voice_tts_api_key=voice_tts_api_key,
-        voice_enable_interruptions=voice_enable_interruptions,
-        voice_wake_enabled=voice_wake_enabled,
-        voice_wake_phrases=voice_wake_phrases,
-        voice_exit_phrases=voice_exit_phrases,
     )
 
 

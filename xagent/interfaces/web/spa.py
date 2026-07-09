@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-_STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
+_STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 
 
 def register_spa_routes(app: FastAPI, *, static_dir: Path | None = None, logger: logging.Logger | None = None) -> None:

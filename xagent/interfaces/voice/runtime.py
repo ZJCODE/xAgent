@@ -422,18 +422,6 @@ class VoiceRuntime:
             except Exception:
                 pass
 
-        if not hasattr(self.agent, "chat_events"):
-            with scheduled_delivery_context(self._delivery_context()):
-                response = await self.agent(
-                    user_message=transcript,
-                    user_id=self.options.user_id,
-                )
-            text = str(response or "")
-            if text:
-                self.output(f"Agent: {text}")
-                yield text
-            return
-
         self.output("Agent: ", end="")
         started = False
         message_delta_seen: set[str] = set()
@@ -580,35 +568,28 @@ class VoiceRuntime:
 
         prompt = AgentConfig.scheduled_agent_prompt(task.content)
         with scheduled_delivery_context(self._delivery_context(task=task)):
-            if hasattr(self.agent, "chat_events"):
-                parts: list[str] = []
-                message_delta_seen: set[str] = set()
-                async for event in self.agent.chat_events(
-                    user_message=prompt,
-                    user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
-                    stream=self.options.stream,
-                    channel="voice",
-                ):
-                    event_type = event.get("type")
-                    message_id = str(event.get("message_id") or uuid.uuid4().hex)
-                    if event_type == "message_delta":
-                        delta = str(event.get("delta") or "")
-                        if delta:
-                            message_delta_seen.add(message_id)
-                            parts.append(delta)
-                    elif event_type == "message_done" and message_id not in message_delta_seen:
-                        content = str(event.get("content") or "")
-                        if content:
-                            parts.append(content)
-                    elif event_type == "error":
-                        raise RuntimeError(str(event.get("error") or "Agent processing error."))
-                return "".join(parts).strip()
-
-            response = await self.agent(
+            parts: list[str] = []
+            message_delta_seen: set[str] = set()
+            async for event in self.agent.chat_events(
                 user_message=prompt,
                 user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
-            )
-        return str(response or "").strip()
+                stream=self.options.stream,
+                channel="voice",
+            ):
+                event_type = event.get("type")
+                message_id = str(event.get("message_id") or uuid.uuid4().hex)
+                if event_type == "message_delta":
+                    delta = str(event.get("delta") or "")
+                    if delta:
+                        message_delta_seen.add(message_id)
+                        parts.append(delta)
+                elif event_type == "message_done" and message_id not in message_delta_seen:
+                    content = str(event.get("content") or "")
+                    if content:
+                        parts.append(content)
+                elif event_type == "error":
+                    raise RuntimeError(str(event.get("error") or "Agent processing error."))
+            return "".join(parts).strip()
 
 
 def _next_or_none(iterator: Iterator[VoiceUtterance]) -> VoiceUtterance | None:

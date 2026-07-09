@@ -69,7 +69,7 @@ from xagent.interfaces.cli import (
     handle_voice,
     main,
 )
-from xagent.interfaces.cli.clients import DEFAULT_WEB_CLIENT_PORT, web_client_config
+from xagent.interfaces.cli.web_client import DEFAULT_WEB_CLIENT_PORT, web_client_config
 from xagent.components.message import MessageStorage
 from xagent.schemas import Message, RoleType
 from xagent.interfaces.cli.config_editor import (
@@ -1251,12 +1251,12 @@ class CLICommandTests(unittest.TestCase):
             agent_b = Path(tmpdir) / "agents" / "b"
             _write_runtime(str(agent_a))
             _write_runtime(str(agent_b))
-            expected_pid_path = root.resolve() / "run" / "clients" / "web.pid"
+            expected_pid_path = root.resolve() / "run" / "web.pid"
 
             def fake_running_pid(path):
                 return 4321 if path == expected_pid_path else None
 
-            with patch("xagent.interfaces.cli.clients.web_client_runtime_root", return_value=root):
+            with patch("xagent.interfaces.cli.web_client.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.overview.running_pid", side_effect=fake_running_pid):
                     overview_a = build_runtime_overview(agent_a)
                     overview_b = build_runtime_overview(agent_b)
@@ -1272,11 +1272,11 @@ class CLICommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "home"
             agent_dir = Path(tmpdir) / "agents" / "work"
-            expected_pid_path = root.resolve() / "run" / "clients" / "web.pid"
+            expected_pid_path = root.resolve() / "run" / "web.pid"
 
             from xagent.interfaces.cli.launcher import _web_client_actions
 
-            with patch("xagent.interfaces.cli.clients.web_client_runtime_root", return_value=root):
+            with patch("xagent.interfaces.cli.web_client.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.launcher.running_pid", return_value=4321) as pid_check:
                     options = _web_client_actions(agent_dir)
 
@@ -2195,11 +2195,11 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             root = Path(tmpdir) / "home"
             config_dir = Path(tmpdir)
-            expected_pid_path = root.resolve() / "run" / "clients" / "web.pid"
+            expected_pid_path = root.resolve() / "run" / "web.pid"
 
             from xagent.interfaces.cli.launcher import _run_web_action
 
-            with patch("xagent.interfaces.cli.clients.web_client_runtime_root", return_value=root):
+            with patch("xagent.interfaces.cli.web_client.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.runtime.running_pid", return_value=None) as stopped_pid_check:
                     with patch("xagent.interfaces.cli.launcher.webbrowser.open") as stopped_browser_open:
                         stopped_exit = _run_web_action(config_dir, "open")
@@ -3286,12 +3286,8 @@ class CLICommandTests(unittest.TestCase):
     def test_web_client_config_ignores_agent_scoped_host_and_port(self):
         config = {
             "channels": {"api": {"host": "127.0.0.1", "port": 9010}},
-            "clients": {
-                "web": {
-                    "host": "0.0.0.0",
-                    "port": 8011,
-                    "api_url": "http://127.0.0.1:9010",
-                }
+            "web": {
+                "api_url": "http://127.0.0.1:9010",
             },
         }
 
@@ -3331,13 +3327,13 @@ class CLICommandTests(unittest.TestCase):
                 open_browser=False,
             )
 
-            with patch("xagent.interfaces.cli.clients.web_client_runtime_root", return_value=root):
+            with patch("xagent.interfaces.cli.web_client.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.runtime.start_background", return_value=StartResult(ok=True, pid=4321)) as starter:
                     exit_code = handle_web_start(args)
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(starter.call_args.kwargs["pid_path"], root.resolve() / "run" / "clients" / "web.pid")
-        self.assertEqual(starter.call_args.kwargs["log_path"], root.resolve() / "logs" / "clients" / "web.log")
+        self.assertEqual(starter.call_args.kwargs["pid_path"], root.resolve() / "run" / "web.pid")
+        self.assertEqual(starter.call_args.kwargs["log_path"], root.resolve() / "logs" / "web.log")
 
     def test_web_client_status_uses_global_pid_paths_for_any_agent(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3349,7 +3345,7 @@ class CLICommandTests(unittest.TestCase):
             args_a = argparse.Namespace(config_dir=str(agent_a), json_output=True)
             args_b = argparse.Namespace(config_dir=str(agent_b), json_output=True)
 
-            with patch("xagent.interfaces.cli.clients.web_client_runtime_root", return_value=root):
+            with patch("xagent.interfaces.cli.web_client.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.runtime.running_pid", return_value=4321) as pid_check:
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout_a:
                         exit_a = handle_web_status(args_a)
@@ -3358,7 +3354,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(exit_a, 0)
         self.assertEqual(exit_b, 0)
-        expected_pid_path = root.resolve() / "run" / "clients" / "web.pid"
+        expected_pid_path = root.resolve() / "run" / "web.pid"
         self.assertEqual(pid_check.call_args_list[0].args[0], expected_pid_path)
         self.assertEqual(pid_check.call_args_list[1].args[0], expected_pid_path)
         self.assertIn(f"http://127.0.0.1:{DEFAULT_WEB_CLIENT_PORT}", stdout_a.getvalue())
@@ -3452,7 +3448,7 @@ class CLICommandTests(unittest.TestCase):
         )
         server_instance = MagicMock()
 
-        with patch("xagent.interfaces.clients.web.WebClientServer", return_value=server_instance) as server_class:
+        with patch("xagent.interfaces.web.WebClientServer", return_value=server_instance) as server_class:
             with patch("xagent.interfaces.cli.runtime.load_client_runtime_config", return_value={}):
                 exit_code = handle_run_web_internal(args)
 

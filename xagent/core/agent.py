@@ -353,124 +353,23 @@ class Agent:
 
             return text_stream()
 
-        if hasattr(self.model_client, "model_turn_events"):
-            final_reply = ""
-            last_error = ""
-            async for event in self.chat_events(
-                user_message=user_message,
-                user_id=user_id,
-                image_source=image_source,
-                attachments=attachments,
-                stream=False,
-                channel_instructions=channel_instructions,
-                room_name=room_name,
-                    channel=channel,
-            ):
-                if event.get("type") == "message_done" and event.get("phase") == "final":
-                    final_reply = str(event.get("content") or "")
-                elif event.get("type") == "error":
-                    last_error = str(event.get("error") or "")
-            return final_reply or last_error
-
-        msg_handler = self.message_handler
-        model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
-        turn_ctx = self._observability_runtime().agent_turn(
+        final_reply = ""
+        last_error = ""
+        async for event in self.chat_events(
+            user_message=user_message,
             user_id=user_id,
-            model=model_name,
-            memory_mode="full",
+            image_source=image_source,
+            attachments=attachments,
             stream=False,
-        )
-        try:
-            with turn_ctx as turn_obs:
-                try:
-                    user_msg = await msg_handler.store_user_message(
-                        user_message,
-                        user_id,
-                        image_source,
-                        attachments=attachments,
-                        room_name=room_name,
-                        channel=channel,
-                    )
-                except ValueError as exc:
-                    logger.warning("Invalid image input from %s: %s", user_id, exc)
-                    return str(exc)
-
-                tool_specs, instructions, iteration_messages, input_messages = await self._build_turn_context(
-                    msg_handler=msg_handler,
-                    user_msg=user_msg,
-                    user_id=user_id,
-                    channel_instructions=channel_instructions,
-                )
-                turn_obs.set_input(input_messages)
-
-                for _ in range(self.max_iter):
-                    logger.debug("Agent iteration with input messages: %s", input_messages)
-                    reply_type, response = await self.model_client.call(
-                        messages=input_messages,
-                        tool_specs=tool_specs,
-                        instructions=instructions,
-                        stream=False,
-                        store_reply=lambda text: self._store_reply_and_schedule_experience(
-                            msg_handler=msg_handler,
-                            triggering_messages=[user_msg],
-                            reply_text=text,
-                        ),
-                    )
-
-                    if reply_type == ReplyType.SIMPLE_REPLY:
-                        assistant_msg = await msg_handler.store_model_reply(
-                            str(response),
-                            self._assistant_sender_id,
-                            room_name=room_name,
-                            channel=channel,
-                            recipient_id=room_name or user_id,
-                        )
-                        self._schedule_experience_write(
-                            messages=[user_msg, assistant_msg],
-                        )
-                        turn_obs.set_output(str(response))
-                        return response
-
-                    if reply_type == ReplyType.TOOL_CALL:
-                        tool_result = await self.tool_executor.handle_tool_calls(
-                            response,
-                            iteration_messages,
-                            self.max_concurrent_tools,
-                        )
-                        if tool_result is not None:
-                            assistant_msg = await msg_handler.store_model_reply(
-                                tool_result.description,
-                                self._assistant_sender_id,
-                                attachments=tool_result.attachments,
-                                room_name=room_name,
-                                channel=channel,
-                                recipient_id=room_name or user_id,
-                            )
-                            self._schedule_experience_write(
-                                messages=[user_msg, assistant_msg],
-                            )
-                            turn_obs.set_output(tool_result.content)
-                            return tool_result.content
-                        input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
-                        continue
-
-                    if reply_type == ReplyType.ERROR:
-                        logger.error("Model returned error event: %s", response)
-                        return "Sorry, I encountered an error while processing your request."
-
-                    logger.error("Unknown reply type: %s", reply_type)
-                    return "Sorry, I encountered an error while processing your request."
-
-                logger.error("Failed to generate response after %d attempts", self.max_iter)
-                return "Sorry, I could not generate a response after multiple attempts."
-        except Exception as exc:
-            logger.exception("Agent chat error: %s", exc)
-            return "Sorry, something went wrong."
-        finally:
-            try:
-                await self._observability_runtime().flush()
-            except Exception as exc:
-                logger.warning("Failed to flush observability events: %s", exc)
+            channel_instructions=channel_instructions,
+            room_name=room_name,
+            channel=channel,
+        ):
+            if event.get("type") == "message_done" and event.get("phase") == "final":
+                final_reply = str(event.get("content") or "")
+            elif event.get("type") == "error":
+                last_error = str(event.get("error") or "")
+        return final_reply or last_error
 
     async def chat_events(
         self,

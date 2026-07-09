@@ -193,29 +193,6 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(response.status_code, 403)
 
-    async def test_memory_tree_and_search_exclude_legacy_people_files(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            server = self._server(root)
-            daily_dir = root / "memory" / "daily" / "2026" / "2026-05"
-            daily_dir.mkdir(parents=True)
-            (daily_dir / "2026-05-19.md").write_text("daily marker", encoding="utf-8")
-            people_dir = root / "memory" / "people"
-            people_dir.mkdir()
-            (people_dir / "alice.md").write_text("legacy people marker", encoding="utf-8")
-
-            async with await self._client(server) as client:
-                tree_response = await client.get("/api/memory/tree")
-                daily_search_response = await client.get("/api/memory/search", params={"query": "daily marker"})
-                people_search_response = await client.get("/api/memory/search", params={"query": "legacy people marker"})
-
-            self.assertEqual(tree_response.status_code, 200)
-            tree_names = [item["name"] for item in tree_response.json()["tree"]]
-            self.assertIn("daily", tree_names)
-            self.assertNotIn("people", tree_names)
-            self.assertEqual(len(daily_search_response.json()["results"]), 1)
-            self.assertEqual(people_search_response.json()["results"], [])
-
     async def test_messages_api_returns_image_preview_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

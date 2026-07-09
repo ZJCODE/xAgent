@@ -10,7 +10,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from xagent.interfaces.cli.agents import register_agent
-from xagent.interfaces.clients.web import WebClientServer
+from xagent.interfaces.web import WebClientServer
 
 
 def _write_agent(path: Path, *, model: str, port: int) -> None:

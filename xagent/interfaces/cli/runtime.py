@@ -31,8 +31,8 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .clients import (
-    CLIENT_WEB,
+from .web_client import (
+    DEFAULT_WEB_CLIENT_PORT,
     web_client_config,
     web_client_paths,
     web_client_public_url,
@@ -62,11 +62,11 @@ def handle_chat(args: argparse.Namespace) -> int:
         asyncio.run(run_interactive_chat())
         return 0
 
-    event_mode = bool(args.events or args.stream is not None or hasattr(agent_cli.agent, "chat_events"))
+    event_mode = bool(args.events or args.stream is not None)
     stream = bool(args.stream) if args.stream is not None else False
 
     async def run_single_message():
-        if event_mode and hasattr(agent_cli.agent, "chat_events"):
+        if event_mode:
             await agent_cli.print_single_chat_events(
                 message=args.message,
                 user_id=args.user_id,
@@ -107,25 +107,6 @@ def handle_voice(args: argparse.Namespace) -> int:
         return 1
 
     return _run_voice_channel(args, config)
-
-
-def handle_server(args: argparse.Namespace) -> int:
-    from ..server import AgentHTTPServer
-
-    raw_config_dir = getattr(args, "config_dir", None)
-    server_kwargs = {
-        "config_dir": raw_config_dir or str(runtime_dir(args)),
-    }
-    if args.max_concurrent_chats is not None:
-        server_kwargs["max_concurrent_chats"] = args.max_concurrent_chats
-    if args.queue_timeout is not None:
-        server_kwargs["chat_queue_timeout"] = args.queue_timeout
-    if args.chat_timeout is not None:
-        server_kwargs["chat_timeout"] = args.chat_timeout
-
-    server = AgentHTTPServer(**server_kwargs)
-    server.run(host=args.host, port=args.port)
-    return 0
 
 
 def _channel_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
@@ -276,7 +257,7 @@ def _web_client_runtime_values(
 
 
 def _run_web_client(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    from ..clients.web import WebClientServer
+    from ..web import WebClientServer
 
     host, port, api_url, open_browser, config_dir, initial_agent = _web_client_runtime_values(args, config)
     server = WebClientServer(
@@ -848,7 +829,6 @@ def handle_web_status(args: argparse.Namespace) -> int:
     paths = web_client_paths()
     pid = running_pid(paths.pid_path)
     row = {
-        "client": CLIENT_WEB,
         "status": "running" if pid is not None else "stopped",
         "pid": pid,
         "pid_path": str(paths.pid_path),
@@ -890,7 +870,7 @@ def handle_web_open(args: argparse.Namespace) -> int:
 
     web_cfg = web_client_config(config)
     if not web_cfg.get("enabled", True):
-        print("Web client is disabled in config (clients.web.enabled=false).")
+        print("Web client is disabled in config (web.enabled=false).")
         return 1
 
     paths = web_client_paths()
