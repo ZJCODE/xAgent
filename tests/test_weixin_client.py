@@ -4,7 +4,7 @@ import unittest
 
 import httpx
 
-from xagent.integrations.weixin.client import WeixinClient, qr_login
+from xagent.integrations.weixin.client import QrLoginCancelled, WeixinClient, qr_login
 from xagent.integrations.weixin.state import WeixinCredentials
 
 
@@ -97,6 +97,33 @@ class WeixinClientTests(unittest.TestCase):
         self.assertEqual(credentials.account_id, "bot@im.bot")
         self.assertEqual(credentials.user_id, "owner@im.wechat")
         self.assertEqual(len(calls), 2)
+
+    def test_qr_login_cancelled_mid_poll(self):
+        import threading
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            if "get_bot_qrcode" in str(_request.url):
+                return httpx.Response(200, json={"qrcode": "qr-1"})
+            return httpx.Response(200, json={"status": "wait"})
+
+        cancel_event = threading.Event()
+
+        async def run_test():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+                task = asyncio.create_task(
+                    qr_login(
+                        base_url="https://example.test",
+                        timeout_seconds=5,
+                        http_client=http_client,
+                        cancel_event=cancel_event,
+                    )
+                )
+                await asyncio.sleep(0.05)
+                cancel_event.set()
+                with self.assertRaises(QrLoginCancelled):
+                    await task
+
+        asyncio.run(run_test())
 
 
 if __name__ == "__main__":
