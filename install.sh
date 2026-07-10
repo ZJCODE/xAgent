@@ -133,7 +133,23 @@ get_local_version() {
     fi
 
     ensure_path
-    "$COMMAND_NAME" --version 2>/dev/null | awk 'NR == 1 { print $2; exit }'
+
+    local version=""
+    version=$("$COMMAND_NAME" version 2>/dev/null | awk 'NR == 1 { print $2; exit }' || true)
+    if [ -n "$version" ]; then
+        echo "$version"
+        return 0
+    fi
+
+    if has_command uv; then
+        version=$(uv tool list 2>/dev/null | awk -v pkg="$PACKAGE_NAME" '$1 == pkg { sub(/^v/, "", $2); print $2; exit }' || true)
+        if [ -n "$version" ]; then
+            echo "$version"
+            return 0
+        fi
+    fi
+
+    echo ""
 }
 
 get_remote_version() {
