@@ -1,7 +1,8 @@
-import { CalendarClock, Trash2 } from "lucide-react";
+import { CalendarClock, Pause, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { TaskEditorModal, type TaskEditorSave } from "../components/TaskEditorModal";
 import { Button, EmptyState, PageShell, PageToolbar } from "../components/ui";
-import { deleteTask, getTasks } from "../lib/api";
+import { createTask, deleteTask, getTasks, pauseTask, resumeTask, updateTask } from "../lib/api";
 import type { ScheduledTaskItem, TasksResponse } from "../types";
 
 function formatRunAt(value: string): string {
@@ -45,8 +46,10 @@ function taskRecurrenceLabels(task: ScheduledTaskItem): string[] {
       const kind = String(rule?.kind || "").trim();
       if (kind === "interval") {
         const every = formatSeconds(rule?.every_seconds);
+        const startAt = formatRunAt(String(rule?.start_at || ""));
         const endAt = formatRunAt(String(rule?.end_at || ""));
-        return [kind, every ? `every ${every}` : "", endAt ? `until ${endAt}` : ""].filter(Boolean).join(" · ");
+        const windowLabel = startAt && endAt ? `${startAt} - ${endAt}` : endAt ? `until ${endAt}` : "";
+        return [kind, every ? `every ${every}` : "", windowLabel].filter(Boolean).join(" · ");
       }
       const time = String(rule?.time || "").trim();
       const weekdays = Array.isArray(rule?.weekdays)
@@ -57,10 +60,15 @@ function taskRecurrenceLabels(task: ScheduledTaskItem): string[] {
     .filter(Boolean);
 }
 
+type EditorMode = "create" | "edit" | null;
+
 export function TasksPage() {
   const [data, setData] = useState<TasksResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [editorMode, setEditorMode] = useState<EditorMode>(null);
+  const [editingTask, setEditingTask] = useState<ScheduledTaskItem | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const tasks = useMemo(() => data?.tasks || [], [data]);
 
@@ -78,7 +86,56 @@ export function TasksPage() {
 
   useEffect(() => {
     void load();
+    const timer = window.setInterval(() => {
+      void getTasks()
+        .then(setData)
+        .catch(() => undefined);
+    }, 20000);
+    return () => window.clearInterval(timer);
   }, []);
+
+  const openCreate = () => {
+    setError("");
+    setEditorMode("create");
+    setEditingTask(null);
+  };
+
+  const openEdit = (task: ScheduledTaskItem) => {
+    setError("");
+    setEditorMode("edit");
+    setEditingTask(task);
+  };
+
+  const closeEditor = () => {
+    setEditorMode(null);
+    setEditingTask(null);
+  };
+
+  const saveEditor = async (payload: TaskEditorSave) => {
+    setSaving(true);
+    setError("");
+    try {
+      if (payload.mode === "create") await createTask(payload.input);
+      else await updateTask(payload.taskId, payload.patch);
+      closeEditor();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const togglePause = async (task: ScheduledTaskItem) => {
+    setError("");
+    try {
+      if (task.status === "paused") await resumeTask(task.task_id);
+      else await pauseTask(task.task_id);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const removeTask = async (task: ScheduledTaskItem) => {
     if (!window.confirm(`Delete task ${task.task_id}?`)) return;
@@ -93,7 +150,16 @@ export function TasksPage() {
 
   return (
     <PageShell>
-      <PageToolbar title="Tasks" subtitle={data?.root || "tasks"} />
+      <PageToolbar
+        title="Tasks"
+        subtitle={data?.root || "tasks"}
+        actions={
+          <Button type="button" onClick={openCreate}>
+            <Plus size={15} />
+            Create
+          </Button>
+        }
+      />
 
       <div className="tasks-layout">
         <section className="task-list-panel">
@@ -121,10 +187,24 @@ export function TasksPage() {
                       ))}
                     </div>
                   </div>
-                  <Button type="button" variant="danger" onClick={() => void removeTask(task)} title="Delete task">
-                    <Trash2 size={15} />
-                    Delete
-                  </Button>
+                  <div className="task-row-actions">
+                    {task.status !== "failed" && (
+                      <Button type="button" onClick={() => void togglePause(task)} title={task.status === "paused" ? "Resume" : "Pause"}>
+                        {task.status === "paused" ? <Play size={15} /> : <Pause size={15} />}
+                        {task.status === "paused" ? "Resume" : "Pause"}
+                      </Button>
+                    )}
+                    {task.status !== "failed" && (
+                      <Button type="button" onClick={() => openEdit(task)} title="Edit task">
+                        <Pencil size={15} />
+                        Edit
+                      </Button>
+                    )}
+                    <Button type="button" variant="danger" onClick={() => void removeTask(task)} title="Delete task">
+                      <Trash2 size={15} />
+                      Delete
+                    </Button>
+                  </div>
                 </article>
               ))}
             </div>
@@ -132,7 +212,17 @@ export function TasksPage() {
             <EmptyState title="No scheduled tasks" />
           )}
         </section>
+
       </div>
+      <TaskEditorModal
+        open={Boolean(editorMode)}
+        mode={editorMode || "create"}
+        task={editingTask}
+        saving={saving}
+        error={editorMode ? error : ""}
+        onClose={closeEditor}
+        onSave={(payload) => void saveEditor(payload)}
+      />
     </PageShell>
   );
 }

@@ -19,11 +19,15 @@ from .tasks import (
     delete_scheduled_task,
     delete_task_file,
     enqueue_scheduled_task,
+    get_pending_scheduled_task,
     list_active_task_records,
     list_active_task_views,
     list_task_records,
+    pause_scheduled_task,
     resolve_scheduled_task_run_at,
+    resume_scheduled_task,
     scheduled_delivery_context,
+    update_scheduled_task,
 )
 
 __all__ = [
@@ -45,9 +49,13 @@ __all__ = [
     "delete_scheduled_task",
     "delete_task_file",
     "enqueue_scheduled_task",
+    "get_pending_scheduled_task",
     "list_active_task_records",
     "list_active_task_views",
     "list_task_records",
+    "pause_scheduled_task",
     "resolve_scheduled_task_run_at",
+    "resume_scheduled_task",
     "scheduled_delivery_context",
+    "update_scheduled_task",
 ]

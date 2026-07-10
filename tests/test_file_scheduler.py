@@ -1,15 +1,18 @@
 import asyncio
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from xagent.core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     enqueue_scheduled_task,
     list_task_records,
+    pause_scheduled_task,
     resolve_scheduled_task_run_at,
+    resume_scheduled_task,
     scheduled_delivery_context,
+    update_scheduled_task,
 )
 from xagent.tools.scheduler_tool import create_schedule_task_tool
 
@@ -230,6 +233,53 @@ class ScheduledTaskTests(unittest.TestCase):
 
         async def _append_delivered(delivered, run_at):
             delivered.append(run_at)
+
+        asyncio.run(run_test())
+
+    def test_pause_skips_dispatch_and_resume_advances_overdue_run_at(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="hey",
+                    run_at=datetime(2026, 6, 1, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 60, "end_at": "2026-06-01 12:00:00"}],
+                )
+                paused = pause_scheduled_task(tmpdir, original.task_id)
+                delivered = []
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=lambda task: _append_delivered(delivered, task.content),
+                    now_provider=lambda: datetime(2026, 6, 1, 10, 0, 0),
+                )
+                await scheduler.tick()
+                self.assertEqual(delivered, [])
+                self.assertEqual(paused.status, "paused")
+
+                resumed = resume_scheduled_task(
+                    tmpdir,
+                    original.task_id,
+                    now=datetime(2026, 6, 1, 10, 5, 0),
+                )
+                self.assertEqual(resumed.status, "active")
+                self.assertEqual(resumed.run_at, datetime(2026, 6, 1, 10, 6, 0))
+
+                updated = update_scheduled_task(
+                    tmpdir,
+                    original.task_id,
+                    content="记得喝水",
+                    end_at="2026-06-01 13:00:00",
+                )
+                self.assertEqual(updated.content, "记得喝水")
+                self.assertEqual(updated.recurrence[0]["end_at"], "2026-06-01 13:00:00")
+
+        async def _append_delivered(delivered, message):
+            delivered.append(message)
 
         asyncio.run(run_test())
 
@@ -519,6 +569,186 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertIn("task_id", missing_task_id["error"])
 
         asyncio.run(run_test())
+
+    def test_resolve_interval_window_with_start_at(self):
+        now = datetime(2026, 7, 10, 15, 0, 0)
+        run_at, recurrence = resolve_scheduled_task_run_at(
+            recurrence=[
+                {
+                    "kind": "interval",
+                    "every_seconds": 600,
+                    "start_at": "2026-07-11 10:00:00",
+                    "end_at": "2026-07-11 12:00:00",
+                }
+            ],
+            now=now,
+        )
+        self.assertEqual(run_at, datetime(2026, 7, 11, 10, 0, 0))
+        self.assertEqual(
+            recurrence,
+            [
+                {
+                    "kind": "interval",
+                    "every_seconds": 600,
+                    "start_at": "2026-07-11 10:00:00",
+                    "end_at": "2026-07-11 12:00:00",
+                }
+            ],
+        )
+
+    def test_async_scheduler_does_not_dispatch_before_interval_start_at(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="打球",
+                    run_at=datetime(2026, 7, 11, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[
+                        {
+                            "kind": "interval",
+                            "every_seconds": 600,
+                            "start_at": "2026-07-11 10:00:00",
+                            "end_at": "2026-07-11 12:00:00",
+                        }
+                    ],
+                )
+                delivered = []
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=lambda task: _append_delivered(delivered, task.run_at),
+                    now_provider=lambda: datetime(2026, 7, 10, 15, 0, 0),
+                )
+
+                await scheduler.tick()
+                records = list_task_records(tmpdir, include_failed=False)
+
+            self.assertEqual(delivered, [])
+            self.assertEqual(records[0].run_at, datetime(2026, 7, 11, 10, 0, 0))
+
+        async def _append_delivered(delivered, run_at):
+            delivered.append(run_at)
+
+        asyncio.run(run_test())
+
+    def test_async_scheduler_interval_window_grid_sequence(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="打球",
+                    run_at=datetime(2026, 7, 11, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[
+                        {
+                            "kind": "interval",
+                            "every_seconds": 600,
+                            "start_at": "2026-07-11 10:00:00",
+                            "end_at": "2026-07-11 12:00:00",
+                        }
+                    ],
+                )
+                delivered = []
+                current = {"now": datetime(2026, 7, 11, 10, 0, 0)}
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=lambda task: _append_delivered(delivered, task.run_at),
+                    now_provider=lambda: current["now"],
+                )
+
+                for minute in (0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120):
+                    current["now"] = datetime(2026, 7, 11, 10, 0, 0) + timedelta(minutes=minute)
+                    await scheduler.tick()
+
+            self.assertEqual(
+                delivered,
+                [
+                    datetime(2026, 7, 11, 10, 0, 0),
+                    datetime(2026, 7, 11, 10, 10, 0),
+                    datetime(2026, 7, 11, 10, 20, 0),
+                    datetime(2026, 7, 11, 10, 30, 0),
+                    datetime(2026, 7, 11, 10, 40, 0),
+                    datetime(2026, 7, 11, 10, 50, 0),
+                    datetime(2026, 7, 11, 11, 0, 0),
+                    datetime(2026, 7, 11, 11, 10, 0),
+                    datetime(2026, 7, 11, 11, 20, 0),
+                    datetime(2026, 7, 11, 11, 30, 0),
+                    datetime(2026, 7, 11, 11, 40, 0),
+                    datetime(2026, 7, 11, 11, 50, 0),
+                    datetime(2026, 7, 11, 12, 0, 0),
+                ],
+            )
+
+        async def _append_delivered(delivered, run_at):
+            delivered.append(run_at)
+
+        asyncio.run(run_test())
+
+    def test_pause_resume_aligns_interval_window_to_grid(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="打球",
+                    run_at=datetime(2026, 7, 11, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[
+                        {
+                            "kind": "interval",
+                            "every_seconds": 600,
+                            "start_at": "2026-07-11 10:00:00",
+                            "end_at": "2026-07-11 12:00:00",
+                        }
+                    ],
+                )
+                pause_scheduled_task(tmpdir, original.task_id)
+                resumed = resume_scheduled_task(
+                    tmpdir,
+                    original.task_id,
+                    now=datetime(2026, 7, 11, 10, 23, 0),
+                )
+                self.assertEqual(resumed.run_at, datetime(2026, 7, 11, 10, 30, 0))
+
+        asyncio.run(run_test())
+
+    def test_interval_start_at_validation(self):
+        with self.assertRaisesRegex(ValueError, "start_at must be before end_at"):
+            resolve_scheduled_task_run_at(
+                recurrence=[
+                    {
+                        "kind": "interval",
+                        "every_seconds": 600,
+                        "start_at": "2026-07-11 12:00:00",
+                        "end_at": "2026-07-11 10:00:00",
+                    }
+                ],
+                now=datetime(2026, 7, 10, 15, 0, 0),
+            )
+
+        with self.assertRaisesRegex(ValueError, "delay_seconds cannot be combined"):
+            resolve_scheduled_task_run_at(
+                delay_seconds=60,
+                recurrence=[
+                    {
+                        "kind": "interval",
+                        "every_seconds": 600,
+                        "start_at": "2026-07-11 10:00:00",
+                        "end_at": "2026-07-11 12:00:00",
+                    }
+                ],
+                now=datetime(2026, 7, 10, 15, 0, 0),
+            )
 
 
 if __name__ == "__main__":

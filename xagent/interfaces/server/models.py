@@ -125,3 +125,39 @@ class SkillStateInput(BaseModel):
 
     name: str
     enabled: bool
+
+class TaskUpdateInput(BaseModel):
+    """Request body for patching a scheduled task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = None
+    content: Optional[str] = None
+    task_type: Optional[str] = None
+    run_at: Optional[str] = None
+    delay_seconds: Optional[int] = None
+    recurrence: Optional[List[Dict[str, Any]]] = None
+    interval_seconds: Optional[int] = None
+    duration_seconds: Optional[int] = None
+    start_at: Optional[str] = None
+    end_at: Optional[str] = None
+
+
+class TaskCreateInput(BaseModel):
+    """Request body for creating an api-channel scheduled task from Web/HTTP."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: str
+    content: str
+    title: Optional[str] = None
+    run_at: Optional[str] = None
+    delay_seconds: Optional[int] = None
+    recurrence: Optional[List[Dict[str, Any]]] = None
+    interval_seconds: Optional[int] = None
+    duration_seconds: Optional[int] = None
+    start_at: Optional[str] = None
+    end_at: Optional[str] = None
+    channel: Optional[str] = "api"
+    user_id: Optional[str] = None
+    target: Optional[Dict[str, Any]] = None

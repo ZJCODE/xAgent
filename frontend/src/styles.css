@@ -1774,6 +1774,119 @@ input::placeholder {
   overflow-wrap: anywhere;
 }
 
+.task-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.task-editor-modal {
+  width: min(780px, 100%);
+}
+
+.task-editor-modal .modal-header {
+  align-items: flex-start;
+}
+
+.task-editor-modal .modal-header p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.task-editor-form,
+.task-editor-section {
+  display: grid;
+  gap: 12px;
+}
+
+.task-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 0.35fr);
+  gap: 12px;
+}
+
+.task-editor-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-editor-radio-group label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-surface-subtle);
+  padding: 7px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.task-editor-radio-group input {
+  margin: 0;
+}
+
+.task-editor-field-block {
+  display: grid;
+  gap: 8px;
+}
+
+.task-editor-field-block > span {
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.weekday-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.weekday-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-surface-subtle);
+  color: var(--text);
+  cursor: pointer;
+  padding: 7px 11px;
+  text-transform: uppercase;
+}
+
+.weekday-chip.selected {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.task-editor-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface-subtle);
+  padding: 10px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.task-editor-save-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .task-editor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .error-banner,
 .error-strip,
 .success-strip {

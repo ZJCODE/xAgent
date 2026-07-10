@@ -29,7 +29,10 @@ import type {
   SkillStateResponse,
   SkillsInfo,
   SkillsTreeResponse,
+  TaskCreateInput,
+  TaskUpdateInput,
   TasksResponse,
+  ScheduledTaskItem,
   WorkspaceUploadResult,
 } from "../types";
 
@@ -213,6 +216,30 @@ export async function getMessagesStats(): Promise<MessagesStats> {
 
 export async function getTasks(): Promise<TasksResponse> {
   return requestJson("/api/tasks");
+}
+
+export async function createTask(input: TaskCreateInput): Promise<{ status: string; task: ScheduledTaskItem }> {
+  return requestJson("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function pauseTask(taskId: string): Promise<{ status: string; task: ScheduledTaskItem }> {
+  return requestJson(`/api/tasks/${encodeURIComponent(taskId)}/pause`, { method: "POST" });
+}
+
+export async function resumeTask(taskId: string): Promise<{ status: string; task: ScheduledTaskItem }> {
+  return requestJson(`/api/tasks/${encodeURIComponent(taskId)}/resume`, { method: "POST" });
+}
+
+export async function updateTask(taskId: string, input: TaskUpdateInput): Promise<{ status: string; task: ScheduledTaskItem }> {
+  return requestJson(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 export async function deleteTask(taskId: string): Promise<{ status: string; deleted: unknown }> {

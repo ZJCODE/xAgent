@@ -79,6 +79,7 @@ export interface ScheduledTaskRecurrenceRule {
   time?: string;
   weekdays?: string[];
   every_seconds?: number;
+  start_at?: string;
   end_at?: string;
 }
 
@@ -89,10 +90,41 @@ export interface ScheduledTaskItem {
   content: string;
   next_run_at: string;
   recurrence?: ScheduledTaskRecurrenceRule[] | null;
-  status: "active" | string;
+  status: "active" | "paused" | "failed" | string;
   channel?: string;
   user_id?: string;
   target?: Record<string, unknown>;
+  paused_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TaskCreateInput {
+  task_type: "message" | "agent" | string;
+  content: string;
+  title?: string;
+  run_at?: string;
+  delay_seconds?: number;
+  recurrence?: ScheduledTaskRecurrenceRule[];
+  interval_seconds?: number;
+  duration_seconds?: number;
+  start_at?: string;
+  end_at?: string;
+  channel?: string;
+  user_id?: string;
+  target?: Record<string, unknown>;
+}
+
+export interface TaskUpdateInput {
+  title?: string;
+  content?: string;
+  task_type?: string;
+  run_at?: string;
+  delay_seconds?: number;
+  recurrence?: ScheduledTaskRecurrenceRule[];
+  interval_seconds?: number;
+  duration_seconds?: number;
+  start_at?: string;
+  end_at?: string;
 }
 
 export interface TasksResponse {

@@ -807,7 +807,7 @@ wheels = [
 
 [[package]]
 name = "myxagent"
-version = "0.3.3"
+version = "0.3.6"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },

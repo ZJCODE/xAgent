@@ -19,6 +19,7 @@ from .scheduler import (
     TASK_TIMESTAMP_FORMAT,
     _fsync_directory,
     _unique_failed_path,
+    align_interval_next_run,
     calculate_next_recurrence_run_at,
     ensure_scheduler_dirs,
     format_task_timestamp,
@@ -35,13 +36,15 @@ TASK_KIND_TASK = "task"
 TASK_TYPE_MESSAGE = "message"
 TASK_TYPE_AGENT = "agent"
 TASK_STATUS_ACTIVE = "active"
-TASK_PAYLOAD_VERSION = 4
+TASK_STATUS_PAUSED = "paused"
+TASK_PAYLOAD_VERSION = 5
 TASK_JSON_SUFFIX = ".json"
 TASK_STATE_PENDING = "pending"
 TASK_STATE_FAILED = "failed"
 TASK_STATE_RUNNING = "running"
 DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS = 1.0
 SUPPORTED_TASK_TYPES = {TASK_TYPE_MESSAGE, TASK_TYPE_AGENT}
+SUPPORTED_LIFECYCLE_STATUSES = {TASK_STATUS_ACTIVE, TASK_STATUS_PAUSED}
 
 
 @dataclass(frozen=True)
@@ -128,9 +131,18 @@ class ScheduledTaskRecord:
 
     @property
     def status(self) -> str:
+        if self.state == TASK_STATE_FAILED:
+            return TASK_STATE_FAILED
+        raw = str(self.payload.get("status") or "").strip().lower() if isinstance(self.payload, dict) else ""
+        if raw == TASK_STATUS_PAUSED:
+            return TASK_STATUS_PAUSED
         if self.state in {TASK_STATE_PENDING, TASK_STATE_RUNNING}:
             return TASK_STATUS_ACTIVE
-        return self.state
+        return raw or TASK_STATUS_ACTIVE
+
+    @property
+    def is_paused(self) -> bool:
+        return self.status == TASK_STATUS_PAUSED
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -158,6 +170,8 @@ class ScheduledTaskRecord:
             "channel": self.delivery_channel or "local",
             "user_id": self.delivery_user_id,
             "target": self.target,
+            "paused_at": self.payload.get("paused_at") if isinstance(self.payload, dict) else None,
+            "updated_at": self.payload.get("updated_at") if isinstance(self.payload, dict) else None,
         }
 
 
@@ -251,6 +265,7 @@ def enqueue_scheduled_task(
         "id": task_id,
         "kind": TASK_KIND_TASK,
         "title": title.strip() if title else "",
+        "status": TASK_STATUS_ACTIVE,
         "task": {
             "type": normalized_type,
             "content": normalized_content,
@@ -263,6 +278,7 @@ def enqueue_scheduled_task(
         "execution": dict(execution or {}),
         "source": dict(source or {}),
         "created_at": datetime.now().replace(microsecond=0).isoformat(sep=" "),
+        "updated_at": datetime.now().replace(microsecond=0).isoformat(sep=" "),
         "run_at": parsed_run_at.isoformat(sep=" "),
     }
     if normalized_recurrence:
@@ -323,6 +339,240 @@ def delete_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskR
         record.path.unlink()
         return record
     raise FileNotFoundError(f"task not found: {normalized_task_id}")
+
+
+def get_pending_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
+    """Return a pending (non-failed) scheduled task by id."""
+    normalized_task_id = str(task_id or "").strip()
+    if not normalized_task_id:
+        raise ValueError("task_id is required")
+    for record in list_task_records(tasks_dir, include_failed=False):
+        if record.task_id == normalized_task_id:
+            return record
+    raise FileNotFoundError(f"task not found: {normalized_task_id}")
+
+
+def pause_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
+    """Pause a pending scheduled task so the scheduler skips it."""
+    record = get_pending_scheduled_task(tasks_dir, task_id)
+    if record.is_paused:
+        return record
+    now = datetime.now().replace(microsecond=0)
+    payload = dict(record.payload)
+    payload["version"] = TASK_PAYLOAD_VERSION
+    payload["status"] = TASK_STATUS_PAUSED
+    payload["paused_at"] = now.isoformat(sep=" ")
+    payload["updated_at"] = now.isoformat(sep=" ")
+    _replace_json_payload(record.path, payload)
+    return ScheduledTaskRecord(
+        path=record.path,
+        run_at=record.run_at,
+        kind=record.kind,
+        state=record.state,
+        payload=payload,
+        reason=record.reason,
+    )
+
+
+def resume_scheduled_task(
+    tasks_dir: Path | str,
+    task_id: str,
+    *,
+    now: datetime | None = None,
+) -> ScheduledTaskRecord:
+    """Resume a paused task and advance overdue run_at when needed."""
+    record = get_pending_scheduled_task(tasks_dir, task_id)
+    current = (now or datetime.now()).replace(microsecond=0)
+    payload = dict(record.payload)
+    next_run_at = record.run_at
+    if record.is_paused or next_run_at <= current:
+        next_run_at = _next_run_at_after_resume(record, now=current)
+    payload["version"] = TASK_PAYLOAD_VERSION
+    payload["status"] = TASK_STATUS_ACTIVE
+    payload.pop("paused_at", None)
+    payload["updated_at"] = current.isoformat(sep=" ")
+    payload["run_at"] = next_run_at.isoformat(sep=" ")
+    return _rewrite_pending_task(tasks_dir, record, payload, next_run_at)
+
+
+def update_scheduled_task(
+    tasks_dir: Path | str,
+    task_id: str,
+    *,
+    title: Optional[str] = None,
+    content: Optional[str] = None,
+    task_type: Optional[str] = None,
+    run_at: Optional[str | datetime] = None,
+    delay_seconds: Optional[int] = None,
+    recurrence: Any = None,
+    interval_seconds: Optional[int] = None,
+    duration_seconds: Optional[int] = None,
+    start_at: Optional[str] = None,
+    end_at: Optional[str] = None,
+    now: datetime | None = None,
+) -> ScheduledTaskRecord:
+    """Patch mutable fields on a pending scheduled task."""
+    record = get_pending_scheduled_task(tasks_dir, task_id)
+    current = (now or datetime.now()).replace(microsecond=0)
+    payload = dict(record.payload)
+    task_body = dict(record.task)
+
+    if title is not None:
+        payload["title"] = str(title).strip()
+    if content is not None:
+        normalized_content = str(content).strip()
+        if not normalized_content:
+            raise ValueError("scheduled task content must not be empty")
+        task_body["content"] = normalized_content
+    if task_type is not None:
+        normalized_type = str(task_type).strip().lower()
+        if normalized_type not in SUPPORTED_TASK_TYPES:
+            raise ValueError(f"task_type must be one of: {', '.join(sorted(SUPPORTED_TASK_TYPES))}")
+        task_body["type"] = normalized_type
+    payload["task"] = task_body
+
+    schedule_retarget = any(value is not None for value in (run_at, delay_seconds, recurrence))
+    interval_patch = any(value is not None for value in (interval_seconds, duration_seconds, start_at, end_at))
+    next_run_at = record.run_at
+    if schedule_retarget and interval_patch:
+        raise ValueError("recurrence/run_at cannot be combined with interval_seconds, duration_seconds, start_at, or end_at")
+
+    if interval_patch:
+        if not is_interval_recurrence(record.recurrence) and interval_seconds is None:
+            raise ValueError("interval_seconds is required when converting a task to interval recurrence")
+        every = interval_seconds
+        if every is None:
+            every = int(record.recurrence[0].get("every_seconds") or 0)
+        if not every:
+            raise ValueError("interval_seconds is required for interval tasks")
+        existing_end = record.recurrence[0].get("end_at") if record.recurrence else None
+        existing_start = record.recurrence[0].get("start_at") if record.recurrence else None
+        if duration_seconds is None and end_at is None:
+            if not existing_end:
+                raise ValueError(
+                    "interval tasks require a user-provided duration_seconds or end_at; "
+                    "ask the user how long to continue or when to stop before creating"
+                )
+            resolved_end = parse_run_at(str(existing_end))
+        elif duration_seconds is not None and end_at is not None:
+            raise ValueError("interval recurrence requires exactly one user-provided end_at or duration_seconds")
+        elif duration_seconds is not None:
+            resolved_end = current + timedelta(seconds=int(duration_seconds))
+        else:
+            resolved_end = parse_run_at(str(end_at or ""))
+        if start_at is not None:
+            resolved_start = parse_run_at(str(start_at))
+        elif existing_start:
+            resolved_start = parse_run_at(str(existing_start))
+        else:
+            resolved_start = None
+        interval_rule: dict[str, Any] = {
+            "kind": "interval",
+            "every_seconds": int(every),
+            "end_at": resolved_end.isoformat(sep=" "),
+        }
+        if resolved_start is not None:
+            interval_rule["start_at"] = resolved_start.isoformat(sep=" ")
+        normalized_rule = normalize_recurrence_rules([interval_rule])[0]
+        payload["recurrence"] = [normalized_rule]
+        schedule_changed = any(value is not None for value in (interval_seconds, duration_seconds, start_at, end_at))
+        if schedule_changed:
+            if resolved_start is not None:
+                aligned = align_interval_next_run(
+                    now=current,
+                    start_at=resolved_start,
+                    every_seconds=int(every),
+                    end_at=resolved_end,
+                )
+                if aligned is None:
+                    raise ValueError("end_at must be at or after the next run time")
+                next_run_at = aligned
+            elif interval_seconds is not None and interval_seconds != int(record.recurrence[0].get("every_seconds") or 0):
+                next_run_at = current + timedelta(seconds=int(every))
+                if next_run_at > resolved_end:
+                    raise ValueError("end_at must be at or after the next run time")
+            elif next_run_at > resolved_end:
+                raise ValueError("end_at must be at or after the next run time")
+    elif schedule_retarget:
+        if recurrence is not None:
+            resolved_run_at, normalized_recurrence = resolve_scheduled_task_run_at(
+                run_at=None,
+                delay_seconds=delay_seconds if is_interval_recurrence(recurrence) else None,
+                recurrence=recurrence,
+                now=current,
+            )
+            next_run_at = resolved_run_at
+            if normalized_recurrence:
+                payload["recurrence"] = normalized_recurrence
+            else:
+                payload.pop("recurrence", None)
+        else:
+            resolved_run_at, _normalized = resolve_scheduled_task_run_at(
+                run_at=run_at,
+                delay_seconds=delay_seconds,
+                recurrence=None,
+                now=current,
+            )
+            next_run_at = resolved_run_at
+            payload.pop("recurrence", None)
+
+    payload["version"] = TASK_PAYLOAD_VERSION
+    payload["updated_at"] = current.isoformat(sep=" ")
+    payload["run_at"] = next_run_at.isoformat(sep=" ")
+    if "status" not in payload:
+        payload["status"] = TASK_STATUS_PAUSED if record.is_paused else TASK_STATUS_ACTIVE
+    return _rewrite_pending_task(tasks_dir, record, payload, next_run_at)
+
+def _next_run_at_after_resume(record: ScheduledTaskRecord, *, now: datetime) -> datetime:
+    if record.run_at > now:
+        return record.run_at
+    recurrence = record.recurrence
+    if not recurrence:
+        return now
+    if is_interval_recurrence(recurrence):
+        rule = recurrence[0]
+        start_at_text = str(rule.get("start_at") or "").strip()
+        if start_at_text:
+            aligned = align_interval_next_run(
+                now=now,
+                start_at=parse_run_at(start_at_text),
+                every_seconds=int(rule.get("every_seconds") or 0),
+                end_at=parse_run_at(str(rule.get("end_at") or "")),
+            )
+            if aligned is None:
+                raise ValueError("interval window has already ended")
+            return aligned
+        return resolve_interval_first_run_at(rule, now=now)
+    return resolve_recurrence_run_at(recurrence, now=now)
+
+
+def _rewrite_pending_task(
+    tasks_dir: Path | str,
+    record: ScheduledTaskRecord,
+    payload: dict[str, Any],
+    next_run_at: datetime,
+) -> ScheduledTaskRecord:
+    root, _failed = ensure_scheduler_dirs(tasks_dir)
+    if next_run_at == record.run_at and record.path.parent == root:
+        _replace_json_payload(record.path, payload)
+        return ScheduledTaskRecord(
+            path=record.path,
+            run_at=next_run_at,
+            kind=record.kind,
+            state=record.state,
+            payload=payload,
+            reason=record.reason,
+        )
+    _replace_json_payload(record.path, payload)
+    new_path = _move_running_task(record.path, root, next_run_at, task_id=record.task_id)
+    return ScheduledTaskRecord(
+        path=new_path,
+        run_at=next_run_at,
+        kind=record.kind,
+        state=record.state,
+        payload=payload,
+        reason=record.reason,
+    )
 
 
 class AsyncTaskScheduler:
@@ -413,6 +663,8 @@ class AsyncTaskScheduler:
         next_run_at: Optional[datetime] = None
         for record in list_active_task_records(self.tasks_dir):
             if record.kind != TASK_KIND_TASK:
+                continue
+            if record.is_paused:
                 continue
             if not self.can_handle(record):
                 continue

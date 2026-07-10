@@ -13,9 +13,26 @@ import yaml as pyyaml
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 
 from ...interfaces.cli.config_editor import validate_config, write_config
-from .models import ConfigInput, IdentityInput, SkillCreateInput, SkillStateInput, SkillWriteInput, WorkspaceWriteInput
+from .models import (
+    ConfigInput,
+    IdentityInput,
+    SkillCreateInput,
+    SkillStateInput,
+    SkillWriteInput,
+    TaskCreateInput,
+    TaskUpdateInput,
+    WorkspaceWriteInput,
+)
 from .serializers import message_item, message_search_result
-from ...core.runtime import delete_scheduled_task, list_task_records
+from ...core.runtime import (
+    delete_scheduled_task,
+    enqueue_scheduled_task,
+    list_task_records,
+    pause_scheduled_task,
+    resolve_scheduled_task_run_at,
+    resume_scheduled_task,
+    update_scheduled_task,
+)
 from ...schemas.attachment import (
     DEFAULT_WEB_ATTACHMENT_DIR,
     DEFAULT_WEB_IMAGE_DIR,
@@ -132,6 +149,111 @@ def register_admin_routes(
             "tasks": tasks,
             "total": len(tasks),
         }
+
+    @app.post("/api/tasks", tags=["Monitoring"], status_code=201)
+    async def tasks_create(input_data: TaskCreateInput):
+        server = resolve_admin()
+        channel = str(input_data.channel or "api").strip().lower() or "api"
+        if channel != "api":
+            raise HTTPException(
+                status_code=400,
+                detail="HTTP create currently supports channel=api only; use chat to schedule feishu/weixin/voice tasks",
+            )
+        user_id = str(input_data.user_id or "web_user").strip() or "web_user"
+        target = dict(input_data.target or {})
+        target.setdefault("user_id", user_id)
+        try:
+            recurrence = input_data.recurrence
+            if recurrence is None and (
+                input_data.interval_seconds is not None
+                or input_data.duration_seconds is not None
+                or input_data.start_at is not None
+                or input_data.end_at is not None
+            ):
+                if input_data.interval_seconds is None:
+                    raise ValueError("interval_seconds is required for interval tasks")
+                if input_data.duration_seconds is None and input_data.end_at is None:
+                    raise ValueError(
+                        "interval tasks require a user-provided duration_seconds or end_at; "
+                        "ask the user how long to continue or when to stop before creating"
+                    )
+                interval_rule: Dict[str, Any] = {
+                    "kind": "interval",
+                    "every_seconds": input_data.interval_seconds,
+                }
+                if input_data.start_at is not None:
+                    interval_rule["start_at"] = input_data.start_at
+                if input_data.duration_seconds is not None:
+                    interval_rule["duration_seconds"] = input_data.duration_seconds
+                if input_data.end_at is not None:
+                    interval_rule["end_at"] = input_data.end_at
+                recurrence = [interval_rule]
+            scheduled_at, normalized_recurrence = resolve_scheduled_task_run_at(
+                run_at=input_data.run_at,
+                delay_seconds=input_data.delay_seconds,
+                recurrence=recurrence,
+            )
+            task = enqueue_scheduled_task(
+                task_type=input_data.task_type,
+                content=input_data.content,
+                run_at=scheduled_at,
+                tasks_dir=server.tasks_dir,
+                channel=channel,
+                target=target,
+                user_id=user_id,
+                title=input_data.title or "Reminder",
+                recurrence=normalized_recurrence or None,
+                source={"source": "http", "client": "web"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "ok", "task": task.to_task_view()}
+
+    @app.post("/api/tasks/{task_id}/pause", tags=["Monitoring"])
+    async def tasks_pause(task_id: str):
+        server = resolve_admin()
+        try:
+            task = pause_scheduled_task(server.tasks_dir, task_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "ok", "task": task.to_task_view()}
+
+    @app.post("/api/tasks/{task_id}/resume", tags=["Monitoring"])
+    async def tasks_resume(task_id: str):
+        server = resolve_admin()
+        try:
+            task = resume_scheduled_task(server.tasks_dir, task_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "ok", "task": task.to_task_view()}
+
+    @app.patch("/api/tasks/{task_id}", tags=["Monitoring"])
+    async def tasks_update(task_id: str, input_data: TaskUpdateInput):
+        server = resolve_admin()
+        try:
+            task = update_scheduled_task(
+                server.tasks_dir,
+                task_id,
+                title=input_data.title,
+                content=input_data.content,
+                task_type=input_data.task_type,
+                run_at=input_data.run_at,
+                delay_seconds=input_data.delay_seconds,
+                recurrence=input_data.recurrence,
+                interval_seconds=input_data.interval_seconds,
+                duration_seconds=input_data.duration_seconds,
+                start_at=input_data.start_at,
+                end_at=input_data.end_at,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "ok", "task": task.to_task_view()}
 
     @app.delete("/api/tasks/delete", tags=["Monitoring"])
     async def tasks_delete(task_id: str = Query(..., description="Stable scheduled task id")):

@@ -184,7 +184,7 @@ class TaskApiTests(unittest.TestCase):
                     [{"kind": "weekly", "time": "13:28:00", "weekdays": ["wed", "fri"]}],
                 )
 
-    def test_create_task_endpoint_is_not_exposed(self):
+    def test_legacy_create_path_is_not_a_create_endpoint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = _TaskAgent(Path(tmpdir))
             server = AgentHTTPServer(agent=agent)
@@ -193,7 +193,77 @@ class TaskApiTests(unittest.TestCase):
                     "/api/tasks/create",
                     json={"message": "走两步", "delay_seconds": 60, "user_id": "web_user"},
                 )
-                self.assertEqual(response.status_code, 404)
+                # Legacy path is not registered; FastAPI may 404 or treat "create" as task_id.
+                self.assertIn(response.status_code, {404, 405, 422})
+
+    def test_create_pause_resume_and_update_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = _TaskAgent(Path(tmpdir))
+            server = AgentHTTPServer(agent=agent)
+            with TestClient(server.app) as client:
+                created = client.post(
+                    "/api/tasks",
+                    json={
+                        "task_type": "message",
+                        "content": "喝水",
+                        "interval_seconds": 60,
+                        "duration_seconds": 3600,
+                        "title": "喝水提醒",
+                    },
+                )
+                self.assertEqual(created.status_code, 201)
+                task_id = created.json()["task"]["task_id"]
+                self.assertEqual(created.json()["task"]["status"], "active")
+                self.assertEqual(created.json()["task"]["channel"], "api")
+
+                paused = client.post(f"/api/tasks/{task_id}/pause")
+                self.assertEqual(paused.status_code, 200)
+                self.assertEqual(paused.json()["task"]["status"], "paused")
+
+                updated = client.patch(
+                    f"/api/tasks/{task_id}",
+                    json={"content": "记得喝水", "title": "喝水提醒-更新"},
+                )
+                self.assertEqual(updated.status_code, 200)
+                self.assertEqual(updated.json()["task"]["content"], "记得喝水")
+                self.assertEqual(updated.json()["task"]["status"], "paused")
+
+                resumed = client.post(f"/api/tasks/{task_id}/resume")
+                self.assertEqual(resumed.status_code, 200)
+                self.assertEqual(resumed.json()["task"]["status"], "active")
+
+                rejected = client.post(
+                    "/api/tasks",
+                    json={
+                        "task_type": "message",
+                        "content": "飞书提醒",
+                        "delay_seconds": 60,
+                        "channel": "feishu",
+                    },
+                )
+                self.assertEqual(rejected.status_code, 400)
+
+    def test_create_interval_window_with_start_at(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = _TaskAgent(Path(tmpdir))
+            server = AgentHTTPServer(agent=agent)
+            with TestClient(server.app) as client:
+                created = client.post(
+                    "/api/tasks",
+                    json={
+                        "task_type": "message",
+                        "content": "打球",
+                        "interval_seconds": 600,
+                        "start_at": "2099-07-11 10:00:00",
+                        "end_at": "2099-07-11 12:00:00",
+                        "title": "打球提醒",
+                    },
+                )
+                self.assertEqual(created.status_code, 201)
+                task = created.json()["task"]
+                self.assertEqual(task["recurrence"][0]["start_at"], "2099-07-11 10:00:00")
+                self.assertEqual(task["recurrence"][0]["end_at"], "2099-07-11 12:00:00")
+                self.assertEqual(task["next_run_at"], "2099-07-11 10:00:00")
 
     def test_dispatch_scheduled_agent_task_broadcasts_agent_reply(self):
         async def run_test():

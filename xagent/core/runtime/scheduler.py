@@ -148,7 +148,7 @@ def normalize_recurrence_rules(value: Any) -> list[dict[str, Any]]:
             )
         if kind == RECURRENCE_KIND_INTERVAL:
             rule = _normalize_interval_rule(raw_rule)
-            key = (kind, str(rule["end_at"]), int(rule["every_seconds"]))
+            key = (kind, str(rule.get("start_at") or ""), str(rule["end_at"]), int(rule["every_seconds"]))
             if key in seen:
                 continue
             seen.add(key)
@@ -203,6 +203,30 @@ def is_interval_recurrence(value: Any) -> bool:
     return len(rules) == 1 and rules[0].get("kind") == RECURRENCE_KIND_INTERVAL
 
 
+def align_interval_next_run(
+    *,
+    now: datetime,
+    start_at: datetime,
+    every_seconds: int,
+    end_at: datetime,
+) -> datetime | None:
+    """Return the next tick on the start_at-aligned grid within [start_at, end_at]."""
+    current = now.replace(microsecond=0)
+    window_start = parse_run_at(start_at)
+    window_end = parse_run_at(end_at)
+    every = int(every_seconds)
+    if current > window_end:
+        return None
+    if current <= window_start:
+        return window_start
+    elapsed = int((current - window_start).total_seconds())
+    remainder = elapsed % every
+    candidate = current if remainder == 0 else current + timedelta(seconds=every - remainder)
+    if candidate > window_end:
+        return None
+    return candidate
+
+
 def resolve_interval_first_run_at(
     rule: Mapping[str, Any],
     *,
@@ -211,13 +235,28 @@ def resolve_interval_first_run_at(
 ) -> datetime:
     current = (now or datetime.now()).replace(microsecond=0)
     normalized = _normalize_interval_rule(rule)
+    end_at = parse_run_at(str(normalized["end_at"]))
+    every_seconds = int(normalized["every_seconds"])
+    start_at_text = str(normalized.get("start_at") or "").strip()
+    if start_at_text:
+        if delay_seconds is not None:
+            raise ValueError("delay_seconds cannot be combined with interval start_at")
+        start_at = parse_run_at(start_at_text)
+        candidate = align_interval_next_run(
+            now=current,
+            start_at=start_at,
+            every_seconds=every_seconds,
+            end_at=end_at,
+        )
+        if candidate is None:
+            raise ValueError("duration is too short for even one interval execution")
+        return candidate
     if delay_seconds is not None:
         if delay_seconds < 0:
             raise ValueError("delay_seconds must be zero or positive.")
         candidate = current + timedelta(seconds=delay_seconds)
     else:
-        candidate = current + timedelta(seconds=int(normalized["every_seconds"]))
-    end_at = parse_run_at(str(normalized["end_at"]))
+        candidate = current + timedelta(seconds=every_seconds)
     if candidate > end_at:
         raise ValueError("duration is too short for even one interval execution")
     return candidate
@@ -355,7 +394,7 @@ def _next_occurrence_for_rule(rule: Mapping[str, Any], *, now: datetime | None =
 def _recurrence_rule_sort_key(rule: Mapping[str, Any]) -> tuple[str, str, tuple[str, ...]]:
     kind = str(rule.get("kind") or "").strip().lower()
     if kind == RECURRENCE_KIND_INTERVAL:
-        return kind, str(rule.get("end_at") or ""), (str(rule.get("every_seconds") or ""),)
+        return kind, str(rule.get("start_at") or ""), (str(rule.get("end_at") or ""), str(rule.get("every_seconds") or ""))
     time_value = str(rule.get("time") or "").strip()
     weekdays = tuple(normalize_weekdays(rule.get("weekdays")))
     return kind, time_value, weekdays
@@ -385,11 +424,25 @@ def _normalize_interval_rule(raw_rule: Mapping[str, Any]) -> dict[str, Any]:
     if has_duration:
         raise ValueError("duration_seconds must be materialized to end_at before storing interval recurrence")
     end_at = parse_run_at(str(raw_rule.get("end_at") or ""))
-    return {
+    start_at_text = str(raw_rule.get("start_at") or "").strip()
+    rule: dict[str, Any] = {
         "kind": RECURRENCE_KIND_INTERVAL,
         "every_seconds": every_seconds,
         "end_at": end_at.isoformat(sep=" "),
     }
+    if start_at_text:
+        start_at = parse_run_at(start_at_text)
+        if start_at >= end_at:
+            raise ValueError("interval start_at must be before end_at")
+        if align_interval_next_run(
+            now=start_at,
+            start_at=start_at,
+            every_seconds=every_seconds,
+            end_at=end_at,
+        ) is None:
+            raise ValueError("duration is too short for even one interval execution")
+        rule["start_at"] = start_at.isoformat(sep=" ")
+    return rule
 
 
 def _parse_positive_int(value: Any, name: str) -> int:
