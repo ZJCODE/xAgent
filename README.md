@@ -11,7 +11,7 @@ xAgent is a local-first AI agent with its own identity, memory, and life. Use it
 # Install
 curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bash
 
-# Launch (open a new terminal, or run the export shown by the installer)
+# Launch
 xagent
 ```
 
