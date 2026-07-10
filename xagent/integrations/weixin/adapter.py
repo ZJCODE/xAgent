@@ -666,7 +666,7 @@ class WeixinAdapter:
             context_token=context_token,
             content=result.content,
             attachments=result.attachments,
-            stable_key=f"scheduled:{task.task_id}",
+            stable_key=f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}",
         )
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:

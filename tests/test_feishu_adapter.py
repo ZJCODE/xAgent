@@ -338,11 +338,51 @@ class FeishuAdapterTests(unittest.TestCase):
                 )
                 task = list_task_records(tmpdir)[0]
                 await adapter._dispatch_scheduled_task(task)
+                expected = adapter._message_uuid(f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}")
+                stale = adapter._message_uuid(f"scheduled:{task.task_id}")
 
             self.assertEqual(adapter._channel.sent[0][0], "oc_group")
             self.assertEqual(adapter._channel.sent[0][1], {"markdown": "走两步"})
             self.assertNotIn("reply_to", adapter._channel.sent[0][2])
-            self.assertTrue(adapter._channel.sent[0][2]["uuid"].startswith("scheduled:"))
+            self.assertEqual(adapter._channel.sent[0][2]["uuid"], expected)
+            self.assertNotEqual(adapter._channel.sent[0][2]["uuid"], stale)
+
+        asyncio.run(run_test())
+
+    def test_scheduled_task_dispatch_uses_unique_uuid_per_run_at(self):
+        async def run_test():
+            agent = _FakeAgent()
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel()
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="去吃饭了",
+                    run_at="2026-06-01 14:30:00",
+                    tasks_dir=tmpdir,
+                    channel="feishu",
+                    target={"chat_id": "oc_chat", "message_id": "om_anchor", "is_group": False},
+                    user_id="ou_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 60, "end_at": "2026-06-01 14:35:00"}],
+                )
+                first = list_task_records(tmpdir)[0]
+                from dataclasses import replace
+
+                second = replace(first, run_at=datetime(2026, 6, 1, 14, 31, 0))
+                await adapter._dispatch_scheduled_task(first)
+                await adapter._dispatch_scheduled_task(second)
+                expected_first = adapter._message_uuid(
+                    f"scheduled:{first.task_id}:{first.run_at.isoformat(sep=' ')}"
+                )
+                expected_second = adapter._message_uuid(
+                    f"scheduled:{first.task_id}:{second.run_at.isoformat(sep=' ')}"
+                )
+
+            uuids = [item[2]["uuid"] for item in adapter._channel.sent]
+            self.assertEqual(len(uuids), 2)
+            self.assertNotEqual(uuids[0], uuids[1])
+            self.assertEqual(uuids[0], expected_first)
+            self.assertEqual(uuids[1], expected_second)
 
         asyncio.run(run_test())
 

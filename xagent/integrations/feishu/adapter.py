@@ -2255,7 +2255,11 @@ class FeishuAdapter:
             raise ValueError("scheduled Feishu task produced no content")
         message_id = str(target.get("message_id") or "").strip() or None
         is_group = bool(target.get("is_group"))
-        uuid_message_id = self._message_uuid(f"scheduled:{task.task_id}")
+        # Include run_at so recurring/interval dispatches are not Feishu-deduped
+        # by a stable task_id-only uuid across executions.
+        uuid_message_id = self._message_uuid(
+            f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}"
+        )
         if result.content:
             send_result = await send_message(
                 self._channel,
