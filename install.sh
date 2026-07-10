@@ -157,15 +157,16 @@ success_message() {
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${GREEN}  xAgent installed successfully!${NC}"
     echo ""
-    echo -e "  Run   ${CYAN}${COMMAND_NAME}${NC}"
+    echo -e "  Get started:"
+    echo -e "    ${CYAN}${COMMAND_NAME}${NC}"
+    echo -e "      Open xAgent's interactive menu to set up and manage your agent."
     echo ""
-    if [ "${XAGENT_NO_PATH_MODIFY:-0}" != "1" ]; then
-        if [ "$PATH_CONFIGURED" -eq 1 ]; then
-            echo -e "  ${YELLOW}Open a new terminal to pick up PATH changes.${NC}"
-        fi
-        echo -e "  To run ${CYAN}${COMMAND_NAME}${NC} in this terminal:"
-        echo -e "    ${CYAN}export PATH=\"$BINDIR:\$PATH\"${NC}"
-    fi
+    echo -e "  Want a visual interface?"
+    echo -e "    ${CYAN}${COMMAND_NAME} web start --open${NC}"
+    echo -e "      Start the xAgent Web UI and open it in your browser."
+    echo ""
+    echo -e "  More commands:"
+    echo -e "    ${CYAN}${COMMAND_NAME} --help${NC}"
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
