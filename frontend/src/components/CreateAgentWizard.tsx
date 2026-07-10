@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
+import { X } from "lucide-react";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { getAgentNameAvailability, getAgentSetupSchema } from "../lib/api";
 import { classNames } from "../lib/format";
 import type { AgentSetupSchema, CreateAgentInput, InitSelectionInput } from "../types";
 import { VoiceSetupFields } from "./VoiceSetupFields";
 import { WizardField } from "./WizardField";
-import { Button } from "./ui";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { Button, IconButton } from "./ui";
 
 const NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
 
@@ -115,6 +117,7 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [directoryExists, setDirectoryExists] = useState(false);
+  const [discardConfirmationOpen, setDiscardConfirmationOpen] = useState(false);
   const [state, dispatch] = useReducer(wizardReducer, {
     stepIndex: 0,
     name: "",
@@ -137,6 +140,15 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
   const steps = useMemo(() => visibleSteps(state.selection), [state.selection]);
   const currentStepId = steps[state.stepIndex] ?? steps[0] ?? "basics";
   const isLastStep = state.stepIndex >= steps.length - 1;
+  const isDirty = useMemo(() => {
+    if (!schema || loadingSchema) return false;
+    const initial = defaultSelection(schema);
+    return (
+      state.name !== "" ||
+      state.replaceExisting ||
+      JSON.stringify(state.selection) !== JSON.stringify(initial)
+    );
+  }, [loadingSchema, schema, state.name, state.replaceExisting, state.selection]);
 
   useEffect(() => {
     if (!open) return;
@@ -174,10 +186,25 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
     [schema, state.selection.provider],
   );
 
-  const close = () => {
+  const requestClose = () => {
     if (submitting) return;
+    if (isDirty) {
+      setDiscardConfirmationOpen(true);
+      return;
+    }
     onClose();
   };
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || discardConfirmationOpen) return;
+      event.preventDefault();
+      requestClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [discardConfirmationOpen, isDirty, onClose, open, submitting]);
 
   const validateStep = (stepId: StepId): string => {
     if (stepId === "basics") {
@@ -282,20 +309,30 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
   if (!open) return null;
 
   return (
-    <div className="modal-overlay" role="presentation" onClick={close}>
+    <div className="modal-overlay" role="presentation">
       <div
         className="modal-card wizard-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-agent-title"
-        onClick={(event) => event.stopPropagation()}
       >
         <div className="wizard-header-block">
-          <div>
-            <h3 id="create-agent-title">Create agent</h3>
-            <p className="wizard-subtitle">
-              Step {state.stepIndex + 1} of {steps.length}: {STEP_LABELS[currentStepId]}
-            </p>
+          <div className="wizard-header-heading">
+            <div>
+              <h3 id="create-agent-title">Create agent</h3>
+              <p className="wizard-subtitle">
+                Step {state.stepIndex + 1} of {steps.length}: {STEP_LABELS[currentStepId]}
+              </p>
+            </div>
+            <IconButton
+              type="button"
+              onClick={requestClose}
+              disabled={submitting}
+              title="Close setup"
+              aria-label="Close setup"
+            >
+              <X size={16} />
+            </IconButton>
           </div>
           <div className="wizard-steps" aria-hidden="true">
             {steps.map((stepId, index) => (
@@ -598,7 +635,7 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
         </div>
 
         <div className="modal-footer">
-          <Button type="button" variant="ghost" onClick={close} disabled={submitting}>
+          <Button type="button" variant="ghost" onClick={requestClose} disabled={submitting}>
             Cancel
           </Button>
           <div className="modal-footer-actions">
@@ -619,6 +656,17 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        open={discardConfirmationOpen}
+        title="Discard unsaved setup?"
+        description="Your changes have not been saved and will be lost."
+        confirmLabel="Discard changes"
+        onConfirm={() => {
+          setDiscardConfirmationOpen(false);
+          onClose();
+        }}
+        onCancel={() => setDiscardConfirmationOpen(false)}
+      />
     </div>
   );
 }

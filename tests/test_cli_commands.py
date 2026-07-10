@@ -2958,8 +2958,9 @@ class CLICommandTests(unittest.TestCase):
         self.assertIs(config["channels"]["feishu"]["stream"], False)
         self.assertIs(config["channels"]["feishu"]["group_reply_only_when_mentioned"], False)
         self.assertIn("Feishu Ready", output)
-        self.assertIn("Optional before group rollout", output)
-        self.assertIn("If you only need direct chats right now", output)
+        self.assertIn("Optional: Enable group chat support", output)
+        self.assertIn("Contact Scope", output)
+        self.assertNotIn("⚠️", output)
         self.assertIn("xagent feishu start", output)
 
     def test_feishu_wizard_interactive_defaults_skip_optional_questions(self):

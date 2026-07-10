@@ -93,6 +93,43 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
   }, [channel, feishuSelection.credential_mode]);
 
   const currentStepId = steps[stepIndex]?.id ?? steps[0]?.id ?? "voice";
+  const isDirty = useMemo(() => {
+    if (!schema || loadingSchema || force || qrReady) return Boolean(force || qrReady);
+    if (channel === "voice") {
+      return JSON.stringify(voiceSelection) !== JSON.stringify(defaultVoiceSelection(schema as VoiceSetupSchema));
+    }
+    if (channel === "feishu") {
+      const defaults = (schema as FeishuSetupSchema).defaults;
+      return (
+        feishuSelection.credential_mode !== defaults.credential_mode ||
+        feishuSelection.app_id !== "" ||
+        feishuSelection.app_secret !== "" ||
+        feishuSelection.stream !== defaults.stream ||
+        feishuSelection.group_fetch_limit !== defaults.group_fetch_limit ||
+        feishuSelection.group_reply_only_when_mentioned !== defaults.group_reply_only_when_mentioned
+      );
+    }
+    const defaults = (schema as WeixinSetupSchema).defaults;
+    return (
+      weixinSelection.owner_only !== defaults.owner_only ||
+      weixinSelection.allow_users !== "" ||
+      weixinSelection.media_enabled !== defaults.media_enabled ||
+      weixinSelection.account_id !== "" ||
+      weixinSelection.owner_user_id !== "" ||
+      weixinSelection.base_url !== defaults.base_url ||
+      weixinSelection.cdn_base_url !== defaults.cdn_base_url ||
+      weixinSelection.credentials !== null
+    );
+  }, [
+    channel,
+    feishuSelection,
+    force,
+    loadingSchema,
+    qrReady,
+    schema,
+    voiceSelection,
+    weixinSelection,
+  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -264,6 +301,7 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
       stepIndex={stepIndex}
       loading={loadingSchema}
       submitting={submitting}
+      isDirty={isDirty}
       error={error}
       submitLabel="Save setup"
       onClose={onClose}
