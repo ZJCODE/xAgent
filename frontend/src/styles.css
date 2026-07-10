@@ -694,7 +694,6 @@ input {
 .status-badge,
 .meta-chip,
 .data-chip,
-.task-state,
 .status-dot-chip {
   display: inline-flex;
   min-height: 26px;
@@ -713,11 +712,20 @@ input {
 
 .status-badge-good,
 .status-dot-chip.is-enabled,
-.status-dot-chip.is-valid,
-.task-state {
+.status-dot-chip.is-valid {
   border-color: color-mix(in srgb, var(--success) 24%, var(--border));
   background: var(--success-soft);
   color: var(--success);
+}
+
+.status-badge.task-type-agent {
+  border-color: color-mix(in srgb, #f37021 28%, var(--border));
+  background: color-mix(in srgb, #f37021 12%, var(--bg-surface-muted));
+  color: #e85d04;
+}
+
+.dark .status-badge.task-type-agent {
+  color: #ff8c42;
 }
 
 .status-badge-info {
@@ -1767,6 +1775,13 @@ input::placeholder {
   align-items: center;
   gap: 8px;
   margin-bottom: 4px;
+}
+
+.task-row-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .task-row-main p {

@@ -1,7 +1,7 @@
 import { CalendarClock, Pause, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { TaskEditorModal, type TaskEditorSave } from "../components/TaskEditorModal";
-import { Button, EmptyState, PageShell, PageToolbar } from "../components/ui";
+import { Button, EmptyState, PageShell, PageToolbar, StatusBadge } from "../components/ui";
 import { createTask, deleteTask, getTasks, pauseTask, resumeTask, updateTask } from "../lib/api";
 import type { ScheduledTaskItem, TasksResponse } from "../types";
 
@@ -24,11 +24,26 @@ function taskContent(task: ScheduledTaskItem): string {
   return String(task.content || "").trim();
 }
 
-function taskTitle(task: ScheduledTaskItem): string {
-  const type = String(task.task_type || "").trim();
+function taskDisplayTitle(task: ScheduledTaskItem): string {
   const title = String(task.title || "").trim();
-  if (title) return type ? `${title} · ${type}` : title;
-  return type ? `Scheduled ${type}` : "Scheduled task";
+  if (title) return title;
+  const content = taskContent(task);
+  if (content) return content.length > 48 ? `${content.slice(0, 48)}…` : content;
+  return "Scheduled task";
+}
+
+function taskTypeBadge(task: ScheduledTaskItem) {
+  const type = task.task_type === "agent" ? "agent" : "message";
+  if (type === "agent") {
+    return <StatusBadge className="task-type-agent">{type}</StatusBadge>;
+  }
+  return <StatusBadge tone="info">{type}</StatusBadge>;
+}
+
+function taskStatusTone(status: string): "good" | "muted" | "danger" {
+  if (status === "paused") return "muted";
+  if (status === "failed") return "danger";
+  return "good";
 }
 
 function formatSeconds(value: unknown): string {
@@ -175,8 +190,11 @@ export function TasksPage() {
                   </div>
                   <div className="task-row-main">
                     <div className="task-row-title">
-                      <h3>{taskTitle(task)}</h3>
-                      <span className="task-state">{task.status}</span>
+                      <h3>{taskDisplayTitle(task)}</h3>
+                      <div className="task-row-badges">
+                        {taskTypeBadge(task)}
+                        <StatusBadge tone={taskStatusTone(task.status)}>{task.status}</StatusBadge>
+                      </div>
                     </div>
                     <p>{taskContent(task) || task.task_id}</p>
                     <div className="chip-list">
