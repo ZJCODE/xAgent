@@ -777,7 +777,8 @@ def handle_status_all(args: argparse.Namespace) -> int:
     return 0
 
 
-def _start_background_web(args: argparse.Namespace) -> bool:
+def _start_background_web(args: argparse.Namespace) -> tuple[bool, bool]:
+    """Start the web client. Returns (success, already_running)."""
     paths = web_client_paths()
     result = start_background(
         _web_command(args),
@@ -787,12 +788,16 @@ def _start_background_web(args: argparse.Namespace) -> bool:
     if result.ok:
         print(f"Started web client in background (pid={result.pid}).")
         print(f"Logs: {paths.log_path}")
-        return True
+        return True, False
+
+    if result.error.startswith("already running"):
+        print(f"Web client is already running (pid={result.pid}).")
+        return True, True
 
     print(f"Failed to start web client: {result.error}")
     if result.recent_output:
         print(result.recent_output)
-    return False
+    return False, False
 
 
 def handle_web_start(args: argparse.Namespace) -> int:
@@ -801,7 +806,12 @@ def handle_web_start(args: argparse.Namespace) -> int:
     except ChannelSelectionError as exc:
         return _handle_channel_error(exc)
 
-    return 0 if _start_background_web(args) else 1
+    started, already_running = _start_background_web(args)
+    if not started:
+        return 1
+    if getattr(args, "open_browser", False) and already_running:
+        return handle_web_open(args)
+    return 0
 
 
 def handle_web_stop(args: argparse.Namespace) -> int:
@@ -817,7 +827,8 @@ def handle_web_restart(args: argparse.Namespace) -> int:
     print(f"web: {message}")
     if not stopped:
         return 1
-    return 0 if _start_background_web(args) else 1
+    started, _already_running = _start_background_web(args)
+    return 0 if started else 1
 
 
 def handle_web_status(args: argparse.Namespace) -> int:

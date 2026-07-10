@@ -3387,6 +3387,52 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(starter.call_args.kwargs["pid_path"], root.resolve() / "run" / "web.pid")
         self.assertEqual(starter.call_args.kwargs["log_path"], root.resolve() / "logs" / "web.log")
 
+    def test_web_start_when_already_running_succeeds(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_dir = Path(tmpdir) / "agents" / "work"
+            _write_runtime(str(agent_dir))
+            args = argparse.Namespace(
+                config_dir=str(agent_dir),
+                host=None,
+                port=None,
+                api_url=None,
+                open_browser=False,
+            )
+
+            with patch(
+                "xagent.interfaces.cli.runtime.start_background",
+                return_value=StartResult(ok=False, pid=70780, error="already running (pid=70780)"),
+            ):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = handle_web_start(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("already running (pid=70780)", stdout.getvalue())
+
+    def test_web_start_open_when_already_running_opens_browser(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_dir = Path(tmpdir) / "agents" / "work"
+            _write_runtime(str(agent_dir))
+            args = argparse.Namespace(
+                config_dir=str(agent_dir),
+                host=None,
+                port=None,
+                api_url=None,
+                open_browser=True,
+            )
+
+            with patch(
+                "xagent.interfaces.cli.runtime.start_background",
+                return_value=StartResult(ok=False, pid=70780, error="already running (pid=70780)"),
+            ):
+                with patch("webbrowser.open", return_value=True) as browser_open:
+                    with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                        exit_code = handle_web_start(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("already running (pid=70780)", stdout.getvalue())
+        browser_open.assert_called_once_with(f"http://127.0.0.1:{DEFAULT_WEB_CLIENT_PORT}")
+
     def test_web_client_status_uses_global_pid_paths_for_any_agent(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "home"
