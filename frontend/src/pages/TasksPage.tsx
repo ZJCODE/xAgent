@@ -1,7 +1,7 @@
-import { CalendarClock, Pause, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { CalendarClock, Pause, Pencil, Play, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { TaskEditorModal, type TaskEditorSave } from "../components/TaskEditorModal";
-import { Button, EmptyState, PageShell, PageToolbar, StatusBadge } from "../components/ui";
+import { Button, EmptyState, IconButton, PageShell, PageToolbar, SearchField, StatusBadge } from "../components/ui";
 import { createTask, deleteTask, getTasks, pauseTask, resumeTask, updateTask } from "../lib/api";
 import type { ScheduledTaskItem, TasksResponse } from "../types";
 
@@ -54,25 +54,62 @@ function formatSeconds(value: unknown): string {
   return `${seconds}s`;
 }
 
-function taskRecurrenceLabels(task: ScheduledTaskItem): string[] {
+function taskRecurrenceChips(task: ScheduledTaskItem): string[] {
   const recurrence = Array.isArray(task.recurrence) ? task.recurrence : [];
-  return recurrence
-    .map((rule) => {
-      const kind = String(rule?.kind || "").trim();
-      if (kind === "interval") {
-        const every = formatSeconds(rule?.every_seconds);
-        const startAt = formatRunAt(String(rule?.start_at || ""));
-        const endAt = formatRunAt(String(rule?.end_at || ""));
-        const windowLabel = startAt && endAt ? `${startAt} - ${endAt}` : endAt ? `until ${endAt}` : "";
-        return [kind, every ? `every ${every}` : "", windowLabel].filter(Boolean).join(" · ");
-      }
-      const time = String(rule?.time || "").trim();
-      const weekdays = Array.isArray(rule?.weekdays)
-        ? rule.weekdays.map((item) => String(item || "").trim()).filter(Boolean).join(", ")
-        : "";
-      return [kind, weekdays, time].filter(Boolean).join(" · ");
-    })
-    .filter(Boolean);
+  const chips: string[] = [];
+
+  for (const rule of recurrence) {
+    const kind = String(rule?.kind || "").trim();
+    if (!kind) continue;
+
+    if (kind === "interval") {
+      chips.push(kind);
+      const every = formatSeconds(rule?.every_seconds);
+      if (every) chips.push(`every ${every}`);
+      const startAt = formatRunAt(String(rule?.start_at || ""));
+      const endAt = formatRunAt(String(rule?.end_at || ""));
+      if (startAt && endAt) chips.push(`${startAt} - ${endAt}`);
+      else if (endAt) chips.push(`until ${endAt}`);
+      continue;
+    }
+
+    chips.push(kind);
+    const weekdays = Array.isArray(rule?.weekdays)
+      ? rule.weekdays.map((item) => String(item || "").trim()).filter(Boolean).join(", ")
+      : "";
+    if (weekdays) chips.push(weekdays);
+    const time = String(rule?.time || "").trim();
+    if (time) chips.push(time);
+  }
+
+  return chips;
+}
+
+function taskSearchText(task: ScheduledTaskItem): string {
+  const target = task.target || {};
+  return [
+    task.task_id,
+    task.title,
+    task.content,
+    task.status,
+    task.task_type,
+    task.channel,
+    task.user_id,
+    String(target.user_id || ""),
+    String(target.chat_id || ""),
+    formatRunAt(task.next_run_at),
+    taskTarget(task),
+    ...taskRecurrenceChips(task),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function filterTasks(tasks: ScheduledTaskItem[], query: string): ScheduledTaskItem[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return tasks;
+  return tasks.filter((task) => taskSearchText(task).includes(needle));
 }
 
 type EditorMode = "create" | "edit" | null;
@@ -84,8 +121,14 @@ export function TasksPage() {
   const [editorMode, setEditorMode] = useState<EditorMode>(null);
   const [editingTask, setEditingTask] = useState<ScheduledTaskItem | null>(null);
   const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
 
   const tasks = useMemo(() => data?.tasks || [], [data]);
+  const visibleTasks = useMemo(
+    () => (appliedQuery ? filterTasks(tasks, appliedQuery) : tasks),
+    [tasks, appliedQuery],
+  );
 
   const load = async () => {
     setLoading(true);
@@ -108,6 +151,15 @@ export function TasksPage() {
     }, 20000);
     return () => window.clearInterval(timer);
   }, []);
+
+  const runSearch = () => {
+    setAppliedQuery(query.trim());
+  };
+
+  const clearSearch = () => {
+    setQuery("");
+    setAppliedQuery("");
+  };
 
   const openCreate = () => {
     setError("");
@@ -163,16 +215,75 @@ export function TasksPage() {
     }
   };
 
+  const renderTaskActions = (task: ScheduledTaskItem) => {
+    const pauseLabel = task.status === "paused" ? "Resume" : "Pause";
+    return (
+      <div className="task-row-actions">
+        {task.status !== "failed" && (
+          <Button
+            type="button"
+            className="task-action-button"
+            onClick={() => void togglePause(task)}
+            title={pauseLabel}
+            aria-label={pauseLabel}
+          >
+            {task.status === "paused" ? <Play size={15} /> : <Pause size={15} />}
+            {pauseLabel}
+          </Button>
+        )}
+        {task.status !== "failed" && (
+          <Button
+            type="button"
+            className="task-action-button"
+            onClick={() => openEdit(task)}
+            title="Edit task"
+            aria-label="Edit task"
+          >
+            <Pencil size={15} />
+            Edit
+          </Button>
+        )}
+        <IconButton
+          type="button"
+          variant="danger"
+          onClick={() => void removeTask(task)}
+          title="Delete task"
+          aria-label={`Delete task ${task.task_id}`}
+        >
+          <Trash2 size={15} />
+        </IconButton>
+      </div>
+    );
+  };
+
   return (
     <PageShell>
       <PageToolbar
         title="Tasks"
         subtitle={data?.root || "tasks"}
         actions={
-          <Button type="button" onClick={openCreate}>
-            <Plus size={15} />
-            Create
-          </Button>
+          <>
+            <Button type="button" onClick={openCreate}>
+              <Plus size={15} />
+              Create
+            </Button>
+            <SearchField
+              placeholder="Search tasks"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onSubmit={runSearch}
+            />
+            <Button type="button" onClick={runSearch}>
+              <Search size={15} />
+              Search
+            </Button>
+            <IconButton type="button" onClick={clearSearch} title="Clear search">
+              <X size={16} />
+            </IconButton>
+            <IconButton type="button" onClick={() => void load()} title="Refresh">
+              <RefreshCw size={16} />
+            </IconButton>
+          </>
         }
       />
 
@@ -181,9 +292,9 @@ export function TasksPage() {
           {error && <div className="error-banner">{error}</div>}
           {loading ? (
             <EmptyState title="Loading tasks..." />
-          ) : tasks.length ? (
+          ) : visibleTasks.length ? (
             <div className="task-list">
-              {tasks.map((task) => (
+              {visibleTasks.map((task) => (
                 <article key={task.task_id} className="task-row">
                   <div className="task-row-icon">
                     <CalendarClock size={18} />
@@ -198,39 +309,25 @@ export function TasksPage() {
                     </div>
                     <p>{taskContent(task) || task.task_id}</p>
                     <div className="chip-list">
-                      <span className="data-chip">{formatRunAt(task.next_run_at)}</span>
-                      <span className="data-chip">{taskTarget(task)}</span>
-                      {taskRecurrenceLabels(task).map((label) => (
-                        <span key={`${task.task_id}-${label}`} className="data-chip">{label}</span>
+                      <span className="data-chip data-chip-wrap">{formatRunAt(task.next_run_at)}</span>
+                      <span className="data-chip data-chip-wrap">{taskTarget(task)}</span>
+                      {taskRecurrenceChips(task).map((label) => (
+                        <span key={`${task.task_id}-${label}`} className="data-chip data-chip-wrap">
+                          {label}
+                        </span>
                       ))}
                     </div>
                   </div>
-                  <div className="task-row-actions">
-                    {task.status !== "failed" && (
-                      <Button type="button" onClick={() => void togglePause(task)} title={task.status === "paused" ? "Resume" : "Pause"}>
-                        {task.status === "paused" ? <Play size={15} /> : <Pause size={15} />}
-                        {task.status === "paused" ? "Resume" : "Pause"}
-                      </Button>
-                    )}
-                    {task.status !== "failed" && (
-                      <Button type="button" onClick={() => openEdit(task)} title="Edit task">
-                        <Pencil size={15} />
-                        Edit
-                      </Button>
-                    )}
-                    <Button type="button" variant="danger" onClick={() => void removeTask(task)} title="Delete task">
-                      <Trash2 size={15} />
-                      Delete
-                    </Button>
-                  </div>
+                  {renderTaskActions(task)}
                 </article>
               ))}
             </div>
+          ) : appliedQuery ? (
+            <EmptyState title={`No tasks match "${appliedQuery}"`} />
           ) : (
             <EmptyState title="No scheduled tasks" />
           )}
         </section>
-
       </div>
       <TaskEditorModal
         open={Boolean(editorMode)}

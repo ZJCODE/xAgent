@@ -756,6 +756,21 @@ input {
   white-space: nowrap;
 }
 
+.data-chip-wrap {
+  align-self: flex-start;
+  align-items: flex-start;
+  height: auto;
+  border-radius: 8px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding: 5px 9px;
+}
+
+.task-row .chip-list {
+  align-items: flex-start;
+}
+
 .search-field {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1791,9 +1806,15 @@ input::placeholder {
 
 .task-row-actions {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
   justify-content: flex-end;
+  gap: 6px;
+}
+
+.task-action-button {
+  min-width: 104px;
 }
 
 .task-editor-modal {
@@ -2580,8 +2601,20 @@ input::placeholder {
     flex: 0 0 auto;
   }
 
-  .task-row {
-    grid-template-columns: auto minmax(0, 1fr);
+  .task-row-actions {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .task-action-button {
+    min-width: 40px;
+    width: 40px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .task-action-button svg {
+    flex: 0 0 auto;
   }
 
   .channel-list {
@@ -2596,10 +2629,5 @@ input::placeholder {
 
   .channel-row-actions .ui-button:not(.ui-icon-button) {
     min-height: var(--channel-action-size);
-  }
-
-  .task-row .ui-button-danger {
-    grid-column: 2;
-    width: fit-content;
   }
 }
