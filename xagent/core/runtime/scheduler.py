@@ -34,6 +34,9 @@ WEEKDAY_ALIASES = {
 }
 RECURRENCE_KIND_DAILY = "daily"
 RECURRENCE_KIND_WEEKLY = "weekly"
+RECURRENCE_KIND_INTERVAL = "interval"
+MIN_INTERVAL_EVERY_SECONDS = 60
+MAX_INTERVAL_DURATION_SECONDS = 30 * 24 * 3600
 
 
 def format_task_timestamp(run_at: datetime) -> str:
@@ -134,15 +137,23 @@ def normalize_recurrence_rules(value: Any) -> list[dict[str, Any]]:
         raise ValueError("recurrence must be an object or a list of objects")
 
     normalized_rules: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    seen: set[tuple[str, str, tuple[str, ...] | int]] = set()
     for raw_rule in raw_rules:
         if not isinstance(raw_rule, Mapping):
             raise ValueError("each recurrence rule must be an object")
         kind = str(raw_rule.get("kind") or "").strip().lower()
-        if kind not in {RECURRENCE_KIND_DAILY, RECURRENCE_KIND_WEEKLY}:
+        if kind not in {RECURRENCE_KIND_DAILY, RECURRENCE_KIND_WEEKLY, RECURRENCE_KIND_INTERVAL}:
             raise ValueError(
-                f"recurrence rule kind must be one of: {RECURRENCE_KIND_DAILY}, {RECURRENCE_KIND_WEEKLY}"
+                f"recurrence rule kind must be one of: {RECURRENCE_KIND_DAILY}, {RECURRENCE_KIND_WEEKLY}, {RECURRENCE_KIND_INTERVAL}"
             )
+        if kind == RECURRENCE_KIND_INTERVAL:
+            rule = _normalize_interval_rule(raw_rule)
+            key = (kind, str(rule["end_at"]), int(rule["every_seconds"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized_rules.append(rule)
+            continue
         formatted_time = format_time_of_day(parse_time_of_day(str(raw_rule.get("time") or "")))
         if kind == RECURRENCE_KIND_DAILY:
             rule: dict[str, Any] = {"kind": RECURRENCE_KIND_DAILY, "time": formatted_time}
@@ -161,7 +172,69 @@ def normalize_recurrence_rules(value: Any) -> list[dict[str, Any]]:
             continue
         seen.add(key)
         normalized_rules.append(rule)
+    _validate_recurrence_rule_mix(normalized_rules)
     return sorted(normalized_rules, key=_recurrence_rule_sort_key)
+
+
+def materialize_interval_recurrence_rules(value: Any, *, now: datetime | None = None) -> list[dict[str, Any]]:
+    """Normalize recurrence rules and convert interval duration into an absolute end_at."""
+    current = (now or datetime.now()).replace(microsecond=0)
+    rules = _raw_recurrence_rules(value)
+    materialized: list[dict[str, Any]] = []
+    for raw_rule in rules:
+        if not isinstance(raw_rule, Mapping):
+            raise ValueError("each recurrence rule must be an object")
+        rule = dict(raw_rule)
+        kind = str(rule.get("kind") or "").strip().lower()
+        if kind == RECURRENCE_KIND_INTERVAL and "duration_seconds" in rule and "end_at" not in rule:
+            duration_seconds = _parse_positive_int(rule.get("duration_seconds"), "duration_seconds")
+            if duration_seconds > MAX_INTERVAL_DURATION_SECONDS:
+                raise ValueError(
+                    f"duration_seconds must be at most {MAX_INTERVAL_DURATION_SECONDS} for interval recurrence"
+                )
+            rule["end_at"] = (current + timedelta(seconds=duration_seconds)).isoformat(sep=" ")
+            rule.pop("duration_seconds", None)
+        materialized.append(rule)
+    return normalize_recurrence_rules(materialized)
+
+
+def is_interval_recurrence(value: Any) -> bool:
+    rules = normalize_recurrence_rules(value)
+    return len(rules) == 1 and rules[0].get("kind") == RECURRENCE_KIND_INTERVAL
+
+
+def resolve_interval_first_run_at(
+    rule: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+    delay_seconds: int | None = None,
+) -> datetime:
+    current = (now or datetime.now()).replace(microsecond=0)
+    normalized = _normalize_interval_rule(rule)
+    if delay_seconds is not None:
+        if delay_seconds < 0:
+            raise ValueError("delay_seconds must be zero or positive.")
+        candidate = current + timedelta(seconds=delay_seconds)
+    else:
+        candidate = current + timedelta(seconds=int(normalized["every_seconds"]))
+    end_at = parse_run_at(str(normalized["end_at"]))
+    if candidate > end_at:
+        raise ValueError("duration is too short for even one interval execution")
+    return candidate
+
+
+def calculate_next_interval_run_at(
+    current_run_at: datetime,
+    rule: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+) -> datetime | None:
+    normalized = _normalize_interval_rule(rule)
+    next_run_at = parse_run_at(current_run_at) + timedelta(seconds=int(normalized["every_seconds"]))
+    end_at = parse_run_at(str(normalized["end_at"]))
+    if next_run_at > end_at:
+        return None
+    return next_run_at
 
 
 def resolve_daily_run_at(value: str, *, now: datetime | None = None) -> datetime:
@@ -229,8 +302,18 @@ def resolve_recurrence_run_at(value: Any, *, now: datetime | None = None) -> dat
     return min(candidates)
 
 
-def calculate_next_recurrence_run_at(value: Any, *, now: datetime | None = None) -> datetime:
+def calculate_next_recurrence_run_at(
+    value: Any,
+    *,
+    now: datetime | None = None,
+    current_run_at: datetime | None = None,
+) -> datetime | None:
     """Advance recurrence rules to the next future scheduled datetime."""
+    rules = normalize_recurrence_rules(value)
+    if is_interval_recurrence(rules):
+        if current_run_at is None:
+            raise ValueError("current_run_at is required for interval recurrence")
+        return calculate_next_interval_run_at(current_run_at, rules[0], now=now)
     return resolve_recurrence_run_at(value, now=now)
 
 
@@ -264,14 +347,62 @@ def _next_occurrence_for_rule(rule: Mapping[str, Any], *, now: datetime | None =
         return resolve_daily_run_at(time_value, now=current)
     if kind == RECURRENCE_KIND_WEEKLY:
         return resolve_weekly_run_at(time_value, weekdays=rule.get("weekdays"), now=current)
+    if kind == RECURRENCE_KIND_INTERVAL:
+        return resolve_interval_first_run_at(rule, now=current)
     raise ValueError(f"unsupported recurrence rule kind: {kind}")
 
 
 def _recurrence_rule_sort_key(rule: Mapping[str, Any]) -> tuple[str, str, tuple[str, ...]]:
     kind = str(rule.get("kind") or "").strip().lower()
+    if kind == RECURRENCE_KIND_INTERVAL:
+        return kind, str(rule.get("end_at") or ""), (str(rule.get("every_seconds") or ""),)
     time_value = str(rule.get("time") or "").strip()
     weekdays = tuple(normalize_weekdays(rule.get("weekdays")))
     return kind, time_value, weekdays
+
+
+def _raw_recurrence_rules(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, Mapping):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    raise ValueError("recurrence must be an object or a list of objects")
+
+
+def _normalize_interval_rule(raw_rule: Mapping[str, Any]) -> dict[str, Any]:
+    every_seconds = _parse_positive_int(raw_rule.get("every_seconds"), "every_seconds")
+    if every_seconds < MIN_INTERVAL_EVERY_SECONDS:
+        raise ValueError(f"every_seconds must be at least {MIN_INTERVAL_EVERY_SECONDS} for interval recurrence")
+    has_end_at = bool(str(raw_rule.get("end_at") or "").strip())
+    has_duration = "duration_seconds" in raw_rule and raw_rule.get("duration_seconds") is not None
+    if has_end_at == has_duration:
+        raise ValueError("interval recurrence requires exactly one of end_at or duration_seconds")
+    if has_duration:
+        raise ValueError("duration_seconds must be materialized to end_at before storing interval recurrence")
+    end_at = parse_run_at(str(raw_rule.get("end_at") or ""))
+    return {
+        "kind": RECURRENCE_KIND_INTERVAL,
+        "every_seconds": every_seconds,
+        "end_at": end_at.isoformat(sep=" "),
+    }
+
+
+def _parse_positive_int(value: Any, name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return parsed
+
+
+def _validate_recurrence_rule_mix(rules: list[dict[str, Any]]) -> None:
+    interval_count = sum(1 for rule in rules if rule.get("kind") == RECURRENCE_KIND_INTERVAL)
+    if interval_count and len(rules) != 1:
+        raise ValueError("interval recurrence cannot be combined with other recurrence rules")
 
 
 def ensure_scheduler_dirs(tasks_dir: Path | str) -> tuple[Path, Path]:

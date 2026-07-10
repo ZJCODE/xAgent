@@ -76,8 +76,10 @@ export interface ChatEvent {
 
 export interface ScheduledTaskRecurrenceRule {
   kind: "daily" | "weekly" | string;
-  time: string;
+  time?: string;
   weekdays?: string[];
+  every_seconds?: number;
+  end_at?: string;
 }
 
 export interface ScheduledTaskItem {

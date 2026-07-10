@@ -8,6 +8,7 @@ from xagent.core.runtime import (
     ScheduledDeliveryContext,
     enqueue_scheduled_task,
     list_task_records,
+    resolve_scheduled_task_run_at,
     scheduled_delivery_context,
 )
 from xagent.tools.scheduler_tool import create_schedule_task_tool
@@ -182,6 +183,56 @@ class ScheduledTaskTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_async_scheduler_reschedules_interval_task_until_end_at(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="hey",
+                    run_at=datetime(2026, 6, 1, 10, 10, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 10:30:00"}],
+                    title="Hey reminder",
+                )
+                delivered = []
+                current = {"now": datetime(2026, 6, 1, 10, 10, 0)}
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=lambda task: _append_delivered(delivered, task.run_at),
+                    now_provider=lambda: current["now"],
+                )
+
+                await scheduler.tick()
+                first_records = list_task_records(tmpdir, include_failed=False)
+                current["now"] = datetime(2026, 6, 1, 10, 20, 0)
+                await scheduler.tick()
+                second_records = list_task_records(tmpdir, include_failed=False)
+                current["now"] = datetime(2026, 6, 1, 10, 30, 0)
+                await scheduler.tick()
+                final_records = list_task_records(tmpdir, include_failed=False)
+
+            self.assertEqual(
+                delivered,
+                [
+                    datetime(2026, 6, 1, 10, 10, 0),
+                    datetime(2026, 6, 1, 10, 20, 0),
+                    datetime(2026, 6, 1, 10, 30, 0),
+                ],
+            )
+            self.assertEqual(first_records[0].task_id, original.task_id)
+            self.assertEqual(first_records[0].run_at, datetime(2026, 6, 1, 10, 20, 0))
+            self.assertEqual(second_records[0].run_at, datetime(2026, 6, 1, 10, 30, 0))
+            self.assertEqual(final_records, [])
+
+        async def _append_delivered(delivered, run_at):
+            delivered.append(run_at)
+
+        asyncio.run(run_test())
+
     def test_async_scheduler_reschedules_failed_daily_task_on_dispatch_error(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -254,6 +305,27 @@ class ScheduledTaskTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_resolve_scheduled_task_run_at_materializes_interval_duration(self):
+        now = datetime(2026, 6, 1, 11, 0, 0)
+
+        run_at, recurrence = resolve_scheduled_task_run_at(
+            recurrence=[{"kind": "interval", "every_seconds": 600, "duration_seconds": 18000}],
+            now=now,
+        )
+        immediate_run_at, immediate_recurrence = resolve_scheduled_task_run_at(
+            delay_seconds=0,
+            recurrence=[{"kind": "interval", "every_seconds": 600, "duration_seconds": 18000}],
+            now=now,
+        )
+
+        self.assertEqual(run_at, datetime(2026, 6, 1, 11, 10, 0))
+        self.assertEqual(
+            recurrence,
+            [{"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 16:00:00"}],
+        )
+        self.assertEqual(immediate_run_at, now)
+        self.assertEqual(immediate_recurrence[0]["end_at"], "2026-06-01 16:00:00")
+
     def test_manage_scheduled_tasks_create_uses_current_delivery_context(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -273,6 +345,29 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertEqual(records[0].target["chat_id"], "oc_chat")
             self.assertEqual(records[0].target["message_id"], "om_anchor")
             self.assertEqual(records[0].content, "查一下当前系统的温度然后发我")
+
+        asyncio.run(run_test())
+
+    def test_manage_scheduled_tasks_creates_interval_task_with_convenience_params(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tool = create_schedule_task_tool(tasks_dir=tmpdir)
+                result = await tool(
+                    action="create",
+                    task_type="message",
+                    content="hey",
+                    interval_seconds=600,
+                    duration_seconds=18000,
+                    title="Hey reminder",
+                )
+                records = list_task_records(tmpdir)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["task"]["recurrence"][0]["kind"], "interval")
+            self.assertEqual(result["task"]["recurrence"][0]["every_seconds"], 600)
+            self.assertIn("end_at", result["task"]["recurrence"][0])
+            self.assertNotIn("duration_seconds", result["task"]["recurrence"][0])
+            self.assertEqual(records[0].recurrence, result["task"]["recurrence"])
 
         asyncio.run(run_test())
 
@@ -357,6 +452,36 @@ class ScheduledTaskTests(unittest.TestCase):
                     content="写日报",
                     recurrence=[{"kind": "monthly", "time": "10:00:00"}],
                 )
+                interval_too_short = await tool(
+                    action="create",
+                    task_type="message",
+                    content="hey",
+                    interval_seconds=30,
+                    duration_seconds=300,
+                )
+                interval_missing_end = await tool(
+                    action="create",
+                    task_type="message",
+                    content="hey",
+                    interval_seconds=600,
+                )
+                interval_with_run_at = await tool(
+                    action="create",
+                    task_type="message",
+                    content="hey",
+                    run_at="2026-06-01 10:00:00",
+                    interval_seconds=600,
+                    duration_seconds=18000,
+                )
+                mixed_interval = await tool(
+                    action="create",
+                    task_type="message",
+                    content="hey",
+                    recurrence=[
+                        {"kind": "daily", "time": "10:00:00"},
+                        {"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 12:00:00"},
+                    ],
+                )
                 missing_task_type = await tool(action="create", content="走两步", delay_seconds=60)
                 missing_task_id = await tool(action="delete")
 
@@ -380,6 +505,14 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertIn("weekdays", invalid_weekly_missing_weekdays["error"])
             self.assertFalse(invalid_recurrence_kind["ok"])
             self.assertIn("kind must be one of", invalid_recurrence_kind["error"])
+            self.assertFalse(interval_too_short["ok"])
+            self.assertIn("at least", interval_too_short["error"])
+            self.assertFalse(interval_missing_end["ok"])
+            self.assertIn("exactly one", interval_missing_end["error"])
+            self.assertFalse(interval_with_run_at["ok"])
+            self.assertIn("one-time tasks", interval_with_run_at["error"])
+            self.assertFalse(mixed_interval["ok"])
+            self.assertIn("cannot be combined", mixed_interval["error"])
             self.assertFalse(missing_task_type["ok"])
             self.assertIn("task_type", missing_task_type["error"])
             self.assertFalse(missing_task_id["ok"])

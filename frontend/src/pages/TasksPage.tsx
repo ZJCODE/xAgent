@@ -30,11 +30,24 @@ function taskTitle(task: ScheduledTaskItem): string {
   return type ? `Scheduled ${type}` : "Scheduled task";
 }
 
+function formatSeconds(value: unknown): string {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}
+
 function taskRecurrenceLabels(task: ScheduledTaskItem): string[] {
   const recurrence = Array.isArray(task.recurrence) ? task.recurrence : [];
   return recurrence
     .map((rule) => {
       const kind = String(rule?.kind || "").trim();
+      if (kind === "interval") {
+        const every = formatSeconds(rule?.every_seconds);
+        const endAt = formatRunAt(String(rule?.end_at || ""));
+        return [kind, every ? `every ${every}` : "", endAt ? `until ${endAt}` : ""].filter(Boolean).join(" · ");
+      }
       const time = String(rule?.time || "").trim();
       const weekdays = Array.isArray(rule?.weekdays)
         ? rule.weekdays.map((item) => String(item || "").trim()).filter(Boolean).join(", ")

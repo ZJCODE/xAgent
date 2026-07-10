@@ -22,8 +22,11 @@ from .scheduler import (
     calculate_next_recurrence_run_at,
     ensure_scheduler_dirs,
     format_task_timestamp,
+    is_interval_recurrence,
+    materialize_interval_recurrence_rules,
     parse_run_at,
     normalize_recurrence_rules,
+    resolve_interval_first_run_at,
     resolve_recurrence_run_at,
 )
 
@@ -193,12 +196,17 @@ def resolve_scheduled_task_run_at(
 ) -> tuple[datetime, list[dict[str, Any]]]:
     """Resolve creation-time schedule parameters into a concrete next run datetime."""
     current = (now or datetime.now()).replace(microsecond=0)
-    normalized_recurrence = normalize_task_recurrence(recurrence)
+    normalized_recurrence = materialize_interval_recurrence_rules(recurrence, now=current)
     if normalized_recurrence:
-        if delay_seconds is not None:
-            raise ValueError("delay_seconds is not supported for recurring tasks")
         if run_at is not None:
             raise ValueError("run_at is only supported for one-time tasks; recurring tasks must define time inside recurrence")
+        if is_interval_recurrence(normalized_recurrence):
+            return (
+                resolve_interval_first_run_at(normalized_recurrence[0], now=current, delay_seconds=delay_seconds),
+                normalized_recurrence,
+            )
+        if delay_seconds is not None:
+            raise ValueError("delay_seconds is not supported for recurring tasks")
         return resolve_recurrence_run_at(normalized_recurrence, now=current), normalized_recurrence
 
     if delay_seconds is None and run_at is None:
@@ -231,7 +239,10 @@ def enqueue_scheduled_task(
     normalized_content = content.strip()
     if not normalized_content:
         raise ValueError("scheduled task content must not be empty")
-    normalized_recurrence = normalize_task_recurrence(recurrence)
+    normalized_recurrence = materialize_interval_recurrence_rules(
+        recurrence,
+        now=datetime.now().replace(microsecond=0),
+    )
     parsed_run_at = parse_run_at(run_at)
     root, _failed = ensure_scheduler_dirs(tasks_dir)
     task_id = uuid.uuid4().hex
@@ -471,7 +482,14 @@ class AsyncTaskScheduler:
         if not recurrence:
             path.unlink(missing_ok=True)
             return
-        next_run_at = calculate_next_recurrence_run_at(recurrence, now=self.now_provider())
+        next_run_at = calculate_next_recurrence_run_at(
+            recurrence,
+            now=self.now_provider(),
+            current_run_at=record.run_at,
+        )
+        if next_run_at is None:
+            path.unlink(missing_ok=True)
+            return
         self._reschedule_record(path, record, next_run_at)
 
     def _reschedule_record(self, path: Path, record: ScheduledTaskRecord, next_run_at: datetime) -> None:

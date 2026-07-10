@@ -23,6 +23,8 @@ PACKAGE_NAME="${XAGENT_PACKAGE:-myxagent}"
 COMMAND_NAME="${XAGENT_COMMAND:-xagent}"
 PYTHON_VERSION="${XAGENT_PYTHON_VERSION:-3.12}"
 BINDIR="${XAGENT_BINDIR:-$HOME/.local/bin}"
+PYPI_INDEX="${XAGENT_PYPI_INDEX:-https://pypi.org/simple/}"
+PYPI_JSON_URL="https://pypi.org/pypi/${PACKAGE_NAME}/json"
 
 info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
@@ -124,18 +126,92 @@ install_uv_if_needed() {
     has_command uv || error "uv installation failed. Please install uv manually and retry."
 }
 
-install_via_uv() {
+get_local_version() {
+    if ! has_command "$COMMAND_NAME"; then
+        echo ""
+        return 0
+    fi
+
+    ensure_path
+    "$COMMAND_NAME" --version 2>/dev/null | awk 'NR == 1 { print $2; exit }'
+}
+
+get_remote_version() {
+    has_command curl || error "curl is required to check for updates."
+
+    if has_command python3; then
+        curl -fsSL "$PYPI_JSON_URL" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])" \
+            || error "Failed to fetch latest version from PyPI."
+        return 0
+    fi
+
+    curl -fsSL "$PYPI_JSON_URL" \
+        | sed -n 's/.*"info"[[:space:]]*:[[:space:]]*{.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        | head -1 \
+        || error "Failed to fetch latest version from PyPI."
+}
+
+run_uv_tool_install() {
+    local package_spec="$1"
+
     install_uv_if_needed
-    step "Installing $PACKAGE_NAME via uv using Python $PYTHON_VERSION..."
     mkdir -p "$BINDIR"
-    UV_TOOL_BIN_DIR="$BINDIR" uv tool install --force "$PACKAGE_NAME" --python "$PYTHON_VERSION"
+    UV_TOOL_BIN_DIR="$BINDIR" uv tool install --force "$package_spec" \
+        --python "$PYTHON_VERSION" \
+        --default-index "$PYPI_INDEX"
+}
+
+install_via_uv() {
+    step "Installing $PACKAGE_NAME via uv using Python $PYTHON_VERSION..."
+    run_uv_tool_install "$PACKAGE_NAME"
     ensure_path
 }
 
 upgrade_xagent() {
     step "Checking for updates..."
 
-    install_via_uv
+    local local_ver remote_ver new_ver
+    local_ver=$(get_local_version)
+    remote_ver=$(get_remote_version)
+
+    if [ -z "$remote_ver" ]; then
+        error "Could not determine the latest $PACKAGE_NAME version from PyPI."
+    fi
+
+    if [ -n "$local_ver" ]; then
+        info "Installed: $local_ver | Latest: $remote_ver"
+    else
+        warn "Could not detect the local version; reinstalling latest ($remote_ver)..."
+        run_uv_tool_install "${PACKAGE_NAME}@latest"
+        ensure_path
+        return 0
+    fi
+
+    if [ "$local_ver" = "$remote_ver" ]; then
+        info "Already up to date ($local_ver)."
+        ensure_path
+        return 0
+    fi
+
+    step "Upgrading $PACKAGE_NAME $local_ver → $remote_ver..."
+    run_uv_tool_install "${PACKAGE_NAME}@latest"
+    ensure_path
+
+    new_ver=$(get_local_version)
+    if [ -n "$new_ver" ] && [ "$new_ver" = "$remote_ver" ]; then
+        info "Upgraded to $new_ver."
+        return 0
+    fi
+
+    if [ -n "$new_ver" ] && [ "$new_ver" != "$local_ver" ]; then
+        info "Upgraded to $new_ver (PyPI latest is $remote_ver)."
+        warn "Installed version differs from PyPI. Your package index may be out of sync."
+        warn "Retry with: XAGENT_PYPI_INDEX=https://pypi.org/simple/ curl -fsSL ... | bash"
+        return 0
+    fi
+
+    warn "Upgrade finished but the installed version could not be verified."
 }
 
 verify_install() {

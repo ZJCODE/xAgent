@@ -24,15 +24,19 @@ def create_schedule_task_tool(*, tasks_dir: str):
         name="manage_scheduled_tasks",
         description=(
             "Create, list, or delete future tasks for the active delivery channel. "
-            "Use message tasks for fixed text and agent tasks for due-time work that may need tools or reasoning."
+            "Use message tasks for fixed text, agent tasks for due-time work that may need tools or reasoning, "
+            "and interval schedules for bounded repeated reminders."
         ),
         param_descriptions={
             "action": "'create', 'list', or 'delete'.",
             "task_type": "'message' for fixed text, or 'agent' for a due-time agent turn.",
             "content": "Text to send or instruction to execute when due.",
             "run_at": "One-time local datetime, e.g. 20260601-143000 or 2026-06-01 14:30:00.",
-            "delay_seconds": "One-time delay from now in seconds.",
-            "recurrence": "Structured recurrence rules, e.g. daily or weekly dictionaries.",
+            "delay_seconds": "One-time delay from now in seconds, or first run delay for interval schedules.",
+            "recurrence": "Structured recurrence rules, e.g. daily, weekly, or interval dictionaries.",
+            "interval_seconds": "Repeat every N seconds for bounded interval tasks.",
+            "duration_seconds": "How long an interval task should keep repeating.",
+            "end_at": "Absolute local end time for interval tasks.",
             "title": "Optional short label.",
             "task_id": "Task id for delete; obtain from list or create.",
         },
@@ -44,6 +48,9 @@ def create_schedule_task_tool(*, tasks_dir: str):
         run_at: Optional[str] = None,
         delay_seconds: Optional[int] = None,
         recurrence: Optional[list[dict]] = None,
+        interval_seconds: Optional[int] = None,
+        duration_seconds: Optional[int] = None,
+        end_at: Optional[str] = None,
         title: Optional[str] = None,
         task_id: Optional[str] = None,
     ) -> dict:
@@ -88,10 +95,23 @@ def create_schedule_task_tool(*, tasks_dir: str):
             }
 
         try:
+            recurrence_for_create = recurrence
+            interval_fields_provided = interval_seconds is not None or duration_seconds is not None or end_at is not None
+            if recurrence is not None and interval_fields_provided:
+                raise ValueError("recurrence cannot be combined with interval_seconds, duration_seconds, or end_at")
+            if recurrence is None and interval_fields_provided:
+                if interval_seconds is None:
+                    raise ValueError("interval_seconds is required for interval tasks")
+                interval_rule: dict = {"kind": "interval", "every_seconds": interval_seconds}
+                if duration_seconds is not None:
+                    interval_rule["duration_seconds"] = duration_seconds
+                if end_at is not None:
+                    interval_rule["end_at"] = end_at
+                recurrence_for_create = [interval_rule]
             scheduled_at, normalized_recurrence = resolve_scheduled_task_run_at(
                 run_at=run_at,
                 delay_seconds=delay_seconds,
-                recurrence=recurrence,
+                recurrence=recurrence_for_create,
             )
         except Exception as exc:
             return {
