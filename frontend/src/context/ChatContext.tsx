@@ -12,6 +12,8 @@ import { getAgentInfo, uploadWorkspaceFile, workspaceBlobUrl } from "../lib/api"
 import type { AgentCapabilities, AttachmentAsset, ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
 import { makeId } from "../lib/format";
 
+export const DEFAULT_WEB_USER_ID = "web_user";
+
 const GLOBAL_SETTINGS_KEY = "xagent_web_settings";
 const HISTORY_KEY = "xagent_chat_history";
 const DEFAULT_CAPABILITIES: AgentCapabilities = {
@@ -46,7 +48,7 @@ const ChatContext = createContext<ChatContextValue | null>(null);
 function defaultSettings(panelId: PanelId): ChatSettings {
   void panelId;
   return {
-    userId: "web_user",
+    userId: DEFAULT_WEB_USER_ID,
     stream: true,
   };
 }
@@ -197,6 +199,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    const userId = new URLSearchParams(window.location.search).get("user_id")?.trim();
+    if (!userId) return;
+    setPanel((current) => {
+      const updatedPanel = {
+        ...current,
+        settings: { ...current.settings, userId },
+      };
+      persistSettings(updatedPanel);
+      return updatedPanel;
+    });
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     getAgentInfo()
       .then((info) => {
@@ -213,7 +228,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const userId = panel.settings.userId || "web_user";
+    const userId = panel.settings.userId || DEFAULT_WEB_USER_ID;
     let disposed = false;
     let socket: WebSocket | null = null;
     let reconnectTimer: number | undefined;

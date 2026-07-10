@@ -999,6 +999,7 @@ input::placeholder {
 
 .chat-toolbar {
   background: var(--bg-app);
+  justify-content: flex-end;
 }
 
 .chat-status-cluster {
@@ -1186,6 +1187,7 @@ input::placeholder {
 
 .observe-row textarea,
 .observe-panel textarea,
+.user-id-panel-input,
 .composer-row textarea,
 .identity-editor {
   width: 100%;
@@ -1198,15 +1200,19 @@ input::placeholder {
 
 .observe-row textarea,
 .observe-panel textarea,
+.user-id-panel-input,
 .composer-row textarea {
   min-height: 42px;
   max-height: 140px;
   padding: 10px 12px;
 }
 
-.observe-panel {
-  align-items: end;
-  grid-template-columns: minmax(0, 1fr) auto;
+.user-id-panel-input {
+  max-height: none;
+}
+
+.user-id-panel-input:disabled {
+  opacity: 0.6;
 }
 
 .observe-actions {
@@ -1222,9 +1228,16 @@ input::placeholder {
 }
 
 .composer-upload-button,
-.observe-toggle-button {
+.observe-toggle-button,
+.user-id-toggle-button {
   min-height: 42px;
   width: 42px;
+}
+
+.user-id-toggle-button.is-active,
+.observe-toggle-button.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .send-button {
@@ -2519,31 +2532,15 @@ input::placeholder {
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
+    justify-content: stretch;
   }
 
-  .panel-settings-left,
   .panel-settings-right {
     min-width: 0;
     width: auto;
     flex-wrap: nowrap;
-    justify-content: space-between;
-  }
-
-  .panel-settings-left {
+    justify-content: flex-end;
     grid-column: 1 / -1;
-  }
-
-  .panel-settings-right {
-    grid-column: 1 / -1;
-  }
-
-  .inline-field {
-    min-width: 0;
-    flex: 1;
-  }
-
-  .inline-input {
-    width: 100%;
   }
 
   .observe-row,
@@ -2562,7 +2559,7 @@ input::placeholder {
   .composer-actions {
     width: 100%;
     display: grid;
-    grid-template-columns: 42px 42px minmax(0, 1fr);
+    grid-template-columns: 42px 42px 42px minmax(0, 1fr);
   }
 
   .composer-actions .send-button {

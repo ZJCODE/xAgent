@@ -1,9 +1,9 @@
-import { Activity, Eye, FileIcon, Paperclip, Play, RadioTower, Send, Wifi, WifiOff, X } from "lucide-react";
+import { Activity, Eye, FileIcon, Paperclip, Play, RadioTower, Send, UserRound, Wifi, WifiOff, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "../components/Markdown";
 import { Button, EmptyState, IconButton, StatusBadge } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
-import { useChat } from "../context/ChatContext";
+import { DEFAULT_WEB_USER_ID, useChat } from "../context/ChatContext";
 import { useApiChannel } from "../lib/useApiChannel";
 import { useApiHealth } from "../lib/useApiHealth";
 import { classNames, formatBytes } from "../lib/format";
@@ -276,13 +276,19 @@ function ChatPanel({
   const [messageText, setMessageText] = useState("");
   const [observeText, setObserveText] = useState("");
   const [observeOpen, setObserveOpen] = useState(false);
+  const [userIdOpen, setUserIdOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const customUserId = panel.settings.userId !== DEFAULT_WEB_USER_ID;
 
   useEffect(() => {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [panel.messages.length, panel.messages[panel.messages.length - 1]?.content]);
+
+  useEffect(() => {
+    if (!chatEnabled) setUserIdOpen(false);
+  }, [chatEnabled]);
 
   const submitMessage = (event?: FormEvent) => {
     event?.preventDefault();
@@ -306,17 +312,13 @@ function ChatPanel({
   return (
     <section className="chat-panel">
       <div className="chat-toolbar">
-        <div className="panel-settings-left">
-          <label className="inline-field">
-            <span className="inline-label">User</span>
-            <input
-              value={panel.settings.userId}
-              onChange={(event) => updateSettings(panel.id, { userId: event.target.value })}
-              className="inline-input"
-            />
-          </label>
-        </div>
         <div className="panel-settings-right chat-status-cluster">
+          {customUserId ? (
+            <StatusBadge tone="info" className="chat-status-badge" title="Non-default API user ID">
+              <UserRound size={14} />
+              <span className="status-badge-label">as {panel.settings.userId}</span>
+            </StatusBadge>
+          ) : null}
           <StatusBadge
             tone={health === "online" ? "good" : health === "offline" ? "danger" : "muted"}
             className="chat-status-badge"
@@ -363,6 +365,40 @@ function ChatPanel({
               onRemove={() => removeAttachment(panel.id, index)}
             />
           ))}
+        </div>
+      ) : null}
+
+      {userIdOpen && chatEnabled ? (
+        <div className="observe-panel">
+          <input
+            id={`user-id-${panel.id}`}
+            value={panel.settings.userId}
+            onChange={(event) => updateSettings(panel.id, { userId: event.target.value })}
+            className="user-id-panel-input"
+            placeholder="web_user by default — change only to test another API user."
+            spellCheck={false}
+            autoComplete="off"
+            disabled={!statusReady || panel.sending}
+          />
+          <div className="observe-actions">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!statusReady || panel.sending || !customUserId}
+              title={`Reset to ${DEFAULT_WEB_USER_ID}`}
+              onClick={() => updateSettings(panel.id, { userId: DEFAULT_WEB_USER_ID })}
+            >
+              Reset
+            </Button>
+            <IconButton
+              type="button"
+              title="Close user ID"
+              aria-label="Close user ID"
+              onClick={() => setUserIdOpen(false)}
+            >
+              <X size={15} />
+            </IconButton>
+          </div>
         </div>
       ) : null}
 
@@ -413,8 +449,24 @@ function ChatPanel({
         <div className="composer-actions">
           <IconButton
             type="button"
-            className="observe-toggle-button"
-            onClick={() => setObserveOpen((value) => !value)}
+            className={classNames("user-id-toggle-button", userIdOpen && "is-active")}
+            onClick={() => {
+              setObserveOpen(false);
+              setUserIdOpen((value) => !value);
+            }}
+            title="User ID"
+            aria-label="User ID"
+            disabled={!statusReady || !chatEnabled || panel.sending}
+          >
+            <UserRound size={18} />
+          </IconButton>
+          <IconButton
+            type="button"
+            className={classNames("observe-toggle-button", observeOpen && "is-active")}
+            onClick={() => {
+              setUserIdOpen(false);
+              setObserveOpen((value) => !value);
+            }}
             title="Add observation"
             aria-label="Add observation"
             disabled={!statusReady || !chatEnabled || panel.sending}
