@@ -46,6 +46,8 @@ has_command() {
 }
 
 PATH_CONFIGURED=0
+UPGRADED=0
+SHOW_RESTART_REMINDER=0
 
 append_path_block() {
     local file="$1"
@@ -201,6 +203,7 @@ upgrade_xagent() {
         warn "Could not detect the local version; reinstalling latest ($remote_ver)..."
         run_uv_tool_install "${PACKAGE_NAME}@latest"
         ensure_path
+        UPGRADED=1
         return 0
     fi
 
@@ -213,6 +216,7 @@ upgrade_xagent() {
     step "Upgrading $PACKAGE_NAME $local_ver → $remote_ver..."
     run_uv_tool_install "${PACKAGE_NAME}@latest"
     ensure_path
+    UPGRADED=1
 
     new_ver=$(get_local_version)
     if [ -n "$new_ver" ] && [ "$new_ver" = "$remote_ver" ]; then
@@ -244,6 +248,94 @@ verify_install() {
     fi
 }
 
+count_running_processes() {
+  local status_json running_count
+
+  if ! has_command "$COMMAND_NAME"; then
+    echo 0
+    return 0
+  fi
+
+  status_json=$("$COMMAND_NAME" processes status --json 2>/dev/null || true)
+  if [ -z "$status_json" ]; then
+    echo 0
+    return 0
+  fi
+
+  if has_command python3; then
+    running_count=$(printf '%s' "$status_json" | python3 -c "import json,sys; data=json.load(sys.stdin); print(int(data.get('running_count', 0)))" 2>/dev/null || echo 0)
+  else
+    running_count=$(printf '%s' "$status_json" | sed -n 's/.*"running_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+    running_count=${running_count:-0}
+  fi
+
+  echo "$running_count"
+}
+
+print_running_processes() {
+  local status_json
+
+  status_json=$("$COMMAND_NAME" processes status --json 2>/dev/null || true)
+  [ -n "$status_json" ] || return 0
+
+  if has_command python3; then
+    printf '%s' "$status_json" | python3 -c '
+import json, sys
+
+data = json.load(sys.stdin)
+for row in data.get("processes", []):
+    if row.get("status") != "running":
+        continue
+    scope = row.get("scope")
+    pid = row.get("pid")
+    if scope == "web":
+        print(f"  - web (pid={pid})")
+    else:
+        print(f"  - {row.get('agent')}/{row.get('channel')} (pid={pid})")
+' 2>/dev/null || true
+  fi
+}
+
+post_upgrade_running_services() {
+  local running_count answer
+
+  [ "$UPGRADED" = "1" ] || return 0
+  has_command "$COMMAND_NAME" || return 0
+
+  running_count=$(count_running_processes)
+  [ "${running_count:-0}" -gt 0 ] || return 0
+
+  echo ""
+  echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  warn "xAgent was upgraded while background services are still running."
+  warn "Restart them to load the new version:"
+  print_running_processes
+  echo ""
+
+  if [ "${XAGENT_AUTO_RESTART:-0}" = "1" ]; then
+    step "Restarting running services (XAGENT_AUTO_RESTART=1)..."
+    "$COMMAND_NAME" processes restart || warn "Some services failed to restart. Run: $COMMAND_NAME processes restart"
+    return 0
+  fi
+
+  if [ -t 0 ] && [ -t 1 ]; then
+    printf "Restart running services now? [y/N] "
+    IFS= read -r answer || answer=""
+    case "$answer" in
+      y|Y|yes|YES)
+        step "Restarting running services..."
+        "$COMMAND_NAME" processes restart || warn "Some services failed to restart. Run: $COMMAND_NAME processes restart"
+        return 0
+        ;;
+    esac
+  fi
+
+  echo -e "  Run: ${CYAN}${COMMAND_NAME} processes restart${NC}"
+  echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  SHOW_RESTART_REMINDER=1
+}
+
 success_message() {
     echo ""
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -259,6 +351,11 @@ success_message() {
     echo ""
     echo -e "  More commands:"
     echo -e "    ${CYAN}${COMMAND_NAME} --help${NC}"
+    if [ "$SHOW_RESTART_REMINDER" = "1" ]; then
+        echo ""
+        echo -e "  After upgrading, restart running services:"
+        echo -e "    ${CYAN}${COMMAND_NAME} processes restart${NC}"
+    fi
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
@@ -269,6 +366,7 @@ main() {
     if has_command "$COMMAND_NAME"; then
         upgrade_xagent
         verify_install
+        post_upgrade_running_services
         success_message
         exit 0
     fi

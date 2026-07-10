@@ -7,12 +7,14 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Iterator, Mapping, Optional, Sequence
 
 
 DEFAULT_STARTUP_TIMEOUT = 2.0
 DEFAULT_STOP_TIMEOUT = 5.0
 STOP_POLL_INTERVAL = 0.1
+
+MANAGED_AGENT_CHANNELS = ("api", "feishu", "weixin", "voice")
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,18 @@ class ManagedProcessPaths:
 
     pid_path: Path
     log_path: Path
+
+
+@dataclass(frozen=True)
+class ManagedProcessRef:
+    """One managed process location (web client or agent channel)."""
+
+    scope: str
+    pid_path: Path
+    log_path: Path
+    agent: Optional[str] = None
+    channel: Optional[str] = None
+    config_dir: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -211,3 +225,73 @@ def stop_managed_process(pid_path: Path, timeout: float = DEFAULT_STOP_TIMEOUT) 
         remove_pid(pid_path, expected_pid=pid)
         return True, f"force-stopped (pid={pid})"
     return False, f"timed out force-stopping pid {pid}"
+
+
+def iter_managed_process_refs(*, root: Optional[Path] = None) -> list[ManagedProcessRef]:
+    """Return every managed PID location for the web client and all agents."""
+    from .agents import AGENTS_DIRNAME, AgentRegistryError, load_agent_registry, management_root
+    from .web_client import web_client_paths
+
+    root_path = (root or management_root()).expanduser().resolve()
+    refs: list[ManagedProcessRef] = []
+
+    web_paths = web_client_paths(root=root_path)
+    refs.append(
+        ManagedProcessRef(
+            scope="web",
+            pid_path=web_paths.pid_path,
+            log_path=web_paths.log_path,
+        )
+    )
+
+    try:
+        registry = load_agent_registry(root=root_path)
+        agent_dirs = [(name, entry.path) for name, entry in sorted(registry.agents.items())]
+    except AgentRegistryError:
+        agent_dirs = []
+        agents_dir = root_path / AGENTS_DIRNAME
+        if agents_dir.is_dir():
+            for agent_dir in sorted(agents_dir.iterdir()):
+                if agent_dir.is_dir():
+                    agent_dirs.append((agent_dir.name, agent_dir.resolve()))
+
+    for agent_name, agent_path in agent_dirs:
+        agent_path = agent_path.expanduser().resolve()
+        for channel in MANAGED_AGENT_CHANNELS:
+            paths = managed_paths(agent_path, channel)
+            refs.append(
+                ManagedProcessRef(
+                    scope="agent",
+                    agent=agent_name,
+                    channel=channel,
+                    config_dir=agent_path,
+                    pid_path=paths.pid_path,
+                    log_path=paths.log_path,
+                )
+            )
+
+    return refs
+
+
+def process_status_row(ref: ManagedProcessRef) -> dict[str, object]:
+    """Return a status mapping for one managed process reference."""
+    pid = running_pid(ref.pid_path)
+    row: dict[str, object] = {
+        "scope": ref.scope,
+        "status": "running" if pid is not None else "stopped",
+        "pid": pid,
+        "pid_path": str(ref.pid_path),
+        "log_path": str(ref.log_path),
+    }
+    if ref.agent is not None:
+        row["agent"] = ref.agent
+    if ref.channel is not None:
+        row["channel"] = ref.channel
+    return row
+
+
+def iter_running_process_refs(*, root: Optional[Path] = None) -> Iterator[ManagedProcessRef]:
+    """Yield managed process refs that currently have a live PID."""
+    for ref in iter_managed_process_refs(root=root):
+        if running_pid(ref.pid_path) is not None:
+            yield ref

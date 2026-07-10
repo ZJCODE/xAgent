@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
-from . import agents, runtime, setup
+from . import agents, processes_status, runtime, setup
 
 
 class XAgentArgumentParser(argparse.ArgumentParser):
@@ -44,6 +44,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  feishu      Feishu bot: setup, start, stop, restart, status, logs",
             "  weixin      Weixin DM: setup, start, stop, restart, status, logs",
             "  status      Show all configured channel processes",
+            "  processes   List or restart all managed background processes",
             "",
             "Inspect:",
             "  config      Show, validate, or locate config.yaml",
@@ -526,6 +527,30 @@ def build_parser() -> argparse.ArgumentParser:
     _add_channel_argument(doctor_parser, default_label="enabled channels")
     doctor_parser.add_argument("--online", action="store_true", help="Include network/model checks")
     doctor_parser.set_defaults(handler=runtime.handle_doctor)
+
+    processes_parser = subparsers.add_parser(
+        "processes",
+        help="List or restart all managed background processes",
+    )
+    processes_sub = processes_parser.add_subparsers(dest="processes_action", metavar="<action>")
+    processes_sub.required = True
+    processes_status_parser = processes_sub.add_parser("status", help="Show status of all managed processes")
+    processes_status_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Print machine-readable JSON",
+    )
+    processes_status_parser.set_defaults(handler=processes_status.handle_processes_status)
+    processes_restart = processes_sub.add_parser("restart", help="Restart all running managed processes")
+    processes_restart.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Print machine-readable JSON",
+    )
+    processes_restart.set_defaults(handler=processes_status.handle_processes_restart)
+    _show_help_on_missing_action(processes_parser)
 
     observe_parser = subparsers.add_parser("observe", help="Ingest context without generating a reply")
     observe_parser.add_argument("text", help="Observation text to store")

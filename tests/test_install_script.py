@@ -139,6 +139,142 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn("xagent --help", result.stdout)
             self.assertNotIn("To run xagent in this terminal:", result.stdout)
 
+    def _write_fake_upgrade_tools(self, home: Path) -> tuple[Path, Path]:
+        fake_bin = home / "bin"
+        fake_bin.mkdir()
+
+        fake_uv = fake_bin / "uv"
+        fake_uv.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env bash",
+                    "set -euo pipefail",
+                    'if [ "${1:-}" = "tool" ] && [ "${2:-}" = "install" ]; then',
+                    '  mkdir -p "$HOME/.local/bin"',
+                    "  cat > \"$HOME/.local/bin/xagent\" <<'EOF'",
+                    "#!/usr/bin/env bash",
+                    "set -euo pipefail",
+                    'if [ \"${1:-}\" = \"version\" ]; then',
+                    '  echo \"xAgent 9.9.9\"',
+                    '  exit 0',
+                    "fi",
+                    'if [ \"${1:-}\" = \"processes\" ] && [ \"${2:-}\" = \"status\" ]; then',
+                    '  echo \'{\"processes\":[{\"scope\":\"web\",\"status\":\"running\",\"pid\":1234}],\"running_count\":1}\'',
+                    "  exit 2",
+                    "fi",
+                    'if [ \"${1:-}\" = \"processes\" ] && [ \"${2:-}\" = \"restart\" ]; then',
+                    '  echo restarted >> \"$HOME/xagent_restart.log\"',
+                    "  exit 0",
+                    "fi",
+                    "exit 0",
+                    "EOF",
+                    '  chmod +x "$HOME/.local/bin/xagent"',
+                    "fi",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        fake_uv.chmod(0o755)
+
+        fake_curl = fake_bin / "curl"
+        fake_curl.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env bash",
+                    "set -euo pipefail",
+                    'for arg in "$@"; do',
+                    '  if [[ "$arg" == *"/pypi/myxagent/json" ]]; then',
+                    '    echo \'{"info":{"version":"9.9.9"}}\'',
+                    "    exit 0",
+                    "  fi",
+                    "done",
+                    'exec /usr/bin/curl "$@"',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        fake_curl.chmod(0o755)
+
+        preinstalled = home / ".local" / "bin"
+        preinstalled.mkdir(parents=True)
+        preinstalled_xagent = preinstalled / "xagent"
+        preinstalled_xagent.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env bash",
+                    "set -euo pipefail",
+                    'if [ "${1:-}" = "version" ]; then',
+                    '  echo "xAgent 1.0.0"',
+                    "  exit 0",
+                    "fi",
+                    'if [ "${1:-}" = "processes" ] && [ "${2:-}" = "status" ]; then',
+                    '  echo \'{"processes":[{"scope":"web","status":"running","pid":1234}],"running_count":1}\'',
+                    "  exit 2",
+                    "fi",
+                    'if [ "${1:-}" = "processes" ] && [ "${2:-}" = "restart" ]; then',
+                    '  echo restarted >> "$HOME/xagent_restart.log"',
+                    "  exit 0",
+                    "fi",
+                    "exit 0",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        preinstalled_xagent.chmod(0o755)
+
+        return fake_bin, preinstalled
+
+    def test_upgrade_warns_when_running_processes_detected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            fake_bin, preinstalled = self._write_fake_upgrade_tools(home)
+
+            env = {
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fake_bin}:{preinstalled}:/usr/bin:/bin:/usr/sbin:/sbin",
+                "XAGENT_NO_PATH_MODIFY": "1",
+            }
+            result = subprocess.run(
+                ["bash", str(INSTALL_SCRIPT)],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertIn("background services are still running", result.stdout)
+            self.assertIn("xagent processes restart", result.stdout)
+            self.assertIn("After upgrading, restart running services:", result.stdout)
+            self.assertFalse((home / "xagent_restart.log").exists())
+
+    def test_upgrade_auto_restart_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            fake_bin, preinstalled = self._write_fake_upgrade_tools(home)
+
+            env = {
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fake_bin}:{preinstalled}:/usr/bin:/bin:/usr/sbin:/sbin",
+                "XAGENT_NO_PATH_MODIFY": "1",
+                "XAGENT_AUTO_RESTART": "1",
+            }
+            result = subprocess.run(
+                ["bash", str(INSTALL_SCRIPT)],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertIn("Restarting running services", result.stdout)
+            self.assertTrue((home / "xagent_restart.log").exists())
+            self.assertIn("restarted", (home / "xagent_restart.log").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3733,6 +3733,14 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("api", output)
         self.assertIn("feishu", output)
 
+    def test_processes_parser_registers_status_and_restart(self):
+        status_args = build_parser().parse_args(["processes", "status", "--json"])
+        restart_args = build_parser().parse_args(["processes", "restart"])
+
+        self.assertTrue(status_args.json_output)
+        self.assertEqual(status_args.processes_action, "status")
+        self.assertEqual(restart_args.processes_action, "restart")
+
 
 if __name__ == "__main__":
     unittest.main()
