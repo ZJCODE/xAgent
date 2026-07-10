@@ -508,7 +508,7 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertFalse(interval_too_short["ok"])
             self.assertIn("at least", interval_too_short["error"])
             self.assertFalse(interval_missing_end["ok"])
-            self.assertIn("exactly one", interval_missing_end["error"])
+            self.assertIn("ask the user", interval_missing_end["error"])
             self.assertFalse(interval_with_run_at["ok"])
             self.assertIn("one-time tasks", interval_with_run_at["error"])
             self.assertFalse(mixed_interval["ok"])

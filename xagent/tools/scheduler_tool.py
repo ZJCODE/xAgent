@@ -25,7 +25,9 @@ def create_schedule_task_tool(*, tasks_dir: str):
         description=(
             "Create, list, or delete future tasks for the active delivery channel. "
             "Use message tasks for fixed text, agent tasks for due-time work that may need tools or reasoning, "
-            "and interval schedules for bounded repeated reminders."
+            "and interval schedules for bounded repeated reminders. "
+            "Interval tasks require an explicit user-provided duration_seconds or end_at; "
+            "if missing, ask the user and do not invent a default."
         ),
         param_descriptions={
             "action": "'create', 'list', or 'delete'.",
@@ -34,9 +36,9 @@ def create_schedule_task_tool(*, tasks_dir: str):
             "run_at": "One-time local datetime, e.g. 20260601-143000 or 2026-06-01 14:30:00.",
             "delay_seconds": "One-time delay from now in seconds, or first run delay for interval schedules.",
             "recurrence": "Structured recurrence rules, e.g. daily, weekly, or interval dictionaries.",
-            "interval_seconds": "Repeat every N seconds for bounded interval tasks.",
-            "duration_seconds": "How long an interval task should keep repeating.",
-            "end_at": "Absolute local end time for interval tasks.",
+            "interval_seconds": "Repeat every N seconds. Requires user-provided duration_seconds or end_at.",
+            "duration_seconds": "Required for interval unless end_at is set. Must come from the user; do not invent.",
+            "end_at": "Required for interval unless duration_seconds is set. Must come from the user; do not invent.",
             "title": "Optional short label.",
             "task_id": "Task id for delete; obtain from list or create.",
         },
@@ -102,6 +104,11 @@ def create_schedule_task_tool(*, tasks_dir: str):
             if recurrence is None and interval_fields_provided:
                 if interval_seconds is None:
                     raise ValueError("interval_seconds is required for interval tasks")
+                if duration_seconds is None and end_at is None:
+                    raise ValueError(
+                        "interval tasks require a user-provided duration_seconds or end_at; "
+                        "ask the user how long to continue or when to stop before creating"
+                    )
                 interval_rule: dict = {"kind": "interval", "every_seconds": interval_seconds}
                 if duration_seconds is not None:
                     interval_rule["duration_seconds"] = duration_seconds

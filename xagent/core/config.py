@@ -171,6 +171,7 @@ class AgentConfig:
             "- `message` sends fixed text later; `agent` performs a due-time agent turn that may use tools.\n"
             "- Use `create`, `list`, or `delete`; use structured recurrence for repeating daily, weekly, or interval tasks.\n"
             "- Use `interval_seconds` plus `duration_seconds` or `end_at` for bounded requests like every 10 minutes for the next 5 hours.\n"
+            "- Interval end time is mandatory: if the user does not state a duration or end time, you MUST ask before creating. NEVER invent, assume, or default a window.\n"
             "- Interval tasks first run after the first interval by default; use `delay_seconds=0` only when the user asks to start immediately.\n"
             "- Schedule only future content, then briefly confirm. Never use schedules to bypass required approval.\n"
         ),

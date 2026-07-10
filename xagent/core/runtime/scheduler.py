@@ -378,7 +378,10 @@ def _normalize_interval_rule(raw_rule: Mapping[str, Any]) -> dict[str, Any]:
     has_end_at = bool(str(raw_rule.get("end_at") or "").strip())
     has_duration = "duration_seconds" in raw_rule and raw_rule.get("duration_seconds") is not None
     if has_end_at == has_duration:
-        raise ValueError("interval recurrence requires exactly one of end_at or duration_seconds")
+        raise ValueError(
+            "interval recurrence requires exactly one user-provided end_at or duration_seconds; "
+            "ask the user how long to continue or when to stop before creating"
+        )
     if has_duration:
         raise ValueError("duration_seconds must be materialized to end_at before storing interval recurrence")
     end_at = parse_run_at(str(raw_rule.get("end_at") or ""))
