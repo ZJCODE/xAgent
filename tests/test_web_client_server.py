@@ -138,6 +138,11 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
         payload = response.json()
         self.assertIn("openai", {row["id"] for row in payload["providers"]})
         self.assertIn("gpt-5.4-mini", payload["models"]["openai"])
+        self.assertEqual(
+            ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+            [model for model in payload["models"]["openai"] if model.startswith("gpt-5.6-")],
+        )
+        self.assertTrue(all("Decide later" not in models for models in payload["models"].values()))
         self.assertIn("identity", payload["defaults"])
 
     async def test_create_agent_endpoint_registers_and_selects_new_agent(self):

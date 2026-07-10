@@ -1210,10 +1210,11 @@ provider:
         self.assertEqual(selection.langfuse_secret_key, "sk-lf-test")
         self.assertEqual(selection.langfuse_base_url, "https://cloud.langfuse.com")
 
-    def test_collect_init_selection_deepseek_decide_later_uses_model_placeholder(self):
+    def test_collect_init_selection_deepseek_empty_custom_model_uses_model_placeholder(self):
         answers = iter([
             "2",
             "3",
+            "",
             "",
             "",
             "",
@@ -1238,7 +1239,7 @@ provider:
     def test_collect_init_selection_supports_custom_model_name(self):
         answers = iter([
             "1",
-            "6",
+            "8",
             "gpt-5.4-lab",
             "",
             "",

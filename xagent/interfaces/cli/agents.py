@@ -521,6 +521,7 @@ def handle_agents(args: argparse.Namespace) -> int:
             registry = load_agent_registry_or_empty()
             if name in registry.agents:
                 raise AgentRegistryError(f"Agent {name!r} is already registered.")
+            replace_existing = False
             if _directory_has_contents(path):
                 if not _confirm_destructive_action(
                     _delete_confirmation_text(name, path, action="Replace existing directory for"),
@@ -529,13 +530,27 @@ def handle_agents(args: argparse.Namespace) -> int:
                 ):
                     print("Create cancelled.")
                     return 1
-                delete_agent_directory(path)
+                # Defer deletion until the setup wizard has completed.  The
+                # creation helper owns the final directory check and removal,
+                # so it can honor this confirmation even if the directory is
+                # recreated while the user is completing the wizard.
+                replace_existing = True
             from .setup import collect_init_selection_terminal_ui
 
-            selection = collect_init_selection_terminal_ui()
+            try:
+                selection = collect_init_selection_terminal_ui()
+            except KeyboardInterrupt:
+                # TerminalUI uses this signal when the user presses q/esc at
+                # a setup prompt.  Treat it as a normal cancellation rather
+                # than allowing the interactive launcher to crash.
+                from .setup import SETUP_EXIT_CANCELLED
+
+                print("Create cancelled.")
+                return SETUP_EXIT_CANCELLED
             create_managed_agent(
                 name,
                 selection=selection,
+                replace_existing=replace_existing,
                 make_active=not registry.agents,
             )
             updated = load_agent_registry()

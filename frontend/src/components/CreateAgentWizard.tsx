@@ -121,7 +121,7 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
     replaceExisting: false,
     selection: defaultSelection({
       providers: [{ id: "openai" }],
-      models: { openai: ["gpt-5.4-mini"] },
+      models: { openai: ["gpt-5.4-mini", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] },
       provider_base_urls: { openai: "" },
       custom_model_apis: [],
       search_providers: [],

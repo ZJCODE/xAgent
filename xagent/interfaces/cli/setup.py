@@ -160,18 +160,18 @@ OPENAI_MODELS = (
     "gpt-5.4-mini",
     "gpt-5.4-nano",
     "gpt-5.5",
-    "Decide later",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
 )
 ANTHROPIC_MODELS = (
     "claude-sonnet-4-20250514",
     "claude-opus-4-1-20250805",
     "claude-3-5-haiku-20241022",
-    "Decide later",
 )
 DEEPSEEK_MODELS = (
     "deepseek-v4-flash",
     "deepseek-v4-pro",
-    "Decide later",
 )
 MINIMAX_MODELS = (
     "MiniMax-M3",
@@ -182,7 +182,6 @@ QWEN_MODELS = (
     "qwen3.7-max",
     "qwen3.6-flash",
     "qwen3.6-plus",
-    "Decide later",
 )
 SEARCH_PROVIDERS = (
     "none",
@@ -327,7 +326,7 @@ def build_setup_schema() -> dict[str, Any]:
             PROVIDER_DEEPSEEK: list(DEEPSEEK_MODELS),
             PROVIDER_MINIMAX: list(MINIMAX_MODELS),
             PROVIDER_QWEN: list(QWEN_MODELS),
-            PROVIDER_CUSTOM: ["Decide later"],
+            PROVIDER_CUSTOM: [],
         },
         "provider_base_urls": {
             PROVIDER_OPENAI: OPENAI_BASE_URL,
@@ -1277,7 +1276,9 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
                 "gpt-5.4-mini": "Balanced default for speed and quality.",
                 "gpt-5.4-nano": "Lowest latency and cost.",
                 "gpt-5.5": "Newest OpenAI release.",
-                "Decide later": "Write a placeholder and fill it in later.",
+                "gpt-5.6-sol": "OpenAI GPT-5.6 Sol model.",
+                "gpt-5.6-terra": "OpenAI GPT-5.6 Terra model.",
+                "gpt-5.6-luna": "OpenAI GPT-5.6 Luna model.",
             },
             default_index=1,
         )
@@ -1312,7 +1313,7 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
         base_url = QWEN_BASE_URL
     else:
         model_api = surface.select_custom_model_api()
-        selected_model = "Decide later"
+        selected_model = MODEL_PLACEHOLDER
         default_base_url = (
             CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER
             if model_api == MODEL_API_ANTHROPIC_MESSAGES
@@ -1327,7 +1328,7 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
             default=False,
         )
 
-    model = MODEL_PLACEHOLDER if selected_model == "Decide later" else selected_model
+    model = selected_model
     api_key = surface.ask_secret("API key (leave blank to fill in later): ").strip() or API_KEY_PLACEHOLDER
 
     provider_api_cfg = {"name": provider}

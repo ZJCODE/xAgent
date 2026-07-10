@@ -2076,6 +2076,10 @@ def _run_agent_launcher() -> int:
                     except AgentRegistryError:
                         pass
                     raise ReturnToLauncherHome()
+                if exit_code == SETUP_EXIT_CANCELLED:
+                    # The setup wizard was cancelled; remain in Agents so
+                    # the user can retry or choose another action.
+                    continue
                 ui.pause("Press Enter to return to Agents")
                 continue
             if option.key == "delete":

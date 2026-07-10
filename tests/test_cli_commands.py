@@ -545,6 +545,57 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("provider:", config_text)
         self.assertNotEqual(config_text, "old")
 
+    def test_agents_create_honors_replacement_confirmation_at_final_directory_write(self):
+        """Replacement remains authorized if the target is recreated during setup."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                stale_path = default_agent_dir("test")
+                stale_path.mkdir(parents=True)
+                (stale_path / "before-wizard.txt").write_text("old", encoding="utf-8")
+
+                def selection_after_recreating_directory():
+                    (stale_path / "during-wizard.txt").write_text("stale", encoding="utf-8")
+                    return _selection(identity="you are test created by Jun")
+
+                with patch(
+                    "xagent.interfaces.cli.setup.collect_init_selection_terminal_ui",
+                    side_effect=selection_after_recreating_directory,
+                ):
+                    with patch("sys.stdout", new_callable=io.StringIO):
+                        exit_code = handle_agents(
+                            argparse.Namespace(agents_action="create", name="test", title=None, yes=True)
+                        )
+
+                registry = load_agent_registry()
+                before_wizard_marker_exists = (stale_path / "before-wizard.txt").exists()
+                during_wizard_marker_exists = (stale_path / "during-wizard.txt").exists()
+                config_exists = (stale_path / "config.yaml").is_file()
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("test", registry.agents)
+        self.assertFalse(before_wizard_marker_exists)
+        self.assertFalse(during_wizard_marker_exists)
+        self.assertTrue(config_exists)
+
+    def test_agents_create_cancelled_setup_returns_cancel_code_without_registering_agent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                with patch(
+                    "xagent.interfaces.cli.setup.collect_init_selection_terminal_ui",
+                    side_effect=KeyboardInterrupt,
+                ):
+                    with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                        exit_code = handle_agents(
+                            argparse.Namespace(agents_action="create", name="test", title=None, yes=False)
+                        )
+                registry = load_agent_registry_or_empty()
+
+        self.assertEqual(exit_code, SETUP_EXIT_CANCELLED)
+        self.assertNotIn("test", registry.agents)
+        self.assertIn("Create cancelled.", stdout.getvalue())
+
     def test_parser_supports_voice_command(self):
         args = build_parser().parse_args([
             "voice",
