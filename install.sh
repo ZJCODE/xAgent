@@ -272,30 +272,6 @@ count_running_processes() {
   echo "$running_count"
 }
 
-print_running_processes() {
-  local status_json
-
-  status_json=$("$COMMAND_NAME" processes status --json 2>/dev/null || true)
-  [ -n "$status_json" ] || return 0
-
-  if has_command python3; then
-    printf '%s' "$status_json" | python3 -c '
-import json, sys
-
-data = json.load(sys.stdin)
-for row in data.get("processes", []):
-    if row.get("status") != "running":
-        continue
-    scope = row.get("scope")
-    pid = row.get("pid")
-    if scope == "web":
-        print(f"  - web (pid={pid})")
-    else:
-        print(f"  - {row.get('agent')}/{row.get('channel')} (pid={pid})")
-' 2>/dev/null || true
-  fi
-}
-
 post_upgrade_running_services() {
   local running_count answer
 
@@ -308,8 +284,6 @@ post_upgrade_running_services() {
   echo ""
   echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   warn "xAgent was upgraded while background services are still running."
-  warn "Restart them to load the new version:"
-  print_running_processes
   echo ""
 
   if [ "${XAGENT_AUTO_RESTART:-0}" = "1" ]; then
