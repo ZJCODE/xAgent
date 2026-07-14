@@ -4,6 +4,7 @@ import {
   Eye,
   FilePlus2,
   FolderPlus,
+  LayoutList,
   Pencil,
   Plus,
   Power,
@@ -45,7 +46,7 @@ import {
   updateSkillState,
   writeSkillFile,
 } from "../lib/api";
-import { formatBytes, formatTimestamp } from "../lib/format";
+import { classNames, formatBytes, formatTimestamp } from "../lib/format";
 import type {
   FileNode,
   FileReadResult,
@@ -69,6 +70,23 @@ interface EntryDialogState {
 }
 
 const emptyForm: NewSkillForm = { name: "", description: "", body: "" };
+type SkillHistoryMode = "push" | "replace" | "none";
+
+function urlSkillPath(): string {
+  return new URL(window.location.href).searchParams.get("path") || "";
+}
+
+function updateSkillUrl(path: string, mode: SkillHistoryMode) {
+  if (mode === "none") return;
+  const url = new URL(window.location.href);
+  if (path) url.searchParams.set("path", path);
+  else url.searchParams.delete("path");
+  const target = `${url.pathname}${url.search}${url.hash}`;
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (target === current) return;
+  window.history[mode === "replace" ? "replaceState" : "pushState"](null, "", target);
+  window.dispatchEvent(new Event("xagent:locationchange"));
+}
 
 function skillForPath(skills: SkillMetadata[], path?: string): SkillMetadata | undefined {
   if (!path) return undefined;
@@ -146,22 +164,6 @@ export function SkillsPage() {
     setSkills(skillsTree.skills || skillsInfo.skills || []);
   };
 
-  const load = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      await refreshCatalog();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void load();
-  }, []);
-
   const guardLocalDiscard = () => {
     if (!dirty) return true;
     if (!window.confirm("Discard unsaved changes?")) return false;
@@ -173,15 +175,86 @@ export function SkillsPage() {
     return true;
   };
 
-  const openFile = async (path: string, mode: "preview" | "edit" = "preview") => {
+  const clearSelectedFile = () => {
+    setSelected(null);
+    setEditorValue("");
+    setConflict(null);
+    setValidationIssues([]);
+    setViewMode("preview");
+    setCreating(false);
+  };
+
+  const openFile = async (
+    path: string,
+    mode: "preview" | "edit" = "preview",
+    historyMode: SkillHistoryMode = "push",
+  ) => {
     const file = await readSkillFile(path);
     setSelected(file);
     setEditorValue(file.content);
     setConflict(null);
     setValidationIssues([]);
     setViewMode(file.text ? mode : "preview");
+    updateSkillUrl(file.path, historyMode);
     return file;
   };
+
+  const showSkillsOverview = (historyMode: SkillHistoryMode = "push", confirm = true) => {
+    if (confirm && !guardLocalDiscard()) return;
+    clearSelectedFile();
+    setQuery("");
+    setResults([]);
+    updateSkillUrl("", historyMode);
+  };
+
+  useEffect(() => {
+    let active = true;
+    const loadInitialState = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        await refreshCatalog();
+        const path = urlSkillPath();
+        if (path && active) await openFile(path, "preview", "none");
+      } catch (err) {
+        if (!active) return;
+        setError(err instanceof Error ? err.message : String(err));
+        clearSelectedFile();
+        updateSkillUrl("", "replace");
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void loadInitialState();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      if (window.location.pathname !== "/skills") return;
+      const path = urlSkillPath();
+      if (path && path === selected?.path) return;
+      if (dirty && !window.confirm("Discard unsaved changes?")) {
+        updateSkillUrl(selected?.path || "", "push");
+        return;
+      }
+      setDirty(false);
+      setError("");
+      if (!path) {
+        clearSelectedFile();
+        setQuery("");
+        setResults([]);
+        return;
+      }
+      void openFile(path, "preview", "none").catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+        clearSelectedFile();
+        updateSkillUrl("", "replace");
+      });
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [dirty, selected?.path, setDirty]);
 
   const selectFile = async (node: FileNode) => {
     if (!guardLocalDiscard()) return;
@@ -201,7 +274,7 @@ export function SkillsPage() {
     setNotice("");
     try {
       await refreshCatalog();
-      if (selected) await openFile(selected.path, viewMode);
+      if (selected) await openFile(selected.path, viewMode, "none");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -300,7 +373,7 @@ export function SkillsPage() {
     setError("");
     try {
       await deleteSkillPath(skill.path, true);
-      setSelected(null);
+      showSkillsOverview("replace", false);
       await refreshCatalog();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -346,7 +419,7 @@ export function SkillsPage() {
           ? `${nextPath}${selected.path.slice(previousPath.length)}`
           : null;
         await refreshCatalog();
-        if (selectedNextPath) await openFile(selectedNextPath);
+        if (selectedNextPath) await openFile(selectedNextPath, "preview", "replace");
         setNotice(`Moved to ${nextPath}`);
       } else {
         const created = await createSkillEntry({
@@ -380,8 +453,8 @@ export function SkillsPage() {
       if (deleteEntry.type === "file" && !revision) revision = (await readSkillFile(deleteEntry.path)).revision;
       await deleteSkillEntry(deleteEntry.path, deleteEntry.type === "dir", revision);
       if (selected?.path === deleteEntry.path || selected?.path.startsWith(`${deleteEntry.path}/`)) {
-        setSelected(null);
-        setEditorValue("");
+        clearSelectedFile();
+        updateSkillUrl("", "replace");
       }
       setNotice(`Deleted ${deleteEntry.path}`);
       setDeleteEntry(null);
@@ -444,6 +517,13 @@ export function SkillsPage() {
         ) : null}
       </>
     );
+  };
+
+  const openSkillDirectory = (node: FileNode) => {
+    const skill = skills.find((item) => item.path === node.path);
+    if (!skill) return false;
+    void selectFile({ name: "SKILL.md", path: skill.skill_file, type: "file" });
+    return true;
   };
 
   const renderCreateForm = () => (
@@ -546,10 +626,10 @@ export function SkillsPage() {
 
   return (
     <PageShell>
-      <PageToolbar title="Skills" subtitle={info?.root || "Agent skills"} actions={<><Button type="button" onClick={() => { if (!guardLocalDiscard()) return; setSelected(null); setCreating(true); }}><Plus size={15} />New Skill</Button><SearchField placeholder="Search skills" value={query} onChange={(event) => setQuery(event.target.value)} onSubmit={() => void runSearch()} /><Button type="button" onClick={() => void runSearch()}><Search size={15} />Search</Button><IconButton type="button" onClick={() => { setQuery(""); setResults([]); }} title="Clear search"><X size={16} /></IconButton><IconButton type="button" onClick={() => void refreshPage()} title="Refresh"><RefreshCw size={16} /></IconButton></>} />
+      <PageToolbar title="Skills" subtitle={info?.root || "Agent skills"} actions={<><Button type="button" onClick={() => { if (!guardLocalDiscard()) return; clearSelectedFile(); updateSkillUrl("", "push"); setCreating(true); }}><Plus size={15} />New Skill</Button><SearchField placeholder="Search skills" value={query} onChange={(event) => setQuery(event.target.value)} onSubmit={() => void runSearch()} /><Button type="button" onClick={() => void runSearch()}><Search size={15} />Search</Button><IconButton type="button" onClick={() => { setQuery(""); setResults([]); }} title="Clear search"><X size={16} /></IconButton><IconButton type="button" onClick={() => void refreshPage()} title="Refresh"><RefreshCw size={16} /></IconButton></>} />
       {error ? <div className="error-strip">{error}</div> : null}
       {notice ? <div className="success-strip">{notice}</div> : null}
-      <BrowserLayout sidebar={results.length ? <div className="space-y-2">{results.map((item) => <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}><strong>{item.path}</strong>{item.snippet ? <span>{item.snippet}</span> : null}</button>)}</div> : loading ? <EmptyState title="Loading..." /> : <FileTree nodes={tree} selectedPath={selected?.path} onSelect={selectFile} renderActions={renderTreeActions} />}>{creating ? renderCreateForm() : renderSelected()}</BrowserLayout>
+      <BrowserLayout sidebar={<><button type="button" className={classNames("skills-overview-link", !selected && !creating && "selected")} onClick={() => showSkillsOverview()}><LayoutList size={15} /><span>Skills Overview</span><b>{skills.length}</b></button>{results.length ? <div className="space-y-2">{results.map((item) => <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}><strong>{item.path}</strong>{item.snippet ? <span>{item.snippet}</span> : null}</button>)}</div> : loading ? <EmptyState title="Loading..." /> : <FileTree nodes={tree} selectedPath={selected?.path} onSelect={selectFile} onDirectoryOpen={openSkillDirectory} renderActions={renderTreeActions} />}</>}>{creating ? renderCreateForm() : renderSelected()}</BrowserLayout>
 
       <ConfirmDialog open={Boolean(entryDialog)} title={entryDialog?.mode === "move" ? "Rename or move entry" : `New ${entryDialog?.mode || "entry"}`} description={entryDialog?.mode === "move" ? "The destination must remain inside the same Skill package." : "Create the entry inside an existing Skill package."} confirmLabel={entrySaving ? "Saving..." : entryDialog?.mode === "move" ? "Move" : "Create"} confirmVariant="primary" confirmDisabled={entrySaving || !entryDialog?.name.trim() || !entryDialog?.parentPath.trim()} onCancel={() => { if (!entrySaving) setEntryDialog(null); }} onConfirm={() => void submitEntryDialog()}>{entryDialog ? <><label className="form-field"><span>Name</span><input value={entryDialog.name} autoFocus onChange={(event) => setEntryDialog({ ...entryDialog, name: event.target.value })} /></label><label className="form-field"><span>Parent path</span><input value={entryDialog.parentPath} onChange={(event) => setEntryDialog({ ...entryDialog, parentPath: event.target.value })} /></label></> : null}</ConfirmDialog>
 

@@ -1422,6 +1422,20 @@ input::placeholder {
   border-radius: 7px;
 }
 
+.tree-toggle,
+.tree-toggle-spacer {
+  display: grid;
+  width: 24px;
+  min-width: 24px;
+  height: 32px;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.tree-toggle:hover {
+  color: var(--text);
+}
+
 .tree-item {
   display: flex;
   min-width: 0;
@@ -1461,6 +1475,42 @@ input::placeholder {
   width: 25px;
   min-height: 25px;
   padding: 0;
+}
+
+.skills-overview-link {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-app);
+  color: var(--text-muted);
+  padding: 0 9px;
+  text-align: left;
+}
+
+.skills-overview-link:hover,
+.skills-overview-link.selected {
+  border-color: var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text);
+}
+
+.skills-overview-link b {
+  display: grid;
+  min-width: 22px;
+  min-height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--bg-surface-muted);
+  font-size: 11px;
 }
 
 .tree-children {
