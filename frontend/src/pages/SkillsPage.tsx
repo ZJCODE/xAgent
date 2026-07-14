@@ -615,7 +615,6 @@ export function SkillsPage() {
           <div className="toolbar-actions">
             {selected.text ? <><Button type="button" variant={viewMode === "preview" ? "primary" : "ghost"} onClick={() => setViewMode("preview")}><Eye size={14} />Preview</Button><Button type="button" variant={viewMode === "edit" ? "primary" : "ghost"} onClick={() => setViewMode("edit")}><Edit3 size={14} />Edit</Button><Button type="button" disabled={!dirty || saving} onClick={() => void saveEditor()}><Save size={14} />{conflict ? "Save merged result" : saving ? "Saving..." : "Save"}</Button><IconButton type="button" disabled={!dirty || saving} onClick={discardEditor} title="Discard changes" aria-label="Discard changes"><RotateCcw size={15} /></IconButton></> : null}
             {isSkillHome && selectedSkill ? renderSkillStateAction(selectedSkill) : null}
-            {!isSkillHome && selectedSkill ? <><Button type="button" onClick={() => beginMoveEntry(selected)}><Pencil size={14} />Rename / Move</Button><Button type="button" variant="danger" onClick={() => beginDeleteEntry(selected)}><Trash2 size={14} />Delete File</Button></> : null}
           </div>
         </div>
         {validationIssues.length ? <div className="skill-issues">{validationIssues.map((issue, index) => <div key={`${issue.code}-${index}`}><strong>{issue.code}{issue.line ? ` at ${issue.line}:${issue.column || 1}` : ""}</strong><span>{issue.message}</span></div>)}</div> : null}
