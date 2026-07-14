@@ -7,6 +7,7 @@ import contextvars
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterator, Optional
 
 from .scheduler import (
+    ARCHIVE_DIRNAME,
     FAILED_DIRNAME,
     RUNNING_MARKER,
     TASK_TIMESTAMP_FORMAT,
@@ -37,14 +39,22 @@ TASK_TYPE_MESSAGE = "message"
 TASK_TYPE_AGENT = "agent"
 TASK_STATUS_ACTIVE = "active"
 TASK_STATUS_PAUSED = "paused"
-TASK_PAYLOAD_VERSION = 5
+TASK_STATUS_COMPLETED = "completed"
+TASK_STATUS_FAILED = "failed"
+TASK_PAYLOAD_VERSION = 6
 TASK_JSON_SUFFIX = ".json"
 TASK_STATE_PENDING = "pending"
 TASK_STATE_FAILED = "failed"
 TASK_STATE_RUNNING = "running"
+TASK_STATE_COMPLETED = "completed"
 DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS = 1.0
 SUPPORTED_TASK_TYPES = {TASK_TYPE_MESSAGE, TASK_TYPE_AGENT}
-SUPPORTED_LIFECYCLE_STATUSES = {TASK_STATUS_ACTIVE, TASK_STATUS_PAUSED}
+SUPPORTED_LIFECYCLE_STATUSES = {
+    TASK_STATUS_ACTIVE,
+    TASK_STATUS_PAUSED,
+    TASK_STATUS_COMPLETED,
+    TASK_STATUS_FAILED,
+}
 
 
 @dataclass(frozen=True)
@@ -133,6 +143,8 @@ class ScheduledTaskRecord:
     def status(self) -> str:
         if self.state == TASK_STATE_FAILED:
             return TASK_STATE_FAILED
+        if self.state == TASK_STATE_COMPLETED:
+            return TASK_STATE_COMPLETED
         raw = str(self.payload.get("status") or "").strip().lower() if isinstance(self.payload, dict) else ""
         if raw == TASK_STATUS_PAUSED:
             return TASK_STATUS_PAUSED
@@ -157,12 +169,13 @@ class ScheduledTaskRecord:
         }
 
     def to_task_view(self) -> dict[str, Any]:
+        is_terminal = self.status in {TASK_STATUS_COMPLETED, TASK_STATUS_FAILED}
         return {
             "task_id": self.task_id,
             "title": self.title or "Reminder",
             "task_type": self.task_type,
             "content": self.content,
-            "next_run_at": self.run_at.isoformat(sep=" "),
+            "next_run_at": None if is_terminal else self.run_at.isoformat(sep=" "),
             "recurrence": self.recurrence or None,
             "status": self.status,
             "state": self.state,
@@ -171,7 +184,14 @@ class ScheduledTaskRecord:
             "user_id": self.delivery_user_id,
             "target": self.target,
             "paused_at": self.payload.get("paused_at") if isinstance(self.payload, dict) else None,
+            "created_at": self.payload.get("created_at") if isinstance(self.payload, dict) else None,
             "updated_at": self.payload.get("updated_at") if isinstance(self.payload, dict) else None,
+            "completed_at": self.payload.get("completed_at") if isinstance(self.payload, dict) else None,
+            "failed_at": self.payload.get("failed_at") if isinstance(self.payload, dict) else None,
+            "last_run_at": self.payload.get("last_run_at") if isinstance(self.payload, dict) else None,
+            "last_run_status": self.payload.get("last_run_status") if isinstance(self.payload, dict) else None,
+            "completion_reason": self.payload.get("completion_reason") if isinstance(self.payload, dict) else None,
+            "last_error": self.payload.get("last_error") if isinstance(self.payload, dict) else None,
         }
 
 
@@ -297,8 +317,13 @@ def list_active_task_views(tasks_dir: Path | str) -> list[dict[str, Any]]:
     return [record.to_task_view() for record in list_active_task_records(tasks_dir)]
 
 
-def list_task_records(tasks_dir: Path | str, *, include_failed: bool = True) -> list[ScheduledTaskRecord]:
-    """Return pending scheduled tasks, optionally including failed tasks."""
+def list_task_records(
+    tasks_dir: Path | str,
+    *,
+    include_failed: bool = True,
+    include_archived: bool = False,
+) -> list[ScheduledTaskRecord]:
+    """Return current tasks, optionally including failed and archived records."""
     root, failed = ensure_scheduler_dirs(tasks_dir)
     records: list[ScheduledTaskRecord] = []
 
@@ -315,11 +340,51 @@ def list_task_records(tasks_dir: Path | str, *, include_failed: bool = True) -> 
             if record is not None:
                 records.append(record)
 
+    if include_archived:
+        records.extend(list_archived_task_records(tasks_dir))
+
     return sorted(records, key=lambda item: (item.run_at, item.name))
 
 
+def list_archived_task_records(tasks_dir: Path | str) -> list[ScheduledTaskRecord]:
+    """Return completed task records, newest completion first."""
+    root, _failed = ensure_scheduler_dirs(tasks_dir)
+    archive = root / ARCHIVE_DIRNAME
+    records: list[ScheduledTaskRecord] = []
+    if archive.is_dir():
+        for path in archive.rglob(f"*{TASK_JSON_SUFFIX}"):
+            record = _record_from_json_file(path, state=TASK_STATE_COMPLETED)
+            if record is not None:
+                records.append(record)
+    return sorted(
+        records,
+        key=lambda item: (str(item.payload.get("completed_at") or ""), item.name),
+        reverse=True,
+    )
+
+
+def count_archived_task_records(tasks_dir: Path | str) -> int:
+    """Count archived task files without parsing their payloads."""
+    root, _failed = ensure_scheduler_dirs(tasks_dir)
+    archive = root / ARCHIVE_DIRNAME
+    if not archive.is_dir():
+        return 0
+    return sum(1 for path in archive.rglob(f"*{TASK_JSON_SUFFIX}") if path.is_file())
+
+
+def get_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
+    """Return a task by id across pending, failed, and archived storage."""
+    normalized_task_id = str(task_id or "").strip()
+    if not normalized_task_id:
+        raise ValueError("task_id is required")
+    for record in list_task_records(tasks_dir, include_archived=True):
+        if record.task_id == normalized_task_id:
+            return record
+    raise FileNotFoundError(f"task not found: {normalized_task_id}")
+
+
 def delete_task_file(tasks_dir: Path | str, name: str) -> ScheduledTaskRecord:
-    """Delete a pending or failed task file by name."""
+    """Delete a pending, failed, or archived task file by name."""
     path = _resolve_task_file(tasks_dir, name)
     record = _record_from_any_file(path)
     if record is None:
@@ -329,16 +394,45 @@ def delete_task_file(tasks_dir: Path | str, name: str) -> ScheduledTaskRecord:
 
 
 def delete_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
-    """Delete a scheduled task by stable task id (searches active and failed)."""
-    normalized_task_id = str(task_id or "").strip()
-    if not normalized_task_id:
-        raise ValueError("task_id is required")
-    for record in list_task_records(tasks_dir):
-        if record.task_id != normalized_task_id:
-            continue
-        record.path.unlink()
-        return record
-    raise FileNotFoundError(f"task not found: {normalized_task_id}")
+    """Permanently delete a task by stable id from any lifecycle location."""
+    record = get_scheduled_task(tasks_dir, task_id)
+    record.path.unlink()
+    return record
+
+
+def duplicate_archived_task(
+    tasks_dir: Path | str,
+    task_id: str,
+    *,
+    run_at: str | datetime,
+    recurrence: Any = None,
+    title: Optional[str] = None,
+    content: Optional[str] = None,
+    task_type: Optional[str] = None,
+) -> ScheduledTaskRecord:
+    """Create a fresh task from a completed record while preserving delivery authority."""
+    original = get_scheduled_task(tasks_dir, task_id)
+    if original.state != TASK_STATE_COMPLETED:
+        raise ValueError("only completed archived tasks can be duplicated")
+    parsed_run_at = parse_run_at(run_at)
+    if parsed_run_at <= datetime.now().replace(microsecond=0):
+        raise ValueError("duplicated task must be scheduled in the future")
+    delivery = original.delivery
+    raw_target = delivery.get("target")
+    target = dict(raw_target) if isinstance(raw_target, dict) else {}
+    return enqueue_scheduled_task(
+        task_type=task_type if task_type is not None else original.task_type,
+        content=content if content is not None else original.content,
+        run_at=parsed_run_at,
+        tasks_dir=tasks_dir,
+        channel=original.delivery_channel,
+        target=target,
+        user_id=original.delivery_user_id,
+        title=title if title is not None else original.title,
+        recurrence=recurrence,
+        source={"source": "task_duplicate", "source_task_id": original.task_id},
+        execution=original.execution,
+    )
 
 
 def get_pending_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
@@ -677,21 +771,20 @@ class AsyncTaskScheduler:
             if claimed_path is None:
                 continue
             claimed = _record_from_json_file(claimed_path, state=TASK_STATE_RUNNING) or record
+            dispatch_error: Exception | None = None
             try:
                 await self.dispatch(claimed)
             except Exception as exc:
+                dispatch_error = exc
                 self.logger.exception("scheduled task failed -> %s: %s", record.name, exc)
                 if not claimed.recurrence:
-                    self._quarantine(claimed_path, record.name, "failed")
+                    self._fail_record(claimed_path, claimed, "failed", exc)
                     continue
-                # Recurring task: log the failure but fall through to
-                # _complete_record to reschedule instead of
-                # quarantining permanently.
             try:
-                self._complete_record(claimed_path, claimed)
+                self._complete_record(claimed_path, claimed, dispatch_error=dispatch_error)
             except Exception as exc:
                 self.logger.exception("scheduled task completion failed -> %s: %s", record.name, exc)
-                self._quarantine(claimed_path, record.name, "error")
+                self._fail_record(claimed_path, claimed, "completion_error", exc)
 
         return next_run_at
 
@@ -729,24 +822,100 @@ class AsyncTaskScheduler:
         except OSError as exc:
             self.logger.error("failed to quarantine structured task %s: %s", original_name, exc)
 
-    def _complete_record(self, path: Path, record: ScheduledTaskRecord) -> None:
+    def _fail_record(
+        self,
+        path: Path,
+        record: ScheduledTaskRecord,
+        reason: str,
+        error: Exception,
+    ) -> None:
+        now = self.now_provider().replace(microsecond=0)
+        payload = dict(record.payload)
+        payload.update(
+            {
+                "version": TASK_PAYLOAD_VERSION,
+                "status": TASK_STATUS_FAILED,
+                "failed_at": now.isoformat(sep=" "),
+                "last_run_at": now.isoformat(sep=" "),
+                "last_run_status": "failed",
+                "last_error": _safe_error_summary(error),
+                "updated_at": now.isoformat(sep=" "),
+            }
+        )
+        try:
+            _replace_json_payload(path, payload)
+        except OSError as exc:
+            self.logger.error("failed to persist task failure metadata for %s: %s", record.name, exc)
+        self._quarantine(path, _original_task_name(path), reason)
+
+    def _complete_record(
+        self,
+        path: Path,
+        record: ScheduledTaskRecord,
+        *,
+        dispatch_error: Exception | None = None,
+    ) -> None:
         recurrence = record.recurrence
+        now = self.now_provider().replace(microsecond=0)
         if not recurrence:
-            path.unlink(missing_ok=True)
+            self._archive_record(path, record, now=now, reason="one_shot_succeeded")
             return
         next_run_at = calculate_next_recurrence_run_at(
             recurrence,
-            now=self.now_provider(),
+            now=now,
             current_run_at=record.run_at,
         )
         if next_run_at is None:
-            path.unlink(missing_ok=True)
+            if dispatch_error is not None:
+                self._fail_record(path, record, "failed", dispatch_error)
+            else:
+                self._archive_record(path, record, now=now, reason="recurrence_exhausted")
             return
-        self._reschedule_record(path, record, next_run_at)
+        self._reschedule_record(path, record, next_run_at, now=now, dispatch_error=dispatch_error)
 
-    def _reschedule_record(self, path: Path, record: ScheduledTaskRecord, next_run_at: datetime) -> None:
+    def _archive_record(
+        self,
+        path: Path,
+        record: ScheduledTaskRecord,
+        *,
+        now: datetime,
+        reason: str,
+    ) -> None:
+        payload = dict(record.payload)
+        payload.update(
+            {
+                "version": TASK_PAYLOAD_VERSION,
+                "status": TASK_STATUS_COMPLETED,
+                "completed_at": now.isoformat(sep=" "),
+                "last_run_at": now.isoformat(sep=" "),
+                "last_run_status": "succeeded",
+                "completion_reason": reason,
+                "updated_at": now.isoformat(sep=" "),
+            }
+        )
+        payload.pop("last_error", None)
+        _replace_json_payload(path, payload)
+        _move_task_to_archive(path, self.tasks_dir, now, task_id=record.task_id)
+
+    def _reschedule_record(
+        self,
+        path: Path,
+        record: ScheduledTaskRecord,
+        next_run_at: datetime,
+        *,
+        now: datetime,
+        dispatch_error: Exception | None,
+    ) -> None:
         payload = dict(record.payload)
         payload["run_at"] = next_run_at.isoformat(sep=" ")
+        payload["updated_at"] = now.isoformat(sep=" ")
+        payload["last_run_at"] = now.isoformat(sep=" ")
+        if dispatch_error is None:
+            payload["last_run_status"] = "succeeded"
+            payload.pop("last_error", None)
+        else:
+            payload["last_run_status"] = "failed"
+            payload["last_error"] = _safe_error_summary(dispatch_error)
         _replace_json_payload(path, payload)
         _move_running_task(path, self.tasks_dir, next_run_at, task_id=record.task_id)
 
@@ -804,16 +973,51 @@ def _move_running_task(path: Path, root: Path, run_at: datetime, *, task_id: str
     raise FileExistsError(f"could not reserve a unique task filename for {format_task_timestamp(run_at)}")
 
 
+def _move_task_to_archive(path: Path, root: Path, completed_at: datetime, *, task_id: str) -> Path:
+    archive_dir = root / ARCHIVE_DIRNAME / completed_at.strftime("%Y-%m")
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    for candidate in _task_file_candidates(archive_dir, completed_at, task_id=task_id):
+        try:
+            os.link(path, candidate)
+        except FileExistsError:
+            continue
+        _fsync_directory(archive_dir)
+        path.unlink(missing_ok=True)
+        _fsync_directory(path.parent)
+        return candidate
+    raise FileExistsError(f"could not reserve archive filename for {format_task_timestamp(completed_at)}")
+
+
+def _original_task_name(path: Path) -> str:
+    return path.name.split(RUNNING_MARKER, 1)[0]
+
+
+def _safe_error_summary(error: Exception) -> str:
+    text = " ".join(str(error).split()).strip()
+    if not text:
+        text = error.__class__.__name__
+    text = re.sub(
+        r"(?i)\b(api[_-]?key|access[_-]?token|token|secret|password)\b\s*[:=]\s*[^\s,;]+",
+        r"\1=[redacted]",
+        text,
+    )
+    return text[:500]
+
+
 def _record_from_any_file(path: Path) -> Optional[ScheduledTaskRecord]:
     if TASK_JSON_SUFFIX in path.name:
-        return _record_from_failed_file(path) if path.parent.name == FAILED_DIRNAME else _record_from_json_file(path)
+        if path.parent.name == FAILED_DIRNAME:
+            return _record_from_failed_file(path)
+        if ARCHIVE_DIRNAME in path.parts:
+            return _record_from_json_file(path, state=TASK_STATE_COMPLETED)
+        return _record_from_json_file(path)
     return None
 
 
 def _record_from_failed_file(path: Path) -> Optional[ScheduledTaskRecord]:
     reason = "failed"
     original_name = path.name
-    for candidate_reason in ("timeout", "failed", "error", "invalid", "orphaned"):
+    for candidate_reason in ("completion_error", "timeout", "failed", "error", "invalid", "orphaned"):
         marker = f".{candidate_reason}"
         if marker in path.name:
             reason = candidate_reason
@@ -862,12 +1066,15 @@ def _parse_task_time_from_json_name(name: str) -> Optional[datetime]:
 
 
 def _resolve_task_file(tasks_dir: Path | str, name: str) -> Path:
-    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+    if not name or any(char in name for char in ("/", "\\", "*", "?", "[", "]")) or name in {".", ".."}:
         raise ValueError("invalid task name")
     root, failed = ensure_scheduler_dirs(tasks_dir)
+    archive = root / ARCHIVE_DIRNAME
     candidates = [root / name, failed / name]
+    if archive.is_dir():
+        candidates.extend(archive.rglob(name))
     for path in candidates:
         resolved = path.resolve()
-        if (resolved.is_relative_to(root) or resolved.is_relative_to(failed)) and resolved.is_file():
+        if resolved.is_relative_to(root) and resolved.is_file():
             return resolved
     raise FileNotFoundError(f"task not found: {name}")

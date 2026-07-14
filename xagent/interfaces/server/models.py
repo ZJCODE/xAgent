@@ -161,3 +161,20 @@ class TaskCreateInput(BaseModel):
     channel: Optional[str] = "api"
     user_id: Optional[str] = None
     target: Optional[Dict[str, Any]] = None
+
+
+class TaskDuplicateInput(BaseModel):
+    """Overrides and a fresh schedule for duplicating a completed task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = None
+    content: Optional[str] = None
+    task_type: Optional[str] = None
+    run_at: Optional[str] = None
+    delay_seconds: Optional[int] = None
+    recurrence: Optional[List[Dict[str, Any]]] = None
+    interval_seconds: Optional[int] = None
+    duration_seconds: Optional[int] = None
+    start_at: Optional[str] = None
+    end_at: Optional[str] = None

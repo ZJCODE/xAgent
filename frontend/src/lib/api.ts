@@ -30,6 +30,8 @@ import type {
   SkillsInfo,
   SkillsTreeResponse,
   TaskCreateInput,
+  TaskDuplicateInput,
+  TaskScope,
   TaskUpdateInput,
   TasksResponse,
   ScheduledTaskItem,
@@ -214,8 +216,14 @@ export async function getMessagesStats(): Promise<MessagesStats> {
   return requestJson("/api/messages/stats");
 }
 
-export async function getTasks(): Promise<TasksResponse> {
-  return requestJson("/api/tasks");
+export async function getTasks(
+  scope: TaskScope = "current",
+  query = "",
+  limit = 50,
+  offset = 0,
+): Promise<TasksResponse> {
+  const params = new URLSearchParams({ scope, query, limit: String(limit), offset: String(offset) });
+  return requestJson(`/api/tasks?${params.toString()}`);
 }
 
 export async function createTask(input: TaskCreateInput): Promise<{ status: string; task: ScheduledTaskItem }> {
@@ -237,6 +245,14 @@ export async function resumeTask(taskId: string): Promise<{ status: string; task
 export async function updateTask(taskId: string, input: TaskUpdateInput): Promise<{ status: string; task: ScheduledTaskItem }> {
   return requestJson(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function duplicateTask(taskId: string, input: TaskDuplicateInput): Promise<{ status: string; task: ScheduledTaskItem }> {
+  return requestJson(`/api/tasks/${encodeURIComponent(taskId)}/duplicate`, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });

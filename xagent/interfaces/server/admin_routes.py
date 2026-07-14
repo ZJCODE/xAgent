@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import mimetypes
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
@@ -20,13 +22,18 @@ from .models import (
     SkillStateInput,
     SkillWriteInput,
     TaskCreateInput,
+    TaskDuplicateInput,
     TaskUpdateInput,
     WorkspaceWriteInput,
 )
 from .serializers import message_item, message_search_result
 from ...core.runtime import (
+    count_archived_task_records,
     delete_scheduled_task,
+    duplicate_archived_task,
     enqueue_scheduled_task,
+    get_scheduled_task,
+    list_archived_task_records,
     list_task_records,
     pause_scheduled_task,
     resolve_scheduled_task_run_at,
@@ -56,6 +63,46 @@ MASK_SENTINEL = "****"
 
 WORKSPACE_TEXT_READ_LIMIT = 1_000_000
 WORKSPACE_SEARCH_TEXT_LIMIT = 2_000_000
+
+
+def _resolve_task_schedule(input_data: Any):
+    recurrence = input_data.recurrence
+    interval_fields = (
+        input_data.interval_seconds is not None
+        or input_data.duration_seconds is not None
+        or input_data.start_at is not None
+        or input_data.end_at is not None
+    )
+    if recurrence is not None and interval_fields:
+        raise ValueError("recurrence cannot be combined with interval schedule fields")
+    if recurrence is None and interval_fields:
+        if input_data.interval_seconds is None:
+            raise ValueError("interval_seconds is required for interval tasks")
+        if input_data.duration_seconds is None and input_data.end_at is None:
+            raise ValueError("interval tasks require a user-provided duration_seconds or end_at")
+        interval_rule: Dict[str, Any] = {
+            "kind": "interval",
+            "every_seconds": input_data.interval_seconds,
+        }
+        if input_data.start_at is not None:
+            interval_rule["start_at"] = input_data.start_at
+        if input_data.duration_seconds is not None:
+            interval_rule["duration_seconds"] = input_data.duration_seconds
+        if input_data.end_at is not None:
+            interval_rule["end_at"] = input_data.end_at
+        recurrence = [interval_rule]
+    return resolve_scheduled_task_run_at(
+        run_at=input_data.run_at,
+        delay_seconds=input_data.delay_seconds,
+        recurrence=recurrence,
+    )
+
+
+def _task_matches_query(view: dict[str, Any], query: str) -> bool:
+    needle = query.strip().lower()
+    if not needle:
+        return True
+    return needle in json.dumps(view, ensure_ascii=False, sort_keys=True, default=str).lower()
 
 
 def _mask_sensitive_fields(data: dict) -> dict:
@@ -141,13 +188,43 @@ def register_admin_routes(
         }
 
     @app.get("/api/tasks", tags=["Monitoring"])
-    async def tasks_list():
+    async def tasks_list(
+        scope: str = Query("current", pattern="^(current|scheduled|attention|archive)$"),
+        query: str = Query(""),
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ):
         server = resolve_admin()
-        tasks = [record.to_task_view() for record in list_task_records(server.tasks_dir)]
+        current_records = list_task_records(server.tasks_dir)
+        scheduled_records = [record for record in current_records if record.status in {"active", "paused"}]
+        attention_records = [record for record in current_records if record.status == "failed"]
+        archive_records = list_archived_task_records(server.tasks_dir) if scope == "archive" else []
+        archive_count = len(archive_records) if scope == "archive" else count_archived_task_records(server.tasks_dir)
+        selected = {
+            "current": [*scheduled_records, *attention_records],
+            "scheduled": scheduled_records,
+            "attention": sorted(
+                attention_records,
+                key=lambda record: str(record.payload.get("failed_at") or ""),
+                reverse=True,
+            ),
+            "archive": archive_records,
+        }[scope]
+        views = [record.to_task_view() for record in selected]
+        filtered = [view for view in views if _task_matches_query(view, query)]
+        tasks = filtered[offset : offset + limit]
         return {
             "root": str(server.tasks_dir),
             "tasks": tasks,
-            "total": len(tasks),
+            "total": len(filtered),
+            "counts": {
+                "scheduled": len(scheduled_records),
+                "attention": len(attention_records),
+                "archive": archive_count,
+            },
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(tasks) < len(filtered),
         }
 
     @app.post("/api/tasks", tags=["Monitoring"], status_code=201)
@@ -163,36 +240,7 @@ def register_admin_routes(
         target = dict(input_data.target or {})
         target.setdefault("user_id", user_id)
         try:
-            recurrence = input_data.recurrence
-            if recurrence is None and (
-                input_data.interval_seconds is not None
-                or input_data.duration_seconds is not None
-                or input_data.start_at is not None
-                or input_data.end_at is not None
-            ):
-                if input_data.interval_seconds is None:
-                    raise ValueError("interval_seconds is required for interval tasks")
-                if input_data.duration_seconds is None and input_data.end_at is None:
-                    raise ValueError(
-                        "interval tasks require a user-provided duration_seconds or end_at; "
-                        "ask the user how long to continue or when to stop before creating"
-                    )
-                interval_rule: Dict[str, Any] = {
-                    "kind": "interval",
-                    "every_seconds": input_data.interval_seconds,
-                }
-                if input_data.start_at is not None:
-                    interval_rule["start_at"] = input_data.start_at
-                if input_data.duration_seconds is not None:
-                    interval_rule["duration_seconds"] = input_data.duration_seconds
-                if input_data.end_at is not None:
-                    interval_rule["end_at"] = input_data.end_at
-                recurrence = [interval_rule]
-            scheduled_at, normalized_recurrence = resolve_scheduled_task_run_at(
-                run_at=input_data.run_at,
-                delay_seconds=input_data.delay_seconds,
-                recurrence=recurrence,
-            )
+            scheduled_at, normalized_recurrence = _resolve_task_schedule(input_data)
             task = enqueue_scheduled_task(
                 task_type=input_data.task_type,
                 content=input_data.content,
@@ -213,7 +261,12 @@ def register_admin_routes(
     async def tasks_pause(task_id: str):
         server = resolve_admin()
         try:
+            existing = get_scheduled_task(server.tasks_dir, task_id)
+            if existing.status in {"completed", "failed"}:
+                raise HTTPException(status_code=409, detail=f"task is immutable in {existing.status} state")
             task = pause_scheduled_task(server.tasks_dir, task_id)
+        except HTTPException:
+            raise
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -224,7 +277,12 @@ def register_admin_routes(
     async def tasks_resume(task_id: str):
         server = resolve_admin()
         try:
+            existing = get_scheduled_task(server.tasks_dir, task_id)
+            if existing.status in {"completed", "failed"}:
+                raise HTTPException(status_code=409, detail=f"task is immutable in {existing.status} state")
             task = resume_scheduled_task(server.tasks_dir, task_id)
+        except HTTPException:
+            raise
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -235,6 +293,9 @@ def register_admin_routes(
     async def tasks_update(task_id: str, input_data: TaskUpdateInput):
         server = resolve_admin()
         try:
+            existing = get_scheduled_task(server.tasks_dir, task_id)
+            if existing.status in {"completed", "failed"}:
+                raise HTTPException(status_code=409, detail=f"task is immutable in {existing.status} state")
             task = update_scheduled_task(
                 server.tasks_dir,
                 task_id,
@@ -249,10 +310,35 @@ def register_admin_routes(
                 start_at=input_data.start_at,
                 end_at=input_data.end_at,
             )
+        except HTTPException:
+            raise
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "ok", "task": task.to_task_view()}
+
+    @app.post("/api/tasks/{task_id}/duplicate", tags=["Monitoring"], status_code=201)
+    async def tasks_duplicate(task_id: str, input_data: TaskDuplicateInput):
+        server = resolve_admin()
+        try:
+            scheduled_at, normalized_recurrence = _resolve_task_schedule(input_data)
+            if scheduled_at <= datetime.now().replace(microsecond=0):
+                raise ValueError("duplicated task must be scheduled in the future")
+            task = duplicate_archived_task(
+                server.tasks_dir,
+                task_id,
+                run_at=scheduled_at,
+                recurrence=normalized_recurrence or None,
+                title=input_data.title,
+                content=input_data.content,
+                task_type=input_data.task_type,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            status_code = 409 if "only completed archived" in str(exc) else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
         return {"status": "ok", "task": task.to_task_view()}
 
     @app.delete("/api/tasks/delete", tags=["Monitoring"])

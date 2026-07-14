@@ -1,4 +1,4 @@
-import type { ScheduledTaskItem, ScheduledTaskRecurrenceRule, TaskCreateInput, TaskUpdateInput } from "../types";
+import type { ScheduledTaskItem, ScheduledTaskRecurrenceRule, TaskCreateInput, TaskDuplicateInput, TaskUpdateInput } from "../types";
 
 export const WEEKDAY_OPTIONS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 export type WeekdayOption = (typeof WEEKDAY_OPTIONS)[number];
@@ -93,7 +93,24 @@ export function taskToFormState(task: ScheduledTaskItem): TaskFormState {
   }
 
   state.oneShotMode = "absolute";
-  state.runAt = fromApiDateTime(task.next_run_at);
+  state.runAt = fromApiDateTime(task.next_run_at || "");
+  return state;
+}
+
+export function taskToDuplicateFormState(task: ScheduledTaskItem): TaskFormState {
+  const state = taskToFormState(task);
+  if (state.scheduleKind === "oneshot") {
+    state.oneShotMode = "absolute";
+    state.runAt = "";
+  } else if (state.scheduleKind === "interval") {
+    state.intervalStartMode = "now";
+    state.intervalStartAt = "";
+    state.intervalEndMode = "duration";
+    state.intervalDurationMinutes = "";
+    state.intervalEndAt = "";
+    state.intervalFirstRunMode = "default";
+    state.intervalDelayMinutes = "";
+  }
   return state;
 }
 
@@ -162,6 +179,11 @@ export function formStateToCreateInput(state: TaskFormState): TaskCreateInput {
     channel: "api",
     ...schedulePayloadForCreate(state),
   };
+}
+
+export function formStateToDuplicateInput(state: TaskFormState): TaskDuplicateInput {
+  const { channel: _channel, user_id: _userId, target: _target, ...input } = formStateToCreateInput(state);
+  return input;
 }
 
 export function formStateToUpdateInput(state: TaskFormState, original: ScheduledTaskItem): TaskUpdateInput {

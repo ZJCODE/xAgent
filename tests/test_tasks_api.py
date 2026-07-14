@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from xagent.components import MessageStorage
 from xagent.core.handlers import MessageHandler
-from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
+from xagent.core.runtime import AsyncTaskScheduler, ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
 from xagent.interfaces.server import AgentHTTPServer
 
 
@@ -158,6 +158,78 @@ class TaskApiTests(unittest.TestCase):
 
                 listed_again = client.get("/api/tasks")
                 self.assertEqual(listed_again.json()["total"], 0)
+
+    def test_archive_scope_duplicate_and_terminal_conflicts(self):
+        import asyncio
+
+        async def archive_task(server, *, content, minute):
+            run_at = datetime(2026, 7, 14, 9, minute, 0)
+            original = enqueue_scheduled_task(
+                task_type="message",
+                content=content,
+                run_at=run_at,
+                tasks_dir=server.tasks_dir,
+                channel="feishu",
+                target={"chat_id": "oc_archive"},
+                user_id="ou_archive",
+                title="归档提醒",
+            )
+
+            async def delivered(task):
+                del task
+
+            scheduler = AsyncTaskScheduler(
+                server.tasks_dir,
+                can_handle=lambda task: True,
+                dispatch=delivered,
+                now_provider=lambda: run_at,
+            )
+            await scheduler.tick()
+            return original
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = AgentHTTPServer(agent=_TaskAgent(Path(tmpdir)))
+            original = asyncio.run(archive_task(server, content="飞书归档提醒", minute=0))
+            asyncio.run(archive_task(server, content="second archived task", minute=1))
+            with TestClient(server.app) as client:
+                current = client.get("/api/tasks")
+                self.assertEqual(current.json()["total"], 0)
+                self.assertEqual(current.json()["counts"], {"scheduled": 0, "attention": 0, "archive": 2})
+
+                first_page = client.get("/api/tasks?scope=archive&limit=1&offset=0")
+                self.assertEqual(first_page.json()["total"], 2)
+                self.assertTrue(first_page.json()["has_more"])
+
+                archived = client.get("/api/tasks?scope=archive&query=飞书&limit=1&offset=0")
+                self.assertEqual(archived.status_code, 200)
+                archived_task = archived.json()["tasks"][0]
+                self.assertEqual(archived_task["task_id"], original.task_id)
+                self.assertEqual(archived_task["status"], "completed")
+                self.assertIsNone(archived_task["next_run_at"])
+
+                conflict = client.patch(f"/api/tasks/{original.task_id}", json={"title": "nope"})
+                self.assertEqual(conflict.status_code, 409)
+
+                duplicated = client.post(
+                    f"/api/tasks/{original.task_id}/duplicate",
+                    json={"title": "再次提醒", "run_at": "2099-01-02 10:00:00"},
+                )
+                self.assertEqual(duplicated.status_code, 201)
+                copy = duplicated.json()["task"]
+                self.assertNotEqual(copy["task_id"], original.task_id)
+                self.assertEqual(copy["channel"], "feishu")
+                self.assertEqual(copy["target"]["chat_id"], "oc_archive")
+                self.assertEqual(copy["user_id"], "ou_archive")
+
+                rejected_override = client.post(
+                    f"/api/tasks/{original.task_id}/duplicate",
+                    json={"run_at": "2099-01-03 10:00:00", "channel": "api"},
+                )
+                self.assertEqual(rejected_override.status_code, 422)
+
+                deleted = client.delete(f"/api/tasks/delete?task_id={original.task_id}")
+                self.assertEqual(deleted.status_code, 200)
+                self.assertEqual(client.delete(f"/api/tasks/delete?task_id={original.task_id}").status_code, 404)
 
     def test_list_weekly_task_includes_weekdays(self):
         with tempfile.TemporaryDirectory() as tmpdir:

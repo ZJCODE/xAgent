@@ -88,14 +88,23 @@ export interface ScheduledTaskItem {
   title: string;
   task_type: "message" | "agent" | string;
   content: string;
-  next_run_at: string;
+  next_run_at: string | null;
   recurrence?: ScheduledTaskRecurrenceRule[] | null;
-  status: "active" | "paused" | "failed" | string;
+  status: "active" | "paused" | "completed" | "failed" | string;
+  reason?: string;
   channel?: string;
   user_id?: string;
   target?: Record<string, unknown>;
   paused_at?: string | null;
+  created_at?: string | null;
   updated_at?: string | null;
+  completed_at?: string | null;
+  failed_at?: string | null;
+  last_run_at?: string | null;
+  last_run_status?: "succeeded" | "failed" | string | null;
+  completion_reason?: string | null;
+  last_error?: string | null;
+  state?: "pending" | "running" | "failed" | "completed" | string;
 }
 
 export interface TaskCreateInput {
@@ -127,10 +136,22 @@ export interface TaskUpdateInput {
   end_at?: string;
 }
 
+export type TaskDuplicateInput = Omit<TaskCreateInput, "channel" | "user_id" | "target">;
+
+export type TaskScope = "current" | "scheduled" | "attention" | "archive";
+
 export interface TasksResponse {
   root: string;
   tasks: ScheduledTaskItem[];
   total: number;
+  counts: {
+    scheduled: number;
+    attention: number;
+    archive: number;
+  };
+  limit: number;
+  offset: number;
+  has_more: boolean;
 }
 
 export type ChannelId = "api" | "voice" | "feishu" | "weixin";

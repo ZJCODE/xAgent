@@ -7,6 +7,7 @@ from xagent.core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     enqueue_scheduled_task,
+    list_archived_task_records,
     list_task_records,
     pause_scheduled_task,
     resolve_scheduled_task_run_at,
@@ -78,6 +79,41 @@ class ScheduledTaskTests(unittest.TestCase):
 
         async def _append_delivered(delivered, message):
             delivered.append(message)
+
+        asyncio.run(run_test())
+
+    def test_one_shot_success_is_archived_with_completion_metadata(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                run_at = datetime(2026, 6, 1, 14, 30, 0)
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="archive me",
+                    run_at=run_at,
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                )
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: True,
+                    dispatch=lambda task: _noop(task),
+                    now_provider=lambda: run_at,
+                )
+                await scheduler.tick()
+
+                self.assertEqual(list_task_records(tmpdir, include_failed=False), [])
+                archived = list_archived_task_records(tmpdir)
+                self.assertEqual(len(archived), 1)
+                self.assertEqual(archived[0].task_id, original.task_id)
+                self.assertEqual(archived[0].status, "completed")
+                self.assertEqual(archived[0].payload["completion_reason"], "one_shot_succeeded")
+                self.assertEqual(archived[0].payload["last_run_status"], "succeeded")
+                self.assertEqual(archived[0].path.parent.name, "2026-06")
+
+        async def _noop(task):
+            del task
 
         asyncio.run(run_test())
 
@@ -217,6 +253,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 current["now"] = datetime(2026, 6, 1, 10, 30, 0)
                 await scheduler.tick()
                 final_records = list_task_records(tmpdir, include_failed=False)
+                archived = list_archived_task_records(tmpdir)
 
             self.assertEqual(
                 delivered,
@@ -230,6 +267,8 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertEqual(first_records[0].run_at, datetime(2026, 6, 1, 10, 20, 0))
             self.assertEqual(second_records[0].run_at, datetime(2026, 6, 1, 10, 30, 0))
             self.assertEqual(final_records, [])
+            self.assertEqual(archived[0].task_id, original.task_id)
+            self.assertEqual(archived[0].payload["completion_reason"], "recurrence_exhausted")
 
         async def _append_delivered(delivered, run_at):
             delivered.append(run_at)
@@ -313,9 +352,77 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertEqual(active_records[0].recurrence, [{"kind": "daily", "time": "10:00:00"}])
             self.assertEqual(active_records[0].run_at, datetime(2026, 6, 2, 10, 0, 0))
             self.assertEqual(len(all_records), 1)
+            self.assertEqual(active_records[0].payload["last_run_status"], "failed")
+            self.assertIn("boom", active_records[0].payload["last_error"])
 
         async def _raise_dispatch_error(task):
             raise RuntimeError(f"boom: {task.content}")
+
+        asyncio.run(run_test())
+
+    def test_final_recurring_failure_moves_to_attention_instead_of_archive(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                run_at = datetime(2026, 6, 1, 10, 30, 0)
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="final attempt",
+                    run_at=run_at,
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    recurrence=[{"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 10:30:00"}],
+                )
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: True,
+                    dispatch=_raise_dispatch_error,
+                    now_provider=lambda: run_at,
+                )
+                await scheduler.tick()
+                records = list_task_records(tmpdir)
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0].status, "failed")
+                self.assertEqual(records[0].payload["last_run_status"], "failed")
+                self.assertEqual(list_archived_task_records(tmpdir), [])
+
+        async def _raise_dispatch_error(task):
+            raise RuntimeError(f"last run failed: {task.content}")
+
+        asyncio.run(run_test())
+
+    def test_archive_failure_is_quarantined_without_redispatch(self):
+        from unittest.mock import patch
+
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                run_at = datetime(2026, 6, 1, 10, 0, 0)
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="deliver once",
+                    run_at=run_at,
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                )
+                delivered = []
+
+                async def deliver(task):
+                    delivered.append(task.task_id)
+
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: True,
+                    dispatch=deliver,
+                    now_provider=lambda: run_at,
+                )
+                with patch("xagent.core.runtime.tasks._move_task_to_archive", side_effect=OSError("disk full")):
+                    await scheduler.tick()
+                await scheduler.tick()
+                records = list_task_records(tmpdir)
+                self.assertEqual(len(delivered), 1)
+                self.assertEqual(records[0].status, "failed")
+                self.assertEqual(records[0].reason, "completion_error")
 
         asyncio.run(run_test())
 

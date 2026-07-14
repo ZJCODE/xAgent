@@ -809,6 +809,45 @@ input::placeholder {
   background: var(--bg-surface);
 }
 
+.task-tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 2px solid transparent;
+  padding: 9px 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 640;
+}
+
+.task-tab:hover,
+.task-tab.active {
+  color: var(--text);
+}
+
+.task-tab.active {
+  border-bottom-color: var(--text);
+}
+
+.task-tab span {
+  display: inline-grid;
+  min-width: 20px;
+  min-height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--bg-surface-muted);
+  padding: 0 6px;
+  font-size: 11px;
+}
+
 .ui-panel,
 .skill-form-panel,
 .message-row,
@@ -1817,6 +1856,12 @@ input::placeholder {
   overflow-wrap: anywhere;
 }
 
+.task-row-main .task-error-copy {
+  margin-top: -4px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .task-row-actions {
   display: flex;
   flex: 0 0 auto;
@@ -1832,6 +1877,49 @@ input::placeholder {
 
 .task-editor-modal {
   width: min(780px, 100%);
+}
+
+.task-details-modal {
+  width: min(620px, 100%);
+}
+
+.task-details-content {
+  margin: 0 0 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-details-grid {
+  display: grid;
+  gap: 0;
+  margin: 0 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.task-details-grid > div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-details-grid > div:last-child {
+  border-bottom: 0;
+}
+
+.task-details-grid dt {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 640;
+}
+
+.task-details-grid dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .task-editor-modal .modal-header {

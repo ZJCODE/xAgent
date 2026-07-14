@@ -3,9 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import { classNames } from "../lib/format";
 import {
   createDefaultTaskFormState,
+  formStateToDuplicateInput,
   formStateToCreateInput,
   formStateToUpdateInput,
   taskToFormState,
+  taskToDuplicateFormState,
   validateTaskForm,
   WEEKDAY_OPTIONS,
   type IntervalEndMode,
@@ -16,17 +18,18 @@ import {
   type TaskScheduleKind,
   type WeekdayOption,
 } from "../lib/taskFormUtils";
-import type { ScheduledTaskItem, TaskCreateInput, TaskUpdateInput } from "../types";
+import type { ScheduledTaskItem, TaskCreateInput, TaskDuplicateInput, TaskUpdateInput } from "../types";
 import { Button, IconButton } from "./ui";
 import { WizardField } from "./WizardField";
 
 export type TaskEditorSave =
   | { mode: "create"; input: TaskCreateInput }
+  | { mode: "duplicate"; taskId: string; input: TaskDuplicateInput }
   | { mode: "edit"; taskId: string; patch: TaskUpdateInput };
 
 interface TaskEditorModalProps {
   open: boolean;
-  mode: "create" | "edit";
+  mode: "create" | "edit" | "duplicate";
   task: ScheduledTaskItem | null;
   saving?: boolean;
   error?: string;
@@ -47,13 +50,14 @@ export function TaskEditorModal({
   const [localError, setLocalError] = useState("");
   const validationError = useMemo(() => validateTaskForm(form), [form]);
   const isEdit = mode === "edit";
+  const isDuplicate = mode === "duplicate";
   const isNonApiTask = isEdit && task && String(task.channel || "api").toLowerCase() !== "api";
 
   useEffect(() => {
     if (!open) return;
     setLocalError("");
-    setForm(task ? taskToFormState(task) : createDefaultTaskFormState());
-  }, [open, task]);
+    setForm(task ? (isDuplicate ? taskToDuplicateFormState(task) : taskToFormState(task)) : createDefaultTaskFormState());
+  }, [isDuplicate, open, task]);
 
   useEffect(() => {
     if (!open) return;
@@ -82,6 +86,11 @@ export function TaskEditorModal({
       onSave({ mode: "edit", taskId: task.task_id, patch: formStateToUpdateInput(form, task) });
       return;
     }
+    if (isDuplicate) {
+      if (!task) return;
+      onSave({ mode: "duplicate", taskId: task.task_id, input: formStateToDuplicateInput(form) });
+      return;
+    }
     onSave({ mode: "create", input: formStateToCreateInput(form) });
   };
 
@@ -103,8 +112,12 @@ export function TaskEditorModal({
       >
         <div className="modal-header">
           <div>
-            <h3 id="task-editor-title">{isEdit ? "Edit task" : "Create task"}</h3>
-            <p className="task-editor-subtitle">API channel is used for new web tasks. Chat-created delivery targets stay unchanged on edit.</p>
+            <h3 id="task-editor-title">{isEdit ? "Edit task" : isDuplicate ? "Duplicate task" : "Create task"}</h3>
+            <p className="task-editor-subtitle">
+              {isDuplicate
+                ? "Create a fresh schedule while preserving the archived task's delivery target."
+                : "API channel is used for new web tasks. Chat-created delivery targets stay unchanged on edit."}
+            </p>
           </div>
           <IconButton type="button" onClick={onClose} disabled={saving} aria-label="Close task editor">
             <X size={16} />
@@ -116,6 +129,13 @@ export function TaskEditorModal({
           {isNonApiTask ? (
             <div className="task-editor-notice">
               Editing delivery channel <span className="data-chip">{task?.channel}</span>. The channel and target will not be changed.
+            </div>
+          ) : null}
+          {isDuplicate && task ? (
+            <div className="task-editor-notice">
+              Delivery is locked to <span className="data-chip">{task.channel || "local"}</span>
+              {String(task.target?.chat_id || "") ? <span className="data-chip">{String(task.target?.chat_id)}</span> : null}
+              {task.user_id ? <span className="data-chip">{task.user_id}</span> : null}. Choose a new future schedule before saving.
             </div>
           ) : null}
 
@@ -172,7 +192,7 @@ export function TaskEditorModal({
               Cancel
             </Button>
             <Button type="button" onClick={save} disabled={saving || Boolean(validationError)}>
-              {saving ? "Saving..." : "Save"}
+              {saving ? "Saving..." : isDuplicate ? `Create for ${task?.channel || "local"}` : "Save"}
             </Button>
           </div>
         </div>

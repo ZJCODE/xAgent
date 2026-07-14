@@ -1671,10 +1671,11 @@ def _print_skills_validation(config_dir: Path) -> int:
     return 1
 
 
-def _task_summary(records: list[Any]) -> tuple[int, int, int]:
-    active = sum(1 for record in records if record.status == "active")
+def _task_summary(records: list[Any]) -> tuple[int, int, int, int]:
+    scheduled = sum(1 for record in records if record.status in {"active", "paused"})
     failed = sum(1 for record in records if record.state == "failed")
-    return len(records), active, failed
+    archived = sum(1 for record in records if record.state == "completed")
+    return len(records), scheduled, failed, archived
 
 
 def _print_tasks_summary(config_dir: Path) -> int:
@@ -1686,12 +1687,13 @@ def _print_tasks_summary(config_dir: Path) -> int:
 
     from ...core.runtime import list_task_records
 
-    records = list_task_records(root)
-    total, active, failed = _task_summary(records)
+    records = list_task_records(root, include_archived=True)
+    total, scheduled, failed, archived = _task_summary(records)
     print(f"Tasks root: {root}")
     print(f"Total: {total}")
-    print(f"Active: {active}")
-    print(f"Failed: {failed}")
+    print(f"Scheduled: {scheduled}")
+    print(f"Needs attention: {failed}")
+    print(f"Archive: {archived}")
     return 0
 
 
@@ -1707,16 +1709,24 @@ def _format_task_record(record: Any) -> str:
     )
 
 
-def _print_tasks_list(config_dir: Path, *, include_failed: bool) -> int:
+def _print_tasks_list(config_dir: Path, *, scope: str) -> int:
     root = config_dir / BaseAgentConfig.TASKS_DIRNAME
     if not root.exists():
         print(f"Tasks root: {root}")
         print("No tasks found.")
         return 0
 
-    from ...core.runtime import list_task_records
+    from ...core.runtime import list_archived_task_records, list_task_records
 
-    records = list_task_records(root, include_failed=include_failed)
+    current = list_task_records(root)
+    if scope == "scheduled":
+        records = [record for record in current if record.status in {"active", "paused"}]
+    elif scope == "attention":
+        records = [record for record in current if record.status == "failed"]
+    elif scope == "archive":
+        records = list_archived_task_records(root)
+    else:
+        records = [*current, *list_archived_task_records(root)]
     if not records:
         print("No tasks found.")
         return 0
@@ -1916,8 +1926,10 @@ def _run_skills_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
 def _run_tasks_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
     actions = [
         MenuOption("summary", "Summary", "Show scheduled task counts."),
-        MenuOption("active", "Active", "List pending active tasks."),
-        MenuOption("all", "All", "List active and failed task files."),
+        MenuOption("scheduled", "Scheduled", "List active and paused tasks."),
+        MenuOption("attention", "Needs attention", "List failed tasks."),
+        MenuOption("archive", "Archive", "List completed tasks."),
+        MenuOption("all", "All", "List every task lifecycle state."),
         MenuOption("back", "Back", "Return to Inspect."),
     ]
     _run_inspect_section(
@@ -1927,7 +1939,7 @@ def _run_tasks_inspect_launcher(ui: TerminalUI, config_dir: Path) -> None:
         actions,
         lambda key: _print_tasks_summary(config_dir)
         if key == "summary"
-        else _print_tasks_list(config_dir, include_failed=key == "all"),
+        else _print_tasks_list(config_dir, scope=key),
     )
 
 

@@ -11,6 +11,7 @@ from typing import Any, Mapping
 TASK_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
 RUNNING_MARKER = ".running-"
 FAILED_DIRNAME = "failed"
+ARCHIVE_DIRNAME = "archive"
 WEEKDAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 WEEKDAY_INDEX_BY_NAME = {name: index for index, name in enumerate(WEEKDAY_NAMES)}
 WEEKDAY_ALIASES = {
