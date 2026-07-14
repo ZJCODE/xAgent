@@ -104,6 +104,87 @@ class SkillsApiTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(response.status_code, 403)
 
+    async def test_skills_api_safe_write_validation_conflict_and_entry_management(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = self._server(Path(tmpdir))
+
+            async with await self._client(server) as client:
+                created_skill = await client.post(
+                    "/api/skills/create",
+                    json={"name": "code-review", "description": "Reviews code. Use for review tasks."},
+                )
+                initial = await client.get("/api/skills/read", params={"path": "code-review/SKILL.md"})
+                created_dir = await client.post(
+                    "/api/skills/entries",
+                    json={"parent_path": "code-review", "name": "references", "kind": "directory"},
+                )
+                created_file = await client.post(
+                    "/api/skills/entries",
+                    json={
+                        "parent_path": "code-review/references",
+                        "name": "guide.md",
+                        "kind": "file",
+                        "content": "# Guide\n",
+                    },
+                )
+                file_read = await client.get(
+                    "/api/skills/read", params={"path": "code-review/references/guide.md"}
+                )
+                write = await client.put(
+                    "/api/skills/write",
+                    json={
+                        "path": "code-review/references/guide.md",
+                        "content": "# Updated guide\n",
+                        "expected_revision": file_read.json()["revision"],
+                    },
+                )
+                stale = await client.put(
+                    "/api/skills/write",
+                    json={
+                        "path": "code-review/references/guide.md",
+                        "content": "# Stale\n",
+                        "expected_revision": file_read.json()["revision"],
+                    },
+                )
+                invalid = await client.put(
+                    "/api/skills/write",
+                    json={
+                        "path": "code-review/SKILL.md",
+                        "content": "---\nname: wrong\ndescription: ''\n---\n",
+                        "expected_revision": initial.json()["revision"],
+                    },
+                )
+                moved = await client.patch(
+                    "/api/skills/entries",
+                    json={
+                        "path": "code-review/references/guide.md",
+                        "new_parent_path": "code-review",
+                        "new_name": "guide.md",
+                        "expected_revision": write.json()["revision"],
+                    },
+                )
+                protected = await client.delete(
+                    "/api/skills/entries", params={"path": "code-review/SKILL.md"}
+                )
+                deleted = await client.delete(
+                    "/api/skills/entries",
+                    params={"path": "code-review/guide.md", "expected_revision": write.json()["revision"]},
+                )
+
+            self.assertEqual(created_skill.status_code, 200)
+            self.assertEqual(created_dir.status_code, 200)
+            self.assertEqual(created_file.status_code, 200)
+            self.assertEqual(write.status_code, 200)
+            self.assertEqual(stale.status_code, 409)
+            self.assertEqual(stale.json()["detail"]["code"], "revision_conflict")
+            self.assertEqual(stale.json()["detail"]["current"]["content"], "# Updated guide\n")
+            self.assertEqual(invalid.status_code, 422)
+            self.assertEqual(invalid.json()["detail"]["code"], "skill_validation_failed")
+            self.assertEqual(moved.status_code, 200)
+            self.assertEqual(moved.json()["entry"]["path"], "code-review/guide.md")
+            self.assertEqual(protected.status_code, 403)
+            self.assertEqual(deleted.status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()

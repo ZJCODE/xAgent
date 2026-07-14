@@ -26,6 +26,11 @@ import type {
   SearchResult,
   SkillCreateInput,
   SkillCreateResponse,
+  SkillEntryCreateInput,
+  SkillEntryMoveInput,
+  SkillFileMutationResponse,
+  SkillApiErrorDetail,
+  SkillWriteInput,
   SkillStateResponse,
   SkillsInfo,
   SkillsTreeResponse,
@@ -38,12 +43,30 @@ import type {
   WorkspaceUploadResult,
 } from "../types";
 
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  detail?: SkillApiErrorDetail;
+
+  constructor(status: number, message: string, detail?: SkillApiErrorDetail) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = detail?.code;
+    this.detail = detail;
+  }
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = typeof data?.detail === "string" ? data.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
+    const rawDetail = data?.detail;
+    const detail = rawDetail && typeof rawDetail === "object" ? rawDetail as SkillApiErrorDetail : undefined;
+    const message = typeof rawDetail === "string"
+      ? rawDetail
+      : detail?.message || `HTTP ${response.status}`;
+    throw new ApiError(response.status, message, detail);
   }
   return data as T;
 }
@@ -188,6 +211,40 @@ export async function createSkill(input: SkillCreateInput): Promise<SkillCreateR
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+export async function writeSkillFile(input: SkillWriteInput): Promise<FileReadResult & { status: string }> {
+  return requestJson("/api/skills/write", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function createSkillEntry(input: SkillEntryCreateInput): Promise<SkillFileMutationResponse> {
+  return requestJson("/api/skills/entries", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function moveSkillEntry(input: SkillEntryMoveInput): Promise<SkillFileMutationResponse> {
+  return requestJson("/api/skills/entries", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteSkillEntry(
+  path: string,
+  recursive = false,
+  expectedRevision?: string,
+): Promise<{ status: string; deleted: FileNode }> {
+  const params = new URLSearchParams({ path, recursive: recursive ? "true" : "false" });
+  if (expectedRevision) params.set("expected_revision", expectedRevision);
+  return requestJson(`/api/skills/entries?${params.toString()}`, { method: "DELETE" });
 }
 
 export async function updateSkillState(name: string, enabled: boolean): Promise<SkillStateResponse> {

@@ -22,7 +22,12 @@ from fastapi import HTTPException
 
 from ..base import BaseAgentConfig, BaseAgentRunner
 from .files import WorkspaceFileService
-from ...components.skills import SkillsStorageLocal
+from ...components.skills import (
+    SkillConflictError,
+    SkillEntryConflictError,
+    SkillValidationError,
+    SkillsStorageLocal,
+)
 from ...core.agent import Agent
 
 
@@ -123,6 +128,29 @@ class AdminService(BaseAgentRunner):
 
     @staticmethod
     def _raise_skills_http_error(exc: Exception) -> None:
+        if isinstance(exc, SkillConflictError):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "revision_conflict",
+                    "message": str(exc),
+                    "current": exc.current,
+                },
+            ) from exc
+        if isinstance(exc, SkillEntryConflictError):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "entry_conflict", "message": str(exc)},
+            ) from exc
+        if isinstance(exc, SkillValidationError):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "skill_validation_failed",
+                    "message": str(exc),
+                    "issues": [issue.to_dict() for issue in exc.issues],
+                },
+            ) from exc
         if isinstance(exc, PermissionError):
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         if isinstance(exc, FileNotFoundError):

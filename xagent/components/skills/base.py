@@ -14,13 +14,20 @@ class SkillValidationIssue:
     path: str
     code: str
     message: str
+    line: Optional[int] = None
+    column: Optional[int] = None
 
-    def to_dict(self) -> Dict[str, str]:
-        return {
+    def to_dict(self) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
             "path": self.path,
             "code": self.code,
             "message": self.message,
         }
+        if self.line is not None:
+            result["line"] = self.line
+        if self.column is not None:
+            result["column"] = self.column
+        return result
 
 
 @dataclass(frozen=True)

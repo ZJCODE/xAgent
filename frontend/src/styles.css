@@ -1414,22 +1414,53 @@ input::placeholder {
   padding: 16px;
 }
 
-.tree-item {
+.tree-item-row {
   display: flex;
   width: 100%;
   min-height: 32px;
   align-items: center;
-  gap: 7px;
   border-radius: 7px;
+}
+
+.tree-item {
+  display: flex;
+  min-width: 0;
+  min-height: 32px;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
   color: var(--text-muted);
   padding: 0 8px;
   font-size: 13px;
 }
 
-.tree-item:hover,
-.tree-item.selected {
+.tree-item-row:hover,
+.tree-item-row.selected {
   background: var(--bg-surface);
   color: var(--text);
+}
+
+.tree-item-row:hover .tree-item,
+.tree-item-row.selected .tree-item {
+  color: var(--text);
+}
+
+.tree-item-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  opacity: 0;
+}
+
+.tree-item-row:hover .tree-item-actions,
+.tree-item-row:focus-within .tree-item-actions {
+  opacity: 1;
+}
+
+.tree-item-actions .ui-icon-button {
+  width: 25px;
+  min-height: 25px;
+  padding: 0;
 }
 
 .tree-children {
@@ -1729,6 +1760,96 @@ input::placeholder {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin-bottom: 12px;
+}
+
+.skill-breadcrumb {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.skill-breadcrumb button {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.skill-breadcrumb button:disabled {
+  cursor: default;
+  color: var(--text);
+}
+
+.skill-breadcrumb span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.skill-breadcrumb b {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.skill-text-editor {
+  width: 100%;
+  min-height: min(62vh, 720px);
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text);
+  padding: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.58;
+  tab-size: 2;
+}
+
+.skill-text-editor:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 1px;
+}
+
+.skill-merge-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.skill-merge-editor section {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.skill-merge-editor section > strong {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.skill-conflict-current {
+  min-height: min(62vh, 720px);
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface-muted);
+  color: var(--text);
+  padding: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.58;
+}
+
+.skill-issues,
+.warning-strip {
   margin-bottom: 12px;
 }
 
@@ -2612,6 +2733,15 @@ input::placeholder {
 
   .skill-hero-status {
     justify-content: flex-start;
+  }
+
+  .skill-merge-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .skill-conflict-current,
+  .skill-text-editor {
+    min-height: 36vh;
   }
 
   .chat-toolbar {

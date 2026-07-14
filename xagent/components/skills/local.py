@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import mimetypes
+import os
 import re
 import shutil
+import stat
+import tempfile
+import threading
 from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -24,12 +29,33 @@ _TEXT_READ_LIMIT = 1_000_000
 _SEARCH_TEXT_LIMIT = 2_000_000
 
 
+class SkillConflictError(Exception):
+    """Raised when a file changed after it was loaded by the caller."""
+
+    def __init__(self, message: str, *, current: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.current = current
+
+
+class SkillValidationError(Exception):
+    """Raised when a proposed SKILL.md document is invalid."""
+
+    def __init__(self, issues: List[SkillValidationIssue]):
+        super().__init__("SKILL.md validation failed")
+        self.issues = issues
+
+
+class SkillEntryConflictError(Exception):
+    """Raised when a create or move destination already exists."""
+
+
 class SkillsStorageLocal(SkillsStorageBase):
     """Manage open-standard Agent Skills stored under a runtime skills directory."""
 
     def __init__(self, root: str | Path, *, seed_builtins: bool = True):
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self._mutation_lock = threading.RLock()
         if seed_builtins:
             self._seed_builtin_skills()
 
@@ -110,7 +136,7 @@ class SkillsStorageLocal(SkillsStorageBase):
             raise PermissionError("Reserved skills state file cannot be read")
         if not requested.is_file():
             raise FileNotFoundError("File not found")
-        metadata = self._file_metadata(requested)
+        metadata = {**self._file_metadata(requested), "revision": self._file_revision(requested)}
         if metadata["binary"]:
             return {**metadata, "content": "", "text": False}
         content = self._read_text_file(requested, _TEXT_READ_LIMIT)
@@ -191,18 +217,146 @@ class SkillsStorageLocal(SkillsStorageBase):
         (skill_dir / SKILL_FILENAME).write_text(content, encoding="utf-8")
         return self._load_skill_metadata(skill_dir)
 
-    def write_file(self, relative_path: str, content: str, *, create_parents: bool = True) -> Dict[str, Any]:
-        requested = self._resolve_relative_path(relative_path)
-        if self._is_reserved_path(requested):
-            raise PermissionError("Reserved skills state file cannot be written")
-        if requested.exists() and requested.is_dir():
-            raise ValueError("Path is a directory")
-        if create_parents:
-            requested.parent.mkdir(parents=True, exist_ok=True)
-        elif not requested.parent.is_dir():
-            raise FileNotFoundError("Parent directory not found")
-        requested.write_text(content, encoding="utf-8")
-        return self.read_file(str(requested.relative_to(self.root)))
+    def write_file(
+        self,
+        relative_path: str,
+        content: str,
+        *,
+        create_parents: bool = True,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        encoded = content.encode("utf-8")
+        if len(encoded) > _TEXT_READ_LIMIT:
+            raise ValueError("File is too large to write as text")
+
+        with self._mutation_lock:
+            self._assert_no_symlink_path(relative_path)
+            requested = self._resolve_relative_path(relative_path)
+            self._assert_mutable_skill_child(requested, allow_skill_file=True)
+            if requested.exists() and requested.is_symlink():
+                raise PermissionError("Symbolic links cannot be written")
+            if requested.exists() and requested.is_dir():
+                raise ValueError("Path is a directory")
+            if create_parents:
+                requested.parent.mkdir(parents=True, exist_ok=True)
+            elif not requested.parent.is_dir():
+                raise FileNotFoundError("Parent directory not found")
+
+            current = self.read_file(str(requested.relative_to(self.root))) if requested.is_file() else None
+            if expected_revision is not None and (
+                current is None or current.get("revision") != expected_revision
+            ):
+                raise SkillConflictError("File changed since it was opened", current=current)
+
+            if requested.name == SKILL_FILENAME and requested.parent.parent == self.root:
+                issues = self._validate_skill_document(
+                    requested.parent.name,
+                    content,
+                    path=str(requested.relative_to(self.root)),
+                )
+                if issues:
+                    raise SkillValidationError(issues)
+
+            self._atomic_write_text(requested, encoded)
+            return self.read_file(str(requested.relative_to(self.root)))
+
+    def create_entry(
+        self,
+        parent_path: str,
+        name: str,
+        *,
+        kind: str,
+        content: str = "",
+    ) -> Dict[str, Any]:
+        if kind not in {"file", "directory"}:
+            raise ValueError("Entry kind must be file or directory")
+        self._validate_entry_name(name)
+        with self._mutation_lock:
+            self._assert_no_symlink_path(parent_path)
+            parent = self._resolve_relative_path(parent_path)
+            self._assert_mutable_skill_child(parent, allow_skill_root=True)
+            if not parent.is_dir():
+                raise FileNotFoundError("Parent directory not found")
+            if parent.is_symlink():
+                raise PermissionError("Symbolic links cannot be modified")
+            requested = (parent / name).resolve()
+            if not requested.is_relative_to(parent.resolve()):
+                raise PermissionError("Access denied")
+            self._assert_mutable_skill_child(requested, allow_skill_file=True)
+            if requested.exists():
+                raise SkillEntryConflictError("Entry already exists")
+            if kind == "directory":
+                requested.mkdir()
+                return self._file_metadata(requested)
+            return self.write_file(str(requested.relative_to(self.root)), content, create_parents=False)
+
+    def move_entry(
+        self,
+        relative_path: str,
+        new_parent_path: str,
+        new_name: str,
+        *,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        self._validate_entry_name(new_name)
+        with self._mutation_lock:
+            self._assert_no_symlink_path(relative_path)
+            self._assert_no_symlink_path(new_parent_path)
+            requested = self._resolve_relative_path(relative_path)
+            self._assert_mutable_skill_child(requested)
+            if not requested.exists():
+                raise FileNotFoundError("Entry not found")
+            if requested.is_symlink():
+                raise PermissionError("Symbolic links cannot be modified")
+            destination_parent = self._resolve_relative_path(new_parent_path)
+            self._assert_mutable_skill_child(destination_parent, allow_skill_root=True)
+            if not destination_parent.is_dir():
+                raise FileNotFoundError("Destination directory not found")
+            if destination_parent.is_symlink():
+                raise PermissionError("Symbolic links cannot be modified")
+            if self._skill_root_for(requested) != self._skill_root_for(destination_parent):
+                raise PermissionError("Entries cannot be moved between skills")
+            if requested.is_dir() and destination_parent.resolve().is_relative_to(requested.resolve()):
+                raise ValueError("A directory cannot be moved inside itself")
+            destination = (destination_parent / new_name).resolve()
+            self._assert_mutable_skill_child(destination, allow_skill_file=True)
+            if destination.exists():
+                raise SkillEntryConflictError("Destination already exists")
+            if requested.is_file() and expected_revision is not None:
+                current = self.read_file(str(requested.relative_to(self.root)))
+                if current.get("revision") != expected_revision:
+                    raise SkillConflictError("File changed since it was opened", current=current)
+            requested.rename(destination)
+            return self._file_metadata(destination)
+
+    def delete_entry(
+        self,
+        relative_path: str,
+        *,
+        recursive: bool = False,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        with self._mutation_lock:
+            self._assert_no_symlink_path(relative_path)
+            requested = self._resolve_relative_path(relative_path)
+            self._assert_mutable_skill_child(requested)
+            if not requested.exists():
+                raise FileNotFoundError("Entry not found")
+            if requested.is_symlink():
+                raise PermissionError("Symbolic links cannot be modified")
+            metadata = self._file_metadata(requested)
+            if requested.is_file() and expected_revision is not None:
+                current = self.read_file(str(requested.relative_to(self.root)))
+                if current.get("revision") != expected_revision:
+                    raise SkillConflictError("File changed since it was opened", current=current)
+            if requested.is_dir():
+                if recursive:
+                    shutil.rmtree(requested)
+                else:
+                    requested.rmdir()
+            else:
+                requested.unlink()
+            return metadata
 
     def delete_path(self, relative_path: str, *, recursive: bool = False) -> Dict[str, Any]:
         requested = self._resolve_relative_path(relative_path)
@@ -373,6 +527,39 @@ class SkillsStorageLocal(SkillsStorageBase):
             errors=issues,
         )
 
+    def _validate_skill_document(self, skill_name: str, content: str, *, path: str) -> List[SkillValidationIssue]:
+        issues: List[SkillValidationIssue] = []
+        frontmatter: Dict[str, Any] = {}
+        try:
+            frontmatter, _ = self._parse_frontmatter(content, path)
+        except yaml.MarkedYAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            issues.append(SkillValidationIssue(
+                path,
+                "frontmatter",
+                str(getattr(exc, "problem", None) or exc),
+                line=(mark.line + 1) if mark is not None else None,
+                column=(mark.column + 1) if mark is not None else None,
+            ))
+            return issues
+        except Exception as exc:
+            issues.append(SkillValidationIssue(path, "frontmatter", str(exc), line=1, column=1))
+            return issues
+
+        name = str(frontmatter.get("name") or "").strip()
+        description = str(frontmatter.get("description") or "").strip()
+        issues.extend(self._validate_name(name, path=path))
+        if name != skill_name:
+            issues.append(SkillValidationIssue(path, "name_mismatch", "Skill name must match the parent directory name"))
+        issues.extend(self._validate_description(description, path=path))
+        compatibility = self._optional_string(frontmatter.get("compatibility"))
+        if compatibility and len(compatibility) > 500:
+            issues.append(SkillValidationIssue(path, "compatibility", "compatibility must be at most 500 characters"))
+        metadata = frontmatter.get("metadata", {})
+        if metadata is not None and not isinstance(metadata, dict):
+            issues.append(SkillValidationIssue(path, "metadata", "metadata must be a mapping"))
+        return issues
+
     @staticmethod
     def _parse_frontmatter(content: str, path: str) -> Tuple[Dict[str, Any], str]:
         lines = content.splitlines(keepends=True)
@@ -421,6 +608,76 @@ class SkillsStorageLocal(SkillsStorageBase):
         if not requested.is_relative_to(self.root):
             raise PermissionError("Access denied")
         return requested
+
+    def _assert_no_symlink_path(self, relative_path: str) -> None:
+        raw_path = str(relative_path or "").strip().strip("/")
+        current = self.root
+        for part in Path(raw_path).parts:
+            current = current / part
+            if current.is_symlink():
+                raise PermissionError("Symbolic links cannot be modified")
+
+    def _skill_root_for(self, path: Path) -> Path:
+        relative = path.resolve().relative_to(self.root)
+        if not relative.parts:
+            raise PermissionError("A skill package must be selected")
+        skill_root = self.root / relative.parts[0]
+        if not skill_root.is_dir() or not (skill_root / SKILL_FILENAME).is_file():
+            raise PermissionError("Path must be inside an existing skill package")
+        return skill_root.resolve()
+
+    def _assert_mutable_skill_child(
+        self,
+        path: Path,
+        *,
+        allow_skill_root: bool = False,
+        allow_skill_file: bool = False,
+    ) -> None:
+        skill_root = self._skill_root_for(path)
+        resolved = path.resolve()
+        if resolved == skill_root:
+            if allow_skill_root:
+                return
+            raise PermissionError("Skill roots must be managed as packages")
+        if not resolved.is_relative_to(skill_root):
+            raise PermissionError("Access denied")
+        if resolved == skill_root / SKILL_FILENAME and not allow_skill_file:
+            raise PermissionError("SKILL.md cannot be renamed or deleted")
+        if self._is_reserved_path(resolved):
+            raise PermissionError("Reserved skills state file cannot be modified")
+
+    @staticmethod
+    def _validate_entry_name(name: str) -> None:
+        if not name or name in {".", ".."} or name != Path(name).name:
+            raise ValueError("Entry name must be one path segment")
+        if "\x00" in name or any(ord(character) < 32 for character in name):
+            raise ValueError("Entry name contains invalid characters")
+
+    def _atomic_write_text(self, path: Path, content: bytes) -> None:
+        previous_mode: Optional[int] = None
+        if path.exists():
+            previous_mode = stat.S_IMODE(path.stat().st_mode)
+        temp_path: Optional[Path] = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+                temp_path = Path(handle.name)
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if previous_mode is not None:
+                os.chmod(temp_path, previous_mode)
+            os.replace(temp_path, path)
+        finally:
+            if temp_path is not None and temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _file_revision(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(64 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def _safe_child(self, path: Path, *, boundary: Optional[Path] = None) -> Optional[Path]:
         try:

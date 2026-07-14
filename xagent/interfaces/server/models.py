@@ -116,6 +116,29 @@ class SkillWriteInput(BaseModel):
     path: str
     content: str
     create_parents: bool = True
+    expected_revision: Optional[str] = None
+
+
+class SkillEntryCreateInput(BaseModel):
+    """Request body for creating a file or directory inside a skill package."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    parent_path: str
+    name: str
+    kind: str
+    content: str = ""
+
+
+class SkillEntryMoveInput(BaseModel):
+    """Request body for renaming or moving a skill package entry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    new_parent_path: str
+    new_name: str
+    expected_revision: Optional[str] = None
 
 
 class SkillStateInput(BaseModel):

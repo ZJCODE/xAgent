@@ -2,8 +2,9 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from xagent.components.skills import SkillsStorageLocal
+from xagent.components.skills import SkillConflictError, SkillValidationError, SkillsStorageLocal
 from xagent.tools import create_read_skill_tool
 
 
@@ -141,6 +142,101 @@ class SkillsStorageLocalTests(unittest.TestCase):
             SkillsStorageLocal(skills_root)
 
             self.assertIn("CUSTOM LOCAL EDIT", skill_file.read_text(encoding="utf-8"))
+
+    def test_revision_checked_atomic_write_and_mode_preservation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = SkillsStorageLocal(Path(tmpdir) / "skills", seed_builtins=False)
+            storage.create_skill(name="code-review", description="Reviews code. Use for review tasks.")
+            script = storage.root / "code-review" / "check.sh"
+            script.write_text("#!/bin/sh\necho old\n", encoding="utf-8")
+            script.chmod(0o755)
+            original = storage.read_file("code-review/check.sh")
+
+            updated = storage.write_file(
+                "code-review/check.sh",
+                "#!/bin/sh\necho new\n",
+                expected_revision=original["revision"],
+            )
+
+            self.assertNotEqual(updated["revision"], original["revision"])
+            self.assertEqual(script.stat().st_mode & 0o777, 0o755)
+            with self.assertRaises(SkillConflictError) as error:
+                storage.write_file(
+                    "code-review/check.sh",
+                    "stale\n",
+                    expected_revision=original["revision"],
+                )
+            self.assertEqual(error.exception.current["content"], "#!/bin/sh\necho new\n")
+
+    def test_invalid_skill_document_is_not_written(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = SkillsStorageLocal(Path(tmpdir) / "skills", seed_builtins=False)
+            storage.create_skill(name="code-review", description="Reviews code. Use for review tasks.")
+            before = storage.read_file("code-review/SKILL.md")
+
+            with self.assertRaises(SkillValidationError) as error:
+                storage.write_file(
+                    "code-review/SKILL.md",
+                    "---\nname: wrong-name\ndescription: ''\n---\n",
+                    expected_revision=before["revision"],
+                )
+
+            self.assertTrue(any(issue.code == "name_mismatch" for issue in error.exception.issues))
+            self.assertEqual(storage.read_file("code-review/SKILL.md")["content"], before["content"])
+
+    def test_create_move_and_delete_entries_with_package_protection(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = SkillsStorageLocal(Path(tmpdir) / "skills", seed_builtins=False)
+            storage.create_skill(name="alpha-skill", description="Handles alpha. Use for alpha tasks.")
+            storage.create_skill(name="beta-skill", description="Handles beta. Use for beta tasks.")
+
+            directory = storage.create_entry("alpha-skill", "references", kind="directory")
+            created = storage.create_entry("alpha-skill/references", "notes.md", kind="file", content="# Notes\n")
+            moved = storage.move_entry(
+                created["path"],
+                "alpha-skill",
+                "guide.md",
+                expected_revision=storage.read_file(created["path"])["revision"],
+            )
+
+            self.assertEqual(directory["type"], "dir")
+            self.assertEqual(moved["path"], "alpha-skill/guide.md")
+            with self.assertRaises(PermissionError):
+                storage.move_entry("alpha-skill/guide.md", "beta-skill", "guide.md")
+            with self.assertRaises(PermissionError):
+                storage.delete_entry("alpha-skill/SKILL.md")
+            with self.assertRaises(PermissionError):
+                storage.delete_entry("alpha-skill", recursive=True)
+
+            deleted_file = storage.delete_entry("alpha-skill/guide.md")
+            deleted_dir = storage.delete_entry("alpha-skill/references")
+            self.assertEqual(deleted_file["type"], "file")
+            self.assertEqual(deleted_dir["type"], "dir")
+
+    def test_symlink_mutation_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = SkillsStorageLocal(Path(tmpdir) / "skills", seed_builtins=False)
+            storage.create_skill(name="alpha-skill", description="Handles alpha. Use for alpha tasks.")
+            target = storage.root / "alpha-skill" / "target.md"
+            target.write_text("target", encoding="utf-8")
+            (storage.root / "alpha-skill" / "link.md").symlink_to(target)
+
+            with self.assertRaises(PermissionError):
+                storage.write_file("alpha-skill/link.md", "changed")
+
+    def test_atomic_write_failure_keeps_original(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = SkillsStorageLocal(Path(tmpdir) / "skills", seed_builtins=False)
+            storage.create_skill(name="alpha-skill", description="Handles alpha. Use for alpha tasks.")
+            path = storage.root / "alpha-skill" / "notes.md"
+            path.write_text("original", encoding="utf-8")
+
+            with patch("xagent.components.skills.local.os.replace", side_effect=OSError("replace failed")):
+                with self.assertRaises(OSError):
+                    storage.write_file("alpha-skill/notes.md", "replacement")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "original")
+            self.assertEqual(list(path.parent.glob(".notes.md.*.tmp")), [])
 
 
 if __name__ == "__main__":

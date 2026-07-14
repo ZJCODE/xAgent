@@ -403,6 +403,7 @@ export interface FileNode {
   modified?: number;
   mime_type?: string;
   binary?: boolean;
+  revision?: string;
 }
 
 export interface FileReadResult extends FileNode {
@@ -471,6 +472,8 @@ export interface SkillValidationIssue {
   path: string;
   code: string;
   message: string;
+  line?: number;
+  column?: number;
 }
 
 export interface SkillMetadata {
@@ -532,4 +535,37 @@ export interface SkillCreateResponse {
 export interface SkillStateResponse {
   status: string;
   skill: SkillMetadata;
+}
+
+export interface SkillWriteInput {
+  path: string;
+  content: string;
+  create_parents?: boolean;
+  expected_revision?: string;
+}
+
+export interface SkillEntryCreateInput {
+  parent_path: string;
+  name: string;
+  kind: "file" | "directory";
+  content?: string;
+}
+
+export interface SkillEntryMoveInput {
+  path: string;
+  new_parent_path: string;
+  new_name: string;
+  expected_revision?: string;
+}
+
+export interface SkillFileMutationResponse {
+  status: string;
+  entry: FileNode;
+}
+
+export interface SkillApiErrorDetail {
+  code?: string;
+  message?: string;
+  issues?: SkillValidationIssue[];
+  current?: FileReadResult | null;
 }

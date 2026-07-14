@@ -19,6 +19,8 @@ from .models import (
     ConfigInput,
     IdentityInput,
     SkillCreateInput,
+    SkillEntryCreateInput,
+    SkillEntryMoveInput,
     SkillStateInput,
     SkillWriteInput,
     TaskCreateInput,
@@ -722,8 +724,54 @@ def register_admin_routes(
                 input_data.path,
                 input_data.content,
                 create_parents=input_data.create_parents,
+                expected_revision=input_data.expected_revision,
             )
             return {"status": "ok", **result}
+        except Exception as exc:
+            server._raise_skills_http_error(exc)
+
+    @app.post("/api/skills/entries", tags=["Monitoring"])
+    async def skills_create_entry(input_data: SkillEntryCreateInput):
+        server = resolve_admin()
+        try:
+            result = server._get_skills_storage().create_entry(
+                input_data.parent_path,
+                input_data.name,
+                kind=input_data.kind,
+                content=input_data.content,
+            )
+            return {"status": "ok", "entry": result}
+        except Exception as exc:
+            server._raise_skills_http_error(exc)
+
+    @app.patch("/api/skills/entries", tags=["Monitoring"])
+    async def skills_move_entry(input_data: SkillEntryMoveInput):
+        server = resolve_admin()
+        try:
+            result = server._get_skills_storage().move_entry(
+                input_data.path,
+                input_data.new_parent_path,
+                input_data.new_name,
+                expected_revision=input_data.expected_revision,
+            )
+            return {"status": "ok", "entry": result}
+        except Exception as exc:
+            server._raise_skills_http_error(exc)
+
+    @app.delete("/api/skills/entries", tags=["Monitoring"])
+    async def skills_delete_entry(
+        path: str = Query(..., description="Relative path inside a skill package"),
+        recursive: bool = Query(False, description="Allow deleting directories recursively"),
+        expected_revision: Optional[str] = Query(None, description="Expected file content revision"),
+    ):
+        server = resolve_admin()
+        try:
+            result = server._get_skills_storage().delete_entry(
+                path,
+                recursive=recursive,
+                expected_revision=expected_revision,
+            )
+            return {"status": "ok", "deleted": result}
         except Exception as exc:
             server._raise_skills_http_error(exc)
 

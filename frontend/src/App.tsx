@@ -3,6 +3,7 @@ import { AgentSessionProvider, useAgentSession } from "./context/AgentSessionCon
 import { ChatProvider } from "./context/ChatContext";
 import { ConnectivityProvider } from "./context/ConnectivityContext";
 import { ThemeProvider } from "./context/ThemeContext";
+import { UnsavedChangesProvider, useUnsavedChanges } from "./context/UnsavedChangesContext";
 import type { RoutePath } from "./types";
 import { AgentPage } from "./pages/AgentPage";
 import { ChannelPage } from "./pages/ChannelPage";
@@ -24,13 +25,21 @@ function normalizeRoute(pathname: string): RoutePath {
 function RoutedApp() {
   const [route, setRoute] = useState<RoutePath>(() => normalizeRoute(window.location.pathname));
   const { agents, loading, refresh: refreshAgents } = useAgentSession();
+  const { confirmDiscard } = useUnsavedChanges();
   const showWelcome = route === "/" && !loading && agents.length === 0;
 
   useEffect(() => {
-    const onPopState = () => setRoute(normalizeRoute(window.location.pathname));
+    const onPopState = () => {
+      const nextRoute = normalizeRoute(window.location.pathname);
+      if (nextRoute !== route && !confirmDiscard()) {
+        window.history.pushState(null, "", route);
+        return;
+      }
+      setRoute(nextRoute);
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  }, [confirmDiscard, route]);
 
   useEffect(() => {
     const interval = window.setInterval(() => void refreshAgents(), 5000);
@@ -39,6 +48,7 @@ function RoutedApp() {
 
   const navigate = (nextRoute: RoutePath) => {
     if (nextRoute === route) return;
+    if (!confirmDiscard()) return;
     window.history.pushState(null, "", nextRoute);
     setRoute(nextRoute);
   };
@@ -76,11 +86,13 @@ export default function App() {
   return (
     <ThemeProvider>
       <ConnectivityProvider>
-        <AgentSessionProvider>
-          <ChatProvider>
-            <RoutedApp />
-          </ChatProvider>
-        </AgentSessionProvider>
+        <UnsavedChangesProvider>
+          <AgentSessionProvider>
+            <ChatProvider>
+              <RoutedApp />
+            </ChatProvider>
+          </AgentSessionProvider>
+        </UnsavedChangesProvider>
       </ConnectivityProvider>
     </ThemeProvider>
   );

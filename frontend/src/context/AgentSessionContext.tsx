@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createAgent, deleteAgent, getAgents, selectAgent } from "../lib/api";
 import type { AgentSummary, CreateAgentInput } from "../types";
+import { useUnsavedChanges } from "./UnsavedChangesContext";
 
 interface AgentSessionContextValue {
   agents: AgentSummary[];
@@ -17,6 +18,7 @@ interface AgentSessionContextValue {
 const AgentSessionContext = createContext<AgentSessionContextValue | null>(null);
 
 export function AgentSessionProvider({ children }: { children: ReactNode }) {
+  const { confirmDiscard } = useUnsavedChanges();
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [selectedAgent, setSelectedAgent] = useState("");
   const [activeAgent, setActiveAgent] = useState("");
@@ -43,9 +45,10 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
 
   const switchAgent = useCallback(async (name: string) => {
     if (name === selectedAgent) return;
+    if (!confirmDiscard()) return;
     await selectAgent(name);
     window.location.reload();
-  }, [selectedAgent]);
+  }, [confirmDiscard, selectedAgent]);
 
   const createAgentEntry = useCallback(async (input: CreateAgentInput) => {
     await createAgent(input);
