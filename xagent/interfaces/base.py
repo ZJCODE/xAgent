@@ -239,6 +239,7 @@ class BaseAgentRunner:
                 "max_iter",
                 "max_concurrent_tools",
                 "subconscious_activity",
+                "memory_recent_days",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
             if unsupported_agent_keys:
@@ -253,6 +254,8 @@ class BaseAgentRunner:
                     raise ValueError(
                         f"agent.subconscious_activity must be a number between 0 and 1, got {val!r}"
                     )
+            if "memory_recent_days" in agent_cfg:
+                self._validate_non_negative_int(agent_cfg["memory_recent_days"], "agent.memory_recent_days")
         self._validate_observability_config(config.get("observability"))
 
         provider_cfg = config.get("provider")
@@ -323,6 +326,11 @@ class BaseAgentRunner:
         for key in ("debug", "tracing_enabled"):
             if key in observability_cfg and not isinstance(observability_cfg[key], bool):
                 raise ValueError(f"observability.{key} must be a boolean")
+
+    @staticmethod
+    def _validate_non_negative_int(value: Any, name: str) -> None:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} must be a non-negative integer")
 
     @staticmethod
     def _validate_positive_int(value: Any, name: str) -> None:
@@ -585,6 +593,7 @@ class BaseAgentRunner:
             max_iter=agent_section.get("max_iter", AgentConfig.DEFAULT_MAX_ITER),
             max_concurrent_tools=agent_section.get("max_concurrent_tools", AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
+            memory_recent_days=agent_section.get("memory_recent_days", AgentConfig.MEMORY_RECENT_DAYS),
         )
 
     def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:

@@ -54,7 +54,7 @@ class MemoryHandler:
         self.message_storage = message_storage
         self.relationship_store = relationship_store
         self.max_history = self._positive_int(max_history, AgentConfig.DEFAULT_MAX_HISTORY)
-        self.recent_days = self._positive_int(recent_days, self.RECENT_DAYS)
+        self.recent_days = self._non_negative_int(recent_days, self.RECENT_DAYS)
         self.window_overlap = min(
             max(1, int(self.max_history * AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO)),
             self.max_history - 1,
@@ -80,7 +80,7 @@ class MemoryHandler:
         This is injected verbatim into the system prompt so the model always
         has recent diary context without needing a tool call.
         """
-        days = days or self.recent_days
+        days = self.recent_days if days is None else self._non_negative_int(days, self.recent_days)
         entries = await self.memory.read_recent_dailies(days=days)
         if not entries:
             return ""

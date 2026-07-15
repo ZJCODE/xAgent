@@ -102,6 +102,23 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(today.isoformat(), ctx)
         self.assertIn("Today's diary entry", ctx)
 
+    async def test_get_recent_context_respects_zero_recent_days(self):
+        today = date.today()
+        await self.memory.append_daily("Today's diary entry", target_date=today)
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=self.llm,
+            message_storage=self.storage,
+            max_history=_TEST_MAX_HISTORY,
+            recent_days=0,
+        )
+
+        ctx = await handler.get_recent_context()
+        self.assertEqual(ctx, "")
+
+        ctx_explicit = await handler.get_recent_context(days=0)
+        self.assertEqual(ctx_explicit, "")
+
     async def test_get_subconscious_context_includes_latest_summaries(self):
         today = date.today()
         await self.memory.append_daily("Fresh inner diary note", target_date=today)

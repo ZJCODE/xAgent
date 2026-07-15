@@ -86,6 +86,7 @@ class AgentConfig:
     # ============================================================
     # 7. Memory & History
     # Tune the size and overlap of the recent-memory window.
+    # Override per agent via config.yaml: agent.memory_recent_days (0 disables injection).
     # ============================================================
     MEMORY_RECENT_DAYS = 2
     MEMORY_WINDOW_OVERLAP_RATIO = 0.2
