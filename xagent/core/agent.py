@@ -41,6 +41,7 @@ class Agent:
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
+        memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.model_api = normalize_model_api(model_api)
@@ -50,6 +51,7 @@ class Agent:
         self.max_iter = max_iter
         self.max_concurrent_tools = max_concurrent_tools
         self.subconscious_activity = subconscious_activity
+        self.memory_recent_days = memory_recent_days
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client
         if self.client is None:
@@ -108,6 +110,7 @@ class Agent:
             message_storage=self.message_storage,
             max_history=self.max_history,
             relationship_store=self.relationship_store,
+            recent_days=self.memory_recent_days,
         )
 
         bound_tools = list(tools or [])
