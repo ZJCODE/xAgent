@@ -127,6 +127,21 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("write_memory", instructions)
         self.assertNotIn("write_daily_memory", instructions)
 
+    def test_search_memory_tool_prompt_prefers_recent_memory_when_injected(self):
+        policy = MessageHandler._build_tool_policy(
+            ["search_memory"],
+            memory_recent_days=2,
+        )
+        self.assertIn("prefer recent memory already provided", policy)
+
+    def test_search_memory_tool_prompt_encourages_search_when_not_injected(self):
+        policy = MessageHandler._build_tool_policy(
+            ["search_memory"],
+            memory_recent_days=0,
+        )
+        self.assertIn("not auto-injected", policy)
+        self.assertNotIn("prefer recent memory already provided", policy)
+
     def test_tool_policy_directs_images_and_artifacts_to_attachments(self):
         handler = MessageHandler(
             system_prompt="",

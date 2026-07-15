@@ -11,14 +11,30 @@ from xagent.core.runtime import RuntimeHeartbeat, RuntimeHeartbeatConfig, create
 class _FakeMemoryHandler:
     def __init__(self):
         self.weekly_calls = []
+        self.monthly_calls = []
+        self.yearly_calls = []
         self.weekly_event = asyncio.Event()
         self.raise_on_weekly = False
+        self.raise_on_monthly = False
+        self.raise_on_yearly = False
 
     async def generate_previous_weekly_summary_if_missing(self, today=None):
         if self.raise_on_weekly:
             raise RuntimeError("weekly failed")
         self.weekly_calls.append(today)
         self.weekly_event.set()
+        return True
+
+    async def generate_previous_monthly_summary_if_missing(self, today=None):
+        if self.raise_on_monthly:
+            raise RuntimeError("monthly failed")
+        self.monthly_calls.append(today)
+        return True
+
+    async def generate_previous_yearly_summary_if_missing(self, today=None):
+        if self.raise_on_yearly:
+            raise RuntimeError("yearly failed")
+        self.yearly_calls.append(today)
         return True
 
 
@@ -117,6 +133,27 @@ class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(agent.maintenance_count, 1)
         self.assertEqual(agent.memory_handler.weekly_calls, [today])
+
+    async def test_run_once_generates_previous_monthly_summary_on_first_of_month(self):
+        agent = _FakeAgent()
+        today = date(2026, 7, 1)
+        heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: today)
+
+        await heartbeat.run_once()
+
+        self.assertEqual(agent.memory_handler.weekly_calls, [])
+        self.assertEqual(agent.memory_handler.monthly_calls, [today])
+        self.assertEqual(agent.memory_handler.yearly_calls, [])
+
+    async def test_run_once_generates_previous_yearly_summary_on_new_years_day(self):
+        agent = _FakeAgent()
+        today = date(2026, 1, 1)
+        heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: today)
+
+        await heartbeat.run_once()
+
+        self.assertEqual(agent.memory_handler.monthly_calls, [today])
+        self.assertEqual(agent.memory_handler.yearly_calls, [today])
 
     async def test_run_once_isolates_maintenance_errors(self):
         agent = _FakeAgent()

@@ -3,7 +3,7 @@
 import asyncio
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from xagent.components.memory import MarkdownMemory
@@ -118,6 +118,26 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         ctx_explicit = await handler.get_recent_context(days=0)
         self.assertEqual(ctx_explicit, "")
+
+    async def test_get_recent_context_trims_to_max_chars(self):
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        await self.memory.append_daily("Y" * 5000, target_date=yesterday)
+        await self.memory.append_daily("T" * 5000, target_date=today)
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=self.llm,
+            message_storage=self.storage,
+            max_history=_TEST_MAX_HISTORY,
+            recent_days=2,
+            recent_max_chars=6000,
+        )
+
+        ctx = await handler.get_recent_context()
+
+        self.assertLessEqual(len(ctx), 6100)
+        self.assertIn(today.isoformat(), ctx)
+        self.assertIn("[earlier diary omitted within recent window]", ctx)
 
     async def test_get_subconscious_context_includes_latest_summaries(self):
         today = date.today()
@@ -708,6 +728,26 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(generated)
         self.assertFalse(self.memory.weekly_path(week_start, week_end).exists())
+
+    async def test_generate_previous_monthly_summary_if_missing_writes_summary(self):
+        today = date(2026, 5, 1)
+        await self.memory.append_daily("April memory", target_date=date(2026, 4, 15))
+
+        generated = await self.handler.generate_previous_monthly_summary_if_missing(today=today)
+
+        self.assertTrue(generated)
+        summary_text = await self.memory.read_file(self.memory.monthly_path(2026, 4))
+        self.assertIn("[Summary: monthly 2026-04]", summary_text)
+
+    async def test_generate_previous_yearly_summary_if_missing_writes_summary(self):
+        today = date(2026, 1, 1)
+        await self.memory.write_summary(self.memory.monthly_path(2025, 12), "December recap")
+
+        generated = await self.handler.generate_previous_yearly_summary_if_missing(today=today)
+
+        self.assertTrue(generated)
+        summary_text = await self.memory.read_file(self.memory.yearly_path(2025))
+        self.assertIn("[Summary: yearly 2025]", summary_text)
 
 
 if __name__ == "__main__":
