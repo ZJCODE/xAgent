@@ -85,8 +85,7 @@ class RuntimeHeartbeat:
     async def run_once(self) -> None:
         await self._run_memory_maintenance()
         today = self._today_provider()
-        if today.weekday() == 0:
-            await self._generate_previous_weekly_summary(today)
+        await self._run_periodic_summaries(today)
         if self._subconscious_loop is not None:
             await self._subconscious_loop.maybe_think()
 
@@ -100,6 +99,47 @@ class RuntimeHeartbeat:
                 self._logger.warning("Runtime heartbeat tick failed: %s", exc)
             await asyncio.sleep(self.interval_seconds)
 
+    async def _run_periodic_summaries(self, today: date) -> None:
+        memory_handler = getattr(self.agent, "memory_handler", None)
+        if memory_handler is None:
+            return
+
+        if today.weekday() == 0:
+            await self._invoke_summary_generator(
+                memory_handler,
+                "generate_previous_weekly_summary_if_missing",
+                today=today,
+            )
+
+        if today.day == 1:
+            await self._invoke_summary_generator(
+                memory_handler,
+                "generate_previous_monthly_summary_if_missing",
+                today=today,
+            )
+
+        if today.month == 1 and today.day == 1:
+            await self._invoke_summary_generator(
+                memory_handler,
+                "generate_previous_yearly_summary_if_missing",
+                today=today,
+            )
+
+    async def _invoke_summary_generator(
+        self,
+        memory_handler: Any,
+        method_name: str,
+        *,
+        today: date,
+    ) -> None:
+        generator = getattr(memory_handler, method_name, None)
+        if generator is None:
+            return
+        try:
+            await generator(today=today)
+        except Exception as exc:
+            self._logger.warning("Runtime heartbeat %s failed: %s", method_name, exc)
+
     async def _run_memory_maintenance(self) -> None:
         flusher = getattr(self.agent, "run_memory_maintenance", None)
         if flusher is None:
@@ -108,16 +148,6 @@ class RuntimeHeartbeat:
             await flusher(trigger="count")
         except Exception as exc:
             self._logger.warning("Runtime heartbeat memory maintenance failed: %s", exc)
-
-    async def _generate_previous_weekly_summary(self, today: date) -> None:
-        memory_handler = getattr(self.agent, "memory_handler", None)
-        generator = getattr(memory_handler, "generate_previous_weekly_summary_if_missing", None)
-        if generator is None:
-            return
-        try:
-            await generator(today=today)
-        except Exception as exc:
-            self._logger.warning("Runtime heartbeat weekly maintenance failed: %s", exc)
 
 
 def create_runtime_heartbeat(

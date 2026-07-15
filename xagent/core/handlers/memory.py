@@ -34,6 +34,7 @@ class MemoryHandler:
     """Manages recent diary context and count-based journal maintenance."""
 
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
+    RECENT_MAX_CHARS = AgentConfig.MEMORY_RECENT_MAX_CHARS
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
     SUBCONSCIOUS_SUMMARY_SCOPES = ("yearly", "monthly", "weekly")
     SUBCONSCIOUS_SUMMARY_CHARS_PER_SCOPE = 2000
@@ -46,6 +47,7 @@ class MemoryHandler:
         *,
         max_history: int,
         recent_days: Optional[int] = None,
+        recent_max_chars: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
         relationship_store: Optional["RelationshipStore"] = None,
     ) -> None:
@@ -55,6 +57,7 @@ class MemoryHandler:
         self.relationship_store = relationship_store
         self.max_history = self._positive_int(max_history, AgentConfig.DEFAULT_MAX_HISTORY)
         self.recent_days = self._non_negative_int(recent_days, self.RECENT_DAYS)
+        self.recent_max_chars = self._non_negative_int(recent_max_chars, self.RECENT_MAX_CHARS)
         self.window_overlap = min(
             max(1, int(self.max_history * AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO)),
             self.max_history - 1,
@@ -81,14 +84,70 @@ class MemoryHandler:
         has recent diary context without needing a tool call.
         """
         days = self.recent_days if days is None else self._non_negative_int(days, self.recent_days)
+        if days <= 0:
+            return ""
+
         entries = await self.memory.read_recent_dailies(days=days)
         if not entries:
             return ""
 
-        sections: list[str] = []
-        for date_str, content in entries:
-            sections.append(f"[{date_str}]\n{content.strip()}")
-        return "\n\n".join(sections)
+        sections = [
+            (date_str, content.strip())
+            for date_str, content in entries
+            if content.strip()
+        ]
+        if not sections:
+            return ""
+        if self.recent_max_chars <= 0:
+            return "\n\n".join(f"[{date_str}]\n{content}" for date_str, content in sections)
+        return self._trim_recent_diary_sections(sections, self.recent_max_chars)
+
+    @classmethod
+    def _trim_recent_diary_sections(
+        cls,
+        sections: list[tuple[str, str]],
+        max_chars: int,
+    ) -> str:
+        """Keep the newest diary days within *max_chars*."""
+        max_chars = max(0, int(max_chars))
+        if max_chars <= 0:
+            return "\n\n".join(f"[{date_str}]\n{content}" for date_str, content in sections)
+
+        chunks: list[str] = []
+        budget = max_chars
+        omitted_earlier = False
+
+        for date_str, content in reversed(sections):
+            block = f"[{date_str}]\n{content}"
+            separator = 2 if chunks else 0
+            if len(block) + separator <= budget:
+                chunks.append(block)
+                budget -= len(block) + separator
+                continue
+
+            header = f"[{date_str}]\n"
+            suffix = "\n[day truncated]"
+            separator = 2 if chunks else 0
+            body_budget = budget - len(header) - len(suffix) - separator
+            if body_budget > 0:
+                tail = content[-body_budget:].lstrip()
+                if tail:
+                    chunks.append(f"{header}{tail}{suffix}")
+                    omitted_earlier = True
+                    budget = 0
+                    continue
+
+            omitted_earlier = True
+
+        if len(chunks) < len(sections):
+            omitted_earlier = True
+
+        chunks.reverse()
+        parts: list[str] = []
+        if omitted_earlier:
+            parts.append("[earlier diary omitted within recent window]")
+        parts.extend(chunks)
+        return "\n\n".join(parts)
 
     async def get_subconscious_context(self, days: int | None = None) -> str:
         """Return memory context for subconscious turns.
@@ -511,23 +570,9 @@ class MemoryHandler:
 
     async def _check_and_generate_summaries_locked(self) -> None:
         today = date.today()
-
         await self._generate_previous_weekly_summary_if_missing_locked(today=today)
-
-        # Monthly: check last month
-        if today.month == 1:
-            last_month, last_year = 12, today.year - 1
-        else:
-            last_month, last_year = today.month - 1, today.year
-        mp = self.memory.monthly_path(last_year, last_month)
-        if not mp.exists():
-            await self._generate_monthly(last_year, last_month)
-
-        # Yearly: check last year
-        last_year_val = today.year - 1
-        yp = self.memory.yearly_path(last_year_val)
-        if not yp.exists():
-            await self._generate_yearly(last_year_val)
+        await self._generate_previous_monthly_summary_if_missing_locked(today=today)
+        await self._generate_previous_yearly_summary_if_missing_locked(today=today)
 
     async def generate_previous_weekly_summary_if_missing(
         self,
@@ -553,6 +598,48 @@ class MemoryHandler:
 
         return await self._generate_weekly(week_start, week_end)
 
+    async def generate_previous_monthly_summary_if_missing(
+        self,
+        today: Optional[date] = None,
+    ) -> bool:
+        """Generate the previous completed month's summary if it is missing."""
+        async with self._maintenance_guard():
+            return await self._generate_previous_monthly_summary_if_missing_locked(today=today)
+
+    async def _generate_previous_monthly_summary_if_missing_locked(
+        self,
+        today: Optional[date] = None,
+    ) -> bool:
+        last_year, last_month = self._previous_month(today or date.today())
+        monthly_path = self.memory.monthly_path(last_year, last_month)
+        if monthly_path.exists():
+            return False
+        return await self._generate_monthly(last_year, last_month)
+
+    async def generate_previous_yearly_summary_if_missing(
+        self,
+        today: Optional[date] = None,
+    ) -> bool:
+        """Generate the previous completed year's summary if it is missing."""
+        async with self._maintenance_guard():
+            return await self._generate_previous_yearly_summary_if_missing_locked(today=today)
+
+    async def _generate_previous_yearly_summary_if_missing_locked(
+        self,
+        today: Optional[date] = None,
+    ) -> bool:
+        target_year = (today or date.today()).year - 1
+        yearly_path = self.memory.yearly_path(target_year)
+        if yearly_path.exists():
+            return False
+        return await self._generate_yearly(target_year)
+
+    @staticmethod
+    def _previous_month(current_day: date) -> tuple[int, int]:
+        if current_day.month == 1:
+            return current_day.year - 1, 12
+        return current_day.year, current_day.month - 1
+
     async def _generate_weekly(self, week_start: date, week_end: date) -> bool:
         source = await self.memory.search_date_range(
             start=week_start.isoformat(),
@@ -568,7 +655,7 @@ class MemoryHandler:
             return True
         return False
 
-    async def _generate_monthly(self, year: int, month: int) -> None:
+    async def _generate_monthly(self, year: int, month: int) -> bool:
         import calendar
 
         first = date(year, month, 1)
@@ -578,14 +665,16 @@ class MemoryHandler:
             end=last.isoformat(),
         )
         if not source.strip():
-            return
+            return False
         label = f"{year}-{month:02d}"
         summary = await self.llm_service.generate_summary(source, "monthly", label)
         if summary:
             await self.memory.write_summary(self.memory.monthly_path(year, month), summary)
             logger.info("Generated monthly summary: %s", label)
+            return True
+        return False
 
-    async def _generate_yearly(self, year: int) -> None:
+    async def _generate_yearly(self, year: int) -> bool:
         parts: list[str] = []
         for month in range(1, 13):
             text = await self.memory.read_file(self.memory.monthly_path(year, month))
@@ -593,12 +682,14 @@ class MemoryHandler:
                 parts.append(f"# {year}-{month:02d}\n\n{text}")
         source = "\n\n".join(parts)
         if not source.strip():
-            return
+            return False
         label = str(year)
         summary = await self.llm_service.generate_summary(source, "yearly", label)
         if summary:
             await self.memory.write_summary(self.memory.yearly_path(year), summary)
             logger.info("Generated yearly summary: %s", label)
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Internal helpers

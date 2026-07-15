@@ -81,6 +81,7 @@ class AgentConfigPromptTests(unittest.TestCase):
 
     def test_memory_defaults_are_internal_balanced_values(self):
         self.assertEqual(AgentConfig.MEMORY_RECENT_DAYS, 2)
+        self.assertEqual(AgentConfig.MEMORY_RECENT_MAX_CHARS, 8000)
         self.assertEqual(AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO, 0.2)
 
 
@@ -2446,6 +2447,26 @@ agent:
             self.assertEqual(runner.agent.memory_recent_days, 9)
             self.assertEqual(runner.agent.memory_handler.recent_days, 9)
 
+    def test_agent_uses_internal_memory_recent_max_chars_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertEqual(
+                runner.agent.memory_handler.recent_max_chars,
+                AgentConfig.MEMORY_RECENT_MAX_CHARS,
+            )
+
     def test_config_rejects_negative_agent_memory_recent_days(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -2465,6 +2486,24 @@ agent:
                 ValueError,
                 r"agent\.memory_recent_days must be a non-negative integer",
             ):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_rejects_agent_memory_recent_max_chars_as_unsupported(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+agent:
+  memory_recent_max_chars: 8000
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "Unsupported agent key"):
                 BaseAgentRunner(config_dir=tmpdir)
 
     def test_config_accepts_disabled_observability_without_credentials(self):

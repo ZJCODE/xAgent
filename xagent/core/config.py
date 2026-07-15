@@ -87,8 +87,10 @@ class AgentConfig:
     # 7. Memory & History
     # Tune the size and overlap of the recent-memory window.
     # Override per agent via config.yaml: agent.memory_recent_days (0 disables injection).
+    # MEMORY_RECENT_MAX_CHARS is an internal prompt-budget guard, not user config.
     # ============================================================
     MEMORY_RECENT_DAYS = 2
+    MEMORY_RECENT_MAX_CHARS = 8000
     MEMORY_WINDOW_OVERLAP_RATIO = 0.2
 
     # ------------------------------------------------------------------
@@ -442,6 +444,24 @@ class AgentConfig:
     @staticmethod
     def build_workspace_context(workspace_dir: str) -> str:
         return AgentConfig.WORKSPACE_CONTEXT_TEMPLATE.format(workspace_dir=workspace_dir)
+
+    @staticmethod
+    def build_search_memory_tool_prompt(*, recent_memory_injected: bool) -> str:
+        if recent_memory_injected:
+            return (
+                "\n**Memory Search:**\n"
+                "- Use `search_memory` only when older context is needed; "
+                "prefer recent memory already provided.\n"
+                "- Search by keyword, date, or date range. "
+                "Keep results tied to the correct speaker, room, and date.\n"
+            )
+        return (
+            "\n**Memory Search:**\n"
+            "- Recent diary is not auto-injected this turn. "
+            "Use `search_memory` when you need prior context, continuity, or older facts.\n"
+            "- Search by keyword, date, or date range. "
+            "Keep results tied to the correct speaker, room, and date.\n"
+        )
 
     @staticmethod
     def build_relationship_context(relationships: str) -> str:

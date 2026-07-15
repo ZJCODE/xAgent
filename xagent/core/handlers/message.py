@@ -835,6 +835,7 @@ class MessageHandler:
         supports_vision: bool = True,
         workspace_context: str = "",
         is_subconscious: bool = False,
+        memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
     ) -> list[dict]:
         """Build static named system layers for the model input.
 
@@ -853,7 +854,11 @@ class MessageHandler:
             "content": core_prompt,
         }]
 
-        tool_policy = self._build_tool_policy(tool_names=tool_names)
+        tool_policy = self._build_tool_policy(
+            tool_names=tool_names,
+            memory_recent_days=memory_recent_days,
+            is_subconscious=is_subconscious,
+        )
         if tool_policy:
             messages.append({
                 "role": "system",
@@ -885,13 +890,24 @@ class MessageHandler:
         return messages
 
     @staticmethod
-    def _build_tool_policy(tool_names: Optional[List[str]] = None) -> str:
+    def _build_tool_policy(
+        tool_names: Optional[List[str]] = None,
+        *,
+        memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
+        is_subconscious: bool = False,
+    ) -> str:
         ordered_names = MessageHandler._ordered_tool_policy_names(tool_names or [])
-        sections = [
-            AgentConfig.TOOL_SYSTEM_PROMPTS[name].strip()
-            for name in ordered_names
-            if name in AgentConfig.TOOL_SYSTEM_PROMPTS
-        ]
+        recent_memory_injected = is_subconscious or memory_recent_days > 0
+        sections: list[str] = []
+        for name in ordered_names:
+            if name == "search_memory":
+                sections.append(
+                    AgentConfig.build_search_memory_tool_prompt(
+                        recent_memory_injected=recent_memory_injected,
+                    ).strip()
+                )
+            elif name in AgentConfig.TOOL_SYSTEM_PROMPTS:
+                sections.append(AgentConfig.TOOL_SYSTEM_PROMPTS[name].strip())
         if not sections:
             return ""
         return (
