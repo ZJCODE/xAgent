@@ -86,9 +86,8 @@ class AgentConfig:
     # ============================================================
     # 7. Memory & History
     # Tune the size and overlap of the recent-memory window.
-    # Override per agent via config.yaml:
-    #   agent.memory_recent_days (0 disables injection)
-    #   agent.memory_recent_max_chars (0 disables char cap)
+    # Override per agent via config.yaml: agent.memory_recent_days (0 disables injection).
+    # MEMORY_RECENT_MAX_CHARS is an internal prompt-budget guard, not user config.
     # ============================================================
     MEMORY_RECENT_DAYS = 2
     MEMORY_RECENT_MAX_CHARS = 8000

@@ -240,7 +240,6 @@ class BaseAgentRunner:
                 "max_concurrent_tools",
                 "subconscious_activity",
                 "memory_recent_days",
-                "memory_recent_max_chars",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
             if unsupported_agent_keys:
@@ -257,11 +256,6 @@ class BaseAgentRunner:
                     )
             if "memory_recent_days" in agent_cfg:
                 self._validate_non_negative_int(agent_cfg["memory_recent_days"], "agent.memory_recent_days")
-            if "memory_recent_max_chars" in agent_cfg:
-                self._validate_non_negative_int(
-                    agent_cfg["memory_recent_max_chars"],
-                    "agent.memory_recent_max_chars",
-                )
         self._validate_observability_config(config.get("observability"))
 
         provider_cfg = config.get("provider")
@@ -600,10 +594,6 @@ class BaseAgentRunner:
             max_concurrent_tools=agent_section.get("max_concurrent_tools", AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
             memory_recent_days=agent_section.get("memory_recent_days", AgentConfig.MEMORY_RECENT_DAYS),
-            memory_recent_max_chars=agent_section.get(
-                "memory_recent_max_chars",
-                AgentConfig.MEMORY_RECENT_MAX_CHARS,
-            ),
         )
 
     def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:

@@ -836,7 +836,6 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
             "memory_recent_days": AgentConfig.MEMORY_RECENT_DAYS,
-            "memory_recent_max_chars": AgentConfig.MEMORY_RECENT_MAX_CHARS,
         },
         "channels": {
             "api": {
@@ -888,10 +887,6 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     yaml_str = yaml_str.replace(
         "memory_recent_days: 2\n",
         "memory_recent_days: 2  # Days of diary injected each turn; 0 disables injection.\n",
-    )
-    yaml_str = yaml_str.replace(
-        "memory_recent_max_chars: 8000\n",
-        "memory_recent_max_chars: 8000  # Char budget for injected diary; 0 disables cap.\n",
     )
     return yaml_str
 
