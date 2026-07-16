@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 
 from ...utils.image_utils import workspace_blob_url
+from ...utils.text_file import is_binary_file
 
 
 class WorkspaceFileService:
@@ -50,7 +51,7 @@ class WorkspaceFileService:
             "size": stat.st_size,
             "modified": stat.st_mtime,
             "mime_type": mime_type or "application/octet-stream",
-            "binary": False if is_dir else self._is_binary_file(resolved),
+            "binary": False if is_dir else is_binary_file(resolved),
         }
 
     def scan_tree(self, directory: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -105,7 +106,7 @@ class WorkspaceFileService:
             if needle in resolved.name.lower() or needle in relative_path.lower():
                 match_kind.append("filename")
 
-            is_binary = self._is_binary_file(resolved)
+            is_binary = is_binary_file(resolved)
             if not is_binary and resolved.stat().st_size <= text_limit:
                 try:
                     content = resolved.read_text(encoding="utf-8")
@@ -182,20 +183,6 @@ class WorkspaceFileService:
         if not resolved.is_relative_to(self.root):
             return None
         return resolved
-
-    @staticmethod
-    def _is_binary_file(path: Path) -> bool:
-        try:
-            chunk = path.read_bytes()[:4096]
-        except OSError:
-            return True
-        if b"\0" in chunk:
-            return True
-        try:
-            chunk.decode("utf-8")
-        except UnicodeDecodeError:
-            return True
-        return False
 
     @staticmethod
     def _read_text_file(path: Path, limit: int) -> str:

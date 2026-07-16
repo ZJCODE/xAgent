@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from ...utils.text_file import is_binary_file
 from .base import SkillMetadata, SkillsStorageBase, SkillValidationIssue
 
 
@@ -160,7 +161,7 @@ class SkillsStorageLocal(SkillsStorageBase):
             if needle in resolved.name.lower() or needle in relative_path.lower():
                 match_kind.append("filename")
 
-            if not self._is_binary_file(resolved) and resolved.stat().st_size <= _SEARCH_TEXT_LIMIT:
+            if not is_binary_file(resolved) and resolved.stat().st_size <= _SEARCH_TEXT_LIMIT:
                 try:
                     content = resolved.read_text(encoding="utf-8")
                 except (OSError, UnicodeDecodeError):
@@ -722,22 +723,8 @@ class SkillsStorageLocal(SkillsStorageBase):
             "size": stat.st_size,
             "modified": stat.st_mtime,
             "mime_type": mime_type or "application/octet-stream",
-            "binary": False if is_dir else self._is_binary_file(resolved),
+            "binary": False if is_dir else is_binary_file(resolved),
         }
-
-    @staticmethod
-    def _is_binary_file(path: Path) -> bool:
-        try:
-            chunk = path.read_bytes()[:4096]
-        except OSError:
-            return True
-        if b"\0" in chunk:
-            return True
-        try:
-            chunk.decode("utf-8")
-        except UnicodeDecodeError:
-            return True
-        return False
 
     @staticmethod
     def _read_text_file(path: Path, limit: int) -> str:
