@@ -533,16 +533,17 @@ def register_admin_routes(
 
             try:
                 content = file_path.read_text(encoding="utf-8")
-            except OSError:
-                continue
+            except (OSError, UnicodeDecodeError):
+                content = ""
 
-            lower_content = content.lower()
-            content_index = lower_content.find(needle)
-            if content_index != -1:
-                match_kind.append("content")
-                start = max(0, content_index - 80)
-                end = min(len(content), content_index + len(query) + 120)
-                snippet = content[start:end].replace("\n", " ").strip()
+            if content:
+                lower_content = content.lower()
+                content_index = lower_content.find(needle)
+                if content_index != -1:
+                    match_kind.append("content")
+                    start = max(0, content_index - 80)
+                    end = min(len(content), content_index + len(query) + 120)
+                    snippet = content[start:end].replace("\n", " ").strip()
 
             if match_kind:
                 results.append({
