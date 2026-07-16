@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Button, EmptyState, IconButton, PageShell, PageToolbar, Panel, PanelHeader } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
+import { useUnsavedChanges } from "../context/UnsavedChangesContext";
 import {
   clearMemory,
   clearMessages,
@@ -82,6 +83,7 @@ const MAINTENANCE_COPY: Record<
 
 export function AgentPage() {
   const { agents, selectedAgent, deleteAgent } = useAgentSession();
+  const { setDirty, confirmDiscard } = useUnsavedChanges();
   const currentAgent = agents.find((agent) => agent.name === selectedAgent);
   const [info, setInfo] = useState<AgentInfo | null>(null);
   const [identity, setIdentity] = useState<AgentIdentity | null>(null);
@@ -106,7 +108,28 @@ export function AgentPage() {
     () => configEditorValue !== (configData?.config || ""),
     [configEditorValue, configData],
   );
+  const dirtyAny = dirty || dirtyConfig;
   const editable = Boolean(info?.identity_editable);
+
+  useEffect(() => {
+    setDirty(dirtyAny);
+    return () => setDirty(false);
+  }, [dirtyAny, setDirty]);
+
+  const switchTab = async (next: "identity" | "config") => {
+    if (next === activeTab) return;
+    if (activeTab === "identity" && dirty) {
+      if (!(await confirmDiscard())) return;
+      setEditorValue(identity?.identity || "");
+    }
+    if (activeTab === "config" && dirtyConfig) {
+      if (!(await confirmDiscard())) return;
+      setConfigEditorValue(configData?.config || "");
+    }
+    setActiveTab(next);
+    setError("");
+    if (next === "identity") setConfigNotice("");
+  };
 
   const load = async () => {
     setError("");
@@ -262,21 +285,14 @@ export function AgentPage() {
             <button
               type="button"
               className={`agent-tab ${activeTab === "identity" ? "active" : ""}`}
-              onClick={() => {
-                setActiveTab("identity");
-                setError("");
-                setConfigNotice("");
-              }}
+              onClick={() => void switchTab("identity")}
             >
               identity.md
             </button>
             <button
               type="button"
               className={`agent-tab ${activeTab === "config" ? "active" : ""}`}
-              onClick={() => {
-                setActiveTab("config");
-                setError("");
-              }}
+              onClick={() => void switchTab("config")}
             >
               config.yaml
             </button>

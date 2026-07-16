@@ -175,6 +175,29 @@ export async function readWorkspaceFile(path: string): Promise<FileReadResult> {
   return requestJson(`/api/workspace/read?path=${encodeURIComponent(path)}`);
 }
 
+export async function writeWorkspaceFile(
+  path: string,
+  content: string,
+  createParents = true,
+): Promise<{ status: string } & FileNode> {
+  return requestJson("/api/workspace/write", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content, create_parents: createParents }),
+  });
+}
+
+export async function deleteWorkspaceFile(
+  path: string,
+  recursive = false,
+): Promise<{ status: string; deleted: FileNode }> {
+  const params = new URLSearchParams({
+    path,
+    recursive: recursive ? "true" : "false",
+  });
+  return requestJson(`/api/workspace/delete?${params.toString()}`, { method: "DELETE" });
+}
+
 export async function searchWorkspace(query: string): Promise<{ query: string; results: SearchResult[] }> {
   return requestJson(`/api/workspace/search?query=${encodeURIComponent(query)}`);
 }

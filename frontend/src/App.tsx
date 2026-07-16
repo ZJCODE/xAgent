@@ -32,12 +32,18 @@ function RoutedApp() {
   useEffect(() => {
     const onPopState = () => {
       const nextRoute = normalizeRoute(window.location.pathname);
-      if (nextRoute !== route && !confirmDiscard()) {
-        window.history.pushState(null, "", locationRef.current);
+      if (nextRoute === route) {
+        locationRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
         return;
       }
-      locationRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-      setRoute(nextRoute);
+      void confirmDiscard().then((ok) => {
+        if (!ok) {
+          window.history.pushState(null, "", locationRef.current);
+          return;
+        }
+        locationRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        setRoute(nextRoute);
+      });
     };
     const onLocationChange = () => {
       locationRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -57,10 +63,12 @@ function RoutedApp() {
 
   const navigate = (nextRoute: RoutePath) => {
     if (nextRoute === route) return;
-    if (!confirmDiscard()) return;
-    window.history.pushState(null, "", nextRoute);
-    locationRef.current = nextRoute;
-    setRoute(nextRoute);
+    void confirmDiscard().then((ok) => {
+      if (!ok) return;
+      window.history.pushState(null, "", nextRoute);
+      locationRef.current = nextRoute;
+      setRoute(nextRoute);
+    });
   };
 
   const page = useMemo(() => {

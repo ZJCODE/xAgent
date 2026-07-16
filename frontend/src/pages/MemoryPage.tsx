@@ -15,6 +15,7 @@ export function MemoryPage() {
   const [selected, setSelected] = useState<FileReadResult | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [searchActive, setSearchActive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -49,6 +50,7 @@ export function MemoryPage() {
     const text = query.trim();
     if (!text) return;
     setError("");
+    setSearchActive(true);
     try {
       const data = await searchMemory(text);
       setResults(data.results || []);
@@ -92,6 +94,7 @@ export function MemoryPage() {
               onClick={() => {
                 setQuery("");
                 setResults([]);
+                setSearchActive(false);
               }}
               title="Clear search"
             >
@@ -107,15 +110,19 @@ export function MemoryPage() {
       {error ? <div className="error-strip">{error}</div> : null}
       <BrowserLayout
         sidebar={
-          results.length ? (
-            <div className="space-y-2">
-              {results.map((item) => (
-                <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}>
-                  <strong>{item.path}</strong>
-                  {item.snippet ? <span>{item.snippet}</span> : null}
-                </button>
-              ))}
-            </div>
+          searchActive ? (
+            results.length ? (
+              <div className="space-y-2">
+                {results.map((item) => (
+                  <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}>
+                    <strong>{item.path}</strong>
+                    {item.snippet ? <span>{item.snippet}</span> : null}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="No matching files" />
+            )
           ) : loading ? (
             <EmptyState title="Loading..." />
           ) : (

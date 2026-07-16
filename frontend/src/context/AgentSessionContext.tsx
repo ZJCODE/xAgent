@@ -45,7 +45,7 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
 
   const switchAgent = useCallback(async (name: string) => {
     if (name === selectedAgent) return;
-    if (!confirmDiscard()) return;
+    if (!(await confirmDiscard())) return;
     await selectAgent(name);
     window.location.reload();
   }, [confirmDiscard, selectedAgent]);

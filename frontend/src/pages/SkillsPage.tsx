@@ -139,6 +139,7 @@ export function SkillsPage() {
   const [validationIssues, setValidationIssues] = useState<SkillValidationIssue[]>([]);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [searchActive, setSearchActive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -204,6 +205,7 @@ export function SkillsPage() {
     clearSelectedFile();
     setQuery("");
     setResults([]);
+    setSearchActive(false);
     updateSkillUrl("", historyMode);
   };
 
@@ -244,6 +246,7 @@ export function SkillsPage() {
         clearSelectedFile();
         setQuery("");
         setResults([]);
+        setSearchActive(false);
         return;
       }
       void openFile(path, "preview", "none").catch((err) => {
@@ -284,6 +287,7 @@ export function SkillsPage() {
     const text = query.trim();
     if (!text) return;
     setError("");
+    setSearchActive(true);
     try {
       const data = await searchSkills(text);
       setResults(data.results || []);
@@ -625,10 +629,10 @@ export function SkillsPage() {
 
   return (
     <PageShell>
-      <PageToolbar title="Skills" subtitle={info?.root || "Agent skills"} actions={<><Button type="button" onClick={() => { if (!guardLocalDiscard()) return; clearSelectedFile(); updateSkillUrl("", "push"); setCreating(true); }}><Plus size={15} />New Skill</Button><SearchField placeholder="Search skills" value={query} onChange={(event) => setQuery(event.target.value)} onSubmit={() => void runSearch()} /><Button type="button" onClick={() => void runSearch()}><Search size={15} />Search</Button><IconButton type="button" onClick={() => { setQuery(""); setResults([]); }} title="Clear search"><X size={16} /></IconButton><IconButton type="button" onClick={() => void refreshPage()} title="Refresh"><RefreshCw size={16} /></IconButton></>} />
+      <PageToolbar title="Skills" subtitle={info?.root || "Agent skills"} actions={<><Button type="button" onClick={() => { if (!guardLocalDiscard()) return; clearSelectedFile(); updateSkillUrl("", "push"); setCreating(true); }}><Plus size={15} />New Skill</Button><SearchField placeholder="Search skills" value={query} onChange={(event) => setQuery(event.target.value)} onSubmit={() => void runSearch()} /><Button type="button" onClick={() => void runSearch()}><Search size={15} />Search</Button><IconButton type="button" onClick={() => { setQuery(""); setResults([]); setSearchActive(false); }} title="Clear search"><X size={16} /></IconButton><IconButton type="button" onClick={() => void refreshPage()} title="Refresh"><RefreshCw size={16} /></IconButton></>} />
       {error ? <div className="error-strip">{error}</div> : null}
       {notice ? <div className="success-strip">{notice}</div> : null}
-      <BrowserLayout sidebar={<><button type="button" className={classNames("skills-overview-link", !selected && !creating && "selected")} onClick={() => showSkillsOverview()}><LayoutList size={15} /><span>Skills Overview</span><b>{skills.length}</b></button>{results.length ? <div className="space-y-2">{results.map((item) => <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}><strong>{item.path}</strong>{item.snippet ? <span>{item.snippet}</span> : null}</button>)}</div> : loading ? <EmptyState title="Loading..." /> : <FileTree nodes={tree} selectedPath={selected?.path} onSelect={selectFile} onDirectoryOpen={openSkillDirectory} renderActions={renderTreeActions} />}</>}>{creating ? renderCreateForm() : renderSelected()}</BrowserLayout>
+      <BrowserLayout sidebar={<><button type="button" className={classNames("skills-overview-link", !selected && !creating && "selected")} onClick={() => showSkillsOverview()}><LayoutList size={15} /><span>Skills Overview</span><b>{skills.length}</b></button>{searchActive ? (results.length ? <div className="space-y-2">{results.map((item) => <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}><strong>{item.path}</strong>{item.snippet ? <span>{item.snippet}</span> : null}</button>)}</div> : <EmptyState title="No matching files" />) : loading ? <EmptyState title="Loading..." /> : <FileTree nodes={tree} selectedPath={selected?.path} onSelect={selectFile} onDirectoryOpen={openSkillDirectory} renderActions={renderTreeActions} />}</>}>{creating ? renderCreateForm() : renderSelected()}</BrowserLayout>
 
       <ConfirmDialog open={Boolean(entryDialog)} title={entryDialog?.mode === "move" ? "Rename or move entry" : `New ${entryDialog?.mode || "entry"}`} description={entryDialog?.mode === "move" ? "The destination must remain inside the same Skill package." : "Create the entry inside an existing Skill package."} confirmLabel={entrySaving ? "Saving..." : entryDialog?.mode === "move" ? "Move" : "Create"} confirmVariant="primary" confirmDisabled={entrySaving || !entryDialog?.name.trim() || !entryDialog?.parentPath.trim()} onCancel={() => { if (!entrySaving) setEntryDialog(null); }} onConfirm={() => void submitEntryDialog()}>{entryDialog ? <><label className="form-field"><span>Name</span><input value={entryDialog.name} autoFocus onChange={(event) => setEntryDialog({ ...entryDialog, name: event.target.value })} /></label><label className="form-field"><span>Parent path</span><input value={entryDialog.parentPath} onChange={(event) => setEntryDialog({ ...entryDialog, parentPath: event.target.value })} /></label></> : null}</ConfirmDialog>
 

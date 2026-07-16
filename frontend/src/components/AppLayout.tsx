@@ -51,6 +51,9 @@ export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
               key={item.route}
               type="button"
               className={classNames("nav-link", route === item.route && "active")}
+              aria-label={item.label}
+              title={item.label}
+              aria-current={route === item.route ? "page" : undefined}
               onClick={() => onNavigate(item.route)}
             >
               {item.icon}
