@@ -197,7 +197,7 @@ def register_admin_routes(
         offset: int = Query(0, ge=0),
     ):
         server = resolve_admin()
-        current_records = list_task_records(server.tasks_dir)
+        current_records = list_task_records(server.tasks_dir, include_running=True)
         scheduled_records = [record for record in current_records if record.status in {"active", "paused"}]
         attention_records = [record for record in current_records if record.status == "failed"]
         archive_records = list_archived_task_records(server.tasks_dir) if scope == "archive" else []

@@ -51,7 +51,13 @@ function taskTypeBadge(task: ScheduledTaskItem) {
   return type === "agent" ? <StatusBadge className="task-type-agent">{type}</StatusBadge> : <StatusBadge tone="info">{type}</StatusBadge>;
 }
 
-function taskStatusTone(status: string): "good" | "muted" | "danger" {
+function taskDisplayStatus(task: ScheduledTaskItem): string {
+  if (task.state === "running") return "running";
+  return task.status;
+}
+
+function taskStatusTone(status: string): "good" | "muted" | "danger" | "info" {
+  if (status === "running") return "info";
   if (status === "paused" || status === "completed") return "muted";
   if (status === "failed") return "danger";
   return "good";
@@ -86,6 +92,7 @@ function taskRecurrenceChips(task: ScheduledTaskItem): string[] {
 }
 
 function lifecycleTime(task: ScheduledTaskItem): string {
+  if (task.state === "running") return "Running now";
   if (task.status === "completed") return formatRunAt(task.completed_at || task.last_run_at);
   if (task.status === "failed") return formatRunAt(task.failed_at || task.last_run_at);
   return formatRunAt(task.next_run_at);
@@ -198,6 +205,13 @@ export function TasksPage() {
   };
 
   const renderActions = (task: ScheduledTaskItem) => {
+    if (task.state === "running") {
+      return (
+        <div className="task-row-actions">
+          <Button className="task-action-button" onClick={() => setSelectedTask(task)}><Eye size={15} />View</Button>
+        </div>
+      );
+    }
     if (task.status === "completed") {
       return (
         <div className="task-row-actions">
@@ -266,7 +280,7 @@ export function TasksPage() {
                   <div className="task-row-main">
                     <div className="task-row-title">
                       <h3>{taskDisplayTitle(task)}</h3>
-                      <div className="task-row-badges">{taskTypeBadge(task)}<StatusBadge tone={taskStatusTone(task.status)}>{task.status}</StatusBadge></div>
+                      <div className="task-row-badges">{taskTypeBadge(task)}<StatusBadge tone={taskStatusTone(taskDisplayStatus(task))}>{taskDisplayStatus(task)}</StatusBadge></div>
                     </div>
                     <p>{taskContent(task) || task.task_id}</p>
                     {task.last_error ? <p className="task-error-copy">{task.last_error}</p> : null}

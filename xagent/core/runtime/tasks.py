@@ -322,8 +322,16 @@ def list_task_records(
     *,
     include_failed: bool = True,
     include_archived: bool = False,
+    include_running: bool = False,
 ) -> list[ScheduledTaskRecord]:
-    """Return current tasks, optionally including failed and archived records."""
+    """Return current tasks, optionally including failed, archived, and running records.
+
+    ``include_running`` is opt-in because the scheduler's ``tick()`` and the task
+    mutation helpers must not see files claimed for dispatch (they would try to
+    re-claim or operate on a renamed running file). Display callers (the HTTP API,
+    CLI listings) pass ``True`` so an interval task remains visible while it is
+    dispatching instead of blinking out of the list.
+    """
     root, failed = ensure_scheduler_dirs(tasks_dir)
     records: list[ScheduledTaskRecord] = []
 
@@ -331,6 +339,12 @@ def list_task_records(
         record = _record_from_json_file(path, state=TASK_STATE_PENDING)
         if record is not None:
             records.append(record)
+
+    if include_running:
+        for path in sorted(root.glob(f"*{TASK_JSON_SUFFIX}{RUNNING_MARKER}*"), key=lambda item: item.name):
+            record = _record_from_json_file(path, state=TASK_STATE_RUNNING)
+            if record is not None:
+                records.append(record)
 
     if include_failed and failed.is_dir():
         for path in sorted(failed.iterdir(), key=lambda item: item.name):
