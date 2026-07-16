@@ -337,6 +337,53 @@ class TaskApiTests(unittest.TestCase):
                 self.assertEqual(task["recurrence"][0]["end_at"], "2099-07-11 12:00:00")
                 self.assertEqual(task["next_run_at"], "2099-07-11 10:00:00")
 
+    def test_tasks_api_surfaces_running_task_during_dispatch(self):
+        import asyncio
+
+        import httpx
+
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                agent = _TaskAgent(Path(tmpdir))
+                server = AgentHTTPServer(agent=agent)
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="hey",
+                    run_at=datetime(2026, 6, 1, 10, 0, 0),
+                    tasks_dir=server.tasks_dir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 11:00:00"}],
+                    title="Hey reminder",
+                )
+                snapshot = {}
+
+                async def dispatch(task):
+                    await asyncio.sleep(0.05)
+                    transport = httpx.ASGITransport(app=server.app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                        snapshot["response"] = await ac.get("/api/tasks")
+
+                scheduler = AsyncTaskScheduler(
+                    server.tasks_dir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=dispatch,
+                    now_provider=lambda: datetime(2026, 6, 1, 10, 0, 0),
+                )
+                await scheduler.tick()
+
+                response = snapshot["response"]
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["total"], 1)
+                self.assertEqual(body["counts"]["scheduled"], 1)
+                task_view = body["tasks"][0]
+                self.assertEqual(task_view["status"], "active")
+                self.assertEqual(task_view["state"], "running")
+
+        asyncio.run(run_test())
+
     def test_dispatch_scheduled_agent_task_broadcasts_agent_reply(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:

@@ -7,6 +7,7 @@ from xagent.core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     enqueue_scheduled_task,
+    list_active_task_records,
     list_archived_task_records,
     list_task_records,
     pause_scheduled_task,
@@ -272,6 +273,80 @@ class ScheduledTaskTests(unittest.TestCase):
 
         async def _append_delivered(delivered, run_at):
             delivered.append(run_at)
+
+        asyncio.run(run_test())
+
+    def test_list_task_records_includes_running_during_dispatch(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="hey",
+                    run_at=datetime(2026, 6, 1, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 11:00:00"}],
+                    title="Hey reminder",
+                )
+                current = {"now": datetime(2026, 6, 1, 10, 0, 0)}
+                snapshot = {}
+                async def dispatch(task):
+                    await asyncio.sleep(0.05)
+                    snapshot["records"] = list_task_records(tmpdir, include_running=True)
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=dispatch,
+                    now_provider=lambda: current["now"],
+                )
+                await scheduler.tick()
+
+                records = snapshot["records"]
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0].state, "running")
+                self.assertEqual(records[0].status, "active")
+                view = records[0].to_task_view()
+                self.assertEqual(view["state"], "running")
+                self.assertEqual(view["status"], "active")
+
+        asyncio.run(run_test())
+
+    def test_list_active_task_records_excludes_running_files(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="hey",
+                    run_at=datetime(2026, 6, 1, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 11:00:00"}],
+                    title="Hey reminder",
+                )
+                current = {"now": datetime(2026, 6, 1, 10, 0, 0)}
+                snapshot = {}
+                async def dispatch(task):
+                    await asyncio.sleep(0.05)
+                    snapshot["active"] = list_active_task_records(tmpdir)
+                    snapshot["default"] = list_task_records(tmpdir)
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=dispatch,
+                    now_provider=lambda: current["now"],
+                )
+                await scheduler.tick()
+
+                # Scheduler path must not see the running file: guards against
+                # double-dispatch within the same tick.
+                self.assertEqual(snapshot["active"], [])
+                self.assertEqual(snapshot["default"], [])
+                # After tick completes the file is rescheduled back to a .json name.
+                self.assertEqual(len(list_active_task_records(tmpdir)), 1)
 
         asyncio.run(run_test())
 
