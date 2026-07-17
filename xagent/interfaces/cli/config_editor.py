@@ -17,6 +17,7 @@ from ...core.providers import (
     PROVIDER_MINIMAX,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
+    ReasoningConfig,
     model_api_uses_openai_client,
     normalize_model_api,
     normalize_provider_name,
@@ -66,6 +67,7 @@ VOICE_PRESETS = ("none", VOICE_PROVIDER_SONIOX, VOICE_PROVIDER_QWEN, VOICE_PROVI
 VOICE_NESTED_PROVIDERS = (VOICE_PROVIDER_SONIOX, VOICE_PROVIDER_QWEN)
 MODEL_PLACEHOLDER = "your_model_here"
 API_KEY_PLACEHOLDER = "your_api_key_here"
+_REASONING_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -264,6 +266,7 @@ def prepare_model_provider_update(
     base_url: str | None = None,
     model_api: str | None = None,
     supports_vision: bool | None = None,
+    reasoning: Any = _REASONING_UNSET,
     search_api_key: str | None = None,
     image_generation_api_key: str | None = None,
 ) -> ConfigUpdate:
@@ -297,6 +300,23 @@ def prepare_model_provider_update(
         if normalized_provider == PROVIDER_CUSTOM:
             provider_config["model_api"] = selected_model_api or MODEL_API_OPENAI_CHAT_COMPLETIONS
             provider_config["supports_vision"] = bool(supports_vision)
+
+        current_provider_name = normalize_provider_name(current_provider.get("name"))
+        current_model_api = provider_model_api(current_provider) if current_provider else None
+        next_model_api = provider_model_api(provider_config)
+        same_provider_api = (
+            current_provider_name == normalized_provider
+            and current_model_api == next_model_api
+        )
+        if reasoning is _REASONING_UNSET:
+            if same_provider_api and isinstance(current_provider.get("reasoning"), dict):
+                provider_config["reasoning"] = dict(current_provider["reasoning"])
+        elif isinstance(reasoning, ReasoningConfig):
+            provider_config["reasoning"] = reasoning.to_dict()
+        elif isinstance(reasoning, dict):
+            provider_config["reasoning"] = dict(reasoning)
+        elif reasoning is not None:
+            raise ValueError("reasoning must be a ReasoningConfig, dictionary, or None")
 
         search = data.get("search")
         if isinstance(search, dict):
@@ -336,6 +356,9 @@ def prepare_model_provider_update(
             "provider.api_key",
             "provider.model",
             "provider.supports_vision",
+            "provider.reasoning.enabled",
+            "provider.reasoning.effort",
+            "provider.reasoning.budget_tokens",
             "search.api_key",
             "image_generation.api_key",
         ),

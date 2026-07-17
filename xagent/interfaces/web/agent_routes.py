@@ -16,6 +16,12 @@ class SelectAgentInput(BaseModel):
     name: str
 
 
+class ReasoningInput(BaseModel):
+    enabled: bool
+    effort: Optional[str] = None
+    budget_tokens: Optional[int] = None
+
+
 class InitSelectionInput(BaseModel):
     provider: str = "openai"
     base_url: str = ""
@@ -24,6 +30,7 @@ class InitSelectionInput(BaseModel):
     identity: str = ""
     model_api: str = ""
     supports_vision: bool = False
+    reasoning: Optional[ReasoningInput] = None
     search_provider: str = "none"
     search_api_key: str = ""
     image_generation_provider: str = "none"

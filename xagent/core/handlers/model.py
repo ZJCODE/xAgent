@@ -10,7 +10,13 @@ from ..providers import (
     MODEL_API_ANTHROPIC_MESSAGES,
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
     MODEL_API_OPENAI_RESPONSES,
+    PROVIDER_DEEPSEEK,
+    PROVIDER_MINIMAX,
+    PROVIDER_OPENAI,
+    PROVIDER_QWEN,
+    ReasoningConfig,
     normalize_model_api as normalize_provider_model_api,
+    normalize_provider_name,
 )
 
 
@@ -118,12 +124,16 @@ class ModelClient:
         client: Any,
         model: str,
         model_api: str = MODEL_API_OPENAI_CHAT_COMPLETIONS,
-        max_tokens: int = AgentConfig.DEFAULT_MAX_TOKENS,
+        max_tokens: Optional[int] = None,
+        provider_name: str = PROVIDER_OPENAI,
+        reasoning: Optional[ReasoningConfig] = None,
     ):
         self.client = client
         self.model = model
+        self.provider_name = normalize_provider_name(provider_name) or PROVIDER_OPENAI
         self.model_api = self._normalize_model_api(model_api)
         self.max_tokens = max_tokens
+        self.reasoning = reasoning
 
     @retry(
         stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
@@ -331,6 +341,12 @@ class ModelClient:
         if tool_specs:
             params["tools"] = tool_specs
             params["tool_choice"] = "auto"
+        if self.max_tokens is not None:
+            if self.provider_name in {PROVIDER_DEEPSEEK, PROVIDER_QWEN}:
+                params["max_tokens"] = self.max_tokens
+            else:
+                params["max_completion_tokens"] = self.max_tokens
+        self._apply_chat_reasoning_params(params)
         return params
 
     def _build_responses_create_params(
@@ -358,7 +374,32 @@ class ModelClient:
             params["tools"] = self._to_responses_tools(tool_specs)
             params["tool_choice"] = "auto"
             params["include"] = ["reasoning.encrypted_content"]
+        if self.max_tokens is not None:
+            params["max_output_tokens"] = self.max_tokens
+        if self.reasoning is not None:
+            params["reasoning"] = {
+                "effort": self.reasoning.effort if self.reasoning.enabled else "none"
+            }
         return params
+
+    def _apply_chat_reasoning_params(self, params: dict) -> None:
+        reasoning = self.reasoning
+        if reasoning is None:
+            return
+        if self.provider_name == PROVIDER_DEEPSEEK:
+            params["extra_body"] = {
+                "thinking": {"type": "enabled" if reasoning.enabled else "disabled"}
+            }
+            if reasoning.enabled:
+                params["reasoning_effort"] = reasoning.effort
+            return
+        if self.provider_name == PROVIDER_QWEN:
+            extra_body: dict[str, Any] = {"enable_thinking": reasoning.enabled}
+            if reasoning.enabled:
+                extra_body["thinking_budget"] = reasoning.budget_tokens
+            params["extra_body"] = extra_body
+            return
+        params["reasoning_effort"] = reasoning.effort if reasoning.enabled else "none"
 
     @classmethod
     def _build_responses_input(cls, messages: list) -> list:
@@ -461,7 +502,7 @@ class ModelClient:
         )
         params = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": self.max_tokens or AgentConfig.DEFAULT_MAX_TOKENS,
             "messages": anthropic_messages,
             "stream": stream,
         }
@@ -470,6 +511,19 @@ class ModelClient:
         if tool_specs:
             params["tools"] = self._to_anthropic_tools(tool_specs)
             params["tool_choice"] = {"type": "auto"}
+        if self.reasoning is not None:
+            if self.provider_name == PROVIDER_MINIMAX:
+                raise ValueError("reasoning is not supported for the MiniMax Anthropic-compatible API")
+            if not self.reasoning.enabled:
+                params["thinking"] = {"type": "disabled"}
+            elif self.reasoning.effort is not None:
+                params["thinking"] = {"type": "adaptive", "display": "omitted"}
+                params["output_config"] = {"effort": self.reasoning.effort}
+            else:
+                params["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": self.reasoning.budget_tokens,
+                }
         return params
 
     @staticmethod
@@ -1084,11 +1138,18 @@ class ModelClient:
                 continue
             if block_type == "thinking":
                 thinking = cls._field(block, "thinking")
-                if thinking:
-                    normalized = {"type": "thinking", "thinking": str(thinking)}
-                    signature = cls._field(block, "signature")
-                    if signature:
-                        normalized["signature"] = signature
+                signature = cls._field(block, "signature")
+                normalized = {
+                    "type": "thinking",
+                    "thinking": str(thinking) if thinking is not None else "",
+                }
+                if signature:
+                    normalized["signature"] = signature
+                blocks.append(normalized)
+                continue
+            if block_type == "redacted_thinking":
+                normalized = cls._to_plain_data(block)
+                if isinstance(normalized, dict):
                     blocks.append(normalized)
                 continue
             if block_type == "tool_use":
@@ -1503,6 +1564,13 @@ class ModelClient:
                     "type": "thinking",
                     "thinking": ModelClient._field(raw_block, "thinking") or "",
                 }
+                signature = ModelClient._field(raw_block, "signature")
+                if signature:
+                    content_blocks[index]["signature"] = signature
+            elif block_type == "redacted_thinking":
+                normalized = ModelClient._to_plain_data(raw_block)
+                if isinstance(normalized, dict):
+                    content_blocks[index] = normalized
             elif block_type == "tool_use":
                 content_blocks[index] = {
                     "type": "tool_use",

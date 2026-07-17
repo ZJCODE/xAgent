@@ -326,11 +326,28 @@ export interface SetupOption {
   description?: string;
 }
 
+export interface ReasoningConfigInput {
+  enabled: boolean;
+  effort?: string;
+  budget_tokens?: number;
+}
+
+export interface ReasoningCapability {
+  supported: boolean;
+  controls: Array<"effort" | "budget_tokens">;
+  effort_values: string[];
+  min_budget_tokens?: number;
+}
+
 export interface AgentSetupSchema {
   providers: SetupOption[];
   models: Record<string, string[]>;
   provider_base_urls: Record<string, string>;
   custom_model_apis: string[];
+  reasoning: {
+    providers: Record<string, ReasoningCapability>;
+    custom_model_apis: Record<string, ReasoningCapability>;
+  };
   search_providers: SetupOption[];
   image_generation_providers: SetupOption[];
   voice_providers: SetupOption[];
@@ -352,6 +369,7 @@ export interface InitSelectionInput {
   identity: string;
   model_api: string;
   supports_vision: boolean;
+  reasoning?: ReasoningConfigInput | null;
   search_provider: string;
   search_api_key: string;
   image_generation_provider: string;

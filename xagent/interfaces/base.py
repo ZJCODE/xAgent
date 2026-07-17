@@ -9,13 +9,16 @@ from anthropic import AsyncAnthropic
 from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..core.providers import (
+    ReasoningConfig,
     model_api_uses_anthropic_client,
+    normalize_reasoning_config,
     normalize_provider_name,
     normalize_model_api,
     provider_is_official_openai,
     provider_base_url,
     provider_model_api,
     provider_supports_vision,
+    resolved_provider_name,
     PROVIDER_MINIMAX,
     PROVIDER_QWEN,
 )
@@ -265,9 +268,9 @@ class BaseAgentRunner:
         provider_model = provider_cfg.get("model")
         if not isinstance(provider_model, str) or not provider_model.strip():
             raise ValueError("provider.model is required")
-        self._validate_provider_config(provider_cfg)
         if "max_tokens" in provider_cfg:
             self._validate_positive_int(provider_cfg["max_tokens"], "provider.max_tokens")
+        self._validate_provider_config(provider_cfg)
 
         self._validate_search_config(config.get("search"), provider_cfg)
         self._validate_image_generation_config(config.get("image_generation"), provider_cfg)
@@ -356,6 +359,7 @@ class BaseAgentRunner:
             "api_key",
             "model",
             "max_tokens",
+            "reasoning",
             "supports_vision",
         }
         unsupported_provider_keys = sorted(set(provider_cfg) - allowed_provider_keys)
@@ -373,6 +377,9 @@ class BaseAgentRunner:
         if "supports_vision" in provider_cfg:
             if not isinstance(provider_cfg["supports_vision"], bool):
                 raise ValueError("provider.supports_vision must be a boolean")
+        reasoning = normalize_reasoning_config(provider_cfg)
+        if reasoning is not None:
+            provider_cfg["reasoning"] = reasoning.to_dict()
 
     def _validate_search_config(
         self,
@@ -580,8 +587,10 @@ class BaseAgentRunner:
         return Agent(
             system_prompt=self.identity,
             model=self._get_agent_model(agent_cfg),
+            provider_name=self._get_provider_name(agent_cfg),
             model_api=self._get_provider_model_api(agent_cfg),
             model_max_tokens=self._get_provider_max_tokens(agent_cfg),
+            reasoning=self._get_provider_reasoning(agent_cfg),
             client=client,
             tools=tools,
             message_storage=self.message_storage,
@@ -613,11 +622,23 @@ class BaseAgentRunner:
             return provider_model_api(provider_cfg)
         return provider_model_api({})
 
-    def _get_provider_max_tokens(self, agent_cfg: Dict[str, Any]) -> int:
+    def _get_provider_name(self, agent_cfg: Dict[str, Any]) -> str:
+        provider_cfg = agent_cfg.get("provider") or {}
+        if isinstance(provider_cfg, dict):
+            return resolved_provider_name(provider_cfg)
+        return ""
+
+    def _get_provider_max_tokens(self, agent_cfg: Dict[str, Any]) -> Optional[int]:
         provider_cfg = agent_cfg.get("provider") or {}
         if isinstance(provider_cfg, dict) and provider_cfg.get("max_tokens"):
             return int(provider_cfg["max_tokens"])
-        return AgentConfig.DEFAULT_MAX_TOKENS
+        return None
+
+    def _get_provider_reasoning(self, agent_cfg: Dict[str, Any]) -> Optional[ReasoningConfig]:
+        provider_cfg = agent_cfg.get("provider") or {}
+        if isinstance(provider_cfg, dict):
+            return normalize_reasoning_config(provider_cfg)
+        return None
 
     def _initialize_client(self, agent_cfg: Dict[str, Any]) -> Optional[Any]:
         """Build an async model client from optional provider config."""

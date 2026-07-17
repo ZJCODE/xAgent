@@ -14,7 +14,14 @@ from .journal import JournalLLMService
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
 from .config import AgentConfig, ReplyType
 from .handlers import MemoryHandler, MessageHandler, ModelClient
-from .providers import MODEL_API_OPENAI_RESPONSES, model_api_uses_anthropic_client, normalize_model_api
+from .providers import (
+    MODEL_API_OPENAI_RESPONSES,
+    PROVIDER_OPENAI,
+    ReasoningConfig,
+    model_api_uses_anthropic_client,
+    normalize_model_api,
+    normalize_provider_name,
+)
 from .tooling import ToolExecutor, ToolManager
 from ..schemas import AgentTurnResult, Message, MessageType, ParticipationDecision, RoleType
 from ..tools import create_write_memory_tool, create_search_memory_tool
@@ -30,7 +37,7 @@ class Agent:
         model: Optional[str] = None,
         client: Optional[Any] = None,
         model_api: str = MODEL_API_OPENAI_RESPONSES,
-        model_max_tokens: int = AgentConfig.DEFAULT_MAX_TOKENS,
+        model_max_tokens: Optional[int] = None,
         tools: Optional[List] = None,
         message_storage: Optional[MessageStorage] = None,
         workspace: Optional[str] = None,
@@ -42,10 +49,14 @@ class Agent:
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
         memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
+        provider_name: str = PROVIDER_OPENAI,
+        reasoning: Optional[ReasoningConfig] = None,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
+        self.provider_name = normalize_provider_name(provider_name) or PROVIDER_OPENAI
         self.model_api = normalize_model_api(model_api)
         self.model_max_tokens = model_max_tokens
+        self.reasoning = reasoning
         self.supports_vision = bool(supports_vision)
         self.max_history = max_history
         self.max_iter = max_iter
@@ -101,8 +112,10 @@ class Agent:
         self.llm_service = JournalLLMService(
             client=self.client,
             model=self.model,
+            provider_name=self.provider_name,
             model_api=self.model_api,
             max_tokens=self.model_max_tokens,
+            reasoning=self.reasoning,
         )
         self.memory_handler = MemoryHandler(
             memory=self.markdown_memory,
@@ -129,8 +142,10 @@ class Agent:
         self.model_client = ModelClient(
             client=self.client,
             model=self.model,
+            provider_name=self.provider_name,
             model_api=self.model_api,
             max_tokens=self.model_max_tokens,
+            reasoning=self.reasoning,
         )
         self.message_handler = MessageHandler(
             message_storage=self.message_storage,
@@ -209,7 +224,7 @@ class Agent:
             skills_catalog=skills_catalog,
             supports_vision=self.supports_vision,
             workspace_context=workspace_context,
-            memory_recent_days=self.memory_recent_days,
+            memory_recent_days=getattr(self, "memory_recent_days", AgentConfig.MEMORY_RECENT_DAYS),
         )
         iteration_messages = msg_handler.build_turn_context_messages(
             recent_messages,

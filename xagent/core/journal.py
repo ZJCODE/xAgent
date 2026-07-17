@@ -9,6 +9,8 @@ from typing import Any, List, Optional
 
 from openai import AsyncOpenAI
 
+from .providers import PROVIDER_OPENAI, ReasoningConfig
+
 
 DEFAULT_OPENAI_CHAT_MODEL_API = "openai_chat_completions"
 
@@ -21,13 +23,17 @@ class JournalLLMService:
         client: Optional[Any] = None,
         model: str = "gpt-5.4-mini",
         model_api: str = DEFAULT_OPENAI_CHAT_MODEL_API,
-        max_tokens: int = 4096,
+        max_tokens: Optional[int] = 4096,
+        provider_name: str = PROVIDER_OPENAI,
+        reasoning: Optional[ReasoningConfig] = None,
     ) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.client = client or AsyncOpenAI()
         self.model = model
+        self.provider_name = provider_name
         self.model_api = model_api
         self.max_tokens = max_tokens
+        self.reasoning = reasoning
 
     async def format_diary_entry(
         self,
@@ -276,8 +282,10 @@ New experience:
         model_client = ModelClient(
             client=self.client,
             model=self.model,
+            provider_name=self.provider_name,
             model_api=self.model_api,
             max_tokens=self.max_tokens,
+            reasoning=self.reasoning,
         )
         reply_type, payload = await model_client.call(
             messages=[{"role": "user", "content": user_prompt}],

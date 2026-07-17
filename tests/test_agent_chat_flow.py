@@ -10,7 +10,15 @@ from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
 from xagent.core.handlers.message import MessageHandler
-from xagent.core.providers import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_OPENAI_RESPONSES
+from xagent.core.providers import (
+    MODEL_API_ANTHROPIC_MESSAGES,
+    MODEL_API_OPENAI_RESPONSES,
+    PROVIDER_ANTHROPIC,
+    PROVIDER_CUSTOM,
+    PROVIDER_DEEPSEEK,
+    PROVIDER_QWEN,
+    ReasoningConfig,
+)
 from xagent.core.tooling.executor import ToolDisplayResult, ToolExecutor
 from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
@@ -388,6 +396,54 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["messages"][0], {"role": "system", "content": "Core Rules"})
         self.assertEqual(call["messages"][1], {"role": "user", "content": "hello"})
         self.assertEqual(call["tool_choice"], "auto")
+        self.assertNotIn("reasoning_effort", call)
+        self.assertNotIn("max_completion_tokens", call)
+
+    async def test_chat_reasoning_and_output_limits_map_by_provider(self):
+        deepseek_client = FakeOpenAIClient([_chat_response(content="ok")])
+        deepseek = ModelClient(
+            client=deepseek_client,
+            model="deepseek-v4-pro",
+            provider_name=PROVIDER_DEEPSEEK,
+            max_tokens=6000,
+            reasoning=ReasoningConfig(enabled=True, effort="max"),
+        )
+        await deepseek.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
+        deepseek_call = deepseek_client.chat_completions.calls[0]
+        self.assertEqual(deepseek_call["max_tokens"], 6000)
+        self.assertEqual(deepseek_call["reasoning_effort"], "max")
+        self.assertEqual(deepseek_call["extra_body"], {"thinking": {"type": "enabled"}})
+        self.assertNotIn("max_completion_tokens", deepseek_call)
+
+        qwen_client = FakeOpenAIClient([_chat_response(content="ok")])
+        qwen = ModelClient(
+            client=qwen_client,
+            model="qwen3.7-max",
+            provider_name=PROVIDER_QWEN,
+            max_tokens=7000,
+            reasoning=ReasoningConfig(enabled=True, budget_tokens=4096),
+        )
+        await qwen.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
+        qwen_call = qwen_client.chat_completions.calls[0]
+        self.assertEqual(qwen_call["max_tokens"], 7000)
+        self.assertEqual(
+            qwen_call["extra_body"],
+            {"enable_thinking": True, "thinking_budget": 4096},
+        )
+        self.assertNotIn("reasoning_effort", qwen_call)
+
+        custom_client = FakeOpenAIClient([_chat_response(content="ok")])
+        custom = ModelClient(
+            client=custom_client,
+            model="custom-model",
+            provider_name=PROVIDER_CUSTOM,
+            max_tokens=5000,
+            reasoning=ReasoningConfig(enabled=False),
+        )
+        await custom.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
+        custom_call = custom_client.chat_completions.calls[0]
+        self.assertEqual(custom_call["max_completion_tokens"], 5000)
+        self.assertEqual(custom_call["reasoning_effort"], "none")
 
     async def test_call_uses_responses_api_when_selected(self):
         client = FakeOpenAIClient(response_api_responses=[_responses_response(output_text="ok")])
@@ -429,6 +485,22 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
                 "strict": False,
             }],
         )
+
+    async def test_responses_reasoning_and_output_limit_mapping(self):
+        client = FakeOpenAIClient(response_api_responses=[_responses_response(output_text="ok")])
+        model = ModelClient(
+            client=client,
+            model="gpt-5.6-sol",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+            max_tokens=12000,
+            reasoning=ReasoningConfig(enabled=True, effort="high"),
+        )
+
+        await model.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
+
+        call = client.responses_api.calls[0]
+        self.assertEqual(call["max_output_tokens"], 12000)
+        self.assertEqual(call["reasoning"], {"effort": "high"})
 
     async def test_responses_tool_call_preserves_replay_items(self):
         response_items = [
@@ -500,6 +572,141 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             }],
         )
         self.assertEqual(call["tool_choice"], {"type": "auto"})
+
+    async def test_anthropic_reasoning_modes_map_to_messages_api(self):
+        adaptive_client = FakeAnthropicClient([_anthropic_response([{"type": "text", "text": "ok"}])])
+        adaptive = ModelClient(
+            client=adaptive_client,
+            model="claude-opus-4-6",
+            provider_name=PROVIDER_ANTHROPIC,
+            model_api=MODEL_API_ANTHROPIC_MESSAGES,
+            max_tokens=16000,
+            reasoning=ReasoningConfig(enabled=True, effort="high"),
+        )
+        await adaptive.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
+        adaptive_call = adaptive_client.messages.calls[0]
+        self.assertEqual(adaptive_call["thinking"], {"type": "adaptive", "display": "omitted"})
+        self.assertEqual(adaptive_call["output_config"], {"effort": "high"})
+
+        budget_client = FakeAnthropicClient([_anthropic_response([{"type": "text", "text": "ok"}])])
+        budget = ModelClient(
+            client=budget_client,
+            model="claude-sonnet-4-20250514",
+            provider_name=PROVIDER_ANTHROPIC,
+            model_api=MODEL_API_ANTHROPIC_MESSAGES,
+            reasoning=ReasoningConfig(enabled=True, budget_tokens=4096),
+        )
+        await budget.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
+        budget_call = budget_client.messages.calls[0]
+        self.assertEqual(budget_call["max_tokens"], AgentConfig.DEFAULT_MAX_TOKENS)
+        self.assertEqual(budget_call["thinking"], {"type": "enabled", "budget_tokens": 4096})
+        self.assertNotIn("output_config", budget_call)
+
+        disabled_client = FakeAnthropicClient([_anthropic_response([{"type": "text", "text": "ok"}])])
+        disabled = ModelClient(
+            client=disabled_client,
+            model="claude-opus-4-6",
+            provider_name=PROVIDER_ANTHROPIC,
+            model_api=MODEL_API_ANTHROPIC_MESSAGES,
+            reasoning=ReasoningConfig(enabled=False),
+        )
+        await disabled.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
+        self.assertEqual(disabled_client.messages.calls[0]["thinking"], {"type": "disabled"})
+
+    def test_anthropic_normalization_preserves_omitted_and_redacted_thinking(self):
+        blocks = ModelClient._normalize_anthropic_content_blocks([
+            SimpleNamespace(type="thinking", thinking="", signature="sig-omitted"),
+            SimpleNamespace(type="redacted_thinking", data="encrypted-redaction"),
+            SimpleNamespace(type="tool_use", id="toolu_1", name="lookup", input={}),
+        ])
+
+        self.assertEqual(
+            blocks,
+            [
+                {"type": "thinking", "thinking": "", "signature": "sig-omitted"},
+                {"type": "redacted_thinking", "data": "encrypted-redaction"},
+                {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+            ],
+        )
+
+    def test_anthropic_stream_preserves_empty_signature_and_redacted_block(self):
+        content_blocks = {}
+        ModelClient._merge_anthropic_stream_event(
+            content_blocks,
+            SimpleNamespace(
+                type="content_block_start",
+                index=0,
+                content_block=SimpleNamespace(type="thinking", thinking=""),
+            ),
+        )
+        ModelClient._merge_anthropic_stream_event(
+            content_blocks,
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="signature_delta", signature="sig-stream"),
+            ),
+        )
+        ModelClient._merge_anthropic_stream_event(
+            content_blocks,
+            SimpleNamespace(
+                type="content_block_start",
+                index=1,
+                content_block=SimpleNamespace(type="redacted_thinking", data="encrypted"),
+            ),
+        )
+
+        self.assertEqual(content_blocks[0], {"type": "thinking", "thinking": "", "signature": "sig-stream"})
+        self.assertEqual(content_blocks[1], {"type": "redacted_thinking", "data": "encrypted"})
+
+    async def test_anthropic_stream_hides_thinking_but_replays_it_with_tools(self):
+        stream = AsyncChunkStream([
+            SimpleNamespace(
+                type="content_block_start",
+                index=0,
+                content_block=SimpleNamespace(type="thinking", thinking=""),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="thinking_delta", thinking="private thought"),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="signature_delta", signature="sig"),
+            ),
+            SimpleNamespace(
+                type="content_block_start",
+                index=1,
+                content_block=SimpleNamespace(type="tool_use", id="toolu_1", name="lookup"),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=1,
+                delta=SimpleNamespace(type="input_json_delta", partial_json='{"query":"x"}'),
+            ),
+        ])
+        client = FakeAnthropicClient([stream])
+        model = ModelClient(
+            client=client,
+            model="claude-opus-4-6",
+            provider_name=PROVIDER_ANTHROPIC,
+            model_api=MODEL_API_ANTHROPIC_MESSAGES,
+        )
+
+        events = [
+            event async for event in model.stream_turn(
+                messages=[{"role": "user", "content": "lookup"}],
+                tool_specs=[{"type": "function", "function": {"name": "lookup"}}],
+            )
+        ]
+
+        self.assertEqual([event.type for event in events], ["tool_calls"])
+        self.assertEqual(
+            events[0].tool_calls[0].content_blocks[0],
+            {"type": "thinking", "thinking": "private thought", "signature": "sig"},
+        )
 
     async def test_anthropic_tool_call_preserves_content_blocks_for_next_turn(self):
         response_blocks = [

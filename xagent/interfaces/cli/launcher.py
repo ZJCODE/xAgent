@@ -18,10 +18,12 @@ from ...core.providers import (
     PROVIDER_MINIMAX,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
+    ReasoningConfig,
     model_api_uses_openai_client,
     normalize_provider_name,
     provider_base_url,
     provider_model_api,
+    reasoning_capability,
 )
 from ...tools.search_tool import is_placeholder_api_key
 from ..base import BaseAgentConfig
@@ -1031,6 +1033,110 @@ def _run_search_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
     return _apply_config_update(ui, config_dir, update, return_home_on_success=True)
 
 
+def _prompt_model_reasoning(
+    ui: TerminalUI,
+    *,
+    provider: str,
+    model_api: Optional[str],
+    current_provider_config: dict[str, Any],
+) -> tuple[bool, Optional[ReasoningConfig]]:
+    capability = reasoning_capability(provider, model_api)
+    if not capability.supported:
+        return True, None
+
+    target_api = provider_model_api({
+        "name": provider,
+        **({"model_api": model_api} if provider == PROVIDER_CUSTOM and model_api else {}),
+    })
+    same_provider_api = (
+        normalize_provider_name(current_provider_config.get("name")) == provider
+        and provider_model_api(current_provider_config) == target_api
+    )
+    current_reasoning = (
+        current_provider_config.get("reasoning")
+        if same_provider_api and isinstance(current_provider_config.get("reasoning"), dict)
+        else None
+    )
+    current_mode = "automatic"
+    if current_reasoning is not None:
+        current_mode = "enabled" if current_reasoning.get("enabled") is True else "disabled"
+    modes = ("automatic", "enabled", "disabled")
+    choice = ui.select_menu(
+        title="xAgent Setup / Reasoning",
+        subtitle="Choose whether xAgent sends explicit reasoning controls.",
+        options=[
+            MenuOption(
+                "automatic",
+                "Automatic (follow model)",
+                "Send no reasoning controls; best compatibility (recommended).",
+            ),
+            MenuOption("enabled", "Enabled", "Enable reasoning with an explicit strength."),
+            MenuOption("disabled", "Disabled", "Explicitly request reasoning to be disabled."),
+        ],
+        default_index=modes.index(current_mode),
+    )
+    if choice is None:
+        return False, None
+    if choice.key == "automatic":
+        return True, None
+    if choice.key == "disabled":
+        return True, ReasoningConfig(enabled=False)
+
+    control = capability.controls[0]
+    if len(capability.controls) > 1:
+        current_control = "budget_tokens" if current_reasoning and "budget_tokens" in current_reasoning else "effort"
+        control_choice = ui.select_menu(
+            title="xAgent Setup / Reasoning Strength",
+            options=_menu_option_rows(
+                capability.controls,
+                {
+                    "effort": "Adaptive discrete effort for current models.",
+                    "budget_tokens": "Fixed thinking-token budget for legacy models.",
+                },
+            ),
+            default_index=capability.controls.index(current_control),
+        )
+        if control_choice is None:
+            return False, None
+        control = str(control_choice.key)
+
+    if control == "effort":
+        current_effort = str((current_reasoning or {}).get("effort") or "")
+        default_effort = current_effort if current_effort in capability.effort_values else (
+            "medium" if "medium" in capability.effort_values else capability.effort_values[0]
+        )
+        effort_choice = ui.select_menu(
+            title="xAgent Setup / Reasoning Effort",
+            options=_menu_option_rows(capability.effort_values),
+            default_index=capability.effort_values.index(default_effort),
+        )
+        if effort_choice is None:
+            return False, None
+        return True, ReasoningConfig(enabled=True, effort=str(effort_choice.key))
+
+    minimum = capability.min_budget_tokens or 1
+    current_budget = (current_reasoning or {}).get("budget_tokens")
+    default_budget = current_budget if isinstance(current_budget, int) else max(minimum, 4096)
+    raw_budget = ui.ask_text(
+        "Reasoning token budget",
+        default=str(default_budget),
+        subtitle=f"Enter an integer of at least {minimum}.",
+    ).strip()
+    try:
+        budget_tokens = int(raw_budget or default_budget)
+    except ValueError:
+        ui.print_panel("Reasoning token budget must be an integer.", title="Setup", border_style="red")
+        return False, None
+    if budget_tokens < minimum:
+        ui.print_panel(
+            f"Reasoning token budget must be at least {minimum}.",
+            title="Setup",
+            border_style="red",
+        )
+        return False, None
+    return True, ReasoningConfig(enabled=True, budget_tokens=budget_tokens)
+
+
 def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
     try:
         config = load_config(config_dir)
@@ -1090,6 +1196,15 @@ def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
         )
         base_url = provider_base_url(provider)
 
+    reasoning_completed, reasoning = _prompt_model_reasoning(
+        ui,
+        provider=provider,
+        model_api=model_api,
+        current_provider_config=provider_config,
+    )
+    if not reasoning_completed:
+        return False
+
     api_key = ui.ask_text(
         f"{provider.title()} API key",
         secret=True,
@@ -1119,6 +1234,7 @@ def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
             base_url=base_url,
             model_api=model_api,
             supports_vision=supports_vision,
+            reasoning=reasoning,
             search_api_key=search_api_key,
             image_generation_api_key=image_generation_api_key,
         )

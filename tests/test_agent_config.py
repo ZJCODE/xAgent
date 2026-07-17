@@ -16,7 +16,9 @@ from xagent.core.providers import (
     MODEL_API_OPENAI_RESPONSES,
     PROVIDER_CUSTOM,
     PROVIDER_QWEN,
+    ReasoningConfig,
     VISION_CAPABLE_PROVIDERS,
+    normalize_reasoning_config,
     provider_supports_vision,
     provider_model_api,
 )
@@ -27,6 +29,7 @@ from xagent.interfaces.cli import (
     collect_init_selection_terminal_ui,
     init_agent_directory,
 )
+from xagent.interfaces.cli.setup import build_setup_schema, init_selection_from_mapping
 from xagent.interfaces.base import BaseAgentRunner
 
 
@@ -86,6 +89,91 @@ class AgentConfigPromptTests(unittest.TestCase):
 
 
 class ProviderConfigTests(unittest.TestCase):
+    def test_reasoning_config_normalizes_supported_provider_controls(self):
+        self.assertEqual(
+            normalize_reasoning_config({
+                "name": "openai",
+                "reasoning": {"enabled": True, "effort": "HIGH"},
+            }),
+            ReasoningConfig(enabled=True, effort="high"),
+        )
+        self.assertEqual(
+            normalize_reasoning_config({
+                "name": "qwen",
+                "reasoning": {"enabled": True, "budget_tokens": 4096},
+            }),
+            ReasoningConfig(enabled=True, budget_tokens=4096),
+        )
+        self.assertEqual(
+            normalize_reasoning_config({
+                "name": "anthropic",
+                "max_tokens": 16000,
+                "reasoning": {"enabled": True, "budget_tokens": 8000},
+            }),
+            ReasoningConfig(enabled=True, budget_tokens=8000),
+        )
+
+    def test_reasoning_config_rejects_invalid_or_unsupported_combinations(self):
+        invalid_configs = (
+            ({"name": "openai", "reasoning": {"enabled": True}}, "exactly one"),
+            ({
+                "name": "openai",
+                "reasoning": {"enabled": True, "effort": "high", "budget_tokens": 1024},
+            }, "exactly one"),
+            ({
+                "name": "openai",
+                "reasoning": {"enabled": False, "effort": "low"},
+            }, "not allowed"),
+            ({
+                "name": "deepseek",
+                "reasoning": {"enabled": True, "effort": "medium"},
+            }, "must be one of"),
+            ({
+                "name": "qwen",
+                "reasoning": {"enabled": True, "effort": "high"},
+            }, "not supported"),
+            ({
+                "name": "anthropic",
+                "max_tokens": 4096,
+                "reasoning": {"enabled": True, "budget_tokens": 4096},
+            }, "must be less"),
+            ({
+                "name": "minimax",
+                "reasoning": {"enabled": False},
+            }, "not supported"),
+        )
+        for provider_cfg, message in invalid_configs:
+            with self.subTest(provider=provider_cfg.get("name")):
+                with self.assertRaisesRegex(ValueError, message):
+                    normalize_reasoning_config(provider_cfg)
+
+    def test_provider_reasoning_reaches_agent_and_journal_clients(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "config.yaml").write_text(
+                """
+provider:
+    name: "anthropic"
+    model: "claude-opus-4-6"
+    base_url: "https://api.anthropic.com"
+    api_key: "test-key"
+    max_tokens: 16000
+    reasoning:
+        enabled: true
+        effort: high
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            expected = ReasoningConfig(enabled=True, effort="high")
+            self.assertEqual(runner.agent.reasoning, expected)
+            self.assertEqual(runner.agent.model_client.reasoning, expected)
+            self.assertEqual(runner.agent.llm_service.reasoning, expected)
+            self.assertEqual(runner.agent.provider_name, "anthropic")
+            self.assertEqual(runner.agent.model_max_tokens, 16000)
+
     def test_provider_config_determines_model_api_protocol(self):
         self.assertEqual(
             provider_model_api({"name": "openai"}),
@@ -714,6 +802,41 @@ provider:
 
             self.assertTrue(config["provider"]["supports_vision"])
 
+    def test_init_writes_reasoning_and_setup_schema_capabilities(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selection = InitSelection(
+                provider="anthropic",
+                base_url="https://api.anthropic.com",
+                api_key="anthropic-key",
+                model="claude-opus-4-6",
+                identity="# Identity\n\nYou reason privately.\n",
+                reasoning=ReasoningConfig(enabled=True, effort="high"),
+            )
+
+            result = init_agent_directory(tmpdir, selection=selection)
+            config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                config["provider"]["reasoning"],
+                {"enabled": True, "effort": "high"},
+            )
+            schema = build_setup_schema()
+            self.assertEqual(schema["reasoning"]["providers"]["qwen"]["controls"], ["budget_tokens"])
+            self.assertFalse(schema["reasoning"]["providers"]["minimax"]["supported"])
+            self.assertEqual(
+                schema["reasoning"]["custom_model_apis"][MODEL_API_ANTHROPIC_MESSAGES]["min_budget_tokens"],
+                1024,
+            )
+
+    def test_web_mapping_normalizes_nested_reasoning(self):
+        selection = init_selection_from_mapping({
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "reasoning": {"enabled": True, "effort": "MAX"},
+        })
+
+        self.assertEqual(selection.reasoning, ReasoningConfig(enabled=True, effort="max"))
+
     def test_init_writes_observability_only_when_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
@@ -1276,6 +1399,8 @@ provider:
                     return SimpleNamespace(key="none")
                 if label == "Image Generation Provider":
                     return SimpleNamespace(key="none")
+                if label == "Reasoning mode":
+                    return SimpleNamespace(key="automatic")
                 raise AssertionError(f"Unexpected select prompt: {label}")
 
             def confirm(self, label, *, default=False):

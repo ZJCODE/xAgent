@@ -807,7 +807,7 @@ wheels = [
 
 [[package]]
 name = "myxagent"
-version = "0.3.6"
+version = "0.3.13"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -838,7 +838,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.64.0" },
+    { name = "anthropic", specifier = ">=0.116.0" },
     { name = "cryptography", specifier = ">=42.0.0" },
     { name = "fastapi", specifier = ">=0.116.1" },
     { name = "httpx", specifier = ">=0.28.0" },

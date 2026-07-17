@@ -27,10 +27,13 @@ from ...core.providers import (
     PROVIDER_MINIMAX,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
+    ReasoningConfig,
     model_api_uses_openai_client,
+    normalize_reasoning_config,
     normalize_provider_name,
     provider_base_url,
     provider_model_api,
+    reasoning_capability,
 )
 from ...tools.search_tool import is_placeholder_api_key
 from ..base import BaseAgentConfig
@@ -68,6 +71,7 @@ class InitSelection:
     identity: str
     model_api: str = ""
     supports_vision: bool = False
+    reasoning: Optional[ReasoningConfig] = None
     search_provider: str = "none"
     search_api_key: str = ""
     image_generation_provider: str = "none"
@@ -279,10 +283,25 @@ def init_selection_from_mapping(data: Mapping[str, Any]) -> InitSelection:
     if voice_enabled and voice_provider == "none":
         voice_provider = "soniox"
 
+    model_api = str(data.get("model_api") or "")
+    reasoning_provider_cfg: dict[str, Any] = {
+        "name": provider,
+        "model_api": model_api or MODEL_API_OPENAI_CHAT_COMPLETIONS,
+        "reasoning": data.get("reasoning"),
+    }
+    if provider != PROVIDER_CUSTOM:
+        reasoning_provider_cfg.pop("model_api", None)
+    reasoning = (
+        normalize_reasoning_config(reasoning_provider_cfg)
+        if data.get("reasoning") is not None
+        else None
+    )
+
     return InitSelection(
         provider=provider,
-        model_api=str(data.get("model_api") or ""),
+        model_api=model_api,
         supports_vision=bool(data.get("supports_vision", False)),
+        reasoning=reasoning,
         base_url=base_url,
         api_key=str(data.get("api_key") or API_KEY_PLACEHOLDER).strip() or API_KEY_PLACEHOLDER,
         model=model,
@@ -341,6 +360,21 @@ def build_setup_schema() -> dict[str, Any]:
             MODEL_API_OPENAI_RESPONSES,
             MODEL_API_ANTHROPIC_MESSAGES,
         ],
+        "reasoning": {
+            "providers": {
+                provider: reasoning_capability(provider).to_dict()
+                for provider in KNOWN_PROVIDERS
+                if provider != PROVIDER_CUSTOM
+            },
+            "custom_model_apis": {
+                model_api: reasoning_capability(PROVIDER_CUSTOM, model_api).to_dict()
+                for model_api in (
+                    MODEL_API_OPENAI_CHAT_COMPLETIONS,
+                    MODEL_API_OPENAI_RESPONSES,
+                    MODEL_API_ANTHROPIC_MESSAGES,
+                )
+            },
+        },
         "search_providers": [
             {"id": provider, "description": _SEARCH_PROVIDER_DESCRIPTIONS.get(provider, "")}
             for provider in SEARCH_PROVIDERS
@@ -827,6 +861,8 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     if selection.provider == PROVIDER_CUSTOM:
         provider_config["model_api"] = selection.model_api or MODEL_API_OPENAI_CHAT_COMPLETIONS
         provider_config["supports_vision"] = selection.supports_vision
+    if selection.reasoning is not None:
+        provider_config["reasoning"] = selection.reasoning.to_dict()
 
     config = {
         "provider": provider_config,
@@ -1251,6 +1287,71 @@ class InitPromptSurface:
     select_image_generation_provider: Callable[[str], str]
     collect_voice_startup: Callable[[], Tuple[bool, Tuple[str, ...], Tuple[str, ...], bool]]
     on_start: Callable[[], None] = lambda: None
+    reasoning_prompt_enabled: bool = False
+
+
+def _collect_reasoning_config(
+    surface: InitPromptSurface,
+    *,
+    provider: str,
+    model_api: str,
+) -> Optional[ReasoningConfig]:
+    capability = reasoning_capability(provider, model_api or None)
+    if not capability.supported:
+        return None
+
+    mode = surface.select_option(
+        "Reasoning mode",
+        ("automatic", "enabled", "disabled"),
+        descriptions={
+            "automatic": "Follow the model default without sending reasoning controls (recommended).",
+            "enabled": "Enable reasoning with an explicit strength.",
+            "disabled": "Explicitly request reasoning to be disabled.",
+        },
+        default_index=0,
+    )
+    if mode == "automatic":
+        return None
+    if mode == "disabled":
+        return ReasoningConfig(enabled=False)
+
+    control = capability.controls[0]
+    if len(capability.controls) > 1:
+        control = surface.select_option(
+            "Reasoning strength control",
+            capability.controls,
+            descriptions={
+                "effort": "Use the provider's adaptive discrete effort level.",
+                "budget_tokens": "Use a fixed thinking-token budget for older models.",
+            },
+            default_index=0,
+        )
+    if control == "effort":
+        default_index = (
+            capability.effort_values.index("medium")
+            if "medium" in capability.effort_values
+            else 0
+        )
+        effort = surface.select_option(
+            "Reasoning effort",
+            capability.effort_values,
+            default_index=default_index,
+        )
+        return ReasoningConfig(enabled=True, effort=effort)
+
+    minimum = capability.min_budget_tokens or 1
+    default_budget = max(minimum, 4096)
+    raw_budget = surface.prompt_text(
+        "Reasoning token budget",
+        default=str(default_budget),
+    ).strip()
+    try:
+        budget_tokens = int(raw_budget)
+    except ValueError as exc:
+        raise ValueError("Reasoning token budget must be an integer") from exc
+    if budget_tokens < minimum:
+        raise ValueError(f"Reasoning token budget must be at least {minimum}")
+    return ReasoningConfig(enabled=True, budget_tokens=budget_tokens)
 
 
 def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
@@ -1335,6 +1436,13 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
 
     model = selected_model
     api_key = surface.ask_secret("API key (leave blank to fill in later): ").strip() or API_KEY_PLACEHOLDER
+    reasoning = None
+    if surface.reasoning_prompt_enabled:
+        reasoning = _collect_reasoning_config(
+            surface,
+            provider=provider,
+            model_api=model_api,
+        )
 
     provider_api_cfg = {"name": provider}
     if model_api:
@@ -1455,6 +1563,7 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
         api_key=api_key,
         model=model,
         identity=identity,
+        reasoning=reasoning,
         search_provider=search_provider,
         search_api_key=search_api_key,
         image_generation_provider=image_generation_provider,
@@ -1560,6 +1669,7 @@ def collect_init_selection_terminal_ui(
             select_search_provider=select_search_provider,
             select_image_generation_provider=select_image_generation_provider,
             collect_voice_startup=collect_voice_startup,
+            reasoning_prompt_enabled=True,
         )
     )
 

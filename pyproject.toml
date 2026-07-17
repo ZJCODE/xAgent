@@ -28,7 +28,7 @@ dependencies = [
     
     # AI/ML and agents
     "openai>=1.98.0",
-    "anthropic>=0.64.0",
+    "anthropic>=0.116.0",
     "langfuse>=3.0.0",
     "cryptography>=42.0.0",
     

@@ -1390,6 +1390,44 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(saved["search"]["api_key"], "openai-search-key")
         self.assertEqual(saved["image_generation"]["api_key"], "openai-image-key")
 
+    def test_config_editor_preserves_or_clears_reasoning_with_provider_api_identity(self):
+        config = {
+            "provider": {
+                "name": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "openai-key",
+                "model": "gpt-5.4-mini",
+                "reasoning": {"enabled": True, "effort": "high"},
+            }
+        }
+
+        same_provider = prepare_model_provider_update(
+            config,
+            provider="openai",
+            model="gpt-5.6-sol",
+        )
+        switched_provider = prepare_model_provider_update(
+            config,
+            provider="qwen",
+            model="qwen3.6-flash",
+        )
+        explicit_qwen = prepare_model_provider_update(
+            config,
+            provider="qwen",
+            model="qwen3.6-flash",
+            reasoning={"enabled": True, "budget_tokens": 4096},
+        )
+
+        self.assertEqual(
+            same_provider.data["provider"]["reasoning"],
+            {"enabled": True, "effort": "high"},
+        )
+        self.assertNotIn("reasoning", switched_provider.data["provider"])
+        self.assertEqual(
+            explicit_qwen.data["provider"]["reasoning"],
+            {"enabled": True, "budget_tokens": 4096},
+        )
+
     def test_config_editor_copies_same_provider_feature_keys(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
@@ -1404,10 +1442,12 @@ class CLICommandTests(unittest.TestCase):
 
     def test_model_launcher_preserves_copyable_feature_keys_without_extra_prompt(self):
         class FakeUI:
-            def select_menu(self, *, title, subtitle, options, footer):
-                del subtitle, options, footer
+            def select_menu(self, *, title, subtitle="", options, footer="", default_index=0):
+                del subtitle, options, footer, default_index
                 if title == "xAgent Setup / Model":
                     return SimpleNamespace(key="qwen")
+                if title == "xAgent Setup / Reasoning":
+                    return SimpleNamespace(key="automatic")
                 raise AssertionError(f"Unexpected menu: {title}")
 
             def ask_text(self, label, *, default=None, secret=False, subtitle=""):

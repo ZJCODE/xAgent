@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from xagent.core.journal import JournalLLMService
 from xagent.core.config import ReplyType
-from xagent.core.providers import MODEL_API_OPENAI_RESPONSES
+from xagent.core.providers import MODEL_API_OPENAI_RESPONSES, ReasoningConfig
 from xagent.schemas import Message
 
 
@@ -128,6 +128,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
             client=object(),
             model="gpt-test",
             model_api=MODEL_API_OPENAI_RESPONSES,
+            reasoning=ReasoningConfig(enabled=True, effort="medium"),
         )
 
         with patch("xagent.core.handlers.model.ModelClient", FakeModelClient):
@@ -152,6 +153,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "Diary entry.")
         instance = FakeModelClient.instances[0]
         self.assertEqual(instance.kwargs["model_api"], MODEL_API_OPENAI_RESPONSES)
+        self.assertEqual(instance.kwargs["reasoning"], ReasoningConfig(enabled=True, effort="medium"))
         self.assertIn("[speaker=ME][timestamp=2026-05-17 09:00:00]\nI captured the plan.", instance.calls[0]["messages"][0]["content"])
         self.assertIn(
             "[speaker=alice][timestamp=2026-05-17 09:01:00]\nI'll send the document.",
