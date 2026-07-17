@@ -26,6 +26,7 @@ from .scheduler import (
     ensure_scheduler_dirs,
     format_task_timestamp,
     is_interval_recurrence,
+    is_interval_window_closed,
     materialize_interval_recurrence_rules,
     parse_run_at,
     normalize_recurrence_rules,
@@ -47,7 +48,11 @@ TASK_STATE_PENDING = "pending"
 TASK_STATE_FAILED = "failed"
 TASK_STATE_RUNNING = "running"
 TASK_STATE_COMPLETED = "completed"
+COMPLETION_REASON_INTERVAL_WINDOW_ENDED = "interval_window_ended"
+COMPLETION_REASON_RECURRENCE_EXHAUSTED = "recurrence_exhausted"
+COMPLETION_REASON_ONE_SHOT_SUCCEEDED = "one_shot_succeeded"
 DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS = 1.0
+DEFAULT_MAX_CONCURRENT_TASK_DISPATCHES = 4
 SUPPORTED_TASK_TYPES = {TASK_TYPE_MESSAGE, TASK_TYPE_AGENT}
 SUPPORTED_LIFECYCLE_STATUSES = {
     TASK_STATUS_ACTIVE,
@@ -693,29 +698,38 @@ class AsyncTaskScheduler:
         can_handle: Callable[[ScheduledTaskRecord], bool],
         dispatch: Callable[[ScheduledTaskRecord], Awaitable[None]],
         poll_interval_seconds: float = DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS,
+        max_concurrent_dispatches: int = DEFAULT_MAX_CONCURRENT_TASK_DISPATCHES,
         logger_: Optional[logging.Logger] = None,
         now_provider: Callable[[], datetime] | None = None,
     ):
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
+        if max_concurrent_dispatches <= 0:
+            raise ValueError("max_concurrent_dispatches must be positive")
         self.tasks_dir, self.failed_dir = ensure_scheduler_dirs(tasks_dir)
         self.can_handle = can_handle
         self.dispatch = dispatch
         self.poll_interval_seconds = float(poll_interval_seconds)
+        self.max_concurrent_dispatches = int(max_concurrent_dispatches)
         self.logger = logger_ or logging.getLogger(__name__)
         self.now_provider = now_provider or datetime.now
         self._stop_event = asyncio.Event()
+        self._wake_event = asyncio.Event()
         self._task: Optional[asyncio.Task[None]] = None
+        self._inflight: set[asyncio.Task[None]] = set()
+        self._dispatch_semaphore = asyncio.Semaphore(self.max_concurrent_dispatches)
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
             return
         self._stop_event.clear()
         self.recover_running_tasks()
+        self.expire_closed_interval_tasks()
         self._task = asyncio.create_task(self.run_forever())
 
     async def stop(self) -> None:
         self._stop_event.set()
+        self._wake_event.set()
         task = self._task
         if task is None:
             return
@@ -725,6 +739,9 @@ class AsyncTaskScheduler:
         except asyncio.CancelledError:
             pass
         self._task = None
+        if self._inflight:
+            await asyncio.gather(*list(self._inflight), return_exceptions=True)
+        self._inflight.clear()
 
     def recover_running_tasks(self) -> int:
         recovered = 0
@@ -745,17 +762,42 @@ class AsyncTaskScheduler:
             recovered += 1
         return recovered
 
+    def expire_closed_interval_tasks(self) -> int:
+        """Archive interval tasks whose end_at is strictly in the past.
+
+        Ignores ``can_handle``: window close is a lifecycle transition, not delivery.
+        Skips already-claimed running files to avoid racing in-flight dispatches.
+        """
+        now = self.now_provider().replace(microsecond=0)
+        expired = 0
+        for record in list_active_task_records(self.tasks_dir):
+            if record.kind != TASK_KIND_TASK:
+                continue
+            if not is_interval_window_closed(record.recurrence, now=now):
+                continue
+            claimed_path = self._claim(record.path)
+            if claimed_path is None:
+                continue
+            claimed = _record_from_json_file(claimed_path, state=TASK_STATE_RUNNING) or record
+            try:
+                self._archive_record(
+                    claimed_path,
+                    claimed,
+                    now=now,
+                    reason=COMPLETION_REASON_INTERVAL_WINDOW_ENDED,
+                )
+                expired += 1
+            except Exception as exc:
+                self.logger.exception("failed to expire closed interval task %s: %s", record.name, exc)
+                self._fail_record(claimed_path, claimed, "expire_error", exc)
+        return expired
+
     async def run_forever(self) -> None:
         self.logger.info("structured task scheduler started: tasks=%s", self.tasks_dir)
         while not self._stop_event.is_set():
             try:
-                next_run_at = await self.tick()
-                await asyncio.wait_for(
-                    self._stop_event.wait(),
-                    timeout=self._sleep_duration(next_run_at),
-                )
-            except asyncio.TimeoutError:
-                continue
+                next_run_at = await self.tick(wait_for_dispatches=False)
+                await self._wait_for_next_cycle(next_run_at)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -766,9 +808,34 @@ class AsyncTaskScheduler:
                     pass
         self.logger.info("structured task scheduler stopped")
 
-    async def tick(self) -> Optional[datetime]:
+    async def _wait_for_next_cycle(self, next_run_at: Optional[datetime]) -> None:
+        timeout = self._sleep_duration(next_run_at)
+        self._wake_event.clear()
+        stop_wait = asyncio.create_task(self._stop_event.wait())
+        wake_wait = asyncio.create_task(self._wake_event.wait())
+        try:
+            done, pending = await asyncio.wait(
+                {stop_wait, wake_wait},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            _ = done
+        except asyncio.CancelledError:
+            stop_wait.cancel()
+            wake_wait.cancel()
+            await asyncio.gather(stop_wait, wake_wait, return_exceptions=True)
+            raise
+
+    async def tick(self, *, wait_for_dispatches: bool = True) -> Optional[datetime]:
+        self.expire_closed_interval_tasks()
         now = self.now_provider()
         next_run_at: Optional[datetime] = None
+        started: list[asyncio.Task[None]] = []
+
         for record in list_active_task_records(self.tasks_dir):
             if record.kind != TASK_KIND_TASK:
                 continue
@@ -780,27 +847,45 @@ class AsyncTaskScheduler:
                 if next_run_at is None or record.run_at < next_run_at:
                     next_run_at = record.run_at
                 continue
+            if len(self._inflight) >= self.max_concurrent_dispatches:
+                # More due work remains; wake ASAP once a slot frees.
+                if next_run_at is None or now < next_run_at:
+                    next_run_at = now
+                break
 
             claimed_path = self._claim(record.path)
             if claimed_path is None:
                 continue
             claimed = _record_from_json_file(claimed_path, state=TASK_STATE_RUNNING) or record
+            task = asyncio.create_task(self._run_claimed(claimed_path, claimed))
+            self._inflight.add(task)
+            task.add_done_callback(self._on_dispatch_done)
+            started.append(task)
+
+        if wait_for_dispatches and started:
+            await asyncio.gather(*started, return_exceptions=True)
+        return next_run_at
+
+    def _on_dispatch_done(self, task: asyncio.Task[None]) -> None:
+        self._inflight.discard(task)
+        self._wake_event.set()
+
+    async def _run_claimed(self, claimed_path: Path, claimed: ScheduledTaskRecord) -> None:
+        async with self._dispatch_semaphore:
             dispatch_error: Exception | None = None
             try:
                 await self.dispatch(claimed)
             except Exception as exc:
                 dispatch_error = exc
-                self.logger.exception("scheduled task failed -> %s: %s", record.name, exc)
+                self.logger.exception("scheduled task failed -> %s: %s", claimed.name, exc)
                 if not claimed.recurrence:
                     self._fail_record(claimed_path, claimed, "failed", exc)
-                    continue
+                    return
             try:
                 self._complete_record(claimed_path, claimed, dispatch_error=dispatch_error)
             except Exception as exc:
-                self.logger.exception("scheduled task completion failed -> %s: %s", record.name, exc)
+                self.logger.exception("scheduled task completion failed -> %s: %s", claimed.name, exc)
                 self._fail_record(claimed_path, claimed, "completion_error", exc)
-
-        return next_run_at
 
     def _sleep_duration(self, next_run_at: Optional[datetime]) -> float:
         if next_run_at is None:
@@ -872,7 +957,13 @@ class AsyncTaskScheduler:
         recurrence = record.recurrence
         now = self.now_provider().replace(microsecond=0)
         if not recurrence:
-            self._archive_record(path, record, now=now, reason="one_shot_succeeded")
+            self._archive_record(path, record, now=now, reason=COMPLETION_REASON_ONE_SHOT_SUCCEEDED)
+            return
+        if is_interval_window_closed(recurrence, now=now):
+            if dispatch_error is not None:
+                self._fail_record(path, record, "failed", dispatch_error)
+            else:
+                self._archive_record(path, record, now=now, reason=COMPLETION_REASON_INTERVAL_WINDOW_ENDED)
             return
         next_run_at = calculate_next_recurrence_run_at(
             recurrence,
@@ -883,7 +974,7 @@ class AsyncTaskScheduler:
             if dispatch_error is not None:
                 self._fail_record(path, record, "failed", dispatch_error)
             else:
-                self._archive_record(path, record, now=now, reason="recurrence_exhausted")
+                self._archive_record(path, record, now=now, reason=COMPLETION_REASON_RECURRENCE_EXHAUSTED)
             return
         self._reschedule_record(path, record, next_run_at, now=now, dispatch_error=dispatch_error)
 

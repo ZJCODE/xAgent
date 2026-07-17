@@ -204,6 +204,26 @@ def is_interval_recurrence(value: Any) -> bool:
     return len(rules) == 1 and rules[0].get("kind") == RECURRENCE_KIND_INTERVAL
 
 
+def interval_end_at(value: Any) -> datetime | None:
+    """Return the absolute end_at for a single interval recurrence, if present."""
+    if not is_interval_recurrence(value):
+        return None
+    rules = normalize_recurrence_rules(value)
+    end_text = str(rules[0].get("end_at") or "").strip()
+    if not end_text:
+        return None
+    return parse_run_at(end_text)
+
+
+def is_interval_window_closed(value: Any, *, now: datetime | None = None) -> bool:
+    """True when wall-clock time is strictly after the interval end_at."""
+    end_at = interval_end_at(value)
+    if end_at is None:
+        return False
+    current = (now or datetime.now()).replace(microsecond=0)
+    return current > end_at
+
+
 def align_interval_next_run(
     *,
     now: datetime,

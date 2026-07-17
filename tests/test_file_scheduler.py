@@ -276,6 +276,140 @@ class ScheduledTaskTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_async_scheduler_expires_overdue_interval_past_end_at_without_dispatch(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="hey",
+                    run_at=datetime(2026, 6, 1, 10, 20, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 10:30:00"}],
+                    title="Hey reminder",
+                )
+                delivered = []
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=lambda task: _append_delivered(delivered, task.content),
+                    now_provider=lambda: datetime(2026, 6, 1, 12, 0, 0),
+                )
+
+                await scheduler.tick()
+                active = list_task_records(tmpdir, include_failed=False)
+                archived = list_archived_task_records(tmpdir)
+
+            self.assertEqual(delivered, [])
+            self.assertEqual(active, [])
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(archived[0].task_id, original.task_id)
+            self.assertEqual(archived[0].payload["completion_reason"], "interval_window_ended")
+
+        async def _append_delivered(delivered, message):
+            delivered.append(message)
+
+        asyncio.run(run_test())
+
+    def test_async_scheduler_expires_paused_interval_past_end_at(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="hey",
+                    run_at=datetime(2026, 6, 1, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 60, "end_at": "2026-06-01 11:00:00"}],
+                )
+                pause_scheduled_task(tmpdir, original.task_id)
+                delivered = []
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: False,
+                    dispatch=lambda task: _append_delivered(delivered, task.content),
+                    now_provider=lambda: datetime(2026, 6, 1, 12, 0, 0),
+                )
+
+                expired = scheduler.expire_closed_interval_tasks()
+                archived = list_archived_task_records(tmpdir)
+                active = list_task_records(tmpdir, include_failed=False)
+
+            self.assertEqual(expired, 1)
+            self.assertEqual(delivered, [])
+            self.assertEqual(active, [])
+            self.assertEqual(archived[0].task_id, original.task_id)
+            self.assertEqual(archived[0].payload["completion_reason"], "interval_window_ended")
+
+        async def _append_delivered(delivered, message):
+            delivered.append(message)
+
+        asyncio.run(run_test())
+
+    def test_async_scheduler_expires_closed_window_while_another_dispatch_runs(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                gate = asyncio.Event()
+                delivered = []
+
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="slow",
+                    run_at=datetime(2026, 6, 1, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 60, "end_at": "2026-06-01 13:00:00"}],
+                )
+                current = {"now": datetime(2026, 6, 1, 10, 0, 0)}
+
+                async def dispatch(task):
+                    if task.content == "slow":
+                        await gate.wait()
+                    delivered.append(task.content)
+
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=dispatch,
+                    now_provider=lambda: current["now"],
+                    max_concurrent_dispatches=2,
+                )
+
+                await scheduler.tick(wait_for_dispatches=False)
+                self.assertEqual(len(scheduler._inflight), 1)
+
+                expired_task = enqueue_scheduled_task(
+                    task_type="message",
+                    content="expired",
+                    run_at=datetime(2026, 6, 1, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 60, "end_at": "2026-06-01 10:30:00"}],
+                )
+                current["now"] = datetime(2026, 6, 1, 12, 0, 0)
+                await scheduler.tick(wait_for_dispatches=False)
+
+                archived = list_archived_task_records(tmpdir)
+                self.assertEqual(len(archived), 1)
+                self.assertEqual(archived[0].task_id, expired_task.task_id)
+                self.assertEqual(archived[0].payload["completion_reason"], "interval_window_ended")
+                self.assertEqual(delivered, [])
+                self.assertEqual(len(scheduler._inflight), 1)
+
+                gate.set()
+                await asyncio.gather(*list(scheduler._inflight), return_exceptions=True)
+                self.assertEqual(delivered, ["slow"])
+
+        asyncio.run(run_test())
+
     def test_list_task_records_includes_running_during_dispatch(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
