@@ -411,7 +411,7 @@ class VoiceRuntime:
 
     async def _agent_text_chunks(self, transcript: str) -> AsyncIterator[str]:
         # Record contact for subconscious thought routing
-        if self._contacts_file is not None:
+        if self._contacts_file is not None and getattr(self.agent, "memory_enabled", True):
             try:
                 upsert_contact(
                     self._contacts_file,

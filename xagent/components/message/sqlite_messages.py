@@ -282,6 +282,7 @@ class MessageStorage:
         date_start: Optional[str] = None,
         date_end: Optional[str] = None,
         max_results: int = 500,
+        memory_eligible_only: bool = False,
     ) -> str:
         """Search messages by keyword using SQLite json_extract + LIKE."""
         if not query:
@@ -292,6 +293,7 @@ class MessageStorage:
             date_start,
             date_end,
             max_results,
+            memory_eligible_only,
         )
 
     def _search_messages_sync(
@@ -300,6 +302,7 @@ class MessageStorage:
         date_start: Optional[str],
         date_end: Optional[str],
         max_results: int,
+        memory_eligible_only: bool,
     ) -> str:
         from datetime import datetime, timezone
 
@@ -307,6 +310,11 @@ class MessageStorage:
             f"json_extract(message_json, '$.content') LIKE ? ESCAPE '\\'"
         ]
         params: list = [f"%{self._escape_like(query)}%"]  # noqa: RUF015
+
+        if memory_eligible_only:
+            conditions.append(
+                "COALESCE(json_extract(message_json, '$.metadata.memory_policy'), 'auto') != 'never'"
+            )
 
         if date_start:
             try:

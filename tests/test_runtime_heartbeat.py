@@ -113,8 +113,37 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
         self.assertIsNotNone(heartbeat)
         self.assertEqual(heartbeat._subconscious_loop._deliverable_channels, {"api"})
 
+    def test_factory_never_creates_subconscious_when_memory_is_disabled(self):
+        class _Agent:
+            memory_enabled = False
+            subconscious_activity = 1.0
+
+            def __init__(self, workspace):
+                self.workspace_dir = Path(workspace) / "workspace"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            heartbeat = create_runtime_heartbeat(
+                _Agent(tmpdir),
+                {"heartbeat_enabled": True, "heartbeat_interval_seconds": 1},
+            )
+
+        self.assertIsNotNone(heartbeat)
+        self.assertIsNone(heartbeat._subconscious_loop)
+
 
 class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_once_skips_all_memory_work_when_disabled(self):
+        agent = _FakeAgent()
+        agent.memory_enabled = False
+        heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: date(2026, 1, 1))
+
+        await heartbeat.run_once()
+
+        self.assertEqual(agent.maintenance_count, 0)
+        self.assertEqual(agent.memory_handler.weekly_calls, [])
+        self.assertEqual(agent.memory_handler.monthly_calls, [])
+        self.assertEqual(agent.memory_handler.yearly_calls, [])
+
     async def test_run_once_runs_memory_maintenance_without_weekly_on_non_monday(self):
         agent = _FakeAgent()
         heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: date(2026, 5, 14))

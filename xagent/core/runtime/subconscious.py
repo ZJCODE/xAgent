@@ -240,6 +240,8 @@ class SubconsciousLoop:
 
         Called by channel adapters after every incoming user message.
         """
+        if not getattr(self._agent, "memory_enabled", AgentConfig.MEMORY_ENABLED):
+            return
         try:
             upsert_contact(
                 self._contacts_file,
@@ -257,6 +259,8 @@ class SubconsciousLoop:
 
     def should_trigger(self) -> bool:
         """Return True if subconscious thought should fire this tick (2% dice roll)."""
+        if not getattr(self._agent, "memory_enabled", AgentConfig.MEMORY_ENABLED):
+            return False
         if not self._enabled:
             return False
         return random.random() < self._probability
@@ -418,6 +422,8 @@ class SubconsciousLoop:
 
     async def _collect_memory_context(self) -> str:
         """Collect recent memory for subconscious context."""
+        if not getattr(self._agent, "memory_enabled", AgentConfig.MEMORY_ENABLED):
+            return ""
         memory_handler = getattr(self._agent, "memory_handler", None)
         if memory_handler is None:
             return "(no memory available)"
@@ -432,6 +438,8 @@ class SubconsciousLoop:
 
     async def _collect_relationship_context(self) -> str:
         """Collect relationship cards to ground subconscious thought."""
+        if not getattr(self._agent, "memory_enabled", AgentConfig.MEMORY_ENABLED):
+            return ""
         memory_handler = getattr(self._agent, "memory_handler", None)
         if memory_handler is None or not callable(
             getattr(memory_handler, "get_relationship_context", None)
@@ -477,6 +485,8 @@ class SubconsciousLoop:
 
     async def _write_subconscious_thought(self, content: str) -> None:
         """Record the raw inner thought directly in the diary."""
+        if not getattr(self._agent, "memory_enabled", AgentConfig.MEMORY_ENABLED):
+            return
         record_method = getattr(self._agent, "record_subconscious_thought", None)
         if callable(record_method):
             try:

@@ -95,6 +95,35 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         ctx = await self.handler.get_recent_context()
         self.assertEqual(ctx, "")
 
+    async def test_disabled_period_messages_are_never_backfilled(self):
+        for index in range(_TEST_MAX_HISTORY):
+            message = Message.create(
+                f"disabled-{index}",
+                role=RoleType.USER,
+                sender_id="alice",
+            )
+            message.metadata["memory_policy"] = "never"
+            self.storage.append(message)
+
+        wrote = await self.handler.run_maintenance(force=True)
+
+        self.assertFalse(wrote)
+        self.assertEqual(self.llm.diary_calls, [])
+        self.assertEqual(self.handler._last_processed_message_id, _TEST_MAX_HISTORY)
+
+        enabled_message = Message.create(
+            "enabled-later",
+            role=RoleType.USER,
+            sender_id="alice",
+        )
+        self.storage.append(enabled_message)
+
+        wrote = await self.handler.run_maintenance(force=True)
+
+        self.assertTrue(wrote)
+        recorded = self.llm.diary_calls[0]["messages"]
+        self.assertEqual([item["content"] for item in recorded], ["enabled-later"])
+
     async def test_get_recent_context_returns_dailies(self):
         today = date.today()
         await self.memory.append_daily("Today's diary entry", target_date=today)

@@ -81,7 +81,10 @@ def create_search_memory_tool(
             )
             # Also search raw messages in SQLite
             if message_storage is not None:
-                msg_results = await message_storage.search_messages(query=query)
+                msg_results = await message_storage.search_messages(
+                    query=query,
+                    memory_eligible_only=True,
+                )
                 if msg_results:
                     prefix = "\n\n--- Message Store ---\n" if results else ""
                     results = results + prefix + msg_results
@@ -124,11 +127,13 @@ def create_search_memory_tool(
                         query=query,
                         date_start=parts[0].strip(),
                         date_end=parts[1].strip(),
+                        memory_eligible_only=True,
                     )
                 else:
                     msg_results = await message_storage.search_messages(
                         query=query,
                         date_start=date.strip(),
+                        memory_eligible_only=True,
                     )
                 if msg_results:
                     prefix = "\n\n--- Message Store ---\n" if results else ""

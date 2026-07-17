@@ -242,6 +242,7 @@ class BaseAgentRunner:
                 "max_iter",
                 "max_concurrent_tools",
                 "subconscious_activity",
+                "memory_enabled",
                 "memory_recent_days",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
@@ -257,6 +258,8 @@ class BaseAgentRunner:
                     raise ValueError(
                         f"agent.subconscious_activity must be a number between 0 and 1, got {val!r}"
                     )
+            if "memory_enabled" in agent_cfg and not isinstance(agent_cfg["memory_enabled"], bool):
+                raise ValueError("agent.memory_enabled must be a boolean")
             if "memory_recent_days" in agent_cfg:
                 self._validate_non_negative_int(agent_cfg["memory_recent_days"], "agent.memory_recent_days")
         self._validate_observability_config(config.get("observability"))
@@ -602,6 +605,7 @@ class BaseAgentRunner:
             max_iter=agent_section.get("max_iter", AgentConfig.DEFAULT_MAX_ITER),
             max_concurrent_tools=agent_section.get("max_concurrent_tools", AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
+            memory_enabled=agent_section.get("memory_enabled", AgentConfig.MEMORY_ENABLED),
             memory_recent_days=agent_section.get("memory_recent_days", AgentConfig.MEMORY_RECENT_DAYS),
         )
 

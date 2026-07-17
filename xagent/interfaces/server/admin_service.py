@@ -29,6 +29,7 @@ from ...components.skills import (
     SkillsStorageLocal,
 )
 from ...core.agent import Agent
+from ...core.config import AgentConfig
 
 
 class AdminService(BaseAgentRunner):
@@ -72,12 +73,23 @@ class AdminService(BaseAgentRunner):
         else:
             super().__init__(config_dir=config_dir)
 
-    def _get_memory_root(self) -> Path:
-        memory = self.agent.markdown_memory
+    def _memory_enabled(self) -> bool:
+        return bool(getattr(self.agent, "memory_enabled", AgentConfig.MEMORY_ENABLED))
+
+    def _memory_root_path(self) -> Path:
+        memory = getattr(self.agent, "markdown_memory", None)
         memory_root = getattr(memory, "root", None)
-        if memory_root is None:
-            raise HTTPException(status_code=500, detail="Memory storage path is unavailable")
-        return Path(memory_root).expanduser().resolve()
+        if memory_root is not None:
+            return Path(memory_root).expanduser().resolve()
+        runtime_root = getattr(self, "workspace", None) or getattr(self.agent, "workspace", None)
+        if runtime_root is None:
+            runtime_root = self.config_dir
+        return (Path(runtime_root).expanduser().resolve() / BaseAgentConfig.MEMORY_DIRNAME)
+
+    def _get_memory_root(self) -> Path:
+        if not self._memory_enabled():
+            raise HTTPException(status_code=409, detail="Memory is disabled for this agent")
+        return self._memory_root_path()
 
     def _get_workspace_root(self) -> Path:
         workspace_dir = getattr(self, "workspace_dir", None)

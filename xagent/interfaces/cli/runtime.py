@@ -1031,6 +1031,16 @@ def _memory_scope_root(args: argparse.Namespace) -> Path:
 def handle_memory(args: argparse.Namespace) -> int:
     root = _memory_root(args)
     scope_root = _memory_scope_root(args)
+    config = load_runtime_config(args)
+    agent_config = config.get("agent") if isinstance(config, dict) else None
+    memory_enabled = not (
+        isinstance(agent_config, dict)
+        and agent_config.get("memory_enabled", True) is False
+    )
+
+    if not memory_enabled and args.memory_command != "clear":
+        print("Memory is disabled for this agent.")
+        return 0
 
     if args.memory_command == "stats":
         files = sorted(scope_root.rglob("*.md")) if scope_root.exists() else []
@@ -1087,7 +1097,8 @@ def handle_memory(args: argparse.Namespace) -> int:
         target = scope_root
         if target.exists():
             shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
+        if memory_enabled:
+            target.mkdir(parents=True, exist_ok=True)
         print(f"Cleared memory scope: {getattr(args, 'scope', 'all')}")
         return 0
 

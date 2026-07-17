@@ -48,10 +48,13 @@ class Agent:
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
+        memory_enabled: bool = AgentConfig.MEMORY_ENABLED,
         memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
         provider_name: str = PROVIDER_OPENAI,
         reasoning: Optional[ReasoningConfig] = None,
     ):
+        if not isinstance(memory_enabled, bool):
+            raise ValueError("memory_enabled must be a boolean")
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.provider_name = normalize_provider_name(provider_name) or PROVIDER_OPENAI
         self.model_api = normalize_model_api(model_api)
@@ -62,6 +65,7 @@ class Agent:
         self.max_iter = max_iter
         self.max_concurrent_tools = max_concurrent_tools
         self.subconscious_activity = subconscious_activity
+        self.memory_enabled = memory_enabled
         self.memory_recent_days = memory_recent_days
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client
@@ -99,45 +103,52 @@ class Agent:
                 path=str(self._message_storage_path(runtime_root))
             )
 
-        # Markdown-based memory system
-        if workspace_path is not None:
-            memory_dir = str(self._memory_dir(workspace_path))
-        else:
-            memory_dir = str(self._memory_dir(runtime_root))
-
-        self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
-        self.relationship_store = RelationshipStore(
-            relationships_dir=str(Path(memory_dir) / AgentConfig.RELATIONSHIPS_DIRNAME)
-        )
-        self.llm_service = JournalLLMService(
-            client=self.client,
-            model=self.model,
-            provider_name=self.provider_name,
-            model_api=self.model_api,
-            max_tokens=self.model_max_tokens,
-            reasoning=self.reasoning,
-        )
-        self.memory_handler = MemoryHandler(
-            memory=self.markdown_memory,
-            llm_service=self.llm_service,
-            message_storage=self.message_storage,
-            max_history=self.max_history,
-            relationship_store=self.relationship_store,
-            recent_days=self.memory_recent_days,
-        )
+        self.markdown_memory = None
+        self.relationship_store = None
+        self.llm_service = None
+        self.memory_handler = None
+        if self.memory_enabled:
+            memory_dir = str(self._memory_dir(workspace_path or runtime_root))
+            self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
+            self.relationship_store = RelationshipStore(
+                relationships_dir=str(Path(memory_dir) / AgentConfig.RELATIONSHIPS_DIRNAME)
+            )
+            self.llm_service = JournalLLMService(
+                client=self.client,
+                model=self.model,
+                provider_name=self.provider_name,
+                model_api=self.model_api,
+                max_tokens=self.model_max_tokens,
+                reasoning=self.reasoning,
+            )
+            self.memory_handler = MemoryHandler(
+                memory=self.markdown_memory,
+                llm_service=self.llm_service,
+                message_storage=self.message_storage,
+                max_history=self.max_history,
+                relationship_store=self.relationship_store,
+                recent_days=self.memory_recent_days,
+            )
 
         bound_tools = list(tools or [])
-        bound_tools.extend([
-            create_write_memory_tool(
-                memory=self.markdown_memory,
-                is_enabled=True,
-            ),
-            create_search_memory_tool(
-                memory=self.markdown_memory,
-                is_enabled=True,
-                message_storage=self.message_storage,
-            ),
-        ])
+        if self.memory_enabled:
+            bound_tools.extend([
+                create_write_memory_tool(
+                    memory=self.markdown_memory,
+                    is_enabled=True,
+                ),
+                create_search_memory_tool(
+                    memory=self.markdown_memory,
+                    is_enabled=True,
+                    message_storage=self.message_storage,
+                ),
+            ])
+        else:
+            bound_tools = [
+                tool for tool in bound_tools
+                if self._tool_spec_name(getattr(tool, "tool_spec", {}))
+                not in {"write_memory", "search_memory"}
+            ]
         self.tool_manager = ToolManager(tools=bound_tools)
         self.model_client = ModelClient(
             client=self.client,
@@ -151,6 +162,7 @@ class Agent:
             message_storage=self.message_storage,
             system_prompt=self.system_prompt,
             workspace_dir=getattr(self, "workspace_dir", None),
+            memory_enabled=self.memory_enabled,
         )
         self.tool_executor = ToolExecutor(
             tool_manager=self.tool_manager,
@@ -198,6 +210,10 @@ class Agent:
             return ""
         return AgentConfig.build_workspace_context(str(self.workspace_dir))
 
+    @staticmethod
+    def _tool_spec_name(tool_spec: dict) -> str:
+        return tool_spec.get("function", {}).get("name") or tool_spec.get("name") or ""
+
     async def _build_turn_context(
         self,
         msg_handler: MessageHandler,
@@ -209,12 +225,16 @@ class Agent:
         recent_messages = await msg_handler.get_recent_messages(
             max_history=self.max_history,
         )
-        memory_context = await self.memory_handler.get_recent_context()
-        relationship_context = await self._relationship_context_for_turn(
-            user_msg=user_msg,
-            user_id=user_id,
-            recent_messages=recent_messages,
-        )
+        memory_enabled = getattr(self, "memory_enabled", AgentConfig.MEMORY_ENABLED)
+        memory_context = ""
+        relationship_context = ""
+        if memory_enabled and self.memory_handler is not None:
+            memory_context = await self.memory_handler.get_recent_context()
+            relationship_context = await self._relationship_context_for_turn(
+                user_msg=user_msg,
+                user_id=user_id,
+                recent_messages=recent_messages,
+            )
         tool_names = list(self.tool_manager._tools)
         tool_specs = self.tool_manager.cached_tool_specs
         workspace_context = self._workspace_context(tool_names)
@@ -224,6 +244,7 @@ class Agent:
             skills_catalog=skills_catalog,
             supports_vision=self.supports_vision,
             workspace_context=workspace_context,
+            memory_enabled=memory_enabled,
             memory_recent_days=getattr(self, "memory_recent_days", AgentConfig.MEMORY_RECENT_DAYS),
         )
         iteration_messages = msg_handler.build_turn_context_messages(
@@ -247,6 +268,8 @@ class Agent:
         recent_messages: List[Message],
     ) -> str:
         """Assemble relationship cards for the current speaker and room peers."""
+        if not getattr(self, "memory_enabled", AgentConfig.MEMORY_ENABLED):
+            return ""
         memory_handler = getattr(self, "memory_handler", None)
         if memory_handler is None or not callable(
             getattr(memory_handler, "get_relationship_context", None)
@@ -281,26 +304,28 @@ class Agent:
         )
 
     async def run_memory_maintenance(self, trigger: str = "count") -> None:
-        idle_timeout = AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS
-        force = False
-        idle_seconds = 0.0
-        if idle_timeout > 0:
-            memory = getattr(self, "markdown_memory", None)
-            if memory is not None:
-                path = memory.root / ".last_interaction"
-                try:
-                    last = float(path.read_text(encoding="utf-8").strip())
-                except (FileNotFoundError, ValueError):
-                    last = time.time()
-                elapsed = time.time() - last
-                if elapsed >= idle_timeout:
-                    force = True
-                    trigger = "idle"
-                    idle_seconds = elapsed
+        memory_handler = getattr(self, "memory_handler", None)
+        if getattr(self, "memory_enabled", AgentConfig.MEMORY_ENABLED) and memory_handler is not None:
+            idle_timeout = AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS
+            force = False
+            idle_seconds = 0.0
+            if idle_timeout > 0:
+                memory = getattr(self, "markdown_memory", None)
+                if memory is not None:
+                    path = memory.root / ".last_interaction"
+                    try:
+                        last = float(path.read_text(encoding="utf-8").strip())
+                    except (FileNotFoundError, ValueError):
+                        last = time.time()
+                    elapsed = time.time() - last
+                    if elapsed >= idle_timeout:
+                        force = True
+                        trigger = "idle"
+                        idle_seconds = elapsed
 
-        await self.memory_handler.run_maintenance(
-            force=force, trigger=trigger, idle_seconds=idle_seconds
-        )
+            await memory_handler.run_maintenance(
+                force=force, trigger=trigger, idle_seconds=idle_seconds
+            )
         observability_flusher = getattr(self._observability_runtime(), "flush", None)
         if observability_flusher is not None:
             try:
@@ -416,7 +441,7 @@ class Agent:
         turn_ctx = self._observability_runtime().agent_turn(
             user_id=user_id,
             model=model_name,
-            memory_mode="full",
+            memory_mode=("full" if getattr(self, "memory_enabled", AgentConfig.MEMORY_ENABLED) else "disabled"),
             stream=stream,
         )
         with turn_ctx as turn_obs:
@@ -634,8 +659,9 @@ class Agent:
     ) -> AgentTurnResult:
         """Record a raw subconscious thought directly in the diary."""
         note = str(content or "").strip()
-        if note:
-            await self.markdown_memory.append_daily(note)
+        memory = getattr(self, "markdown_memory", None)
+        if getattr(self, "memory_enabled", AgentConfig.MEMORY_ENABLED) and note and memory is not None:
+            await memory.append_daily(note)
         return AgentTurnResult(
             kind="subconscious_thought",
             replied=False,
@@ -753,6 +779,8 @@ class Agent:
 
     def _record_last_interaction(self) -> None:
         """Write the current timestamp to the shared idle-tracking file."""
+        if not getattr(self, "memory_enabled", AgentConfig.MEMORY_ENABLED):
+            return
         memory = getattr(self, "markdown_memory", None)
         if memory is None:
             return
@@ -790,7 +818,11 @@ class Agent:
     ) -> None:
         if not messages:
             return
-        self.memory_handler.schedule_experience_write(messages)
+        if not getattr(self, "memory_enabled", AgentConfig.MEMORY_ENABLED):
+            return
+        memory_handler = getattr(self, "memory_handler", None)
+        if memory_handler is not None:
+            memory_handler.schedule_experience_write(messages)
 
     @staticmethod
     def _turn_message_id(user_msg: Message, iteration_index: int, suffix: str = "message") -> str:

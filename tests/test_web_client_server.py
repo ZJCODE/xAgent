@@ -129,6 +129,29 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "success")
 
+    async def test_memory_routes_are_inaccessible_when_agent_memory_is_disabled(self):
+        config_path = self.agent_a_path / "config.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        config["agent"] = {"memory_enabled": False}
+        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+        memory_root = self.agent_a_path / "memory"
+        memory_root.mkdir()
+        (memory_root / "old.md").write_text("old memory", encoding="utf-8")
+        client = TestClient(self._server().app)
+
+        info = client.get("/api/agent/info")
+        tree = client.get("/api/memory/tree")
+        search = client.get("/api/memory/search", params={"query": "old"})
+        cleared = client.post("/api/memory/clear")
+
+        self.assertEqual(info.status_code, 200)
+        self.assertFalse(info.json()["memory_enabled"])
+        self.assertFalse(info.json()["capabilities"]["memory"])
+        self.assertEqual(tree.status_code, 409)
+        self.assertEqual(search.status_code, 409)
+        self.assertEqual(cleared.status_code, 200)
+        self.assertFalse(memory_root.exists())
+
     async def test_setup_schema_endpoint_returns_providers_and_models(self):
         client = TestClient(self._server().app)
 

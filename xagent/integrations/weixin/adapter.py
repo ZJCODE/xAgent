@@ -173,9 +173,10 @@ class WeixinAdapter:
             await self._cancel_processing_tasks()
             if self._owns_client and self.client is not None:
                 await self.client.aclose()
-            flusher = getattr(self.agent, "run_memory_maintenance", None)
-            if callable(flusher):
-                await flusher()
+            if getattr(self.agent, "memory_enabled", True):
+                flusher = getattr(self.agent, "run_memory_maintenance", None)
+                if callable(flusher):
+                    await flusher()
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -349,19 +350,20 @@ class WeixinAdapter:
 
         chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound)
 
-        # Record contact for subconscious thought routing
-        try:
-            upsert_contact(
-                self._contacts_file,
-                channel="weixin",
-                user_id=user_id,
-                target={
-                    "user_id": user_id,
-                    "account_id": self._credentials.account_id,
-                },
-            )
-        except Exception:
-            self.logger.debug("Failed to record contact for subconscious", exc_info=True)
+        # Record contact only while the memory-backed subconscious is enabled.
+        if getattr(self.agent, "memory_enabled", True):
+            try:
+                upsert_contact(
+                    self._contacts_file,
+                    channel="weixin",
+                    user_id=user_id,
+                    target={
+                        "user_id": user_id,
+                        "account_id": self._credentials.account_id,
+                    },
+                )
+            except Exception:
+                self.logger.debug("Failed to record contact for subconscious", exc_info=True)
 
         context = ScheduledDeliveryContext(
             channel="weixin",

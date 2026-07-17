@@ -23,6 +23,43 @@ class _FakeMessageStorage:
 
 
 class MessageHandlerMemoryContextTests(unittest.TestCase):
+    def test_memory_disabled_marks_every_persisted_message_as_never(self):
+        import asyncio
+
+        storage = _FakeMessageStorage()
+        handler = MessageHandler(message_storage=storage, memory_enabled=False)
+
+        user = asyncio.run(handler.store_user_message("hello", "alice"))
+        assistant = asyncio.run(handler.store_model_reply(
+            "hi",
+            "agent",
+            metadata={"memory_policy": "always"},
+        ))
+        event = asyncio.run(handler.store_context_event(
+            "ambient",
+            metadata={"memory_policy": "always"},
+        ))
+
+        self.assertEqual([item.metadata["memory_policy"] for item in storage.messages], ["never"] * 3)
+        self.assertEqual([user, assistant, event], storage.messages)
+
+    def test_memory_disabled_uses_memory_neutral_core_prompt(self):
+        handler = MessageHandler(
+            system_prompt="",
+            message_storage=_FakeMessageStorage(),
+            memory_enabled=False,
+        )
+
+        messages = handler.build_instruction_messages(
+            tool_names=[],
+            memory_enabled=False,
+        )
+        prompt = messages[0]["content"]
+
+        self.assertIn("Use only the conversation and context supplied in the current turn", prompt)
+        self.assertNotIn("memory is one first-person life stream", prompt)
+        self.assertNotIn("independent, persistent individual", prompt)
+
     def test_handler_persists_data_uri_as_metadata_and_blob_source(self):
         image_bytes = b"\x89PNG\r\n\x1a\npng"
         image_source = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"

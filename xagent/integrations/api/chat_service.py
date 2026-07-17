@@ -200,6 +200,8 @@ class ChatService:
         )
 
     def _record_contact(self, user_id: str) -> None:
+        if not getattr(self.agent, "memory_enabled", True):
+            return
         try:
             upsert_contact(
                 self.contacts_file,

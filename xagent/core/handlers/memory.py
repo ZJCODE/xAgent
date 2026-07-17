@@ -282,10 +282,14 @@ class MemoryHandler:
             await self._commit_processed_message_id(jump_to)
             return False
 
-        new_records = [
-            self._experience_record(message)
+        eligible_messages = [
+            message
             for message in recent_messages
             if self._is_memory_worthy_experience(message)
+        ]
+        new_records = [
+            self._experience_record(message)
+            for message in eligible_messages
         ]
         if not new_records:
             await self._commit_processed_message_id(end_inclusive)
@@ -305,7 +309,7 @@ class MemoryHandler:
             ):
                 return False
 
-        await self._update_relationship_cards(recent_messages, new_records)
+        await self._update_relationship_cards(eligible_messages, new_records)
 
         if not await self._commit_processed_message_id(end_inclusive):
             logger.warning(
@@ -474,15 +478,16 @@ class MemoryHandler:
 
     @staticmethod
     def _is_memory_worthy_experience(message: Message) -> bool:
+        metadata = message.metadata or {}
+        policy = str(metadata.get("memory_policy", "auto")).lower()
+        if policy == "never":
+            return False
+
         if message.type == MessageType.MESSAGE:
             return bool(message.content.strip())
         if message.type != MessageType.CONTEXT_EVENT:
             return False
 
-        metadata = message.metadata or {}
-        policy = str(metadata.get("memory_policy", "auto")).lower()
-        if policy == "never":
-            return False
         if policy == "always" or metadata.get("memory_worthy") is True:
             return True
 

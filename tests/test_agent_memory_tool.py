@@ -194,6 +194,37 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("project notes", result["results"])
         self.assertNotIn("Message Store", result["results"])
 
+    async def test_search_memory_excludes_messages_from_disabled_periods(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            msg_storage = MessageStorage(path=db_path)
+            hidden = Message.create(
+                content="private disabled-period marker",
+                role=RoleType.USER,
+                sender_id="alice",
+            )
+            hidden.metadata["memory_policy"] = "never"
+            visible = Message.create(
+                content="visible marker",
+                role=RoleType.USER,
+                sender_id="alice",
+            )
+            await msg_storage.add_messages([hidden, visible])
+            tool = create_search_memory_tool(
+                self.memory,
+                is_enabled=True,
+                message_storage=msg_storage,
+            )
+
+            hidden_result = await tool(query="marker")
+
+            self.assertNotIn("private disabled-period", hidden_result["results"])
+            self.assertIn("visible marker", hidden_result["results"])
+        finally:
+            import os
+            os.unlink(db_path)
+
 
 if __name__ == "__main__":
     unittest.main()

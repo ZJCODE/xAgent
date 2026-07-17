@@ -931,6 +931,24 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Recent note", output)
         self.assertNotIn("Old note", output)
 
+    def test_memory_list_does_not_scan_files_when_memory_is_disabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "config.yaml").write_text(
+                "agent:\n  memory_enabled: false\n",
+                encoding="utf-8",
+            )
+            marker = root / "memory" / "daily" / "old.md"
+            marker.parent.mkdir(parents=True)
+            marker.write_text("must not be printed", encoding="utf-8")
+            args = argparse.Namespace(config_dir=tmpdir, memory_command="list", days=7)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = handle_memory(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue().strip(), "Memory is disabled for this agent.")
+
     def test_observe_does_not_flush_memory_on_exit(self):
         class FakeAgent:
             def __init__(self):

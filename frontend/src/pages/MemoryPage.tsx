@@ -23,8 +23,16 @@ export function MemoryPage() {
     setLoading(true);
     setError("");
     try {
-      const [agentInfo, memoryTree] = await Promise.all([getAgentInfo(), getMemoryTree()]);
+      const agentInfo = await getAgentInfo();
       setInfo(agentInfo);
+      if (!agentInfo.memory_enabled) {
+        setTree([]);
+        setSelected(null);
+        setResults([]);
+        setSearchActive(false);
+        return;
+      }
+      const memoryTree = await getMemoryTree();
       setTree(memoryTree.tree || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -78,71 +86,80 @@ export function MemoryPage() {
         title="Memory"
         subtitle={info?.memory_dir || "Time-scoped markdown memory"}
         actions={
-          <>
-            <SearchField
-              placeholder="Search memory"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onSubmit={() => void runSearch()}
-            />
-            <Button type="button" onClick={runSearch}>
-              <Search size={15} />
-              Search
-            </Button>
-            <IconButton
-              type="button"
-              onClick={() => {
-                setQuery("");
-                setResults([]);
-                setSearchActive(false);
-              }}
-              title="Clear search"
-            >
-              <X size={16} />
-            </IconButton>
+          info?.memory_enabled === false ? (
             <IconButton type="button" onClick={load} title="Refresh">
               <RefreshCw size={16} />
             </IconButton>
-          </>
+          ) : (
+            <>
+              <SearchField
+                placeholder="Search memory"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onSubmit={() => void runSearch()}
+              />
+              <Button type="button" onClick={runSearch}>
+                <Search size={15} />
+                Search
+              </Button>
+              <IconButton
+                type="button"
+                onClick={() => {
+                  setQuery("");
+                  setResults([]);
+                  setSearchActive(false);
+                }}
+                title="Clear search"
+              >
+                <X size={16} />
+              </IconButton>
+              <IconButton type="button" onClick={load} title="Refresh">
+                <RefreshCw size={16} />
+              </IconButton>
+            </>
+          )
         }
       />
 
       {error ? <div className="error-strip">{error}</div> : null}
-      <BrowserLayout
-        sidebar={
-          searchActive ? (
-            results.length ? (
-              <div className="space-y-2">
-                {results.map((item) => (
-                  <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}>
-                    <strong>{item.path}</strong>
-                    {item.snippet ? <span>{item.snippet}</span> : null}
-                  </button>
-                ))}
-              </div>
+      {info?.memory_enabled === false ? (
+        <EmptyState title="Memory is disabled for this agent" className="h-full" />
+      ) : (
+        <BrowserLayout
+          sidebar={
+            searchActive ? (
+              results.length ? (
+                <div className="space-y-2">
+                  {results.map((item) => (
+                    <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}>
+                      <strong>{item.path}</strong>
+                      {item.snippet ? <span>{item.snippet}</span> : null}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="No matching files" />
+              )
+            ) : loading ? (
+              <EmptyState title="Loading..." />
             ) : (
-              <EmptyState title="No matching files" />
+              <div className="space-y-3">
+                {timeNodes.length > 0 && (
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 px-1">Time</div>
+                    <FileTree nodes={timeNodes} selectedPath={selected?.path} onSelect={selectFile} />
+                  </div>
+                )}
+                {relNodes.length > 0 && (
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 px-1">Relationships</div>
+                    <FileTree nodes={relNodes} selectedPath={selected?.path} onSelect={selectFile} />
+                  </div>
+                )}
+              </div>
             )
-          ) : loading ? (
-            <EmptyState title="Loading..." />
-          ) : (
-            <div className="space-y-3">
-              {timeNodes.length > 0 && (
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 px-1">Time</div>
-                  <FileTree nodes={timeNodes} selectedPath={selected?.path} onSelect={selectFile} />
-                </div>
-              )}
-              {relNodes.length > 0 && (
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 px-1">Relationships</div>
-                  <FileTree nodes={relNodes} selectedPath={selected?.path} onSelect={selectFile} />
-                </div>
-              )}
-            </div>
-          )
-        }
-      >
+          }
+        >
           {selected ? (
             <>
               <div className="content-heading">
@@ -154,7 +171,8 @@ export function MemoryPage() {
           ) : (
             <EmptyState title="Select a memory file" className="h-full" />
           )}
-      </BrowserLayout>
+        </BrowserLayout>
+      )}
     </PageShell>
   );
 }

@@ -100,6 +100,8 @@ class RuntimeHeartbeat:
             await asyncio.sleep(self.interval_seconds)
 
     async def _run_periodic_summaries(self, today: date) -> None:
+        if not getattr(self.agent, "memory_enabled", AgentConfig.MEMORY_ENABLED):
+            return
         memory_handler = getattr(self.agent, "memory_handler", None)
         if memory_handler is None:
             return
@@ -141,6 +143,8 @@ class RuntimeHeartbeat:
             self._logger.warning("Runtime heartbeat %s failed: %s", method_name, exc)
 
     async def _run_memory_maintenance(self) -> None:
+        if not getattr(self.agent, "memory_enabled", AgentConfig.MEMORY_ENABLED):
+            return
         flusher = getattr(self.agent, "run_memory_maintenance", None)
         if flusher is None:
             return
@@ -165,7 +169,8 @@ def create_runtime_heartbeat(
     # Resolve workspace path for the subconscious loop
     workspace = _resolve_agent_workspace(agent)
     subconscious_loop = None
-    if workspace is not None and AgentConfig.SUBCONSCIOUS_ENABLED:
+    memory_enabled = getattr(agent, "memory_enabled", AgentConfig.MEMORY_ENABLED)
+    if workspace is not None and memory_enabled and AgentConfig.SUBCONSCIOUS_ENABLED:
         from .subconscious import SubconsciousLoop
 
         subconscious_loop = SubconsciousLoop(

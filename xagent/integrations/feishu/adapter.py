@@ -356,6 +356,8 @@ class FeishuAdapter:
             self.logger.debug("FeishuChannel stop raised", exc_info=True)
 
     async def _flush_agent_memory(self) -> None:
+        if not getattr(self.agent, "memory_enabled", True):
+            return
         flusher = getattr(self.agent, "run_memory_maintenance", None)
         if not callable(flusher):
             flusher = getattr(self.agent, "flush_memory", None)
@@ -2212,21 +2214,22 @@ class FeishuAdapter:
                 "chat_id": chat_id,
             },
         )
-        # Record contact for subconscious thought routing
-        try:
-            upsert_contact(
-                self._contacts_file,
-                channel="feishu",
-                user_id=user_id,
-                target={
-                    "chat_id": chat_id,
-                    "is_group": is_group,
-                    "sender_id": sender_id,
-                    "sender_name": sender_name,
-                },
-            )
-        except Exception:
-            self.logger.debug("Failed to record contact for subconscious", exc_info=True)
+        # Record contact only while the memory-backed subconscious is enabled.
+        if getattr(self.agent, "memory_enabled", True):
+            try:
+                upsert_contact(
+                    self._contacts_file,
+                    channel="feishu",
+                    user_id=user_id,
+                    target={
+                        "chat_id": chat_id,
+                        "is_group": is_group,
+                        "sender_id": sender_id,
+                        "sender_name": sender_name,
+                    },
+                )
+            except Exception:
+                self.logger.debug("Failed to record contact for subconscious", exc_info=True)
 
         with scheduled_delivery_context(context):
             await self._send_event_replies(

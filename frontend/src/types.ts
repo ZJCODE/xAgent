@@ -54,6 +54,7 @@ export interface ChatPanelState {
 export interface AgentCapabilities {
   vision: boolean;
   vision_input?: boolean;
+  memory?: boolean;
   web_search: boolean;
   image_generation: boolean;
   image_generation_provider?: string;
@@ -287,6 +288,7 @@ export interface AgentInfo {
   workspace_dir: string;
   skills_dir?: string;
   memory_dir: string;
+  memory_enabled: boolean;
   message_storage: Record<string, unknown>;
   tools: string[];
   capabilities?: Partial<AgentCapabilities>;

@@ -143,7 +143,8 @@ def register_admin_routes(
     @app.get("/api/agent/info", tags=["Monitoring"])
     async def agent_info():
         server = resolve_admin()
-        memory_dir = str(server._get_memory_root())
+        memory_enabled = server._memory_enabled()
+        memory_dir = str(server._memory_root_path())
         storage_info = server.message_storage.get_stream_info() if hasattr(server.message_storage, "get_stream_info") else {}
         identity = server._get_agent_identity()
         try:
@@ -172,11 +173,13 @@ def register_admin_routes(
             "workspace_dir": str(server._get_workspace_root()),
             "skills_dir": str(skills_root),
             "memory_dir": memory_dir,
+            "memory_enabled": memory_enabled,
             "message_storage": storage_info,
             "tools": tool_names,
             "capabilities": {
                 "vision": supports_vision,
                 "vision_input": supports_vision,
+                "memory": memory_enabled,
                 "web_search": "web_search" in tool_names,
                 "image_generation": "generate_image" in tool_names,
                 "image_generation_provider": image_generation_provider if "generate_image" in tool_names else "none",
@@ -851,12 +854,14 @@ def register_admin_routes(
     @app.post("/api/memory/clear", tags=["Monitoring"])
     async def memory_clear():
         server = resolve_admin()
-        memory_dir = server._get_memory_root()
+        memory_enabled = server._memory_enabled()
+        memory_dir = server._memory_root_path()
         try:
             shutil.rmtree(memory_dir)
         except OSError:
             pass
-        memory_dir.mkdir(parents=True, exist_ok=True)
+        if memory_enabled:
+            memory_dir.mkdir(parents=True, exist_ok=True)
         return {"status": "ok"}
 
     @app.get("/api/messages/stats", tags=["Monitoring"])

@@ -40,10 +40,12 @@ class MessageHandler:
         message_storage: MessageStorage,
         system_prompt: str = "",
         workspace_dir: Optional[Union[str, Path]] = None,
+        memory_enabled: bool = AgentConfig.MEMORY_ENABLED,
     ):
         self.message_storage = message_storage
         self.system_prompt = system_prompt
         self.workspace_dir = Path(workspace_dir).expanduser().resolve() if workspace_dir is not None else None
+        self.memory_enabled = bool(memory_enabled)
 
     async def store_user_message(
         self,
@@ -84,6 +86,7 @@ class MessageHandler:
             msg.metadata[ATTACHMENT_METADATA_KEY] = normalized_attachments
         if image_metadata:
             msg.metadata["images"] = image_metadata
+        self._enforce_memory_policy(msg)
         await self.message_storage.add_messages(msg)
         return msg
 
@@ -117,6 +120,7 @@ class MessageHandler:
         image_metadata = self._preview_image_metadata(image_source)
         if image_metadata and "images" not in model_msg.metadata:
             model_msg.metadata["images"] = image_metadata
+        self._enforce_memory_policy(model_msg)
         await self.message_storage.add_messages(model_msg)
         return model_msg
 
@@ -145,8 +149,13 @@ class MessageHandler:
             event_msg.room_name = room_name
         if channel:
             event_msg.channel = channel
+        self._enforce_memory_policy(event_msg)
         await self.message_storage.add_messages(event_msg)
         return event_msg
+
+    def _enforce_memory_policy(self, message: Message) -> None:
+        if not self.memory_enabled:
+            message.metadata["memory_policy"] = "never"
 
     async def get_recent_messages(
         self,
@@ -835,6 +844,7 @@ class MessageHandler:
         supports_vision: bool = True,
         workspace_context: str = "",
         is_subconscious: bool = False,
+        memory_enabled: Optional[bool] = None,
         memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
     ) -> list[dict]:
         """Build static named system layers for the model input.
@@ -843,7 +853,16 @@ class MessageHandler:
         appended to the core prompt so the model knows it cannot execute
         tasks or use tools during this turn.
         """
-        core_prompt = AgentConfig.BASE_AGENT_PROMPT.strip()
+        resolved_memory_enabled = self.memory_enabled if memory_enabled is None else bool(memory_enabled)
+        effective_tool_names = list(tool_names or [])
+        if not resolved_memory_enabled:
+            effective_tool_names = [
+                name for name in effective_tool_names
+                if name not in {"write_memory", "search_memory"}
+            ]
+        core_prompt = AgentConfig.build_base_agent_prompt(
+            memory_enabled=resolved_memory_enabled,
+        ).strip()
         if not supports_vision:
             core_prompt = core_prompt + AgentConfig.NO_VISION_NOTICE.rstrip()
         if is_subconscious:
@@ -855,7 +874,7 @@ class MessageHandler:
         }]
 
         tool_policy = self._build_tool_policy(
-            tool_names=tool_names,
+            tool_names=effective_tool_names,
             memory_recent_days=memory_recent_days,
             is_subconscious=is_subconscious,
         )

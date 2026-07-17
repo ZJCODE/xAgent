@@ -483,7 +483,7 @@ provider:
             config_text = result.config_path.read_text(encoding="utf-8")
             identity_text = result.identity_path.read_text(encoding="utf-8")
             config = yaml.safe_load(config_text)
-            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2})
+            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_enabled": True, "memory_recent_days": 2})
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
             self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
@@ -533,7 +533,7 @@ provider:
 
             self.assertTrue(forced.wrote_files)
             config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2})
+            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_enabled": True, "memory_recent_days": 2})
             identity_text = forced.identity_path.read_text(encoding="utf-8")
             self.assertIn("practical collaborator", identity_text)
             self.assertIn("own continuing identity", identity_text)
@@ -595,7 +595,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2})
+            self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_enabled": True, "memory_recent_days": 2})
             self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
             self.assertEqual(config["provider"]["api_key"], "secret-key")
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
@@ -2551,6 +2551,51 @@ agent:
 
             self.assertEqual(runner.agent.memory_recent_days, 0)
             self.assertEqual(runner.agent.memory_handler.recent_days, 0)
+
+    def test_config_can_disable_entire_memory_subsystem(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+agent:
+  memory_enabled: false
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertFalse(runner.agent.memory_enabled)
+            self.assertFalse(runner.agent.message_handler.memory_enabled)
+            self.assertIsNone(runner.agent.markdown_memory)
+            self.assertIsNone(runner.agent.relationship_store)
+            self.assertIsNone(runner.agent.llm_service)
+            self.assertIsNone(runner.agent.memory_handler)
+            self.assertNotIn("write_memory", runner.agent.tools)
+            self.assertNotIn("search_memory", runner.agent.tools)
+            self.assertFalse((Path(tmpdir) / "memory").exists())
+
+    def test_config_rejects_non_boolean_agent_memory_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+agent:
+  memory_enabled: "false"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, r"agent\.memory_enabled must be a boolean"):
+                BaseAgentRunner(config_dir=tmpdir)
 
     def test_config_accepts_agent_memory_recent_days_custom(self):
         with tempfile.TemporaryDirectory() as tmpdir:
