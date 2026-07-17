@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import aclosing, suppress
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import HTTPException, WebSocket
+from starlette.websockets import WebSocketDisconnect
 
 from ...core.agent import Agent
 from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context, upsert_contact
@@ -17,6 +20,41 @@ from ...interfaces.server.serializers import response_payload
 from .config import ChatLimits
 from .constants import CHANNEL_API, CLIENT_HTTP, CLIENT_WS
 from .input_normalization import input_attachments, input_image_sources
+
+CancelReason = Literal["cancel", "disconnect"]
+
+
+@dataclass
+class _ChatStreamState:
+    """Tracks the in-flight assistant message so cancel can close it cleanly."""
+
+    open_message_id: Optional[str] = None
+    open_phase: Optional[str] = None
+    content_parts: list[str] = field(default_factory=list)
+    done_sent: bool = False
+
+    def observe(self, event: dict[str, Any]) -> None:
+        event_type = event.get("type")
+        if event_type == "message_start":
+            self.open_message_id = event.get("message_id")
+            self.open_phase = event.get("phase")
+            self.content_parts = []
+            return
+        if event_type == "message_delta":
+            delta = event.get("delta")
+            if delta:
+                self.content_parts.append(str(delta))
+            if self.open_message_id is None and event.get("message_id"):
+                self.open_message_id = event.get("message_id")
+                self.open_phase = event.get("phase")
+            return
+        if event_type == "message_done":
+            self.open_message_id = None
+            self.open_phase = None
+            self.content_parts = []
+            return
+        if event_type == "done":
+            self.done_sent = True
 
 
 class ChatService:
@@ -68,8 +106,46 @@ class ChatService:
         *,
         client: str = CLIENT_WS,
     ) -> None:
-        async for event in self.chat_event_stream(input_data, client=client):
-            await websocket.send_json(event)
+        """Stream one chat turn and cancel cooperatively on client stop/disconnect.
+
+        Control plane:
+        - Client may send ``{"type": "cancel"}`` to stop the active turn.
+        - Client disconnect also cancels the turn (defense in depth).
+
+        On graceful cancel the server finalizes any open message with
+        ``phase=cancelled`` and emits ``{"type": "done", "reason": "cancelled"}``.
+        """
+        state = _ChatStreamState()
+        forward_task = asyncio.create_task(
+            self._forward_chat_events(websocket, input_data, client=client, state=state),
+            name="ws-chat-forward",
+        )
+        cancel_task = asyncio.create_task(
+            self._wait_for_chat_cancel(websocket),
+            name="ws-chat-cancel-waiter",
+        )
+
+        done, _pending = await asyncio.wait(
+            {forward_task, cancel_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if cancel_task in done and not forward_task.done():
+            reason = cancel_task.result()
+            await self._cancel_task(forward_task)
+            if reason == "disconnect":
+                self.logger.info(
+                    "WebSocket chat cancelled by disconnect for %s",
+                    input_data.user_id,
+                )
+                raise WebSocketDisconnect()
+            self.logger.info("WebSocket chat cancelled by client for %s", input_data.user_id)
+            await self._send_cancelled_terminal(websocket, state)
+            return
+
+        await self._cancel_task(cancel_task)
+        # Propagate forward-task errors (timeouts/errors already yielded as events).
+        await forward_task
 
     async def send_websocket_observe_events(self, websocket: WebSocket, input_data: ObserveInput) -> None:
         try:
@@ -147,6 +223,9 @@ class ChatService:
                     if event.get("type") == "done":
                         done_sent = True
                     yield event
+        except asyncio.CancelledError:
+            # Cooperative cancel must not be converted into an error event.
+            raise
         except HTTPException as exc:
             self.logger.warning("WebSocket chat rejected for %s: %s", input_data.user_id, exc.detail)
             yield {"type": "error", "error": exc.detail, "status_code": exc.status_code}
@@ -167,6 +246,66 @@ class ChatService:
 
     def release_slot(self) -> None:
         self._semaphore.release()
+
+    async def _forward_chat_events(
+        self,
+        websocket: WebSocket,
+        input_data: AgentInput,
+        *,
+        client: str,
+        state: _ChatStreamState,
+    ) -> None:
+        async with aclosing(self.chat_event_stream(input_data, client=client)) as stream:
+            async for event in stream:
+                state.observe(event)
+                await websocket.send_json(event)
+
+    async def _wait_for_chat_cancel(self, websocket: WebSocket) -> CancelReason:
+        try:
+            while True:
+                raw_payload = await websocket.receive_json()
+                if self._is_cancel_payload(raw_payload):
+                    return "cancel"
+                self.logger.debug(
+                    "Ignoring WebSocket payload during active chat turn: %s",
+                    type(raw_payload).__name__,
+                )
+        except WebSocketDisconnect:
+            return "disconnect"
+
+    @staticmethod
+    def _is_cancel_payload(raw_payload: Any) -> bool:
+        if not isinstance(raw_payload, dict):
+            return False
+        return str(raw_payload.get("type") or "").strip().lower() == "cancel"
+
+    async def _send_cancelled_terminal(self, websocket: WebSocket, state: _ChatStreamState) -> None:
+        try:
+            if state.open_message_id is not None:
+                await websocket.send_json({
+                    "type": "message_done",
+                    "message_id": state.open_message_id,
+                    "phase": "cancelled",
+                    "content": "".join(state.content_parts),
+                })
+                state.open_message_id = None
+                state.content_parts = []
+            if not state.done_sent:
+                await websocket.send_json({"type": "done", "reason": "cancelled"})
+                state.done_sent = True
+        except (WebSocketDisconnect, RuntimeError):
+            # Connection already gone — cancellation still applied server-side.
+            self.logger.debug("Could not send cancelled terminal events", exc_info=True)
+
+    @staticmethod
+    async def _cancel_task(task: asyncio.Task[Any]) -> None:
+        if task.done():
+            with suppress(asyncio.CancelledError):
+                task.result()
+            return
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
     async def _acquire_slot(self) -> None:
         try:
@@ -223,15 +362,15 @@ class ChatService:
         return await asyncio.wait_for(awaitable, timeout=self._remaining_time(deadline))
 
     async def _iterate_before_deadline(self, response, deadline: float):
-        iterator = response.__aiter__()
-        while True:
-            try:
-                yield await asyncio.wait_for(
-                    iterator.__anext__(),
-                    timeout=self._remaining_time(deadline),
-                )
-            except StopAsyncIteration:
-                break
+        async with aclosing(response) as stream:
+            while True:
+                try:
+                    yield await asyncio.wait_for(
+                        anext(stream),
+                        timeout=self._remaining_time(deadline),
+                    )
+                except StopAsyncIteration:
+                    break
 
     @staticmethod
     def _remaining_time(deadline: float) -> float:

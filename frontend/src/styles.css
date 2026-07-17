@@ -1284,6 +1284,10 @@ input::placeholder {
   min-height: 42px;
 }
 
+.stop-button {
+  gap: 8px;
+}
+
 .image-chip,
 .file-chip,
 .attachment-chip {
