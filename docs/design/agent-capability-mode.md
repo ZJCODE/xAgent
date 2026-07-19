@@ -10,13 +10,13 @@ Related product intent: [`GOAL.md`](../../GOAL.md)
 ## 1. Intent
 
 xAgent should stay a full-capability digital individual when the model can carry that load.  
-It should also be able to run **lighter** when the model cannot — especially local small models — without asking users to understand the internal tool inventory.
+It should also run **lighter** when the model cannot — especially local small models — without asking users to understand the internal tool inventory.
 
 The user-facing decision is one word:
 
 ```yaml
 agent:
-  mode: companion   # chat | companion | assistant | full
+  mode: companion   # chat | companion | full
 ```
 
 The runtime expands that mode into:
@@ -29,36 +29,51 @@ Disabled capabilities must disappear completely from the model’s view (no sche
 
 ---
 
-## 2. Why this shape
+## 2. First principles → why exactly three modes
 
-### 2.1 The real failure mode
+Capability modes must track **distinct jobs**, not implementation accidents (e.g. “scheduler prompt is long”).
 
-Today the agent always loads most builtins and injects a large instruction stack every turn. Strong cloud models tolerate that. Small local models often do not:
+Ask one question at each step:
 
-- too many tools → wrong calls, loops, empty turns;
-- too much instruction text → identity / privacy / attribution rules get diluted;
-- no first-class way to say “run lighter.”
+| Question | If no | If yes |
+|---|---|---|
+| Can / should this agent **use tools**? | `chat` | continue |
+| Should it only **keep continuity** (memory), or also **act in the world**? | `companion` | `full` |
 
-### 2.2 Why not expose per-tool switches as the main UX
+That yields three stable jobs:
 
-Atomic toggles (`run_command`, `manage_scheduled_tasks`, `web_fetch`, …) force users to learn:
+| Mode | Job | Product reading |
+|---|---|---|
+| `chat` | Talk | Model concession: pure conversation when tool-use is unreliable |
+| `companion` | Talk + remember | Product-lite aligned with [`GOAL.md`](../../GOAL.md): independent subject with diary continuity, no action surface |
+| `full` | Talk + remember + act | Product-complete: workspace, network, schedule, skills, image when backends exist |
 
-- nine tool names;
-- hidden couplings (skills catalog ↔ `read_skill`, workspace context ↔ `run_command`);
-- provider gates for search / image.
+### Why not a fourth “assistant” (full minus scheduler)
 
-Users think in jobs (“just chat”, “remember me”, “help me do things”), not in tool registries.  
-So the product contract is **modes**. Tool sets are an expansion detail.
+“Has scheduler or not” is an **implementation cost**, not a user job. Users do not wake up wanting “an agent that can shell and search but not cron.”
 
-### 2.3 First principles
+Keeping that split forces everyone to learn a non-obvious boundary.  
+If someone needs `full` without scheduler, that is an **advanced override**, not a primary mode.
 
-1. **Identity ≠ capability surface.** Independent subject / diary memory stay product invariants. Tool and prompt density are runtime choices.
-2. **One user decision.** Prefer 3–4 named modes over many booleans.
-3. **Disable means absent.** Off tools leave no schema, no policy, no orphan layers.
-4. **Mode expands to a plan.** Tools + prompt density + runtime bounds resolve together.
-5. **Default stays full.** Omitting `mode` preserves current behavior.
-6. **Advanced overrides exist, but are not taught first.**
-7. **No extra planners.** Reduce choice and text; do not add routing agents.
+### Why keep `chat` instead of collapsing into `companion`
+
+[`GOAL.md`](../../GOAL.md) makes memory central — so `companion` is the natural lite product mode.  
+`chat` still earns a seat: the smallest local models often fail even two memory tools. Pure talk is the honest last rung, not the default recommendation.
+
+### Why not size names (`lite` / `standard` / `full`)
+
+Size names hide the job. `companion` says what the agent *is for*; `lite` only says “less.” Prefer job names.
+
+### Principles (compressed)
+
+1. **Identity ≠ capability surface.** Independent subject / diary rules stay; tools and prompt density are runtime choices.
+2. **Modes follow jobs, not tool counts.**
+3. **One user decision** — three answers is enough.
+4. **Disable means absent** from schema, policy, and dependent layers.
+5. **Mode expands to one plan** — tools + prompt density + bounds together.
+6. **Default is `full`.** Omit mode ⇒ today’s behavior.
+7. **Advanced overrides exist; do not teach them first.**
+8. **No extra planners.** Reduce choice and text.
 
 ---
 
@@ -101,16 +116,17 @@ Missing: a user-facing mode that sets those coherently, and registration gates f
 
 ### In scope
 
-1. Ship `agent.mode` as the primary capability control.
+1. Ship `agent.mode` ∈ {`chat`,`companion`,`full`} as the primary capability control.
 2. Expand mode → effective tool set + prompt density + runtime bounds.
 3. Ensure disabled tools fully vanish from model-visible surface.
-4. Keep omitted/`full` behavior identical to today.
+4. Keep omitted / `full` behavior identical to today.
 5. Teach modes in wizard and docs; keep per-tool maps as advanced escape hatch only.
 
 ### Out of scope
 
 - Leading with a per-tool checklist in setup/README.
-- Multi-agent “small model routes to big model” designs.
+- A fourth mode for “full minus one heavy tool.”
+- Multi-agent routing designs.
 - Changing diary-as-memory product rules.
 - Rewriting the ReAct loop beyond using existing bounds.
 - Hot-reload of mode without agent restart.
@@ -123,26 +139,24 @@ Missing: a user-facing mode that sets those coherently, and registration gates f
 
 | Mode | Meaning | Best for |
 |---|---|---|
-| `chat` | Conversation only. No tools. Lightest prompt. | Tiny local models |
-| `companion` | Conversation + memory tools. No shell / web / scheduler. | Small local models that should keep continuity |
-| `assistant` | Companion + workspace / files / network / skills / image when backends exist. **No scheduler.** | Mid-strength models |
-| `full` | Current agent: all builtins + provider-gated extras. | Strong cloud models (default) |
+| `chat` | Conversation only. No tools. Lightest prompt. | Tiny local models that cannot tool-use reliably |
+| `companion` | Conversation + memory. No shell / web / scheduler / skills action surface. | Small local models; default suggestion for local/custom providers |
+| `full` | Current agent: all builtins + provider-gated extras. | Strong cloud models (default when unspecified) |
 
 Wizard copy target:
 
 ```
 How capable should this agent be?
-  [1] chat       — conversation only (best for small local models)
-  [2] companion  — conversation + memory
-  [3] assistant  — memory + workspace/files + web when configured
-  [4] full       — all tools including scheduler (default for strong models)
+  [1] chat       — conversation only (smallest local models)
+  [2] companion  — conversation + memory (recommended for local models)
+  [3] full       — full agent tools (default for strong models)
 ```
 
-One question. Four answers.
+One question. Three answers.
 
 ### 5.2 Internal bundles
 
-Bundles are an internal vocabulary so expansion stays readable. Users do not configure bundles in v1.
+Bundles are internal vocabulary. Users do not configure them in v1.
 
 | Bundle | Tools |
 |---|---|
@@ -157,7 +171,6 @@ Bundles are an internal vocabulary so expansion stays readable. Users do not con
 |---|---|
 | `chat` | none |
 | `companion` | `memory` |
-| `assistant` | `memory` + `workspace` + `network` + `skills` + `image` |
 | `full` | all bundles |
 
 Provider / storage prerequisites still apply:
@@ -168,21 +181,19 @@ Provider / storage prerequisites still apply:
 
 Mode never invents backends; it only allows bundles when backends exist.
 
-Scheduler stays out of `assistant` on purpose: heaviest tool policy, common weak-model failure point. Users who need it choose `full` (or an advanced override).
-
-### 5.3 Full expansion table
+### 5.3 Expansion table
 
 Resolved once at agent init into an effective plan:
 
-| Knob | `chat` | `companion` | `assistant` | `full` |
-|---|---|---|---|---|
-| Bundles | ∅ | memory | memory + workspace + network + skills + image | all |
-| `prompt.core` | `minimal` | `essential` | `essential` | `full` |
-| `max_iter` | 2 | 6 | 12 | 50 |
-| `max_history` | 8 | 12 | 16 | 32 |
-| `memory_recent_days` | 0 | 1 | 2 | 2 |
-| `subconscious_activity` | 0 | 0 | 0 | current default (0.02) |
-| `prompt.relationships` | false | true | true | true |
+| Knob | `chat` | `companion` | `full` |
+|---|---|---|---|
+| Bundles | ∅ | memory | all |
+| `prompt.core` | `minimal` | `essential` | `full` |
+| `max_iter` | 2 | 6 | 50 |
+| `max_history` | 8 | 12 | 32 |
+| `memory_recent_days` | 0 | 1 | 2 |
+| `subconscious_activity` | 0 | 0 | current default (0.02) |
+| `prompt.relationships` | false | true | true |
 
 ### 5.4 Override precedence
 
@@ -200,18 +211,25 @@ search.provider / image_generation.provider / skills storage
   > still gate network / image / skills
 ```
 
-Advanced escape hatch (not taught in wizard):
+Advanced escape hatch (not taught in wizard) — e.g. full without scheduler, or companion plus fetch:
+
+```yaml
+agent:
+  mode: full
+tools:
+  manage_scheduled_tasks: false
+```
 
 ```yaml
 agent:
   mode: companion
 tools:
-  web_fetch: true   # power-user override
+  web_fetch: true
 ```
 
 If `tools.*` appears without `mode`, treat base as `full` then apply overrides.
 
-Status/debug surfaces should show both `mode` and `effective_tools` so operators need not read expansion code.
+Status/debug surfaces show both `mode` and `effective_tools`.
 
 ---
 
@@ -219,10 +237,10 @@ Status/debug surfaces should show both `mode` and `effective_tools` so operators
 
 Mode picks density by default. Explicit `prompt.core` can override.
 
-| Density | Used by default for | Target size | Content |
+| Density | Default for | Target size | Content |
 |---|---|---|---|
 | `full` | `full` mode | ~3000 chars | Current GOAL-complete core rules |
-| `essential` | `companion`, `assistant` | ~1200–1600 | Independence + privacy + short attribution |
+| `essential` | `companion` | ~1200–1600 | Independence + privacy + short attribution |
 | `minimal` | `chat` | ~500–800 | Tiny-context last resort |
 
 Every density must still preserve:
@@ -275,17 +293,15 @@ Omit `agent.mode`, or set `mode: full`.
 
 ```yaml
 agent:
-  mode: assistant
-  max_iter: 8
-prompt:
-  core: minimal
+  mode: full
+  max_iter: 12
 tools:
-  manage_scheduled_tasks: true
+  manage_scheduled_tasks: false
 ```
 
 ### Validation
 
-- `agent.mode` ∈ {`chat`,`companion`,`assistant`,`full`}; default `full` when absent.
+- `agent.mode` ∈ {`chat`,`companion`,`full`}; default `full` when absent.
 - Advanced `tools` values must be bools for known tool names; unknown keys warn.
 - `prompt.core` ∈ {`full`,`essential`,`minimal`} when present.
 
@@ -321,7 +337,7 @@ skills_catalog = only if read_skill registered
 2. Wire `_load_agent_tools` and memory-tool registration to the plan.
 3. Gate skills catalog on `read_skill`.
 4. Expose `mode` + `effective_tools` in status API / CLI.
-5. Setup wizard: ask for mode only.
+5. Setup wizard: ask for mode only (3 choices).
 6. Tests for each mode’s tool set and default bounds; no-mode == today.
 
 ### Phase 2 — Prompt densities
@@ -335,11 +351,11 @@ skills_catalog = only if read_skill registered
 
 1. README “pick a mode” recipe for local models.
 2. Effective-config display in web/CLI.
-3. Optional UX: show bundle summary (“companion includes memory”).
+3. Optional UX: show one-line summary (“companion: memory only”).
 
 ### Deferred
 
-- First-class user-facing bundle checkboxes — only if four modes prove too coarse.
+- Extra modes or user-facing bundle checkboxes — only if three modes prove too coarse in practice.
 - Per-tool checklist as default setup UX — not planned.
 
 Suggested PR slice: Phase 1 → Phase 2 → Phase 3.
@@ -350,9 +366,9 @@ Suggested PR slice: Phase 1 → Phase 2 → Phase 3.
 
 ### Unit
 
-- Mode expansion matrix (tools + bounds + prompt density).
+- Mode expansion matrix (tools + bounds + prompt density) for all three modes.
 - Explicit overrides beat mode defaults.
-- Provider `none` still hides search/image under `assistant` / `full`.
+- Provider `none` still hides search/image under `full`.
 - Skills catalog empty when mode has no `read_skill`.
 
 ### Integration
@@ -382,10 +398,10 @@ Same scripted chat on a 7B–14B model across `full` / `companion` / `chat`; com
 
 | Risk | Mitigation |
 |---|---|
-| Four modes too coarse | Advanced `tools.*`; consider bundles later |
-| `assistant` vs `full` unclear | Wizard blurbs + docs table; scheduler is the clearest divider |
+| Jump from `companion` to `full` feels large | Honest: action surface is one job; advanced `tools.*` can trim; wizard recommends `companion` for local |
 | `minimal` weakens multi-user privacy | Keep mandatory bullets; default remains `full` |
-| Auto-suggesting `companion` for local providers surprises power users | Suggest as wizard default, still easy to pick `full` |
+| Users want “act but no scheduler” | Advanced override under `full`; do not add a fourth mode |
+| Auto-suggesting `companion` for local providers surprises power users | Wizard default only; `full` still one pick away |
 
 ---
 
@@ -396,7 +412,7 @@ Same scripted chat on a 7B–14B model across `full` / `companion` / `chat`; com
 | Independent subject | Retained in all prompt densities |
 | Multi-user distinction | Attribution grammar retained in `essential` / `minimal` |
 | 1:1 and group coverage | Unchanged architecturally |
-| Continuity | `companion+` keep memory tools and diary injection |
+| Continuity | `companion` and `full` keep memory tools + diary injection |
 | Unified memory | No per-user silos introduced |
 | Agent-governed sharing | Boundary rules retained |
 | Diary-only memory carrier | Unchanged |
@@ -405,7 +421,7 @@ Same scripted chat on a 7B–14B model across `full` / `companion` / `chat`; com
 
 ## 14. Success criteria
 
-1. A new user picks **one mode** and gets a coherent lighter/heavier agent without learning tool names.
+1. A new user picks **one of three modes** and gets a coherent agent without learning tool names.
 2. `companion` / `chat` measurably reduce registered tools and static instruction size vs `full`.
 3. Omitting mode matches today’s tools and full core prompt.
 4. Status surfaces show effective tools for debugging.
@@ -415,10 +431,9 @@ Same scripted chat on a 7B–14B model across `full` / `companion` / `chat`; com
 
 ## 15. Open questions
 
-1. Auto-suggest `companion` in the wizard when provider is `custom` / localhost?
-2. Should `assistant` include network automatically whenever a search provider is configured? (Recommendation: yes — mode allows; provider gates.)
-3. Exact naming: keep job names (`chat` / `companion` / `assistant` / `full`) rather than size names (`lite` / `standard`)?
-4. Later UI: mode dropdown first, advanced disclosure for overrides — confirm when frontend settings land.
+1. Auto-suggest `companion` in the wizard when provider is `custom` / localhost? (Recommendation: yes.)
+2. For `full`, should weak custom providers get a warning that tool-heavy mode may underperform? (Nice-to-have, not blocking.)
+3. Later UI: mode dropdown first, advanced disclosure for `tools.*` — confirm when frontend settings land.
 
 ---
 
@@ -440,6 +455,7 @@ Same scripted chat on a 7B–14B model across `full` / `companion` / `chat`; com
 
 ## 17. Decision
 
-Ship **capability mode** as the product control for lighter/heavier agents.  
-Expand mode into tools, prompt density, and runtime bounds behind the scenes.  
-Keep defaults at `full`. Teach modes; hide per-tool switches.
+Three modes only: **`chat` | `companion` | `full`**.  
+They map to talk / remember / act.  
+Expand behind the scenes into tools, prompt density, and runtime bounds.  
+Default `full`. Teach modes; hide per-tool switches.
