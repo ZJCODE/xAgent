@@ -94,6 +94,7 @@ class WebAgentSession:
                 "name": name,
                 "title": entry.title,
                 "path": str(entry.path),
+                "api_url": self._api_url_for_agent(name, entry.path),
                 "active": name == registry.active_agent,
                 "selected": name == current,
                 "initialized": _is_agent_initialized(entry.path),
@@ -226,9 +227,11 @@ class WebAgentSession:
         name = self._resolve_agent_name()
         if name is None:
             return self._initial_api_url
+        return self._api_url_for_agent(name, self._entry_path(name))
+
+    def _api_url_for_agent(self, name: str, entry_path: Path) -> str:
         if name == self._initial_agent_name and self._initial_api_url:
             return self._initial_api_url
-        entry_path = self._entry_path(name)
         cfg = _safe_load_config(entry_path)
         return web_client_config(cfg)["api_url"]
 

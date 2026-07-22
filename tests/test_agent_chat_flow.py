@@ -4,7 +4,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
@@ -1102,6 +1102,27 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_call_forwards_channel_to_chat(self):
+        agent = SimpleNamespace(chat=AsyncMock(return_value="ok"))
+
+        result = await Agent.__call__(
+            agent,
+            user_message="hello",
+            user_id="api-user",
+            channel="api",
+        )
+
+        self.assertEqual(result, "ok")
+        agent.chat.assert_awaited_once_with(
+            user_message="hello",
+            user_id="api-user",
+            image_source=None,
+            attachments=None,
+            stream=False,
+            channel_instructions="",
+            channel="api",
+        )
+
     def _build_agent(
         self,
         storage,

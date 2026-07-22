@@ -96,6 +96,11 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
         payload = response.json()
         names = {row["name"] for row in payload["agents"]}
         self.assertEqual(names, {"agent_a", "agent_b"})
+        api_urls = {row["name"]: row["api_url"] for row in payload["agents"]}
+        self.assertEqual(api_urls, {
+            "agent_a": "http://127.0.0.1:8010",
+            "agent_b": "http://127.0.0.1:9010",
+        })
         self.assertEqual(payload["selected_agent"], "agent_a")
         self.assertEqual(payload["active_agent"], "agent_a")
 

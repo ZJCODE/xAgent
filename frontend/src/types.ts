@@ -301,6 +301,7 @@ export interface AgentSummary {
   name: string;
   title: string;
   path: string;
+  api_url: string;
   active: boolean;
   selected: boolean;
   initialized: boolean;

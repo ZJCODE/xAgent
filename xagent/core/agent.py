@@ -316,6 +316,7 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         channel_instructions: str = "",
+        channel: Optional[str] = None,
     ) -> Union[str, AsyncGenerator[str, None]]:
         return await self.chat(
             user_message=user_message,
@@ -324,6 +325,7 @@ class Agent:
             attachments=attachments,
             stream=stream,
             channel_instructions=channel_instructions,
+            channel=channel,
         )
 
     async def chat(

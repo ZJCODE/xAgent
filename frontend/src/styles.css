@@ -569,9 +569,223 @@ input {
 .sidebar-footer {
   display: flex;
   align-items: center;
+  gap: 4px;
   margin-top: auto;
   border-top: 1px solid var(--border);
   padding: 12px 6px 0;
+}
+
+.help-dialog {
+  width: min(840px, 100%);
+}
+
+.help-dialog-header > div:first-child {
+  min-width: 0;
+}
+
+.help-dialog-header h3 {
+  font-size: 17px;
+}
+
+.help-dialog-header p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.help-dialog-body {
+  display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 18px;
+}
+
+.help-intro {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.help-connection-details {
+  display: grid;
+  grid-template-columns: minmax(0, 0.65fr) repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--border);
+}
+
+.help-connection-details > div {
+  min-width: 0;
+  background: var(--bg-surface-subtle);
+  padding: 11px 12px;
+}
+
+.help-connection-details dt {
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 640;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.help-connection-details dd {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.help-connection-details dd code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.help-connection-details dd span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 450;
+  line-height: 1.4;
+}
+
+.help-connection-details code,
+.help-api-section code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+}
+
+.help-agent-warning {
+  margin: 0;
+}
+
+.help-api-section {
+  display: grid;
+  gap: 10px;
+}
+
+.help-api-section + .help-api-section {
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.help-section-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.help-section-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.help-section-heading h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 680;
+}
+
+.help-section-heading > code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.help-method-badge {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  border-radius: 5px;
+  background: var(--success-soft);
+  color: var(--success);
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.035em;
+}
+
+.help-method-badge-ws {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.help-api-section > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.help-api-section > p code {
+  color: var(--text);
+}
+
+.help-code-block {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-surface-subtle);
+}
+
+.help-code-toolbar {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 4px 6px 4px 12px;
+  font-size: 11px;
+  font-weight: 640;
+}
+
+.help-copy-button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.help-code-block pre {
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.help-code-block pre code {
+  font: inherit;
+}
+
+.help-security-note {
+  display: grid;
+  gap: 3px;
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--border));
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.help-security-note strong {
+  font-weight: 680;
 }
 
 .page-toolbar-actions,
@@ -2626,6 +2840,35 @@ input::placeholder {
 }
 
 @media (max-width: 760px) {
+  .help-dialog-overlay {
+    align-items: end;
+    padding: 12px;
+  }
+
+  .help-dialog {
+    max-height: calc(100dvh - 24px);
+  }
+
+  .help-dialog-header,
+  .help-dialog-body {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .help-connection-details {
+    grid-template-columns: 1fr;
+  }
+
+  .help-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .help-section-heading > code {
+    width: 100%;
+  }
+
   .app-shell {
     grid-template-rows: minmax(0, 1fr) auto;
   }

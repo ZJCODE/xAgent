@@ -1,6 +1,7 @@
 import {
   Activity,
   Bot,
+  CircleHelp,
   Database,
   Files,
   ListTodo,
@@ -11,12 +12,14 @@ import {
   Sun,
   WifiOff,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { useAgentSession } from "../context/AgentSessionContext";
 import { useConnectivity } from "../context/ConnectivityContext";
 import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
 import type { RoutePath } from "../types";
 import { AgentSwitcher } from "./AgentSwitcher";
+import { HelpDialog } from "./HelpDialog";
 import { Button, IconButton } from "./ui";
 
 interface AppLayoutProps {
@@ -38,8 +41,11 @@ const navItems: Array<{ route: RoutePath; label: string; icon: ReactNode }> = [
 
 export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
   const { dark, toggleTheme } = useTheme();
+  const { agents, selectedAgent } = useAgentSession();
   const { webStatus, retry } = useConnectivity();
+  const [helpOpen, setHelpOpen] = useState(false);
   const showConnectivityBanner = webStatus === "offline";
+  const currentAgent = agents.find((agent) => agent.name === selectedAgent) || agents[0];
 
   return (
     <div className="app-shell">
@@ -62,6 +68,9 @@ export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
           ))}
         </nav>
         <div className="sidebar-footer">
+          <IconButton type="button" onClick={() => setHelpOpen(true)} title="API Help" aria-label="Open API Help">
+            <CircleHelp size={16} />
+          </IconButton>
           <IconButton type="button" onClick={toggleTheme} title="Toggle theme" aria-label="Toggle theme">
             {dark ? <Sun size={16} /> : <Moon size={16} />}
           </IconButton>
@@ -80,6 +89,13 @@ export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
         ) : null}
         <main className="app-content">{children}</main>
       </div>
+
+      <HelpDialog
+        open={helpOpen}
+        currentAgent={currentAgent?.name || ""}
+        directApiUrl={currentAgent?.api_url || ""}
+        onClose={() => setHelpOpen(false)}
+      />
     </div>
   );
 }
