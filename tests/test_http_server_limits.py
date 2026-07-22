@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -51,6 +53,33 @@ class SlowStreamingAgent:
         yield {"type": "message_delta", "delta": "late", "message_id": "m1", "phase": "final"}
         yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "firstlate"}
         yield {"type": "done"}
+
+
+class CancellableStreamingAgent:
+    model = "test-model"
+    tools = {}
+
+    def __init__(self):
+        self.message_storage = FakeMessageStorage()
+        self.started = threading.Event()
+        self.cancelled = False
+        self._hold = asyncio.Event()
+
+    async def __call__(self, **kwargs):
+        return "ok"
+
+    async def chat_events(self, **kwargs):
+        yield {"type": "message_start", "message_id": "m1", "phase": "final"}
+        yield {"type": "message_delta", "delta": "hel", "message_id": "m1", "phase": "final"}
+        self.started.set()
+        try:
+            await self._hold.wait()
+            yield {"type": "message_delta", "delta": "lo", "message_id": "m1", "phase": "final"}
+            yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "hello"}
+            yield {"type": "done"}
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
 
 
 class FastStreamingAgent:
@@ -400,6 +429,133 @@ class AgentWebSocketServerTests(unittest.TestCase):
                     "status_code": 504,
                 })
                 self.assertEqual(websocket.receive_json(), {"type": "done"})
+
+    def test_websocket_chat_cancel_stops_generation_and_keeps_partial(self):
+        agent = CancellableStreamingAgent()
+        server = AgentHTTPServer(agent=agent)
+
+        with TestClient(server.app) as client:
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json({
+                    "user_id": "alice",
+                    "user_message": "stream please",
+                    "stream": True,
+                })
+
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "message_start",
+                    "message_id": "m1",
+                    "phase": "final",
+                })
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "message_delta",
+                    "delta": "hel",
+                    "message_id": "m1",
+                    "phase": "final",
+                })
+
+                # Wait until the agent is blocked mid-turn, then cancel.
+                self.assertTrue(agent.started.wait(timeout=1.0))
+                websocket.send_json({"type": "cancel"})
+
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "message_done",
+                    "message_id": "m1",
+                    "phase": "cancelled",
+                    "content": "hel",
+                })
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "done",
+                    "reason": "cancelled",
+                })
+
+        self.assertTrue(agent.cancelled)
+
+    def test_websocket_chat_disconnect_cancels_generation(self):
+        agent = CancellableStreamingAgent()
+        server = AgentHTTPServer(agent=agent)
+
+        with TestClient(server.app) as client:
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json({
+                    "user_id": "alice",
+                    "user_message": "stream please",
+                    "stream": True,
+                })
+
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "message_start",
+                    "message_id": "m1",
+                    "phase": "final",
+                })
+                self.assertEqual(websocket.receive_json(), {
+                    "type": "message_delta",
+                    "delta": "hel",
+                    "message_id": "m1",
+                    "phase": "final",
+                })
+                self.assertTrue(agent.started.wait(timeout=1.0))
+                websocket.close()
+
+        deadline = time.time() + 2.0
+        while not agent.cancelled and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(agent.cancelled)
+
+    def test_websocket_chat_cancel_releases_concurrency_slot(self):
+        first_agent = CancellableStreamingAgent()
+        second_agent = FastStreamingAgent()
+        agents = iter([first_agent, second_agent])
+
+        class SwitchingAgent:
+            model = "test-model"
+            tools = {}
+
+            def __init__(self):
+                self.message_storage = FakeMessageStorage()
+                self.current = None
+
+            async def __call__(self, **kwargs):
+                return "ok"
+
+            async def chat_events(self, **kwargs):
+                self.current = next(agents)
+                async for event in self.current.chat_events(**kwargs):
+                    yield event
+
+        switcher = SwitchingAgent()
+        server = AgentHTTPServer(
+            agent=switcher,
+            max_concurrent_chats=1,
+            chat_queue_timeout=0.2,
+            chat_timeout=5.0,
+        )
+
+        with TestClient(server.app) as client:
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json({
+                    "user_id": "alice",
+                    "user_message": "hold slot",
+                    "stream": True,
+                })
+                self.assertEqual(websocket.receive_json()["type"], "message_start")
+                self.assertEqual(websocket.receive_json()["type"], "message_delta")
+                self.assertTrue(first_agent.started.wait(timeout=1.0))
+                websocket.send_json({"type": "cancel"})
+                self.assertEqual(websocket.receive_json()["phase"], "cancelled")
+                self.assertEqual(websocket.receive_json(), {"type": "done", "reason": "cancelled"})
+
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json({
+                    "user_id": "bob",
+                    "user_message": "next",
+                    "stream": False,
+                })
+                self.assertEqual(websocket.receive_json()["type"], "message_start")
+                self.assertEqual(websocket.receive_json()["type"], "message_done")
+                self.assertEqual(websocket.receive_json(), {"type": "done"})
+
+        self.assertTrue(first_agent.cancelled)
 
     def test_websocket_observe_returns_result_and_done(self):
         agent = ObservingAgent()
