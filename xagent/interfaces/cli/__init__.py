@@ -82,6 +82,7 @@ from .setup import (
     init_agent_directory,
 )
 from .terminal_ui import ReturnToLauncherHome, SetupCancelled, TerminalUI, rich_terminal_available
+from .update import handle_update
 
 __all__ = [
     "AgentCLI",
@@ -120,6 +121,7 @@ __all__ = [
     "handle_status",
     "handle_status_all",
     "handle_stop",
+    "handle_update",
     "handle_web_start",
     "handle_web_stop",
     "handle_web_restart",

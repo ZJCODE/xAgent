@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
-from . import agents, processes_status, runtime, setup
+from . import agents, processes_status, runtime, setup, update
 
 
 class XAgentArgumentParser(argparse.ArgumentParser):
@@ -32,6 +32,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "Setup:",
             "  setup       Configure the active agent",
             "  agents      Create, select, inspect, or remove agents",
+            "  update      Update xAgent using its current installation method",
             "",
             "Use Now:",
             "  chat        Chat in the terminal",
@@ -58,6 +59,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "",
             "Common Flows:",
             "  xagent setup",
+            "  xagent update",
             "  xagent agents create work",
             "  xagent agents select work",
             '  xagent chat "Help me plan today"',
@@ -563,6 +565,18 @@ def build_parser() -> argparse.ArgumentParser:
     version_parser = subparsers.add_parser("version", help="Show xAgent version")
     version_parser.set_defaults(handler=runtime.handle_version)
 
+    update_parser = subparsers.add_parser(
+        "update",
+        help="Update xAgent using its current installation method",
+    )
+    update_parser.add_argument(
+        "--restart",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Restart running background processes after an update",
+    )
+    update_parser.set_defaults(handler=update.handle_update)
+
     agents_parser = subparsers.add_parser("agents", help="Create, select, and inspect managed agents")
     agents_sub = agents_parser.add_subparsers(dest="agents_action", metavar="<action>")
     agents_sub.required = True
@@ -609,5 +623,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_web_client_arguments(internal_web)
     internal_web.set_defaults(handler=runtime.handle_run_web_internal)
     _hide_subparser_choice(subparsers, "_run-web")
+
+    internal_update = subparsers.add_parser("_update-worker", help=argparse.SUPPRESS)
+    internal_update.add_argument(
+        "--restart",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    internal_update.set_defaults(handler=update.handle_update_worker)
+    _hide_subparser_choice(subparsers, "_update-worker")
 
     return parser

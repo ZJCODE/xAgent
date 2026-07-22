@@ -42,6 +42,20 @@ xagent
 
 The interactive launcher will guide you through creating and managing your agents.
 
+## Updating
+
+Update xAgent without changing how it was installed:
+
+```bash
+xagent update
+```
+
+The command detects whether the current xAgent was installed as an isolated uv
+tool or with pip, then asks that same package manager to perform the update. If
+background channels are running, xAgent offers to restart them after a
+successful version change. Use `xagent update --restart` to restart them
+automatically, or `xagent update --no-restart` to leave them running.
+
 ## Local Data
 
 All xAgent data is stored locally in:
