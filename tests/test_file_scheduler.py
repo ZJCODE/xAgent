@@ -350,6 +350,108 @@ class ScheduledTaskTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_calculate_next_interval_run_at_skips_missed_ticks(self):
+        from xagent.core.runtime.scheduler import calculate_next_interval_run_at
+
+        rule = {"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 12:00:00"}
+        next_run = calculate_next_interval_run_at(
+            datetime(2026, 6, 1, 10, 0, 0),
+            rule,
+            now=datetime(2026, 6, 1, 11, 5, 0),
+        )
+        self.assertEqual(next_run, datetime(2026, 6, 1, 11, 10, 0))
+
+    def test_align_overdue_interval_run_at_keeps_active_slot(self):
+        from xagent.core.runtime.scheduler import align_overdue_interval_run_at
+
+        rule = {"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 12:00:00"}
+        aligned = align_overdue_interval_run_at(
+            datetime(2026, 6, 1, 10, 0, 0),
+            rule,
+            now=datetime(2026, 6, 1, 10, 0, 1),
+        )
+        self.assertEqual(aligned, datetime(2026, 6, 1, 10, 0, 0))
+
+    def test_align_overdue_interval_run_at_jumps_to_next_future_grid(self):
+        from xagent.core.runtime.scheduler import align_overdue_interval_run_at
+
+        rule = {"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 12:00:00"}
+        aligned = align_overdue_interval_run_at(
+            datetime(2026, 6, 1, 10, 0, 0),
+            rule,
+            now=datetime(2026, 6, 1, 11, 3, 0),
+        )
+        self.assertEqual(aligned, datetime(2026, 6, 1, 11, 10, 0))
+
+    def test_async_scheduler_skips_missed_interval_ticks_after_downtime(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="hey",
+                    run_at=datetime(2026, 6, 1, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 12:00:00"}],
+                    title="Hey reminder",
+                )
+                delivered = []
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=lambda task: _append_delivered(delivered, task.run_at),
+                    now_provider=lambda: datetime(2026, 6, 1, 11, 3, 0),
+                )
+
+                next_run_at = await scheduler.tick()
+                active = list_task_records(tmpdir, include_failed=False)
+
+            self.assertEqual(delivered, [])
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0].task_id, original.task_id)
+            self.assertEqual(active[0].run_at, datetime(2026, 6, 1, 11, 10, 0))
+            self.assertEqual(next_run_at, datetime(2026, 6, 1, 11, 10, 0))
+
+        async def _append_delivered(delivered, run_at):
+            delivered.append(run_at)
+
+        asyncio.run(run_test())
+
+    def test_async_scheduler_fires_exact_grid_point_after_downtime_once(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="hey",
+                    run_at=datetime(2026, 6, 1, 10, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 12:00:00"}],
+                )
+                delivered = []
+                current = {"now": datetime(2026, 6, 1, 11, 0, 0)}
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=lambda task: _append_delivered(delivered, task.run_at),
+                    now_provider=lambda: current["now"],
+                )
+
+                await scheduler.tick()
+                active = list_task_records(tmpdir, include_failed=False)
+
+            self.assertEqual(delivered, [datetime(2026, 6, 1, 11, 0, 0)])
+            self.assertEqual(active[0].run_at, datetime(2026, 6, 1, 11, 10, 0))
+
+        async def _append_delivered(delivered, run_at):
+            delivered.append(run_at)
+
+        asyncio.run(run_test())
+
     def test_async_scheduler_expires_closed_window_while_another_dispatch_runs(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:

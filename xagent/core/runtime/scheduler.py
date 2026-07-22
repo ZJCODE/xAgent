@@ -289,9 +289,64 @@ def calculate_next_interval_run_at(
     *,
     now: datetime | None = None,
 ) -> datetime | None:
+    """Advance to the next future interval tick, skipping missed catch-up runs.
+
+    After downtime, jumping ``current_run_at + every_seconds`` repeatedly while still
+    in the past has no user value; skip ahead to the first tick strictly after ``now``.
+    """
     normalized = _normalize_interval_rule(rule)
-    next_run_at = parse_run_at(current_run_at) + timedelta(seconds=int(normalized["every_seconds"]))
+    every_seconds = int(normalized["every_seconds"])
     end_at = parse_run_at(str(normalized["end_at"]))
+    current = (now or datetime.now()).replace(microsecond=0)
+    next_run_at = parse_run_at(current_run_at) + timedelta(seconds=every_seconds)
+    while next_run_at <= current:
+        next_run_at += timedelta(seconds=every_seconds)
+    if next_run_at > end_at:
+        return None
+    return next_run_at
+
+
+def align_overdue_interval_run_at(
+    current_run_at: datetime,
+    rule: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Skip missed pending interval ticks after a gap; keep the active slot if open.
+
+    If ``now`` is still inside ``[run_at, run_at + every)``, keep ``run_at`` so small
+    scheduler latency still delivers the current tick. Once at least one full interval
+    late, jump to the next grid point at or after ``now`` (no historical catch-up).
+    """
+    normalized = _normalize_interval_rule(rule)
+    every_seconds = int(normalized["every_seconds"])
+    end_at = parse_run_at(str(normalized["end_at"]))
+    current = (now or datetime.now()).replace(microsecond=0)
+    candidate = parse_run_at(current_run_at)
+    if candidate > end_at:
+        return None
+    if candidate > current:
+        return candidate
+    if current < candidate + timedelta(seconds=every_seconds):
+        return candidate
+
+    start_at_text = str(normalized.get("start_at") or "").strip()
+    if start_at_text:
+        return align_interval_next_run(
+            now=current,
+            start_at=parse_run_at(start_at_text),
+            every_seconds=every_seconds,
+            end_at=end_at,
+        )
+
+    elapsed = int((current - candidate).total_seconds())
+    steps = elapsed // every_seconds
+    on_or_before = candidate + timedelta(seconds=steps * every_seconds)
+    if on_or_before > end_at:
+        return None
+    if on_or_before == current:
+        return on_or_before
+    next_run_at = on_or_before + timedelta(seconds=every_seconds)
     if next_run_at > end_at:
         return None
     return next_run_at

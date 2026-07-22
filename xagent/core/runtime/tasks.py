@@ -22,6 +22,7 @@ from .scheduler import (
     _fsync_directory,
     _unique_failed_path,
     align_interval_next_run,
+    align_overdue_interval_run_at,
     calculate_next_recurrence_run_at,
     ensure_scheduler_dirs,
     format_task_timestamp,
@@ -843,6 +844,9 @@ class AsyncTaskScheduler:
                 continue
             if not self.can_handle(record):
                 continue
+            record = self._skip_missed_interval_ticks(record, now=now)
+            if record is None:
+                continue
             if record.run_at > now:
                 if next_run_at is None or record.run_at < next_run_at:
                     next_run_at = record.run_at
@@ -865,6 +869,45 @@ class AsyncTaskScheduler:
         if wait_for_dispatches and started:
             await asyncio.gather(*started, return_exceptions=True)
         return next_run_at
+
+    def _skip_missed_interval_ticks(
+        self,
+        record: ScheduledTaskRecord,
+        *,
+        now: datetime,
+    ) -> ScheduledTaskRecord | None:
+        """Realign overdue interval tasks without catching up missed ticks.
+
+        Returns the (possibly rewritten) pending record, or ``None`` when the
+        remaining window has no further runnable tick and the task was archived.
+        """
+        if not is_interval_recurrence(record.recurrence):
+            return record
+        if record.run_at > now:
+            return record
+        aligned = align_overdue_interval_run_at(record.run_at, record.recurrence[0], now=now)
+        if aligned is None:
+            claimed_path = self._claim(record.path)
+            if claimed_path is None:
+                return None
+            claimed = _record_from_json_file(claimed_path, state=TASK_STATE_RUNNING) or record
+            try:
+                self._archive_record(
+                    claimed_path,
+                    claimed,
+                    now=now,
+                    reason=COMPLETION_REASON_INTERVAL_WINDOW_ENDED,
+                )
+            except Exception as exc:
+                self.logger.exception("failed to archive exhausted interval task %s: %s", record.name, exc)
+                self._fail_record(claimed_path, claimed, "expire_error", exc)
+            return None
+        if aligned == record.run_at:
+            return record
+        payload = dict(record.payload)
+        payload["run_at"] = aligned.isoformat(sep=" ")
+        payload["updated_at"] = now.isoformat(sep=" ")
+        return _rewrite_pending_task(self.tasks_dir, record, payload, aligned)
 
     def _on_dispatch_done(self, task: asyncio.Task[None]) -> None:
         self._inflight.discard(task)
