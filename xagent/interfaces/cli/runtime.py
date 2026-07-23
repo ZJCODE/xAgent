@@ -476,6 +476,8 @@ def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
                 user_id=getattr(args, "user_id", None) or "local_voice",
                 stream=True,
                 tasks_dir=getattr(runner, "tasks_dir", None),
+                jobs_dir=getattr(runner, "jobs_dir", None),
+                workspace_dir=getattr(runner, "workspace_dir", None),
             ),
             input_device=getattr(args, "input_device", None),
             output_device=getattr(args, "output_device", None),

@@ -39,6 +39,8 @@ class AgentHTTPServer(AdminService):
             self.agent,
             contacts_file=contacts_file,
             tasks_dir=self.tasks_dir,
+            jobs_dir=self.jobs_dir,
+            workspace_dir=self.workspace_dir,
             limits=ChatLimits(
                 max_concurrent_chats=max_concurrent_chats,
                 chat_queue_timeout=chat_queue_timeout,

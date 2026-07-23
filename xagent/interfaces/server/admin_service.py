@@ -68,6 +68,8 @@ class AdminService(BaseAgentRunner):
             ).expanduser().resolve()
             self.tasks_dir = self.workspace / BaseAgentConfig.TASKS_DIRNAME
             self.tasks_dir.mkdir(parents=True, exist_ok=True)
+            self.jobs_dir = self.workspace / BaseAgentConfig.JOBS_DIRNAME
+            self.jobs_dir.mkdir(parents=True, exist_ok=True)
             self.logger = logging.getLogger(self.__class__.__name__)
         else:
             super().__init__(config_dir=config_dir)

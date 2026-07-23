@@ -1,4 +1,4 @@
-export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/channels" | "/agent";
+export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/jobs" | "/channels" | "/agent";
 
 export type ChatRole = "user" | "assistant" | "observation";
 
@@ -72,6 +72,7 @@ export interface ChatEvent {
   error?: string;
   status_code?: number;
   task?: ScheduledTaskItem;
+  job?: BackgroundJobItem;
 }
 
 export interface ScheduledTaskRecurrenceRule {
@@ -146,6 +147,60 @@ export interface TasksResponse {
   total: number;
   counts: {
     scheduled: number;
+    attention: number;
+    archive: number;
+  };
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+export type JobScope = "current" | "running" | "attention" | "archive";
+
+export interface BackgroundJobItem {
+  job_id: string;
+  title: string;
+  kind: "process" | string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
+  command: string;
+  cwd?: string | null;
+  timeout_seconds?: number | null;
+  resources?: string[];
+  channel?: string;
+  user_id?: string;
+  target?: Record<string, unknown>;
+  progress?: Record<string, unknown>;
+  execution?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  last_error?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  failed_at?: string | null;
+  cancelled_at?: string | null;
+  stdout_tail?: string;
+  stderr_tail?: string;
+}
+
+export interface JobCreateInput {
+  command: string;
+  title?: string;
+  cwd?: string;
+  timeout_seconds?: number;
+  resources?: string[];
+  channel?: string;
+  user_id?: string;
+  target?: Record<string, unknown>;
+}
+
+export interface JobsResponse {
+  root: string;
+  jobs: BackgroundJobItem[];
+  total: number;
+  counts: {
+    running: number;
+    queued: number;
     attention: number;
     archive: number;
   };

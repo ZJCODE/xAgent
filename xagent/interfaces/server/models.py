@@ -201,3 +201,18 @@ class TaskDuplicateInput(BaseModel):
     duration_seconds: Optional[int] = None
     start_at: Optional[str] = None
     end_at: Optional[str] = None
+
+
+class JobCreateInput(BaseModel):
+    """Request body for creating an api-channel background job from Web/HTTP."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    command: str
+    title: Optional[str] = None
+    cwd: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+    resources: Optional[List[str]] = None
+    channel: Optional[str] = "api"
+    user_id: Optional[str] = None
+    target: Optional[Dict[str, Any]] = None

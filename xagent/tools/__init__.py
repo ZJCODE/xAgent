@@ -5,6 +5,7 @@ from .search_tool import create_web_search_tool
 from .shell_tool import create_workspace_run_command_tool, run_command
 from .skills_tool import create_read_skill_tool
 from .scheduler_tool import create_schedule_task_tool
+from .jobs_tool import create_manage_jobs_tool
 from .web_fetch_tool import create_web_fetch_tool
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "create_web_search_tool",
     "create_read_skill_tool",
     "create_schedule_task_tool",
+    "create_manage_jobs_tool",
     "create_web_fetch_tool",
 ]
 
