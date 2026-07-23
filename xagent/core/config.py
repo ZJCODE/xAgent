@@ -43,7 +43,9 @@ class AgentConfig:
     WORKSPACE_DIRNAME = "workspace"
     SKILLS_DIRNAME = "skills"
     TASKS_DIRNAME = "tasks"
+    JOBS_DIRNAME = "jobs"
     MESSAGE_DB_FILENAME = "messages.sqlite3"
+    DEFAULT_MAX_CONCURRENT_JOBS = 2
 
     # ============================================================
     # 3. Model & Agent Defaults
@@ -180,6 +182,16 @@ class AgentConfig:
             "- Prefer `pause` over `delete` for temporary stops; use `update` to change content or extend `end_at` instead of recreating.\n"
             "- Interval tasks first run after the first interval by default; use `delay_seconds=0` only when the user asks to start immediately.\n"
             "- Schedule only future content, then briefly confirm. Never use schedules to bypass required approval.\n"
+            "- Do NOT use scheduled tasks for long-running work that should continue while you keep chatting; use `manage_jobs` instead.\n"
+        ),
+        "manage_jobs": (
+            "\n**Background Jobs:**\n"
+            "- Use `manage_jobs` to start long-running work that must continue independently while you keep responding.\n"
+            "- Prefer jobs for multi-minute scripts, pipelines, renders, hardware sequences, or any wall-clock work that should not block conversation.\n"
+            "- `start` returns a job_id immediately; confirm briefly and continue. Do not wait, poll in a loop, or hold the turn open.\n"
+            "- Use `status` or `list` only when the user asks for progress; use `cancel` to stop a running or queued job.\n"
+            "- Keep `run_command` for short synchronous shell checks. Keep `manage_scheduled_tasks` for future reminders or due-time agent turns.\n"
+            "- Job cwd must stay inside the agent workspace or the job work directory.\n"
         ),
         "web_search": (
             "\n**Web Search:**\n"
@@ -217,6 +229,7 @@ class AgentConfig:
     TOOL_POLICY_ORDER = (
         "run_command",
         "manage_scheduled_tasks",
+        "manage_jobs",
         "write_memory",
         "search_memory",
         "web_search",

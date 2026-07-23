@@ -15,7 +15,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
+    AsyncJobSupervisor,
     AsyncTaskScheduler,
+    JobRecord,
     ScheduledDeliveryContext,
     SubconsciousDelivery,
     resolve_contacts_path,
@@ -137,7 +139,9 @@ class WeixinAdapter:
         self._dedup = _MessageDeduplicator()
         self._stop_event = asyncio.Event()
         self._tasks_dir = self.runtime_dir / AgentConfig.TASKS_DIRNAME
+        self._jobs_dir = self.runtime_dir / AgentConfig.JOBS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
+        self._job_supervisor: Optional[AsyncJobSupervisor] = None
         self._contacts_file = resolve_contacts_path(self.runtime_dir)
 
     async def run(self) -> None:
@@ -164,10 +168,22 @@ class WeixinAdapter:
         )
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
+        job_supervisor = AsyncJobSupervisor(
+            self._jobs_dir,
+            can_notify=self._can_notify_job,
+            notify=self._notify_job,
+            workspace_dir=getattr(self.agent, "workspace_dir", self.runtime_dir / AgentConfig.WORKSPACE_DIRNAME),
+            max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
+            logger_=self.logger,
+        )
+        self._job_supervisor = job_supervisor
+        await job_supervisor.start()
 
         try:
             await self._poll_loop()
         finally:
+            await job_supervisor.stop()
+            self._job_supervisor = None
             await task_scheduler.stop()
             self._task_scheduler = None
             await self._cancel_processing_tasks()
@@ -651,6 +667,41 @@ class WeixinAdapter:
     def _can_handle_scheduled_task(self, task) -> bool:
         return task.kind == "task" and task.delivery_channel == "weixin" and self.client is not None
 
+    def _can_notify_job(self, job: JobRecord) -> bool:
+        return job.delivery_channel == "weixin" and self.client is not None
+
+    async def _notify_job(self, job: JobRecord) -> None:
+        user_id = str(job.target.get("user_id") or job.delivery_user_id or "").strip()
+        if not user_id:
+            raise ValueError("background Weixin job is missing user_id")
+        context_token = self._context_tokens.get(user_id)
+        if not context_token:
+            raise ValueError(f"background Weixin job cannot notify {user_id}: no cached context_token")
+        summary = _job_notify_summary(job)
+        await self._observe_job(job, summary, channel="weixin")
+        await self._send_text_and_attachments(
+            user_id=user_id,
+            context_token=context_token,
+            content=summary,
+            attachments=[],
+            stable_key=f"job:{job.job_id}:{job.status}",
+        )
+
+    async def _observe_job(self, job: JobRecord, summary: str, *, channel: str) -> None:
+        observe = getattr(self.agent, "observe", None)
+        if not callable(observe):
+            return
+        try:
+            await observe(
+                context=summary,
+                source="background_job",
+                event_type="job_completed" if job.status == "completed" else f"job_{job.status}",
+                metadata={"job_id": job.job_id, "status": job.status, "title": job.title, "command": job.command},
+                channel=channel,
+            )
+        except Exception:
+            self.logger.debug("Failed to observe Weixin job completion for %s", job.job_id, exc_info=True)
+
     async def _dispatch_scheduled_task(self, task) -> None:
         user_id = str(task.target.get("user_id") or task.delivery_user_id or "").strip()
         if not user_id:
@@ -854,6 +905,13 @@ def _safe_id(value: Any, keep: int = 8) -> str:
     if len(text) <= keep:
         return text or "?"
     return text[:keep]
+
+
+def _job_notify_summary(job: JobRecord) -> str:
+    title = job.title or "Background job"
+    result = job.payload.get("result") if isinstance(job.payload.get("result"), dict) else {}
+    detail = str((result or {}).get("summary") or job.payload.get("last_error") or job.status).strip()
+    return f"[job {job.status}] {title}: {detail} (id={job.job_id})"
 
 
 def _safe_filename_part(value: str) -> str:

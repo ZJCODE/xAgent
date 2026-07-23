@@ -18,6 +18,7 @@ from ...interfaces.cli.config_editor import validate_config, write_config
 from .models import (
     ConfigInput,
     IdentityInput,
+    JobCreateInput,
     SkillCreateInput,
     SkillEntryCreateInput,
     SkillEntryMoveInput,
@@ -30,14 +31,21 @@ from .models import (
 )
 from .serializers import message_item, message_search_result
 from ...core.runtime import (
+    count_archived_job_records,
     count_archived_task_records,
+    delete_job,
     delete_scheduled_task,
     duplicate_archived_task,
+    enqueue_job,
     enqueue_scheduled_task,
+    get_job,
     get_scheduled_task,
+    list_archived_job_records,
     list_archived_task_records,
+    list_job_records,
     list_task_records,
     pause_scheduled_task,
+    request_job_cancel,
     resolve_scheduled_task_run_at,
     resume_scheduled_task,
     update_scheduled_task,
@@ -105,6 +113,10 @@ def _task_matches_query(view: dict[str, Any], query: str) -> bool:
     if not needle:
         return True
     return needle in json.dumps(view, ensure_ascii=False, sort_keys=True, default=str).lower()
+
+
+def _job_matches_query(view: dict[str, Any], query: str) -> bool:
+    return _task_matches_query(view, query)
 
 
 def _mask_sensitive_fields(data: dict) -> dict:
@@ -353,6 +365,118 @@ def register_admin_routes(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"status": "ok", "deleted": task.to_task_view()}
+
+    @app.get("/api/jobs", tags=["Monitoring"])
+    async def jobs_list(
+        scope: str = Query("current", pattern="^(current|running|attention|archive)$"),
+        query: str = Query(""),
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ):
+        server = resolve_admin()
+        current_records = list_job_records(server.jobs_dir, include_failed=True, include_claimed=True)
+        running_records = [record for record in current_records if record.status == "running"]
+        queued_records = [record for record in current_records if record.status == "queued"]
+        active_records = [*queued_records, *running_records]
+        attention_records = [record for record in current_records if record.status == "failed"]
+        archive_records = list_archived_job_records(server.jobs_dir) if scope == "archive" else []
+        archive_count = len(archive_records) if scope == "archive" else count_archived_job_records(server.jobs_dir)
+        selected = {
+            "current": [*active_records, *attention_records],
+            "running": active_records,
+            "attention": sorted(
+                attention_records,
+                key=lambda record: str(record.payload.get("failed_at") or ""),
+                reverse=True,
+            ),
+            "archive": archive_records,
+        }[scope]
+        views = [record.to_job_view() for record in selected]
+        filtered = [view for view in views if _job_matches_query(view, query)]
+        jobs = filtered[offset : offset + limit]
+        return {
+            "root": str(server.jobs_dir),
+            "jobs": jobs,
+            "total": len(filtered),
+            "counts": {
+                "running": len(active_records),
+                "queued": len(queued_records),
+                "attention": len(attention_records),
+                "archive": archive_count,
+            },
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(jobs) < len(filtered),
+        }
+
+    @app.post("/api/jobs", tags=["Monitoring"], status_code=201)
+    async def jobs_create(input_data: JobCreateInput):
+        server = resolve_admin()
+        channel = str(input_data.channel or "api").strip().lower() or "api"
+        if channel != "api":
+            raise HTTPException(
+                status_code=400,
+                detail="HTTP create currently supports channel=api only; use chat to start feishu/weixin/voice jobs",
+            )
+        user_id = str(input_data.user_id or "web_user").strip() or "web_user"
+        target = dict(input_data.target or {})
+        target.setdefault("user_id", user_id)
+        try:
+            job = enqueue_job(
+                kind="process",
+                command=input_data.command,
+                jobs_dir=server.jobs_dir,
+                channel=channel,
+                target=target,
+                user_id=user_id,
+                title=input_data.title or "Background job",
+                cwd=input_data.cwd,
+                timeout_seconds=input_data.timeout_seconds,
+                resources=input_data.resources,
+                source={"source": "http", "client": "web"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        wake = getattr(getattr(server, "api", None), "wake_jobs", None)
+        if callable(wake):
+            wake()
+        return {"status": "ok", "job": job.to_job_view()}
+
+    @app.get("/api/jobs/{job_id}", tags=["Monitoring"])
+    async def jobs_get(job_id: str):
+        server = resolve_admin()
+        try:
+            job = get_job(server.jobs_dir, job_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "ok", "job": job.to_job_view(log_tail=True)}
+
+    @app.post("/api/jobs/{job_id}/cancel", tags=["Monitoring"])
+    async def jobs_cancel(job_id: str):
+        server = resolve_admin()
+        try:
+            job = request_job_cancel(server.jobs_dir, job_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        wake = getattr(getattr(server, "api", None), "wake_jobs", None)
+        if callable(wake):
+            wake()
+        return {"status": "ok", "job": job.to_job_view()}
+
+    @app.delete("/api/jobs/delete", tags=["Monitoring"])
+    async def jobs_delete(job_id: str = Query(..., description="Stable background job id")):
+        server = resolve_admin()
+        try:
+            job = delete_job(server.jobs_dir, job_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "ok", "deleted": job.to_job_view()}
 
     @app.get("/api/agent/identity", tags=["Monitoring"])
     async def agent_identity():

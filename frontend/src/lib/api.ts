@@ -40,6 +40,10 @@ import type {
   TaskUpdateInput,
   TasksResponse,
   ScheduledTaskItem,
+  BackgroundJobItem,
+  JobCreateInput,
+  JobScope,
+  JobsResponse,
   WorkspaceUploadResult,
 } from "../types";
 
@@ -340,6 +344,36 @@ export async function duplicateTask(taskId: string, input: TaskDuplicateInput): 
 
 export async function deleteTask(taskId: string): Promise<{ status: string; deleted: unknown }> {
   return requestJson(`/api/tasks/delete?task_id=${encodeURIComponent(taskId)}`, { method: "DELETE" });
+}
+
+export async function getJobs(
+  scope: JobScope = "current",
+  query = "",
+  limit = 50,
+  offset = 0,
+): Promise<JobsResponse> {
+  const params = new URLSearchParams({ scope, query, limit: String(limit), offset: String(offset) });
+  return requestJson(`/api/jobs?${params.toString()}`);
+}
+
+export async function createJob(input: JobCreateInput): Promise<{ status: string; job: BackgroundJobItem }> {
+  return requestJson("/api/jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getJob(jobId: string): Promise<{ status: string; job: BackgroundJobItem }> {
+  return requestJson(`/api/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export async function cancelJob(jobId: string): Promise<{ status: string; job: BackgroundJobItem }> {
+  return requestJson(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+}
+
+export async function deleteJob(jobId: string): Promise<{ status: string; deleted: unknown }> {
+  return requestJson(`/api/jobs/delete?job_id=${encodeURIComponent(jobId)}`, { method: "DELETE" });
 }
 
 export async function getChannels(): Promise<ChannelsResponse> {

@@ -44,7 +44,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
+    AsyncJobSupervisor,
     AsyncTaskScheduler,
+    JobRecord,
     ScheduledDeliveryContext,
     SubconsciousDelivery,
     resolve_contacts_path,
@@ -217,7 +219,12 @@ class FeishuAdapter:
         self._artifact_renderer = FeishuArtifactRenderer(self)
         runtime_root = Path(getattr(agent, "workspace", AgentConfig.DEFAULT_WORKSPACE)).expanduser().resolve()
         self._tasks_dir = runtime_root / AgentConfig.TASKS_DIRNAME
+        self._jobs_dir = runtime_root / AgentConfig.JOBS_DIRNAME
+        self._workspace_dir = Path(
+            getattr(agent, "workspace_dir", runtime_root / AgentConfig.WORKSPACE_DIRNAME)
+        ).expanduser().resolve()
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
+        self._job_supervisor: Optional[AsyncJobSupervisor] = None
         self._contacts_file = resolve_contacts_path(runtime_root)
 
     # ------------------------------------------------------------------
@@ -286,6 +293,16 @@ class FeishuAdapter:
         )
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
+        job_supervisor = AsyncJobSupervisor(
+            self._jobs_dir,
+            can_notify=self._can_notify_job,
+            notify=self._notify_job,
+            workspace_dir=self._workspace_dir,
+            max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
+            logger_=self.logger,
+        )
+        self._job_supervisor = job_supervisor
+        await job_supervisor.start()
 
         run_task = loop.run_in_executor(None, self.run_blocking)
         stop_task = asyncio.create_task(self._stop_event.wait())
@@ -303,6 +320,8 @@ class FeishuAdapter:
                 if exc is not None:
                     raise exc
         finally:
+            await job_supervisor.stop()
+            self._job_supervisor = None
             await task_scheduler.stop()
             self._task_scheduler = None
             self._safe_stop()
@@ -2244,6 +2263,45 @@ class FeishuAdapter:
             and self._channel is not None
         )
 
+    def _can_notify_job(self, job: JobRecord) -> bool:
+        return job.delivery_channel == "feishu" and self._channel is not None
+
+    async def _notify_job(self, job: JobRecord) -> None:
+        assert self._channel is not None
+        target = job.target
+        chat_id = str(target.get("chat_id") or "").strip()
+        if not chat_id:
+            raise ValueError("background Feishu job is missing chat_id")
+        message_id = str(target.get("message_id") or "").strip() or None
+        summary = _job_notify_summary(job)
+        await self._observe_job(job, summary)
+        send_result = await send_message(
+            self._channel,
+            chat_id=chat_id,
+            payload={"markdown": summary},
+            reply_to=None,
+            uuid=self._message_uuid(f"job:{job.job_id}:{job.status}"),
+            logger=self.logger,
+            message_id=message_id,
+        )
+        if getattr(send_result, "success", False) is False:
+            raise RuntimeError(f"Feishu job notify failed: {getattr(send_result, 'error', None)}")
+
+    async def _observe_job(self, job: JobRecord, summary: str) -> None:
+        observe = getattr(self.agent, "observe", None)
+        if not callable(observe):
+            return
+        try:
+            await observe(
+                context=summary,
+                source="background_job",
+                event_type="job_completed" if job.status == "completed" else f"job_{job.status}",
+                metadata={"job_id": job.job_id, "status": job.status, "title": job.title, "command": job.command},
+                channel="feishu",
+            )
+        except Exception:
+            self.logger.debug("Failed to observe Feishu job completion for %s", job.job_id, exc_info=True)
+
     async def _dispatch_scheduled_task(self, task) -> None:
         assert self._channel is not None
         target = task.target
@@ -3249,3 +3307,10 @@ class FeishuAdapter:
         if isinstance(reply, str):
             return reply.strip()
         return str(reply).strip()
+
+
+def _job_notify_summary(job: JobRecord) -> str:
+    title = job.title or "Background job"
+    result = job.payload.get("result") if isinstance(job.payload.get("result"), dict) else {}
+    detail = str((result or {}).get("summary") or job.payload.get("last_error") or job.status).strip()
+    return f"[job {job.status}] {title}: {detail} (id={job.job_id})"

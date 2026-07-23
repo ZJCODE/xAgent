@@ -78,6 +78,17 @@ class DeliveryBus:
             payload["message"] = message_item(stored_message)
         await self.push(user_id, payload)
 
+    async def broadcast_job_message(self, job, content: str) -> None:
+        user_id = str(job.target.get("user_id") or job.delivery_user_id or "")
+        if not user_id:
+            return
+        payload: Dict[str, Any] = {
+            "type": "job_message",
+            "content": content,
+            "job": job.to_job_view(),
+        }
+        await self.push(user_id, payload)
+
     async def deliver_subconscious(self, delivery: SubconsciousDelivery, *, agent: Agent) -> None:
         if delivery.recipient.channel != CHANNEL_API:
             raise ValueError(f"api runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")

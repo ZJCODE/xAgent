@@ -33,6 +33,18 @@ from .tasks import (
     scheduled_delivery_context,
     update_scheduled_task,
 )
+from .jobs import (
+    AsyncJobSupervisor,
+    JobRecord,
+    count_archived_job_records,
+    delete_job,
+    enqueue_job,
+    ensure_jobs_dirs,
+    get_job,
+    list_archived_job_records,
+    list_job_records,
+    request_job_cancel,
+)
 
 __all__ = [
     "RuntimeHeartbeat",
@@ -66,4 +78,14 @@ __all__ = [
     "resume_scheduled_task",
     "scheduled_delivery_context",
     "update_scheduled_task",
+    "AsyncJobSupervisor",
+    "JobRecord",
+    "count_archived_job_records",
+    "delete_job",
+    "enqueue_job",
+    "ensure_jobs_dirs",
+    "get_job",
+    "list_archived_job_records",
+    "list_job_records",
+    "request_job_cancel",
 ]

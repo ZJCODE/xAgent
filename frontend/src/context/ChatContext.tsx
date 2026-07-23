@@ -113,11 +113,12 @@ function scheduledMessagePayload(message: unknown): ScheduledMessagePayload | un
 
 function pushMessageMeta(event: ChatEvent): string {
   if (event.type === "subconscious_message") return "Subconscious";
+  if (event.type === "job_message") return event.job?.title || "Job";
   return event.task?.title || "Scheduled";
 }
 
 function appendPushMessage(patchPanel: (panelId: PanelId, updater: (panel: ChatPanelState) => ChatPanelState) => void, event: ChatEvent) {
-  if (event.type !== "scheduled_message" && event.type !== "subconscious_message") return;
+  if (event.type !== "scheduled_message" && event.type !== "subconscious_message" && event.type !== "job_message") return;
   const scheduledMessage = scheduledMessagePayload(event.message);
   const fallbackMessageContent = typeof event.message === "string" ? event.message : scheduledMessage?.content;
   const content = String(event.content ?? fallbackMessageContent ?? "").trim();
@@ -139,7 +140,13 @@ function appendPushMessage(patchPanel: (panelId: PanelId, updater: (panel: ChatP
     messages: [
       ...current.messages,
       {
-        id: makeId(event.type === "subconscious_message" ? "subconscious" : "scheduled"),
+        id: makeId(
+          event.type === "subconscious_message"
+            ? "subconscious"
+            : event.type === "job_message"
+              ? "job"
+              : "scheduled",
+        ),
         role: "assistant",
         content,
         images: imageUrls,

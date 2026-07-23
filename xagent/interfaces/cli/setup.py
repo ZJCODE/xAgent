@@ -56,6 +56,7 @@ class InitResult:
     workspace_dir: Path
     skills_dir: Path
     tasks_dir: Path
+    jobs_dir: Path
     wrote_files: bool
     conflicts: Tuple[Path, ...]
 
@@ -1750,8 +1751,9 @@ def init_agent_directory(
     workspace_dir = resolved_dir / BaseAgentConfig.WORKSPACE_DIRNAME
     skills_dir = resolved_dir / BaseAgentConfig.SKILLS_DIRNAME
     tasks_dir = resolved_dir / BaseAgentConfig.TASKS_DIRNAME
+    jobs_dir = resolved_dir / BaseAgentConfig.JOBS_DIRNAME
     managed_paths = (config_file, identity_file)
-    runtime_dirs = (memory_dir, messages_dir, workspace_dir, skills_dir, tasks_dir)
+    runtime_dirs = (memory_dir, messages_dir, workspace_dir, skills_dir, tasks_dir, jobs_dir)
     conflicts = tuple(path for path in managed_paths if path.exists())
 
     if conflicts and not force:
@@ -1772,6 +1774,7 @@ def init_agent_directory(
             workspace_dir=workspace_dir,
             skills_dir=skills_dir,
             tasks_dir=tasks_dir,
+            jobs_dir=jobs_dir,
             wrote_files=False,
             conflicts=conflicts,
         )
@@ -1784,6 +1787,7 @@ def init_agent_directory(
     workspace_dir.mkdir(parents=True, exist_ok=True)
     skills_dir.mkdir(parents=True, exist_ok=True)
     tasks_dir.mkdir(parents=True, exist_ok=True)
+    jobs_dir.mkdir(parents=True, exist_ok=True)
 
     selection = selection or _default_init_selection()
     port = allocate_api_port(root=registry_root)
@@ -1801,6 +1805,7 @@ def init_agent_directory(
                 f"Workspace: {workspace_dir}",
                 f"Skills: {skills_dir}",
                 f"Tasks: {tasks_dir}",
+                f"Jobs: {jobs_dir}",
             ]),
             title="xAgent Ready",
             leading_blank_line=True,
@@ -1813,6 +1818,7 @@ def init_agent_directory(
         workspace_dir=workspace_dir,
         skills_dir=skills_dir,
         tasks_dir=tasks_dir,
+        jobs_dir=jobs_dir,
         wrote_files=True,
         conflicts=(),
     )

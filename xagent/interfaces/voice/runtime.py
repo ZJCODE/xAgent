@@ -14,7 +14,9 @@ from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Protocol
 
 from xagent.core.config import AgentConfig
 from xagent.core.runtime import (
+    AsyncJobSupervisor,
     AsyncTaskScheduler,
+    JobRecord,
     ScheduledDeliveryContext,
     ScheduledTaskRecord,
     SubconsciousDelivery,
@@ -44,6 +46,8 @@ class VoiceRuntimeOptions:
     user_id: str = "local_voice"
     stream: bool = True
     tasks_dir: Optional[Path | str] = None
+    jobs_dir: Optional[Path | str] = None
+    workspace_dir: Optional[Path | str] = None
 
 
 class VoiceMicrophone(Protocol):
@@ -114,6 +118,7 @@ class VoiceRuntime:
         self.stop_event = threading.Event()
         self._playback_lock = asyncio.Lock()
         self.task_scheduler: AsyncTaskScheduler | None = None
+        self.job_supervisor: AsyncJobSupervisor | None = None
         self._contacts_file: Optional[Path] = None
         if self.options.tasks_dir is not None:
             self.task_scheduler = AsyncTaskScheduler(
@@ -123,6 +128,18 @@ class VoiceRuntime:
             )
             runtime_root = Path(self.options.tasks_dir).parent
             self._contacts_file = resolve_contacts_path(runtime_root)
+            jobs_dir = self.options.jobs_dir or (runtime_root / AgentConfig.JOBS_DIRNAME)
+            workspace_dir = self.options.workspace_dir or getattr(
+                agent, "workspace_dir", runtime_root / AgentConfig.WORKSPACE_DIRNAME
+            )
+            self.job_supervisor = AsyncJobSupervisor(
+                jobs_dir,
+                can_notify=self._can_notify_job,
+                notify=self._notify_job,
+                workspace_dir=workspace_dir,
+                max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
+                logger_=self.logger,
+            )
         self._wake_active = False
         self._wake_last_activity_at = 0.0
 
@@ -142,6 +159,8 @@ class VoiceRuntime:
         try:
             if self.task_scheduler is not None:
                 await self.task_scheduler.start()
+            if self.job_supervisor is not None:
+                await self.job_supervisor.start()
             next_utterance_task = self._create_next_utterance_task(utterances)
             while not self.stop_event.is_set():
                 utterance_result = await self._await_next_utterance(next_utterance_task)
@@ -164,6 +183,8 @@ class VoiceRuntime:
             self.stop_event.set()
             if next_utterance_task is not None and not next_utterance_task.done():
                 next_utterance_task.cancel()
+            if self.job_supervisor is not None:
+                await self.job_supervisor.stop()
             if self.task_scheduler is not None:
                 await self.task_scheduler.stop()
 
@@ -481,6 +502,28 @@ class VoiceRuntime:
 
     def _can_handle_scheduled_task(self, task: ScheduledTaskRecord) -> bool:
         return task.kind == "task" and task.delivery_channel == "voice"
+
+    def _can_notify_job(self, job: JobRecord) -> bool:
+        return job.delivery_channel in {"voice", "local", ""}
+
+    async def _notify_job(self, job: JobRecord) -> None:
+        title = job.title or "Background job"
+        result = job.payload.get("result") if isinstance(job.payload.get("result"), dict) else {}
+        detail = str((result or {}).get("summary") or job.payload.get("last_error") or job.status).strip()
+        summary = f"[job {job.status}] {title}: {detail}"
+        observe = getattr(self.agent, "observe", None)
+        if callable(observe):
+            try:
+                await observe(
+                    context=summary,
+                    source="background_job",
+                    event_type="job_completed" if job.status == "completed" else f"job_{job.status}",
+                    metadata={"job_id": job.job_id, "status": job.status, "title": job.title, "command": job.command},
+                    channel="voice",
+                )
+            except Exception:
+                self.logger.debug("Failed to observe voice job completion for %s", job.job_id, exc_info=True)
+        await self._play_scheduled_text(summary)
 
     async def _dispatch_scheduled_task(self, task: ScheduledTaskRecord) -> None:
         text = await self._scheduled_task_text(task)
