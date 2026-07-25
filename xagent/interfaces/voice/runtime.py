@@ -134,10 +134,10 @@ class VoiceRuntime:
             )
             self.job_supervisor = AsyncJobSupervisor(
                 jobs_dir,
-                can_handle=self._can_notify_job,
+                can_handle=self._can_handle_job,
                 can_notify=self._can_notify_job,
                 notify=self._notify_job,
-                owner_channels=("voice", "local", ""),
+                owner_channels=("voice",),
                 workspace_dir=workspace_dir,
                 max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
                 logger_=self.logger,
@@ -505,8 +505,12 @@ class VoiceRuntime:
     def _can_handle_scheduled_task(self, task: ScheduledTaskRecord) -> bool:
         return task.kind == "task" and task.delivery_channel == "voice"
 
+    def _can_handle_job(self, job: JobRecord) -> bool:
+        # api owns local/empty; voice only runs voice-channel jobs.
+        return job.delivery_channel == "voice"
+
     def _can_notify_job(self, job: JobRecord) -> bool:
-        return job.delivery_channel in {"voice", "local", ""}
+        return job.delivery_channel == "voice"
 
     async def _notify_job(self, job: JobRecord) -> None:
         title = job.title or "Background job"

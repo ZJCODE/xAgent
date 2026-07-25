@@ -20,7 +20,14 @@ from xagent.core.runtime import (
     request_job_cancel,
     scheduled_delivery_context,
 )
-from xagent.core.runtime.jobs import CLAIM_MARKER, JOB_STATUS_CLAIMED, _write_json_atomic
+from xagent.core.runtime.jobs import (
+    CLAIM_MARKER,
+    JOB_STATUS_CLAIMED,
+    JOB_STATUS_RUNNING,
+    _release_resource_locks,
+    _try_acquire_resource_locks,
+    _write_json_atomic,
+)
 from xagent.tools.jobs_tool import create_manage_jobs_tool
 
 
@@ -191,6 +198,7 @@ class BackgroundJobTests(unittest.TestCase):
                 await supervisor._run_claimed(
                     claimed_path,
                     get_job(jobs_dir, job.job_id),
+                    [],
                 )
                 archived = list_archived_job_records(jobs_dir)
                 self.assertEqual(len(archived), 1)
@@ -337,6 +345,179 @@ class BackgroundJobTests(unittest.TestCase):
                     await asyncio.sleep(0.05)
                 await supervisor.stop()
                 self.assertEqual(len(list_archived_job_records(jobs_dir)), 1)
+
+        asyncio.run(run_test())
+
+    def test_enqueue_dedupes_resources(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job = enqueue_job(
+                kind="process",
+                command="true",
+                jobs_dir=tmpdir,
+                channel="api",
+                target={},
+                resources=["gpu:0", "gpu:0", "disk", "gpu:0"],
+            )
+            self.assertEqual(job.resources, ["gpu:0", "disk"])
+
+    def test_resource_locks_are_exclusive_across_handles(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            jobs_dir = Path(tmpdir)
+            first = _try_acquire_resource_locks(jobs_dir, ["serial:dmx"])
+            second = _try_acquire_resource_locks(jobs_dir, ["serial:dmx"])
+            self.assertIsNotNone(first)
+            self.assertIsNone(second)
+            _release_resource_locks(first or [])
+            third = _try_acquire_resource_locks(jobs_dir, ["serial:dmx"])
+            self.assertIsNotNone(third)
+            _release_resource_locks(third or [])
+
+    def test_supervisor_adopts_live_pid_after_restart(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                jobs_dir = Path(tmpdir) / "jobs"
+                workspace = Path(tmpdir) / "workspace"
+                workspace.mkdir()
+                job = enqueue_job(
+                    kind="process",
+                    command="true",
+                    jobs_dir=jobs_dir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    cwd=str(workspace),
+                )
+                process = await asyncio.create_subprocess_shell(
+                    "python3 -c \"import time; time.sleep(60)\"",
+                    cwd=str(workspace),
+                    start_new_session=True,
+                )
+                self.assertIsNotNone(process.pid)
+                path = jobs_dir / f"{job.job_id}.json"
+                claimed_path = path.with_name(f"{path.name}{CLAIM_MARKER}adopt01")
+                path.rename(claimed_path)
+                payload = dict(job.payload)
+                payload["status"] = JOB_STATUS_RUNNING
+                payload["started_at"] = payload["created_at"]
+                payload["execution"] = {
+                    "pid": process.pid,
+                    "pgid": process.pid,
+                    "supervisor_pid": 1_000_000 + (os.getpid() % 1000),
+                    "claimed_at_ts": time.time() - 60,
+                    "started_at": payload["created_at"],
+                }
+                _write_json_atomic(claimed_path, payload)
+
+                supervisor = AsyncJobSupervisor(
+                    jobs_dir,
+                    can_handle=lambda record: record.delivery_channel == "api",
+                    can_notify=lambda record: False,
+                    notify=lambda record: asyncio.sleep(0),
+                    owner_channels=("api",),
+                    workspace_dir=workspace,
+                    poll_interval_seconds=0.05,
+                    cancel_grace_seconds=0.2,
+                )
+                await supervisor.start()
+                for _ in range(40):
+                    if job.job_id in supervisor._inflight:
+                        break
+                    await asyncio.sleep(0.05)
+                self.assertIn(job.job_id, supervisor._inflight)
+                request_job_cancel(jobs_dir, job.job_id)
+                supervisor.wake()
+                for _ in range(80):
+                    if not list_job_records(jobs_dir, include_failed=False, include_claimed=True):
+                        break
+                    await asyncio.sleep(0.05)
+                await supervisor.stop()
+                archived = list_archived_job_records(jobs_dir)
+                self.assertEqual(len(archived), 1)
+                self.assertEqual(archived[0].status, "cancelled")
+                self.assertTrue(bool((archived[0].payload.get("execution") or {}).get("adopted")))
+
+        asyncio.run(run_test())
+
+    def test_supervisor_stop_marks_running_job_cancelled(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                jobs_dir = Path(tmpdir) / "jobs"
+                workspace = Path(tmpdir) / "workspace"
+                workspace.mkdir()
+                enqueue_job(
+                    kind="process",
+                    command="python3 -c \"import time; time.sleep(30)\"",
+                    jobs_dir=jobs_dir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                )
+                supervisor = AsyncJobSupervisor(
+                    jobs_dir,
+                    can_handle=lambda record: True,
+                    can_notify=lambda record: False,
+                    notify=lambda record: asyncio.sleep(0),
+                    workspace_dir=workspace,
+                    poll_interval_seconds=0.05,
+                    cancel_grace_seconds=0.2,
+                )
+                await supervisor.start()
+                for _ in range(80):
+                    records = list_job_records(jobs_dir, include_claimed=True)
+                    if records and records[0].status == "running":
+                        break
+                    await asyncio.sleep(0.05)
+                await supervisor.stop()
+                archived = list_archived_job_records(jobs_dir)
+                self.assertEqual(len(archived), 1)
+                self.assertEqual(archived[0].status, "cancelled")
+
+        asyncio.run(run_test())
+
+    def test_supervisor_claims_queued_jobs_fifo(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                jobs_dir = Path(tmpdir) / "jobs"
+                workspace = Path(tmpdir) / "workspace"
+                workspace.mkdir()
+                order_file = workspace / "order.txt"
+                enqueue_job(
+                    kind="process",
+                    command="python3 -c \"open('order.txt','a').write('old\\n'); import time; time.sleep(0.2)\"",
+                    jobs_dir=jobs_dir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    cwd=str(workspace),
+                    title="old",
+                )
+                await asyncio.sleep(0.02)
+                enqueue_job(
+                    kind="process",
+                    command="python3 -c \"open('order.txt','a').write('new\\n')\"",
+                    jobs_dir=jobs_dir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    cwd=str(workspace),
+                    title="new",
+                )
+                supervisor = AsyncJobSupervisor(
+                    jobs_dir,
+                    can_handle=lambda record: True,
+                    can_notify=lambda record: False,
+                    notify=lambda record: asyncio.sleep(0),
+                    workspace_dir=workspace,
+                    poll_interval_seconds=0.05,
+                    max_concurrent_jobs=1,
+                )
+                await supervisor.start()
+                for _ in range(80):
+                    if len(list_archived_job_records(jobs_dir)) >= 2:
+                        break
+                    await asyncio.sleep(0.05)
+                await supervisor.stop()
+                self.assertEqual(order_file.read_text(encoding="utf-8"), "old\nnew\n")
 
         asyncio.run(run_test())
 
