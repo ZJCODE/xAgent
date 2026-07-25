@@ -192,6 +192,7 @@ class AgentConfig:
             "- Use `status` or `list` only when the user asks for progress; use `cancel` to stop a running or queued job.\n"
             "- Keep `run_command` for short synchronous shell checks. Keep `manage_scheduled_tasks` for future reminders or due-time agent turns.\n"
             "- Job cwd must stay inside the agent workspace or the job work directory.\n"
+            "- Jobs keep running while you chat only while a channel runtime (api/feishu/weixin/voice) stays up; they are not OS daemons across full restart.\n"
         ),
         "web_search": (
             "\n**Web Search:**\n"

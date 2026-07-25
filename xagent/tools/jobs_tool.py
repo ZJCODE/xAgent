@@ -25,7 +25,8 @@ def create_manage_jobs_tool(*, jobs_dir: str, wake: Optional[Callable[[], None]]
         description=(
             "Start, list, inspect, cancel, or delete background jobs. "
             "Use this for long-running process work that should continue independently "
-            "while conversation stays responsive. Prefer this over run_command for multi-minute work."
+            "while conversation stays responsive. Prefer this over run_command for multi-minute work. "
+            "Requires a living channel runtime; jobs are not OS daemons."
         ),
         param_descriptions={
             "action": "'start', 'list', 'status', 'cancel', or 'delete'.",

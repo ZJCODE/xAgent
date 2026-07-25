@@ -2,20 +2,25 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from xagent.core.runtime import (
     AsyncJobSupervisor,
     ScheduledDeliveryContext,
+    delete_job,
     enqueue_job,
     get_job,
+    has_live_job_supervisor,
     list_archived_job_records,
     list_job_records,
     request_job_cancel,
     scheduled_delivery_context,
 )
+from xagent.core.runtime.jobs import CLAIM_MARKER, JOB_STATUS_CLAIMED, _write_json_atomic
 from xagent.tools.jobs_tool import create_manage_jobs_tool
 
 
@@ -63,10 +68,12 @@ class BackgroundJobTests(unittest.TestCase):
                     jobs_dir,
                     can_notify=lambda record: record.delivery_channel == "api",
                     notify=notify,
+                    owner_channels=("api", "local", ""),
                     workspace_dir=workspace,
                     poll_interval_seconds=0.05,
                 )
                 await supervisor.start()
+                self.assertTrue(has_live_job_supervisor(jobs_dir, channel="api"))
                 for _ in range(80):
                     active = list_job_records(jobs_dir, include_failed=False, include_claimed=True)
                     if not active:
@@ -81,6 +88,51 @@ class BackgroundJobTests(unittest.TestCase):
                 self.assertEqual(notified, [job.job_id])
                 stdout = (jobs_dir / job.job_id / "stdout.log").read_text(encoding="utf-8")
                 self.assertIn("done", stdout)
+                self.assertFalse(has_live_job_supervisor(jobs_dir, channel="api"))
+
+        asyncio.run(run_test())
+
+    def test_supervisor_skips_foreign_channel_jobs(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                jobs_dir = Path(tmpdir) / "jobs"
+                workspace = Path(tmpdir) / "workspace"
+                workspace.mkdir()
+                job = enqueue_job(
+                    kind="process",
+                    command="python3 -c \"print('stolen')\"",
+                    jobs_dir=jobs_dir,
+                    channel="feishu",
+                    target={"chat_id": "oc_x"},
+                    user_id="u1",
+                    title="Foreign",
+                )
+                notified = []
+
+                async def notify(record):
+                    notified.append(record.job_id)
+
+                foreign = AsyncJobSupervisor(
+                    jobs_dir,
+                    can_handle=lambda record: record.delivery_channel == "api",
+                    can_notify=lambda record: record.delivery_channel == "api",
+                    notify=notify,
+                    owner_channels=("api",),
+                    workspace_dir=workspace,
+                    poll_interval_seconds=0.05,
+                )
+                await foreign.start()
+                for _ in range(20):
+                    await foreign.tick()
+                    await asyncio.sleep(0.02)
+                await foreign.stop()
+
+                active = list_job_records(jobs_dir, include_claimed=True)
+                self.assertEqual(len(active), 1)
+                self.assertEqual(active[0].job_id, job.job_id)
+                self.assertEqual(active[0].status, "queued")
+                self.assertEqual(notified, [])
+                self.assertEqual(list_archived_job_records(jobs_dir), [])
 
         asyncio.run(run_test())
 
@@ -101,7 +153,7 @@ class BackgroundJobTests(unittest.TestCase):
             self.assertEqual(len(archived), 1)
             self.assertEqual(archived[0].status, "cancelled")
 
-    def test_cancel_running_job(self):
+    def test_cancel_claimed_before_spawn_does_not_start(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 jobs_dir = Path(tmpdir) / "jobs"
@@ -109,11 +161,62 @@ class BackgroundJobTests(unittest.TestCase):
                 workspace.mkdir()
                 job = enqueue_job(
                     kind="process",
-                    command="python3 -c \"import time; time.sleep(30)\"",
+                    command="python3 -c \"open('STARTED','w').write('x'); import time; time.sleep(30)\"",
                     jobs_dir=jobs_dir,
                     channel="api",
                     target={"user_id": "web_user"},
                     user_id="web_user",
+                    cwd=str(workspace),
+                )
+                # Simulate claim + cancel race: rename to claimed, mark claimed, cancel.
+                path = jobs_dir / f"{job.job_id}.json"
+                claimed_path = path.with_name(f"{path.name}{CLAIM_MARKER}race0001")
+                path.rename(claimed_path)
+                payload = dict(job.payload)
+                payload["status"] = JOB_STATUS_CLAIMED
+                _write_json_atomic(claimed_path, payload)
+                cancelled = request_job_cancel(jobs_dir, job.job_id)
+                self.assertTrue(bool(cancelled.payload.get("cancel_requested")))
+                self.assertNotEqual(cancelled.status, "cancelled")
+
+                supervisor = AsyncJobSupervisor(
+                    jobs_dir,
+                    can_notify=lambda record: False,
+                    notify=lambda record: asyncio.sleep(0),
+                    workspace_dir=workspace,
+                    poll_interval_seconds=0.05,
+                    cancel_grace_seconds=0.2,
+                )
+                await supervisor._run_claimed(
+                    claimed_path,
+                    get_job(jobs_dir, job.job_id),
+                )
+                archived = list_archived_job_records(jobs_dir)
+                self.assertEqual(len(archived), 1)
+                self.assertEqual(archived[0].status, "cancelled")
+                self.assertFalse((workspace / "STARTED").exists())
+
+        asyncio.run(run_test())
+
+    def test_cancel_running_job_kills_process_group(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                jobs_dir = Path(tmpdir) / "jobs"
+                workspace = Path(tmpdir) / "workspace"
+                workspace.mkdir()
+                # Child sleeps independently of the shell; group kill must reap it.
+                job = enqueue_job(
+                    kind="process",
+                    command=(
+                        "python3 -c \"import os, time; "
+                        "open('child.pid','w').write(str(os.getpid())); "
+                        "time.sleep(60)\""
+                    ),
+                    jobs_dir=jobs_dir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    cwd=str(workspace),
                 )
                 supervisor = AsyncJobSupervisor(
                     jobs_dir,
@@ -124,14 +227,14 @@ class BackgroundJobTests(unittest.TestCase):
                     cancel_grace_seconds=0.2,
                 )
                 await supervisor.start()
-                running = None
-                for _ in range(80):
-                    records = list_job_records(jobs_dir, include_claimed=True)
-                    if records and records[0].status == "running":
-                        running = records[0]
+                child_pid = None
+                for _ in range(100):
+                    pid_file = workspace / "child.pid"
+                    if pid_file.is_file():
+                        child_pid = int(pid_file.read_text(encoding="utf-8").strip())
                         break
                     await asyncio.sleep(0.05)
-                self.assertIsNotNone(running)
+                self.assertIsNotNone(child_pid)
                 request_job_cancel(jobs_dir, job.job_id)
                 supervisor.wake()
                 for _ in range(80):
@@ -142,8 +245,35 @@ class BackgroundJobTests(unittest.TestCase):
                 archived = list_archived_job_records(jobs_dir)
                 self.assertEqual(len(archived), 1)
                 self.assertEqual(archived[0].status, "cancelled")
+                # Child must be gone (process-group kill).
+                dead = False
+                for _ in range(40):
+                    try:
+                        os.kill(child_pid, 0)
+                    except ProcessLookupError:
+                        dead = True
+                        break
+                    time.sleep(0.05)
+                self.assertTrue(dead, f"child pid {child_pid} still alive after cancel")
 
         asyncio.run(run_test())
+
+    def test_delete_job_removes_work_and_logs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job = enqueue_job(
+                kind="process",
+                command="echo hi",
+                jobs_dir=tmpdir,
+                channel="api",
+                target={"user_id": "web_user"},
+                user_id="web_user",
+            )
+            job_dir = Path(tmpdir) / job.job_id
+            (job_dir / "stdout.log").write_text("log\n", encoding="utf-8")
+            self.assertTrue(job_dir.is_dir())
+            delete_job(tmpdir, job.job_id)
+            self.assertFalse(job.path.exists())
+            self.assertFalse(job_dir.exists())
 
     def test_manage_jobs_tool_start_uses_delivery_context(self):
         async def run_test():

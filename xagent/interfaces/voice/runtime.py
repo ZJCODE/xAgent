@@ -134,8 +134,10 @@ class VoiceRuntime:
             )
             self.job_supervisor = AsyncJobSupervisor(
                 jobs_dir,
+                can_handle=self._can_notify_job,
                 can_notify=self._can_notify_job,
                 notify=self._notify_job,
+                owner_channels=("voice", "local", ""),
                 workspace_dir=workspace_dir,
                 max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
                 logger_=self.logger,

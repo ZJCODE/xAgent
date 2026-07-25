@@ -89,8 +89,10 @@ class ApiChannelAdapter:
 
         supervisor = AsyncJobSupervisor(
             self.jobs_dir,
+            can_handle=self.jobs.can_notify,
             can_notify=self.jobs.can_notify,
             notify=self.jobs.notify,
+            owner_channels=("", "api", "local"),
             workspace_dir=self.workspace_dir,
             max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
             logger_=self.logger,
