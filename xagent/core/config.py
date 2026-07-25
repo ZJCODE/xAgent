@@ -165,33 +165,28 @@ class AgentConfig:
         ),
         "run_command": (
             "\n**Shell Command Execution:**\n"
-            "- Default cwd is the agent workspace, your self-managed work area. Work there freely when useful.\n"
-            "- Outside the workspace, get explicit approval before write, delete, install, network, or git-mutation commands.\n"
+            "- Use `run_command` for short synchronous checks in the current turn (read-only probes, quick inspection).\n"
+            "- Default cwd is the agent workspace. Outside it, get explicit approval before write, delete, install, network, or git-mutation commands.\n"
             "- Prefer read-only inspection first. Never run destructive commands or expose secrets.\n"
-            "- Keep commands scoped and bounded. On failure, use return code/stderr to explain the cause and next fix.\n"
+            "- If work is expected to exceed ~30s, the user wants background execution, or it should continue while you keep chatting, use `manage_jobs` instead of stretching this tool.\n"
+            "- Calendar or repeating schedules belong to `manage_scheduled_tasks`, not shell loops.\n"
         ),
         "manage_scheduled_tasks": (
-            "\n**Scheduled Tasks and Reminders:**\n"
-            "- Use `manage_scheduled_tasks` for reminders, later messages, future work, or task management.\n"
-            "- `message` sends fixed text later; `agent` performs a due-time agent turn that may use tools.\n"
-            "- Use `create`, `list`, `duplicate`, `update`, `pause`, `resume`, or `delete`; use structured recurrence for repeating daily, weekly, or interval tasks.\n"
-            "- Completed tasks are immutable archives. List with `scope=archive`, or duplicate one with a fresh future schedule while preserving its delivery target.\n"
-            "- Use `interval_seconds` plus `duration_seconds` or `end_at` for bounded requests like every 10 minutes for the next 5 hours.\n"
-            "- For requests like from 10:00 to 12:00 every 10 minutes, use `start_at`, `end_at`, and `interval_seconds` together. Do not simulate future starts with a huge `delay_seconds`.\n"
-            "- Interval end time is mandatory: if the user does not state a duration or end time, you MUST ask before creating. NEVER invent, assume, or default a window.\n"
-            "- Prefer `pause` over `delete` for temporary stops; use `update` to change content or extend `end_at` instead of recreating.\n"
-            "- Interval tasks first run after the first interval by default; use `delay_seconds=0` only when the user asks to start immediately.\n"
-            "- Schedule only future content, then briefly confirm. Never use schedules to bypass required approval.\n"
-            "- Do NOT use scheduled tasks for long-running work that should continue while you keep chatting; use `manage_jobs` instead.\n"
+            "\n**Scheduled Tasks (Timetable):**\n"
+            "- Use `manage_scheduled_tasks` for timetable work: one-shot (`run_at` / `delay_seconds`), daily, weekly, or bounded interval schedules.\n"
+            "- `message` delivers fixed text when due; `agent` opens one due-time agent turn that may use tools. An `agent` task is not a background job.\n"
+            "- Bounded intervals need user-provided `duration_seconds` or `end_at` (optional `start_at`). If missing, ask; never invent a window.\n"
+            "- Prefer `pause` over `delete` for temporary stops; use `update` to extend or retarget; duplicate archived tasks for a fresh schedule.\n"
+            "- Periodic repetition (e.g. every 2 minutes for 3 hours) is a Task. Continuous long-running process work that should not block chat is `manage_jobs`.\n"
+            "- Never use schedules to bypass required approval.\n"
         ),
         "manage_jobs": (
             "\n**Background Jobs:**\n"
-            "- Use `manage_jobs` to start long-running work that must continue independently while you keep responding.\n"
-            "- Prefer jobs for multi-minute scripts, pipelines, renders, hardware sequences, or any wall-clock work that should not block conversation.\n"
+            "- Use `manage_jobs` when work can be handed off to an independent process, should keep running while you chat, and can finish via exit code/logs/artifacts.\n"
+            "- Prefer jobs when expected runtime exceeds ~30s or the user asks to run in the background. Duration alone is not enough if the work still needs step-by-step interactive decisions.\n"
             "- `start` returns a job_id immediately; confirm briefly and continue. Do not wait, poll in a loop, or hold the turn open.\n"
-            "- Use `status` or `list` only when the user asks for progress; use `cancel` to stop a running or queued job.\n"
-            "- Keep `run_command` for short synchronous shell checks. Keep `manage_scheduled_tasks` for future reminders or due-time agent turns.\n"
-            "- Job cwd must stay inside the agent workspace or the job work directory.\n"
+            "- Timetable triggers (one-shot, daily, weekly, bounded interval) use `manage_scheduled_tasks`. Short synchronous checks use `run_command`.\n"
+            "- Job cwd must stay inside the agent workspace or the job work directory. Use `resources` for exclusive devices.\n"
         ),
         "web_search": (
             "\n**Web Search:**\n"
@@ -220,7 +215,8 @@ class AgentConfig:
         "read_skill": (
             "\n**Agent Skills Loading:**\n"
             "- Use the Available Skills layer for discovery. When a skill matches, load `SKILL.md` with `read_skill` before applying it.\n"
-            "- Read referenced files only when the skill or task needs them. Run skill scripts only through `run_command`.\n"
+            "- Read referenced files only when the skill or task needs them.\n"
+            "- Run short skill probes with `run_command`; run long skill scripts or pipelines with `manage_jobs` so chat stays responsive.\n"
         ),
     }
 

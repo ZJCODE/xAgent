@@ -26,11 +26,12 @@ def create_schedule_task_tool(*, tasks_dir: str):
     @function_tool(
         name="manage_scheduled_tasks",
         description=(
-            "Create, list, duplicate, update, pause, resume, or delete scheduled tasks. "
-            "Use message tasks for fixed text, agent tasks for due-time work that may need tools or reasoning, "
-            "and interval schedules for bounded repeated reminders. "
+            "Create, list, duplicate, update, pause, resume, or delete timetable tasks. "
+            "Supports one-shot, daily, weekly, and bounded interval schedules. "
+            "Use message tasks for fixed text and agent tasks for one due-time agent turn (not a background job). "
             "Interval tasks require an explicit user-provided duration_seconds or end_at; "
             "if missing, ask the user and do not invent a default. "
+            "Continuous long-running process work that should not block chat belongs in manage_jobs. "
             "Prefer pause over delete for temporary stops; use update to extend end_at or change content."
         ),
         param_descriptions={
