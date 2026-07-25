@@ -44,7 +44,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
-    AsyncJobSupervisor,
+    AsyncJobDeliveryDispatcher,
     AsyncTaskScheduler,
     JobRecord,
     ScheduledDeliveryContext,
@@ -224,7 +224,7 @@ class FeishuAdapter:
             getattr(agent, "workspace_dir", runtime_root / AgentConfig.WORKSPACE_DIRNAME)
         ).expanduser().resolve()
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._job_supervisor: Optional[AsyncJobSupervisor] = None
+        self._job_delivery: Optional[AsyncJobDeliveryDispatcher] = None
         self._contacts_file = resolve_contacts_path(runtime_root)
 
     # ------------------------------------------------------------------
@@ -293,18 +293,15 @@ class FeishuAdapter:
         )
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
-        job_supervisor = AsyncJobSupervisor(
+        job_delivery = AsyncJobDeliveryDispatcher(
             self._jobs_dir,
-            can_handle=self._can_notify_job,
+            channels=("feishu",),
             can_notify=self._can_notify_job,
             notify=self._notify_job,
-            owner_channels=("feishu",),
-            workspace_dir=self._workspace_dir,
-            max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
             logger_=self.logger,
         )
-        self._job_supervisor = job_supervisor
-        await job_supervisor.start()
+        self._job_delivery = job_delivery
+        await job_delivery.start()
 
         run_task = loop.run_in_executor(None, self.run_blocking)
         stop_task = asyncio.create_task(self._stop_event.wait())
@@ -322,8 +319,8 @@ class FeishuAdapter:
                 if exc is not None:
                     raise exc
         finally:
-            await job_supervisor.stop()
-            self._job_supervisor = None
+            await job_delivery.stop()
+            self._job_delivery = None
             await task_scheduler.stop()
             self._task_scheduler = None
             self._safe_stop()
@@ -2297,8 +2294,8 @@ class FeishuAdapter:
             await observe(
                 context=summary,
                 source="background_job",
-                event_type="job_completed" if job.status == "completed" else f"job_{job.status}",
-                metadata={"job_id": job.job_id, "status": job.status, "title": job.title, "command": job.command},
+                event_type="job_succeeded" if job.status == "succeeded" else f"job_{job.status}",
+                metadata={"job_id": job.job_id, "status": job.status, "title": job.title},
                 channel="feishu",
             )
         except Exception:

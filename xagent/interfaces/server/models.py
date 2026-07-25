@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class ChatImageInput(BaseModel):
@@ -208,7 +208,9 @@ class JobCreateInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    command: str
+    argv: Optional[List[str]] = None
+    command: Optional[str] = None
+    shell: bool = False
     title: Optional[str] = None
     cwd: Optional[str] = None
     timeout_seconds: Optional[int] = None
@@ -216,3 +218,15 @@ class JobCreateInput(BaseModel):
     channel: Optional[str] = "api"
     user_id: Optional[str] = None
     target: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_execution_mode(self):
+        has_argv = bool(self.argv)
+        has_command = bool(str(self.command or "").strip())
+        if has_argv == has_command:
+            raise ValueError("provide exactly one of argv or command")
+        if has_command and not self.shell:
+            raise ValueError("command requires shell=true; prefer argv")
+        if has_argv and self.shell:
+            raise ValueError("shell=true cannot be combined with argv")
+        return self

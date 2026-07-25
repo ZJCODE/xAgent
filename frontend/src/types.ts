@@ -155,14 +155,26 @@ export interface TasksResponse {
   has_more: boolean;
 }
 
-export type JobScope = "current" | "running" | "attention" | "archive";
+export type JobScope = "active" | "attention" | "history";
 
 export interface BackgroundJobItem {
   job_id: string;
   title: string;
   kind: "process" | string;
-  status: "queued" | "claimed" | "running" | "completed" | "failed" | "cancelled" | string;
+  status:
+    | "queued"
+    | "starting"
+    | "running"
+    | "cancelling"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "interrupted"
+    | string;
+  desired_state?: string;
   command: string;
+  argv?: string[] | null;
+  shell?: boolean;
   cwd?: string | null;
   timeout_seconds?: number | null;
   resources?: string[];
@@ -172,6 +184,19 @@ export interface BackgroundJobItem {
   progress?: Record<string, unknown>;
   execution?: Record<string, unknown>;
   result?: Record<string, unknown>;
+  deliveries?: Array<{
+    delivery_id?: string;
+    channel?: string;
+    state?: string;
+    attempt_count?: number;
+    last_error?: string | null;
+    delivered_at?: string | null;
+    expires_at?: string | null;
+  }>;
+  delivery_warning?: string | null;
+  wait_reason?: string | null;
+  retry_of?: string | null;
+  reason?: string | null;
   last_error?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -179,12 +204,15 @@ export interface BackgroundJobItem {
   completed_at?: string | null;
   failed_at?: string | null;
   cancelled_at?: string | null;
+  finished_at?: string | null;
   stdout_tail?: string;
   stderr_tail?: string;
 }
 
 export interface JobCreateInput {
-  command: string;
+  argv?: string[];
+  command?: string;
+  shell?: boolean;
   title?: string;
   cwd?: string;
   timeout_seconds?: number;
@@ -199,10 +227,19 @@ export interface JobsResponse {
   jobs: BackgroundJobItem[];
   total: number;
   counts: {
+    active: number;
     running: number;
     queued: number;
     attention: number;
+    history: number;
     archive: number;
+  };
+  worker: {
+    state: string;
+    available: boolean;
+    pid?: number;
+    last_error?: string | null;
+    last_heartbeat_at?: string | null;
   };
   limit: number;
   offset: number;

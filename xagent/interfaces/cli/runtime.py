@@ -49,6 +49,21 @@ from .paths import (
 from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
 
 
+def handle_run_jobs_worker_internal(args: argparse.Namespace) -> int:
+    """Run the hidden per-agent background-jobs worker."""
+    from ...core.runtime.job_worker import JobWorker
+    from ...core.runtime import JobSettings
+
+    settings = JobSettings.from_mapping(json.loads(args.settings_json))
+    worker = JobWorker(
+        jobs_dir=Path(args.jobs_dir).expanduser().resolve(),
+        workspace_dir=Path(args.workspace_dir).expanduser().resolve(),
+        worker_token=args.worker_token,
+        settings=settings,
+    )
+    return worker.run()
+
+
 def handle_chat(args: argparse.Namespace) -> int:
     agent_cli = AgentCLI(config_dir=str(runtime_dir(args)), verbose=args.verbose)
 

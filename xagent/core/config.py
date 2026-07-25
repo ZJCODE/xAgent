@@ -189,10 +189,11 @@ class AgentConfig:
             "- Use `manage_jobs` to start long-running work that must continue independently while you keep responding.\n"
             "- Prefer jobs for multi-minute scripts, pipelines, renders, hardware sequences, or any wall-clock work that should not block conversation.\n"
             "- `start` returns a job_id immediately; confirm briefly and continue. Do not wait, poll in a loop, or hold the turn open.\n"
-            "- Use `status` or `list` only when the user asks for progress; use `cancel` to stop a running or queued job.\n"
+            "- Prefer `argv` for execution. Use raw `command` only when shell syntax is necessary and set `shell=true` explicitly.\n"
+            "- Use `status` or `list` only when the user asks for progress; use `cancel` to stop a running or queued job, and `retry` only after explicit user intent.\n"
             "- Keep `run_command` for short synchronous shell checks. Keep `manage_scheduled_tasks` for future reminders or due-time agent turns.\n"
-            "- Job cwd must stay inside the agent workspace or the job work directory.\n"
-            "- Jobs keep running while you chat only while a channel runtime (api/feishu/weixin/voice) stays up; they are not OS daemons across full restart.\n"
+            "- Job cwd must stay inside the agent workspace. Do not put secrets in command-line arguments because job specifications are persisted.\n"
+            "- Jobs run in an independent local worker and continue when chat or delivery channels stop.\n"
         ),
         "web_search": (
             "\n**Web Search:**\n"

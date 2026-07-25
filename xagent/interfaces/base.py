@@ -8,6 +8,7 @@ from anthropic import AsyncAnthropic
 # Local imports
 from ..core.agent import Agent
 from ..core.config import AgentConfig
+from ..core.runtime import settings_from_config
 from ..core.providers import (
     ReasoningConfig,
     model_api_uses_anthropic_client,
@@ -175,6 +176,7 @@ class BaseAgentRunner:
             "image_generation",
             "channels",
             "runtime",
+            "jobs",
             "observability",
             "web",
         }
@@ -236,6 +238,10 @@ class BaseAgentRunner:
                     runtime_cfg["heartbeat_interval_seconds"],
                     "runtime.heartbeat_interval_seconds",
                 )
+
+        # Job settings are validated by the same immutable runtime model used
+        # by the worker and attempt runner.
+        settings_from_config(config)
 
         agent_cfg = config.get("agent")
         if agent_cfg is not None:
@@ -788,6 +794,8 @@ class BaseAgentRunner:
             ),
             create_manage_jobs_tool(
                 jobs_dir=str(self.jobs_dir),
+                workspace_dir=str(self.workspace_dir),
+                settings=settings_from_config(self.config),
             ),
             create_attach_artifact_tool(
                 workspace_dir=str(self.workspace_dir),

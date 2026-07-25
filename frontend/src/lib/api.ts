@@ -347,7 +347,7 @@ export async function deleteTask(taskId: string): Promise<{ status: string; dele
 }
 
 export async function getJobs(
-  scope: JobScope = "current",
+  scope: JobScope = "active",
   query = "",
   limit = 50,
   offset = 0,
@@ -359,7 +359,10 @@ export async function getJobs(
 export async function createJob(input: JobCreateInput): Promise<{ status: string; job: BackgroundJobItem }> {
   return requestJson("/api/jobs", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify(input),
   });
 }
@@ -372,8 +375,15 @@ export async function cancelJob(jobId: string): Promise<{ status: string; job: B
   return requestJson(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
 }
 
+export async function retryJob(jobId: string): Promise<{ status: string; job: BackgroundJobItem }> {
+  return requestJson(`/api/jobs/${encodeURIComponent(jobId)}/retry`, {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+
 export async function deleteJob(jobId: string): Promise<{ status: string; deleted: unknown }> {
-  return requestJson(`/api/jobs/delete?job_id=${encodeURIComponent(jobId)}`, { method: "DELETE" });
+  return requestJson(`/api/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
 }
 
 export async function getChannels(): Promise<ChannelsResponse> {

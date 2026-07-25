@@ -35,10 +35,9 @@ def register_api_proxy(
 
     ``/api/*`` and ``/clear_messages`` are intentionally NOT proxied here — they
     are served locally by the admin routes mounted directly on the web client,
-    so most tabs work without any api channel running. Job create still requires
-    a live owning-channel supervisor (api/feishu/weixin/voice); otherwise
-    ``POST /api/jobs`` returns 503. Only the routes that require a live
-    model/tool-executing agent are forwarded: chat, observe, the
+    so most tabs work without any api channel running. Jobs use their own
+    on-demand local worker and therefore remain on this admin surface. Only the
+    routes that require a live model/tool-executing agent are forwarded: chat, observe, the
     scheduled-task/subconscious push socket, and health checks.
     """
     logger = logger or logging.getLogger(__name__)

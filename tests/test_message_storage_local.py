@@ -7,6 +7,19 @@ from xagent.schemas import Message, MessageType, RoleType
 
 
 class MessageStorageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_add_message_once_is_durable_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "messages.sqlite3"
+            storage = MessageStorage(path=str(db_path))
+            first = Message.create(content="first")
+            duplicate = Message.create(content="duplicate")
+            stored_first = await storage.add_message_once(first, dedupe_key="job:1")
+            stored_duplicate = await storage.add_message_once(duplicate, dedupe_key="job:1")
+            self.assertEqual(stored_first.content, "first")
+            self.assertEqual(stored_duplicate.content, "first")
+            messages = await storage.get_messages()
+            self.assertEqual([message.content for message in messages], ["first"])
+
     async def test_cursor_range_is_stable_when_newer_messages_arrive(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "messages.sqlite3"
