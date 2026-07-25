@@ -181,6 +181,7 @@ class BackgroundJobTests(unittest.TestCase):
 
                 supervisor = AsyncJobSupervisor(
                     jobs_dir,
+                    can_handle=lambda record: True,
                     can_notify=lambda record: False,
                     notify=lambda record: asyncio.sleep(0),
                     workspace_dir=workspace,
@@ -220,8 +221,10 @@ class BackgroundJobTests(unittest.TestCase):
                 )
                 supervisor = AsyncJobSupervisor(
                     jobs_dir,
+                    can_handle=lambda record: record.delivery_channel == "api",
                     can_notify=lambda record: False,
                     notify=lambda record: asyncio.sleep(0),
+                    owner_channels=("api",),
                     workspace_dir=workspace,
                     poll_interval_seconds=0.05,
                     cancel_grace_seconds=0.2,
