@@ -22,8 +22,9 @@ def _truncate(text: str, max_size: int) -> str:
 @function_tool(
     name="run_command",
     description=(
-        "Run a scoped shell command and return stdout, stderr, and exit code. "
+        "Run a short synchronous shell command in the current turn and return stdout, stderr, and exit code. "
         "Prefer read-only inspection first; get explicit approval for destructive or sensitive operations. "
+        "For work expected over ~30s, background execution, or anything that should continue while chatting, use manage_jobs. "
         "Output is capped and truncated."
     ),
     param_descriptions={
