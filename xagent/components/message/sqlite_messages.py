@@ -24,6 +24,7 @@ class MessageStorageConfig:
     CONNECT_TIMEOUT = 5.0
     TABLE_NAME = "messages"
     CURRENT_COLUMNS = {"id", "timestamp", "message_json"}
+    DEDUPE_TABLE_NAME = "message_dedupe"
 
 
 class MessageStorage:
@@ -65,6 +66,7 @@ class MessageStorage:
                 connection.execute(f"DROP TABLE IF EXISTS {MessageStorageConfig.TABLE_NAME}")
                 self._create_current_schema(connection)
 
+            self._ensure_dedupe_schema(connection)
             connection.commit()
 
     def _create_current_schema(self, connection: sqlite3.Connection) -> None:
@@ -84,6 +86,22 @@ class MessageStorage:
             f"""
             CREATE INDEX IF NOT EXISTS idx_{MessageStorageConfig.TABLE_NAME}_id
             ON {MessageStorageConfig.TABLE_NAME} (id)
+            """
+        )
+
+    def _ensure_dedupe_schema(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {MessageStorageConfig.DEDUPE_TABLE_NAME} (
+                dedupe_key TEXT PRIMARY KEY,
+                message_id INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_{MessageStorageConfig.DEDUPE_TABLE_NAME}_message
+            ON {MessageStorageConfig.DEDUPE_TABLE_NAME} (message_id)
             """
         )
 
@@ -108,6 +126,53 @@ class MessageStorage:
                 rows,
             )
             connection.commit()
+
+    async def add_message_once(self, message: Message, *, dedupe_key: str) -> Message:
+        """Atomically add one message, or return the prior message for the key."""
+        normalized_key = str(dedupe_key or "").strip()
+        if not normalized_key:
+            raise ValueError("dedupe_key is required")
+        return await asyncio.to_thread(
+            self._add_message_once_sync,
+            message,
+            normalized_key,
+        )
+
+    def _add_message_once_sync(self, message: Message, dedupe_key: str) -> Message:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                f"""
+                SELECT m.message_json
+                FROM {MessageStorageConfig.DEDUPE_TABLE_NAME} d
+                JOIN {MessageStorageConfig.TABLE_NAME} m ON m.id = d.message_id
+                WHERE d.dedupe_key = ?
+                """,
+                (dedupe_key,),
+            ).fetchone()
+            if row is not None:
+                connection.commit()
+                return Message.model_validate_json(row["message_json"])
+            connection.execute(
+                f"DELETE FROM {MessageStorageConfig.DEDUPE_TABLE_NAME} WHERE dedupe_key = ?",
+                (dedupe_key,),
+            )
+            cursor = connection.execute(
+                f"""
+                INSERT INTO {MessageStorageConfig.TABLE_NAME} (timestamp, message_json)
+                VALUES (?, ?)
+                """,
+                (message.timestamp, message.model_dump_json()),
+            )
+            connection.execute(
+                f"""
+                INSERT INTO {MessageStorageConfig.DEDUPE_TABLE_NAME}(dedupe_key, message_id)
+                VALUES (?, ?)
+                """,
+                (dedupe_key, int(cursor.lastrowid)),
+            )
+            connection.commit()
+        return message
 
     async def get_messages(
         self,
@@ -142,6 +207,9 @@ class MessageStorage:
 
     def _clear_messages_sync(self) -> None:
         with self._connect() as connection:
+            connection.execute(
+                f"DELETE FROM {MessageStorageConfig.DEDUPE_TABLE_NAME}"
+            )
             connection.execute(f"DELETE FROM {MessageStorageConfig.TABLE_NAME}")
             connection.commit()
 
@@ -162,6 +230,10 @@ class MessageStorage:
                 if row is None:
                     return None
 
+                connection.execute(
+                    f"DELETE FROM {MessageStorageConfig.DEDUPE_TABLE_NAME} WHERE message_id = ?",
+                    (row["id"],),
+                )
                 connection.execute(
                     f"DELETE FROM {MessageStorageConfig.TABLE_NAME} WHERE id = ?",
                     (row["id"],),

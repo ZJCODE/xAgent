@@ -1,15 +1,35 @@
-import { Eye, Play, Plus, RefreshCw, Search, Square, Trash2, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Eye,
+  Play,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, EmptyState, IconButton, PageShell, PageToolbar, SearchField, StatusBadge } from "../components/ui";
-import { cancelJob, createJob, deleteJob, getJob, getJobs } from "../lib/api";
-import type { BackgroundJobItem, JobScope, JobsResponse } from "../types";
+import {
+  Button,
+  EmptyState,
+  IconButton,
+  PageShell,
+  PageToolbar,
+  SearchField,
+  StatusBadge,
+} from "../components/ui";
+import { cancelJob, createJob, deleteJob, getJob, getJobs, retryJob } from "../lib/api";
+import type { BackgroundJobItem, JobCreateInput, JobScope, JobsResponse } from "../types";
 
 const PAGE_SIZE = 50;
-type PageScope = Exclude<JobScope, "current">;
+const ACTIVE_STATES = new Set(["queued", "starting", "running", "cancelling"]);
 
 function formatStamp(value?: string | null): string {
   if (!value) return "";
-  const date = new Date(value.replace(" ", "T"));
+  const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
 }
@@ -22,24 +42,32 @@ function jobTarget(job: BackgroundJobItem): string {
 }
 
 function jobStatusTone(status: string): "good" | "muted" | "danger" | "info" {
-  if (status === "running" || status === "queued" || status === "claimed") return "info";
-  if (status === "completed" || status === "cancelled") return "muted";
-  if (status === "failed") return "danger";
-  return "good";
+  if (ACTIVE_STATES.has(status)) return "info";
+  if (status === "succeeded") return "good";
+  if (status === "failed" || status === "interrupted") return "danger";
+  return "muted";
 }
 
 function lifecycleTime(job: BackgroundJobItem): string {
   if (job.status === "running") return formatStamp(job.started_at) || "Running now";
-  if (job.status === "claimed") return formatStamp(job.updated_at) || "Starting";
+  if (job.status === "starting") return formatStamp(job.updated_at) || "Starting";
+  if (job.status === "cancelling") return formatStamp(job.updated_at) || "Stopping process";
   if (job.status === "queued") return formatStamp(job.created_at) || "Queued";
-  if (job.status === "completed") return formatStamp(job.completed_at);
-  if (job.status === "failed") return formatStamp(job.failed_at);
-  if (job.status === "cancelled") return formatStamp(job.cancelled_at);
-  return formatStamp(job.updated_at);
+  return formatStamp(job.finished_at || job.updated_at);
+}
+
+function waitReason(reason?: string | null): string {
+  if (!reason) return "";
+  if (reason === "waiting_for_worker") return "Waiting for worker";
+  if (reason === "concurrency_limit") return "Waiting for an execution slot";
+  if (reason.startsWith("waiting_for_resource:")) {
+    return `Waiting for ${reason.slice("waiting_for_resource:".length)}`;
+  }
+  return reason.replaceAll("_", " ");
 }
 
 export function JobsPage() {
-  const [scope, setScope] = useState<PageScope>("running");
+  const [scope, setScope] = useState<JobScope>("active");
   const [data, setData] = useState<JobsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -49,6 +77,11 @@ export function JobsPage() {
   const [creating, setCreating] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftCommand, setDraftCommand] = useState("");
+  const [draftMode, setDraftMode] = useState<"shell" | "argv">("shell");
+  const [draftCwd, setDraftCwd] = useState("");
+  const [draftTimeout, setDraftTimeout] = useState("");
+  const [draftResources, setDraftResources] = useState("");
+  const [advanced, setAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const jobs = useMemo(() => data?.jobs || [], [data]);
@@ -79,7 +112,7 @@ export function JobsPage() {
   }, [scope, appliedQuery]);
 
   useEffect(() => {
-    if (scope === "archive") return;
+    if (scope !== "active") return;
     const timer = window.setInterval(() => {
       void getJobs(scope, appliedQuery, PAGE_SIZE, 0).then(setData).catch(() => undefined);
     }, 3000);
@@ -95,19 +128,48 @@ export function JobsPage() {
     }
   };
 
+  const resetDraft = () => {
+    setDraftTitle("");
+    setDraftCommand("");
+    setDraftMode("shell");
+    setDraftCwd("");
+    setDraftTimeout("");
+    setDraftResources("");
+    setAdvanced(false);
+  };
+
+  const createInput = (): JobCreateInput => {
+    const input: JobCreateInput = {
+      title: draftTitle.trim() || undefined,
+      cwd: draftCwd.trim() || undefined,
+      timeout_seconds: draftTimeout ? Number(draftTimeout) : undefined,
+      resources: draftResources
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    };
+    if (draftMode === "shell") {
+      input.command = draftCommand.trim();
+      input.shell = true;
+      return input;
+    }
+    const parsed: unknown = JSON.parse(draftCommand);
+    if (!Array.isArray(parsed) || !parsed.length || !parsed.every((item) => typeof item === "string")) {
+      throw new Error("Argv mode requires a JSON string array, for example [\"python3\", \"script.py\"].");
+    }
+    input.argv = parsed;
+    return input;
+  };
+
   const onCreate = async () => {
     if (!draftCommand.trim()) return;
     setSaving(true);
     setError("");
     try {
-      await createJob({
-        command: draftCommand.trim(),
-        title: draftTitle.trim() || undefined,
-      });
+      await createJob(createInput());
       setCreating(false);
-      setDraftTitle("");
-      setDraftCommand("");
-      setScope("running");
+      resetDraft();
+      setScope("active");
       setAppliedQuery("");
       setQuery("");
       await load(false);
@@ -121,7 +183,20 @@ export function JobsPage() {
   const onCancel = async (job: BackgroundJobItem) => {
     setError("");
     try {
-      await cancelJob(job.job_id);
+      const response = await cancelJob(job.job_id);
+      if (selectedJob?.job_id === job.job_id) setSelectedJob(response.job);
+      await load(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const onRetry = async (job: BackgroundJobItem) => {
+    setError("");
+    try {
+      await retryJob(job.job_id);
+      setSelectedJob(null);
+      setScope("active");
       await load(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -141,16 +216,20 @@ export function JobsPage() {
   };
 
   const renderActions = (job: BackgroundJobItem) => {
-    if (job.status === "queued" || job.status === "claimed" || job.status === "running") {
+    if (ACTIVE_STATES.has(job.status)) {
       return (
         <div className="task-row-actions">
           <Button className="task-action-button" onClick={() => void openDetails(job)}>
             <Eye size={15} />
             View
           </Button>
-          <Button className="task-action-button" onClick={() => void onCancel(job)} disabled={saving}>
+          <Button
+            className="task-action-button"
+            onClick={() => void onCancel(job)}
+            disabled={saving || job.status === "cancelling"}
+          >
             <Square size={15} />
-            Cancel
+            {job.status === "cancelling" ? "Cancelling" : "Cancel"}
           </Button>
         </div>
       );
@@ -161,12 +240,20 @@ export function JobsPage() {
           <Eye size={15} />
           View
         </Button>
+        {job.status === "failed" || job.status === "interrupted" ? (
+          <Button className="task-action-button" onClick={() => void onRetry(job)}>
+            <RotateCcw size={15} />
+            Retry
+          </Button>
+        ) : null}
         <IconButton variant="danger" onClick={() => void onDelete(job)} title="Delete job">
           <Trash2 size={15} />
         </IconButton>
       </div>
     );
   };
+
+  const workerUnavailable = data?.worker && !data.worker.available;
 
   return (
     <PageShell>
@@ -206,14 +293,26 @@ export function JobsPage() {
         }
       />
 
+      {workerUnavailable ? (
+        <div className="error-banner">
+          Job worker is {data?.worker.state || "unavailable"}.
+          {data?.worker.last_error ? ` ${data.worker.last_error}` : " Queued work will resume when it can start."}
+        </div>
+      ) : data?.worker ? (
+        <div className="job-worker-strip">
+          Worker: {data.worker.state}
+          {data.worker.last_heartbeat_at ? ` · heartbeat ${formatStamp(data.worker.last_heartbeat_at)}` : ""}
+        </div>
+      ) : null}
+
       <div className="tasks-layout">
         <div className="task-tab-bar" role="tablist" aria-label="Job lifecycle">
           {(
             [
-              ["running", "Active", data?.counts.running],
+              ["active", "Active", data?.counts.active],
               ["attention", "Needs attention", data?.counts.attention],
-              ["archive", "Archive", data?.counts.archive],
-            ] as Array<[PageScope, string, number | undefined]>
+              ["history", "History", data?.counts.history],
+            ] as Array<[JobScope, string, number | undefined]>
           ).map(([value, label, count]) => (
             <button
               key={value}
@@ -242,15 +341,19 @@ export function JobsPage() {
                     <div className="task-row-title">
                       <h3>{job.title || "Background job"}</h3>
                       <div className="task-row-badges">
-                        <StatusBadge tone="info">{job.kind}</StatusBadge>
+                        <StatusBadge tone="info">{job.shell ? "shell" : job.kind}</StatusBadge>
                         <StatusBadge tone={jobStatusTone(job.status)}>{job.status}</StatusBadge>
                       </div>
                     </div>
                     <p>{job.command || job.job_id}</p>
                     {job.last_error ? <p className="task-error-copy">{job.last_error}</p> : null}
+                    {job.delivery_warning ? <p className="task-error-copy">Delivery: {job.delivery_warning}</p> : null}
                     <div className="chip-list">
                       <span className="data-chip data-chip-wrap">{lifecycleTime(job) || "Unknown time"}</span>
                       <span className="data-chip data-chip-wrap">{jobTarget(job)}</span>
+                      {job.wait_reason ? (
+                        <span className="data-chip data-chip-wrap">{waitReason(job.wait_reason)}</span>
+                      ) : null}
                     </div>
                   </div>
                   {renderActions(job)}
@@ -267,11 +370,11 @@ export function JobsPage() {
               title={
                 appliedQuery
                   ? `No ${scope} jobs match “${appliedQuery}”`
-                  : scope === "running"
+                  : scope === "active"
                     ? "No active jobs"
                     : scope === "attention"
                       ? "No jobs need attention"
-                      : "No archived jobs"
+                      : "No job history"
               }
             />
           )}
@@ -293,14 +396,46 @@ export function JobsPage() {
                 <input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} placeholder="Optional label" />
               </label>
               <label className="task-editor-field-block">
-                <span>Command</span>
+                <span>{draftMode === "shell" ? "Command" : "Argv JSON"}</span>
                 <textarea
                   value={draftCommand}
                   onChange={(event) => setDraftCommand(event.target.value)}
-                  placeholder="python3 scripts/long_job.py"
+                  placeholder={draftMode === "shell" ? "python3 scripts/long_job.py" : '["python3", "scripts/long_job.py"]'}
                   rows={5}
                 />
               </label>
+              {draftMode === "shell" ? (
+                <p className="wizard-hint">
+                  This runs through /bin/sh on this machine. Treat commands and logs as sensitive local data.
+                </p>
+              ) : null}
+              <Button type="button" variant="ghost" onClick={() => setAdvanced((value) => !value)}>
+                {advanced ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                Advanced
+              </Button>
+              {advanced ? (
+                <div className="wizard-grid">
+                  <label className="task-editor-field-block">
+                    <span>Execution mode</span>
+                    <select value={draftMode} onChange={(event) => setDraftMode(event.target.value as "shell" | "argv")}>
+                      <option value="shell">Shell command</option>
+                      <option value="argv">Argument list (safer)</option>
+                    </select>
+                  </label>
+                  <label className="task-editor-field-block">
+                    <span>Working directory</span>
+                    <input value={draftCwd} onChange={(event) => setDraftCwd(event.target.value)} placeholder="Inside workspace" />
+                  </label>
+                  <label className="task-editor-field-block">
+                    <span>Timeout seconds</span>
+                    <input type="number" min="1" value={draftTimeout} onChange={(event) => setDraftTimeout(event.target.value)} />
+                  </label>
+                  <label className="task-editor-field-block">
+                    <span>Exclusive resources</span>
+                    <input value={draftResources} onChange={(event) => setDraftResources(event.target.value)} placeholder="gpu:0, build" />
+                  </label>
+                </div>
+              ) : null}
             </div>
             <div className="modal-footer">
               <Button variant="secondary" onClick={() => setCreating(false)}>
@@ -314,7 +449,13 @@ export function JobsPage() {
         </div>
       ) : null}
 
-      <JobDetailsModal job={selectedJob} onClose={() => setSelectedJob(null)} onDelete={(job) => void onDelete(job)} />
+      <JobDetailsModal
+        job={selectedJob}
+        onClose={() => setSelectedJob(null)}
+        onCancel={(job) => void onCancel(job)}
+        onRetry={(job) => void onRetry(job)}
+        onDelete={(job) => void onDelete(job)}
+      />
     </PageShell>
   );
 }
@@ -322,21 +463,30 @@ export function JobsPage() {
 function JobDetailsModal({
   job,
   onClose,
+  onCancel,
+  onRetry,
   onDelete,
 }: {
   job: BackgroundJobItem | null;
   onClose: () => void;
+  onCancel: (job: BackgroundJobItem) => void;
+  onRetry: (job: BackgroundJobItem) => void;
   onDelete: (job: BackgroundJobItem) => void;
 }) {
   if (!job) return null;
+  const execution = job.execution || {};
   const rows = [
     ["Status", job.status],
-    ["Kind", job.kind],
+    ["Reason", job.reason || ""],
+    ["Kind", job.shell ? "process · shell" : "process · argv"],
     ["Delivery", jobTarget(job)],
+    ["Wait", waitReason(job.wait_reason)],
     ["Created", formatStamp(job.created_at)],
     ["Started", formatStamp(job.started_at)],
-    ["Updated", formatStamp(job.updated_at)],
-    ["Completed", formatStamp(job.completed_at || job.failed_at || job.cancelled_at)],
+    ["Finished", formatStamp(job.finished_at)],
+    ["Attempt", String(execution.attempt_no || "")],
+    ["Exit code", execution.exit_code == null ? "" : String(execution.exit_code)],
+    ["Signal", execution.signal == null ? "" : String(execution.signal)],
     ["Error", job.last_error || ""],
   ].filter(([, value]) => value);
   return (
@@ -358,6 +508,12 @@ function JobDetailsModal({
               </div>
             ))}
           </dl>
+          {job.deliveries?.length ? (
+            <label className="task-editor-field-block">
+              <span>Delivery</span>
+              <pre className="help-code-block">{JSON.stringify(job.deliveries, null, 2)}</pre>
+            </label>
+          ) : null}
           {job.stdout_tail ? (
             <label className="task-editor-field-block">
               <span>Stdout tail</span>
@@ -372,11 +528,24 @@ function JobDetailsModal({
           ) : null}
         </div>
         <div className="modal-footer">
-          {job.status === "queued" || job.status === "claimed" || job.status === "running" ? null : (
-            <Button variant="danger" onClick={() => onDelete(job)}>
-              <Trash2 size={15} />
-              Delete permanently
+          {ACTIVE_STATES.has(job.status) ? (
+            <Button disabled={job.status === "cancelling"} onClick={() => onCancel(job)}>
+              <Square size={15} />
+              {job.status === "cancelling" ? "Cancelling" : "Cancel"}
             </Button>
+          ) : (
+            <>
+              {job.status === "failed" || job.status === "interrupted" ? (
+                <Button onClick={() => onRetry(job)}>
+                  <RotateCcw size={15} />
+                  Retry
+                </Button>
+              ) : null}
+              <Button variant="danger" onClick={() => onDelete(job)}>
+                <Trash2 size={15} />
+                Delete permanently
+              </Button>
+            </>
           )}
         </div>
       </div>

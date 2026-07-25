@@ -31,7 +31,32 @@ class JobNotifyService:
     async def notify(self, job: JobRecord) -> None:
         summary = _job_summary(job)
         await self._observe_completion(job, summary)
-        await self.delivery.broadcast_job_message(job, summary)
+        stored_message = await self._store_completion_once(job, summary)
+        await self.delivery.broadcast_job_message(
+            job,
+            summary,
+            stored_message=stored_message,
+        )
+
+    async def _store_completion_once(self, job: JobRecord, summary: str):
+        message_handler = getattr(self.agent, "message_handler", None)
+        store_model_reply = getattr(message_handler, "store_model_reply", None)
+        if not callable(store_model_reply):
+            return None
+        return await store_model_reply(
+            summary,
+            getattr(self.agent, "_assistant_sender_id", "agent"),
+            metadata={
+                "background_job": {
+                    "job_id": job.job_id,
+                    "status": job.status,
+                    "delivery_key": f"job:{job.job_id}:api",
+                }
+            },
+            channel=CHANNEL_API,
+            recipient_id=job.delivery_user_id or str(job.target.get("user_id") or ""),
+            dedupe_key=f"job:{job.job_id}:api",
+        )
 
     async def _observe_completion(self, job: JobRecord, summary: str) -> None:
         observe = getattr(self.agent, "observe", None)
@@ -41,12 +66,11 @@ class JobNotifyService:
             await observe(
                 context=summary,
                 source="background_job",
-                event_type="job_completed" if job.status == "completed" else f"job_{job.status}",
+                event_type="job_succeeded" if job.status == "succeeded" else f"job_{job.status}",
                 metadata={
                     "job_id": job.job_id,
                     "status": job.status,
                     "title": job.title,
-                    "command": job.command,
                 },
                 channel=CHANNEL_API,
             )

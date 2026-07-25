@@ -8,11 +8,13 @@ import json
 import mimetypes
 import shutil
 from datetime import datetime
+from ipaddress import ip_address
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import yaml as pyyaml
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 
 from ...interfaces.cli.config_editor import validate_config, write_config
 from .models import (
@@ -31,24 +33,21 @@ from .models import (
 )
 from .serializers import message_item, message_search_result
 from ...core.runtime import (
-    count_archived_job_records,
     count_archived_task_records,
-    delete_job,
     delete_scheduled_task,
     duplicate_archived_task,
-    enqueue_job,
     enqueue_scheduled_task,
-    get_job,
     get_scheduled_task,
-    has_live_job_supervisor,
-    list_archived_job_records,
     list_archived_task_records,
-    list_job_records,
     list_task_records,
+    IdempotencyConflict,
+    JobStore,
+    QueueCapacityError,
+    ensure_worker_running,
     pause_scheduled_task,
-    request_job_cancel,
     resolve_scheduled_task_run_at,
     resume_scheduled_task,
+    settings_from_config,
     update_scheduled_task,
 )
 from ...schemas.attachment import (
@@ -116,21 +115,34 @@ def _task_matches_query(view: dict[str, Any], query: str) -> bool:
     return needle in json.dumps(view, ensure_ascii=False, sort_keys=True, default=str).lower()
 
 
-def _wake_job_supervisor(server: Any) -> None:
-    wake = getattr(getattr(server, "api", None), "wake_jobs", None)
-    if callable(wake):
-        wake()
+def _job_store(server: Any) -> JobStore:
+    settings = settings_from_config(getattr(server, "config", None))
+    workspace_dir = getattr(server, "workspace_dir", None)
+    if workspace_dir is None:
+        workspace_dir = Path(getattr(server, "jobs_dir")).parent / "workspace"
+    return JobStore(
+        server.jobs_dir,
+        workspace_dir=workspace_dir,
+        settings=settings,
+    )
 
 
-def _job_runner_available(server: Any, channel: str) -> bool:
-    api = getattr(server, "api", None)
-    if api is not None and getattr(api, "job_supervisor", None) is not None:
-        return True
-    return has_live_job_supervisor(getattr(server, "jobs_dir", ""), channel=channel)
-
-
-def _job_matches_query(view: dict[str, Any], query: str) -> bool:
-    return _task_matches_query(view, query)
+def _require_local_job_access(request: Request) -> None:
+    """Keep arbitrary process control on the local machine and same origin."""
+    client_host = str(request.client.host if request.client else "")
+    if client_host != "testclient":
+        try:
+            if not ip_address(client_host).is_loopback:
+                raise HTTPException(status_code=403, detail="Jobs are available from localhost only")
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="Jobs are available from localhost only") from exc
+    origin = str(request.headers.get("origin") or "").strip()
+    if not origin:
+        return
+    origin_host = urlsplit(origin).netloc.lower()
+    request_host = str(request.headers.get("host") or "").lower()
+    if not origin_host or origin_host != request_host:
+        raise HTTPException(status_code=403, detail="Cross-origin Jobs access is not allowed")
 
 
 def _mask_sensitive_fields(data: dict) -> dict:
@@ -382,51 +394,47 @@ def register_admin_routes(
 
     @app.get("/api/jobs", tags=["Monitoring"])
     async def jobs_list(
-        scope: str = Query("current", pattern="^(current|running|attention|archive)$"),
+        request: Request,
+        scope: str = Query(
+            "active",
+            pattern="^(active|attention|history|current|running|archive)$",
+        ),
         query: str = Query(""),
         limit: int = Query(50, ge=1, le=200),
         offset: int = Query(0, ge=0),
     ):
+        _require_local_job_access(request)
         server = resolve_admin()
-        current_records = list_job_records(server.jobs_dir, include_failed=True, include_claimed=True)
-        running_records = [
-            record for record in current_records if record.status in {"running", "claimed"}
-        ]
-        queued_records = [record for record in current_records if record.status == "queued"]
-        active_records = [*queued_records, *running_records]
-        attention_records = [record for record in current_records if record.status == "failed"]
-        archive_records = list_archived_job_records(server.jobs_dir) if scope == "archive" else []
-        archive_count = len(archive_records) if scope == "archive" else count_archived_job_records(server.jobs_dir)
-        selected = {
-            "current": [*active_records, *attention_records],
-            "running": active_records,
-            "attention": sorted(
-                attention_records,
-                key=lambda record: str(record.payload.get("failed_at") or ""),
-                reverse=True,
-            ),
-            "archive": archive_records,
-        }[scope]
-        views = [record.to_job_view() for record in selected]
-        filtered = [view for view in views if _job_matches_query(view, query)]
-        jobs = filtered[offset : offset + limit]
+        store = _job_store(server)
+        normalized_scope = {
+            "current": "current",
+            "running": "active",
+            "archive": "history",
+        }.get(scope, scope)
+        records, total = store.list_jobs(
+            scope=normalized_scope,
+            query=query,
+            limit=limit,
+            offset=offset,
+        )
         return {
             "root": str(server.jobs_dir),
-            "jobs": jobs,
-            "total": len(filtered),
-            "counts": {
-                "running": len(active_records),
-                "queued": len(queued_records),
-                "attention": len(attention_records),
-                "archive": archive_count,
-            },
+            "jobs": [record.to_job_view() for record in records],
+            "total": total,
+            "counts": store.counts(),
+            "worker": store.worker_health(),
             "limit": limit,
             "offset": offset,
-            "has_more": offset + len(jobs) < len(filtered),
+            "has_more": offset + len(records) < total,
         }
 
     @app.post("/api/jobs", tags=["Monitoring"], status_code=201)
-    async def jobs_create(input_data: JobCreateInput):
+    async def jobs_create(
+        input_data: JobCreateInput,
+        request: Request,
+        idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    ):
+        _require_local_job_access(request)
         server = resolve_admin()
         channel = str(input_data.channel or "api").strip().lower() or "api"
         if channel != "api":
@@ -434,23 +442,15 @@ def register_admin_routes(
                 status_code=400,
                 detail="HTTP create currently supports channel=api only; use chat to start feishu/weixin/voice jobs",
             )
-        if not _job_runner_available(server, channel):
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "No live job supervisor for this channel. "
-                    "Start the api channel (or another owning channel runtime) before creating jobs; "
-                    "background jobs are not OS daemons and need a living channel runtime."
-                ),
-            )
         user_id = str(input_data.user_id or "web_user").strip() or "web_user"
         target = dict(input_data.target or {})
         target.setdefault("user_id", user_id)
+        store = _job_store(server)
         try:
-            job = enqueue_job(
-                kind="process",
+            job = store.create_job(
+                argv=input_data.argv,
                 command=input_data.command,
-                jobs_dir=server.jobs_dir,
+                shell=input_data.shell,
                 channel=channel,
                 target=target,
                 user_id=user_id,
@@ -459,45 +459,124 @@ def register_admin_routes(
                 timeout_seconds=input_data.timeout_seconds,
                 resources=input_data.resources,
                 source={"source": "http", "client": "web"},
+                idempotency_scope=f"http:{channel}:{user_id}",
+                idempotency_key=idempotency_key,
             )
+        except IdempotencyConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except QueueCapacityError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _wake_job_supervisor(server)
-        return {"status": "ok", "job": job.to_job_view()}
+        worker = ensure_worker_running(
+            server.jobs_dir,
+            workspace_dir=store.workspace_dir,
+            settings=store.settings,
+        )
+        return {
+            "status": "ok",
+            "job": job.to_job_view(),
+            "worker": worker.to_view(),
+        }
 
     @app.get("/api/jobs/{job_id}", tags=["Monitoring"])
-    async def jobs_get(job_id: str):
+    async def jobs_get(
+        job_id: str,
+        request: Request,
+        log_tail_bytes: int = Query(128 * 1024, ge=1, le=1024 * 1024),
+    ):
+        _require_local_job_access(request)
         server = resolve_admin()
         try:
-            job = get_job(server.jobs_dir, job_id)
+            store = _job_store(server)
+            job = store.get_job(job_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"status": "ok", "job": job.to_job_view(log_tail=True)}
+        return {
+            "status": "ok",
+            "job": job.to_job_view(log_tail=log_tail_bytes),
+            "worker": store.worker_health(),
+        }
 
     @app.post("/api/jobs/{job_id}/cancel", tags=["Monitoring"])
-    async def jobs_cancel(job_id: str):
+    async def jobs_cancel(job_id: str, request: Request):
+        _require_local_job_access(request)
         server = resolve_admin()
         try:
-            job = request_job_cancel(server.jobs_dir, job_id)
+            store = _job_store(server)
+            job = store.request_cancel(job_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _wake_job_supervisor(server)
-        return {"status": "ok", "job": job.to_job_view()}
+        worker = ensure_worker_running(
+            server.jobs_dir,
+            workspace_dir=store.workspace_dir,
+            settings=store.settings,
+        )
+        return {
+            "status": "ok",
+            "job": job.to_job_view(),
+            "worker": worker.to_view(),
+        }
 
-    @app.delete("/api/jobs/delete", tags=["Monitoring"])
-    async def jobs_delete(job_id: str = Query(..., description="Stable background job id")):
+    @app.post("/api/jobs/{job_id}/retry", tags=["Monitoring"], status_code=201)
+    async def jobs_retry(
+        job_id: str,
+        request: Request,
+        idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    ):
+        _require_local_job_access(request)
         server = resolve_admin()
         try:
-            job = delete_job(server.jobs_dir, job_id)
+            store = _job_store(server)
+            job = store.retry_job(
+                job_id,
+                idempotency_scope="http:retry",
+                idempotency_key=idempotency_key,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except IdempotencyConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except QueueCapacityError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        worker = ensure_worker_running(
+            server.jobs_dir,
+            workspace_dir=store.workspace_dir,
+            settings=store.settings,
+        )
+        return {
+            "status": "ok",
+            "job": job.to_job_view(),
+            "worker": worker.to_view(),
+        }
+
+    async def _delete_job_response(job_id: str, request: Request):
+        _require_local_job_access(request)
+        server = resolve_admin()
+        try:
+            job = _job_store(server).delete_job(job_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"status": "ok", "deleted": job.to_job_view()}
+
+    @app.delete("/api/jobs/{job_id}", tags=["Monitoring"])
+    async def jobs_delete(job_id: str, request: Request):
+        return await _delete_job_response(job_id, request)
+
+    @app.delete("/api/jobs/delete", tags=["Monitoring"], include_in_schema=False)
+    async def jobs_delete_legacy(
+        request: Request,
+        job_id: str = Query(..., description="Stable background job id"),
+    ):
+        return await _delete_job_response(job_id, request)
 
     @app.get("/api/agent/identity", tags=["Monitoring"])
     async def agent_identity():

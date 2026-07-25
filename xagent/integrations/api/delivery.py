@@ -78,7 +78,7 @@ class DeliveryBus:
             payload["message"] = message_item(stored_message)
         await self.push(user_id, payload)
 
-    async def broadcast_job_message(self, job, content: str) -> None:
+    async def broadcast_job_message(self, job, content: str, *, stored_message=None) -> None:
         user_id = str(job.target.get("user_id") or job.delivery_user_id or "")
         if not user_id:
             return
@@ -87,6 +87,8 @@ class DeliveryBus:
             "content": content,
             "job": job.to_job_view(),
         }
+        if stored_message is not None:
+            payload["message"] = message_item(stored_message)
         await self.push(user_id, payload)
 
     async def deliver_subconscious(self, delivery: SubconsciousDelivery, *, agent: Agent) -> None:

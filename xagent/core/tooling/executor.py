@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from ..config import AgentConfig
 from .manager import ToolManager
+from .context import reset_tool_call_id, set_tool_call_id
 from ...components import MessageStorage
 from ...utils.image_utils import is_image_output
 from ...tools.image_generation_tool import (
@@ -142,11 +143,14 @@ class ToolExecutor:
 
         logger.info("Calling tool: %s with args: %s", name, args)
 
+        context_token = set_tool_call_id(call_id)
         try:
             result = await func(**args)
         except Exception as e:
             logger.error("Tool call error: %s", e)
             result = f"Tool error: {e}"
+        finally:
+            reset_tool_call_id(context_token)
 
         if is_generated_image_result(result):
             result_str = json.dumps(result, ensure_ascii=False)

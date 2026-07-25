@@ -2247,6 +2247,15 @@ input::placeholder {
   font-size: 12px;
 }
 
+.job-worker-strip {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface-subtle);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .task-row-actions {
   display: flex;
   flex: 0 0 auto;

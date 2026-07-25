@@ -10,7 +10,7 @@ from fastapi import FastAPI
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
-from ...core.runtime import AsyncJobSupervisor, AsyncTaskScheduler, SubconsciousDelivery
+from ...core.runtime import AsyncJobDeliveryDispatcher, AsyncTaskScheduler, SubconsciousDelivery
 from ...interfaces.server.runtime_routes import register_runtime_routes
 from .chat_service import ChatService
 from .config import ChatLimits
@@ -66,15 +66,16 @@ class ApiChannelAdapter:
             logger=self.logger,
         )
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._job_supervisor: Optional[AsyncJobSupervisor] = None
+        self._job_delivery: Optional[AsyncJobDeliveryDispatcher] = None
 
     @property
-    def job_supervisor(self) -> Optional[AsyncJobSupervisor]:
-        return self._job_supervisor
+    def job_supervisor(self) -> Optional[AsyncJobDeliveryDispatcher]:
+        """Compatibility alias for callers that only need wake()."""
+        return self._job_delivery
 
     def wake_jobs(self) -> None:
-        if self._job_supervisor is not None:
-            self._job_supervisor.wake()
+        if self._job_delivery is not None:
+            self._job_delivery.wake()
 
     async def start(self) -> None:
         scheduler = AsyncTaskScheduler(
@@ -87,25 +88,22 @@ class ApiChannelAdapter:
         await scheduler.start()
         self.logger.info("Scheduled task runtime started: tasks=%s", self.tasks_dir)
 
-        supervisor = AsyncJobSupervisor(
+        delivery = AsyncJobDeliveryDispatcher(
             self.jobs_dir,
-            can_handle=self.jobs.can_notify,
+            channels=("", "api", "local"),
             can_notify=self.jobs.can_notify,
             notify=self.jobs.notify,
-            owner_channels=("", "api", "local"),
-            workspace_dir=self.workspace_dir,
-            max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
             logger_=self.logger,
         )
-        self._job_supervisor = supervisor
-        await supervisor.start()
-        self.logger.info("Background job runtime started: jobs=%s", self.jobs_dir)
+        self._job_delivery = delivery
+        await delivery.start()
+        self.logger.info("Background job delivery started: jobs=%s", self.jobs_dir)
 
     async def stop(self) -> None:
-        if self._job_supervisor is not None:
-            await self._job_supervisor.stop()
-            self._job_supervisor = None
-            self.logger.info("Background job runtime stopped")
+        if self._job_delivery is not None:
+            await self._job_delivery.stop()
+            self._job_delivery = None
+            self.logger.info("Background job delivery stopped")
         if self._task_scheduler is not None:
             await self._task_scheduler.stop()
             self._task_scheduler = None

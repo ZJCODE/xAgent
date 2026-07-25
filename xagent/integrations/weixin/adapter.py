@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
-    AsyncJobSupervisor,
+    AsyncJobDeliveryDispatcher,
     AsyncTaskScheduler,
     JobRecord,
     ScheduledDeliveryContext,
@@ -141,7 +141,7 @@ class WeixinAdapter:
         self._tasks_dir = self.runtime_dir / AgentConfig.TASKS_DIRNAME
         self._jobs_dir = self.runtime_dir / AgentConfig.JOBS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._job_supervisor: Optional[AsyncJobSupervisor] = None
+        self._job_delivery: Optional[AsyncJobDeliveryDispatcher] = None
         self._contacts_file = resolve_contacts_path(self.runtime_dir)
 
     async def run(self) -> None:
@@ -168,24 +168,21 @@ class WeixinAdapter:
         )
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
-        job_supervisor = AsyncJobSupervisor(
+        job_delivery = AsyncJobDeliveryDispatcher(
             self._jobs_dir,
-            can_handle=self._can_notify_job,
+            channels=("weixin",),
             can_notify=self._can_notify_job,
             notify=self._notify_job,
-            owner_channels=("weixin",),
-            workspace_dir=getattr(self.agent, "workspace_dir", self.runtime_dir / AgentConfig.WORKSPACE_DIRNAME),
-            max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
             logger_=self.logger,
         )
-        self._job_supervisor = job_supervisor
-        await job_supervisor.start()
+        self._job_delivery = job_delivery
+        await job_delivery.start()
 
         try:
             await self._poll_loop()
         finally:
-            await job_supervisor.stop()
-            self._job_supervisor = None
+            await job_delivery.stop()
+            self._job_delivery = None
             await task_scheduler.stop()
             self._task_scheduler = None
             await self._cancel_processing_tasks()
@@ -697,8 +694,8 @@ class WeixinAdapter:
             await observe(
                 context=summary,
                 source="background_job",
-                event_type="job_completed" if job.status == "completed" else f"job_{job.status}",
-                metadata={"job_id": job.job_id, "status": job.status, "title": job.title, "command": job.command},
+                event_type="job_succeeded" if job.status == "succeeded" else f"job_{job.status}",
+                metadata={"job_id": job.job_id, "status": job.status, "title": job.title},
                 channel=channel,
             )
         except Exception:

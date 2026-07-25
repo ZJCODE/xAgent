@@ -96,6 +96,7 @@ class MessageHandler:
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
         recipient_id: Optional[str] = None,
+        dedupe_key: Optional[str] = None,
     ) -> Message:
         normalized_attachments = dedupe_attachments(list(attachments or []))
         image_source = extract_image_urls_from_text(reply_text)
@@ -117,6 +118,11 @@ class MessageHandler:
         image_metadata = self._preview_image_metadata(image_source)
         if image_metadata and "images" not in model_msg.metadata:
             model_msg.metadata["images"] = image_metadata
+        if dedupe_key:
+            return await self.message_storage.add_message_once(
+                model_msg,
+                dedupe_key=dedupe_key,
+            )
         await self.message_storage.add_messages(model_msg)
         return model_msg
 

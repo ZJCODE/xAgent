@@ -14,7 +14,7 @@ from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Protocol
 
 from xagent.core.config import AgentConfig
 from xagent.core.runtime import (
-    AsyncJobSupervisor,
+    AsyncJobDeliveryDispatcher,
     AsyncTaskScheduler,
     JobRecord,
     ScheduledDeliveryContext,
@@ -118,7 +118,7 @@ class VoiceRuntime:
         self.stop_event = threading.Event()
         self._playback_lock = asyncio.Lock()
         self.task_scheduler: AsyncTaskScheduler | None = None
-        self.job_supervisor: AsyncJobSupervisor | None = None
+        self.job_delivery: AsyncJobDeliveryDispatcher | None = None
         self._contacts_file: Optional[Path] = None
         if self.options.tasks_dir is not None:
             self.task_scheduler = AsyncTaskScheduler(
@@ -132,14 +132,11 @@ class VoiceRuntime:
             workspace_dir = self.options.workspace_dir or getattr(
                 agent, "workspace_dir", runtime_root / AgentConfig.WORKSPACE_DIRNAME
             )
-            self.job_supervisor = AsyncJobSupervisor(
+            self.job_delivery = AsyncJobDeliveryDispatcher(
                 jobs_dir,
-                can_handle=self._can_handle_job,
+                channels=("voice",),
                 can_notify=self._can_notify_job,
                 notify=self._notify_job,
-                owner_channels=("voice",),
-                workspace_dir=workspace_dir,
-                max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
                 logger_=self.logger,
             )
         self._wake_active = False
@@ -161,8 +158,8 @@ class VoiceRuntime:
         try:
             if self.task_scheduler is not None:
                 await self.task_scheduler.start()
-            if self.job_supervisor is not None:
-                await self.job_supervisor.start()
+            if self.job_delivery is not None:
+                await self.job_delivery.start()
             next_utterance_task = self._create_next_utterance_task(utterances)
             while not self.stop_event.is_set():
                 utterance_result = await self._await_next_utterance(next_utterance_task)
@@ -185,8 +182,8 @@ class VoiceRuntime:
             self.stop_event.set()
             if next_utterance_task is not None and not next_utterance_task.done():
                 next_utterance_task.cancel()
-            if self.job_supervisor is not None:
-                await self.job_supervisor.stop()
+            if self.job_delivery is not None:
+                await self.job_delivery.stop()
             if self.task_scheduler is not None:
                 await self.task_scheduler.stop()
 
@@ -523,8 +520,8 @@ class VoiceRuntime:
                 await observe(
                     context=summary,
                     source="background_job",
-                    event_type="job_completed" if job.status == "completed" else f"job_{job.status}",
-                    metadata={"job_id": job.job_id, "status": job.status, "title": job.title, "command": job.command},
+                    event_type="job_succeeded" if job.status == "succeeded" else f"job_{job.status}",
+                    metadata={"job_id": job.job_id, "status": job.status, "title": job.title},
                     channel="voice",
                 )
             except Exception:

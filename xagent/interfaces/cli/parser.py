@@ -624,6 +624,14 @@ def build_parser() -> argparse.ArgumentParser:
     internal_web.set_defaults(handler=runtime.handle_run_web_internal)
     _hide_subparser_choice(subparsers, "_run-web")
 
+    internal_jobs_worker = subparsers.add_parser("_run-jobs-worker", help=argparse.SUPPRESS)
+    internal_jobs_worker.add_argument("--jobs-dir", required=True, help=argparse.SUPPRESS)
+    internal_jobs_worker.add_argument("--workspace-dir", required=True, help=argparse.SUPPRESS)
+    internal_jobs_worker.add_argument("--worker-token", required=True, help=argparse.SUPPRESS)
+    internal_jobs_worker.add_argument("--settings-json", required=True, help=argparse.SUPPRESS)
+    internal_jobs_worker.set_defaults(handler=runtime.handle_run_jobs_worker_internal)
+    _hide_subparser_choice(subparsers, "_run-jobs-worker")
+
     internal_update = subparsers.add_parser("_update-worker", help=argparse.SUPPRESS)
     internal_update.add_argument(
         "--restart",
