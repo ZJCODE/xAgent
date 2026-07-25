@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
 import uuid
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from .tasks import ScheduledDeliveryContext, current_delivery_context
 
 JOB_KIND_PROCESS = "process"
 JOB_STATUS_QUEUED = "queued"
+JOB_STATUS_CLAIMED = "claimed"
 JOB_STATUS_RUNNING = "running"
 JOB_STATUS_COMPLETED = "completed"
 JOB_STATUS_FAILED = "failed"
@@ -27,13 +29,15 @@ JOB_STATUS_CANCELLED = "cancelled"
 JOB_PAYLOAD_VERSION = 1
 JOB_JSON_SUFFIX = ".json"
 CLAIM_MARKER = ".claimed-"
+SUPERVISORS_DIRNAME = ".supervisors"
 DEFAULT_MAX_CONCURRENT_JOBS = 2
 DEFAULT_JOB_POLL_INTERVAL_SECONDS = 0.5
 DEFAULT_CANCEL_GRACE_SECONDS = 5.0
 DEFAULT_LOG_TAIL_BYTES = 4096
 MAX_JOB_LOG_BYTES = 2 * 1024 * 1024
+SUPERVISOR_LEASE_STALE_SECONDS = 30.0
 SUPPORTED_JOB_KINDS = {JOB_KIND_PROCESS}
-ACTIVE_JOB_STATUSES = {JOB_STATUS_QUEUED, JOB_STATUS_RUNNING}
+ACTIVE_JOB_STATUSES = {JOB_STATUS_QUEUED, JOB_STATUS_CLAIMED, JOB_STATUS_RUNNING}
 TERMINAL_JOB_STATUSES = {JOB_STATUS_COMPLETED, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}
 
 
@@ -283,9 +287,15 @@ def get_job(jobs_dir: Path | str, job_id: str) -> JobRecord:
 
 def delete_job(jobs_dir: Path | str, job_id: str) -> JobRecord:
     record = get_job(jobs_dir, job_id)
-    if record.status == JOB_STATUS_RUNNING:
+    if record.status in {JOB_STATUS_RUNNING, JOB_STATUS_CLAIMED}:
         raise ValueError("cannot delete a running job; cancel it first")
+    if CLAIM_MARKER in record.path.name:
+        raise ValueError("cannot delete a claimed job; cancel it first")
+    root = _jobs_root_from_path(record.path)
     record.path.unlink(missing_ok=True)
+    job_dir = root / record.job_id
+    if job_dir.is_dir():
+        shutil.rmtree(job_dir, ignore_errors=True)
     return record
 
 
@@ -296,7 +306,10 @@ def request_job_cancel(jobs_dir: Path | str, job_id: str) -> JobRecord:
         return record
     now = _now_text()
     payload = dict(record.payload)
-    if record.status == JOB_STATUS_QUEUED:
+    claimed_path = CLAIM_MARKER in record.path.name
+    # Only archive unclaimed queued jobs. Claimed files may still say "queued"
+    # until the supervisor marks claimed/running; archiving those races spawn.
+    if record.status == JOB_STATUS_QUEUED and not claimed_path:
         payload["status"] = JOB_STATUS_CANCELLED
         payload["cancelled_at"] = now
         payload["updated_at"] = now
@@ -311,6 +324,39 @@ def request_job_cancel(jobs_dir: Path | str, job_id: str) -> JobRecord:
     return JobRecord(path=record.path, payload=payload)
 
 
+def has_live_job_supervisor(jobs_dir: Path | str, *, channel: str = "") -> bool:
+    """Return True when a supervisor lease for ``channel`` looks alive."""
+    root, _failed = ensure_jobs_dirs(jobs_dir)
+    lease_dir = root / SUPERVISORS_DIRNAME
+    if not lease_dir.is_dir():
+        return False
+    normalized = str(channel or "").strip().lower()
+    aliases = {normalized} if normalized else set()
+    if normalized in {"", "local", "api"}:
+        aliases.update({"", "local", "api"})
+    now = datetime.now().timestamp()
+    for path in lease_dir.glob("*.json"):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        pid = int(raw.get("pid") or 0)
+        if pid <= 0 or not _pid_is_running(pid):
+            continue
+        updated_at = float(raw.get("updated_at_ts") or 0.0)
+        if updated_at > 0 and (now - updated_at) > SUPERVISOR_LEASE_STALE_SECONDS:
+            continue
+        channels = raw.get("channels")
+        if isinstance(channels, list) and channels:
+            owned = {str(item).strip().lower() for item in channels}
+            if aliases and aliases.isdisjoint(owned) and normalized not in owned:
+                continue
+        return True
+    return False
+
+
 class AsyncJobSupervisor:
     """Claim and execute queued process jobs without holding chat capacity."""
 
@@ -320,6 +366,8 @@ class AsyncJobSupervisor:
         *,
         can_notify: Callable[[JobRecord], bool],
         notify: Callable[[JobRecord], Awaitable[None]],
+        can_handle: Callable[[JobRecord], bool] | None = None,
+        owner_channels: Optional[list[str] | set[str] | tuple[str, ...]] = None,
         workspace_dir: Path | str | None = None,
         poll_interval_seconds: float = DEFAULT_JOB_POLL_INTERVAL_SECONDS,
         max_concurrent_jobs: int = DEFAULT_MAX_CONCURRENT_JOBS,
@@ -334,8 +382,17 @@ class AsyncJobSupervisor:
         self.jobs_dir, self.failed_dir = ensure_jobs_dirs(jobs_dir)
         self.workspace_dir = Path(workspace_dir).expanduser().resolve() if workspace_dir else None
         self.can_notify = can_notify
+        # Ownership gate for claim/run. Defaults to the notify predicate so a
+        # channel never executes jobs it cannot deliver.
+        self.can_handle = can_handle or can_notify
         self.notify = notify
         self.on_complete = on_complete
+        owned = set()
+        for item in owner_channels or []:
+            text = str(item).strip().lower()
+            if text or item == "":
+                owned.add(text)
+        self.owner_channels = sorted(owned)
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.max_concurrent_jobs = int(max_concurrent_jobs)
         self.cancel_grace_seconds = float(cancel_grace_seconds)
@@ -346,6 +403,7 @@ class AsyncJobSupervisor:
         self._inflight: dict[str, asyncio.Task[None]] = {}
         self._resource_locks: dict[str, asyncio.Lock] = {}
         self._resource_owners: dict[str, str] = {}
+        self._lease_path: Optional[Path] = None
 
     def wake(self) -> None:
         self._wake_event.set()
@@ -355,6 +413,7 @@ class AsyncJobSupervisor:
             return
         self._stop_event.clear()
         self.recover_orphaned_jobs()
+        self._write_lease()
         self._task = asyncio.create_task(self.run_forever())
 
     async def stop(self) -> None:
@@ -362,6 +421,7 @@ class AsyncJobSupervisor:
         self._wake_event.set()
         task = self._task
         if task is None:
+            self._clear_lease()
             return
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -370,6 +430,7 @@ class AsyncJobSupervisor:
         if self._inflight:
             await asyncio.gather(*list(self._inflight.values()), return_exceptions=True)
         self._inflight.clear()
+        self._clear_lease()
 
     def recover_orphaned_jobs(self) -> int:
         recovered = 0
@@ -456,9 +517,12 @@ class AsyncJobSupervisor:
             raise
 
     async def tick(self) -> None:
+        self._touch_lease()
         self._reap_finished_inflight()
         for record in list_job_records(self.jobs_dir, include_failed=False, include_claimed=False):
             if record.status != JOB_STATUS_QUEUED:
+                continue
+            if not self.can_handle(record):
                 continue
             if bool(record.payload.get("cancel_requested")):
                 request_job_cancel(self.jobs_dir, record.job_id)
@@ -470,7 +534,7 @@ class AsyncJobSupervisor:
             claimed_path = self._claim(record.path)
             if claimed_path is None:
                 continue
-            claimed = _record_from_json_file(claimed_path) or record
+            claimed = self._mark_claimed(claimed_path, record)
             task = asyncio.create_task(self._run_claimed(claimed_path, claimed))
             self._inflight[claimed.job_id] = task
             task.add_done_callback(lambda done, job_id=claimed.job_id: self._on_job_done(job_id, done))
@@ -538,7 +602,44 @@ class AsyncJobSupervisor:
             except Exception as exc:
                 self.logger.exception("job notify failed for %s: %s", final_record.job_id, exc)
 
+    def _mark_claimed(self, claimed_path: Path, record: JobRecord) -> JobRecord:
+        now = _now_text()
+        payload = dict(record.payload)
+        payload["status"] = JOB_STATUS_CLAIMED
+        payload["updated_at"] = now
+        payload["progress"] = {"message": "claimed", "updated_at": now}
+        try:
+            _write_json_atomic(claimed_path, payload)
+        except OSError as exc:
+            self.logger.error("failed to mark job claimed %s: %s", record.job_id, exc)
+        return JobRecord(path=claimed_path, payload=payload)
+
+    def _cancel_claimed_before_start(self, claimed_path: Path, payload: dict[str, Any]) -> JobRecord:
+        now = _now_text()
+        updated = dict(payload)
+        updated["status"] = JOB_STATUS_CANCELLED
+        updated["cancelled_at"] = now
+        updated["updated_at"] = now
+        updated["result"] = {"summary": "Cancelled before start"}
+        updated.pop("cancel_requested", None)
+        try:
+            _write_json_atomic(claimed_path, updated)
+        except OSError:
+            # Path may already have been removed; still try to archive if present.
+            pass
+        if not claimed_path.exists():
+            return JobRecord(path=claimed_path, payload=updated)
+        final_path = _archive_job_path(claimed_path, self.jobs_dir, updated)
+        return JobRecord(path=final_path, payload=updated)
+
     async def _run_process_job(self, claimed_path: Path, claimed: JobRecord) -> JobRecord:
+        # Re-read after claim: cancel may have raced in before spawn.
+        fresh = _read_payload(claimed_path)
+        if fresh is None:
+            return self._cancel_claimed_before_start(claimed_path, dict(claimed.payload))
+        if bool(fresh.get("cancel_requested")) or str(fresh.get("status") or "") == JOB_STATUS_CANCELLED:
+            return self._cancel_claimed_before_start(claimed_path, fresh)
+
         cwd = self._resolve_cwd(claimed)
         env = os.environ.copy()
         extra_env = claimed.spec.get("env")
@@ -553,12 +654,17 @@ class AsyncJobSupervisor:
         timeout = float(timeout_seconds) if timeout_seconds is not None else None
 
         now = _now_text()
-        payload = dict(claimed.payload)
+        payload = dict(fresh)
         payload["status"] = JOB_STATUS_RUNNING
         payload["started_at"] = now
         payload["updated_at"] = now
         payload["progress"] = {"message": "running", "updated_at": now}
         _write_json_atomic(claimed_path, payload)
+
+        # Cancel may arrive after we wrote running but before spawn.
+        fresh = _read_payload(claimed_path) or payload
+        if bool(fresh.get("cancel_requested")):
+            return self._cancel_claimed_before_start(claimed_path, fresh)
 
         stdout_handle = stdout_path.open("ab")
         stderr_handle = stderr_path.open("ab")
@@ -570,22 +676,32 @@ class AsyncJobSupervisor:
                 env=env,
                 stdout=stdout_handle,
                 stderr=stderr_handle,
+                start_new_session=True,
             )
             payload["execution"] = {
                 "pid": process.pid,
+                "pgid": process.pid,
                 "started_at": now,
             }
             payload["updated_at"] = _now_text()
             _write_json_atomic(claimed_path, payload)
             (log_dir / "pid").write_text(f"{process.pid}\n", encoding="utf-8")
 
-            returncode = await self._wait_process_with_cancel(claimed_path, claimed.job_id, process, timeout)
+            returncode = await self._wait_process_with_cancel(
+                claimed_path,
+                claimed.job_id,
+                process,
+                timeout,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
             ended = _now_text()
             payload = _read_payload(claimed_path) or payload
             cancel_requested = bool(payload.get("cancel_requested"))
             payload["execution"] = {
                 **dict(payload.get("execution") or {}),
                 "pid": process.pid,
+                "pgid": process.pid,
                 "ended_at": ended,
                 "return_code": returncode,
             }
@@ -638,10 +754,15 @@ class AsyncJobSupervisor:
         job_id: str,
         process: asyncio.subprocess.Process,
         timeout: Optional[float],
+        *,
+        stdout_path: Path,
+        stderr_path: Path,
     ) -> int:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout if timeout is not None else None
         while True:
+            _truncate_log_file(stdout_path)
+            _truncate_log_file(stderr_path)
             if self._stop_event.is_set():
                 await _terminate_process(process, self.cancel_grace_seconds)
                 return process.returncode if process.returncode is not None else -1
@@ -708,6 +829,36 @@ class AsyncJobSupervisor:
                 return None
         self.logger.error("failed to claim job %s: could not reserve claim name", path.name)
         return None
+
+    def _write_lease(self) -> None:
+        lease_dir = self.jobs_dir / SUPERVISORS_DIRNAME
+        lease_dir.mkdir(parents=True, exist_ok=True)
+        if self._lease_path is None:
+            self._lease_path = lease_dir / f"{os.getpid()}-{uuid.uuid4().hex[:8]}.json"
+        payload = {
+            "pid": os.getpid(),
+            "channels": list(self.owner_channels),
+            "updated_at": _now_text(),
+            "updated_at_ts": datetime.now().timestamp(),
+        }
+        try:
+            _write_json_atomic(self._lease_path, payload)
+        except OSError as exc:
+            self.logger.error("failed to write job supervisor lease: %s", exc)
+
+    def _touch_lease(self) -> None:
+        if self._lease_path is None or not self._lease_path.exists():
+            self._write_lease()
+            return
+        self._write_lease()
+
+    def _clear_lease(self) -> None:
+        path = self._lease_path
+        self._lease_path = None
+        if path is None:
+            return
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
 
     def _quarantine(self, path: Path, original_name: str, reason: str) -> None:
         self.failed_dir.mkdir(parents=True, exist_ok=True)
@@ -851,8 +1002,13 @@ def _pid_is_running(pid: int) -> bool:
 
 
 async def _terminate_process(process: asyncio.subprocess.Process, grace_seconds: float) -> None:
+    """Terminate the process group (shell + children) then fall back to the parent."""
     if process.returncode is not None:
         return
+    pid = process.pid
+    if pid:
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(pid, signal.SIGTERM)
     with contextlib.suppress(ProcessLookupError):
         process.send_signal(signal.SIGTERM)
     try:
@@ -860,6 +1016,9 @@ async def _terminate_process(process: asyncio.subprocess.Process, grace_seconds:
         return
     except asyncio.TimeoutError:
         pass
+    if pid:
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(pid, signal.SIGKILL)
     with contextlib.suppress(ProcessLookupError):
         process.kill()
     with contextlib.suppress(asyncio.TimeoutError):

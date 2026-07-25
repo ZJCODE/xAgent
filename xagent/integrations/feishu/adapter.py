@@ -295,8 +295,10 @@ class FeishuAdapter:
         await task_scheduler.start()
         job_supervisor = AsyncJobSupervisor(
             self._jobs_dir,
+            can_handle=self._can_notify_job,
             can_notify=self._can_notify_job,
             notify=self._notify_job,
+            owner_channels=("feishu",),
             workspace_dir=self._workspace_dir,
             max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
             logger_=self.logger,

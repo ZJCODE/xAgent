@@ -40,6 +40,7 @@ from ...core.runtime import (
     enqueue_scheduled_task,
     get_job,
     get_scheduled_task,
+    has_live_job_supervisor,
     list_archived_job_records,
     list_archived_task_records,
     list_job_records,
@@ -113,6 +114,19 @@ def _task_matches_query(view: dict[str, Any], query: str) -> bool:
     if not needle:
         return True
     return needle in json.dumps(view, ensure_ascii=False, sort_keys=True, default=str).lower()
+
+
+def _wake_job_supervisor(server: Any) -> None:
+    wake = getattr(getattr(server, "api", None), "wake_jobs", None)
+    if callable(wake):
+        wake()
+
+
+def _job_runner_available(server: Any, channel: str) -> bool:
+    api = getattr(server, "api", None)
+    if api is not None and getattr(api, "job_supervisor", None) is not None:
+        return True
+    return has_live_job_supervisor(getattr(server, "jobs_dir", ""), channel=channel)
 
 
 def _job_matches_query(view: dict[str, Any], query: str) -> bool:
@@ -375,7 +389,9 @@ def register_admin_routes(
     ):
         server = resolve_admin()
         current_records = list_job_records(server.jobs_dir, include_failed=True, include_claimed=True)
-        running_records = [record for record in current_records if record.status == "running"]
+        running_records = [
+            record for record in current_records if record.status in {"running", "claimed"}
+        ]
         queued_records = [record for record in current_records if record.status == "queued"]
         active_records = [*queued_records, *running_records]
         attention_records = [record for record in current_records if record.status == "failed"]
@@ -418,6 +434,15 @@ def register_admin_routes(
                 status_code=400,
                 detail="HTTP create currently supports channel=api only; use chat to start feishu/weixin/voice jobs",
             )
+        if not _job_runner_available(server, channel):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "No live job supervisor for this channel. "
+                    "Start the api channel (or another owning channel runtime) before creating jobs; "
+                    "background jobs are not OS daemons and need a living channel runtime."
+                ),
+            )
         user_id = str(input_data.user_id or "web_user").strip() or "web_user"
         target = dict(input_data.target or {})
         target.setdefault("user_id", user_id)
@@ -437,9 +462,7 @@ def register_admin_routes(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        wake = getattr(getattr(server, "api", None), "wake_jobs", None)
-        if callable(wake):
-            wake()
+        _wake_job_supervisor(server)
         return {"status": "ok", "job": job.to_job_view()}
 
     @app.get("/api/jobs/{job_id}", tags=["Monitoring"])
@@ -462,9 +485,7 @@ def register_admin_routes(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        wake = getattr(getattr(server, "api", None), "wake_jobs", None)
-        if callable(wake):
-            wake()
+        _wake_job_supervisor(server)
         return {"status": "ok", "job": job.to_job_view()}
 
     @app.delete("/api/jobs/delete", tags=["Monitoring"])

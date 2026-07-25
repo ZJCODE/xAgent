@@ -170,8 +170,10 @@ class WeixinAdapter:
         await task_scheduler.start()
         job_supervisor = AsyncJobSupervisor(
             self._jobs_dir,
+            can_handle=self._can_notify_job,
             can_notify=self._can_notify_job,
             notify=self._notify_job,
+            owner_channels=("weixin",),
             workspace_dir=getattr(self.agent, "workspace_dir", self.runtime_dir / AgentConfig.WORKSPACE_DIRNAME),
             max_concurrent_jobs=AgentConfig.DEFAULT_MAX_CONCURRENT_JOBS,
             logger_=self.logger,

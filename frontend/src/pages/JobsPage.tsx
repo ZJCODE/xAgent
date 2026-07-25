@@ -22,7 +22,7 @@ function jobTarget(job: BackgroundJobItem): string {
 }
 
 function jobStatusTone(status: string): "good" | "muted" | "danger" | "info" {
-  if (status === "running" || status === "queued") return "info";
+  if (status === "running" || status === "queued" || status === "claimed") return "info";
   if (status === "completed" || status === "cancelled") return "muted";
   if (status === "failed") return "danger";
   return "good";
@@ -30,6 +30,7 @@ function jobStatusTone(status: string): "good" | "muted" | "danger" | "info" {
 
 function lifecycleTime(job: BackgroundJobItem): string {
   if (job.status === "running") return formatStamp(job.started_at) || "Running now";
+  if (job.status === "claimed") return formatStamp(job.updated_at) || "Starting";
   if (job.status === "queued") return formatStamp(job.created_at) || "Queued";
   if (job.status === "completed") return formatStamp(job.completed_at);
   if (job.status === "failed") return formatStamp(job.failed_at);
@@ -140,7 +141,7 @@ export function JobsPage() {
   };
 
   const renderActions = (job: BackgroundJobItem) => {
-    if (job.status === "queued" || job.status === "running") {
+    if (job.status === "queued" || job.status === "claimed" || job.status === "running") {
       return (
         <div className="task-row-actions">
           <Button className="task-action-button" onClick={() => void openDetails(job)}>
@@ -371,7 +372,7 @@ function JobDetailsModal({
           ) : null}
         </div>
         <div className="modal-footer">
-          {job.status === "queued" || job.status === "running" ? null : (
+          {job.status === "queued" || job.status === "claimed" || job.status === "running" ? null : (
             <Button variant="danger" onClick={() => onDelete(job)}>
               <Trash2 size={15} />
               Delete permanently

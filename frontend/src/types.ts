@@ -161,7 +161,7 @@ export interface BackgroundJobItem {
   job_id: string;
   title: string;
   kind: "process" | string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
+  status: "queued" | "claimed" | "running" | "completed" | "failed" | "cancelled" | string;
   command: string;
   cwd?: string | null;
   timeout_seconds?: number | null;
