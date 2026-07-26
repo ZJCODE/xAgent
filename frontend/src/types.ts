@@ -349,14 +349,8 @@ export interface AgentSetupSchema {
     providers: Record<string, ReasoningCapability>;
     custom_model_apis: Record<string, ReasoningCapability>;
   };
-  search_providers: SetupOption[];
-  image_generation_providers: SetupOption[];
-  voice_providers: SetupOption[];
-  voice_custom_providers: string[];
   defaults: {
     identity: string;
-    wake_phrases: string[];
-    exit_phrases: string[];
   };
   placeholders: Record<string, string>;
   name_pattern: string;
@@ -371,25 +365,6 @@ export interface InitSelectionInput {
   model_api: string;
   supports_vision: boolean;
   reasoning?: ReasoningConfigInput | null;
-  search_provider: string;
-  search_api_key: string;
-  image_generation_provider: string;
-  image_generation_api_key: string;
-  observability_enabled: boolean;
-  langfuse_public_key: string;
-  langfuse_secret_key: string;
-  langfuse_base_url: string;
-  voice_enabled: boolean;
-  voice_provider: string;
-  voice_api_key: string;
-  voice_stt_provider: string;
-  voice_stt_api_key: string;
-  voice_tts_provider: string;
-  voice_tts_api_key: string;
-  voice_enable_interruptions: boolean;
-  voice_wake_enabled: boolean;
-  voice_wake_phrases: string[];
-  voice_exit_phrases: string[];
 }
 
 export interface CreateAgentInput {

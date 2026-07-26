@@ -10,22 +10,18 @@ import type {
   ReasoningCapability,
   ReasoningConfigInput,
 } from "../types";
-import { VoiceSetupFields } from "./VoiceSetupFields";
 import { WizardField } from "./WizardField";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Button, IconButton } from "./ui";
 
 const NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
 
-const STEP_ORDER = ["basics", "provider", "tools", "observability", "voice", "identity"] as const;
+const STEP_ORDER = ["basics", "provider", "identity"] as const;
 type StepId = (typeof STEP_ORDER)[number];
 
 const STEP_LABELS: Record<StepId, string> = {
   basics: "Basics",
   provider: "Provider",
-  tools: "Tools",
-  observability: "Observability",
-  voice: "Voice",
   identity: "Identity",
 };
 
@@ -60,25 +56,6 @@ function defaultSelection(schema: AgentSetupSchema): InitSelectionInput {
     model_api: schema.custom_model_apis[0] || "",
     supports_vision: false,
     reasoning: null,
-    search_provider: "none",
-    search_api_key: "",
-    image_generation_provider: "none",
-    image_generation_api_key: "",
-    observability_enabled: false,
-    langfuse_public_key: "",
-    langfuse_secret_key: "",
-    langfuse_base_url: schema.placeholders.langfuse_base_url || "",
-    voice_enabled: false,
-    voice_provider: "none",
-    voice_api_key: "",
-    voice_stt_provider: schema.voice_custom_providers[0] || "soniox",
-    voice_stt_api_key: "",
-    voice_tts_provider: schema.voice_custom_providers[0] || "soniox",
-    voice_tts_api_key: "",
-    voice_enable_interruptions: false,
-    voice_wake_enabled: false,
-    voice_wake_phrases: [...schema.defaults.wake_phrases],
-    voice_exit_phrases: [...schema.defaults.exit_phrases],
   };
 }
 
@@ -101,14 +78,6 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
     return { ...state, selection: { ...state.selection, ...action.patch } };
   }
   return state;
-}
-
-function supportsLangfuse(provider: string, modelApi: string) {
-  if (provider === "openai" || provider === "deepseek" || provider === "qwen") return true;
-  if (provider === "custom") {
-    return modelApi === "openai_chat_completions" || modelApi === "openai_responses";
-  }
-  return false;
 }
 
 function reasoningCapabilityFor(
@@ -134,12 +103,6 @@ function defaultEnabledReasoning(capability: ReasoningCapability): ReasoningConf
   };
 }
 
-function visibleSteps(selection: InitSelectionInput): StepId[] {
-  return STEP_ORDER.filter(
-    (id) => id !== "observability" || supportsLangfuse(selection.provider, selection.model_api),
-  );
-}
-
 export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
   const { agents, createAgent } = useAgentSession();
   const [schema, setSchema] = useState<AgentSetupSchema | null>(null);
@@ -158,17 +121,13 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
       provider_base_urls: { openai: "" },
       custom_model_apis: [],
       reasoning: { providers: {}, custom_model_apis: {} },
-      search_providers: [],
-      image_generation_providers: [],
-      voice_providers: [],
-      voice_custom_providers: [],
-      defaults: { identity: "", wake_phrases: [], exit_phrases: [] },
+      defaults: { identity: "" },
       placeholders: {},
       name_pattern: NAME_PATTERN.source,
     }),
   });
 
-  const steps = useMemo(() => visibleSteps(state.selection), [state.selection]);
+  const steps = STEP_ORDER;
   const currentStepId = steps[state.stepIndex] ?? steps[0] ?? "basics";
   const isLastStep = state.stepIndex >= steps.length - 1;
   const isDirty = useMemo(() => {
@@ -313,12 +272,6 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
         selection: {
           ...state.selection,
           api_key: state.selection.api_key.trim() || schema.placeholders.api_key,
-          langfuse_public_key:
-            state.selection.langfuse_public_key.trim() || schema.placeholders.langfuse_public_key,
-          langfuse_secret_key:
-            state.selection.langfuse_secret_key.trim() || schema.placeholders.langfuse_secret_key,
-          langfuse_base_url:
-            state.selection.langfuse_base_url.trim() || schema.placeholders.langfuse_base_url,
         },
       };
       await createAgent(payload);
@@ -347,13 +300,6 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
 
   const onModelApiChange = (modelApi: string) => {
     dispatch({ type: "patch-selection", patch: { model_api: modelApi, reasoning: null } });
-    const nextSteps = visibleSteps({ ...state.selection, model_api: modelApi });
-    if (currentStepId === "observability" && !nextSteps.includes("observability")) {
-      const voiceIndex = nextSteps.indexOf("voice");
-      if (voiceIndex >= 0) {
-        dispatch({ type: "set-step-index", stepIndex: voiceIndex });
-      }
-    }
   };
 
   const onReasoningModeChange = (mode: string) => {
@@ -396,12 +342,13 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
   if (!open) return null;
 
   return (
-    <div className="modal-overlay" role="presentation">
+    <div className="modal-backdrop" onMouseDown={requestClose}>
       <div
         className="modal-card wizard-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-agent-title"
+        onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="wizard-header-block">
           <div className="wizard-header-heading">
@@ -608,137 +555,6 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
             </div>
           ) : null}
 
-          {!loadingSchema && currentStepId === "tools" && schema ? (
-            <div className="wizard-grid">
-              <WizardField label="Search provider">
-                <select
-                  value={state.selection.search_provider}
-                  onChange={(event) =>
-                    dispatch({ type: "patch-selection", patch: { search_provider: event.target.value } })
-                  }
-                >
-                  {schema.search_providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.id}
-                    </option>
-                  ))}
-                </select>
-              </WizardField>
-              {state.selection.search_provider !== "none" &&
-              state.selection.search_provider !== state.selection.provider ? (
-                <WizardField label="Search API key">
-                  <input
-                    type="password"
-                    value={state.selection.search_api_key}
-                    autoComplete="off"
-                    onChange={(event) =>
-                      dispatch({ type: "patch-selection", patch: { search_api_key: event.target.value } })
-                    }
-                  />
-                </WizardField>
-              ) : null}
-              <WizardField label="Image generation">
-                <select
-                  value={state.selection.image_generation_provider}
-                  onChange={(event) =>
-                    dispatch({
-                      type: "patch-selection",
-                      patch: { image_generation_provider: event.target.value },
-                    })
-                  }
-                >
-                  {schema.image_generation_providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.id}
-                    </option>
-                  ))}
-                </select>
-              </WizardField>
-              {state.selection.image_generation_provider !== "none" &&
-              state.selection.image_generation_provider !== state.selection.provider ? (
-                <WizardField label="Image generation API key">
-                  <input
-                    type="password"
-                    value={state.selection.image_generation_api_key}
-                    autoComplete="off"
-                    onChange={(event) =>
-                      dispatch({
-                        type: "patch-selection",
-                        patch: { image_generation_api_key: event.target.value },
-                      })
-                    }
-                  />
-                </WizardField>
-              ) : null}
-            </div>
-          ) : null}
-
-          {!loadingSchema && currentStepId === "observability" && schema ? (
-            <div className="wizard-grid">
-              <label className="wizard-checkbox">
-                <input
-                  type="checkbox"
-                  checked={state.selection.observability_enabled}
-                  onChange={(event) =>
-                    dispatch({
-                      type: "patch-selection",
-                      patch: { observability_enabled: event.target.checked },
-                    })
-                  }
-                />
-                <span>Enable Langfuse observability</span>
-              </label>
-              {state.selection.observability_enabled ? (
-                <>
-                  <WizardField label="Langfuse public key">
-                    <input
-                      value={state.selection.langfuse_public_key}
-                      onChange={(event) =>
-                        dispatch({
-                          type: "patch-selection",
-                          patch: { langfuse_public_key: event.target.value },
-                        })
-                      }
-                    />
-                  </WizardField>
-                  <WizardField label="Langfuse secret key">
-                    <input
-                      type="password"
-                      value={state.selection.langfuse_secret_key}
-                      autoComplete="off"
-                      onChange={(event) =>
-                        dispatch({
-                          type: "patch-selection",
-                          patch: { langfuse_secret_key: event.target.value },
-                        })
-                      }
-                    />
-                  </WizardField>
-                  <WizardField label="Langfuse base URL">
-                    <input
-                      value={state.selection.langfuse_base_url}
-                      onChange={(event) =>
-                        dispatch({
-                          type: "patch-selection",
-                          patch: { langfuse_base_url: event.target.value },
-                        })
-                      }
-                    />
-                  </WizardField>
-                </>
-              ) : null}
-            </div>
-          ) : null}
-
-          {!loadingSchema && currentStepId === "voice" && schema ? (
-            <VoiceSetupFields
-              schema={schema}
-              selection={state.selection}
-              onChange={(patch) => dispatch({ type: "patch-selection", patch })}
-              showEnableToggle
-            />
-          ) : null}
-
           {!loadingSchema && currentStepId === "identity" ? (
             <div className="wizard-grid">
               <WizardField label="Identity">
@@ -769,17 +585,6 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                       : reasoningMode === "disabled"
                         ? "disabled"
                         : state.selection.reasoning?.effort || `${state.selection.reasoning?.budget_tokens} tokens`}
-                  </li>
-                  <li>
-                    <strong>Search:</strong> {state.selection.search_provider}
-                  </li>
-                  <li>
-                    <strong>Observability:</strong>{" "}
-                    {state.selection.observability_enabled ? "Langfuse enabled" : "disabled"}
-                  </li>
-                  <li>
-                    <strong>Voice:</strong>{" "}
-                    {state.selection.voice_enabled ? state.selection.voice_provider : "disabled"}
                   </li>
                 </ul>
                 {directoryExists ? (
@@ -821,16 +626,19 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
           </div>
         </div>
       </div>
+
       <ConfirmDialog
         open={discardConfirmationOpen}
-        title="Discard unsaved setup?"
-        description="Your changes have not been saved and will be lost."
-        confirmLabel="Discard changes"
+        title="Discard create agent draft?"
+        description="Your unfinished create-agent choices will be lost."
+        confirmLabel="Discard"
+        cancelLabel="Keep editing"
+        danger
+        onCancel={() => setDiscardConfirmationOpen(false)}
         onConfirm={() => {
           setDiscardConfirmationOpen(false);
           onClose();
         }}
-        onCancel={() => setDiscardConfirmationOpen(false)}
       />
     </div>
   );

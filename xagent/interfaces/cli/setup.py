@@ -28,14 +28,11 @@ from ...core.providers import (
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
     ReasoningConfig,
-    model_api_uses_openai_client,
     normalize_reasoning_config,
     normalize_provider_name,
     provider_base_url,
-    provider_model_api,
     reasoning_capability,
 )
-from ...tools.search_tool import is_placeholder_api_key
 from ..base import BaseAgentConfig
 from .agents import allocate_api_port
 from .paths import config_path as _config_path, runtime_dir as _runtime_dir, setup_runtime_dir as _setup_runtime_dir
@@ -72,25 +69,6 @@ class InitSelection:
     model_api: str = ""
     supports_vision: bool = False
     reasoning: Optional[ReasoningConfig] = None
-    search_provider: str = "none"
-    search_api_key: str = ""
-    image_generation_provider: str = "none"
-    image_generation_api_key: str = ""
-    observability_enabled: bool = False
-    langfuse_public_key: str = ""
-    langfuse_secret_key: str = ""
-    langfuse_base_url: str = ""
-    voice_enabled: bool = False
-    voice_provider: str = "none"
-    voice_api_key: str = ""
-    voice_stt_provider: str = ""
-    voice_stt_api_key: str = ""
-    voice_tts_provider: str = ""
-    voice_tts_api_key: str = ""
-    voice_enable_interruptions: bool = False
-    voice_wake_enabled: bool = False
-    voice_wake_phrases: Tuple[str, ...] = ()
-    voice_exit_phrases: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -142,11 +120,6 @@ QWEN_BASE_URL = provider_base_url(PROVIDER_QWEN)
 CUSTOM_OPENAI_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_API_OPENAI_CHAT_COMPLETIONS)
 CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_API_ANTHROPIC_MESSAGES)
 API_KEY_PLACEHOLDER = "your_api_key_here"
-OPENAI_SEARCH_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
-QWEN_SEARCH_API_KEY_PLACEHOLDER = "your_qwen_api_key_here"
-OPENAI_IMAGE_API_KEY_PLACEHOLDER = "your_openai_api_key_here"
-MINIMAX_IMAGE_API_KEY_PLACEHOLDER = "your_minimax_api_key_here"
-QWEN_IMAGE_API_KEY_PLACEHOLDER = "your_qwen_api_key_here"
 SONIOX_KEY_PLACEHOLDER = "your_soniox_api_key_here"
 QWEN_KEY_PLACEHOLDER = "your_qwen_api_key_here"
 MODEL_PLACEHOLDER = "your_model_here"
@@ -230,20 +203,6 @@ _PROVIDER_LABELS = {
     PROVIDER_CUSTOM: "Custom",
 }
 
-_SEARCH_PROVIDER_DESCRIPTIONS = {
-    "none": "Do not enable a provider-native web search tool.",
-    "openai": "Use OpenAI web search.",
-    "qwen": "Use Qwen web search via DashScope.",
-    "minimax": "Use MiniMax web search.",
-}
-
-_IMAGE_GENERATION_DESCRIPTIONS = {
-    "none": "Do not enable image generation.",
-    "openai": "Use OpenAI image generation.",
-    "minimax": "Use MiniMax image generation.",
-    "qwen": "Use Qwen image generation via DashScope.",
-}
-
 _VOICE_PROVIDER_DESCRIPTIONS = {
     "none": "Disable voice features.",
     "soniox": "Use Soniox voice runtime defaults.",
@@ -278,11 +237,6 @@ def init_selection_from_mapping(data: Mapping[str, Any]) -> InitSelection:
         else:
             base_url = provider_base_url(provider)
 
-    voice_enabled = bool(data.get("voice_enabled", False))
-    voice_provider = str(data.get("voice_provider") or "none").strip() or "none"
-    if voice_enabled and voice_provider == "none":
-        voice_provider = "soniox"
-
     model_api = str(data.get("model_api") or "")
     reasoning_provider_cfg: dict[str, Any] = {
         "name": provider,
@@ -306,25 +260,6 @@ def init_selection_from_mapping(data: Mapping[str, Any]) -> InitSelection:
         api_key=str(data.get("api_key") or API_KEY_PLACEHOLDER).strip() or API_KEY_PLACEHOLDER,
         model=model,
         identity=str(data.get("identity") or _default_identity_markdown()),
-        search_provider=str(data.get("search_provider") or "none"),
-        search_api_key=str(data.get("search_api_key") or ""),
-        image_generation_provider=str(data.get("image_generation_provider") or "none"),
-        image_generation_api_key=str(data.get("image_generation_api_key") or ""),
-        observability_enabled=bool(data.get("observability_enabled", False)),
-        langfuse_public_key=str(data.get("langfuse_public_key") or ""),
-        langfuse_secret_key=str(data.get("langfuse_secret_key") or ""),
-        langfuse_base_url=str(data.get("langfuse_base_url") or LANGFUSE_BASE_URL),
-        voice_enabled=voice_enabled,
-        voice_provider=voice_provider,
-        voice_api_key=str(data.get("voice_api_key") or ""),
-        voice_stt_provider=str(data.get("voice_stt_provider") or ""),
-        voice_stt_api_key=str(data.get("voice_stt_api_key") or ""),
-        voice_tts_provider=str(data.get("voice_tts_provider") or ""),
-        voice_tts_api_key=str(data.get("voice_tts_api_key") or ""),
-        voice_enable_interruptions=bool(data.get("voice_enable_interruptions", False)),
-        voice_wake_enabled=bool(data.get("voice_wake_enabled", False)),
-        voice_wake_phrases=_phrase_tuple(data.get("voice_wake_phrases")) or DEFAULT_WAKE_PHRASES,
-        voice_exit_phrases=_phrase_tuple(data.get("voice_exit_phrases")) or DEFAULT_EXIT_PHRASES,
     )
 
 
@@ -375,37 +310,12 @@ def build_setup_schema() -> dict[str, Any]:
                 )
             },
         },
-        "search_providers": [
-            {"id": provider, "description": _SEARCH_PROVIDER_DESCRIPTIONS.get(provider, "")}
-            for provider in SEARCH_PROVIDERS
-        ],
-        "image_generation_providers": [
-            {"id": provider, "description": _IMAGE_GENERATION_DESCRIPTIONS.get(provider, "")}
-            for provider in IMAGE_GENERATION_PROVIDERS
-        ],
-        "voice_providers": [
-            {"id": provider, "description": _VOICE_PROVIDER_DESCRIPTIONS.get(provider, "")}
-            for provider in VOICE_PROVIDERS
-        ],
-        "voice_custom_providers": list(VOICE_CUSTOM_PROVIDERS),
         "defaults": {
             "identity": _default_identity_markdown(),
-            "wake_phrases": list(DEFAULT_WAKE_PHRASES),
-            "exit_phrases": list(DEFAULT_EXIT_PHRASES),
         },
         "placeholders": {
             "api_key": API_KEY_PLACEHOLDER,
             "model": MODEL_PLACEHOLDER,
-            "langfuse_public_key": LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
-            "langfuse_secret_key": LANGFUSE_SECRET_KEY_PLACEHOLDER,
-            "langfuse_base_url": LANGFUSE_BASE_URL,
-            "openai_search_api_key": OPENAI_SEARCH_API_KEY_PLACEHOLDER,
-            "qwen_search_api_key": QWEN_SEARCH_API_KEY_PLACEHOLDER,
-            "openai_image_api_key": OPENAI_IMAGE_API_KEY_PLACEHOLDER,
-            "minimax_image_api_key": MINIMAX_IMAGE_API_KEY_PLACEHOLDER,
-            "qwen_image_api_key": QWEN_IMAGE_API_KEY_PLACEHOLDER,
-            "soniox_api_key": SONIOX_KEY_PLACEHOLDER,
-            "qwen_voice_api_key": QWEN_KEY_PLACEHOLDER,
         },
         "name_pattern": "^[a-z][a-z0-9_-]*$",
     }
@@ -723,50 +633,11 @@ def apply_channel_setup(
     }
 
 
-def _search_api_key_placeholder(provider: str) -> str:
-    if provider == "openai":
-        return OPENAI_SEARCH_API_KEY_PLACEHOLDER
-    if provider == "qwen":
-        return QWEN_SEARCH_API_KEY_PLACEHOLDER
-    if provider == "minimax":
-        return MINIMAX_IMAGE_API_KEY_PLACEHOLDER
-    return API_KEY_PLACEHOLDER
-
-
-def _image_generation_api_key_placeholder(provider: str) -> str:
-    if provider == "openai":
-        return OPENAI_IMAGE_API_KEY_PLACEHOLDER
-    if provider == "minimax":
-        return MINIMAX_IMAGE_API_KEY_PLACEHOLDER
-    if provider == "qwen":
-        return QWEN_IMAGE_API_KEY_PLACEHOLDER
-    return API_KEY_PLACEHOLDER
-
-
 def _voice_api_key_placeholder(provider: str) -> str:
     if provider == "qwen":
         return QWEN_KEY_PLACEHOLDER
     return SONIOX_KEY_PLACEHOLDER
 
-
-def _feature_api_key_value(
-    *,
-    feature_provider: str,
-    explicit_api_key: str,
-    model_provider: str,
-    model_api_key: str,
-    placeholder: str,
-) -> str:
-    configured_key = explicit_api_key.strip()
-    if configured_key:
-        return configured_key
-
-    if normalize_provider_name(feature_provider) == normalize_provider_name(model_provider):
-        copied_key = model_api_key.strip()
-        if copied_key and not is_placeholder_api_key(copied_key):
-            return copied_key
-
-    return placeholder
 
 
 def _voice_defaults_for_provider(provider: str) -> dict[str, dict[str, str]]:
@@ -798,12 +669,10 @@ def _default_init_selection() -> InitSelection:
         api_key=API_KEY_PLACEHOLDER,
         model="gpt-5.4-mini",
         identity=_default_identity_markdown(),
-        search_provider="none",
-        image_generation_provider="none",
     )
 
 
-def _voice_channel_config(selection: InitSelection | VoiceInitSelection) -> dict[str, Any]:
+def _voice_channel_config(selection: VoiceInitSelection) -> dict[str, Any]:
     voice_provider = selection.voice_provider or "soniox"
     wake_phrases = list(selection.voice_wake_phrases) or list(DEFAULT_WAKE_PHRASES)
     exit_phrases = list(selection.voice_exit_phrases) or list(DEFAULT_EXIT_PHRASES)
@@ -883,37 +752,8 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "api_url": f"http://127.0.0.1:{port}",
         },
     }
-    if selection.voice_enabled:
-        config["channels"]["voice"] = _voice_channel_config(selection)
-    search_config = {"provider": selection.search_provider or "none"}
-    if search_config["provider"] in {"openai", "qwen", "minimax"}:
-        search_config["api_key"] = _feature_api_key_value(
-            feature_provider=search_config["provider"],
-            explicit_api_key=selection.search_api_key,
-            model_provider=selection.provider,
-            model_api_key=selection.api_key,
-            placeholder=_search_api_key_placeholder(search_config["provider"]),
-        )
-    config["search"] = search_config
-    selected_image_generation_provider = selection.image_generation_provider or "none"
-    image_generation_config = {"provider": selected_image_generation_provider}
-    if selected_image_generation_provider in {"openai", "minimax", "qwen"}:
-        image_generation_config["api_key"] = _feature_api_key_value(
-            feature_provider=selected_image_generation_provider,
-            explicit_api_key=selection.image_generation_api_key,
-            model_provider=selection.provider,
-            model_api_key=selection.api_key,
-            placeholder=_image_generation_api_key_placeholder(selected_image_generation_provider),
-        )
-    config["image_generation"] = image_generation_config
-    if selection.observability_enabled:
-        config["observability"] = {
-            "enabled": True,
-            "provider": "langfuse",
-            "public_key": selection.langfuse_public_key or LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
-            "secret_key": selection.langfuse_secret_key or LANGFUSE_SECRET_KEY_PLACEHOLDER,
-            "base_url": selection.langfuse_base_url or LANGFUSE_BASE_URL,
-        }
+    config["search"] = {"provider": "none"}
+    config["image_generation"] = {"provider": "none"}
     yaml_str = yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
     # Inline comment for subconscious_activity
     yaml_str = yaml_str.replace(
@@ -1024,75 +864,6 @@ def _resolve_selected_model(
     if selected_model == "Decide later":
         return MODEL_PLACEHOLDER
     return selected_model
-
-
-def _select_search_provider(
-    provider: str,
-    *,
-    input_func: Callable[[str], str] = input,
-) -> str:
-    del provider
-    return _select_option(
-        "Search provider",
-        SEARCH_PROVIDERS,
-        default_index=0,
-        input_func=input_func,
-    )
-
-
-def _select_image_generation_provider(
-    provider: str,
-    *,
-    input_func: Callable[[str], str] = input,
-) -> str:
-    del provider
-    return _select_option(
-        "Image generation provider",
-        IMAGE_GENERATION_PROVIDERS,
-        default_index=0,
-        input_func=input_func,
-    )
-
-
-def _prompt_image_generation_api_key(
-    image_generation_provider: str,
-    *,
-    secret_input_func: Callable[[str], str] = getpass.getpass,
-) -> str:
-    if image_generation_provider == "openai":
-        api_key = secret_input_func(
-            "OpenAI API key for image generation (leave blank to fill in later): "
-        ).strip()
-    elif image_generation_provider == "minimax":
-        api_key = secret_input_func(
-            "MiniMax API key for image generation (leave blank to fill in later): "
-        ).strip()
-    elif image_generation_provider == "qwen":
-        api_key = secret_input_func(
-            "Qwen API key for image generation (leave blank to fill in later): "
-        ).strip()
-    else:
-        return ""
-    return api_key or _image_generation_api_key_placeholder(image_generation_provider)
-
-
-def _prompt_search_api_key(
-    search_provider: str,
-    *,
-    secret_input_func: Callable[[str], str] = getpass.getpass,
-) -> str:
-    prompt_names = {
-        "openai": "OpenAI",
-        "qwen": "Qwen",
-        "minimax": "MiniMax",
-    }
-    prompt_name = prompt_names.get(search_provider)
-    if not prompt_name:
-        return ""
-    api_key = secret_input_func(
-        f"{prompt_name} API key for search (leave blank to fill in later): "
-    ).strip()
-    return api_key or _search_api_key_placeholder(search_provider)
 
 
 def _prompt_voice_api_key(
@@ -1283,9 +1054,6 @@ class InitPromptSurface:
     prompt_yes_no: Callable[..., bool]
     ask_secret: Callable[[str], str]
     prompt_multiline_identity: Callable[[], str]
-    select_search_provider: Callable[[str], str]
-    select_image_generation_provider: Callable[[str], str]
-    collect_voice_startup: Callable[[], Tuple[bool, Tuple[str, ...], Tuple[str, ...], bool]]
     on_start: Callable[[], None] = lambda: None
     reasoning_prompt_enabled: bool = False
 
@@ -1444,115 +1212,6 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
             model_api=model_api,
         )
 
-    provider_api_cfg = {"name": provider}
-    if model_api:
-        provider_api_cfg["model_api"] = model_api
-    selected_model_api = provider_model_api(provider_api_cfg)
-
-    observability_enabled = False
-    langfuse_public_key = ""
-    langfuse_secret_key = ""
-    langfuse_base_url = ""
-    if model_api_uses_openai_client(selected_model_api):
-        observability_enabled = surface.prompt_yes_no(
-            "Enable Langfuse observability?",
-            default=False,
-        )
-    if observability_enabled:
-        langfuse_public_key = surface.prompt_text(
-            "Langfuse public key",
-            default=LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
-        )
-        langfuse_secret_key = (
-            surface.ask_secret("Langfuse secret key (leave blank to fill in later): ").strip()
-            or LANGFUSE_SECRET_KEY_PLACEHOLDER
-        )
-        langfuse_base_url = surface.prompt_text(
-            "Langfuse base URL",
-            default=LANGFUSE_BASE_URL,
-        )
-
-    search_provider = surface.select_search_provider(provider)
-    search_api_key = ""
-    if search_provider in {"openai", "qwen", "minimax"} and search_provider != provider:
-        search_api_key = _prompt_search_api_key(search_provider, secret_input_func=surface.ask_secret)
-
-    image_generation_provider = surface.select_image_generation_provider(provider)
-    image_generation_api_key = ""
-    if image_generation_provider in {"openai", "minimax", "qwen"} and image_generation_provider != provider:
-        image_generation_api_key = _prompt_image_generation_api_key(
-            image_generation_provider,
-            secret_input_func=surface.ask_secret,
-        )
-
-    voice_enabled = surface.prompt_yes_no("Enable voice mode?", default=False)
-    voice_provider = "none"
-    voice_api_key = ""
-    voice_stt_provider = ""
-    voice_stt_api_key = ""
-    voice_tts_provider = ""
-    voice_tts_api_key = ""
-    voice_enable_interruptions = False
-    voice_wake_enabled = False
-    voice_wake_phrases: tuple[str, ...] = ()
-    voice_exit_phrases: tuple[str, ...] = ()
-
-    if voice_enabled:
-        voice_provider = surface.select_option(
-            "Voice Provider",
-            VOICE_PROVIDERS,
-            descriptions={
-                "none": "Disable voice features.",
-                "soniox": "Use Soniox voice runtime defaults.",
-                "qwen": "Use Qwen voice runtime defaults.",
-                "custom": "Pick separate STT and TTS providers.",
-            },
-            default_index=1,
-        )
-        voice_enabled = voice_provider != "none"
-
-    if voice_enabled:
-        if voice_provider == "custom":
-            voice_stt_provider = surface.select_option(
-                "STT Provider",
-                VOICE_CUSTOM_PROVIDERS,
-                default_index=0,
-            )
-            voice_stt_api_key = _prompt_voice_api_key(
-                voice_stt_provider,
-                provider=provider,
-                main_api_key=api_key,
-                purpose="STT",
-                secret_input_func=surface.ask_secret,
-            )
-            voice_tts_provider = surface.select_option(
-                "TTS Provider",
-                VOICE_CUSTOM_PROVIDERS,
-                default_index=0,
-            )
-            voice_tts_api_key = _prompt_voice_api_key(
-                voice_tts_provider,
-                provider=provider,
-                main_api_key=api_key,
-                purpose="TTS",
-                secret_input_func=surface.ask_secret,
-            )
-        elif voice_provider == "qwen" and provider == PROVIDER_QWEN:
-            voice_api_key = api_key if api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
-        else:
-            voice_api_key = _prompt_voice_api_key(
-                voice_provider,
-                provider=provider,
-                main_api_key=api_key,
-                secret_input_func=surface.ask_secret,
-            )
-        (
-            voice_wake_enabled,
-            voice_wake_phrases,
-            voice_exit_phrases,
-            voice_enable_interruptions,
-        ) = surface.collect_voice_startup()
-
     identity = surface.prompt_multiline_identity()
 
     return InitSelection(
@@ -1564,25 +1223,6 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
         model=model,
         identity=identity,
         reasoning=reasoning,
-        search_provider=search_provider,
-        search_api_key=search_api_key,
-        image_generation_provider=image_generation_provider,
-        image_generation_api_key=image_generation_api_key,
-        observability_enabled=observability_enabled,
-        langfuse_public_key=langfuse_public_key,
-        langfuse_secret_key=langfuse_secret_key,
-        langfuse_base_url=langfuse_base_url,
-        voice_enabled=voice_enabled,
-        voice_provider=voice_provider,
-        voice_api_key=voice_api_key,
-        voice_stt_provider=voice_stt_provider,
-        voice_stt_api_key=voice_stt_api_key,
-        voice_tts_provider=voice_tts_provider,
-        voice_tts_api_key=voice_tts_api_key,
-        voice_enable_interruptions=voice_enable_interruptions,
-        voice_wake_enabled=voice_wake_enabled,
-        voice_wake_phrases=voice_wake_phrases,
-        voice_exit_phrases=voice_exit_phrases,
     )
 
 
@@ -1619,44 +1259,6 @@ def collect_init_selection_terminal_ui(
     def prompt_yes_no(label: str, *, default: bool = False) -> bool:
         return _terminal_prompt_yes_no(wizard_ui, label, default=default)
 
-    def select_search_provider(provider_name: str) -> str:
-        del provider_name
-        return select_option(
-            "Search Provider",
-            SEARCH_PROVIDERS,
-            descriptions={
-                "none": "Do not enable a provider-native web search tool.",
-                "openai": "Use OpenAI web search.",
-                "qwen": "Use Qwen web search via DashScope.",
-                "minimax": "Use MiniMax web search.",
-            },
-            default_index=0,
-        )
-
-    def select_image_generation_provider(provider_name: str) -> str:
-        del provider_name
-        return select_option(
-            "Image Generation Provider",
-            IMAGE_GENERATION_PROVIDERS,
-            descriptions={
-                "none": "Do not enable image generation.",
-                "openai": "Use OpenAI image generation.",
-                "minimax": "Use MiniMax image generation.",
-                "qwen": "Use Qwen image generation via DashScope.",
-            },
-            default_index=0,
-        )
-
-    def collect_voice_startup():
-        return _collect_voice_startup_preferences(
-            prompt_yes_no=lambda prompt: prompt_yes_no(prompt, default=False),
-            prompt_text=lambda prompt, default: wizard_ui.ask_text(
-                prompt,
-                default=default,
-                subtitle="Separate phrases with commas.",
-            ),
-        )
-
     return _collect_init_selection_core(
         InitPromptSurface(
             select_option=select_option,
@@ -1666,9 +1268,6 @@ def collect_init_selection_terminal_ui(
             prompt_yes_no=prompt_yes_no,
             ask_secret=ask_secret,
             prompt_multiline_identity=lambda: _terminal_prompt_multiline_identity(wizard_ui),
-            select_search_provider=select_search_provider,
-            select_image_generation_provider=select_image_generation_provider,
-            collect_voice_startup=collect_voice_startup,
             reasoning_prompt_enabled=True,
         )
     )
@@ -1703,18 +1302,6 @@ def collect_init_selection(
     def prompt_yes_no(label: str, *, default: bool = False) -> bool:
         return _prompt_yes_no(label, default=default, input_func=input_func)
 
-    def select_search_provider(provider_name: str) -> str:
-        return _select_search_provider(provider_name, input_func=input_func)
-
-    def select_image_generation_provider(provider_name: str) -> str:
-        return _select_image_generation_provider(provider_name, input_func=input_func)
-
-    def collect_voice_startup():
-        return _collect_voice_startup_preferences(
-            prompt_yes_no=lambda prompt: prompt_yes_no(prompt, default=False),
-            prompt_text=lambda prompt, default: prompt_text(prompt, default=default),
-        )
-
     return _collect_init_selection_core(
         InitPromptSurface(
             select_option=select_option,
@@ -1724,9 +1311,6 @@ def collect_init_selection(
             prompt_yes_no=prompt_yes_no,
             ask_secret=secret_input_func,
             prompt_multiline_identity=lambda: _prompt_multiline_identity(input_func=input_func),
-            select_search_provider=select_search_provider,
-            select_image_generation_provider=select_image_generation_provider,
-            collect_voice_startup=collect_voice_startup,
             on_start=on_start,
         )
     )
@@ -1832,7 +1416,7 @@ def _format_init_command(command: str, *, config_dir: Path | None = None, agent_
     return command
 
 
-def _print_init_next_steps(*, config_dir: Path, selection: InitSelection, agent_name: str | None = None) -> None:
+def _print_init_next_steps(*, config_dir: Path, agent_name: str | None = None) -> None:
     ready_now = [
         (
             "chat",
@@ -1850,16 +1434,9 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection, agent_
             "Run the HTTP / SSE / WebSocket channel in the background.",
         ),
     ]
-    if selection.voice_enabled:
-        ready_now.insert(
-            2,
-            (
-                "voice",
-                _format_init_command("xagent voice start", config_dir=config_dir, agent_name=agent_name),
-                "Run the microphone/speaker channel in the background.",
-            ),
-        )
 
+    voice_init = _format_init_command("xagent voice setup", config_dir=config_dir, agent_name=agent_name)
+    voice_start = _format_init_command("xagent voice start", config_dir=config_dir, agent_name=agent_name)
     feishu_init = _format_init_command("xagent feishu setup", config_dir=config_dir, agent_name=agent_name)
     feishu_start = _format_init_command("xagent feishu start", config_dir=config_dir, agent_name=agent_name)
     weixin_init = _format_init_command("xagent weixin setup", config_dir=config_dir, agent_name=agent_name)
@@ -1873,6 +1450,12 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection, agent_
         content.append(command, style="cyan")
         content.append(f"\n        {description}\n")
     content.append("\nOptional:\n")
+    content.append("voice   ", style="")
+    content.append(voice_init, style="cyan")
+    content.append("\n        Configure the microphone/speaker channel, then start it with ")
+    content.append(voice_start, style="cyan")
+    content.append(".")
+    content.append("\n")
     content.append("feishu  ", style="")
     content.append(feishu_init, style="cyan")
     content.append("\n        Create a Feishu bot config, then start it with ")
@@ -1939,7 +1522,6 @@ def handle_init(args: argparse.Namespace) -> int:
     if result.wrote_files:
         _print_init_next_steps(
             config_dir=result.config_path.parent,
-            selection=selection,
             agent_name=getattr(args, "agent", None),
         )
     return 0 if result.wrote_files else 1

@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ..cli.agents import AgentRegistryError
 from .session import WebAgentSession
@@ -31,25 +31,6 @@ class InitSelectionInput(BaseModel):
     model_api: str = ""
     supports_vision: bool = False
     reasoning: Optional[ReasoningInput] = None
-    search_provider: str = "none"
-    search_api_key: str = ""
-    image_generation_provider: str = "none"
-    image_generation_api_key: str = ""
-    observability_enabled: bool = False
-    langfuse_public_key: str = ""
-    langfuse_secret_key: str = ""
-    langfuse_base_url: str = ""
-    voice_enabled: bool = False
-    voice_provider: str = "none"
-    voice_api_key: str = ""
-    voice_stt_provider: str = ""
-    voice_stt_api_key: str = ""
-    voice_tts_provider: str = ""
-    voice_tts_api_key: str = ""
-    voice_enable_interruptions: bool = False
-    voice_wake_enabled: bool = False
-    voice_wake_phrases: list[str] = Field(default_factory=list)
-    voice_exit_phrases: list[str] = Field(default_factory=list)
 
 
 class CreateAgentInput(BaseModel):

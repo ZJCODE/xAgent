@@ -93,7 +93,6 @@ def _selection(**overrides) -> InitSelection:
         "api_key": "test-key",
         "model": "gpt-5.4-mini",
         "identity": "# Identity\n\nTest agent.\n",
-        "search_provider": "openai",
     }
     values.update(overrides)
     return InitSelection(
@@ -2598,8 +2597,9 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("xagent api start --agent work", output)
         self.assertIn("xagent feishu setup --agent work", output)
         self.assertIn("xagent feishu start --agent work", output)
+        self.assertIn("xagent voice setup --agent work", output)
+        self.assertIn("xagent voice start --agent work", output)
         self.assertNotIn("xagent doctor", output)
-        self.assertNotIn("xagent voice start --agent work", output)
         self.assertNotIn("--dir", output)
 
     def test_setup_without_registry_creates_default_agent(self):
@@ -2639,23 +2639,21 @@ class CLICommandTests(unittest.TestCase):
         self.assertTrue(config_exists)
         self.assertTrue(identity_exists)
 
-    def test_init_prints_voice_entry_when_voice_is_configured(self):
+    def test_init_prints_voice_setup_in_optional_next_steps(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             args = argparse.Namespace(config_dir=tmpdir, agent="work", force=False, schema=False)
 
             with patch(
                 "xagent.interfaces.cli.setup.collect_init_selection_terminal_ui",
-                return_value=_selection(
-                    voice_enabled=True,
-                    voice_provider="qwen",
-                    voice_api_key="voice-key",
-                ),
+                return_value=_selection(),
             ):
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     exit_code = handle_init(args)
 
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
+        self.assertIn("Optional:", output)
+        self.assertIn("xagent voice setup --agent work", output)
         self.assertIn("xagent voice start --agent work", output)
         self.assertNotIn("--dir", output)
 
