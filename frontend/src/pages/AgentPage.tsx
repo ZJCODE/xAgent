@@ -1,6 +1,8 @@
-import { Save, RotateCcw, Trash2 } from "lucide-react";
+import { RefreshCw, Save, RotateCcw, Trash2, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ChannelSetupWizard } from "../components/ChannelSetupWizard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { FeatureSetupModal } from "../components/FeatureSetupModal";
 import { Button, EmptyState, IconButton, PageShell, PageToolbar, Panel, PanelHeader } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { useUnsavedChanges } from "../context/UnsavedChangesContext";
@@ -9,12 +11,25 @@ import {
   clearMessages,
   clearWorkspace,
   getAgentConfig,
+  getAgentEditSetupSchema,
   getAgentIdentity,
   getAgentInfo,
+  restartChannel,
   updateAgentConfig,
   updateAgentIdentity,
 } from "../lib/api";
-import type { AgentConfig, AgentIdentity, AgentInfo } from "../types";
+import type {
+  AgentConfig,
+  AgentEditSetupFeatureId,
+  AgentEditSetupResponse,
+  AgentEditSetupSchema,
+  AgentIdentity,
+  AgentInfo,
+  SetupChannelId,
+} from "../types";
+
+const AGENT_FEATURE_IDS = new Set(["model", "search", "image", "observability"]);
+const CHANNEL_FEATURE_IDS = new Set(["voice", "feishu", "weixin"]);
 
 function stringValue(value: unknown): string {
   return typeof value === "string" && value.trim() ? value : "";
@@ -102,6 +117,14 @@ export function AgentPage() {
   const [maintenanceOpen, setMaintenanceOpen] = useState<MaintenanceAction | null>(null);
   const [maintenanceAcknowledged, setMaintenanceAcknowledged] = useState(false);
   const [maintenanceClearing, setMaintenanceClearing] = useState(false);
+  const [setupSchema, setSetupSchema] = useState<AgentEditSetupSchema | null>(null);
+  const [setupFeature, setSetupFeature] = useState<Extract<
+    AgentEditSetupFeatureId,
+    "model" | "search" | "image" | "observability"
+  > | null>(null);
+  const [channelSetupId, setChannelSetupId] = useState<SetupChannelId | null>(null);
+  const [setupNotice, setSetupNotice] = useState("");
+  const [restartingApi, setRestartingApi] = useState(false);
 
   const dirty = useMemo(() => editorValue !== (identity?.identity || ""), [editorValue, identity]);
   const dirtyConfig = useMemo(
@@ -131,6 +154,14 @@ export function AgentPage() {
     if (next === "identity") setConfigNotice("");
   };
 
+  const loadSetupSchema = async () => {
+    try {
+      setSetupSchema(await getAgentEditSetupSchema());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const load = async () => {
     setError("");
     try {
@@ -141,6 +172,7 @@ export function AgentPage() {
       setInfo(agentInfo);
       setIdentity(identityData);
       setEditorValue(identityData?.identity || agentInfo.identity || "");
+      await loadSetupSchema();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -202,11 +234,53 @@ export function AgentPage() {
       const updated = await updateAgentConfig(value);
       setConfigData(updated);
       setConfigEditorValue(updated.config);
-      setConfigNotice("Config saved. Provider, model, search, and image generation changes require a restart to take effect.");
+      setConfigNotice(
+        "Config saved. Provider, model, search, image generation, and observability changes require an API restart.",
+      );
+      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setConfigSaving(false);
+    }
+  };
+
+  const openSetupFeature = (featureId: AgentEditSetupFeatureId) => {
+    if (AGENT_FEATURE_IDS.has(featureId)) {
+      setSetupFeature(featureId as "model" | "search" | "image" | "observability");
+      return;
+    }
+    if (CHANNEL_FEATURE_IDS.has(featureId)) {
+      setChannelSetupId(featureId as SetupChannelId);
+    }
+  };
+
+  const onSetupSaved = async (result: AgentEditSetupResponse) => {
+    setSetupFeature(null);
+    if (!result.changed) {
+      setSetupNotice("No config values changed.");
+      return;
+    }
+    setSetupNotice(
+      result.restart_required
+        ? "Setup saved. Restart the API channel for model, search, image, and observability changes to take effect."
+        : "Setup saved.",
+    );
+    await load();
+    if (activeTab === "config") await loadConfig();
+  };
+
+  const restartApiChannel = async () => {
+    setRestartingApi(true);
+    setError("");
+    try {
+      await restartChannel("api");
+      setSetupNotice("API channel restarted.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRestartingApi(false);
     }
   };
 
@@ -257,9 +331,20 @@ export function AgentPage() {
     <PageShell className="agent-page">
       <PageToolbar
         title="Agent"
-        subtitle="Runtime identity and local maintenance"
+        subtitle="Runtime identity, Edit Setup, and local maintenance"
       />
       {error ? <div className="error-strip">{error}</div> : null}
+      {setupNotice ? (
+        <div className="success-strip setup-notice-strip">
+          <span>{setupNotice}</span>
+          {setupNotice.includes("Restart the API") ? (
+            <Button type="button" variant="secondary" disabled={restartingApi} onClick={() => void restartApiChannel()}>
+              <RefreshCw size={14} />
+              {restartingApi ? "Restarting..." : "Restart API"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="agent-grid">
         <Panel className="info-panel">
@@ -278,6 +363,37 @@ export function AgentPage() {
               {info?.tools?.length ? info.tools.map((tool) => <span key={tool} className="data-chip">{tool}</span>) : "None"}
             </dd>
           </dl>
+        </Panel>
+
+        <Panel className="setup-panel">
+          <PanelHeader
+            title="Edit Setup"
+            meta="Same capabilities as CLI Setup → Edit Setup"
+          />
+          <div className="setup-feature-list">
+            {(setupSchema?.features || []).map((feature) => (
+              <div key={feature.id} className="setup-feature-row">
+                <div>
+                  <h4>{feature.label}</h4>
+                  <p>{feature.description}</p>
+                  <span className="setup-feature-status">{feature.status}</span>
+                  {feature.disabled && feature.disabled_reason ? (
+                    <span className="setup-feature-disabled">{feature.disabled_reason}</span>
+                  ) : null}
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={feature.disabled}
+                  onClick={() => openSetupFeature(feature.id)}
+                >
+                  <Wrench size={14} />
+                  {feature.kind === "channel" && !feature.configured ? "Set up" : "Configure"}
+                </Button>
+              </div>
+            ))}
+            {!setupSchema ? <p className="wizard-hint">Loading setup options...</p> : null}
+          </div>
         </Panel>
 
         <Panel className="identity-panel">
@@ -471,6 +587,29 @@ export function AgentPage() {
           />
         </FieldLike>
       </ConfirmDialog>
+
+      {setupFeature && setupSchema ? (
+        <FeatureSetupModal
+          open={Boolean(setupFeature)}
+          feature={setupFeature}
+          schema={setupSchema}
+          onClose={() => setSetupFeature(null)}
+          onSaved={(result) => void onSetupSaved(result)}
+        />
+      ) : null}
+
+      {channelSetupId ? (
+        <ChannelSetupWizard
+          channel={channelSetupId}
+          open={Boolean(channelSetupId)}
+          onClose={() => setChannelSetupId(null)}
+          onComplete={() => {
+            setSetupNotice(`${channelSetupId} setup saved.`);
+            setChannelSetupId(null);
+            void load();
+          }}
+        />
+      ) : null}
     </PageShell>
   );
 }

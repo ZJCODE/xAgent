@@ -374,6 +374,85 @@ export interface CreateAgentInput {
   selection: InitSelectionInput;
 }
 
+export type AgentEditSetupFeatureId =
+  | "model"
+  | "search"
+  | "voice"
+  | "image"
+  | "feishu"
+  | "weixin"
+  | "observability";
+
+export interface AgentEditSetupFeature {
+  id: AgentEditSetupFeatureId;
+  kind: "agent" | "channel";
+  label: string;
+  description: string;
+  status: string;
+  disabled: boolean;
+  disabled_reason?: string;
+  configured?: boolean;
+}
+
+export interface AgentEditSetupSchema {
+  features: AgentEditSetupFeature[];
+  model_provider: string;
+  model: {
+    providers: SetupOption[];
+    models: Record<string, string[]>;
+    provider_base_urls: Record<string, string>;
+    custom_model_apis: string[];
+    reasoning: {
+      providers: Record<string, ReasoningCapability>;
+      custom_model_apis: Record<string, ReasoningCapability>;
+    };
+    current: {
+      provider: string;
+      model: string;
+      base_url: string;
+      model_api: string;
+      supports_vision: boolean;
+      has_api_key: boolean;
+      reasoning?: ReasoningConfigInput | null;
+    };
+    placeholders: Record<string, string>;
+  };
+  search: {
+    providers: SetupOption[];
+    current: { provider: string; has_api_key: boolean };
+    placeholders: Record<string, string>;
+  };
+  image: {
+    providers: SetupOption[];
+    current: { provider: string; has_api_key: boolean };
+    placeholders: Record<string, string>;
+  };
+  observability: {
+    available: boolean;
+    current: {
+      enabled: boolean;
+      has_public_key: boolean;
+      has_secret_key: boolean;
+      base_url: string;
+    };
+    placeholders: Record<string, string>;
+  };
+}
+
+export interface AgentEditSetupChange {
+  path: string;
+  before: string;
+  after: string;
+}
+
+export interface AgentEditSetupResponse {
+  status: string;
+  feature: string;
+  restart_required: boolean;
+  changed: boolean;
+  changes: AgentEditSetupChange[];
+}
+
 export interface AgentIdentity {
   identity: string;
   path: string;

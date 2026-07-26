@@ -2550,6 +2550,67 @@ input::placeholder {
   border-top: 1px solid var(--border);
 }
 
+.setup-panel {
+  grid-column: 1 / -1;
+}
+
+.setup-feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.setup-feature-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+}
+
+.setup-feature-row:last-child {
+  border-bottom: 0;
+}
+
+.setup-feature-row h4 {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+}
+
+.setup-feature-row p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.setup-feature-status {
+  display: inline-block;
+  margin-top: 0.45rem;
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
+
+.setup-feature-disabled {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--danger, #b42318);
+}
+
+.setup-notice-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.channel-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .maintenance-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

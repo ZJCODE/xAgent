@@ -12,9 +12,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import yaml as pyyaml
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
 
-from ...interfaces.cli.config_editor import validate_config, write_config
+from ...interfaces.cli.config_editor import (
+    apply_agent_edit_setup,
+    build_agent_edit_setup_schema,
+    load_config,
+    validate_config,
+    write_config,
+)
 from .models import (
     ConfigInput,
     IdentityInput,
@@ -137,9 +143,13 @@ def register_admin_routes(
     app: FastAPI,
     resolve_admin: Callable[[], "AdminService"],
     *,
+    on_config_written: Callable[[], None] | None = None,
     workspace_text_limit: int = WORKSPACE_TEXT_READ_LIMIT,
     workspace_search_text_limit: int = WORKSPACE_SEARCH_TEXT_LIMIT,
 ) -> None:
+    def _notify_config_written() -> None:
+        if on_config_written is not None:
+            on_config_written()
     @app.get("/api/agent/info", tags=["Monitoring"])
     async def agent_info():
         server = resolve_admin()
@@ -430,6 +440,7 @@ def register_admin_routes(
             raise HTTPException(status_code=400, detail=str(e))
 
         server.config = new_data
+        _notify_config_written()
 
         config_path = Path(server.config_path).expanduser().resolve()
         masked = _mask_sensitive_fields(new_data)
@@ -442,6 +453,35 @@ def register_admin_routes(
             "filename": config_path.name,
             "modified": config_path.stat().st_mtime,
         }
+
+    @app.get("/api/agent/setup-schema", tags=["Setup"])
+    async def agent_edit_setup_schema():
+        server = resolve_admin()
+        try:
+            config = load_config(Path(server.config_dir))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return build_agent_edit_setup_schema(config)
+
+    @app.post("/api/agent/setup/{feature}", tags=["Setup"])
+    async def agent_edit_setup_feature(
+        feature: str,
+        input_data: Dict[str, Any] = Body(default_factory=dict),
+    ):
+        server = resolve_admin()
+        selection = input_data if isinstance(input_data, dict) else {}
+        try:
+            result = apply_agent_edit_setup(Path(server.config_dir), feature, selection)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            server.config = load_config(Path(server.config_dir))
+        except Exception:
+            pass
+        _notify_config_written()
+        return result
 
     @app.get("/api/memory/tree", tags=["Monitoring"])
     async def memory_tree():

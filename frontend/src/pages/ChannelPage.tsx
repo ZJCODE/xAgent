@@ -40,18 +40,22 @@ function ChannelStatusMeta({
   channel: ChannelStatus;
   onSetup: (channel: SetupChannelId) => void;
 }) {
-  if (!channel.ready && isSetupChannel(channel.id)) {
+  if (isSetupChannel(channel.id)) {
     const setupId = channel.id;
     return (
-      <Button
-        type="button"
-        variant="primary"
-        className="channel-setup-button"
-        onClick={() => onSetup(setupId)}
-      >
-        <Wrench size={13} />
-        Set up
-      </Button>
+      <div className="channel-status-actions">
+        {channel.ready ? <StatusBadge tone={statusTone(channel.status)}>{statusLabel(channel)}</StatusBadge> : null}
+        {!channel.ready ? <StatusBadge tone="muted">Not configured</StatusBadge> : null}
+        <Button
+          type="button"
+          variant={channel.ready ? "secondary" : "primary"}
+          className="channel-setup-button"
+          onClick={() => onSetup(setupId)}
+        >
+          <Wrench size={13} />
+          {channel.ready ? "Configure" : "Set up"}
+        </Button>
+      </div>
     );
   }
 

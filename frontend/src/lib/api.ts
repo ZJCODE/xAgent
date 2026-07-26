@@ -1,5 +1,7 @@
 import type {
   AgentConfig,
+  AgentEditSetupResponse,
+  AgentEditSetupSchema,
   AgentIdentity,
   AgentInfo,
   AgentNameAvailability,
@@ -140,6 +142,21 @@ export async function updateAgentConfig(config: string): Promise<AgentConfig> {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ config }),
+  });
+}
+
+export async function getAgentEditSetupSchema(): Promise<AgentEditSetupSchema> {
+  return requestJson("/api/agent/setup-schema");
+}
+
+export async function applyAgentEditSetup(
+  feature: string,
+  selection: Record<string, unknown>,
+): Promise<AgentEditSetupResponse> {
+  return requestJson(`/api/agent/setup/${encodeURIComponent(feature)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(selection),
   });
 }
 

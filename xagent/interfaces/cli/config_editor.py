@@ -745,3 +745,282 @@ def validate_voice_config(data: dict[str, Any]) -> None:
     if not isinstance(channels, dict) or "voice" not in channels:
         return
     VoiceChannelConfig.from_dict(channels["voice"])
+
+
+AGENT_SETUP_FEATURES = ("model", "search", "image", "observability")
+_SEARCH_PROVIDER_DESCRIPTIONS = {
+    "none": "Do not enable a provider-native web search tool.",
+    "openai": "Use OpenAI web search.",
+    "qwen": "Use Qwen web search via DashScope.",
+    "minimax": "Use MiniMax web search.",
+}
+_IMAGE_GENERATION_DESCRIPTIONS = {
+    "none": "Do not enable image generation.",
+    "openai": "Use OpenAI image generation.",
+    "minimax": "Use MiniMax image generation.",
+    "qwen": "Use Qwen image generation via DashScope.",
+}
+
+
+def _has_usable_secret(value: Any) -> bool:
+    raw = str(value or "").strip()
+    return bool(raw) and not is_placeholder_api_key(raw)
+
+
+def _channel_status(config: dict[str, Any], channel: str) -> dict[str, Any]:
+    channels = config.get("channels") if isinstance(config.get("channels"), dict) else {}
+    data = channels.get(channel) if isinstance(channels.get(channel), dict) else {}
+    if channel == "voice":
+        configured = bool(data) and data.get("enabled") is not False
+        provider = str(data.get("provider") or "none").strip() or "none"
+        return {
+            "id": "voice",
+            "kind": "channel",
+            "label": "Voice",
+            "description": "Enable or update STT/TTS, interruptions, and wake settings.",
+            "configured": configured,
+            "status": provider if configured else "not configured",
+            "disabled": False,
+        }
+    if channel == "feishu":
+        configured = bool(data.get("app_id") and data.get("app_secret"))
+        return {
+            "id": "feishu",
+            "kind": "channel",
+            "label": "Feishu",
+            "description": "Re-run Feishu setup and replace channels.feishu.",
+            "configured": configured,
+            "status": "configured" if configured else "not configured",
+            "disabled": False,
+        }
+    if channel == "weixin":
+        configured = bool(data.get("account_id"))
+        return {
+            "id": "weixin",
+            "kind": "channel",
+            "label": "Weixin",
+            "description": "Re-run Weixin QR setup and replace channels.weixin.",
+            "configured": configured,
+            "status": "configured" if configured else "not configured",
+            "disabled": False,
+        }
+    raise ValueError(f"Unknown channel: {channel}")
+
+
+def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
+    """Return Edit Setup metadata for the web client, aligned with CLI menus."""
+    from .setup import (
+        ANTHROPIC_MODELS,
+        DEEPSEEK_MODELS,
+        LANGFUSE_BASE_URL,
+        LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
+        LANGFUSE_SECRET_KEY_PLACEHOLDER,
+        MINIMAX_MODELS,
+        OPENAI_MODELS,
+        QWEN_MODELS,
+        _PROVIDER_DESCRIPTIONS,
+        _PROVIDER_LABELS,
+        build_setup_schema,
+    )
+
+    create_schema = build_setup_schema()
+    provider_cfg = config.get("provider") if isinstance(config.get("provider"), dict) else {}
+    model_provider = normalize_provider_name(provider_cfg.get("name") or PROVIDER_OPENAI)
+    model_name = str(provider_cfg.get("model") or "").strip() or MODEL_PLACEHOLDER
+    model_api = provider_model_api(provider_cfg) if provider_cfg else MODEL_API_OPENAI_CHAT_COMPLETIONS
+    observability_available = model_api_uses_openai_client(model_api)
+
+    search_cfg = config.get("search") if isinstance(config.get("search"), dict) else {}
+    search_provider = normalize_search_provider(search_cfg.get("provider"))
+    image_cfg = config.get("image_generation") if isinstance(config.get("image_generation"), dict) else {}
+    try:
+        image_provider = normalize_image_generation_provider(image_cfg.get("provider"))
+    except ValueError:
+        image_provider = IMAGE_GENERATION_PROVIDER_NONE
+    observability_cfg = config.get("observability") if isinstance(config.get("observability"), dict) else {}
+    observability_enabled = bool(observability_cfg.get("enabled", False))
+
+    features = [
+        {
+            "id": "model",
+            "kind": "agent",
+            "label": "Model",
+            "description": "Update the main model provider, model, API key, or custom endpoint.",
+            "status": f"{model_provider} / {model_name}",
+            "disabled": False,
+            "disabled_reason": "",
+        },
+        {
+            "id": "search",
+            "kind": "agent",
+            "label": "Search",
+            "description": "Change provider-native web search.",
+            "status": search_provider,
+            "disabled": False,
+            "disabled_reason": "",
+        },
+        _channel_status(config, "voice"),
+        {
+            "id": "image",
+            "kind": "agent",
+            "label": "Image",
+            "description": "Enable or update image generation provider settings.",
+            "status": image_provider,
+            "disabled": False,
+            "disabled_reason": "",
+        },
+        _channel_status(config, "feishu"),
+        _channel_status(config, "weixin"),
+        {
+            "id": "observability",
+            "kind": "agent",
+            "label": "Observability",
+            "description": (
+                "Enable or update Langfuse observability for OpenAI-compatible model APIs."
+                if observability_available
+                else "Requires an OpenAI-compatible model API. Update Model first."
+            ),
+            "status": ("enabled" if observability_enabled else "disabled"),
+            "disabled": not observability_available,
+            "disabled_reason": "" if observability_available else "Requires an OpenAI-compatible model API.",
+        },
+    ]
+
+    current_reasoning = provider_cfg.get("reasoning") if isinstance(provider_cfg.get("reasoning"), dict) else None
+    return {
+        "features": features,
+        "model_provider": model_provider,
+        "model": {
+            "providers": [
+                {
+                    "id": provider,
+                    "label": _PROVIDER_LABELS.get(provider, provider),
+                    "description": _PROVIDER_DESCRIPTIONS.get(provider, ""),
+                }
+                for provider in KNOWN_PROVIDERS
+            ],
+            "models": {
+                PROVIDER_OPENAI: list(OPENAI_MODELS),
+                "anthropic": list(ANTHROPIC_MODELS),
+                "deepseek": list(DEEPSEEK_MODELS),
+                PROVIDER_MINIMAX: list(MINIMAX_MODELS),
+                PROVIDER_QWEN: list(QWEN_MODELS),
+                PROVIDER_CUSTOM: [],
+            },
+            "provider_base_urls": create_schema["provider_base_urls"],
+            "custom_model_apis": create_schema["custom_model_apis"],
+            "reasoning": create_schema["reasoning"],
+            "current": {
+                "provider": model_provider,
+                "model": model_name,
+                "base_url": str(provider_cfg.get("base_url") or ""),
+                "model_api": str(provider_cfg.get("model_api") or ""),
+                "supports_vision": bool(provider_cfg.get("supports_vision", False)),
+                "has_api_key": _has_usable_secret(provider_cfg.get("api_key")),
+                "reasoning": current_reasoning,
+            },
+            "placeholders": {
+                "api_key": API_KEY_PLACEHOLDER,
+                "model": MODEL_PLACEHOLDER,
+            },
+        },
+        "search": {
+            "providers": [
+                {"id": provider, "description": _SEARCH_PROVIDER_DESCRIPTIONS.get(provider, "")}
+                for provider in SEARCH_PROVIDERS
+            ],
+            "current": {
+                "provider": search_provider,
+                "has_api_key": _has_usable_secret(search_cfg.get("api_key")),
+            },
+            "placeholders": {"api_key": API_KEY_PLACEHOLDER},
+        },
+        "image": {
+            "providers": [
+                {"id": provider, "description": _IMAGE_GENERATION_DESCRIPTIONS.get(provider, "")}
+                for provider in IMAGE_GENERATION_PROVIDERS
+            ],
+            "current": {
+                "provider": image_provider,
+                "has_api_key": _has_usable_secret(image_cfg.get("api_key")),
+            },
+            "placeholders": {"api_key": API_KEY_PLACEHOLDER},
+        },
+        "observability": {
+            "available": observability_available,
+            "current": {
+                "enabled": observability_enabled,
+                "has_public_key": _has_usable_secret(observability_cfg.get("public_key")),
+                "has_secret_key": _has_usable_secret(observability_cfg.get("secret_key")),
+                "base_url": str(observability_cfg.get("base_url") or LANGFUSE_BASE_URL),
+            },
+            "placeholders": {
+                "public_key": LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
+                "secret_key": LANGFUSE_SECRET_KEY_PLACEHOLDER,
+                "base_url": LANGFUSE_BASE_URL,
+            },
+        },
+    }
+
+
+def apply_agent_edit_setup(
+    config_dir: Path,
+    feature: str,
+    selection: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply one Edit Setup feature update and persist config.yaml."""
+    normalized = str(feature or "").strip().lower()
+    if normalized == "image_generation":
+        normalized = "image"
+    if normalized not in AGENT_SETUP_FEATURES:
+        raise ValueError(f"Unsupported setup feature: {feature}")
+
+    config = load_config(config_dir)
+    if normalized == "search":
+        update = prepare_search_provider_update(
+            config,
+            provider=str(selection.get("provider") or SEARCH_PROVIDER_NONE),
+            api_key=selection.get("api_key"),
+        )
+    elif normalized == "image":
+        update = prepare_image_generation_provider_update(
+            config,
+            provider=str(selection.get("provider") or IMAGE_GENERATION_PROVIDER_NONE),
+            api_key=selection.get("api_key"),
+        )
+    elif normalized == "observability":
+        update = prepare_observability_update(
+            config,
+            enabled=bool(selection.get("enabled", False)),
+            public_key=selection.get("public_key"),
+            secret_key=selection.get("secret_key"),
+            base_url=selection.get("base_url"),
+        )
+    else:
+        reasoning = selection.get("reasoning", _REASONING_UNSET)
+        if reasoning is not None and reasoning is not _REASONING_UNSET and not isinstance(reasoning, (dict, ReasoningConfig)):
+            raise ValueError("reasoning must be an object, null, or omitted")
+        update = prepare_model_provider_update(
+            config,
+            provider=str(selection.get("provider") or PROVIDER_OPENAI),
+            model=str(selection.get("model") or MODEL_PLACEHOLDER),
+            api_key=selection.get("api_key"),
+            base_url=selection.get("base_url"),
+            model_api=selection.get("model_api"),
+            supports_vision=selection.get("supports_vision"),
+            reasoning=reasoning,
+            search_api_key=selection.get("search_api_key"),
+            image_generation_api_key=selection.get("image_generation_api_key"),
+        )
+
+    write_config(config_dir, update.data)
+    return {
+        "status": "ok",
+        "feature": normalized,
+        "restart_required": True,
+        "changed": bool(update.changes),
+        "changes": [
+            {"path": change.path, "before": change.before, "after": change.after}
+            for change in update.changes
+        ],
+    }

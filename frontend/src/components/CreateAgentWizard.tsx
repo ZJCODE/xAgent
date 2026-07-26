@@ -632,8 +632,6 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
         title="Discard create agent draft?"
         description="Your unfinished create-agent choices will be lost."
         confirmLabel="Discard"
-        cancelLabel="Keep editing"
-        danger
         onCancel={() => setDiscardConfirmationOpen(false)}
         onConfirm={() => {
           setDiscardConfirmationOpen(false);
