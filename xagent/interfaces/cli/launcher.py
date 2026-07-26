@@ -15,7 +15,6 @@ from ...core.providers import (
     PROVIDER_ANTHROPIC,
     PROVIDER_CUSTOM,
     PROVIDER_DEEPSEEK,
-    PROVIDER_MINIMAX,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
     ReasoningConfig,
@@ -79,7 +78,6 @@ from .setup import (
     LANGFUSE_SECRET_KEY_PLACEHOLDER,
     MEMORY_LIST_DAY_CHOICES,
     MESSAGE_LIST_COUNT_CHOICES,
-    MINIMAX_MODELS,
     MODEL_PLACEHOLDER,
     OPENAI_MODELS,
     QWEN_MODELS,
@@ -733,8 +731,6 @@ def _model_options_for_provider(provider: str) -> tuple[str, ...]:
         return ANTHROPIC_MODELS
     if provider == PROVIDER_DEEPSEEK:
         return DEEPSEEK_MODELS
-    if provider == PROVIDER_MINIMAX:
-        return MINIMAX_MODELS
     if provider == PROVIDER_QWEN:
         return QWEN_MODELS
     return (MODEL_PLACEHOLDER,)

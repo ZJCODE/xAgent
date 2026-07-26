@@ -24,7 +24,6 @@ from ...core.providers import (
     PROVIDER_ANTHROPIC,
     PROVIDER_CUSTOM,
     PROVIDER_DEEPSEEK,
-    PROVIDER_MINIMAX,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
     ReasoningConfig,
@@ -115,7 +114,6 @@ class VoiceInitSelection:
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
 DEEPSEEK_BASE_URL = provider_base_url(PROVIDER_DEEPSEEK)
 ANTHROPIC_BASE_URL = provider_base_url(PROVIDER_ANTHROPIC)
-MINIMAX_BASE_URL = provider_base_url(PROVIDER_MINIMAX)
 QWEN_BASE_URL = provider_base_url(PROVIDER_QWEN)
 CUSTOM_OPENAI_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_API_OPENAI_CHAT_COMPLETIONS)
 CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_API_ANTHROPIC_MESSAGES)
@@ -150,11 +148,6 @@ DEEPSEEK_MODELS = (
     "deepseek-v4-flash",
     "deepseek-v4-pro",
 )
-MINIMAX_MODELS = (
-    "MiniMax-M3",
-    "MiniMax-M2.7",
-    "MiniMax-M2.7-highspeed",
-)
 QWEN_MODELS = (
     "qwen3.7-max",
     "qwen3.6-flash",
@@ -188,7 +181,6 @@ DEFAULT_EXIT_PHRASES = ("exit", "stop", "goodbye", "that's all", "never mind")
 _PROVIDER_DESCRIPTIONS = {
     PROVIDER_OPENAI: "GPT family via the OpenAI platform.",
     PROVIDER_DEEPSEEK: "DeepSeek chat and coding models.",
-    PROVIDER_MINIMAX: "MiniMax models via the Anthropic-style API.",
     PROVIDER_QWEN: "Qwen models via DashScope-compatible APIs.",
     PROVIDER_ANTHROPIC: "Claude models via Anthropic Messages.",
     PROVIDER_CUSTOM: "Bring your own OpenAI, Responses, or Anthropic endpoint.",
@@ -197,7 +189,6 @@ _PROVIDER_DESCRIPTIONS = {
 _PROVIDER_LABELS = {
     PROVIDER_OPENAI: "OpenAI",
     PROVIDER_DEEPSEEK: "DeepSeek",
-    PROVIDER_MINIMAX: "MiniMax",
     PROVIDER_QWEN: "Qwen",
     PROVIDER_ANTHROPIC: "Anthropic",
     PROVIDER_CUSTOM: "Custom",
@@ -278,7 +269,6 @@ def build_setup_schema() -> dict[str, Any]:
             PROVIDER_OPENAI: list(OPENAI_MODELS),
             PROVIDER_ANTHROPIC: list(ANTHROPIC_MODELS),
             PROVIDER_DEEPSEEK: list(DEEPSEEK_MODELS),
-            PROVIDER_MINIMAX: list(MINIMAX_MODELS),
             PROVIDER_QWEN: list(QWEN_MODELS),
             PROVIDER_CUSTOM: [],
         },
@@ -286,7 +276,6 @@ def build_setup_schema() -> dict[str, Any]:
             PROVIDER_OPENAI: OPENAI_BASE_URL,
             PROVIDER_DEEPSEEK: DEEPSEEK_BASE_URL,
             PROVIDER_ANTHROPIC: ANTHROPIC_BASE_URL,
-            PROVIDER_MINIMAX: MINIMAX_BASE_URL,
             PROVIDER_QWEN: QWEN_BASE_URL,
             PROVIDER_CUSTOM: CUSTOM_OPENAI_BASE_URL_PLACEHOLDER,
         },
@@ -1131,7 +1120,6 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
         descriptions={
             PROVIDER_OPENAI: "GPT family via the OpenAI platform.",
             PROVIDER_DEEPSEEK: "DeepSeek chat and coding models.",
-            PROVIDER_MINIMAX: "MiniMax models via the Anthropic-style API.",
             PROVIDER_QWEN: "Qwen models via DashScope-compatible APIs.",
             PROVIDER_ANTHROPIC: "Claude models via Anthropic Messages.",
             PROVIDER_CUSTOM: "Bring your own OpenAI, Responses, or Anthropic endpoint.",
@@ -1171,13 +1159,6 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
             default_index=0,
         )
         base_url = DEEPSEEK_BASE_URL
-    elif provider == PROVIDER_MINIMAX:
-        selected_model = surface.select_model_option(
-            "MiniMax Model",
-            MINIMAX_MODELS,
-            default_index=0,
-        )
-        base_url = MINIMAX_BASE_URL
     elif provider == PROVIDER_QWEN:
         selected_model = surface.select_model_option(
             "Qwen Model",

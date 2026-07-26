@@ -660,7 +660,8 @@ provider:
             )
             schema = build_setup_schema()
             self.assertEqual(schema["reasoning"]["providers"]["qwen"]["controls"], ["budget_tokens"])
-            self.assertFalse(schema["reasoning"]["providers"]["minimax"]["supported"])
+            self.assertNotIn("minimax", schema["reasoning"]["providers"])
+            self.assertNotIn("minimax", schema["models"])
             self.assertEqual(
                 schema["reasoning"]["custom_model_apis"][MODEL_API_ANTHROPIC_MESSAGES]["min_budget_tokens"],
                 1024,
@@ -794,7 +795,7 @@ provider:
 
     def test_collect_init_selection_supports_qwen_models(self):
         answers = iter([
-            "4",
+            "3",
             "3",
             ".",
         ])
@@ -810,27 +811,10 @@ provider:
         self.assertEqual(selection.api_key, "qwen-key")
         self.assertEqual(selection.model, "qwen3.6-plus")
 
-    def test_collect_init_selection_supports_minimax_provider_with_builtin_anthropic_protocol(self):
-        answers = iter([
-            "3",
-            "",
-            ".",
-        ])
-
-        selection = collect_init_selection(
-            input_func=lambda prompt: next(answers),
-            secret_input_func=lambda prompt: "minimax-key",
-        )
-
-        self.assertEqual(selection.model_api, "")
-        self.assertEqual(selection.provider, "minimax")
-        self.assertEqual(selection.base_url, "https://api.minimaxi.com/anthropic")
-        self.assertEqual(selection.api_key, "minimax-key")
-        self.assertEqual(selection.model, "MiniMax-M3")
 
     def test_collect_init_selection_supports_anthropic_provider(self):
         answers = iter([
-            "5",
+            "4",
             "",
             ".",
         ])
@@ -848,7 +832,7 @@ provider:
 
     def test_collect_init_selection_custom_provider_selects_model_api_before_base_url(self):
         answers = iter([
-            "6",
+            "5",
             "2",
             "",
             "y",
