@@ -27,6 +27,7 @@ from xagent.schemas import Message, MessageType, RoleType
 class InMemoryMessageStorage:
     def __init__(self, initial_messages=None):
         self.messages = list(initial_messages or [])
+        self.journal_state = {}
         self.last_count = None
         self.last_offset = None
 
@@ -51,6 +52,18 @@ class InMemoryMessageStorage:
     async def pop_message(self):
         return self.messages.pop() if self.messages else None
 
+    def get_journal_state_sync(self, key, default=None):
+        return self.journal_state.get(key, default)
+
+    def set_journal_state_sync(self, key, value):
+        self.journal_state[key] = str(value)
+
+    async def get_journal_state(self, key, default=None):
+        return self.get_journal_state_sync(key, default)
+
+    async def set_journal_state(self, key, value):
+        self.set_journal_state_sync(key, value)
+
 
 class FakeToolManager:
     def __init__(self, tools=None):
@@ -63,15 +76,11 @@ class FakeToolManager:
 
 class FakeMemoryHandler:
     def __init__(self):
-        self.experience_messages = None
         self.maintenance_calls = 0
         self.maintenance_force = None
 
     async def get_recent_context(self):
         return ""
-
-    def schedule_experience_write(self, messages):
-        self.experience_messages = messages
 
     async def run_maintenance(self, force=False, trigger="count", idle_seconds=0):
         self.maintenance_calls += 1
@@ -202,7 +211,7 @@ class FakeToolExecutor:
     def __init__(self):
         self.seen_input_messages = []
 
-    async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools):
+    async def handle_tool_calls(self, tool_calls, input_messages):
         self.seen_input_messages.append(list(input_messages))
         input_messages.extend([
             {
@@ -223,7 +232,7 @@ class FakeAttachmentToolExecutor:
     def __init__(self, display_result):
         self.display_result = display_result
 
-    async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools):
+    async def handle_tool_calls(self, tool_calls, input_messages):
         input_messages.extend([
             {
                 "role": "assistant",
@@ -331,13 +340,16 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         )
         response = _chat_response(content="I will look that up first.", tool_calls=[raw_tool_call])
 
-        reply_type, payload = ModelClient._handle_non_stream(response)
+        events = ModelClient._chat_non_stream_turn_events(response)
 
-        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload[0].call_id, "call-1")
-        self.assertEqual(payload[0].name, "lookup")
-        self.assertEqual(payload[0].arguments, "{}")
-        self.assertEqual(payload[0].assistant_content, "I will look that up first.")
+        self.assertEqual([event.type for event in events], ["text", "tool_calls"])
+        self.assertEqual(events[-1].tool_calls[0].call_id, "call-1")
+        self.assertEqual(events[-1].tool_calls[0].name, "lookup")
+        self.assertEqual(events[-1].tool_calls[0].arguments, "{}")
+        self.assertEqual(
+            events[-1].tool_calls[0].assistant_content,
+            "I will look that up first.",
+        )
 
     def test_non_stream_tool_calls_preserve_reasoning_content(self):
         raw_tool_call = SimpleNamespace(
@@ -350,10 +362,13 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             reasoning_content="I need to inspect local state before answering.",
         )
 
-        reply_type, payload = ModelClient._handle_non_stream(response)
+        events = ModelClient._chat_non_stream_turn_events(response)
 
-        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
-        self.assertEqual(payload[0].reasoning_content, "I need to inspect local state before answering.")
+        self.assertEqual(events[-1].type, "tool_calls")
+        self.assertEqual(
+            events[-1].tool_calls[0].reasoning_content,
+            "I need to inspect local state before answering.",
+        )
 
     async def test_model_turn_events_non_stream_preserves_text_and_tool_calls(self):
         raw_tool_call = SimpleNamespace(
@@ -782,7 +797,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             },
             {
                 "role": "system",
-                "name": AgentConfig.TOOL_POLICY_NAME,
+                "name": AgentConfig.IDENTITY_CONTEXT_NAME,
                 "content": "<tool_policy>Policy</tool_policy>",
             },
         ]
@@ -835,7 +850,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
                 },
                 {
                     "role": "system",
-                    "name": AgentConfig.TOOL_POLICY_NAME,
+                    "name": AgentConfig.IDENTITY_CONTEXT_NAME,
                     "content": "<tool_policy>Policy</tool_policy>",
                 },
             ],
@@ -1096,20 +1111,20 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(reply_type, ReplyType.ERROR)
         self.assertIsInstance(payload, ModelErrorEvent)
-        self.assertEqual(payload.code, "model_call_failed")
-        self.assertEqual(payload.message, "Model call failed.")
+        self.assertEqual(payload.code, "model_stream_failed")
+        self.assertEqual(payload.message, "Model stream failed.")
         self.assertIn("provider rejected messages", payload.details)
 
 
 class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
-    async def test_call_forwards_channel_to_chat(self):
+    async def test_call_forwards_source_to_chat(self):
         agent = SimpleNamespace(chat=AsyncMock(return_value="ok"))
 
         result = await Agent.__call__(
             agent,
             user_message="hello",
             user_id="api-user",
-            channel="api",
+            source="api",
         )
 
         self.assertEqual(result, "ok")
@@ -1120,7 +1135,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             attachments=None,
             stream=False,
             channel_instructions="",
-            channel="api",
+            source="api",
         )
 
     def _build_agent(
@@ -1139,7 +1154,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.supports_vision = True
         agent.max_history = AgentConfig.DEFAULT_MAX_HISTORY
         agent.max_iter = AgentConfig.DEFAULT_MAX_ITER
-        agent.max_concurrent_tools = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
         agent.observability = observability or NoopObservabilityRuntime()
         agent.tool_manager = FakeToolManager(tools=tools)
         agent.model_client = model_client
@@ -1148,25 +1162,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.memory_handler = memory_handler or FakeMemoryHandler()
         agent.tool_executor = tool_executor or FakeToolExecutor()
         return agent
-
-    def test_agent_init_passes_message_storage_to_memory_handler(self):
-        captured = {}
-
-        class CapturingMemoryHandler:
-            def __init__(self, **kwargs):
-                captured.update(kwargs)
-
-            async def get_recent_context(self):
-                return ""
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("xagent.core.agent.MemoryHandler", CapturingMemoryHandler):
-                agent = Agent(
-                    client=object(),
-                    workspace=tmpdir,
-                )
-
-        self.assertIs(captured["message_storage"], agent.message_storage)
 
     async def test_decide_participation_returns_structured_decision_without_storing_event(self):
         storage = InMemoryMessageStorage([
@@ -1243,13 +1238,17 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         second_call_messages = model_client.calls[1]
         self.assertEqual(
             [message["name"] for message in first_call_messages],
-            [AgentConfig.RECENT_EXPERIENCE_NAME, AgentConfig.CURRENT_TASK_NAME],
+            [
+                AgentConfig.RECENT_EXPERIENCE_NAME,
+                AgentConfig.CURRENT_EVENT_NAME,
+                AgentConfig.CURRENT_TASK_NAME,
+            ],
         )
         self.assertEqual(model_client.instructions_calls[0][0]["name"], AgentConfig.CORE_INTERACTION_RULES_NAME)
-        self.assertEqual(second_call_messages[2]["role"], "assistant")
-        self.assertEqual(second_call_messages[2]["tool_calls"][0]["function"]["name"], "lookup")
-        self.assertEqual(second_call_messages[3]["role"], "tool")
-        self.assertEqual(second_call_messages[3]["tool_call_id"], "call-1")
+        self.assertEqual(second_call_messages[3]["role"], "assistant")
+        self.assertEqual(second_call_messages[3]["tool_calls"][0]["function"]["name"], "lookup")
+        self.assertEqual(second_call_messages[4]["role"], "tool")
+        self.assertEqual(second_call_messages[4]["tool_call_id"], "call-1")
         self.assertEqual(
             [message.role for message in storage.messages],
             [RoleType.USER, RoleType.ASSISTANT],
@@ -1281,12 +1280,12 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(model_client.calls), 1)
             input_messages = model_client.calls[0]
             self.assertNotIn("image_url", repr(input_messages))
-            recent_experience = next(
+            current_event = next(
                 message for message in input_messages
-                if message.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME
+                if message.get("name") == AgentConfig.CURRENT_EVENT_NAME
             )
-            self.assertIn("/api/workspace/blob?path=assets%2Finbound%2Flocal%2Fimages%2F", recent_experience["content"])
-            self.assertIn("path: assets/inbound/local/images/", recent_experience["content"])
+            self.assertIn("/api/workspace/blob?path=assets%2Finbound%2Flocal%2Fimages%2F", current_event["content"])
+            self.assertIn("path: assets/inbound/local/images/", current_event["content"])
             current_task = next(
                 message for message in input_messages
                 if message.get("name") == AgentConfig.CURRENT_TASK_NAME
@@ -1366,7 +1365,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertEqual(storage.messages[1].metadata["turn_phase"], "preface")
         self.assertEqual(storage.messages[2].metadata["turn_phase"], "final")
-        self.assertEqual(memory_handler.experience_messages, [storage.messages[0], storage.messages[2]])
         self.assertEqual(model_client.stream_calls, [True, True])
 
     async def test_chat_events_emits_delta_before_model_turn_finishes(self):
@@ -1558,19 +1556,16 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(observability.flushed)
 
-    async def test_chat_updates_last_interaction_file(self):
+    async def test_chat_updates_last_interaction_state(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "ok")])
         agent = self._build_agent(storage=storage, model_client=model_client)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent.markdown_memory = SimpleNamespace(root=Path(tmpdir))
-            idle_file = Path(tmpdir) / ".last_interaction"
-            idle_file.write_text(str(time.time() - 100), encoding="utf-8")
-            await Agent.chat(agent, user_message="hello", user_id="bob")
-            updated = float(idle_file.read_text(encoding="utf-8").strip())
-            self.assertGreater(updated, time.time() - 100)
+        storage.journal_state["last_interaction"] = str(time.time() - 100)
+        await Agent.chat(agent, user_message="hello", user_id="bob")
+        updated = float(storage.journal_state["last_interaction"])
+        self.assertGreater(updated, time.time() - 100)
 
-    async def test_observe_does_not_update_last_interaction_file(self):
+    async def test_observe_does_not_update_last_interaction_state(self):
         storage = InMemoryMessageStorage()
         memory_handler = FakeMemoryHandler()
         model_client = CapturingModelClient([])
@@ -1579,14 +1574,11 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             model_client=model_client,
             memory_handler=memory_handler,
         )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent.markdown_memory = SimpleNamespace(root=Path(tmpdir))
-            idle_file = Path(tmpdir) / ".last_interaction"
-            idle_file.write_text(str(time.time() - 100), encoding="utf-8")
-            before = float(idle_file.read_text(encoding="utf-8").strip())
-            await Agent.observe(agent, context="test observation", source="test")
-            after = float(idle_file.read_text(encoding="utf-8").strip())
-            self.assertEqual(after, before)
+        storage.journal_state["last_interaction"] = str(time.time() - 100)
+        before = float(storage.journal_state["last_interaction"])
+        await Agent.observe(agent, context="test observation", source="test")
+        after = float(storage.journal_state["last_interaction"])
+        self.assertEqual(after, before)
 
     async def test_run_memory_maintenance_passes_force_when_idle(self):
         storage = InMemoryMessageStorage()
@@ -1597,15 +1589,11 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             model_client=model_client,
             memory_handler=memory_handler,
         )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent.markdown_memory = SimpleNamespace(root=Path(tmpdir))
-            idle_file = Path(tmpdir) / ".last_interaction"
-            idle_file.write_text(
-                str(time.time() - AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS - 60),
-                encoding="utf-8",
-            )
-            await Agent.run_memory_maintenance(agent)
-            self.assertTrue(memory_handler.maintenance_force)
+        storage.journal_state["last_interaction"] = str(
+            time.time() - AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS - 60
+        )
+        await Agent.run_memory_maintenance(agent)
+        self.assertTrue(memory_handler.maintenance_force)
 
     async def test_run_memory_maintenance_does_not_force_when_active(self):
         storage = InMemoryMessageStorage()
@@ -1616,12 +1604,9 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             model_client=model_client,
             memory_handler=memory_handler,
         )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent.markdown_memory = SimpleNamespace(root=Path(tmpdir))
-            idle_file = Path(tmpdir) / ".last_interaction"
-            idle_file.write_text(str(time.time()), encoding="utf-8")
-            await Agent.run_memory_maintenance(agent)
-            self.assertFalse(memory_handler.maintenance_force)
+        storage.journal_state["last_interaction"] = str(time.time())
+        await Agent.run_memory_maintenance(agent)
+        self.assertFalse(memory_handler.maintenance_force)
 
     async def test_chat_caps_history_before_loading_messages(self):
         storage = InMemoryMessageStorage([
@@ -1650,7 +1635,11 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("old-00", transcript)
         self.assertNotIn("old-10", transcript)
         self.assertIn("old-49", transcript)
-        self.assertIn("latest request", transcript)
+        current_event = next(
+            message for message in model_client.calls[0]
+            if message["name"] == AgentConfig.CURRENT_EVENT_NAME
+        )["content"]
+        self.assertIn("latest request", current_event)
 
     async def test_chat_respects_explicit_max_history(self):
         storage = InMemoryMessageStorage([
@@ -1680,7 +1669,11 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("old-36", transcript)
         self.assertNotIn("old-35", transcript)
         self.assertIn("old-49", transcript)
-        self.assertIn("latest request", transcript)
+        current_event = next(
+            message for message in model_client.calls[0]
+            if message["name"] == AgentConfig.CURRENT_EVENT_NAME
+        )["content"]
+        self.assertIn("latest request", current_event)
 
     async def test_chat_hides_model_error_event_from_user(self):
         storage = InMemoryMessageStorage()
@@ -1709,42 +1702,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(stored_messages), 1)
         self.assertEqual(stored_messages[0].content, "hello")
 
-    async def test_transcript_history_window_omits_older_messages_without_truncation(self):
-        messages = [
-            Message.create(f"message-{index}", role=RoleType.USER, sender_id="alice")
-            for index in range(3)
-        ]
-        messages.append(
-            Message.create("x" * 30, role=RoleType.USER, sender_id="alice")
-        )
-
-        transcript = MessageHandler.build_recent_transcript_message(
-            messages,
-            current_user_id="alice",
-            max_messages=2,
-        )["content"]
-
-        self.assertIn("[Earlier experience omitted: 2 conversation messages]", transcript)
-        self.assertNotIn("message-0", transcript)
-        self.assertIn("message-2", transcript)
-        self.assertIn("x" * 30, transcript)
-
-    async def test_transcript_budget_records_images_without_attaching_them(self):
-        image_url = "https://example.com/chart.png"
-        messages = [
-            Message.create("older", role=RoleType.USER, sender_id="alice"),
-            Message.create("look at this", role=RoleType.USER, sender_id="alice", image_source=image_url),
-        ]
-
-        model_message = MessageHandler.build_recent_transcript_message(
-            messages,
-            current_user_id="alice",
-            max_messages=1,
-        )
-
-        self.assertIsInstance(model_message["content"], str)
-        self.assertIn("[Attached image: 1]", model_message["content"])
-
     async def test_observe_ingests_event_without_calling_model(self):
         storage = InMemoryMessageStorage()
         memory_handler = FakeMemoryHandler()
@@ -1769,7 +1726,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.messages[0].metadata["source"], "camera")
         self.assertEqual(storage.messages[0].metadata["event_type"], "presence")
         self.assertEqual(model_client.calls, [])
-        self.assertEqual(memory_handler.experience_messages, [storage.messages[0]])
 
     async def test_observe_stores_ingested_history_recap(self):
         storage = InMemoryMessageStorage()
@@ -1793,7 +1749,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(storage.messages), 1)
         self.assertEqual(storage.messages[0].type, MessageType.CONTEXT_EVENT)
         self.assertEqual(model_client.calls, [])
-        self.assertEqual(memory_handler.experience_messages, [storage.messages[0]])
 
     async def test_observe_preserves_overheard_attribution_in_metadata(self):
         storage = InMemoryMessageStorage()
@@ -1819,7 +1774,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(storage.messages[0].sender_id)
         self.assertEqual(storage.messages[0].metadata["speaker_id"], "bob")
         self.assertEqual(model_client.calls, [])
-        self.assertEqual(memory_handler.experience_messages, storage.messages)
 
 
 class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
@@ -1921,7 +1875,6 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
                 FakeToolCall(name="second", call_id="call-2"),
             ],
             messages,
-            max_concurrent_tools=2,
         )
 
         self.assertIsNone(result)
@@ -1945,7 +1898,6 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         result = await executor.handle_tool_calls(
             [FakeToolCall(name="lookup", call_id="call-1")],
             messages,
-            max_concurrent_tools=1,
         )
 
         self.assertIsNone(result)
@@ -1960,7 +1912,6 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
                 reasoning_content="I need this tool result before answering.",
             )],
             messages,
-            max_concurrent_tools=1,
         )
 
         self.assertIsNone(result)
@@ -1995,7 +1946,6 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
                 response_items=response_items,
             )],
             messages,
-            max_concurrent_tools=1,
         )
 
         self.assertIsNone(result)

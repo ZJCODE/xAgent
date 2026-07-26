@@ -6,7 +6,6 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from ..config import AgentConfig
@@ -51,6 +50,7 @@ class RuntimeHeartbeat:
         today_provider: Callable[[], date] = date.today,
         logger_: Optional[logging.Logger] = None,
         subconscious_loop: Any = None,
+        operation_lock: asyncio.Lock | None = None,
     ) -> None:
         self.agent = agent
         self.interval_seconds = max(0.001, float(interval_seconds))
@@ -58,10 +58,15 @@ class RuntimeHeartbeat:
         self._logger = logger_ or logger
         self._task: Optional[asyncio.Task[None]] = None
         self._subconscious_loop = subconscious_loop
+        self._operation_lock = operation_lock
 
     @property
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    @property
+    def subconscious_loop(self) -> Any:
+        return self._subconscious_loop
 
     async def start(self) -> None:
         if self.is_running:
@@ -83,11 +88,18 @@ class RuntimeHeartbeat:
             self._logger.warning("Runtime heartbeat stopped after failure: %s", exc)
 
     async def run_once(self) -> None:
+        if self._operation_lock is not None:
+            async with self._operation_lock:
+                await self._run_once_locked()
+            return
+        await self._run_once_locked()
+
+    async def _run_once_locked(self) -> None:
         await self._run_memory_maintenance()
         today = self._today_provider()
         await self._run_periodic_summaries(today)
         if self._subconscious_loop is not None:
-            await self._subconscious_loop.maybe_think()
+            await self._subconscious_loop.maybe_submit()
 
     async def _run_loop(self) -> None:
         while True:
@@ -156,23 +168,32 @@ def create_runtime_heartbeat(
     *,
     logger_: Optional[logging.Logger] = None,
     subconscious_delivery_sink: Optional[Callable[..., Any]] = None,
+    subconscious_event_sink: Optional[Callable[..., Any]] = None,
+    subconscious_before_side_effect: Optional[Callable[..., Any]] = None,
+    subconscious_contacts_provider: Optional[Callable[..., Any]] = None,
     subconscious_deliverable_channels: Optional[Iterable[str]] = None,
+    operation_lock: asyncio.Lock | None = None,
 ) -> Optional[RuntimeHeartbeat]:
     config = RuntimeHeartbeatConfig.from_mapping(runtime_config)
     if not config.enabled:
         return None
 
-    # Resolve workspace path for the subconscious loop
-    workspace = _resolve_agent_workspace(agent)
     subconscious_loop = None
-    if workspace is not None and AgentConfig.SUBCONSCIOUS_ENABLED:
+    subconscious_probability = float(
+        getattr(agent, "subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY)
+    )
+    if subconscious_probability > 0:
+        if subconscious_event_sink is None:
+            raise ValueError("subconscious event sink is required when subconscious is enabled")
         from .subconscious import SubconsciousLoop
 
         subconscious_loop = SubconsciousLoop(
             agent,
-            workspace=workspace,
-            probability=getattr(agent, "subconscious_activity", None),
+            event_sink=subconscious_event_sink,
+            probability=subconscious_probability,
             delivery_sink=subconscious_delivery_sink,
+            before_side_effect=subconscious_before_side_effect,
+            contacts_provider=subconscious_contacts_provider,
             deliverable_channels=subconscious_deliverable_channels,
             logger_=logger_,
         )
@@ -182,18 +203,5 @@ def create_runtime_heartbeat(
         interval_seconds=config.interval_seconds,
         logger_=logger_,
         subconscious_loop=subconscious_loop,
+        operation_lock=operation_lock,
     )
-
-
-def _resolve_agent_workspace(agent: Any) -> Optional[Path]:
-    """Resolve the agent workspace directory path."""
-    markdown_memory = getattr(agent, "markdown_memory", None)
-    if markdown_memory is not None:
-        root = getattr(markdown_memory, "root", None)
-        if root is not None:
-            # root is the memory/ directory; workspace is its parent
-            return Path(root).parent
-    workspace_dir = getattr(agent, "workspace_dir", None)
-    if workspace_dir is not None:
-        return Path(workspace_dir)
-    return None

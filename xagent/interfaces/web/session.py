@@ -1,13 +1,8 @@
-"""Multi-agent session state for the built-in web client.
+"""Selected-agent state for the local Web control client.
 
-The web client can list every agent registered with the CLI (``agents.yaml``)
-and switch which one's Chat/Memory/Message/Workspace/Skills/Tasks/Agent data
-is currently being served, similar to the interactive launcher's Agents menu.
-
-The "currently selected agent" lives in-memory on the running web client
-process only (shared by every browser tab pointed at it) and is never written
-back to ``agents.yaml`` — switching in the browser never changes the CLI's
-own notion of the active agent.
+The browser chooses one registered agent and talks only to that agent's local
+Runtime control service. Selection is process-local and never changes the CLI's
+active-agent setting.
 """
 
 from __future__ import annotations
@@ -16,8 +11,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
-from ..base import BaseAgentConfig
+from ...core.agent_factory import AgentPaths
 from ..cli.agents import (
     AgentRegistryError,
     agent_directory_has_contents,
@@ -35,28 +31,72 @@ from ..cli.setup import (
     build_setup_schema,
     init_selection_from_mapping,
 )
-from ..cli.channels import CHANNEL_API, load_config_file
-from ..cli.web_client import web_client_config
-from ..cli.processes import managed_paths, running_pid
-from ..server.admin_service import AdminService
+from ..cli.channels import load_config_file
+from ...core.runtime import RuntimeClient, RuntimeUnavailable
+from ...settings import XAgentSettings
+
+
+SECRET_SENTINEL = "••••••••"
+
+
+def _is_secret_field(name: str) -> bool:
+    normalized = name.lower()
+    return (
+        normalized == "api_key"
+        or normalized.endswith("_api_key")
+        or normalized in {"app_secret", "secret_key", "password", "access_token"}
+        or normalized.endswith("_secret_key")
+    )
+
+
+def _redact_secrets(value: Any, *, field_name: str = "") -> Any:
+    if _is_secret_field(field_name):
+        return SECRET_SENTINEL if value else value
+    if isinstance(value, dict):
+        return {
+            str(key): _redact_secrets(item, field_name=str(key))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_secrets(item) for item in value]
+    return value
+
+
+def _restore_secrets(submitted: Any, current: Any, *, field_name: str = "") -> Any:
+    if _is_secret_field(field_name) and submitted == SECRET_SENTINEL:
+        return current
+    if isinstance(submitted, dict):
+        current_mapping = current if isinstance(current, dict) else {}
+        return {
+            str(key): _restore_secrets(
+                item,
+                current_mapping.get(key),
+                field_name=str(key),
+            )
+            for key, item in submitted.items()
+        }
+    if isinstance(submitted, list):
+        current_list = current if isinstance(current, list) else []
+        return [
+            _restore_secrets(
+                item,
+                current_list[index] if index < len(current_list) else None,
+            )
+            for index, item in enumerate(submitted)
+        ]
+    return submitted
 
 
 def _is_agent_initialized(path: Path) -> bool:
-    config_file = path / BaseAgentConfig.CONFIG_FILENAME
-    identity_file = path / BaseAgentConfig.IDENTITY_FILENAME
+    config_file = path / AgentPaths.CONFIG_FILENAME
+    identity_file = path / AgentPaths.IDENTITY_FILENAME
     if not config_file.is_file() or not identity_file.is_file():
         return False
     try:
-        return bool(identity_file.read_text(encoding="utf-8", errors="replace").strip())
-    except OSError:
+        XAgentSettings.load(config_file)
+        return bool(identity_file.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
         return False
-
-
-def _safe_load_config(path: Path) -> Dict[str, Any]:
-    try:
-        return load_config_file(path)
-    except Exception:
-        return {}
 
 
 class WebAgentSession:
@@ -67,15 +107,11 @@ class WebAgentSession:
         *,
         initial_config_dir: Path,
         initial_agent_name: Optional[str] = None,
-        initial_api_url: str = "",
         registry_root: Optional[Path] = None,
     ) -> None:
         self._registry_root = registry_root
         self._initial_config_dir = Path(initial_config_dir).expanduser().resolve()
-        self._initial_agent_name = initial_agent_name
-        self._initial_api_url = initial_api_url
         self._current_name: Optional[str] = initial_agent_name
-        self._admin_cache: Dict[str, AdminService] = {}
 
     def _load_registry(self):
         return load_agent_registry_or_empty(root=self._registry_root)
@@ -86,27 +122,42 @@ class WebAgentSession:
 
     def list_agents(self) -> List[Dict[str, Any]]:
         registry = self._load_registry()
-        current = self._current_name
+        current = self._resolve_agent_name()
+        self._current_name = current
         rows: List[Dict[str, Any]] = []
         for name, entry in sorted(registry.agents.items()):
-            pid = running_pid(managed_paths(entry.path, CHANNEL_API).pid_path)
+            try:
+                runtime_status = RuntimeClient(entry.path).status()
+            except RuntimeUnavailable:
+                runtime_status = None
+            try:
+                settings = XAgentSettings.load(entry.path / AgentPaths.CONFIG_FILENAME)
+                provider = settings.provider.name
+                model = settings.provider.model
+            except (OSError, ValueError):
+                provider = ""
+                model = ""
             rows.append({
                 "name": name,
                 "title": entry.title,
                 "path": str(entry.path),
-                "api_url": self._api_url_for_agent(name, entry.path),
                 "active": name == registry.active_agent,
                 "selected": name == current,
                 "initialized": _is_agent_initialized(entry.path),
-                "channel_running": pid is not None,
+                "runtime_running": bool(runtime_status and runtime_status.get("running")),
+                "pid": int(runtime_status["pid"]) if runtime_status else None,
+                "provider": provider,
+                "model": model,
             })
         return rows
 
     def snapshot(self) -> Dict[str, Any]:
         registry = self._load_registry()
+        selected = self._resolve_agent_name() or ""
+        self._current_name = selected or None
         return {
             "active_agent": registry.active_agent,
-            "selected_agent": self._current_name or "",
+            "selected_agent": selected,
             "agents": self.list_agents(),
         }
 
@@ -115,7 +166,7 @@ class WebAgentSession:
         normalized = validate_agent_name(name)
         if normalized not in registry.agents:
             raise AgentRegistryError(
-                f"Unknown agent {normalized!r}. Run `xagent agents list` to see available agents."
+                f"Unknown agent {normalized!r}."
             )
         self._current_name = normalized
         return self.snapshot()
@@ -158,8 +209,7 @@ class WebAgentSession:
         normalized = validate_agent_name(name)
         if confirm != normalized:
             raise AgentRegistryError("Confirmation name does not match the agent to delete.")
-        delete_managed_agent(normalized, root=self._registry_root, stop_channels=True)
-        self._admin_cache.pop(normalized, None)
+        delete_managed_agent(normalized, root=self._registry_root, stop_runtime=True)
         registry = self._load_registry()
         if self._current_name == normalized:
             self._current_name = registry.active_agent or None
@@ -191,56 +241,45 @@ class WebAgentSession:
     def get_current_config_dir(self) -> Path:
         name = self._resolve_agent_name()
         if name is None:
+            if (self._initial_config_dir / AgentPaths.CONFIG_FILENAME).is_file():
+                return self._initial_config_dir
             raise self._no_agents_http_error()
         return self._entry_path(name).expanduser().resolve()
 
-    @staticmethod
-    def _build_admin(config_dir: Path) -> AdminService:
+    def settings_snapshot(self) -> Dict[str, Any]:
+        settings = XAgentSettings.load(
+            self.get_current_config_dir() / AgentPaths.CONFIG_FILENAME
+        )
+        return {
+            "settings": _redact_secrets(
+                settings.model_dump(mode="json", exclude_none=True)
+            ),
+            "schema": XAgentSettings.json_schema(),
+            "secret_sentinel": SECRET_SENTINEL,
+        }
+
+    def update_settings(self, submitted: Dict[str, Any]) -> Dict[str, Any]:
+        config_path = self.get_current_config_dir() / AgentPaths.CONFIG_FILENAME
+        current = XAgentSettings.load(config_path)
+        current_data = current.model_dump(mode="python", exclude_none=True)
+        restored = _restore_secrets(submitted, current_data)
         try:
-            return AdminService(config_dir=str(config_dir))
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Agent configuration is missing or invalid at {config_dir}: {exc}",
-            ) from exc
-
-    def get_current_admin(self) -> AdminService:
-        name = self._resolve_agent_name()
-        if name is None:
-            raise self._no_agents_http_error()
-        cached = self._admin_cache.get(name)
-        if cached is not None:
-            return cached
-        entry_path = self._entry_path(name)
-        admin = self._build_admin(entry_path)
-        self._admin_cache[name] = admin
-        return admin
-
-    def invalidate_admin_cache(self, name: Optional[str] = None) -> None:
-        """Drop cached admin state so the next request reloads files from disk."""
-        if name is None:
-            name = self._resolve_agent_name()
-        if name:
-            self._admin_cache.pop(name, None)
-
-    def get_current_api_url(self) -> str:
-        name = self._resolve_agent_name()
-        if name is None:
-            return self._initial_api_url
-        return self._api_url_for_agent(name, self._entry_path(name))
-
-    def _api_url_for_agent(self, name: str, entry_path: Path) -> str:
-        if name == self._initial_agent_name and self._initial_api_url:
-            return self._initial_api_url
-        cfg = _safe_load_config(entry_path)
-        return web_client_config(cfg)["api_url"]
+            updated = XAgentSettings.model_validate(restored)
+        except ValidationError as exc:
+            errors = []
+            for error in exc.errors(include_input=False, include_url=False):
+                location = ".".join(str(item) for item in error["loc"])
+                errors.append(f"{location}: {error['msg']}")
+            raise ValueError("Invalid configuration: " + "; ".join(errors)) from exc
+        updated.write_atomic(config_path)
+        return self.settings_snapshot()
 
     def channel_setup_schema(self, channel: str) -> Dict[str, Any]:
         normalized = str(channel or "").strip().lower()
         if normalized not in SETUP_CHANNELS:
             raise HTTPException(status_code=404, detail=f"Unknown channel: {channel}")
         config_dir = self.get_current_config_dir()
-        config = _safe_load_config(config_dir)
+        config = load_config_file(config_dir)
         return build_channel_setup_schema(normalized, config)
 
     def apply_channel_setup(
@@ -265,5 +304,4 @@ class WebAgentSession:
             message = str(exc)
             status_code = 409 if "already exists" in message else 400
             raise HTTPException(status_code=status_code, detail=message) from exc
-        self.invalidate_admin_cache()
         return result

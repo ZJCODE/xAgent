@@ -125,7 +125,7 @@ def register_runtime_routes(app: FastAPI, adapter: "ApiChannelAdapter") -> None:
 
     @app.websocket("/ws/tasks")
     async def websocket_tasks(websocket: WebSocket):
-        user_id = (websocket.query_params.get("user_id") or "web_user").strip() or "web_user"
+        user_id = (websocket.query_params.get("user_id") or "owner").strip() or "owner"
         await websocket.accept()
         await adapter.delivery.register_subscriber(user_id, websocket)
         adapter.logger.info("Scheduled task WebSocket connected for %s", user_id)

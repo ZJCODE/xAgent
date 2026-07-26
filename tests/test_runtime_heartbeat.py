@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from xagent.core.config import AgentConfig
 from xagent.core.runtime import RuntimeHeartbeat, RuntimeHeartbeatConfig, create_runtime_heartbeat
@@ -76,29 +77,9 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
 
         self.assertIsNone(heartbeat)
 
-    def test_factory_passes_subconscious_delivery_sink(self):
+    def test_subconscious_is_not_created_by_default(self):
         class _Agent:
-            subconscious_activity = 0.02
-
-            def __init__(self, workspace):
-                self.workspace_dir = Path(workspace) / "workspace"
-
-        async def sink(_delivery):
-            return None
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            heartbeat = create_runtime_heartbeat(
-                _Agent(tmpdir),
-                {"heartbeat_enabled": True, "heartbeat_interval_seconds": 1},
-                subconscious_delivery_sink=sink,
-            )
-
-        self.assertIsNotNone(heartbeat)
-        self.assertIs(heartbeat._subconscious_loop._delivery_sink, sink)
-
-    def test_factory_passes_subconscious_deliverable_channels(self):
-        class _Agent:
-            subconscious_activity = 0.02
+            subconscious_activity = 0.0
 
             def __init__(self, workspace):
                 self.workspace_dir = Path(workspace) / "workspace"
@@ -107,11 +88,22 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
             heartbeat = create_runtime_heartbeat(
                 _Agent(tmpdir),
                 {"heartbeat_enabled": True, "heartbeat_interval_seconds": 1},
-                subconscious_deliverable_channels={"api"},
             )
 
         self.assertIsNotNone(heartbeat)
-        self.assertEqual(heartbeat._subconscious_loop._deliverable_channels, {"api"})
+        self.assertIsNone(heartbeat.subconscious_loop)
+
+    def test_positive_activity_enables_subconscious(self):
+        class _Agent:
+            subconscious_activity = 0.02
+
+        heartbeat = create_runtime_heartbeat(
+            _Agent(),
+            {"heartbeat_enabled": True, "heartbeat_interval_seconds": 1},
+            subconscious_event_sink=AsyncMock(),
+        )
+
+        self.assertIsNotNone(heartbeat.subconscious_loop)
 
 
 class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):

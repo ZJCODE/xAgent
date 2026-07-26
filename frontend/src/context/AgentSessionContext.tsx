@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createAgent, deleteAgent, getAgents, selectAgent } from "../lib/api";
-import type { AgentSummary, CreateAgentInput } from "../types";
+import type { AgentsResponse, AgentSummary, CreateAgentInput } from "../types";
 import { useUnsavedChanges } from "./UnsavedChangesContext";
 
 interface AgentSessionContextValue {
@@ -25,19 +25,22 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const applySnapshot = useCallback((data: AgentsResponse) => {
+    setAgents(data.agents);
+    setSelectedAgent(data.selected_agent);
+    setActiveAgent(data.active_agent);
+    setError("");
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
-      const data = await getAgents();
-      setAgents(data.agents);
-      setSelectedAgent(data.selected_agent);
-      setActiveAgent(data.active_agent);
-      setError("");
+      applySnapshot(await getAgents());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applySnapshot]);
 
   useEffect(() => {
     void refresh();
@@ -46,19 +49,16 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
   const switchAgent = useCallback(async (name: string) => {
     if (name === selectedAgent) return;
     if (!(await confirmDiscard())) return;
-    await selectAgent(name);
-    window.location.reload();
-  }, [confirmDiscard, selectedAgent]);
+    applySnapshot(await selectAgent(name));
+  }, [applySnapshot, confirmDiscard, selectedAgent]);
 
   const createAgentEntry = useCallback(async (input: CreateAgentInput) => {
-    await createAgent(input);
-    window.location.reload();
-  }, []);
+    applySnapshot(await createAgent(input));
+  }, [applySnapshot]);
 
   const deleteAgentEntry = useCallback(async (name: string, confirm: string) => {
-    await deleteAgent(name, confirm);
-    window.location.reload();
-  }, []);
+    applySnapshot(await deleteAgent(name, confirm));
+  }, [applySnapshot]);
 
   const value = useMemo(
     () => ({

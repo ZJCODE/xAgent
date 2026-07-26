@@ -1,386 +1,273 @@
 import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { classNames } from "../lib/format";
-import {
-  createDefaultTaskFormState,
-  formStateToDuplicateInput,
-  formStateToCreateInput,
-  formStateToUpdateInput,
-  taskToFormState,
-  taskToDuplicateFormState,
-  validateTaskForm,
-  WEEKDAY_OPTIONS,
-  type IntervalEndMode,
-  type IntervalFirstRunMode,
-  type IntervalStartMode,
-  type OneShotMode,
-  type TaskFormState,
-  type TaskScheduleKind,
-  type WeekdayOption,
-} from "../lib/taskFormUtils";
-import type { ScheduledTaskItem, TaskCreateInput, TaskDuplicateInput, TaskUpdateInput } from "../types";
+import type {
+  ChannelId,
+  RuntimeTask,
+  TaskCreateInput,
+  TaskSchedule,
+  TaskUpdateInput,
+} from "../types";
 import { Button, IconButton } from "./ui";
 import { WizardField } from "./WizardField";
 
 export type TaskEditorSave =
   | { mode: "create"; input: TaskCreateInput }
-  | { mode: "duplicate"; taskId: string; input: TaskDuplicateInput }
   | { mode: "edit"; taskId: string; patch: TaskUpdateInput };
 
-interface TaskEditorModalProps {
+interface Props {
   open: boolean;
-  mode: "create" | "edit" | "duplicate";
-  task: ScheduledTaskItem | null;
-  saving?: boolean;
-  error?: string;
+  task: RuntimeTask | null;
+  saving: boolean;
+  error: string;
   onClose: () => void;
-  onSave: (payload: TaskEditorSave) => void;
+  onSave: (value: TaskEditorSave) => void;
 }
 
-export function TaskEditorModal({
-  open,
-  mode,
-  task,
-  saving = false,
-  error = "",
-  onClose,
-  onSave,
-}: TaskEditorModalProps) {
-  const [form, setForm] = useState<TaskFormState>(() => createDefaultTaskFormState());
-  const [localError, setLocalError] = useState("");
-  const validationError = useMemo(() => validateTaskForm(form), [form]);
-  const isEdit = mode === "edit";
-  const isDuplicate = mode === "duplicate";
-  const isNonApiTask = isEdit && task && String(task.channel || "api").toLowerCase() !== "api";
+type Kind = TaskSchedule["kind"];
+
+function localDateTime(timestamp = Date.now() + 3_600_000): string {
+  const date = new Date(timestamp - new Date().getTimezoneOffset() * 60_000);
+  return date.toISOString().slice(0, 16);
+}
+
+export function TaskEditorModal({ open, task, saving, error, onClose, onSave }: Props) {
+  const [content, setContent] = useState("");
+  const [kind, setKind] = useState<Kind>("once");
+  const [runAt, setRunAt] = useState(localDateTime);
+  const [localTime, setLocalTime] = useState("09:00");
+  const [weekday, setWeekday] = useState(0);
+  const [intervalMinutes, setIntervalMinutes] = useState("5");
+  const [durationHours, setDurationHours] = useState("4");
+  const [endAt, setEndAt] = useState("");
+  const [deliverResult, setDeliverResult] = useState(false);
+  const [destinationChannel, setDestinationChannel] = useState<ChannelId>("feishu");
+  const [destinationRecipient, setDestinationRecipient] = useState("");
 
   useEffect(() => {
     if (!open) return;
-    setLocalError("");
-    setForm(task ? (isDuplicate ? taskToDuplicateFormState(task) : taskToFormState(task)) : createDefaultTaskFormState());
-  }, [isDuplicate, open, task]);
+    setContent(task?.instruction || "");
+    setKind(task?.schedule.kind || "once");
+    setRunAt(
+      task?.schedule.kind === "once"
+        ? localDateTime(new Date(task.schedule.run_at).getTime())
+        : localDateTime(),
+    );
+    setLocalTime(
+      task?.schedule.kind === "daily" || task?.schedule.kind === "weekly"
+        ? task.schedule.local_time
+        : "09:00",
+    );
+    setWeekday(task?.schedule.kind === "weekly" ? task.schedule.weekday : 0);
+    setIntervalMinutes(
+      task?.schedule.kind === "interval"
+        ? String(task.schedule.interval_seconds / 60)
+        : "5",
+    );
+    setDurationHours(
+      task?.schedule.kind === "interval" && task.schedule.duration_seconds
+        ? String(task.schedule.duration_seconds / 3600)
+        : "4",
+    );
+    setEndAt(
+      task?.schedule.kind === "interval" && task.schedule.end_at
+        ? localDateTime(new Date(task.schedule.end_at).getTime())
+        : "",
+    );
+    setDeliverResult(Boolean(task?.destination));
+    setDestinationChannel(task?.destination?.channel || "feishu");
+    setDestinationRecipient(
+      String(
+        task?.destination?.target.chat_id
+        || task?.destination?.target.user_id
+        || "",
+      ),
+    );
+  }, [open, task]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !saving) onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, open, saving]);
+  const validation = useMemo(() => {
+    if (!content.trim()) return "Content is required.";
+    if (deliverResult && destinationChannel !== "voice" && !destinationRecipient.trim()) {
+      return destinationChannel === "feishu"
+        ? "Feishu chat ID is required."
+        : "Recipient user ID is required.";
+    }
+    if (kind === "once" && new Date(runAt).getTime() <= Date.now()) return "Run time must be in the future.";
+    if (kind === "interval") {
+      const interval = Number(intervalMinutes);
+      if (!Number.isFinite(interval) || interval <= 0) return "Interval must be positive.";
+      if (endAt && new Date(endAt).getTime() <= Date.now()) return "End time must be in the future.";
+      if (!endAt && Number(durationHours) <= 0) return "Duration must be positive.";
+    }
+    return "";
+  }, [
+    content,
+    deliverResult,
+    destinationChannel,
+    destinationRecipient,
+    durationHours,
+    endAt,
+    intervalMinutes,
+    kind,
+    runAt,
+  ]);
 
   if (!open) return null;
 
-  const updateForm = (patch: Partial<TaskFormState>) => {
-    setLocalError("");
-    setForm((current) => ({ ...current, ...patch }));
+  const schedule = (): TaskSchedule => {
+    if (kind === "once") return { kind, run_at: new Date(runAt).toISOString() };
+    if (kind === "daily") return { kind, local_time: localTime };
+    if (kind === "weekly") return { kind, weekday, local_time: localTime };
+    return endAt
+      ? { kind, interval_seconds: Number(intervalMinutes) * 60, end_at: new Date(endAt).toISOString() }
+      : {
+          kind,
+          interval_seconds: Number(intervalMinutes) * 60,
+          duration_seconds: Number(durationHours) * 3600,
+        };
   };
 
   const save = () => {
-    const message = validateTaskForm(form);
-    if (message) {
-      setLocalError(message);
+    if (validation) return;
+    const destination = deliverResult
+      ? {
+          channel: destinationChannel,
+          target: destinationChannel === "voice"
+            ? {}
+            : destinationChannel === "feishu"
+              ? { chat_id: destinationRecipient.trim() }
+              : { user_id: destinationRecipient.trim() },
+        }
+      : null;
+    if (task) {
+      onSave({
+        mode: "edit",
+        taskId: task.task_id,
+        patch: {
+          instruction: content.trim(),
+          schedule: schedule(),
+          destination,
+        },
+      });
       return;
     }
-    if (isEdit) {
-      if (!task) return;
-      onSave({ mode: "edit", taskId: task.task_id, patch: formStateToUpdateInput(form, task) });
-      return;
-    }
-    if (isDuplicate) {
-      if (!task) return;
-      onSave({ mode: "duplicate", taskId: task.task_id, input: formStateToDuplicateInput(form) });
-      return;
-    }
-    onSave({ mode: "create", input: formStateToCreateInput(form) });
-  };
-
-  const toggleWeekday = (weekday: WeekdayOption) => {
-    const exists = form.weekdays.includes(weekday);
-    updateForm({
-      weekdays: exists ? form.weekdays.filter((item) => item !== weekday) : [...form.weekdays, weekday],
+    onSave({
+      mode: "create",
+      input: {
+        instruction: content.trim(),
+        schedule: schedule(),
+        destination,
+      },
     });
   };
 
   return (
     <div className="modal-overlay" role="presentation" onClick={() => !saving && onClose()}>
-      <div
-        className="modal-card task-editor-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="task-editor-title"
-        onClick={(event) => event.stopPropagation()}
-      >
+      <div className="modal-card task-editor-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
         <div className="modal-header">
           <div>
-            <h3 id="task-editor-title">{isEdit ? "Edit task" : isDuplicate ? "Duplicate task" : "Create task"}</h3>
-            <p className="task-editor-subtitle">
-              {isDuplicate
-                ? "Create a fresh schedule while preserving the archived task's delivery target."
-                : "API channel is used for new web tasks. Chat-created delivery targets stay unchanged on edit."}
-            </p>
+            <h3>{task ? "Edit Agent task" : "Create Agent task"}</h3>
+            <p className="task-editor-subtitle">Tell the Agent what to do and when. Results stay in its timeline and memory.</p>
           </div>
-          <IconButton type="button" onClick={onClose} disabled={saving} aria-label="Close task editor">
+          <IconButton type="button" onClick={onClose} disabled={saving} aria-label="Close">
             <X size={16} />
           </IconButton>
         </div>
-
         <div className="modal-body">
-          {(localError || error) && <div className="error-banner">{localError || error}</div>}
-          {isNonApiTask ? (
-            <div className="task-editor-notice">
-              Editing delivery channel <span className="data-chip">{task?.channel}</span>. The channel and target will not be changed.
-            </div>
-          ) : null}
-          {isDuplicate && task ? (
-            <div className="task-editor-notice">
-              Delivery is locked to <span className="data-chip">{task.channel || "local"}</span>
-              {String(task.target?.chat_id || "") ? <span className="data-chip">{String(task.target?.chat_id)}</span> : null}
-              {task.user_id ? <span className="data-chip">{task.user_id}</span> : null}. Choose a new future schedule before saving.
-            </div>
-          ) : null}
-
-          <form
-            className="task-editor-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              save();
-            }}
-          >
-            <div className="task-editor-grid">
-              <WizardField label="Title" hint="Optional. Empty titles are saved as Reminder.">
-                <input value={form.title} onChange={(event) => updateForm({ title: event.target.value })} />
-              </WizardField>
-
-              <WizardField label="Type">
-                <select value={form.taskType} onChange={(event) => updateForm({ taskType: event.target.value as "message" | "agent" })}>
-                  <option value="message">message</option>
-                  <option value="agent">agent</option>
-                </select>
-              </WizardField>
-            </div>
-
-            <WizardField label="Content">
-              <textarea value={form.content} onChange={(event) => updateForm({ content: event.target.value })} rows={4} />
-            </WizardField>
-
+          {error || validation ? <div className="error-banner">{error || validation}</div> : null}
+          <div className="task-editor-grid task-editor-grid-single">
             <WizardField label="Schedule">
-              <select value={form.scheduleKind} onChange={(event) => updateForm({ scheduleKind: event.target.value as TaskScheduleKind })}>
-                <option value="oneshot">One-shot</option>
+              <select value={kind} onChange={(event) => setKind(event.target.value as Kind)}>
+                <option value="once">Once</option>
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
-                <option value="interval">Interval</option>
+                <option value="interval">Bounded interval</option>
               </select>
             </WizardField>
-
-            {form.scheduleKind === "oneshot" && <OneShotFields form={form} updateForm={updateForm} />}
-            {form.scheduleKind === "daily" && (
-              <WizardField label="Daily time" hint="Local wall-clock time.">
-                <input type="time" value={form.dailyTime} onChange={(event) => updateForm({ dailyTime: event.target.value })} />
-              </WizardField>
-            )}
-            {form.scheduleKind === "weekly" && (
-              <WeeklyFields form={form} updateForm={updateForm} toggleWeekday={toggleWeekday} />
-            )}
-            {form.scheduleKind === "interval" && <IntervalFields form={form} updateForm={updateForm} />}
-          </form>
-        </div>
-
-        <div className="modal-footer">
-          <span className="task-editor-save-hint">{validationError ? validationError : "Ready to save."}</span>
-          <div className="modal-footer-actions">
-            <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
-              Cancel
-            </Button>
-            <Button type="button" onClick={save} disabled={saving || Boolean(validationError)}>
-              {saving ? "Saving..." : isDuplicate ? `Create for ${task?.channel || "local"}` : "Save"}
-            </Button>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function OneShotFields({
-  form,
-  updateForm,
-}: {
-  form: TaskFormState;
-  updateForm: (patch: Partial<TaskFormState>) => void;
-}) {
-  return (
-    <div className="task-editor-section">
-      <RadioGroup
-        name="oneshot-mode"
-        value={form.oneShotMode}
-        options={[
-          { value: "delay", label: "Run after a delay" },
-          { value: "absolute", label: "Run at a specific time" },
-        ]}
-        onChange={(value) => updateForm({ oneShotMode: value as OneShotMode })}
-      />
-      {form.oneShotMode === "delay" ? (
-        <WizardField label="Delay (minutes)">
-          <input type="number" min="0" step="1" value={form.delayMinutes} onChange={(event) => updateForm({ delayMinutes: event.target.value })} />
-        </WizardField>
-      ) : (
-        <WizardField label="Run at">
-          <input type="datetime-local" value={form.runAt} onChange={(event) => updateForm({ runAt: event.target.value })} />
-        </WizardField>
-      )}
-    </div>
-  );
-}
-
-function WeeklyFields({
-  form,
-  updateForm,
-  toggleWeekday,
-}: {
-  form: TaskFormState;
-  updateForm: (patch: Partial<TaskFormState>) => void;
-  toggleWeekday: (weekday: WeekdayOption) => void;
-}) {
-  return (
-    <div className="task-editor-section">
-      <WizardField label="Weekly time" hint="Local wall-clock time.">
-        <input type="time" value={form.weeklyTime} onChange={(event) => updateForm({ weeklyTime: event.target.value })} />
-      </WizardField>
-      <div className="task-editor-field-block">
-        <span>Weekdays</span>
-        <div className="weekday-chip-list">
-          {WEEKDAY_OPTIONS.map((weekday) => (
-            <button
-              key={weekday}
-              type="button"
-              className={classNames("weekday-chip", form.weekdays.includes(weekday) && "selected")}
-              onClick={() => toggleWeekday(weekday)}
+          <WizardField
+            label="Instruction"
+            hint="For example: Review today's conversations and summarize anything that needs attention."
+          >
+            <textarea
+              rows={4}
+              value={content}
+              placeholder="What should the Agent do?"
+              onChange={(event) => setContent(event.target.value)}
+            />
+          </WizardField>
+          <div className="task-editor-grid">
+            <WizardField
+              label="Result"
+              hint="Keeping the result stores it in Messages and memory without sending it."
             >
-              {weekday}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function IntervalFields({
-  form,
-  updateForm,
-}: {
-  form: TaskFormState;
-  updateForm: (patch: Partial<TaskFormState>) => void;
-}) {
-  return (
-    <div className="task-editor-section">
-      <RadioGroup
-        name="interval-start-mode"
-        value={form.intervalStartMode}
-        options={[
-          { value: "now", label: "Start from now" },
-          { value: "at", label: "Start at a specific time" },
-        ]}
-        onChange={(value) => updateForm({ intervalStartMode: value as IntervalStartMode })}
-      />
-      {form.intervalStartMode === "at" ? (
-        <WizardField label="Start at" hint="First reminder fires at this time, then repeats on the grid.">
-          <input
-            type="datetime-local"
-            value={form.intervalStartAt}
-            onChange={(event) => updateForm({ intervalStartAt: event.target.value })}
-          />
-        </WizardField>
-      ) : null}
-
-      <WizardField label="Every (minutes)" hint="Minimum 1 minute.">
-        <input
-          type="number"
-          min="1"
-          step="1"
-          value={form.intervalMinutes}
-          onChange={(event) => updateForm({ intervalMinutes: event.target.value })}
-        />
-      </WizardField>
-
-      <RadioGroup
-        name="interval-end-mode"
-        value={form.intervalEndMode}
-        options={[
-          { value: "duration", label: "Run for a duration" },
-          { value: "end_at", label: "Stop at a specific time" },
-        ]}
-        onChange={(value) => updateForm({ intervalEndMode: value as IntervalEndMode })}
-      />
-      {form.intervalEndMode === "duration" ? (
-        <WizardField label="Duration (minutes)" hint="Required; max 30 days.">
-          <input
-            type="number"
-            min="1"
-            step="1"
-            value={form.intervalDurationMinutes}
-            onChange={(event) => updateForm({ intervalDurationMinutes: event.target.value })}
-          />
-        </WizardField>
-      ) : (
-        <WizardField label="Stop at">
-          <input type="datetime-local" value={form.intervalEndAt} onChange={(event) => updateForm({ intervalEndAt: event.target.value })} />
-        </WizardField>
-      )}
-
-      {form.intervalStartMode === "now" ? (
-        <>
-          <RadioGroup
-            name="interval-first-run-mode"
-            value={form.intervalFirstRunMode}
-            options={[
-              { value: "default", label: "First run after one interval" },
-              { value: "immediate", label: "Run once immediately" },
-              { value: "delay", label: "Custom first-run delay" },
-            ]}
-            onChange={(value) => updateForm({ intervalFirstRunMode: value as IntervalFirstRunMode })}
-          />
-          {form.intervalFirstRunMode === "delay" ? (
-            <WizardField label="First run delay (minutes)">
+              <select
+                value={deliverResult ? "send" : "keep"}
+                onChange={(event) => setDeliverResult(event.target.value === "send")}
+              >
+                <option value="keep">Keep in Agent timeline</option>
+                <option value="send">Send through a channel</option>
+              </select>
+            </WizardField>
+            {deliverResult ? (
+              <WizardField label="Channel">
+                <select
+                  value={destinationChannel}
+                  onChange={(event) => setDestinationChannel(event.target.value as ChannelId)}
+                >
+                  <option value="api">API</option>
+                  <option value="feishu">Feishu</option>
+                  <option value="weixin">Weixin</option>
+                  <option value="voice">Voice</option>
+                </select>
+              </WizardField>
+            ) : null}
+          </div>
+          {deliverResult && destinationChannel !== "voice" ? (
+            <WizardField
+              label={destinationChannel === "feishu" ? "Feishu chat ID" : "Recipient user ID"}
+              hint={
+                destinationChannel === "feishu"
+                  ? "The conversation ID that should receive the result."
+                  : "The account ID subscribed to this channel."
+              }
+            >
               <input
-                type="number"
-                min="0"
-                step="1"
-                value={form.intervalDelayMinutes}
-                onChange={(event) => updateForm({ intervalDelayMinutes: event.target.value })}
+                value={destinationRecipient}
+                placeholder={destinationChannel === "feishu" ? "oc_…" : "user ID"}
+                onChange={(event) => setDestinationRecipient(event.target.value)}
               />
             </WizardField>
           ) : null}
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-function RadioGroup({
-  name,
-  value,
-  options,
-  onChange,
-}: {
-  name: string;
-  value: string;
-  options: Array<{ value: string; label: string }>;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="task-editor-radio-group">
-      {options.map((option) => (
-        <label key={option.value}>
-          <input
-            type="radio"
-            name={name}
-            checked={value === option.value}
-            onChange={() => onChange(option.value)}
-          />
-          <span>{option.label}</span>
-        </label>
-      ))}
+          {kind === "once" ? (
+            <WizardField label="Run at"><input type="datetime-local" value={runAt} onChange={(event) => setRunAt(event.target.value)} /></WizardField>
+          ) : null}
+          {kind === "daily" || kind === "weekly" ? (
+            <div className="task-editor-grid">
+              {kind === "weekly" ? (
+                <WizardField label="Weekday">
+                  <select value={weekday} onChange={(event) => setWeekday(Number(event.target.value))}>
+                    {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((label, index) => (
+                      <option key={label} value={index}>{label}</option>
+                    ))}
+                  </select>
+                </WizardField>
+              ) : null}
+              <WizardField label="Local time"><input type="time" value={localTime} onChange={(event) => setLocalTime(event.target.value)} /></WizardField>
+            </div>
+          ) : null}
+          {kind === "interval" ? (
+            <div className="task-editor-grid">
+              <WizardField label="Every minutes"><input type="number" min="1" value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} /></WizardField>
+              <WizardField label="Duration hours" hint="Used when end time is empty."><input type="number" min="0.01" step="0.25" value={durationHours} onChange={(event) => setDurationHours(event.target.value)} /></WizardField>
+              <WizardField label="Or end at"><input type="datetime-local" value={endAt} onChange={(event) => setEndAt(event.target.value)} /></WizardField>
+            </div>
+          ) : null}
+        </div>
+        <div className="modal-footer">
+          <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button type="button" onClick={save} disabled={saving || Boolean(validation)}>{saving ? "Saving…" : "Save"}</Button>
+        </div>
+      </div>
     </div>
   );
 }

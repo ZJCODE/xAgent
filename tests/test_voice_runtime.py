@@ -4,16 +4,12 @@ import tempfile
 import threading
 import time
 import unittest
-from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from xagent.core.runtime import (
-    ContactEntry,
-    SubconsciousDelivery,
+    Delivery,
     current_delivery_context,
-    enqueue_scheduled_task,
-    list_active_task_records,
 )
 from xagent.interfaces.voice.config import VoiceChannelConfig, VoiceTTSConfig
 from xagent.interfaces.voice.factory import create_local_voice_runtime
@@ -467,82 +463,10 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(agent.context.user_id, "alice")
         self.assertEqual(agent.context.target["user_id"], "alice")
 
-    def test_runtime_dispatches_due_voice_message_task_to_tts(self):
-        async def run_task():
-            with tempfile.TemporaryDirectory() as tmpdir:
-                enqueue_scheduled_task(
-                    task_type="message",
-                    content="该喝水了",
-                    run_at=datetime.now() - timedelta(seconds=1),
-                    tasks_dir=tmpdir,
-                    channel="voice",
-                    user_id="alice",
-                    target={"user_id": "alice"},
-                )
-                synth = FakeSynthesizer()
-                player = FakePlayer()
-                runtime = VoiceRuntime(
-                    agent=FakeAgent(),
-                    config=voice_channel_config({"api_key": "test-key"}),
-                    microphone=FakeMicrophone(),
-                    recognizer=FakeRecognizer([]),
-                    synthesizer=synth,
-                    player=player,
-                    options=VoiceRuntimeOptions(user_id="alice",tasks_dir=tmpdir),
-                    output=lambda *args, **kwargs: None,
-                )
-
-                self.assertIsNotNone(runtime.task_scheduler)
-                await runtime.task_scheduler.tick()
-
-                self.assertEqual(synth.calls[0]["chunks"], ["该喝水了"])
-                self.assertEqual(player.played, ["该喝水了".encode("utf-8")])
-                self.assertEqual(list_active_task_records(tmpdir), [])
-
-        asyncio.run(run_task())
-
-    def test_runtime_dispatches_due_voice_agent_task_with_voice_context(self):
-        async def run_task():
-            with tempfile.TemporaryDirectory() as tmpdir:
-                enqueue_scheduled_task(
-                    task_type="agent",
-                    content="查一下状态",
-                    run_at=datetime.now() - timedelta(seconds=1),
-                    tasks_dir=tmpdir,
-                    channel="voice",
-                    user_id="alice",
-                    target={"user_id": "alice"},
-                )
-                agent = ScheduledAgent()
-                synth = FakeSynthesizer()
-                runtime = VoiceRuntime(
-                    agent=agent,
-                    config=voice_channel_config({"api_key": "test-key"}),
-                    microphone=FakeMicrophone(),
-                    recognizer=FakeRecognizer([]),
-                    synthesizer=synth,
-                    player=FakePlayer(),
-                    options=VoiceRuntimeOptions(user_id="fallback",tasks_dir=tmpdir),
-                    output=lambda *args, **kwargs: None,
-                )
-
-                self.assertIsNotNone(runtime.task_scheduler)
-                await runtime.task_scheduler.tick()
-
-                self.assertEqual(agent.kwargs["user_id"], "alice")
-                self.assertIn("This scheduled task is now due", agent.kwargs["user_message"])
-                self.assertEqual(agent.context.channel, "voice")
-                self.assertEqual(agent.context.user_id, "alice")
-                self.assertEqual(synth.calls[0]["chunks"], ["done"])
-                self.assertEqual(list_active_task_records(tmpdir), [])
-
-        asyncio.run(run_task())
-
-    def test_runtime_delivers_subconscious_message_directly(self):
+    def test_runtime_sends_durable_delivery(self):
         async def run_task():
             synth = FakeSynthesizer()
             agent = FakeAgent()
-            agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
             runtime = VoiceRuntime(
                 agent=agent,
                 config=voice_channel_config({"api_key": "test-key"}),
@@ -553,31 +477,20 @@ class VoiceRuntimeTests(unittest.TestCase):
                 options=VoiceRuntimeOptions(user_id="alice"),
                 output=lambda *args, **kwargs: None,
             )
-            delivery = SubconsciousDelivery(
-                content="direct voice thought",
-                recipient=ContactEntry(
-                    channel="voice",
-                    user_id="alice",
-                    target={"user_id": "alice"},
-                    last_seen="2026-06-25 09:00:00",
-                ),
-                internal_content="inner",
-                created_at=datetime(2026, 6, 25, 9, 0, 0),
+            delivery = Delivery.create(
+                event_id="event-voice",
+                channel="voice",
+                target={"user_id": "alice"},
+                payload={"content": "direct voice thought"},
             )
 
-            await runtime.deliver_subconscious_message(delivery)
+            await runtime.send(delivery)
 
-            return agent, synth.calls
+            return synth.calls
 
-        agent, calls = asyncio.run(run_task())
+        calls = asyncio.run(run_task())
 
         self.assertEqual(calls[0]["chunks"], ["direct voice thought"])
-        agent.message_handler.store_model_reply.assert_awaited_once()
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.args[0], "direct voice thought")
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["channel"], "voice")
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["recipient_id"], "alice")
-        metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
-        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
 
     def test_runtime_default_keeps_microphone_paused_during_playback(self):
         config = voice_channel_config({"api_key": "test-key"})

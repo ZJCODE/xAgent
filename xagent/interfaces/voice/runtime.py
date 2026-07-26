@@ -9,18 +9,12 @@ import time
 import unicodedata
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Protocol
 
-from xagent.core.config import AgentConfig
 from xagent.core.runtime import (
-    AsyncTaskScheduler,
-    ScheduledDeliveryContext,
-    ScheduledTaskRecord,
-    SubconsciousDelivery,
-    resolve_contacts_path,
-    scheduled_delivery_context,
-    upsert_contact,
+    Delivery,
+    DeliveryContext,
+    delivery_context,
 )
 
 from .config import VoiceChannelConfig
@@ -43,7 +37,6 @@ class VoiceRuntimeOptions:
 
     user_id: str = "local_voice"
     stream: bool = True
-    tasks_dir: Optional[Path | str] = None
 
 
 class VoiceMicrophone(Protocol):
@@ -113,16 +106,6 @@ class VoiceRuntime:
         self.pause_event = threading.Event()
         self.stop_event = threading.Event()
         self._playback_lock = asyncio.Lock()
-        self.task_scheduler: AsyncTaskScheduler | None = None
-        self._contacts_file: Optional[Path] = None
-        if self.options.tasks_dir is not None:
-            self.task_scheduler = AsyncTaskScheduler(
-                self.options.tasks_dir,
-                can_handle=self._can_handle_scheduled_task,
-                dispatch=self._dispatch_scheduled_task,
-            )
-            runtime_root = Path(self.options.tasks_dir).parent
-            self._contacts_file = resolve_contacts_path(runtime_root)
         self._wake_active = False
         self._wake_last_activity_at = 0.0
 
@@ -140,8 +123,6 @@ class VoiceRuntime:
         )
         next_utterance_task: asyncio.Future[VoiceUtterance | None] | None = None
         try:
-            if self.task_scheduler is not None:
-                await self.task_scheduler.start()
             next_utterance_task = self._create_next_utterance_task(utterances)
             while not self.stop_event.is_set():
                 utterance_result = await self._await_next_utterance(next_utterance_task)
@@ -164,8 +145,6 @@ class VoiceRuntime:
             self.stop_event.set()
             if next_utterance_task is not None and not next_utterance_task.done():
                 next_utterance_task.cancel()
-            if self.task_scheduler is not None:
-                await self.task_scheduler.stop()
 
     def _ready_message(self) -> str:
         if not self.config.wake.enabled:
@@ -410,27 +389,15 @@ class VoiceRuntime:
         return future
 
     async def _agent_text_chunks(self, transcript: str) -> AsyncIterator[str]:
-        # Record contact for subconscious thought routing
-        if self._contacts_file is not None:
-            try:
-                upsert_contact(
-                    self._contacts_file,
-                    channel="voice",
-                    user_id=self.options.user_id,
-                    target={"user_id": self.options.user_id},
-                )
-            except Exception:
-                pass
-
         self.output("Agent: ", end="")
         started = False
         message_delta_seen: set[str] = set()
-        with scheduled_delivery_context(self._delivery_context()):
+        with delivery_context(self._delivery_context()):
             async for event in self.agent.chat_events(
                 user_message=transcript,
                 user_id=self.options.user_id,
                 stream=self.options.stream,
-                channel="voice",
+                source="voice",
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
@@ -459,38 +426,16 @@ class VoiceRuntime:
         if started:
             self.output("")
 
-    def _delivery_context(self, *, task: ScheduledTaskRecord | None = None) -> ScheduledDeliveryContext:
-        if task is None:
-            return ScheduledDeliveryContext(
-                channel="voice",
-                user_id=self.options.user_id,
-                target={"user_id": self.options.user_id},
-                metadata={"source": "voice"},
-            )
-        return ScheduledDeliveryContext(
+    def _delivery_context(self) -> DeliveryContext:
+        return DeliveryContext(
+            source="voice",
             channel="voice",
-            user_id=task.delivery_user_id or self.options.user_id,
-            target=task.delivery.get("target") if isinstance(task.delivery.get("target"), dict) else {},
-            metadata={
-                "source": "scheduled_task",
-                "task_id": task.task_id,
-                "task_name": task.name,
-                "task_type": task.task_type,
-            },
+            user_id=self.options.user_id,
+            target={"user_id": self.options.user_id},
+            metadata={"source": "voice"},
         )
 
-    def _can_handle_scheduled_task(self, task: ScheduledTaskRecord) -> bool:
-        return task.kind == "task" and task.delivery_channel == "voice"
-
-    async def _dispatch_scheduled_task(self, task: ScheduledTaskRecord) -> None:
-        text = await self._scheduled_task_text(task)
-        if not text:
-            raise ValueError("scheduled voice task produced no content")
-        self.output(f"\nScheduled task: {task.title or task.task_type or 'Reminder'}")
-        async with self._playback_lock:
-            await self._play_scheduled_text(text)
-
-    async def _play_scheduled_text(self, text: str) -> None:
+    async def _play_text(self, text: str) -> None:
         self.pause_event.set()
         playback_stop_event = threading.Event()
         playback_task: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -522,75 +467,12 @@ class VoiceRuntime:
             playback_stop_event.set()
             self.pause_event.clear()
 
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        if delivery.recipient.channel != "voice":
-            raise ValueError(f"Voice runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        text = str(delivery.content or "").strip()
+    async def send(self, delivery: Delivery) -> None:
+        text = str(delivery.payload.get("content") or "").strip()
         if not text:
-            raise ValueError("subconscious voice delivery produced no content")
-        self.output("\nSubconscious message")
+            raise ValueError("Voice delivery produced no content")
         async with self._playback_lock:
-            await self._play_scheduled_text(text)
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        if callable(store_model_reply):
-            try:
-                recipient_id = str(
-                    delivery.recipient.target.get("user_id")
-                    or delivery.recipient.user_id
-                    or self.options.user_id
-                )
-                await store_model_reply(
-                    text,
-                    getattr(self.agent, "_assistant_sender_id", "agent"),
-                    metadata={
-                        "subconscious": {
-                            "source": "subconscious",
-                            "created_at": delivery.created_at.isoformat(sep=" "),
-                            "recipient": {
-                                "channel": delivery.recipient.channel,
-                                "user_id": delivery.recipient.user_id,
-                                "target": delivery.recipient.target,
-                            },
-                        }
-                    },
-                    channel="voice",
-                    recipient_id=recipient_id,
-                )
-            except Exception:
-                self.logger.debug("Failed to persist voice subconscious delivery", exc_info=True)
-
-    async def _scheduled_task_text(self, task: ScheduledTaskRecord) -> str:
-        if task.task_type == "message":
-            return task.content.strip()
-        if task.task_type != "agent":
-            raise ValueError(f"unsupported scheduled voice task type: {task.task_type}")
-
-        prompt = AgentConfig.scheduled_agent_prompt(task.content)
-        with scheduled_delivery_context(self._delivery_context(task=task)):
-            parts: list[str] = []
-            message_delta_seen: set[str] = set()
-            async for event in self.agent.chat_events(
-                user_message=prompt,
-                user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
-                stream=self.options.stream,
-                channel="voice",
-            ):
-                event_type = event.get("type")
-                message_id = str(event.get("message_id") or uuid.uuid4().hex)
-                if event_type == "message_delta":
-                    delta = str(event.get("delta") or "")
-                    if delta:
-                        message_delta_seen.add(message_id)
-                        parts.append(delta)
-                elif event_type == "message_done" and message_id not in message_delta_seen:
-                    content = str(event.get("content") or "")
-                    if content:
-                        parts.append(content)
-                elif event_type == "error":
-                    raise RuntimeError(str(event.get("error") or "Agent processing error."))
-            return "".join(parts).strip()
-
+            await self._play_text(text)
 
 def _next_or_none(iterator: Iterator[VoiceUtterance]) -> VoiceUtterance | None:
     try:

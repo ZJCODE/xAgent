@@ -1,12 +1,9 @@
 import asyncio
 import tempfile
 import unittest
-from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
-from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
+from xagent.core.runtime import Delivery
 from xagent.integrations.weixin.adapter import WeixinAdapter
 from xagent.integrations.weixin.config import WeixinAdapterConfig
 from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
@@ -164,22 +161,18 @@ class WeixinAdapterTests(unittest.TestCase):
             self.assertGreater(len(client.sent_text), 1)
             self.assertEqual([item["text"] for item in client.sent_text], ["first line", "second line", "third line"])
 
-    def test_scheduled_message_requires_cached_context_and_sends(self):
+    def test_runtime_delivery_requires_cached_context_and_sends(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 adapter, _agent, client, _state = self._adapter(tmpdir)
                 adapter._context_tokens["owner@im.wechat"] = "ctx-owner"
-                enqueue_scheduled_task(
-                    task_type="message",
-                    content="scheduled hello",
-                    run_at="2026-06-01 14:30:00",
-                    tasks_dir=tmpdir,
+                delivery = Delivery.create(
+                    event_id="event-1",
                     channel="weixin",
                     target={"user_id": "owner@im.wechat"},
-                    user_id="owner@im.wechat",
+                    payload={"content": "scheduled hello"},
                 )
-                task = list_task_records(tmpdir)[0]
-                await adapter._dispatch_scheduled_task(task)
+                await adapter.send(delivery)
                 return client.sent_text
 
         sent_text = asyncio.run(run_test())
@@ -188,39 +181,54 @@ class WeixinAdapterTests(unittest.TestCase):
         self.assertEqual(sent_text[0]["context_token"], "ctx-owner")
         self.assertEqual(sent_text[0]["text"], "scheduled hello")
 
-    def test_deliver_subconscious_message_uses_cached_context(self):
+    def test_runtime_delivery_uses_stable_delivery_id(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 adapter, _agent, client, _state = self._adapter(tmpdir)
-                _agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
                 adapter._context_tokens["owner@im.wechat"] = "ctx-owner"
-                delivery = SubconsciousDelivery(
-                    content="subconscious hello",
-                    recipient=ContactEntry(
-                        channel="weixin",
-                        user_id="owner@im.wechat",
-                        target={"user_id": "owner@im.wechat"},
-                        last_seen="2026-06-25 09:00:00",
-                    ),
-                    internal_content="inner",
-                    created_at=datetime(2026, 6, 25, 9, 0, 0),
+                delivery = Delivery.create(
+                    event_id="event-2",
+                    channel="weixin",
+                    target={"user_id": "owner@im.wechat"},
+                    payload={"content": "subconscious hello"},
                 )
+                await adapter.send(delivery)
+                return delivery, client.sent_text
 
-                await adapter.deliver_subconscious_message(delivery)
-                return _agent, client.sent_text
-
-        agent, sent_text = asyncio.run(run_test())
+        delivery, sent_text = asyncio.run(run_test())
 
         self.assertEqual(sent_text[0]["to_user_id"], "owner@im.wechat")
         self.assertEqual(sent_text[0]["context_token"], "ctx-owner")
         self.assertEqual(sent_text[0]["text"], "subconscious hello")
-        self.assertTrue(sent_text[0]["client_id"])
-        agent.message_handler.store_model_reply.assert_awaited_once()
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.args[0], "subconscious hello")
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["channel"], "weixin")
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["recipient_id"], "owner@im.wechat")
-        metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
-        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
+        self.assertIn(delivery.delivery_id, sent_text[0]["client_id"])
+
+    def test_runtime_mode_persists_reply_instead_of_sending_directly(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                adapter, _agent, client, _state = self._adapter(tmpdir)
+                queued = []
+
+                async def sink(delivery):
+                    queued.append(delivery)
+
+                adapter.delivery_sink = sink
+                message = {
+                    "message_id": 101,
+                    "from_user_id": "owner@im.wechat",
+                    "to_user_id": "bot@im.bot",
+                    "message_type": 1,
+                    "context_token": "ctx-owner",
+                    "item_list": [{"type": 1, "text_item": {"text": "hello"}}],
+                }
+                await adapter._process_message(message)
+                return queued, client.sent_text
+
+        queued, sent_text = asyncio.run(run_test())
+
+        self.assertEqual(sent_text, [])
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0].event_id, "weixin:101")
+        self.assertEqual(queued[0].payload["content"], "agent reply")
 
 
 if __name__ == "__main__":

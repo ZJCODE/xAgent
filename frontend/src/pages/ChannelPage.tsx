@@ -1,17 +1,18 @@
 import { FileText, Play, RefreshCw, Square, Wrench, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChannelSetupWizard } from "../components/ChannelSetupWizard";
 import { Button, IconButton, PageShell, PageToolbar, Panel, StatusBadge } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
 import {
   getChannelLogs,
   getChannels,
+  restartChannel,
   startChannel,
   stopChannel,
 } from "../lib/api";
 import type { ChannelId, ChannelStatus, ChannelsResponse, ChannelRuntimeStatus, SetupChannelId } from "../types";
 
-type PendingAction = "start" | "stop" | "logs";
+type PendingAction = "start" | "stop" | "restart" | "logs";
 
 const SETUP_CHANNELS = new Set<ChannelId>(["voice", "feishu", "weixin"]);
 
@@ -21,7 +22,8 @@ function isSetupChannel(channel: ChannelId): channel is SetupChannelId {
 
 function statusTone(status: ChannelRuntimeStatus): "good" | "danger" | "muted" | "info" {
   if (status === "running") return "good";
-  if (status === "error") return "danger";
+  if (status === "error" || status === "degraded") return "danger";
+  if (status === "starting" || status === "stopping") return "info";
   if (status === "stopped") return "muted";
   return "muted";
 }
@@ -29,6 +31,10 @@ function statusTone(status: ChannelRuntimeStatus): "good" | "danger" | "muted" |
 function statusLabel(channel: ChannelStatus): string {
   if (channel.status === "running") return "Running";
   if (channel.status === "stopped") return "Stopped";
+  if (channel.status === "runtime-stopped") return "Runtime stopped";
+  if (channel.status === "starting") return "Starting";
+  if (channel.status === "stopping") return "Stopping";
+  if (channel.status === "degraded") return "Degraded";
   if (channel.status === "error") return "Needs attention";
   return "Disabled";
 }
@@ -68,6 +74,7 @@ function ChannelRow({
   logs,
   onStart,
   onStop,
+  onRestart,
   onLogs,
   onRefreshLogs,
   onCloseLogs,
@@ -78,6 +85,7 @@ function ChannelRow({
   logs?: string;
   onStart: (channel: ChannelId) => void;
   onStop: (channel: ChannelId) => void;
+  onRestart: (channel: ChannelId) => void;
   onLogs: (channel: ChannelId) => void;
   onRefreshLogs: (channel: ChannelId) => void;
   onCloseLogs: (channel: ChannelId) => void;
@@ -94,6 +102,9 @@ function ChannelRow({
           <ChannelStatusMeta channel={channel} onSetup={onSetup} />
         </div>
       </header>
+      <p className="channel-row-detail">
+        {channel.detail || (channel.ready ? "Configured for this Agent." : "Complete setup before starting this channel.")}
+      </p>
 
       <div className="channel-row-actions">
         <Button
@@ -112,6 +123,14 @@ function ChannelRow({
           >
             <Square size={13} />
             {pending === "stop" ? "Stopping" : "Stop"}
+          </Button>
+          <Button
+            type="button"
+            disabled={!channel.can_restart || actionBusy}
+            onClick={() => onRestart(channel.id)}
+          >
+            <RefreshCw size={13} />
+            {pending === "restart" ? "Restarting" : "Restart"}
           </Button>
           <Button
             type="button"
@@ -166,19 +185,21 @@ export function ChannelPage() {
 
   const channels = useMemo(() => data?.channels || [], [data]);
 
-  const load = async () => {
-    setError("");
+  const load = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}) => {
+    if (!quiet) setError("");
     try {
       const next = await getChannels();
       setData(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (!quiet) setError(err instanceof Error ? err.message : String(err));
     }
-  };
+  }, []);
 
   useEffect(() => {
     void load();
-  }, []);
+    const interval = window.setInterval(() => void load({ quiet: true }), 5000);
+    return () => window.clearInterval(interval);
+  }, [load, selectedAgent]);
 
   const runAction = async (channel: ChannelId, action: Exclude<PendingAction, "logs">) => {
     setPending((current) => ({ ...current, [channel]: action }));
@@ -187,6 +208,7 @@ export function ChannelPage() {
     try {
       if (action === "start") await startChannel(channel);
       if (action === "stop") await stopChannel(channel);
+      if (action === "restart") await restartChannel(channel);
       await load();
       await refreshAgents();
       setNotice(`${channel} ${action} complete.`);
@@ -262,27 +284,35 @@ export function ChannelPage() {
   return (
     <PageShell className="channels-page">
       <PageToolbar
+        eyebrow="Transport adapters"
         title="Channels"
-        subtitle={selectedAgent ? `Selected agent: ${selectedAgent}` : data?.config_dir}
+        subtitle={
+          selectedAgent
+            ? `Manage external transports for ${selectedAgent}. Web chat uses the always-on local Runtime API.`
+            : data?.config_dir
+        }
       />
-      {error ? <div className="error-strip">{error}</div> : null}
-      {notice ? <div className="success-strip">{notice}</div> : null}
+      <div className="page-body channels-body">
+        {error ? <div className="error-strip">{error}</div> : null}
+        {notice ? <div className="success-strip">{notice}</div> : null}
 
-      <div className="channel-list">
-        {channels.map((channel) => (
-          <ChannelRow
-            key={channel.id}
-            channel={channel}
-            pending={pending[channel.id]}
-            logs={logs[channel.id]}
-            onStart={(id) => void runAction(id, "start")}
-            onStop={(id) => void runAction(id, "stop")}
-            onLogs={(id) => void toggleLogs(id)}
-            onRefreshLogs={(id) => void loadLogs(id)}
-            onCloseLogs={closeLogs}
-            onSetup={setSetupChannelId}
-          />
-        ))}
+        <div className="channel-list">
+          {channels.map((channel) => (
+            <ChannelRow
+              key={channel.id}
+              channel={channel}
+              pending={pending[channel.id]}
+              logs={logs[channel.id]}
+              onStart={(id) => void runAction(id, "start")}
+              onStop={(id) => void runAction(id, "stop")}
+              onRestart={(id) => void runAction(id, "restart")}
+              onLogs={(id) => void toggleLogs(id)}
+              onRefreshLogs={(id) => void loadLogs(id)}
+              onCloseLogs={closeLogs}
+              onSetup={setSetupChannelId}
+            />
+          ))}
+        </div>
       </div>
 
       {setupChannelId ? (

@@ -1,31 +1,47 @@
 import json
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from ..components import (
     MarkdownMemory,
     MessageStorage,
-    RelationshipStore,
     SkillsStorageBase,
 )
 from .journal import JournalLLMService
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
 from .config import AgentConfig, ReplyType
+from .prompts import PromptAssembler
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .providers import (
-    MODEL_API_OPENAI_RESPONSES,
     PROVIDER_OPENAI,
     ReasoningConfig,
-    model_api_uses_anthropic_client,
     normalize_model_api,
     normalize_provider_name,
 )
 from .tooling import ToolExecutor, ToolManager
 from ..schemas import AgentTurnResult, Message, MessageType, ParticipationDecision, RoleType
-from ..tools import create_write_memory_tool, create_search_memory_tool
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AgentDependencies:
+    """Fully assembled dependencies; construction performs no I/O."""
+
+    client: Any
+    message_storage: MessageStorage
+    markdown_memory: MarkdownMemory
+    llm_service: JournalLLMService
+    memory_handler: MemoryHandler
+    message_handler: MessageHandler
+    tool_manager: ToolManager
+    model_client: ModelClient
+    tool_executor: ToolExecutor
+    workspace_dir: Path
+    skills_storage: Optional[SkillsStorageBase]
+    observability: ObservabilityRuntime
 
 
 class Agent:
@@ -33,26 +49,21 @@ class Agent:
 
     def __init__(
         self,
-        system_prompt: Optional[str] = None,
-        model: Optional[str] = None,
-        client: Optional[Any] = None,
-        model_api: str = MODEL_API_OPENAI_RESPONSES,
-        model_max_tokens: Optional[int] = None,
-        tools: Optional[List] = None,
-        message_storage: Optional[MessageStorage] = None,
-        workspace: Optional[str] = None,
-        skills_storage: Optional[SkillsStorageBase] = None,
-        observability: Optional[ObservabilityRuntime] = None,
+        *,
+        identity: str,
+        model: str,
+        dependencies: AgentDependencies,
+        model_api: str,
+        model_max_tokens: Optional[int],
+        provider_name: str,
+        reasoning: Optional[ReasoningConfig],
         supports_vision: bool = True,
         max_history: int = AgentConfig.DEFAULT_MAX_HISTORY,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
-        max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
         memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
-        provider_name: str = PROVIDER_OPENAI,
-        reasoning: Optional[ReasoningConfig] = None,
     ):
-        self.model = model or AgentConfig.DEFAULT_MODEL
+        self.model = model
         self.provider_name = normalize_provider_name(provider_name) or PROVIDER_OPENAI
         self.model_api = normalize_model_api(model_api)
         self.model_max_tokens = model_max_tokens
@@ -60,132 +71,30 @@ class Agent:
         self.supports_vision = bool(supports_vision)
         self.max_history = max_history
         self.max_iter = max_iter
-        self.max_concurrent_tools = max_concurrent_tools
         self.subconscious_activity = subconscious_activity
         self.memory_recent_days = memory_recent_days
-        self.observability = observability or NoopObservabilityRuntime()
-        self.client = client
-        if self.client is None:
-            if model_api_uses_anthropic_client(self.model_api):
-                from anthropic import AsyncAnthropic
-
-                self.client = AsyncAnthropic()
-            else:
-                from openai import AsyncOpenAI
-
-                self.client = self.observability.create_client({}) or AsyncOpenAI()
-        self.system_prompt = system_prompt or ""
+        self.observability = dependencies.observability
+        self.client = dependencies.client
+        self.system_prompt = identity
         self._assistant_sender_id = "agent"
-
-        workspace_path: Optional[Path] = None
-        if workspace is not None:
-            workspace_path = Path(workspace).expanduser().resolve()
-
-        runtime_root = workspace_path or Path(AgentConfig.DEFAULT_WORKSPACE).expanduser().resolve()
-        runtime_root.mkdir(parents=True, exist_ok=True)
-        self.workspace = runtime_root
-        self.workspace_dir = self._workspace_dir(runtime_root)
-        self.workspace_dir.mkdir(parents=True, exist_ok=True)
-        self.skills_storage = skills_storage
-
-        if message_storage is not None:
-            self.message_storage = message_storage
-        elif workspace_path is not None:
-            self.message_storage = MessageStorage(
-                path=str(self._message_storage_path(workspace_path))
-            )
-        else:
-            self.message_storage = MessageStorage(
-                path=str(self._message_storage_path(runtime_root))
-            )
-
-        # Markdown-based memory system
-        if workspace_path is not None:
-            memory_dir = str(self._memory_dir(workspace_path))
-        else:
-            memory_dir = str(self._memory_dir(runtime_root))
-
-        self.markdown_memory = MarkdownMemory(memory_dir=memory_dir)
-        self.relationship_store = RelationshipStore(
-            relationships_dir=str(Path(memory_dir) / AgentConfig.RELATIONSHIPS_DIRNAME)
-        )
-        self.llm_service = JournalLLMService(
-            client=self.client,
-            model=self.model,
-            provider_name=self.provider_name,
-            model_api=self.model_api,
-            max_tokens=self.model_max_tokens,
-            reasoning=self.reasoning,
-        )
-        self.memory_handler = MemoryHandler(
-            memory=self.markdown_memory,
-            llm_service=self.llm_service,
-            message_storage=self.message_storage,
-            max_history=self.max_history,
-            relationship_store=self.relationship_store,
-            recent_days=self.memory_recent_days,
-        )
-
-        bound_tools = list(tools or [])
-        bound_tools.extend([
-            create_write_memory_tool(
-                memory=self.markdown_memory,
-                is_enabled=True,
-            ),
-            create_search_memory_tool(
-                memory=self.markdown_memory,
-                is_enabled=True,
-                message_storage=self.message_storage,
-            ),
-        ])
-        self.tool_manager = ToolManager(tools=bound_tools)
-        self.model_client = ModelClient(
-            client=self.client,
-            model=self.model,
-            provider_name=self.provider_name,
-            model_api=self.model_api,
-            max_tokens=self.model_max_tokens,
-            reasoning=self.reasoning,
-        )
-        self.message_handler = MessageHandler(
-            message_storage=self.message_storage,
-            system_prompt=self.system_prompt,
-            workspace_dir=getattr(self, "workspace_dir", None),
-        )
-        self.tool_executor = ToolExecutor(
-            tool_manager=self.tool_manager,
-            message_storage=self.message_storage,
-            client=self.client,
-        )
+        self.workspace_dir = dependencies.workspace_dir
+        self.skills_storage = dependencies.skills_storage
+        self.message_storage = dependencies.message_storage
+        self.markdown_memory = dependencies.markdown_memory
+        self.llm_service = dependencies.llm_service
+        self.memory_handler = dependencies.memory_handler
+        self.tool_manager = dependencies.tool_manager
+        self.model_client = dependencies.model_client
+        self.message_handler = dependencies.message_handler
+        self.tool_executor = dependencies.tool_executor
 
     @property
     def identity(self) -> str:
         return self.system_prompt
 
-    @identity.setter
-    def identity(self, value: str) -> None:
-        self.set_identity(value)
-
-    def set_identity(self, identity: str) -> None:
-        self.system_prompt = identity or ""
-        if hasattr(self, "message_handler"):
-            self.message_handler.system_prompt = self.system_prompt
-
     @property
     def tools(self) -> dict:
         return self.tool_manager.tools
-
-    @classmethod
-    def _message_storage_path(cls, workspace: Path) -> Path:
-        return workspace / AgentConfig.MESSAGE_DIRNAME / AgentConfig.MESSAGE_DB_FILENAME
-
-    @classmethod
-    def _memory_dir(cls, workspace: Path) -> Path:
-        return workspace / AgentConfig.MEMORY_DIRNAME
-
-    @classmethod
-    def _workspace_dir(cls, workspace: Path) -> Path:
-        return workspace / AgentConfig.WORKSPACE_DIRNAME
 
     def _skills_catalog_context(self) -> str:
         skills_storage = getattr(self, "skills_storage", None)
@@ -196,7 +105,7 @@ class Agent:
     def _workspace_context(self, tool_names: List[str]) -> str:
         if "run_command" not in tool_names:
             return ""
-        return AgentConfig.build_workspace_context(str(self.workspace_dir))
+        return PromptAssembler.workspace_context(str(self.workspace_dir))
 
     async def _build_turn_context(
         self,
@@ -210,11 +119,6 @@ class Agent:
             max_history=self.max_history,
         )
         memory_context = await self.memory_handler.get_recent_context()
-        relationship_context = await self._relationship_context_for_turn(
-            user_msg=user_msg,
-            user_id=user_id,
-            recent_messages=recent_messages,
-        )
         tool_names = list(self.tool_manager._tools)
         tool_specs = self.tool_manager.cached_tool_specs
         workspace_context = self._workspace_context(tool_names)
@@ -230,73 +134,39 @@ class Agent:
             recent_messages,
             current_user_id=user_id,
             memory_context=memory_context,
-            relationship_context=relationship_context,
             max_messages=self.max_history,
             include_images=self.supports_vision,
             workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
             channel_instructions=channel_instructions,
         )
+        instructions, iteration_messages = PromptAssembler.apply_budget(
+            instructions,
+            iteration_messages,
+            tool_specs,
+        )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
-
-    async def _relationship_context_for_turn(
-        self,
-        user_msg: Message,
-        user_id: str,
-        recent_messages: List[Message],
-    ) -> str:
-        """Assemble relationship cards for the current speaker and room peers."""
-        memory_handler = getattr(self, "memory_handler", None)
-        if memory_handler is None or not callable(
-            getattr(memory_handler, "get_relationship_context", None)
-        ):
-            return ""
-
-        channel = getattr(user_msg, "channel", None) or ""
-        speaker_key = RelationshipStore.make_key(channel, user_id)
-
-        participant_keys: list[str] = []
-        seen = {speaker_key}
-        max_peers = max(0, AgentConfig.RELATIONSHIP_MAX_CARDS_PER_TURN - 1)
-        for message in reversed(recent_messages):
-            if len(participant_keys) >= max_peers:
-                break
-            if message.type != MessageType.MESSAGE or message.role != RoleType.USER:
-                continue
-            peer_id = (message.sender_id or "").strip()
-            if not peer_id:
-                continue
-            peer_key = RelationshipStore.make_key(
-                (message.channel or "").strip(), peer_id
-            )
-            if peer_key in seen:
-                continue
-            seen.add(peer_key)
-            participant_keys.append(peer_key)
-
-        return await memory_handler.get_relationship_context(
-            speaker_keys=[speaker_key],
-            participant_keys=participant_keys,
-        )
 
     async def run_memory_maintenance(self, trigger: str = "count") -> None:
         idle_timeout = AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS
         force = False
         idle_seconds = 0.0
         if idle_timeout > 0:
-            memory = getattr(self, "markdown_memory", None)
-            if memory is not None:
-                path = memory.root / ".last_interaction"
-                try:
-                    last = float(path.read_text(encoding="utf-8").strip())
-                except (FileNotFoundError, ValueError):
-                    last = time.time()
-                elapsed = time.time() - last
-                if elapsed >= idle_timeout:
-                    force = True
-                    trigger = "idle"
-                    idle_seconds = elapsed
+            try:
+                last = float(
+                    self.message_storage.get_journal_state_sync(
+                        "last_interaction",
+                        str(time.time()),
+                    )
+                )
+            except ValueError:
+                last = time.time()
+            elapsed = time.time() - last
+            if elapsed >= idle_timeout:
+                force = True
+                trigger = "idle"
+                idle_seconds = elapsed
 
         await self.memory_handler.run_maintenance(
             force=force, trigger=trigger, idle_seconds=idle_seconds
@@ -316,7 +186,7 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         channel_instructions: str = "",
-        channel: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> Union[str, AsyncGenerator[str, None]]:
         return await self.chat(
             user_message=user_message,
@@ -325,7 +195,7 @@ class Agent:
             attachments=attachments,
             stream=stream,
             channel_instructions=channel_instructions,
-            channel=channel,
+            source=source,
         )
 
     async def chat(
@@ -337,14 +207,13 @@ class Agent:
         stream: bool = False,
         channel_instructions: str = "",
         room_name: Optional[str] = None,
-        channel: Optional[str] = None,
+        source: Optional[str] = None,
+        runtime_event_id: Optional[str] = None,
     ) -> Union[str, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message.
 
         Args:
-            stream: When True, return an async text generator for compatibility
-                with the legacy Python API. New event consumers should prefer
-                ``chat_events(stream=True)``.
+            stream: When True, return an async text generator.
             room_name: Optional room/group name for multi-participant conversations.
         """
         self._record_last_interaction()
@@ -359,7 +228,8 @@ class Agent:
                     stream=True,
                     channel_instructions=channel_instructions,
                     room_name=room_name,
-                    channel=channel,
+                    source=source,
+                    runtime_event_id=runtime_event_id,
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or "")
@@ -384,7 +254,8 @@ class Agent:
             stream=False,
             channel_instructions=channel_instructions,
             room_name=room_name,
-            channel=channel,
+            source=source,
+            runtime_event_id=runtime_event_id,
         ):
             if event.get("type") == "message_done" and event.get("phase") == "final":
                 final_reply = str(event.get("content") or "")
@@ -401,7 +272,8 @@ class Agent:
         stream: bool = False,
         channel_instructions: str = "",
         room_name: Optional[str] = None,
-        channel: Optional[str] = None,
+        source: Optional[str] = None,
+        runtime_event_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -429,7 +301,8 @@ class Agent:
                     image_source,
                     attachments=attachments,
                     room_name=room_name,
-                    channel=channel,
+                    source=source,
+                    runtime_event_id=runtime_event_id,
                 )
             except ValueError as exc:
                 logger.warning("Invalid image input from %s: %s", user_id, exc)
@@ -506,7 +379,7 @@ class Agent:
                             self._assistant_sender_id,
                             metadata={"turn_phase": "preface"},
                             room_name=room_name,
-                            channel=channel,
+                            source=source,
                             recipient_id=room_name or user_id,
                         )
 
@@ -516,7 +389,6 @@ class Agent:
                     tool_result = await self.tool_executor.handle_tool_calls(
                         tool_calls,
                         iteration_messages,
-                        self.max_concurrent_tools,
                     )
 
                     for tool_call in tool_calls:
@@ -532,17 +404,14 @@ class Agent:
                             attachments=tool_result.attachments,
                         ):
                             yield event
-                        assistant_msg = await msg_handler.store_model_reply(
+                        await msg_handler.store_model_reply(
                             tool_result.description,
                             self._assistant_sender_id,
                             metadata={"turn_phase": "final"},
                             attachments=tool_result.attachments,
                             room_name=room_name,
-                            channel=channel,
+                            source=source,
                             recipient_id=room_name or user_id,
-                        )
-                        self._schedule_experience_write(
-                            messages=[user_msg, assistant_msg],
                         )
                         turn_obs.set_output(tool_result.content)
                         yield {"type": "done"}
@@ -563,16 +432,13 @@ class Agent:
                             deltas=text_parts,
                         ):
                             yield event
-                    assistant_msg = await msg_handler.store_model_reply(
+                    await msg_handler.store_model_reply(
                         visible_text,
                         self._assistant_sender_id,
                         metadata={"turn_phase": "final"},
                         room_name=room_name,
-                        channel=channel,
+                        source=source,
                         recipient_id=room_name or user_id,
-                    )
-                    self._schedule_experience_write(
-                        messages=[user_msg, assistant_msg],
                     )
                     turn_obs.set_output(visible_text)
                     yield {"type": "done"}
@@ -606,7 +472,8 @@ class Agent:
         event_type: str = "observation",
         metadata: Optional[Dict[str, Any]] = None,
         room_name: Optional[str] = None,
-        channel: Optional[str] = None,
+        event_source: Optional[str] = None,
+        runtime_event_id: Optional[str] = None,
     ) -> AgentTurnResult:
         """Record environmental context without generating a reply."""
         event_msg = await self.message_handler.store_context_event(
@@ -615,10 +482,8 @@ class Agent:
             event_type=event_type,
             metadata=metadata,
             room_name=room_name,
-                    channel=channel,
-        )
-        self._schedule_experience_write(
-            messages=[event_msg],
+            event_source=event_source,
+            runtime_event_id=runtime_event_id,
         )
         event_metadata = event_msg.metadata or {}
         return AgentTurnResult(
@@ -664,19 +529,21 @@ class Agent:
             instructions = [{
                 "role": "system",
                 "name": AgentConfig.DECISION_RULES_NAME,
-                "content": AgentConfig.DECISION_SYSTEM_PROMPT,
+                "content": PromptAssembler.core_contract(
+                    supports_vision=False,
+                ),
             }]
             if self.system_prompt.strip():
                 instructions.append({
                     "role": "system",
                     "name": AgentConfig.IDENTITY_CONTEXT_NAME,
-                    "content": AgentConfig.build_identity_context(self.system_prompt),
+                    "content": PromptAssembler.identity_context(self.system_prompt),
                 })
 
             input_messages = [{
                 "role": "user",
                 "name": "participation_decision",
-                "content": self._build_participation_decision_prompt(
+                "content": PromptAssembler.participation_task(
                     context=context,
                     source=source,
                     event_type=event_type,
@@ -695,25 +562,6 @@ class Agent:
         except Exception as exc:
             logger.warning("Participation decision failed: %s", exc, exc_info=True)
         return ParticipationDecision(should_reply=False, reason="participation decision failed")
-
-    @staticmethod
-    def _build_participation_decision_prompt(
-        *,
-        context: str,
-        source: str,
-        event_type: str,
-    ) -> str:
-        return (
-            "<participation_decision>\n"
-            f"Source: {source}\n"
-            f"Event type: {event_type}\n\n"
-            "Recent group conversation:\n"
-            f"{context.strip()}\n\n"
-            "Decide whether to reply now. "
-            "Return JSON only:\n"
-            '{"should_reply": true|false, "reason": "brief reason"}\n'
-            "</participation_decision>"
-        )
 
     @staticmethod
     def _parse_participation_decision(payload: str) -> ParticipationDecision:
@@ -754,45 +602,14 @@ class Agent:
         return observability
 
     def _record_last_interaction(self) -> None:
-        """Write the current timestamp to the shared idle-tracking file."""
-        memory = getattr(self, "markdown_memory", None)
-        if memory is None:
-            return
-        path = memory.root / ".last_interaction"
+        """Write the current timestamp to unified SQLite state."""
         try:
-            path.write_text(str(time.time()), encoding="utf-8")
+            self.message_storage.set_journal_state_sync(
+                "last_interaction",
+                str(time.time()),
+            )
         except OSError:
             pass
-
-    async def _store_reply_and_schedule_experience(
-        self,
-        msg_handler: MessageHandler,
-        triggering_messages: List[Message],
-        reply_text: str,
-    ) -> None:
-        room_name = next((m.room_name for m in triggering_messages if m.room_name), None)
-        channel = next((m.channel for m in triggering_messages if m.channel), None)
-        recipient_id = room_name or next(
-            (m.sender_id for m in triggering_messages if m.sender_id and m.role == RoleType.USER), None
-        )
-        assistant_msg = await msg_handler.store_model_reply(
-            reply_text,
-            self._assistant_sender_id,
-            room_name=room_name,
-            channel=channel,
-            recipient_id=recipient_id,
-        )
-        self._schedule_experience_write(
-            messages=[*triggering_messages, assistant_msg],
-        )
-
-    def _schedule_experience_write(
-        self,
-        messages: List[Message],
-    ) -> None:
-        if not messages:
-            return
-        self.memory_handler.schedule_experience_write(messages)
 
     @staticmethod
     def _turn_message_id(user_msg: Message, iteration_index: int, suffix: str = "message") -> str:

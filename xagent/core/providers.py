@@ -147,18 +147,14 @@ def provider_base_url(provider_name: str, model_api: Optional[str] = None) -> st
     provider = normalize_provider_name(provider_name)
     if provider == PROVIDER_CUSTOM:
         return CUSTOM_BASE_URLS[_model_api_from_hint(model_api)]
-    return PROVIDER_BASE_URLS.get(provider, CUSTOM_BASE_URLS[MODEL_API_OPENAI_CHAT_COMPLETIONS])
+    try:
+        return PROVIDER_BASE_URLS[provider]
+    except KeyError as exc:
+        raise ValueError(f"unknown provider: {provider_name!r}") from exc
 
 
 def provider_is_official_openai(provider_cfg: dict[str, Any]) -> bool:
-    provider_name = normalize_provider_name(provider_cfg.get("name"))
-    if provider_name:
-        return provider_name == PROVIDER_OPENAI
-
-    base_url = str(provider_cfg.get("base_url") or "").strip().rstrip("/")
-    if not base_url:
-        return True
-    return base_url == PROVIDER_BASE_URLS[PROVIDER_OPENAI].rstrip("/")
+    return normalize_provider_name(provider_cfg.get("name")) == PROVIDER_OPENAI
 
 
 def provider_supports_vision(provider_cfg: dict[str, Any]) -> bool:
@@ -169,9 +165,7 @@ def provider_supports_vision(provider_cfg: dict[str, Any]) -> bool:
         return False
     if provider in VISION_CAPABLE_PROVIDERS:
         return True
-    if provider:
-        return False
-    return provider_is_official_openai(provider_cfg)
+    return False
 
 
 def provider_model_api(provider_cfg: dict[str, Any]) -> str:
@@ -182,18 +176,14 @@ def provider_model_api(provider_cfg: dict[str, Any]) -> str:
     provider = normalize_provider_name(provider_cfg.get("name"))
     if provider in PROVIDER_MODEL_APIS:
         return PROVIDER_MODEL_APIS[provider]
-
-    if provider_is_official_openai(provider_cfg):
-        return MODEL_API_OPENAI_RESPONSES
-    return MODEL_API_OPENAI_CHAT_COMPLETIONS
+    raise ValueError("provider.name is required")
 
 
 def resolved_provider_name(provider_cfg: dict[str, Any]) -> str:
-    """Resolve legacy unnamed provider configs for request-specific behavior."""
     provider = normalize_provider_name(provider_cfg.get("name"))
-    if provider:
-        return provider
-    return PROVIDER_OPENAI if provider_is_official_openai(provider_cfg) else PROVIDER_CUSTOM
+    if provider not in KNOWN_PROVIDERS:
+        raise ValueError("provider.name is required")
+    return provider
 
 
 def reasoning_capability(

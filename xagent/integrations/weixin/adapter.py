@@ -9,18 +9,13 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
-from ...core.agent import Agent
-from ...core.config import AgentConfig
 from ...core.runtime import (
-    AsyncTaskScheduler,
-    ScheduledDeliveryContext,
-    SubconsciousDelivery,
-    resolve_contacts_path,
-    scheduled_delivery_context,
-    upsert_contact,
+    Delivery,
+    DeliveryContext,
+    delivery_context,
 )
 from ...schemas.attachment import (
     ATTACHMENT_KIND_IMAGE,
@@ -57,12 +52,6 @@ class _WeixinOutboundAttachment:
     path: Path
     caption: str = ""
     blob_url: str = ""
-
-
-@dataclass(frozen=True)
-class _WeixinScheduledTaskResult:
-    content: str
-    attachments: list[_WeixinOutboundAttachment]
 
 
 @dataclass(frozen=True)
@@ -113,37 +102,39 @@ class WeixinAdapter:
 
     def __init__(
         self,
-        agent: Agent,
+        agent: Any,
         config: WeixinAdapterConfig,
         *,
         runtime_dir: str | Path,
         logger: Optional[logging.Logger] = None,
         client: Optional[WeixinClient] = None,
         state_store: Optional[WeixinStateStore] = None,
+        delivery_sink: Optional[Callable[[Delivery], Awaitable[None]]] = None,
     ) -> None:
         self.agent = agent
         self.config = config
         self.runtime_dir = Path(runtime_dir).expanduser().resolve()
         self.logger = logger or logging.getLogger(self.__class__.__name__)
+        self.delivery_sink = delivery_sink
         self.state_store = state_store or WeixinStateStore(self.runtime_dir)
         self.client = client
         self._owns_client = client is None
         self._credentials: Optional[WeixinCredentials] = None
         self._context_tokens: dict[str, str] = {}
-        self._chat_locks: dict[str, asyncio.Lock] = {}
+        self._chat_locks: dict[str, tuple[asyncio.Lock, int]] = {}
+        self._chat_locks_guard = asyncio.Lock()
         self._processing_tasks: set[asyncio.Task[None]] = set()
         self._processing_tasks_lock = asyncio.Lock()
         self._typing_cache = _TypingTicketCache(config.typing_ticket_ttl_seconds)
         self._dedup = _MessageDeduplicator()
         self._stop_event = asyncio.Event()
-        self._tasks_dir = self.runtime_dir / AgentConfig.TASKS_DIRNAME
-        self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._contacts_file = resolve_contacts_path(self.runtime_dir)
 
     async def run(self) -> None:
         credentials = self.state_store.load_credentials(self.config.account_id)
         if credentials is None:
-            raise RuntimeError("Weixin channel credentials are missing. Run: xagent weixin setup")
+            raise RuntimeError(
+                "Weixin channel credentials are missing. Run: xagent channel setup weixin"
+            )
         self._credentials = credentials
         self._context_tokens = self.state_store.load_context_tokens(credentials.account_id)
         if self.client is None:
@@ -156,26 +147,12 @@ class WeixinAdapter:
         else:
             self.client.with_credentials(credentials)
 
-        task_scheduler = AsyncTaskScheduler(
-            self._tasks_dir,
-            can_handle=self._can_handle_scheduled_task,
-            dispatch=self._dispatch_scheduled_task,
-            logger_=self.logger,
-        )
-        self._task_scheduler = task_scheduler
-        await task_scheduler.start()
-
         try:
             await self._poll_loop()
         finally:
-            await task_scheduler.stop()
-            self._task_scheduler = None
             await self._cancel_processing_tasks()
             if self._owns_client and self.client is not None:
                 await self.client.aclose()
-            flusher = getattr(self.agent, "run_memory_maintenance", None)
-            if callable(flusher):
-                await flusher()
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -293,14 +270,33 @@ class WeixinAdapter:
         if not self._should_route_message(message):
             return
         user_id = str(message.get("from_user_id") or "").strip()
-        lock = self._chat_locks.get(user_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._chat_locks[user_id] = lock
-        async with lock:
-            await self._handle_dm(message, user_id=user_id)
-        # Evict lock after processing to prevent unbounded dict growth.
-        self._chat_locks.pop(user_id, None)
+        lock = await self._retain_chat_lock(user_id)
+        try:
+            async with lock:
+                await self._handle_dm(message, user_id=user_id)
+        finally:
+            await self._release_chat_lock(user_id, lock)
+
+    async def _retain_chat_lock(self, user_id: str) -> asyncio.Lock:
+        async with self._chat_locks_guard:
+            entry = self._chat_locks.get(user_id)
+            if entry is None:
+                lock, references = asyncio.Lock(), 0
+            else:
+                lock, references = entry
+            self._chat_locks[user_id] = (lock, references + 1)
+            return lock
+
+    async def _release_chat_lock(self, user_id: str, lock: asyncio.Lock) -> None:
+        async with self._chat_locks_guard:
+            entry = self._chat_locks.get(user_id)
+            if entry is None or entry[0] is not lock:
+                return
+            references = entry[1] - 1
+            if references <= 0:
+                self._chat_locks.pop(user_id, None)
+            else:
+                self._chat_locks[user_id] = (lock, references)
 
     def _should_route_message(self, message: dict[str, Any]) -> bool:
         if int(message.get("message_type") or 0) != 1:
@@ -348,22 +344,12 @@ class WeixinAdapter:
             return
 
         chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound)
+        source_message_id = str(message.get("message_id") or "")
+        if source_message_id:
+            chat_kwargs["event_id"] = f"weixin:{source_message_id}"
 
-        # Record contact for subconscious thought routing
-        try:
-            upsert_contact(
-                self._contacts_file,
-                channel="weixin",
-                user_id=user_id,
-                target={
-                    "user_id": user_id,
-                    "account_id": self._credentials.account_id,
-                },
-            )
-        except Exception:
-            self.logger.debug("Failed to record contact for subconscious", exc_info=True)
-
-        context = ScheduledDeliveryContext(
+        context = DeliveryContext(
+            source="weixin",
             channel="weixin",
             user_id=user_id,
             target={
@@ -379,8 +365,13 @@ class WeixinAdapter:
         try:
             if self.config.send_typing:
                 typing_task = asyncio.create_task(self._typing_keepalive(user_id, context_token))
-            with scheduled_delivery_context(context):
-                await self._send_event_replies(user_id=user_id, context_token=context_token, source_message_id=str(message.get("message_id") or ""), chat_kwargs=chat_kwargs)
+            with delivery_context(context):
+                await self._send_event_replies(
+                    user_id=user_id,
+                    context_token=context_token,
+                    source_message_id=source_message_id,
+                    chat_kwargs=chat_kwargs,
+                )
         finally:
             if typing_task is not None:
                 typing_task.cancel()
@@ -486,7 +477,7 @@ class WeixinAdapter:
         kwargs: dict[str, Any] = {
             "user_message": text,
             "user_id": user_id,
-            "channel": "weixin",
+            "source": "weixin",
         }
         if inbound.image_sources and bool(getattr(self.agent, "supports_vision", True)):
             kwargs["image_source"] = inbound.image_sources[0] if len(inbound.image_sources) == 1 else inbound.image_sources
@@ -499,6 +490,10 @@ class WeixinAdapter:
         if not callable(chat_events):
             raise RuntimeError("Agent does not support chat_events().")
         sent_count = 0
+        source_event_id = str(
+            chat_kwargs.get("event_id")
+            or f"weixin:{source_message_id or hashlib.sha256(repr(chat_kwargs).encode()).hexdigest()}"
+        )
         try:
             async with asyncio.timeout(_WECHAT_CHAT_TIMEOUT):
                 async for event in chat_events(**chat_kwargs, stream=False):
@@ -509,21 +504,61 @@ class WeixinAdapter:
                         if not content and not attachments:
                             continue
                         sent_count += 1
-                        await self._send_text_and_attachments(
-                            user_id=user_id,
-                            context_token=context_token,
-                            content=content,
-                            attachments=attachments,
-                            stable_key=f"{source_message_id or 'message'}:{sent_count}",
-                        )
+                        if self.delivery_sink is not None:
+                            await self.delivery_sink(
+                                Delivery.create(
+                                    delivery_id=self._runtime_delivery_id(
+                                        source_event_id,
+                                        sent_count,
+                                    ),
+                                    event_id=source_event_id,
+                                    channel="weixin",
+                                    target={"user_id": user_id},
+                                    payload={
+                                        "content": content,
+                                        "attachments": [
+                                            {
+                                                "kind": attachment.kind,
+                                                "path": str(attachment.path),
+                                                "caption": attachment.caption,
+                                                "blob_url": attachment.blob_url,
+                                            }
+                                            for attachment in attachments
+                                        ],
+                                    },
+                                )
+                            )
+                        else:
+                            await self._send_text_and_attachments(
+                                user_id=user_id,
+                                context_token=context_token,
+                                content=content,
+                                attachments=attachments,
+                                stable_key=f"{source_message_id or 'message'}:{sent_count}",
+                            )
                     elif event_type == "error":
                         sent_count += 1
-                        await self._send_text(
-                            user_id=user_id,
-                            context_token=context_token,
-                            text=str(event.get("error") or "Agent processing error."),
-                            stable_key=f"{source_message_id or 'message'}:error:{sent_count}",
-                        )
+                        error_text = str(event.get("error") or "Agent processing error.")
+                        if self.delivery_sink is not None:
+                            await self.delivery_sink(
+                                Delivery.create(
+                                    delivery_id=self._runtime_delivery_id(
+                                        source_event_id,
+                                        sent_count,
+                                    ),
+                                    event_id=source_event_id,
+                                    channel="weixin",
+                                    target={"user_id": user_id},
+                                    payload={"content": error_text},
+                                )
+                            )
+                        else:
+                            await self._send_text(
+                                user_id=user_id,
+                                context_token=context_token,
+                                text=error_text,
+                                stable_key=f"{source_message_id or 'message'}:error:{sent_count}",
+                            )
         except asyncio.TimeoutError:
             self.logger.error(
                 "Agent call timed out after %ss for user=%s",
@@ -648,97 +683,38 @@ class WeixinAdapter:
             self._typing_cache.set(user_id, ticket)
         await self.client.send_typing(user_id=user_id, typing_ticket=ticket, status=status, timeout_ms=self.config.api_timeout_ms)
 
-    def _can_handle_scheduled_task(self, task) -> bool:
-        return task.kind == "task" and task.delivery_channel == "weixin" and self.client is not None
-
-    async def _dispatch_scheduled_task(self, task) -> None:
-        user_id = str(task.target.get("user_id") or task.delivery_user_id or "").strip()
+    async def send(self, delivery: Delivery) -> None:
+        user_id = str(delivery.target.get("user_id") or "").strip()
         if not user_id:
-            raise ValueError("scheduled Weixin task is missing user_id")
+            raise ValueError("Weixin delivery is missing user_id")
         context_token = self._context_tokens.get(user_id)
         if not context_token:
-            raise ValueError(f"scheduled Weixin task cannot send to {user_id}: no cached context_token")
-        result = await self._scheduled_task_result(task, user_id=user_id)
-        if not result.content and not result.attachments:
-            raise ValueError("scheduled Weixin task produced no content")
+            raise ValueError(f"Weixin delivery cannot send to {user_id}: no cached context_token")
+        content = str(delivery.payload.get("content") or "").strip()
+        attachments = [
+            _WeixinOutboundAttachment(
+                kind=str(item.get("kind") or "file"),
+                path=Path(str(item["path"])).expanduser().resolve(),
+                caption=str(item.get("caption") or ""),
+                blob_url=str(item.get("blob_url") or ""),
+            )
+            for item in delivery.payload.get("attachments", [])
+            if isinstance(item, dict) and item.get("path")
+        ]
+        if not content and not attachments:
+            raise ValueError("Weixin delivery content is empty")
         await self._send_text_and_attachments(
             user_id=user_id,
             context_token=context_token,
-            content=result.content,
-            attachments=result.attachments,
-            stable_key=f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}",
+            content=content,
+            attachments=attachments,
+            stable_key=delivery.delivery_id,
         )
 
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        if delivery.recipient.channel != "weixin":
-            raise ValueError(f"Weixin runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        user_id = str(delivery.recipient.target.get("user_id") or delivery.recipient.user_id or "").strip()
-        if not user_id:
-            raise ValueError("subconscious Weixin delivery is missing user_id")
-        context_token = self._context_tokens.get(user_id)
-        if not context_token:
-            raise ValueError(f"subconscious Weixin delivery cannot send to {user_id}: no cached context_token")
-        await self._send_text_and_attachments(
-            user_id=user_id,
-            context_token=context_token,
-            content=delivery.content,
-            attachments=[],
-            stable_key=f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{user_id}",
-        )
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        if callable(store_model_reply):
-            try:
-                await store_model_reply(
-                    delivery.content,
-                    getattr(self.agent, "_assistant_sender_id", "agent"),
-                    metadata={
-                        "subconscious": {
-                            "source": "subconscious",
-                            "created_at": delivery.created_at.isoformat(sep=" "),
-                            "recipient": {
-                                "channel": delivery.recipient.channel,
-                                "user_id": delivery.recipient.user_id,
-                                "target": delivery.recipient.target,
-                            },
-                        }
-                    },
-                    channel="weixin",
-                    recipient_id=user_id,
-                )
-            except Exception:
-                self.logger.debug("Failed to persist Weixin subconscious delivery", exc_info=True)
-
-    async def _scheduled_task_result(self, task, *, user_id: str) -> _WeixinScheduledTaskResult:
-        if task.task_type == "message":
-            return _WeixinScheduledTaskResult(task.content.strip(), [])
-        if task.task_type != "agent":
-            raise ValueError(f"unsupported scheduled Weixin task type: {task.task_type}")
-        chat_events = getattr(self.agent, "chat_events", None)
-        if not callable(chat_events):
-            raise RuntimeError("Agent does not support chat_events().")
-        prompt = AgentConfig.scheduled_agent_prompt(task.content)
-        context = ScheduledDeliveryContext(
-            channel="weixin",
-            user_id=user_id,
-            target=task.target,
-            metadata={"source": "scheduled_task", "task_id": task.task_id},
-        )
-        content = ""
-        attachments: list[_WeixinOutboundAttachment] = []
-        with scheduled_delivery_context(context):
-            async for event in chat_events(
-                user_message=prompt,
-                user_id=user_id,
-                stream=False,
-                channel="weixin",
-            ):
-                if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":
-                    content = str(event.get("content") or "").strip()
-                    attachments = self._outbound_attachments_from_event(event)
-                elif event.get("type") == "error" and not content:
-                    content = str(event.get("error") or "").strip()
-        return _WeixinScheduledTaskResult(content, attachments)
+    @staticmethod
+    def _runtime_delivery_id(event_id: str, count: int) -> str:
+        value = f"weixin:{event_id}:{count}".encode("utf-8", errors="replace")
+        return hashlib.sha256(value).hexdigest()
 
     def _split_outbound_attachments(self, text: str, *, seen_paths: Optional[set[Path]] = None) -> tuple[str, list[_WeixinOutboundAttachment]]:
         if not isinstance(text, str) or not text:

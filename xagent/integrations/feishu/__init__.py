@@ -1,18 +1,10 @@
 """Feishu (Lark) bot integration for xAgent.
 
-Bridges Feishu inbound messages to an in-process ``Agent`` using the
+Bridges Feishu inbound messages to the single runtime using the
 official ``lark_oapi.channel.FeishuChannel`` WebSocket long-connection
 layer. No public webhook, no reverse proxy, no extra HTTP hop required.
 
-Quick start:
-
-    from xagent.integrations.feishu import FeishuAdapter, FeishuAdapterConfig
-    from xagent.interfaces.base import BaseAgentRunner
-
-    runner = BaseAgentRunner(config_dir="~/.xagent/agents/default")
-    cfg = FeishuAdapterConfig.from_dict(runner.config["channels"]["feishu"])
-    adapter = FeishuAdapter(agent=runner.agent, config=cfg)
-    asyncio.run(adapter.run())
+Adapters are constructed only by the runtime composition root.
 """
 
 from .config import FeishuAdapterConfig

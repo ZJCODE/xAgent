@@ -1,4 +1,12 @@
-export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/channels" | "/agent";
+export type RoutePath =
+  | "/"
+  | "/chat"
+  | "/messages"
+  | "/memory"
+  | "/tasks"
+  | "/channels"
+  | "/deliveries"
+  | "/settings";
 
 export type ChatRole = "user" | "assistant" | "observation";
 
@@ -6,157 +14,80 @@ export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
-  meta?: string;
-  images?: string[];
-  imageCount?: number;
-  attachments?: AttachmentAsset[];
-  attachmentCount?: number;
+  source?: string;
   pending?: boolean;
   error?: boolean;
-}
-
-export interface AttachmentAsset {
-  kind?: string;
-  path?: string;
-  workspace_path?: string;
-  blob_url?: string;
-  mime_type?: string;
-  size_bytes?: number;
-  file_name?: string;
-  original_name?: string;
-  caption?: string;
-  source_channel?: string;
-  source_message_id?: string;
-  source_resource_id?: string;
-  source_resource_type?: string;
-  client?: string;
-}
-
-export interface ImageAsset extends AttachmentAsset {
-  external_url?: string;
-  width?: number;
-  height?: number;
-}
-
-export interface ChatSettings {
-  userId: string;
-  stream: boolean;
 }
 
 export interface ChatPanelState {
   id: "single";
   messages: ChatMessage[];
-  pendingAttachments: AttachmentAsset[];
-  settings: ChatSettings;
   sending: boolean;
-}
-
-export interface AgentCapabilities {
-  vision: boolean;
-  vision_input?: boolean;
-  web_search: boolean;
-  image_generation: boolean;
-  image_generation_provider?: string;
-  image_editing?: boolean;
 }
 
 export interface ChatEvent {
   type?: string;
-  event?: string;
   delta?: string;
   content?: string;
-  attachments?: AttachmentAsset[];
   message?: unknown;
   message_id?: string;
   phase?: string;
   error?: string;
-  status_code?: number;
-  task?: ScheduledTaskItem;
 }
 
-export interface ScheduledTaskRecurrenceRule {
-  kind: "daily" | "weekly" | string;
-  time?: string;
-  weekdays?: string[];
-  every_seconds?: number;
-  start_at?: string;
-  end_at?: string;
-}
+export type TaskStatus = "active" | "paused" | "running" | "completed" | "failed";
+export type TaskSchedule =
+  | { kind: "once"; run_at: string }
+  | { kind: "daily"; local_time: string }
+  | { kind: "weekly"; weekday: number; local_time: string }
+  | {
+      kind: "interval";
+      interval_seconds: number;
+      duration_seconds?: number;
+      end_at?: string;
+      end_timestamp?: number;
+    };
 
-export interface ScheduledTaskItem {
+export interface RuntimeTask {
   task_id: string;
-  title: string;
-  task_type: "message" | "agent" | string;
-  content: string;
-  next_run_at: string | null;
-  recurrence?: ScheduledTaskRecurrenceRule[] | null;
-  status: "active" | "paused" | "completed" | "failed" | string;
-  reason?: string;
-  channel?: string;
-  user_id?: string;
-  target?: Record<string, unknown>;
-  paused_at?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-  completed_at?: string | null;
-  failed_at?: string | null;
-  last_run_at?: string | null;
-  last_run_status?: "succeeded" | "failed" | string | null;
-  completion_reason?: string | null;
-  last_error?: string | null;
-  state?: "pending" | "running" | "failed" | "completed" | string;
+  instruction: string;
+  schedule: TaskSchedule;
+  destination: TaskDestination | null;
+  created_source: string;
+  created_by: string;
+  status: TaskStatus;
+  next_run_at: number | null;
+  created_at: number;
+  updated_at: number;
+  error: string;
 }
 
 export interface TaskCreateInput {
-  task_type: "message" | "agent" | string;
-  content: string;
-  title?: string;
-  run_at?: string;
-  delay_seconds?: number;
-  recurrence?: ScheduledTaskRecurrenceRule[];
-  interval_seconds?: number;
-  duration_seconds?: number;
-  start_at?: string;
-  end_at?: string;
-  channel?: string;
-  user_id?: string;
-  target?: Record<string, unknown>;
+  instruction: string;
+  schedule: TaskSchedule;
+  destination: TaskDestination | null;
 }
 
 export interface TaskUpdateInput {
-  title?: string;
-  content?: string;
-  task_type?: string;
-  run_at?: string;
-  delay_seconds?: number;
-  recurrence?: ScheduledTaskRecurrenceRule[];
-  interval_seconds?: number;
-  duration_seconds?: number;
-  start_at?: string;
-  end_at?: string;
-}
-
-export type TaskDuplicateInput = Omit<TaskCreateInput, "channel" | "user_id" | "target">;
-
-export type TaskScope = "current" | "scheduled" | "attention" | "archive";
-
-export interface TasksResponse {
-  root: string;
-  tasks: ScheduledTaskItem[];
-  total: number;
-  counts: {
-    scheduled: number;
-    attention: number;
-    archive: number;
-  };
-  limit: number;
-  offset: number;
-  has_more: boolean;
+  instruction?: string;
+  schedule?: TaskSchedule;
+  destination?: TaskDestination | null;
 }
 
 export type ChannelId = "api" | "voice" | "feishu" | "weixin";
-
-export type ChannelRuntimeStatus = "running" | "stopped" | "disabled" | "error";
+export interface TaskDestination {
+  channel: ChannelId;
+  target: Record<string, unknown>;
+}
+export type ChannelRuntimeStatus =
+  | "runtime-stopped"
+  | "stopped"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "degraded"
+  | "disabled"
+  | "error";
 
 export interface ChannelStatus {
   id: ChannelId;
@@ -164,14 +95,13 @@ export interface ChannelStatus {
   status: ChannelRuntimeStatus;
   configured: boolean;
   ready: boolean;
+  enabled: boolean;
   pid: number | null;
   detail: string;
-  pid_path: string;
   log_path: string;
   can_start: boolean;
   can_stop: boolean;
   can_restart: boolean;
-  setup_hint: string;
 }
 
 export interface ChannelsResponse {
@@ -193,6 +123,12 @@ export interface ChannelLogsResponse {
 }
 
 export type SetupChannelId = Extract<ChannelId, "voice" | "feishu" | "weixin">;
+
+export interface SetupOption {
+  id: string;
+  label?: string;
+  description?: string;
+}
 
 export interface VoiceSelectionInput {
   voice_enabled?: boolean;
@@ -221,10 +157,7 @@ export interface VoiceSetupSchema {
     voice_enable_interruptions: boolean;
   };
   placeholders: Record<string, string>;
-  inherit_api_key_from: {
-    provider: string;
-    can_inherit_qwen_key: boolean;
-  };
+  inherit_api_key_from: { provider: string; can_inherit_qwen_key: boolean };
   configured: boolean;
   can_force: boolean;
 }
@@ -254,19 +187,13 @@ export interface WeixinSetupSchema {
 }
 
 export type ChannelSetupSchema = VoiceSetupSchema | FeishuSetupSchema | WeixinSetupSchema;
-
 export interface ChannelSetupInput {
   force: boolean;
   selection: Record<string, unknown>;
 }
-
 export interface ChannelSetupResponse {
   status: string;
-  setup: {
-    channel: string;
-    config_path: string;
-    configured: boolean;
-  };
+  setup: { channel: string; config_path: string; configured: boolean };
   channel: ChannelStatus;
 }
 
@@ -280,32 +207,17 @@ export interface QrSessionResponse {
   error?: string | null;
 }
 
-export interface AgentInfo {
-  provider?: string;
-  model: string;
-  workspace: string;
-  workspace_dir: string;
-  skills_dir?: string;
-  memory_dir: string;
-  message_storage: Record<string, unknown>;
-  tools: string[];
-  capabilities?: Partial<AgentCapabilities>;
-  identity?: string;
-  identity_file?: string;
-  identity_path?: string;
-  identity_editable?: boolean;
-  system_prompt?: string;
-}
-
 export interface AgentSummary {
   name: string;
   title: string;
   path: string;
-  api_url: string;
   active: boolean;
   selected: boolean;
   initialized: boolean;
-  channel_running: boolean;
+  runtime_running: boolean;
+  pid: number | null;
+  provider: string;
+  model: string;
 }
 
 export interface AgentsResponse {
@@ -319,12 +231,6 @@ export interface AgentNameAvailability {
   registered: boolean;
   directory_exists: boolean;
   path: string;
-}
-
-export interface SetupOption {
-  id: string;
-  label?: string;
-  description?: string;
 }
 
 export interface ReasoningConfigInput {
@@ -353,11 +259,7 @@ export interface AgentSetupSchema {
   image_generation_providers: SetupOption[];
   voice_providers: SetupOption[];
   voice_custom_providers: string[];
-  defaults: {
-    identity: string;
-    wake_phrases: string[];
-    exit_phrases: string[];
-  };
+  defaults: { identity: string; wake_phrases: string[]; exit_phrases: string[] };
   placeholders: Record<string, string>;
   name_pattern: string;
 }
@@ -399,192 +301,157 @@ export interface CreateAgentInput {
   selection: InitSelectionInput;
 }
 
-export interface AgentIdentity {
-  identity: string;
-  path: string;
-  filename: string;
-  modified: number;
+export type DeliveryStatus = "pending" | "sending" | "delivered" | "blocked" | "failed" | "unknown";
+export interface RuntimeDelivery {
+  delivery_id: string;
+  event_id: string;
+  channel: string;
+  target: Record<string, unknown>;
+  payload: Record<string, unknown>;
+  status: DeliveryStatus;
+  attempts: number;
+  channel_message_id: string;
+  error: string;
+  created_at: number;
+  updated_at: number;
 }
 
-export interface AgentConfig {
-  config: string;
-  path: string;
-  filename: string;
-  modified: number;
-}
-
-export interface FileNode {
+export interface RuntimeChannel {
   name: string;
-  path: string;
-  type: "dir" | "file";
-  children?: FileNode[];
-  size?: number;
-  modified?: number;
-  mime_type?: string;
-  binary?: boolean;
-  revision?: string;
+  state: string;
+  enabled: boolean;
+  error: string;
 }
 
-export interface FileReadResult extends FileNode {
-  content: string;
-  text?: boolean;
-  blob_url?: string;
+export interface RuntimeStatus {
+  pid: number | null;
+  instance_id: string;
+  started_at: number | null;
+  uptime_seconds?: number;
+  running: boolean;
+  channels: RuntimeChannel[];
 }
 
-export interface WorkspaceUploadResult extends FileNode {
-  status: string;
-  blob_url?: string;
+export interface RuntimeActionResponse {
+  action: "start" | "stop" | "restart";
+  outcome: string;
+  runtime: RuntimeStatus;
 }
 
-export interface SearchResult extends FileNode {
-  matched_in: string[];
-  snippet?: string;
-}
-
-export interface MessageItem {
-  role: string;
-  type: string;
-  content: string;
-  sender_id?: string;
-  recipient_id?: string;
-  timestamp?: number;
-  metadata?: Record<string, unknown>;
-  images?: ImageAsset[];
-  image_count?: number;
-  attachments?: AttachmentAsset[];
-  attachment_count?: number;
-  channel?: string;
-  room_name?: string;
-  tool_call?: {
-    name: string;
-    arguments: unknown;
-    output: unknown;
+export interface XAgentConfig {
+  schema_version: 2;
+  provider: {
+    name: "openai" | "deepseek" | "minimax" | "qwen" | "anthropic" | "custom";
+    model: string;
+    api_key: string;
+    base_url: string;
+    model_api?: "openai_responses" | "openai_chat_completions" | "anthropic_messages";
+    max_tokens?: number;
+    reasoning?: { enabled: boolean; effort?: string; budget_tokens?: number };
+    supports_vision?: boolean;
+    [key: string]: unknown;
   };
+  agent: {
+    max_history: number;
+    max_iter: number;
+    subconscious_activity: number;
+    memory_recent_days: number;
+    [key: string]: unknown;
+  };
+  tools: {
+    shell: { enabled: boolean; [key: string]: unknown };
+    [key: string]: unknown;
+  };
+  channels: Record<string, Record<string, unknown>>;
+  runtime: {
+    heartbeat_enabled: boolean;
+    heartbeat_interval_seconds: number;
+    turn_timeout_seconds: number;
+    tool_timeout_seconds: number;
+    [key: string]: unknown;
+  };
+  search: Record<string, unknown>;
+  image_generation: Record<string, unknown>;
+  observability?: Record<string, unknown> | null;
+  [key: string]: unknown;
 }
 
-export interface MessageSearchResult extends MessageItem {
-  matched_in: string[];
-  snippet?: string;
+export interface SettingsDocument {
+  settings: XAgentConfig;
+  schema: Record<string, unknown>;
+  secret_sentinel: string;
+}
+
+export interface OverviewCounts {
+  messages: number;
+  people: number;
+  events: Record<string, number>;
+  deliveries: Record<string, number>;
+  tasks: Record<string, number>;
+  memory_files: number;
+}
+
+export interface RuntimeEventSummary {
+  sequence: number;
+  event_id: string;
+  kind: string;
+  source: string;
+  speaker_id: string;
+  content: string;
+  timestamp: number;
+  status: string;
+  error: string;
+}
+
+export interface MemoryEntry {
+  path: string;
+  scope: "daily" | "weekly" | "monthly" | "yearly" | string;
+  title: string;
+  excerpt: string;
+  modified_at: number;
+  size_bytes: number;
+}
+
+export interface MemoryIndexResponse {
+  entries: MemoryEntry[];
+  total: number;
+  scope: string;
+  query: string;
+}
+
+export interface MemoryFile {
+  path: string;
+  title: string;
+  content: string;
+  modified_at: number;
+  size_bytes: number;
+}
+
+export interface OverviewResponse {
+  runtime: RuntimeStatus;
+  counts: OverviewCounts | null;
+  recent_events: RuntimeEventSummary[];
+  recent_memory: MemoryEntry[];
+}
+
+export interface PersistedMessage {
+  id: number;
+  type: "message" | "context_event" | string;
+  role: "user" | "assistant" | "environment" | string;
+  sender_id?: string | null;
+  recipient_id?: string | null;
+  source?: string | null;
+  room_name?: string | null;
+  content: string;
+  timestamp: number;
+  images?: Array<{ format: string; source?: string | null }> | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface MessagesResponse {
-  messages: MessageItem[];
+  messages: PersistedMessage[];
   total: number;
-  count: number;
   offset: number;
+  limit: number;
   has_more: boolean;
-}
-
-export interface MessagesStats {
-  total: number;
-  storage?: Record<string, unknown>;
-  earliest_timestamp?: number;
-  latest_timestamp?: number;
-}
-
-export interface MessageSearchResponse {
-  query: string;
-  results: MessageSearchResult[];
-}
-
-export interface SkillValidationIssue {
-  path: string;
-  code: string;
-  message: string;
-  line?: number;
-  column?: number;
-}
-
-export interface SkillMetadata {
-  name: string;
-  description: string;
-  path: string;
-  skill_file: string;
-  enabled: boolean;
-  valid: boolean;
-  modified?: number;
-  license?: string;
-  compatibility?: string;
-  metadata?: Record<string, unknown>;
-  allowed_tools?: string;
-  errors: SkillValidationIssue[];
-}
-
-export interface SkillsValidationResult {
-  valid: boolean;
-  skills: Array<{
-    name: string;
-    path: string;
-    valid: boolean;
-    errors: SkillValidationIssue[];
-  }>;
-}
-
-export interface SkillsInfo {
-  root: string;
-  count: number;
-  enabled_count: number;
-  disabled_count: number;
-  invalid_count: number;
-  skills: SkillMetadata[];
-  validation: SkillsValidationResult;
-}
-
-export interface SkillsTreeResponse {
-  root: string;
-  tree: FileNode[];
-  skills: SkillMetadata[];
-}
-
-export interface SkillCreateInput {
-  name: string;
-  description: string;
-  body?: string;
-  license?: string;
-  compatibility?: string;
-  metadata?: Record<string, unknown>;
-  allowed_tools?: string;
-}
-
-export interface SkillCreateResponse {
-  status: string;
-  skill: SkillMetadata;
-}
-
-export interface SkillStateResponse {
-  status: string;
-  skill: SkillMetadata;
-}
-
-export interface SkillWriteInput {
-  path: string;
-  content: string;
-  create_parents?: boolean;
-  expected_revision?: string;
-}
-
-export interface SkillEntryCreateInput {
-  parent_path: string;
-  name: string;
-  kind: "file" | "directory";
-  content?: string;
-}
-
-export interface SkillEntryMoveInput {
-  path: string;
-  new_parent_path: string;
-  new_name: string;
-  expected_revision?: string;
-}
-
-export interface SkillFileMutationResponse {
-  status: string;
-  entry: FileNode;
-}
-
-export interface SkillApiErrorDetail {
-  code?: string;
-  message?: string;
-  issues?: SkillValidationIssue[];
-  current?: FileReadResult | null;
 }

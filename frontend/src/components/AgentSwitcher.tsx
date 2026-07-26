@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, Plus } from "lucide-react";
+import { Bot, Check, ChevronDown, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { classNames } from "../lib/format";
@@ -81,7 +81,7 @@ export function AgentSwitcher() {
 
   return (
     <div className="agent-switcher" ref={rootRef}>
-      <span className="agent-switcher-label">Agent</span>
+      <span className="agent-switcher-label">Current agent</span>
       <button
         type="button"
         className={classNames("agent-switcher-trigger", open && "open")}
@@ -90,7 +90,8 @@ export function AgentSwitcher() {
         onClick={() => setOpen((value) => !value)}
       >
         <span className="agent-switcher-current">
-          <strong>{current?.name ?? "Select agent"}</strong>
+          <strong>{current?.title || current?.name || "Select agent"}</strong>
+          <span>{current?.model || current?.name}</span>
         </span>
         <ChevronDown size={15} />
       </button>
@@ -110,14 +111,16 @@ export function AgentSwitcher() {
               }}
             >
               <div className="agent-switcher-option-copy">
-                <strong>{agent.name}</strong>
+                <strong>{agent.title || agent.name}</strong>
+                <span>{agent.provider && agent.model ? `${agent.provider} · ${agent.model}` : agent.name}</span>
               </div>
               <div className="agent-switcher-option-meta">
-                {agent.channel_running ? (
+                {agent.runtime_running ? (
                   <StatusBadge tone="good" className="agent-switcher-badge">
                     Running
                   </StatusBadge>
                 ) : null}
+                {agent.selected ? <Check size={14} /> : null}
               </div>
             </button>
           ))}

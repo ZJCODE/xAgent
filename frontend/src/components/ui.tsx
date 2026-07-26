@@ -38,10 +38,12 @@ export function PageShell({ children, className }: { children: ReactNode; classN
 }
 
 export function PageToolbar({
+  eyebrow,
   title,
   subtitle,
   actions,
 }: {
+  eyebrow?: string;
   title: string;
   subtitle?: ReactNode;
   actions?: ReactNode;
@@ -49,6 +51,7 @@ export function PageToolbar({
   return (
     <section className="page-toolbar">
       <div className="page-title-block">
+        {eyebrow ? <span className="page-eyebrow">{eyebrow}</span> : null}
         <h2>{title}</h2>
         {subtitle ? <p>{subtitle}</p> : null}
       </div>

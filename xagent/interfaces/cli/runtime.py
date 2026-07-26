@@ -1,1268 +1,308 @@
-"""Runtime command handlers for the CLI."""
-
+"""CLI client for the single local xAgent runtime."""
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
-import logging
-import os
-import signal
-import subprocess
-import sys
-import time
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
-from ...core.runtime import create_runtime_heartbeat
-from ..base import BaseAgentConfig, BaseAgentRunner
-from .agents import AgentRegistryError, management_root, resolve_agent_name
-from .channels import (
-    CHANNEL_API,
-    CHANNEL_FEISHU,
-    CHANNEL_VOICE,
-    CHANNEL_WEIXIN,
-    ChannelSelectionError,
-    api_config,
-    default_start_channel_from_config,
-    enabled_channels_from_config,
-    feishu_config,
-    normalize_channel_values,
-    voice_config,
-    weixin_config,
-)
-from .web_client import (
-    DEFAULT_WEB_CLIENT_PORT,
-    web_client_config,
-    web_client_paths,
-    web_client_public_url,
-)
-from .chat import AgentCLI
-from .paths import (
-    config_path,
-    identity_path,
-    load_client_runtime_config,
-    load_runtime_config,
-    runtime_dir,
-    runtime_dir_or_management_root,
-)
-from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
+from ...core.runtime.client import RuntimeClient, RuntimeUnavailable
+from ...core.runtime.launcher import RuntimeLaunchError, RuntimeLauncher
+from ...core.runtime.types import LOCAL_OWNER_PERSON_ID
+from ...settings import XAgentSettings
+from .paths import runtime_dir
+
+
+def _config_dir(args: argparse.Namespace) -> Path:
+    return runtime_dir(args)
+
+
+def _ensure_runtime(
+    args: argparse.Namespace,
+    *,
+    announce: bool = True,
+) -> int:
+    launcher = RuntimeLauncher(_config_dir(args))
+    try:
+        outcome = launcher.start()
+    except RuntimeLaunchError as exc:
+        print(f"Failed to start xAgent runtime: {exc}")
+        return 1
+    if announce:
+        if outcome.state == "already_running":
+            print(f"xAgent runtime is already running (pid={outcome.pid}).")
+        else:
+            print(f"Started xAgent runtime (pid={outcome.pid}).")
+    return 0
+
+
+def handle_runtime_foreground(args: argparse.Namespace) -> int:
+    try:
+        asyncio.run(RuntimeLauncher(_config_dir(args)).run_foreground())
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:
+        print(f"Runtime failed: {exc}")
+        return 1
+    return 0
+
+
+def handle_runtime_start(args: argparse.Namespace) -> int:
+    return _ensure_runtime(args)
+
+
+def handle_runtime_stop(args: argparse.Namespace) -> int:
+    launcher = RuntimeLauncher(_config_dir(args))
+    try:
+        outcome = launcher.stop()
+    except RuntimeLaunchError as exc:
+        print(f"Failed to stop xAgent runtime: {exc}")
+        return 1
+    if outcome.state == "already_stopped":
+        print("xAgent runtime is not running.")
+        return 0
+    print(f"Stopped xAgent runtime (pid={outcome.pid}).")
+    return 0
+
+
+def handle_runtime_restart(args: argparse.Namespace) -> int:
+    try:
+        outcome = RuntimeLauncher(_config_dir(args)).restart()
+    except RuntimeLaunchError as exc:
+        print(f"Failed to restart xAgent runtime: {exc}")
+        return 1
+    print(f"Restarted xAgent runtime (pid={outcome.pid}).")
+    return 0
+
+
+def handle_runtime_status(args: argparse.Namespace) -> int:
+    try:
+        status = RuntimeLauncher(_config_dir(args)).status()
+    except RuntimeLaunchError as exc:
+        print(f"Runtime status failed: {exc}")
+        return 1
+    if status is None:
+        status = {"running": False, "channels": []}
+    if getattr(args, "json_output", False):
+        print(json.dumps(status, ensure_ascii=False, indent=2))
+        return 0
+    if not status.get("running"):
+        print("Runtime: stopped")
+        return 0
+    print(f"Runtime: running (pid={status['pid']})")
+    for channel in status.get("channels", []):
+        error = f" error={channel['error']}" if channel.get("error") else ""
+        print(
+            f"  {channel['name']}: {channel['state']} "
+            f"(enabled={str(channel['enabled']).lower()}){error}"
+        )
+    return 0
+
+
+def _write_channel_enabled(config_dir: Path, name: str, enabled: bool) -> None:
+    path = config_dir / "config.yaml"
+    settings = XAgentSettings.load(path)
+    settings.with_channel_enabled(name, enabled).write_atomic(path)
+
+
+def handle_channel(args: argparse.Namespace) -> int:
+    root = _config_dir(args)
+    client = RuntimeClient(root)
+    action = args.channel_action
+    name = getattr(args, "name", None)
+
+    if action == "list":
+        try:
+            payload = client.request("GET", "/v1/channels")
+            channels = payload["channels"]
+        except RuntimeUnavailable:
+            settings = XAgentSettings.load(root / "config.yaml")
+            channels = [
+                {
+                    "name": channel_name,
+                    "enabled": getattr(settings.channels, channel_name).enabled,
+                    "state": "runtime-stopped",
+                    "error": "",
+                }
+                for channel_name in ("api", "feishu", "weixin", "voice")
+            ]
+        if getattr(args, "json_output", False):
+            print(json.dumps({"channels": channels}, ensure_ascii=False, indent=2))
+        else:
+            for channel in channels:
+                print(
+                    f"{channel['name']}: {channel['state']} "
+                    f"(enabled={str(channel['enabled']).lower()})"
+                )
+        return 0
+
+    if action == "setup":
+        return _handle_channel_setup(args)
+
+    if name not in {"api", "feishu", "weixin", "voice"}:
+        print(f"Unknown channel: {name}")
+        return 1
+
+    if action in {"start", "restart"} and _ensure_runtime(args, announce=False) != 0:
+        return 1
+    try:
+        payload = client.request("POST", f"/v1/channels/{name}/{action}")
+    except RuntimeUnavailable as exc:
+        if action == "stop":
+            _write_channel_enabled(root, name, False)
+            print(f"{name}: stopped (runtime is not running)")
+            return 0
+        print(f"Channel {action} failed: {exc}")
+        return 1
+    except RuntimeError as exc:
+        print(f"Channel {action} failed: {exc}")
+        return 1
+    channel = payload["channel"]
+    print(
+        f"{name}: {channel['state']} "
+        f"(enabled={str(channel['enabled']).lower()})"
+    )
+    return 0
+
+
+def _handle_channel_setup(args: argparse.Namespace) -> int:
+    name = args.name
+    if name == "api":
+        settings = XAgentSettings.load(_config_dir(args) / "config.yaml")
+        data = settings.model_dump(mode="python", exclude_none=True)
+        api = data["channels"]["api"]
+        api["host"] = getattr(args, "host", None) or api.get("host") or "127.0.0.1"
+        api["port"] = getattr(args, "port", None) or api.get("port") or 8010
+        updated = XAgentSettings.model_validate(data)
+        updated.write_atomic(_config_dir(args) / "config.yaml")
+        print("api: configured")
+        return 0
+
+    from . import setup
+
+    handlers = {
+        "feishu": setup.handle_init_feishu,
+        "weixin": setup.handle_init_weixin,
+        "voice": setup.handle_init_voice,
+    }
+    handler = handlers.get(name)
+    if handler is None:
+        print(f"Unknown channel: {name}")
+        return 1
+    return int(handler(args) or 0)
+
+
+def handle_delivery(args: argparse.Namespace) -> int:
+    client = RuntimeClient(_config_dir(args))
+    try:
+        if args.delivery_action == "list":
+            status = getattr(args, "status", None)
+            query = f"?status={status}" if status else ""
+            payload = client.request("GET", f"/v1/deliveries{query}")
+            deliveries = payload["deliveries"]
+            if getattr(args, "json_output", False):
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                for delivery in deliveries:
+                    print(
+                        f"{delivery['delivery_id']} {delivery['status']} "
+                        f"{delivery['channel']} attempts={delivery['attempts']}"
+                    )
+            return 0
+        payload = client.request(
+            "POST",
+            f"/v1/deliveries/{args.delivery_id}/retry",
+        )
+        print(f"{payload['delivery']['delivery_id']}: pending")
+        return 0
+    except (RuntimeUnavailable, RuntimeError) as exc:
+        print(f"Delivery command failed: {exc}")
+        return 1
+
+
+def handle_person(args: argparse.Namespace) -> int:
+    client = RuntimeClient(_config_dir(args))
+    try:
+        if args.person_action == "list":
+            payload = client.request("GET", "/v1/people")
+            if getattr(args, "json_output", False):
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                for person in payload["people"]:
+                    accounts = ", ".join(
+                        f"{item['channel']}:{item['account_id']}"
+                        for item in person["accounts"]
+                    )
+                    print(f"{person['person_id']} {accounts}")
+            return 0
+        payload = client.request(
+            "POST",
+            f"/v1/people/{args.person_id}/accounts",
+            json={
+                "channel": args.channel,
+                "account_id": args.account_id,
+            },
+        )
+        account = payload["account"]
+        print(
+            f"linked {account['channel']}:{account['account_id']} "
+            f"to {account['person_id']}"
+        )
+        return 0
+    except (RuntimeUnavailable, RuntimeError) as exc:
+        print(f"Person command failed: {exc}")
+        return 1
 
 
 def handle_chat(args: argparse.Namespace) -> int:
-    agent_cli = AgentCLI(config_dir=str(runtime_dir(args)), verbose=args.verbose)
-
-    if args.message is None:
-        async def run_interactive_chat():
-            await agent_cli.chat_interactive(
-                user_id=args.user_id,
-                stream=args.stream,
+    if _ensure_runtime(args, announce=False) != 0:
+        return 1
+    client = RuntimeClient(_config_dir(args))
+    def send(text: str) -> int:
+        try:
+            payload = client.request(
+                "POST",
+                "/v1/events",
+                json={
+                    "kind": "chat",
+                    "source": "cli",
+                    "conversation_id": "cli:main",
+                    "speaker_id": LOCAL_OWNER_PERSON_ID,
+                    "audience_ids": [LOCAL_OWNER_PERSON_ID],
+                    "content": text,
+                    "metadata": {"stream": False},
+                    "wait": True,
+                },
             )
-
-        asyncio.run(run_interactive_chat())
+        except (RuntimeUnavailable, RuntimeError) as exc:
+            print(f"Chat failed: {exc}")
+            return 1
+        final = _final_text(payload.get("result") or {})
+        print(final)
         return 0
 
-    event_mode = bool(args.events or args.stream is not None)
-    stream = bool(args.stream) if args.stream is not None else False
-
-    async def run_single_message():
-        if event_mode:
-            await agent_cli.print_single_chat_events(
-                message=args.message,
-                user_id=args.user_id,
-                stream=stream,
-            )
-            return
-
-        response = await agent_cli.chat_single(
-            message=args.message,
-            user_id=args.user_id,
-        )
-        print(response)
-
-    asyncio.run(run_single_message())
-    return 0
-
-
-def handle_voice(args: argparse.Namespace) -> int:
-    if getattr(args, "verbose", False):
-        logging.getLogger().setLevel(logging.INFO)
-        logging.getLogger("xagent").setLevel(logging.INFO)
-    else:
-        logging.getLogger().setLevel(logging.CRITICAL)
-        logging.getLogger("xagent").setLevel(logging.CRITICAL)
-
-    try:
-        if getattr(args, "list_devices", False):
-            from ..voice.audio import list_audio_devices_text
-
-            print(list_audio_devices_text())
-            return 0
-
-        config = load_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-    except Exception as exc:
-        print(f"Failed to start voice channel: {exc}")
-        return 1
-
-    return _run_voice_channel(args, config)
-
-
-def _channel_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
-    values = getattr(args, "channels", None)
-    if values is None:
-        return None
-    if isinstance(values, str):
-        return [values]
-    return list(values)
-
-
-def _select_channels(args: argparse.Namespace, *, default: str) -> tuple[list[str], dict[str, Any]]:
-    config = load_runtime_config(args)
-    values = _channel_arg_values(args)
-    if values is None and default == "auto":
-        channels = [default_start_channel_from_config(config)]
-    else:
-        channels = normalize_channel_values(values, default=default, config=config)
-    return channels, config
-
-
-def _handle_channel_error(exc: ChannelSelectionError) -> int:
-    print(f"Error: {exc}")
-    return 1
-
-
-def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
-    command = [sys.executable, "-m", "xagent.interfaces.cli", "_run-channel", channel]
-    config_dir = getattr(args, "config_dir", None)
-    if config_dir:
-        command.extend(["--config-dir", config_dir])
-    else:
-        command.extend(["--agent", resolve_agent_name(getattr(args, "agent", None))])
-
-    for flag, attr in (
-        ("--host", "host"),
-        ("--port", "port"),
-        ("--max-concurrent-chats", "max_concurrent_chats"),
-        ("--queue-timeout", "queue_timeout"),
-        ("--chat-timeout", "chat_timeout"),
-    ):
-        value = getattr(args, attr, None)
-        if value is not None:
-            command.extend([flag, str(value)])
-    if channel == CHANNEL_VOICE:
-        user_id = getattr(args, "user_id", None)
-        if user_id:
-            command.extend(["--user-id", str(user_id)])
-        if getattr(args, "verbose", False):
-            command.append("--verbose")
-        input_device = getattr(args, "input_device", None)
-        if input_device is not None:
-            command.extend(["--input-device", str(input_device)])
-        output_device = getattr(args, "output_device", None)
-        if output_device is not None:
-            command.extend(["--output-device", str(output_device)])
-    return command
-
-
-def _web_spawn_target(args: argparse.Namespace) -> tuple[Optional[str], Optional[str]]:
-    """Return ``(config_dir, agent_name)`` for a managed web client subprocess."""
-    config_dir = getattr(args, "config_dir", None)
-    if config_dir:
-        return str(config_dir), None
-    try:
-        return None, resolve_agent_name(getattr(args, "agent", None))
-    except AgentRegistryError:
-        return str(management_root()), None
-
-
-def _web_command(args: argparse.Namespace) -> list[str]:
-    command = [sys.executable, "-m", "xagent.interfaces.cli", "_run-web"]
-    config_dir, agent_name = _web_spawn_target(args)
-    if config_dir:
-        command.extend(["--config-dir", config_dir])
-    elif agent_name:
-        command.extend(["--agent", agent_name])
-
-    for flag, attr in (("--host", "host"), ("--port", "port"), ("--api-url", "api_url")):
-        value = getattr(args, attr, None)
-        if value is not None:
-            command.extend([flag, str(value)])
-    if getattr(args, "open_browser", False):
-        command.append("--open")
-    return command
-
-
-def _api_runtime_values(
-    args: argparse.Namespace,
-    config: dict[str, Any],
-) -> tuple[dict[str, Any], Optional[str], Optional[int]]:
-    api_cfg = api_config(config)
-    raw_config_dir = getattr(args, "config_dir", None)
-    server_kwargs: dict[str, Any] = {
-        "config_dir": raw_config_dir or str(runtime_dir(args)),
-    }
-
-    runtime_mapping = (
-        ("max_concurrent_chats", "max_concurrent_chats"),
-        ("queue_timeout", "chat_queue_timeout"),
-        ("chat_timeout", "chat_timeout"),
-    )
-    for args_attr, server_key in runtime_mapping:
-        value = getattr(args, args_attr, None)
-        if value is None:
-            value = api_cfg.get(args_attr)
-        if value is not None:
-            server_kwargs[server_key] = value
-
-    host = getattr(args, "host", None) or api_cfg.get("host")
-    port = getattr(args, "port", None)
-    if port is None:
-        port = api_cfg.get("port")
-    return server_kwargs, host, port
-
-
-def _run_api_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    from ..server import AgentHTTPServer
-
-    server_kwargs, host, port = _api_runtime_values(args, config)
-    server = AgentHTTPServer(**server_kwargs)
-    print(f"xAgent api channel ready (model={server.agent.model}).")
-    server.run(host=host, port=port)
-    return 0
-
-
-def _web_client_runtime_values(
-    args: argparse.Namespace,
-    config: dict[str, Any],
-) -> tuple[str, int, str, bool, str, Optional[str]]:
-    web_cfg = web_client_config(config)
-    host = getattr(args, "host", None) or web_cfg.get("host")
-    port = getattr(args, "port", None)
-    if port is None:
-        port = web_cfg.get("port")
-    api_url = str(getattr(args, "api_url", None) or web_cfg.get("api_url") or "").strip()
-    open_browser = bool(getattr(args, "open_browser", False))
-
-    raw_config_dir = getattr(args, "config_dir", None)
-    config_dir = raw_config_dir or str(runtime_dir_or_management_root(args))
-    initial_agent: Optional[str] = None
-    if not raw_config_dir:
+    if args.message is not None:
+        return send(args.message)
+    print("xAgent chat. Type /exit to leave.")
+    while True:
         try:
-            initial_agent = resolve_agent_name(getattr(args, "agent", None))
-        except AgentRegistryError:
-            initial_agent = None
-    return str(host), int(port), api_url, open_browser, config_dir, initial_agent
-
-
-def _run_web_client(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    from ..web import WebClientServer
-
-    host, port, api_url, open_browser, config_dir, initial_agent = _web_client_runtime_values(args, config)
-    server = WebClientServer(
-        host=host,
-        port=port,
-        api_url=api_url,
-        config_dir=config_dir,
-        initial_agent=initial_agent,
-    )
-    print(f"xAgent web client ready at http://{host}:{port} (api={api_url}).")
-    server.run(open_browser=open_browser)
-    return 0
-
-
-def _run_feishu_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    try:
-        from ...integrations.feishu import FeishuAdapter, FeishuAdapterConfig
-    except ImportError as exc:  # pragma: no cover - defensive
-        print(f"Failed to import Feishu adapter: {exc}")
-        return 1
-
-    feishu_data = feishu_config(config)
-    if not feishu_data:
-        print("Feishu channel is not configured. Run: xagent feishu setup")
-        return 1
-
-    try:
-        feishu_runtime_config = FeishuAdapterConfig.from_dict(feishu_data)
-    except Exception as exc:
-        print(f"Invalid Feishu channel config: {exc}")
-        return 1
-
-    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
-    adapter = FeishuAdapter(agent=runner.agent, config=feishu_runtime_config)
-
-    async def _run_daemon() -> bool:
-        heartbeat = create_runtime_heartbeat(
-            runner.agent,
-            config.get("runtime") if isinstance(config, dict) else None,
-            logger_=logging.getLogger(__name__),
-            subconscious_delivery_sink=getattr(adapter, "deliver_subconscious_message", None),
-            subconscious_deliverable_channels={"feishu"},
-        )
-        stop_requested = False
-        loop = asyncio.get_running_loop()
-        old_handlers: dict[int, object] = {}
-        signal_handlers: list[int] = []
-
-        def _request_stop() -> None:
-            nonlocal stop_requested
-            stop_requested = True
-            adapter._stop_event.set()
-            adapter._safe_stop()
-
-        def _handle_stop(_signum: int, _frame) -> None:
-            loop.call_soon_threadsafe(_request_stop)
-
-        for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
-            if signum is None:
-                continue
-            try:
-                loop.add_signal_handler(signum, _request_stop)
-                signal_handlers.append(signum)
-            except (NotImplementedError, RuntimeError):
-                old_handlers[signum] = signal.getsignal(signum)
-                signal.signal(signum, _handle_stop)
-
-        try:
-            if heartbeat is not None:
-                await heartbeat.start()
-            await adapter.run()
-        finally:
-            for signum in signal_handlers:
-                try:
-                    loop.remove_signal_handler(signum)
-                except (NotImplementedError, RuntimeError):
-                    pass
-            for signum, previous_handler in old_handlers.items():
-                signal.signal(signum, previous_handler)
-            if heartbeat is not None:
-                await heartbeat.stop()
-        return stop_requested
-
-    print(f"xAgent Feishu channel ready (model={runner.agent.model}).")
-    print(f"Connecting to Feishu (app_id={feishu_runtime_config.app_id})...")
-    try:
-        stop_requested = asyncio.run(_run_daemon())
-    except KeyboardInterrupt:
-        stop_requested = True
-    except RuntimeError as exc:
-        print(f"{exc}")
-        return 1
-
-    if stop_requested:
-        print("Feishu channel stopped.")
-    return 0
-
-
-def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    try:
-        from ...integrations.weixin import WeixinAdapter, WeixinAdapterConfig
-    except ImportError as exc:  # pragma: no cover - defensive
-        print(f"Failed to import Weixin adapter: {exc}")
-        return 1
-
-    weixin_data = weixin_config(config)
-    if not weixin_data:
-        print("Weixin channel is not configured. Run: xagent weixin setup")
-        return 1
-
-    try:
-        weixin_runtime_config = WeixinAdapterConfig.from_dict(weixin_data)
-    except Exception as exc:
-        print(f"Invalid Weixin channel config: {exc}")
-        return 1
-
-    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
-    adapter = WeixinAdapter(
-        agent=runner.agent,
-        config=weixin_runtime_config,
-        runtime_dir=runner.config_dir,
-    )
-
-    async def _run_daemon() -> bool:
-        heartbeat = create_runtime_heartbeat(
-            runner.agent,
-            config.get("runtime") if isinstance(config, dict) else None,
-            logger_=logging.getLogger(__name__),
-            subconscious_delivery_sink=getattr(adapter, "deliver_subconscious_message", None),
-            subconscious_deliverable_channels={"weixin"},
-        )
-        stop_requested = False
-        loop = asyncio.get_running_loop()
-        old_handlers: dict[int, object] = {}
-        signal_handlers: list[int] = []
-
-        def _request_stop() -> None:
-            nonlocal stop_requested
-            stop_requested = True
-            adapter._stop_event.set()
-
-        def _handle_stop(_signum: int, _frame) -> None:
-            loop.call_soon_threadsafe(_request_stop)
-
-        for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
-            if signum is None:
-                continue
-            try:
-                loop.add_signal_handler(signum, _request_stop)
-                signal_handlers.append(signum)
-            except (NotImplementedError, RuntimeError):
-                old_handlers[signum] = signal.getsignal(signum)
-                signal.signal(signum, _handle_stop)
-
-        try:
-            if heartbeat is not None:
-                await heartbeat.start()
-            await adapter.run()
-        finally:
-            for signum in signal_handlers:
-                try:
-                    loop.remove_signal_handler(signum)
-                except (NotImplementedError, RuntimeError):
-                    pass
-            for signum, previous_handler in old_handlers.items():
-                signal.signal(signum, previous_handler)
-            if heartbeat is not None:
-                await heartbeat.stop()
-        return stop_requested
-
-    print(f"xAgent Weixin channel ready (model={runner.agent.model}).")
-    print(f"Connecting to Weixin iLink (account_id={weixin_runtime_config.account_id})...")
-    try:
-        stop_requested = asyncio.run(_run_daemon())
-    except KeyboardInterrupt:
-        stop_requested = True
-    except RuntimeError as exc:
-        print(f"{exc}")
-        return 1
-
-    if stop_requested:
-        print("Weixin channel stopped.")
-    return 0
-
-
-def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    log_level = logging.INFO if getattr(args, "verbose", False) else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    try:
-        runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
-        voice_data = voice_config(runner.config)
-        if not voice_data or voice_data.get("enabled") is False:
-            print("Voice channel is not configured. Run: xagent voice setup")
-            return 1
-
-        from ..voice.config import VoiceChannelConfig
-        from ..voice.factory import create_local_voice_runtime
-        from ..voice.runtime import VoiceRuntimeOptions
-
-        voice_runtime_config = VoiceChannelConfig.from_dict(voice_data)
-        runtime = create_local_voice_runtime(
-            agent=runner.agent,
-            config=voice_runtime_config,
-            options=VoiceRuntimeOptions(
-                user_id=getattr(args, "user_id", None) or "local_voice",
-                stream=True,
-                tasks_dir=getattr(runner, "tasks_dir", None),
-            ),
-            input_device=getattr(args, "input_device", None),
-            output_device=getattr(args, "output_device", None),
-        )
-    except Exception as exc:
-        print(f"Failed to start voice channel: {exc}")
-        return 1
-
-    async def _run_daemon() -> bool:
-        heartbeat = create_runtime_heartbeat(
-            runner.agent,
-            config.get("runtime") if isinstance(config, dict) else None,
-            logger_=logging.getLogger(__name__),
-            subconscious_delivery_sink=getattr(runtime, "deliver_subconscious_message", None),
-            subconscious_deliverable_channels={"voice"},
-        )
-        stop_requested = False
-        loop = asyncio.get_running_loop()
-        old_handlers: dict[int, object] = {}
-        signal_handlers: list[int] = []
-
-        def _request_stop() -> None:
-            nonlocal stop_requested
-            stop_requested = True
-            stop_event = getattr(runtime, "stop_event", None)
-            if stop_event is not None:
-                stop_event.set()
-
-        def _handle_stop(_signum: int, _frame) -> None:
-            loop.call_soon_threadsafe(_request_stop)
-
-        for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
-            if signum is None:
-                continue
-            try:
-                loop.add_signal_handler(signum, _request_stop)
-                signal_handlers.append(signum)
-            except (NotImplementedError, RuntimeError):
-                old_handlers[signum] = signal.getsignal(signum)
-                signal.signal(signum, _handle_stop)
-
-        try:
-            if heartbeat is not None:
-                await heartbeat.start()
-            await runtime.run_forever()
-        finally:
-            for signum in signal_handlers:
-                try:
-                    loop.remove_signal_handler(signum)
-                except (NotImplementedError, RuntimeError):
-                    pass
-            for signum, previous_handler in old_handlers.items():
-                signal.signal(signum, previous_handler)
-            if heartbeat is not None:
-                await heartbeat.stop()
-        return stop_requested
-
-    print(f"xAgent voice channel ready (model={runner.agent.model}).")
-    try:
-        stop_requested = asyncio.run(_run_daemon())
-    except KeyboardInterrupt:
-        stop_requested = True
-    except RuntimeError as exc:
-        print(f"{exc}")
-        return 1
-    except Exception as exc:
-        print(f"Voice channel error: {exc}")
-        return 1
-
-    if stop_requested:
-        print("Voice channel stopped.")
-    return 0
-
-
-def _run_channel(channel: str, args: argparse.Namespace, config: dict[str, Any]) -> int:
-    if channel == CHANNEL_API:
-        return _run_api_channel(args, config)
-    if channel == CHANNEL_FEISHU:
-        return _run_feishu_channel(args, config)
-    if channel == CHANNEL_WEIXIN:
-        return _run_weixin_channel(args, config)
-    if channel == CHANNEL_VOICE:
-        return _run_voice_channel(args, config)
-    print(f"Unknown channel: {channel}")
-    return 1
-
-
-def handle_run_channel_internal(args: argparse.Namespace) -> int:
-    try:
-        config = load_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-    return _run_channel(args.channel, args, config)
-
-
-def handle_run_web_internal(args: argparse.Namespace) -> int:
-    try:
-        config = load_client_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-    return _run_web_client(args, config)
-
-
-def handle_run(args: argparse.Namespace) -> int:
-    try:
-        channels, config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    if len(channels) == 1:
-        return _run_channel(channels[0], args, config)
-
-    processes: list[subprocess.Popen] = []
-    try:
-        for channel in channels:
-            print(f"Starting {channel} channel in foreground...")
-            process = subprocess.Popen(_channel_command(channel, args))
-            processes.append(process)
-        while processes:
-            for process in list(processes):
-                return_code = process.poll()
-                if return_code is not None:
-                    processes.remove(process)
-                    if return_code != 0:
-                        return return_code
-            time.sleep(0.2)
-    except KeyboardInterrupt:
-        print("Stopping foreground channels...")
-        for process in processes:
-            if process.poll() is None:
-                process.terminate()
-        for process in processes:
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-        return 0
-    return 0
-
-
-def _start_background_channels(args: argparse.Namespace, channels: list[str]) -> int:
-    ok = True
-    config_dir = runtime_dir(args)
-    for channel in channels:
-        if not _start_background_channel(args, channel=channel, config_dir=config_dir):
-            ok = False
-    return 0 if ok else 1
-
-
-def _start_background_channel(args: argparse.Namespace, *, channel: str, config_dir: Path | None = None) -> bool:
-    runtime_root = config_dir or runtime_dir(args)
-    paths = managed_paths(runtime_root, channel)
-    result = start_background(
-        _channel_command(channel, args),
-        pid_path=paths.pid_path,
-        log_path=paths.log_path,
-    )
-    if result.ok:
-        print(f"Started {channel} channel in background (pid={result.pid}).")
-        print(f"Logs: {paths.log_path}")
-        return True
-
-    print(f"Failed to start {channel} channel: {result.error}")
-    if result.recent_output:
-        print(result.recent_output)
-    return False
-
-
-def handle_start(args: argparse.Namespace) -> int:
-    try:
-        channels, _config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    return _start_background_channels(args, channels)
-
-
-def handle_stop(args: argparse.Namespace) -> int:
-    try:
-        channels, _config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    ok = True
-    config_dir = runtime_dir(args)
-    for channel in channels:
-        paths = managed_paths(config_dir, channel)
-        stopped, message = stop_managed_process(paths.pid_path)
-        ok = ok and stopped
-        print(f"{channel}: {message}")
-    return 0 if ok else 1
-
-
-def handle_restart(args: argparse.Namespace) -> int:
-    try:
-        channels, _config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    ok = True
-    config_dir = runtime_dir(args)
-    restart_values = dict(vars(args))
-
-    for channel in channels:
-        paths = managed_paths(config_dir, channel)
-        stopped, message = stop_managed_process(paths.pid_path)
-        print(f"{channel}: {message}")
-        if not stopped:
-            ok = False
-            continue
-        restart_values["channels"] = [channel]
-        restart_args = argparse.Namespace(**restart_values)
-        if not _start_background_channel(restart_args, channel=channel, config_dir=config_dir):
-            ok = False
-
-    return 0 if ok else 1
-
-
-def handle_status(args: argparse.Namespace) -> int:
-    try:
-        channels, _config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    config_dir = runtime_dir(args)
-    rows: list[dict[str, Any]] = []
-    for channel in channels:
-        paths = managed_paths(config_dir, channel)
-        pid = running_pid(paths.pid_path)
-        rows.append({
-            "channel": channel,
-            "status": "running" if pid is not None else "stopped",
-            "pid": pid,
-            "pid_path": str(paths.pid_path),
-            "log_path": str(paths.log_path),
-        })
-
-    if getattr(args, "json_output", False):
-        print(json.dumps({"channels": rows}, indent=2, sort_keys=True))
-        return 0
-
-    for row in rows:
-        pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
-        print(f"{row['channel']}: {row['status']}{pid_text}")
-        print(f"  pid: {row['pid_path']}")
-        print(f"  log: {row['log_path']}")
-    return 0
-
-
-def handle_status_all(args: argparse.Namespace) -> int:
-    """Show status of all configured channels at a glance."""
-    try:
-        config = load_runtime_config(args)
-        channels = enabled_channels_from_config(config)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    if not channels:
-        print("No channels are enabled.")
-        return 0
-
-    config_dir = runtime_dir(args)
-    rows: list[dict[str, Any]] = []
-    for channel in channels:
-        paths = managed_paths(config_dir, channel)
-        pid = running_pid(paths.pid_path)
-        rows.append({
-            "channel": channel,
-            "status": "running" if pid is not None else "stopped",
-            "pid": pid,
-            "pid_path": str(paths.pid_path),
-            "log_path": str(paths.log_path),
-        })
-
-    if getattr(args, "json_output", False):
-        print(json.dumps({"channels": rows}, indent=2, sort_keys=True))
-        return 0
-
-    print(f"Runtime: {config_dir}")
-    print()
-    for row in rows:
-        pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
-        print(f"{row['channel']}: {row['status']}{pid_text}")
-        print(f"  pid: {row['pid_path']}")
-        print(f"  log: {row['log_path']}")
-
-    web_cfg = web_client_config(config)
-    if web_cfg.get("enabled", True):
-        paths = web_client_paths()
-        pid = running_pid(paths.pid_path)
-        print()
-        print("Web client:")
-        pid_text = f" pid={pid}" if pid is not None else ""
-        status = "running" if pid is not None else "stopped"
-        print(f"  status: {status}{pid_text}")
-        print(f"  url: {web_client_public_url(config)}")
-        print(f"  pid: {paths.pid_path}")
-        print(f"  log: {paths.log_path}")
-    return 0
-
-
-def _start_background_web(args: argparse.Namespace) -> tuple[bool, bool]:
-    """Start the web client. Returns (success, already_running)."""
-    paths = web_client_paths()
-    result = start_background(
-        _web_command(args),
-        pid_path=paths.pid_path,
-        log_path=paths.log_path,
-    )
-    if result.ok:
-        print(f"Started web client in background (pid={result.pid}).")
-        print(f"Logs: {paths.log_path}")
-        return True, False
-
-    if result.error.startswith("already running"):
-        print(f"Web client is already running (pid={result.pid}).")
-        return True, True
-
-    print(f"Failed to start web client: {result.error}")
-    if result.recent_output:
-        print(result.recent_output)
-    return False, False
-
-
-def handle_web_start(args: argparse.Namespace) -> int:
-    try:
-        load_client_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    started, already_running = _start_background_web(args)
-    if not started:
-        return 1
-    if getattr(args, "open_browser", False) and already_running:
-        return handle_web_open(args)
-    return 0
-
-
-def handle_web_stop(args: argparse.Namespace) -> int:
-    paths = web_client_paths()
-    stopped, message = stop_managed_process(paths.pid_path)
-    print(f"web: {message}")
-    return 0 if stopped else 1
-
-
-def handle_web_restart(args: argparse.Namespace) -> int:
-    paths = web_client_paths()
-    stopped, message = stop_managed_process(paths.pid_path)
-    print(f"web: {message}")
-    if not stopped:
-        return 1
-    started, _already_running = _start_background_web(args)
-    return 0 if started else 1
-
-
-def handle_web_status(args: argparse.Namespace) -> int:
-    try:
-        config = load_client_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    paths = web_client_paths()
-    pid = running_pid(paths.pid_path)
-    row = {
-        "status": "running" if pid is not None else "stopped",
-        "pid": pid,
-        "pid_path": str(paths.pid_path),
-        "log_path": str(paths.log_path),
-        "url": web_client_public_url(config),
-    }
-
-    if getattr(args, "json_output", False):
-        print(json.dumps({"web": row}, indent=2, sort_keys=True))
-        return 0
-
-    pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
-    print(f"web: {row['status']}{pid_text}")
-    print(f"  url: {row['url']}")
-    print(f"  pid: {row['pid_path']}")
-    print(f"  log: {row['log_path']}")
-    return 0
-
-
-def handle_web_logs(args: argparse.Namespace) -> int:
-    paths = web_client_paths()
-    lines = max(1, int(getattr(args, "lines", 80)))
-    print(f"==> web ({paths.log_path})")
-    if getattr(args, "follow", False):
-        _follow_log(paths.log_path)
-        return 0
-    text = tail_text(paths.log_path, max_lines=lines)
-    print(text or "(no log output)")
-    return 0
-
-
-def handle_web_open(args: argparse.Namespace) -> int:
-    import webbrowser
-
-    try:
-        config = load_client_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    web_cfg = web_client_config(config)
-    if not web_cfg.get("enabled", True):
-        print("Web client is disabled in config (web.enabled=false).")
-        return 1
-
-    paths = web_client_paths()
-    if running_pid(paths.pid_path) is None:
-        print("Web client is not running. Start it with: xagent web start")
-        return 1
-
-    url = web_client_public_url(config)
-    if webbrowser.open(url):
-        print(f"Opened: {url}")
-        return 0
-    print(f"Failed to open: {url}")
-    return 1
-
-
-def _follow_log(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+", encoding="utf-8", errors="replace") as handle:
-        handle.seek(0, os.SEEK_END)
-        while True:
-            line = handle.readline()
-            if line:
-                print(line, end="")
-                continue
-            time.sleep(0.2)
-
-
-def handle_logs(args: argparse.Namespace) -> int:
-    if getattr(args, "follow", False):
-        raw_channels = _channel_arg_values(args)
-        explicit_tokens = [
-            token.strip().lower()
-            for raw_channel in (raw_channels or [])
-            for token in str(raw_channel).split(",")
-            if token.strip()
-        ]
-        if len(explicit_tokens) != 1 or explicit_tokens[0] not in {
-            CHANNEL_API,
-            CHANNEL_FEISHU,
-            CHANNEL_WEIXIN,
-            CHANNEL_VOICE,
-        }:
-            print("--follow requires an explicit single channel")
-            return 1
-
-    try:
-        channels, _config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    if getattr(args, "follow", False) and len(channels) != 1:
-        print("--follow requires exactly one channel")
-        return 1
-
-    config_dir = runtime_dir(args)
-    for index, channel in enumerate(channels):
-        paths = managed_paths(config_dir, channel)
-        if len(channels) > 1:
-            if index:
-                print("")
-            print(f"==> {channel}: {paths.log_path} <==")
-        output = tail_text(paths.log_path, max_lines=max(1, int(args.lines)))
-        if output:
-            print(output)
-        elif not paths.log_path.exists():
-            print(f"No log file: {paths.log_path}")
-
-    if getattr(args, "follow", False):
-        _follow_log(managed_paths(config_dir, channels[0]).log_path)
-    return 0
-
-
-def handle_observe(args: argparse.Namespace) -> int:
-    metadata = None
-    if args.metadata:
-        try:
-            metadata = json.loads(args.metadata)
-        except json.JSONDecodeError as exc:
-            print(f"Invalid metadata JSON: {exc}")
-            return 1
-        if not isinstance(metadata, dict):
-            print("--metadata must be a JSON object")
-            return 1
-
-    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
-
-    async def _run_observe():
-        result = await runner.agent.observe(
-            context=args.text,
-            source=args.source,
-            event_type=args.event_type,
-            metadata=metadata,
-        )
-        if hasattr(result, "model_dump"):
-            print(json.dumps(result.model_dump(), indent=2, sort_keys=True))
-        else:
-            print(result)
-
-    asyncio.run(_run_observe())
-    return 0
-
-
-def handle_config(args: argparse.Namespace) -> int:
-    path = config_path(args)
-    if args.config_command == "path":
-        print(path)
-        return 0
-    if args.config_command == "show":
-        if not path.is_file():
-            print(f"Config not found: {path}")
-            return 1
-        print(path.read_text(encoding="utf-8"), end="")
-        return 0
-    if args.config_command == "validate":
-        BaseAgentRunner(config_dir=str(runtime_dir(args)))
-        print(f"Config OK: {path}")
-        return 0
-    print(f"Unknown config command: {args.config_command}")
-    return 1
-
-
-def handle_identity(args: argparse.Namespace) -> int:
-    path = identity_path(args)
-    if args.identity_command == "path":
-        print(path)
-        return 0
-    if args.identity_command == "show":
-        if not path.is_file():
-            print(f"Identity not found: {path}")
-            return 1
-        print(path.read_text(encoding="utf-8"), end="")
-        return 0
-    print(f"Unknown identity command: {args.identity_command}")
-    return 1
-
-
-def _memory_root(args: argparse.Namespace) -> Path:
-    return runtime_dir(args) / BaseAgentConfig.MEMORY_DIRNAME
-
-
-def _memory_scope_root(args: argparse.Namespace) -> Path:
-    scope = getattr(args, "scope", "all")
-    root = _memory_root(args)
-    return root if scope == "all" else root / scope
-
-
-def handle_memory(args: argparse.Namespace) -> int:
-    root = _memory_root(args)
-    scope_root = _memory_scope_root(args)
-
-    if args.memory_command == "stats":
-        files = sorted(scope_root.rglob("*.md")) if scope_root.exists() else []
-        total_bytes = sum(path.stat().st_size for path in files if path.is_file())
-        print(f"Memory root: {root}")
-        print(f"Scope: {getattr(args, 'scope', 'all')}")
-        print(f"Files: {len(files)}")
-        print(f"Bytes: {total_bytes}")
-        return 0
-
-    if args.memory_command == "list":
-        from ...components.memory import MarkdownMemory
-
-        days = int(getattr(args, "days", 7) or 7)
-        if days <= 0:
-            print("--days must be a positive whole number")
-            return 1
-
-        async def _run_memory_list() -> int:
-            memory = MarkdownMemory(str(root))
-            entries = await memory.read_recent_dailies(days=days)
-            if not entries:
-                unit = "day" if days == 1 else "days"
-                print(f"No daily journals found in the last {days} {unit}.")
-                return 0
-            for index, (date_label, text) in enumerate(entries):
-                if index:
-                    print("\n---\n")
-                print(f"# {date_label}\n")
-                print(text.strip())
+            text = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
             return 0
-
-        return asyncio.run(_run_memory_list())
-
-    if args.memory_command == "search":
-        if not scope_root.exists():
+        if text in {"/exit", "/quit"}:
             return 0
-        needle = args.query.casefold()
-        for path in sorted(scope_root.rglob("*.md")):
-            if not path.is_file():
-                continue
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            for line_number, line in enumerate(lines, 1):
-                if needle in line.casefold():
-                    print(f"{path.relative_to(root)}:{line_number}:{line}")
-        return 0
-
-    if args.memory_command == "clear":
-        import shutil
-
-        if not getattr(args, "yes", False):
-            print("Refusing to clear memory without --yes")
-            return 1
-        target = scope_root
-        if target.exists():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
-        print(f"Cleared memory scope: {getattr(args, 'scope', 'all')}")
-        return 0
-
-    print(f"Unknown memory command: {args.memory_command}")
-    return 1
-
-
-def handle_messages(args: argparse.Namespace) -> int:
-    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
-    storage = runner.message_storage
-
-    async def _run_messages() -> int:
-        if args.messages_command == "stats":
-            total = await storage.get_message_count()
-            info = storage.get_stream_info() if hasattr(storage, "get_stream_info") else {}
-            print(json.dumps({"total": total, "storage": info}, indent=2, sort_keys=True))
-            return 0
-
-        if args.messages_command == "list":
-            messages = await storage.get_messages(count=args.count, offset=args.offset)
-            payload = []
-            for message in messages:
-                item = message.model_dump(mode="json") if hasattr(message, "model_dump") else str(message)
-                payload.append(item)
-            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-            return 0
-
-        if args.messages_command == "clear":
-            if not getattr(args, "yes", False):
-                print("Refusing to clear messages without --yes")
+        if text:
+            if send(text) != 0:
                 return 1
-            await storage.clear_messages()
-            print("Cleared message stream")
-            return 0
-
-        print(f"Unknown messages command: {args.messages_command}")
-        return 1
-
-    return asyncio.run(_run_messages())
 
 
-def handle_doctor(args: argparse.Namespace) -> int:
-    config_dir = runtime_dir(args)
-    config_file = config_dir / BaseAgentConfig.CONFIG_FILENAME
-    identity_file = config_dir / BaseAgentConfig.IDENTITY_FILENAME
-    ok = True
-
-    print(f"Runtime dir: {config_dir}")
-    if config_file.is_file():
-        print(f"Config: ok ({config_file})")
-    else:
-        print(f"Config: missing ({config_file})")
-        ok = False
-
-    if identity_file.is_file() and identity_file.read_text(encoding="utf-8").strip():
-        print(f"Identity: ok ({identity_file})")
-    else:
-        print(f"Identity: missing or empty ({identity_file})")
-        ok = False
-
-    try:
-        config = load_runtime_config(args)
-        raw_channels = getattr(args, "channels", None)
-        channels = (
-            normalize_channel_values(raw_channels, default=CHANNEL_API, config=config)
-            if raw_channels
-            else enabled_channels_from_config(config)
-        )
-    except ChannelSelectionError as exc:
-        print(f"Channels: {exc}")
-        return 1
-
-    print(f"Channels: {', '.join(channels)}")
-    if CHANNEL_FEISHU in channels:
-        data = feishu_config(config)
-        if data.get("app_id") and data.get("app_secret"):
-            print("Feishu: configured")
-        else:
-            print("Feishu: missing app_id/app_secret")
-            ok = False
-    if CHANNEL_WEIXIN in channels:
-        data = weixin_config(config)
-        if data.get("account_id"):
-            print("Weixin: configured")
-        else:
-            print("Weixin: missing account_id")
-            ok = False
-    if CHANNEL_VOICE in channels:
-        try:
-            from ..voice.config import VoiceChannelConfig
-
-            data = voice_config(config)
-            if not data or data.get("enabled") is False:
-                raise ValueError("channels.voice is not enabled")
-            voice_runtime_config = VoiceChannelConfig.from_dict(data)
-            voice_runtime_config.resolved_provider()
-            voice_runtime_config.resolved_stt_api_key()
-            voice_runtime_config.resolved_tts_api_key()
-            print("Voice: configured")
-        except Exception as exc:
-            print(f"Voice: {exc}")
-            ok = False
-    if args.online:
-        print("Online checks are not implemented yet.")
-    return 0 if ok else 1
-
-
-def handle_version(_args: argparse.Namespace) -> int:
-    try:
-        from xagent.__version__ import __version__
-    except Exception:  # pragma: no cover - defensive
-        __version__ = "unknown"
-    print(f"xAgent {__version__}")
-    print(f"Python {sys.version.split()[0]}")
-    return 0
-
-
-def _runtime_is_initialized(config_dir: Path) -> bool:
-    config_file = config_dir / BaseAgentConfig.CONFIG_FILENAME
-    identity_file = config_dir / BaseAgentConfig.IDENTITY_FILENAME
-    if not config_file.is_file() or not identity_file.is_file():
-        return False
-    try:
-        return bool(identity_file.read_text(encoding="utf-8").strip())
-    except OSError:
-        return False
-
-
-def print_quick_start() -> None:
-    try:
-        config_dir = runtime_dir(_launcher_args(agent=None, config_dir=None))
-        initialized = _runtime_is_initialized(config_dir)
-        runtime_label = str(config_dir)
-    except Exception:
-        initialized = False
-        runtime_label = "(no active agent)"
-
-    print("xAgent")
-    print(f"Runtime: {runtime_label}")
-    print("")
-    if not initialized:
-        print("First time? Run:  xagent agents create default")
-        print("")
-    print("Use now:")
-    print("  xagent chat                     Chat in the terminal")
-    print("  xagent web open                 Open the browser web client")
-    print("  xagent voice                    Use microphone / speaker mode")
-    print("")
-    print("Keep running:")
-    print("  xagent api start                Start the api channel")
-    print("  xagent web start                Start the browser web client")
-    print("  xagent voice start              Start voice channel")
-    print("  xagent status                   Show channel and client status")
-    print("  xagent api logs -f              Follow api channel logs")
-    print("  xagent web logs -f              Follow web client logs")
-    print("")
-    print("Setup and inspect:")
-    print("  xagent setup                    Reconfigure the active agent")
-    print("  xagent voice setup              Configure the voice channel")
-    print("  xagent agents list              List agents")
-    print("  xagent agents select work       Switch active agent")
-    print("  xagent config validate          Validate config.yaml")
-    print("  xagent memory list --days 7     Show recent daily journals")
-    print("  xagent doctor                   Check readiness")
-    print("")
-    print("Full help: xagent --help")
-
-
-def _xagent_version_text() -> str:
-    try:
-        from xagent.__version__ import __version__
-    except Exception:  # pragma: no cover - defensive
-        return "unknown"
-    return __version__
-
-
-def _launcher_args(**kwargs: Any) -> argparse.Namespace:
-    return argparse.Namespace(**kwargs)
+def _final_text(result: dict[str, Any]) -> str:
+    final = ""
+    for item in result.get("events", []):
+        if item.get("type") == "message_done" and item.get("phase") == "final":
+            final = str(item.get("content") or "")
+        elif item.get("type") in {"text", "message"}:
+            final = str(item.get("content") or final)
+    return final

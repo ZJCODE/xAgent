@@ -135,10 +135,6 @@ class ModelClient:
         self.max_tokens = max_tokens
         self.reasoning = reasoning
 
-    @retry(
-        stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
-        wait=wait_exponential(multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT)
-    )
     async def call(
         self,
         messages: list,
@@ -147,65 +143,42 @@ class ModelClient:
         stream: bool = False,
         store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
-        """
-        Call the AI model with prepared messages.
-
-        Args:
-            messages: Input message list (user/assistant/tool content only).
-            tool_specs: Tool specifications for the model.
-            instructions: Static behavioural instructions (system prompt).
-            stream: Whether to stream the response.
-            store_reply: Async callback to store the final reply text.
-        Returns:
-            Tuple of (ReplyType, response_object).
-        """
-        try:
-            if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
-                response = await self.client.messages.create(
-                    **self._build_anthropic_create_params(
-                        messages=messages,
-                        tool_specs=tool_specs,
-                        instructions=instructions,
-                        stream=stream,
-                    )
+        """Collect the canonical model event stream into a simple reply."""
+        text_parts: list[str] = []
+        async for event in self.model_turn_events(
+            messages=messages,
+            tool_specs=tool_specs,
+            instructions=instructions,
+            stream=stream,
+        ):
+            if event.type in {"delta", "text"} and event.delta:
+                text_parts.append(event.delta)
+            elif event.type == "tool_calls":
+                return ReplyType.TOOL_CALL, event.tool_calls
+            elif event.type == "error":
+                return ReplyType.ERROR, event.error or ModelErrorEvent(
+                    code="model_stream_error",
+                    message="Model stream failed.",
                 )
-                if stream:
-                    return await self._handle_anthropic_stream(response, store_reply)
-                return self._handle_anthropic_non_stream(response)
 
-            if self.model_api == MODEL_API_OPENAI_RESPONSES:
-                response = await self.client.responses.create(
-                    **self._build_responses_create_params(
-                        messages=messages,
-                        tool_specs=tool_specs,
-                        instructions=instructions,
-                        stream=stream,
-                    )
-                )
-                if stream:
-                    return await self._handle_responses_stream(response, store_reply)
-                return self._handle_responses_non_stream(response)
-
-            response = await self.client.chat.completions.create(
-                **self._build_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=stream,
-                )
-            )
-
-            if stream:
-                return await self._handle_stream(response, store_reply)
-            return self._handle_non_stream(response)
-
-        except Exception as e:
-            logger.exception("Model call failed: %s", e)
+        if not text_parts:
             return ReplyType.ERROR, ModelErrorEvent(
-                code="model_call_failed",
-                message="Model call failed.",
-                details=str(e),
+                code="empty_model_response",
+                message="No valid output from model response.",
             )
+        text = "".join(text_parts)
+        if not stream:
+            if store_reply is not None:
+                await store_reply(text)
+            return ReplyType.SIMPLE_REPLY, text
+
+        async def stream_generator():
+            for part in text_parts:
+                yield part
+            if store_reply is not None:
+                await store_reply(text)
+
+        return ReplyType.SIMPLE_REPLY, stream_generator()
 
     async def stream_turn(
         self,
@@ -239,40 +212,22 @@ class ModelClient:
                     yield event
                 return
 
+            response = await self._create_response(
+                messages=messages,
+                tool_specs=tool_specs,
+                instructions=instructions,
+                stream=True,
+            )
             if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
-                response = await self.client.messages.create(
-                    **self._build_anthropic_create_params(
-                        messages=messages,
-                        tool_specs=tool_specs,
-                        instructions=instructions,
-                        stream=True,
-                    )
-                )
                 async for event in self._iter_anthropic_turn_events(response):
                     yield event
                 return
 
             if self.model_api == MODEL_API_OPENAI_RESPONSES:
-                response = await self.client.responses.create(
-                    **self._build_responses_create_params(
-                        messages=messages,
-                        tool_specs=tool_specs,
-                        instructions=instructions,
-                        stream=True,
-                    )
-                )
                 async for event in self._iter_responses_turn_events(response):
                     yield event
                 return
 
-            response = await self.client.chat.completions.create(
-                **self._build_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=True,
-                )
-            )
             async for event in self._iter_chat_turn_events(response):
                 yield event
         except Exception as exc:
@@ -292,39 +247,66 @@ class ModelClient:
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
     ) -> AsyncGenerator[ModelStreamEvent, None]:
+        response = await self._create_response(
+            messages=messages,
+            tool_specs=tool_specs,
+            instructions=instructions,
+            stream=False,
+        )
         if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
-            response = await self.client.messages.create(
-                **self._build_anthropic_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=False,
-                )
-            )
             events = self._anthropic_non_stream_turn_events(response)
         elif self.model_api == MODEL_API_OPENAI_RESPONSES:
-            response = await self.client.responses.create(
-                **self._build_responses_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=False,
-                )
-            )
             events = self._responses_non_stream_turn_events(response)
         else:
-            response = await self.client.chat.completions.create(
-                **self._build_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=False,
-                )
-            )
             events = self._chat_non_stream_turn_events(response)
 
         for event in events:
             yield event
+
+    @retry(
+        stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
+        wait=wait_exponential(
+            multiplier=1,
+            min=AgentConfig.RETRY_MIN_WAIT,
+            max=AgentConfig.RETRY_MAX_WAIT,
+        ),
+        reraise=True,
+    )
+    async def _create_response(
+        self,
+        *,
+        messages: list,
+        tool_specs: Optional[list],
+        instructions: Optional[Union[str, list[dict]]],
+        stream: bool,
+    ) -> Any:
+        """Create one provider response, retrying failures before any output exists."""
+        if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
+            return await self.client.messages.create(
+                **self._build_anthropic_create_params(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                    stream=stream,
+                )
+            )
+        if self.model_api == MODEL_API_OPENAI_RESPONSES:
+            return await self.client.responses.create(
+                **self._build_responses_create_params(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                    stream=stream,
+                )
+            )
+        return await self.client.chat.completions.create(
+            **self._build_create_params(
+                messages=messages,
+                tool_specs=tool_specs,
+                instructions=instructions,
+                stream=stream,
+            )
+        )
 
     def _build_create_params(
         self,
@@ -763,66 +745,6 @@ class ModelClient:
             })
         return tools
 
-    @staticmethod
-    def _handle_non_stream(
-        response,
-    ) -> tuple[ReplyType, object]:
-        """Handle a non-streaming model response."""
-        text = ModelClient._extract_response_text(response)
-        tool_calls = ModelClient._extract_tool_calls(response)
-        if tool_calls:
-            ModelClient._set_tool_calls_assistant_content(tool_calls, text or None)
-            return ReplyType.TOOL_CALL, tool_calls
-
-        if text:
-            return ReplyType.SIMPLE_REPLY, text
-
-        logger.warning("Model response contains no valid output: %s", response)
-        return ReplyType.ERROR, ModelErrorEvent(
-            code="empty_model_response",
-            message="No valid output from model response.",
-        )
-
-    @staticmethod
-    def _handle_responses_non_stream(
-        response,
-    ) -> tuple[ReplyType, object]:
-        """Handle a non-streaming OpenAI Responses API response."""
-        text = ModelClient._extract_responses_text(response)
-        tool_calls = ModelClient._extract_responses_tool_calls(response)
-        if tool_calls:
-            ModelClient._set_tool_calls_assistant_content(tool_calls, text or None)
-            return ReplyType.TOOL_CALL, tool_calls
-
-        if text:
-            return ReplyType.SIMPLE_REPLY, text
-
-        logger.warning("Responses API response contains no valid output: %s", response)
-        return ReplyType.ERROR, ModelErrorEvent(
-            code="empty_model_response",
-            message="No valid output from model response.",
-        )
-
-    @staticmethod
-    def _handle_anthropic_non_stream(
-        response,
-    ) -> tuple[ReplyType, object]:
-        """Handle a non-streaming Anthropic Messages response."""
-        text = ModelClient._extract_anthropic_response_text(response)
-        tool_calls = ModelClient._extract_anthropic_tool_calls(response)
-        if tool_calls:
-            ModelClient._set_tool_calls_assistant_content(tool_calls, text or None)
-            return ReplyType.TOOL_CALL, tool_calls
-
-        if text:
-            return ReplyType.SIMPLE_REPLY, text
-
-        logger.warning("Anthropic response contains no valid output: %s", response)
-        return ReplyType.ERROR, ModelErrorEvent(
-            code="empty_model_response",
-            message="No valid output from model response.",
-        )
-
     @classmethod
     def _chat_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
         text = cls._extract_response_text(response)
@@ -862,74 +784,6 @@ class ModelClient:
                 ),
             ))
         return events
-
-    async def _handle_stream(
-        self,
-        response,
-        store_reply: Optional[Callable[..., Awaitable]] = None,
-    ) -> tuple[ReplyType, object]:
-        """Handle a streaming model response."""
-        return await self._collect_stream_result(
-            self._iter_chat_turn_events(response),
-            store_reply,
-        )
-
-    async def _handle_responses_stream(
-        self,
-        response,
-        store_reply: Optional[Callable[..., Awaitable]] = None,
-    ) -> tuple[ReplyType, object]:
-        """Handle a streaming OpenAI Responses API response."""
-        return await self._collect_stream_result(
-            self._iter_responses_turn_events(response),
-            store_reply,
-        )
-
-    async def _handle_anthropic_stream(
-        self,
-        response,
-        store_reply: Optional[Callable[..., Awaitable]] = None,
-    ) -> tuple[ReplyType, object]:
-        """Handle a streaming Anthropic Messages response."""
-        return await self._collect_stream_result(
-            self._iter_anthropic_turn_events(response),
-            store_reply,
-        )
-
-    async def _collect_stream_result(
-        self,
-        events: AsyncGenerator[ModelStreamEvent, None],
-        store_reply: Optional[Callable[..., Awaitable]] = None,
-    ) -> tuple[ReplyType, object]:
-        """Collect model stream events into the ReplyType contract."""
-        text_parts: list[str] = []
-        async for event in events:
-            if event.type in {"delta", "text"} and event.delta:
-                text_parts.append(event.delta)
-                continue
-            if event.type == "tool_calls":
-                return ReplyType.TOOL_CALL, event.tool_calls
-            if event.type == "error":
-                return ReplyType.ERROR, event.error or ModelErrorEvent(
-                    code="model_stream_error",
-                    message="Model stream failed.",
-                )
-
-        if text_parts:
-            async def stream_generator():
-                for part in text_parts:
-                    yield part
-                final_text = "".join(text_parts)
-                if final_text and store_reply:
-                    await store_reply(final_text)
-
-            return ReplyType.SIMPLE_REPLY, stream_generator()
-
-        logger.warning("Stream response contains no recognized output")
-        return ReplyType.ERROR, ModelErrorEvent(
-            code="empty_stream_response",
-            message="No valid output from model response.",
-        )
 
     async def _iter_chat_turn_events(self, response) -> AsyncGenerator[ModelStreamEvent, None]:
         text_parts: list[str] = []

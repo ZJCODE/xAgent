@@ -43,6 +43,7 @@ class _FakeLLMService:
 class _FakeMessageStorage:
     def __init__(self, messages=None):
         self.messages = list(messages or [])
+        self.journal_state = {}
 
     async def get_message_count(self):
         return len(self.messages)
@@ -68,6 +69,12 @@ class _FakeMessageStorage:
         normalized = max(0, int(message_count or 0))
         return normalized if normalized <= len(self.messages) else 0
 
+    async def get_journal_state(self, key, default=None):
+        return self.journal_state.get(key, default)
+
+    async def set_journal_state(self, key, value):
+        self.journal_state[key] = str(value)
+
     def append(self, message: Message) -> None:
         self.messages.append(message)
 
@@ -86,9 +93,6 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def asyncTearDown(self):
-        maintenance_task = getattr(self.handler, "_maintenance_task", None)
-        if maintenance_task is not None and not maintenance_task.done():
-            await maintenance_task
         self._tmpdir.cleanup()
 
     async def test_get_recent_context_empty(self):
@@ -176,7 +180,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(record["timestamp"], 1710000000.0)
 
-    async def test_schedule_experience_write_triggers_background_maintenance(self):
+    async def test_experience_write_is_serialized(self):
         message = Message(
             role=RoleType.USER,
             sender_id="alice",
@@ -191,27 +195,10 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             max_history=1,
         )
 
-        handler.schedule_experience_write([message])
-        self.assertIsNotNone(handler._maintenance_task)
-        await handler._maintenance_task
+        await handler.run_maintenance()
 
         today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
         self.assertIn("write the diary anyway", today_text)
-
-    async def test_schedule_experience_write_ignores_routine_context_events(self):
-        routine_event = Message(
-            role=RoleType.ENVIRONMENT,
-            type=MessageType.CONTEXT_EVENT,
-            sender_id=None,
-            content="heartbeat tick",
-            timestamp=1710000000.0,
-            metadata={"event_type": "heartbeat", "source": "runtime"},
-        )
-        self.storage.append(routine_event)
-
-        self.handler.schedule_experience_write([routine_event])
-
-        self.assertIsNone(self.handler._maintenance_task)
 
     async def test_run_maintenance_skips_when_cursor_gap_below_threshold(self):
         self.storage.append(Message(
@@ -348,7 +335,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(wrote)
         self.assertEqual(handler._last_processed_message_id, 1)
         self.assertEqual(self.llm.diary_calls, [])
-        self.assertTrue(Path(self.memory.root / ".journal_cursor").exists())
+        self.assertEqual(storage.journal_state["diary_cursor"], "1")
 
     async def test_run_maintenance_does_not_advance_checkpoint_when_diary_write_fails(self):
         storage = _FakeMessageStorage([
@@ -372,7 +359,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(wrote)
         self.assertEqual(handler._last_processed_message_id, 0)
-        self.assertFalse(Path(self.memory.root / ".journal_cursor").exists())
+        self.assertNotIn("diary_cursor", storage.journal_state)
 
     async def test_run_maintenance_retries_full_window_after_partial_batch_failure(self):
         storage = _FakeMessageStorage([
@@ -426,8 +413,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             )
             for index in range(4)
         ])
-        state_path = self.memory.root / ".journal_cursor"
-        state_path.write_text("2", encoding="utf-8")
+        storage.journal_state["diary_cursor"] = "2"
         handler = MemoryHandler(
             memory=self.memory,
             llm_service=self.llm,
@@ -442,7 +428,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             [message["content"] for message in self.llm.diary_calls[0]["messages"]],
             ["entry 0", "entry 1", "entry 2", "entry 3"],
         )
-        self.assertEqual(state_path.read_text(encoding="utf-8").strip(), "4")
+        self.assertEqual(storage.journal_state["diary_cursor"], "4")
 
     async def test_run_maintenance_splits_oversized_period_by_source_budget(self):
         storage = _FakeMessageStorage([
@@ -536,46 +522,6 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.llm.diary_calls), 1)
         self.assertEqual(handler._last_processed_message_id, 8)
 
-    async def test_run_maintenance_serializes_handlers_with_workspace_lock(self):
-        storage = _FakeMessageStorage([
-            Message(
-                role=RoleType.USER,
-                sender_id="alice",
-                content="shared window",
-                timestamp=1712700000.0,
-            )
-        ])
-        blocking_llm = _FakeLLMService()
-        blocking_llm.diary_gate = asyncio.Event()
-        waiting_llm = _FakeLLMService()
-        first_handler = MemoryHandler(
-            memory=self.memory,
-            llm_service=blocking_llm,
-            message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
-        )
-        second_handler = MemoryHandler(
-            memory=self.memory,
-            llm_service=waiting_llm,
-            message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
-        )
-
-        first_task = asyncio.create_task(first_handler.run_maintenance(force=True))
-        await asyncio.wait_for(blocking_llm.diary_started.wait(), timeout=1)
-        second_task = asyncio.create_task(second_handler.run_maintenance(force=True))
-
-        await asyncio.sleep(0.05)
-        self.assertFalse(second_task.done())
-
-        blocking_llm.diary_gate.set()
-        first_result, second_result = await asyncio.gather(first_task, second_task)
-
-        self.assertTrue(first_result)
-        self.assertFalse(second_result)
-        self.assertEqual(len(blocking_llm.diary_calls), 1)
-        self.assertEqual(waiting_llm.diary_calls, [])
-
     async def test_run_maintenance_recovers_checkpoint_after_restart(self):
         storage = _FakeMessageStorage([
             Message(
@@ -595,7 +541,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         first_wrote = await first_handler.run_maintenance(force=True)
         self.assertTrue(first_wrote)
-        self.assertTrue(Path(self.memory.root / ".journal_cursor").exists())
+        self.assertEqual(storage.journal_state["diary_cursor"], "2")
 
         for index in range(2):
             storage.append(Message(

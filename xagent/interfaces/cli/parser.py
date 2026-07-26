@@ -1,637 +1,762 @@
-"""Argument parser assembly for the CLI."""
-
+"""Documented command surface for the single-Runtime architecture."""
 from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable, Sequence
 
-from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
-from . import agents, processes_status, runtime, setup, update
+from . import launcher, runtime, setup, web
+
+
+CHANNEL_NAMES = ("api", "feishu", "weixin", "voice")
+DELIVERY_STATUSES = (
+    "pending",
+    "sending",
+    "delivered",
+    "blocked",
+    "failed",
+    "unknown",
+)
+
+_TOP_LEVEL_HELP = """usage:
+  xagent
+  xagent <command> [options]
+
+xAgent runs one persistent individual through one Runtime and one ordered
+timeline. Use Web on a desktop, or the terminal launcher on a headless host.
+
+Setup and navigation:
+  setup                         Create the active Agent's config and identity
+  launcher                      Open the headless terminal control surface
+  web                           Open the desktop browser management UI
+
+Runtime lifecycle:
+  run                           Run the Runtime in the foreground
+  start                         Idempotently start it in the background
+  stop                          Gracefully stop it
+  restart                       Gracefully replace it
+  status                        Show Runtime and channel state
+
+Interaction and operations:
+  chat [message]                Chat through the Runtime
+  channel list                  List hot-swappable channels
+  channel setup <name>          Configure api, feishu, weixin, or voice
+  channel start <name>          Enable and start one channel
+  channel stop <name>           Disable and stop one channel
+  channel restart <name>        Restart only one channel
+  delivery list                 Inspect durable outbound deliveries
+  delivery retry <id>           Explicitly retry one blocked delivery
+  person list                   List people and linked channel accounts
+  person link ...               Explicitly link an account to a person
+
+Target selection:
+  --agent NAME                  Use a managed Agent instead of the active one
+
+Lifecycle rules:
+  * The Runtime remains alive when every channel is disabled.
+  * `stop` does not change persisted channel enabled states.
+  * Starting a channel starts the Runtime first when necessary.
+  * Deliveries blocked by a disabled channel are never sent until retried.
+
+Examples:
+  xagent setup
+  xagent
+  xagent web
+  xagent start --agent mono
+  xagent channel setup feishu --agent mono
+  xagent channel start feishu --agent mono
+  xagent delivery list --status blocked --json --agent mono
+  xagent status --json
+
+Run `xagent <command> -h` for command-specific options and examples.
+"""
 
 
 class XAgentArgumentParser(argparse.ArgumentParser):
-    """Root parser with task-oriented help instead of argparse's flat command list."""
-
     def error(self, message: str) -> None:
         if self.prog == "xagent" and "invalid choice" in message:
             self.print_usage(sys.stderr)
-            self.exit(2, "xagent: error: unknown command. Use 'xagent --help' to see available commands.\n")
-        if "arguments are required" in message:
-            self.print_help(sys.stderr)
-            self.exit(2)
+            self.exit(2, "xagent: error: unknown command. Use 'xagent -h'.\n")
         super().error(message)
 
     def format_help(self) -> str:
-        if self.prog != "xagent":
-            return super().format_help()
-        return "\n".join([
-            "usage: xagent <command> ...",
-            "",
-            "xAgent — your personal AI agent",
-            "",
-            "Setup:",
-            "  setup       Configure the active agent",
-            "  agents      Create, select, inspect, or remove agents",
-            "  update      Update xAgent using its current installation method",
-            "",
-            "Use Now:",
-            "  chat        Chat in the terminal",
-            "  web         Manage the browser web UI",
-            "  voice       Use microphone / speaker mode for this session",
-            "",
-            "Keep Running:",
-            "  api         API channel: start, stop, restart, status, logs",
-            "  voice       Voice channel: start, stop, restart, status, logs",
-            "  feishu      Feishu bot: setup, start, stop, restart, status, logs",
-            "  weixin      Weixin DM: setup, start, stop, restart, status, logs",
-            "  status      Show all configured channel processes",
-            "  processes   List or restart all managed background processes",
-            "",
-            "Inspect:",
-            "  config      Show, validate, or locate config.yaml",
-            "  memory      List, search, stats, or clear long-term memory",
-            "  inspect     Inspect identity, messages, skills, or tasks",
-            "  doctor      Check local xAgent readiness",
-            "",
-            "Advanced:",
-            "  observe     Ingest context without generating a reply",
-            "  version     Show xAgent version",
-            "",
-            "Common Flows:",
-            "  xagent setup",
-            "  xagent update",
-            "  xagent agents create work",
-            "  xagent agents select work",
-            '  xagent chat "Help me plan today"',
-            "  xagent api start",
-            "  xagent web start",
-            "  xagent web open",
-            "  xagent status",
-            "  xagent api logs -f",
-            "  xagent voice setup",
-            "  xagent voice logs -f",
-            "  xagent feishu setup",
-            "  xagent feishu start",
-            "  xagent weixin setup",
-            "  xagent weixin start",
-            "  xagent config show",
-            "  xagent memory list --days 7",
-            "  xagent doctor",
-            "",
-            "Use 'xagent <command> --help' for detailed options.",
-            "",
-        ])
+        if self.prog == "xagent":
+            return _TOP_LEVEL_HELP
+        return super().format_help()
 
 
-def _show_help_on_missing_action(parser: argparse.ArgumentParser) -> None:
-    """Make a parser print its help instead of an error when a required
-    sub-action / sub-target is omitted (e.g. ``xagent feishu`` without
-    ``start`` or ``setup``)."""
-
-    _original_error = parser.error
-
-    def _custom_error(message: str) -> None:
-        if "arguments are required" in message:
-            parser.print_help(sys.stderr)
-            parser.exit(2)
-        _original_error(message)
-
-    parser.error = _custom_error  # type: ignore[method-assign]
+def _examples(*commands: str) -> str:
+    return "Examples:\n" + "\n".join(f"  {command}" for command in commands)
 
 
-def _add_agent_argument(parser: argparse.ArgumentParser) -> None:
+def _command_parser(
+    subparsers: argparse._SubParsersAction,
+    name: str,
+    *,
+    help: str,
+    description: str,
+    examples: Sequence[str] = (),
+) -> argparse.ArgumentParser:
+    return subparsers.add_parser(
+        name,
+        help=help,
+        description=description,
+        epilog=_examples(*examples) if examples else None,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+
+def _add_target(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--agent",
-        dest="agent",
+        metavar="NAME",
         default=None,
-        help="Managed agent name (default: active agent)",
+        help="target managed Agent; defaults to the active Agent",
     )
+    parser.add_argument("--config-dir", default=None, help=argparse.SUPPRESS)
 
 
-def _add_channel_argument(
-    parser: argparse.ArgumentParser,
+def _add_runtime_command(
+    subparsers: argparse._SubParsersAction,
+    name: str,
+    handler: Callable,
     *,
-    default_label: str,
-) -> None:
+    help: str,
+    description: str,
+    examples: Sequence[str],
+) -> argparse.ArgumentParser:
+    parser = _command_parser(
+        subparsers,
+        name,
+        help=help,
+        description=description,
+        examples=examples,
+    )
+    _add_target(parser)
+    parser.set_defaults(handler=handler)
+    return parser
+
+
+def _add_setup_target(parser: argparse.ArgumentParser) -> None:
+    _add_target(parser)
     parser.add_argument(
-        "--channel",
-        dest="channels",
-        action="append",
-        default=None,
-        metavar="CHANNELS",
-        help=f"Channel(s) to use: api, feishu, weixin, voice, or comma-separated values (default: {default_label})",
+        "--force",
+        action="store_true",
+        help="replace existing settings for this setup target",
     )
 
 
-def _add_api_runtime_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--host", default=None, help="API host override")
-    parser.add_argument("--port", type=int, default=None, help="API port override")
-    parser.add_argument(
-        "--max-concurrent-chats",
+def _add_channel_setup_commands(
+    channel_sub: argparse._SubParsersAction,
+) -> None:
+    channel_setup = _command_parser(
+        channel_sub,
+        "setup",
+        help="configure one channel",
+        description=(
+            "Configure exactly one transport. Options are channel-specific; "
+            "setup does not start the channel."
+        ),
+        examples=(
+            "xagent channel setup api --host 127.0.0.1 --port 8010",
+            "xagent channel setup feishu",
+            "xagent channel setup weixin",
+            "xagent channel setup voice --provider qwen",
+        ),
+    )
+    setup_sub = channel_setup.add_subparsers(
+        dest="name",
+        title="channels",
+        metavar="{api,feishu,weixin,voice}",
+        required=True,
+    )
+
+    api = _command_parser(
+        setup_sub,
+        "api",
+        help="configure the public HTTP/WebSocket channel",
+        description=(
+            "Configure the public API listener. This is separate from the "
+            "authenticated loopback Runtime control service."
+        ),
+        examples=(
+            "xagent channel setup api",
+            "xagent channel setup api --host 0.0.0.0 --port 8010 --agent mono",
+        ),
+    )
+    _add_target(api)
+    api.add_argument(
+        "--host",
+        metavar="HOST",
+        default=None,
+        help="listen address; defaults to the configured value or 127.0.0.1",
+    )
+    api.add_argument(
+        "--port",
+        metavar="PORT",
         type=int,
         default=None,
-        help="Maximum concurrent chat/observe requests",
+        help="listen port; defaults to the configured value or 8010",
     )
-    parser.add_argument(
-        "--queue-timeout",
-        type=float,
-        default=None,
-        help="Seconds to wait for a chat slot",
+    api.set_defaults(handler=runtime.handle_channel)
+
+    feishu = _command_parser(
+        setup_sub,
+        "feishu",
+        help="configure the Feishu bot channel",
+        description=(
+            "Configure Feishu using one-click registration or explicit app "
+            "credentials. Existing settings require --force."
+        ),
+        examples=(
+            "xagent channel setup feishu",
+            "xagent channel setup feishu --manual --app-id APP_ID --app-secret APP_SECRET",
+            "xagent channel setup feishu --force --agent mono",
+        ),
     )
-    parser.add_argument(
-        "--chat-timeout",
-        type=float,
-        default=None,
-        help="Seconds before a chat or observe request times out",
-    )
-
-
-def _add_web_client_arguments(parser: argparse.ArgumentParser, *, open_by_default: bool = False) -> None:
-    parser.add_argument("--host", default=None, help="Web client host override")
-    parser.add_argument("--port", type=int, default=None, help="Web client port override")
-    parser.add_argument("--api-url", dest="api_url", default=None, help="Upstream api channel URL")
-    if open_by_default:
-        parser.add_argument(
-            "--open",
-            action=argparse.BooleanOptionalAction,
-            default=True,
-            dest="open_browser",
-            help="Open the web client in a browser",
-        )
-    else:
-        parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the web client in a browser")
-
-
-def _add_voice_runtime_arguments(
-    parser: argparse.ArgumentParser,
-    *,
-    include_list_devices: bool = False,
-) -> None:
-    parser.add_argument("--user-id", dest="user_id", default="local_voice", help="Speaker identifier")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    if include_list_devices:
-        parser.add_argument(
-            "--list-devices",
-            action="store_true",
-            help="List available local audio input/output devices and exit",
-        )
-    parser.add_argument(
-        "--input-device",
-        default=None,
-        help="Override voice input device by name, #index, index, or auto",
-    )
-    parser.add_argument(
-        "--output-device",
-        default=None,
-        help="Override voice output device by name, #index, index, or auto",
-    )
-
-
-def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:
-    _add_agent_argument(parser)
-    parser.add_argument("--app-id", dest="app_id", default=None, help="Feishu app id (cli_xxx)")
-    parser.add_argument("--app-secret", dest="app_secret", default=None, help="Feishu app secret")
-    parser.add_argument(
+    _add_setup_target(feishu)
+    feishu.add_argument(
         "--manual",
         action="store_true",
-        help="Enter App ID/Secret manually instead of the one-click QR code flow",
+        help="enter an existing App ID and App Secret instead of one-click setup",
     )
-    parser.add_argument(
+    feishu.add_argument("--app-id", metavar="ID", default=None, help="Feishu App ID")
+    feishu.add_argument(
+        "--app-secret",
+        metavar="SECRET",
+        default=None,
+        help="Feishu App Secret",
+    )
+    feishu.add_argument(
         "--stream",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Use Feishu streaming cards for in-progress replies",
+        help="stream model output when the Feishu transport supports it",
     )
-
-    parser.add_argument(
+    feishu.add_argument(
         "--group-fetch-limit",
+        metavar="COUNT",
         type=int,
         default=None,
-        dest="group_fetch_limit",
-        help="How many recent group/topic messages to fetch before replying (default: 10)",
+        help="recent group messages to fetch for context; 0 disables fetching",
     )
-    parser.add_argument(
+    feishu.add_argument(
         "--group-reply-only-when-mentioned",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Record unmentioned group/topic messages but only reply when @mentioned",
+        help="reply in groups only when the Agent is mentioned",
     )
-    parser.add_argument("--force", action="store_true", help="Overwrite existing channels.feishu config")
+    feishu.set_defaults(handler=runtime.handle_channel)
 
-
-def _add_weixin_setup_arguments(parser: argparse.ArgumentParser) -> None:
-    _add_agent_argument(parser)
-    parser.add_argument("--base-url", default=None, help="Weixin iLink API base URL")
-    parser.add_argument("--cdn-base-url", default=None, help="Weixin iLink CDN base URL")
-    parser.add_argument("--bot-type", default="3", help="iLink bot_type for QR login (default: 3)")
-    parser.add_argument(
+    weixin = _command_parser(
+        setup_sub,
+        "weixin",
+        help="configure the Weixin direct-message channel",
+        description=(
+            "Authenticate the Weixin iLink channel by QR code. Only direct "
+            "messages are handled. Existing settings require --force."
+        ),
+        examples=(
+            "xagent channel setup weixin",
+            "xagent channel setup weixin --allow-user USER_ID",
+            "xagent channel setup weixin --no-owner-only --force --agent mono",
+        ),
+    )
+    _add_setup_target(weixin)
+    weixin.add_argument(
+        "--base-url",
+        metavar="URL",
+        default=None,
+        help="iLink API base URL",
+    )
+    weixin.add_argument(
+        "--cdn-base-url",
+        metavar="URL",
+        default=None,
+        help="media CDN base URL",
+    )
+    weixin.add_argument(
+        "--bot-type",
+        metavar="TYPE",
+        default="3",
+        help="iLink bot type; default: 3",
+    )
+    weixin.add_argument(
         "--owner-only",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Only allow the QR-authorizing Weixin user to trigger xAgent",
+        help="restrict access to the authenticated owner; default: enabled",
     )
-    parser.add_argument(
+    weixin.add_argument(
         "--allow-user",
+        metavar="USER_ID",
         action="append",
-        default=None,
         dest="allow_users",
-        help="Additional Weixin user id allowed to trigger the DM channel; can be repeated or comma-separated",
+        default=None,
+        help="allow an additional user; repeat for multiple users",
     )
-    parser.add_argument(
+    weixin.add_argument(
         "--media",
         action=argparse.BooleanOptionalAction,
-        default=True,
         dest="media_enabled",
-        help="Enable inbound/outbound Weixin media download and upload",
+        default=True,
+        help="enable inbound and outbound media; default: enabled",
     )
-    parser.add_argument("--force", action="store_true", help="Overwrite existing channels.weixin config and refresh QR login")
+    weixin.set_defaults(handler=runtime.handle_channel)
 
-
-def _add_voice_setup_arguments(parser: argparse.ArgumentParser) -> None:
-    _add_agent_argument(parser)
-    parser.add_argument("--provider", choices=("soniox", "qwen", "custom"), default=None, help="Voice provider")
-    parser.add_argument("--api-key", dest="api_key", default=None, help="Voice provider API key")
-    parser.add_argument("--stt-provider", choices=("soniox", "qwen"), default=None, help="STT provider for custom voice")
-    parser.add_argument("--stt-api-key", dest="stt_api_key", default=None, help="STT provider API key")
-    parser.add_argument("--tts-provider", choices=("soniox", "qwen"), default=None, help="TTS provider for custom voice")
-    parser.add_argument("--tts-api-key", dest="tts_api_key", default=None, help="TTS provider API key")
-    parser.add_argument(
+    voice = _command_parser(
+        setup_sub,
+        "voice",
+        help="configure the local microphone/speaker channel",
+        description=(
+            "Configure local speech recognition and synthesis. Choose one "
+            "provider for both directions or custom providers for STT and TTS."
+        ),
+        examples=(
+            "xagent channel setup voice --provider soniox",
+            "xagent channel setup voice --provider qwen --wake",
+            "xagent channel setup voice --provider custom --stt-provider soniox --tts-provider qwen",
+        ),
+    )
+    _add_setup_target(voice)
+    voice.add_argument(
+        "--provider",
+        choices=("soniox", "qwen", "custom"),
+        default=None,
+        help="voice provider mode",
+    )
+    voice.add_argument(
+        "--api-key",
+        metavar="KEY",
+        default=None,
+        help="shared STT/TTS key for soniox or qwen mode",
+    )
+    voice.add_argument(
+        "--stt-provider",
+        choices=("soniox", "qwen"),
+        default=None,
+        help="speech-to-text provider in custom mode",
+    )
+    voice.add_argument(
+        "--stt-api-key",
+        metavar="KEY",
+        default=None,
+        help="speech-to-text API key in custom mode",
+    )
+    voice.add_argument(
+        "--tts-provider",
+        choices=("soniox", "qwen"),
+        default=None,
+        help="text-to-speech provider in custom mode",
+    )
+    voice.add_argument(
+        "--tts-api-key",
+        metavar="KEY",
+        default=None,
+        help="text-to-speech API key in custom mode",
+    )
+    voice.add_argument(
         "--wake",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Enable wake phrases for voice",
+        help="require a wake phrase before accepting speech",
     )
-    parser.add_argument("--wake-phrases", default=None, help="Comma-separated wake phrases")
-    parser.add_argument("--exit-phrases", default=None, help="Comma-separated exit phrases")
-    parser.add_argument(
+    voice.add_argument(
+        "--wake-phrase",
+        metavar="TEXT",
+        action="append",
+        dest="wake_phrases",
+        default=None,
+        help="wake phrase; repeat for multiple phrases",
+    )
+    voice.add_argument(
+        "--exit-phrase",
+        metavar="TEXT",
+        action="append",
+        dest="exit_phrases",
+        default=None,
+        help="phrase that returns voice to wake-waiting mode; repeatable",
+    )
+    voice.add_argument(
         "--interruptions",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Enable voice interruptions",
+        help="allow new speech to interrupt current playback",
     )
-    parser.add_argument("--force", action="store_true", help="Overwrite existing channels.voice config")
-
-
-def _add_channel_lifecycle_subparsers(
-    parent_parser: argparse.ArgumentParser,
-    channel: str,
-    *,
-    dest: str,
-    has_setup: bool = False,
-) -> None:
-    """Register start / stop / status / logs / restart (and optionally setup)
-    as sub-actions under a top-level channel parser."""
-
-    sub = parent_parser.add_subparsers(dest=dest, metavar="<action>")
-    sub.required = True
-
-    if has_setup and channel == CHANNEL_FEISHU:
-        setup_parser = sub.add_parser("setup", help="Enable or reconfigure the Feishu channel")
-        _add_feishu_setup_arguments(setup_parser)
-        setup_parser.set_defaults(handler=setup.handle_init_feishu)
-    elif has_setup and channel == CHANNEL_WEIXIN:
-        setup_parser = sub.add_parser("setup", help="Enable or reconfigure the Weixin DM channel")
-        _add_weixin_setup_arguments(setup_parser)
-        setup_parser.set_defaults(handler=setup.handle_init_weixin)
-
-    start_parser = sub.add_parser("start", help=f"Start the {channel} channel in the background")
-    _add_agent_argument(start_parser)
-    if channel == CHANNEL_API:
-        _add_api_runtime_arguments(start_parser)
-    start_parser.set_defaults(handler=runtime.handle_start, channels=[channel])
-
-    stop_parser = sub.add_parser("stop", help=f"Stop the background {channel} channel")
-    _add_agent_argument(stop_parser)
-    stop_parser.set_defaults(handler=runtime.handle_stop, channels=[channel])
-
-    restart_parser = sub.add_parser("restart", help=f"Restart the background {channel} channel")
-    _add_agent_argument(restart_parser)
-    if channel == CHANNEL_API:
-        _add_api_runtime_arguments(restart_parser)
-    restart_parser.set_defaults(handler=runtime.handle_restart, channels=[channel])
-
-    status_parser = sub.add_parser("status", help=f"Show {channel} channel status")
-    _add_agent_argument(status_parser)
-    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    status_parser.set_defaults(handler=runtime.handle_status, channels=[channel])
-
-    logs_parser = sub.add_parser("logs", help=f"Show {channel} channel logs")
-    _add_agent_argument(logs_parser)
-    logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    logs_parser.set_defaults(handler=runtime.handle_logs, channels=[channel])
-
-
-def _add_web_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> None:
-    sub = parent_parser.add_subparsers(dest="web_action", metavar="<action>")
-    sub.required = True
-
-    open_parser = sub.add_parser("open", help="Open the running web client in a browser")
-    _add_agent_argument(open_parser)
-    open_parser.set_defaults(handler=runtime.handle_web_open)
-
-    start_parser = sub.add_parser("start", help="Start the web client in the background")
-    _add_agent_argument(start_parser)
-    _add_web_client_arguments(start_parser)
-    start_parser.set_defaults(handler=runtime.handle_web_start)
-
-    stop_parser = sub.add_parser("stop", help="Stop the background web client")
-    _add_agent_argument(stop_parser)
-    stop_parser.set_defaults(handler=runtime.handle_web_stop)
-
-    restart_parser = sub.add_parser("restart", help="Restart the background web client")
-    _add_agent_argument(restart_parser)
-    _add_web_client_arguments(restart_parser)
-    restart_parser.set_defaults(handler=runtime.handle_web_restart)
-
-    status_parser = sub.add_parser("status", help="Show web client status")
-    _add_agent_argument(status_parser)
-    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    status_parser.set_defaults(handler=runtime.handle_web_status)
-
-    logs_parser = sub.add_parser("logs", help="Show web client logs")
-    _add_agent_argument(logs_parser)
-    logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    logs_parser.set_defaults(handler=runtime.handle_web_logs)
-
-
-def _hide_subparser_choice(subparsers: argparse._SubParsersAction, name: str) -> None:
-    subparsers._choices_actions = [
-        action for action in subparsers._choices_actions if action.dest != name
-    ]
+    voice.set_defaults(handler=runtime.handle_channel)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = XAgentArgumentParser(
-        prog="xagent",
-        description="xAgent command line interface",
+    parser = XAgentArgumentParser(prog="xagent", add_help=True)
+    sub = parser.add_subparsers(dest="command")
+
+    setup_parser = _command_parser(
+        sub,
+        "setup",
+        help="create config and identity for the active Agent",
+        description=(
+            "Create the strict schema-version 2 configuration, identity, "
+            "workspace and memory directories for one Agent."
+        ),
+        examples=(
+            "xagent setup",
+            "xagent setup --force",
+        ),
     )
-    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
-
-    # ------------------------------------------------------------------
-    # Get Started
-    # ------------------------------------------------------------------
-
-    setup_parser = subparsers.add_parser("setup", help="Create or reconfigure config.yaml and identity.md")
-    _add_agent_argument(setup_parser)
-    setup_parser.add_argument("--force", action="store_true", help="Overwrite setup-managed files")
+    _add_target(setup_parser)
+    setup_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="replace existing config and identity files",
+    )
     setup_parser.set_defaults(handler=setup.handle_init)
 
-    chat_parser = subparsers.add_parser("chat", help="Start an interactive chat or send a single message")
-    chat_parser.add_argument("message", nargs="?", help="Single message to send; omit for interactive chat")
-    _add_agent_argument(chat_parser)
-    chat_parser.add_argument("--user-id", dest="user_id", default=None, help="Speaker identifier")
-    chat_parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    chat_parser.add_argument(
-        "--events",
-        action="store_true",
-        help="Use segmented event output for a single message",
+    launcher_parser = _command_parser(
+        sub,
+        "launcher",
+        help="open the headless terminal control surface",
+        description=(
+            "Open the keyboard-driven terminal control surface for SSH and "
+            "headless systems. Exiting it does not stop the Runtime."
+        ),
+        examples=(
+            "xagent",
+            "xagent launcher",
+            "xagent launcher --agent mono",
+        ),
     )
-    chat_parser.add_argument(
-        "--stream",
-        action=argparse.BooleanOptionalAction,
+    launcher_parser.add_argument(
+        "--agent",
+        metavar="NAME",
         default=None,
-        help="Print message deltas as they are emitted in event mode",
+        help="initial managed Agent; defaults to the active Agent",
     )
-    chat_parser.set_defaults(handler=runtime.handle_chat)
+    launcher_parser.set_defaults(handler=launcher.handle_launcher)
 
-    voice_parser = subparsers.add_parser("voice", help="Talk with your agent by microphone")
-    _add_agent_argument(voice_parser)
-    _add_voice_runtime_arguments(voice_parser, include_list_devices=True)
-    voice_parser.set_defaults(handler=runtime.handle_voice)
-    voice_sub = voice_parser.add_subparsers(dest="voice_action", metavar="<action>")
-
-    voice_setup = voice_sub.add_parser("setup", help="Enable or reconfigure the voice channel")
-    _add_voice_setup_arguments(voice_setup)
-    voice_setup.set_defaults(handler=setup.handle_init_voice)
-
-    voice_start = voice_sub.add_parser("start", help="Start the voice channel in the background")
-    _add_agent_argument(voice_start)
-    _add_voice_runtime_arguments(voice_start)
-    voice_start.set_defaults(handler=runtime.handle_start, channels=[CHANNEL_VOICE])
-
-    voice_stop = voice_sub.add_parser("stop", help="Stop the background voice channel")
-    _add_agent_argument(voice_stop)
-    voice_stop.set_defaults(handler=runtime.handle_stop, channels=[CHANNEL_VOICE])
-
-    voice_restart = voice_sub.add_parser("restart", help="Restart the background voice channel")
-    _add_agent_argument(voice_restart)
-    _add_voice_runtime_arguments(voice_restart)
-    voice_restart.set_defaults(handler=runtime.handle_restart, channels=[CHANNEL_VOICE])
-
-    voice_status = voice_sub.add_parser("status", help="Show voice channel status")
-    _add_agent_argument(voice_status)
-    voice_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    voice_status.set_defaults(handler=runtime.handle_status, channels=[CHANNEL_VOICE])
-
-    voice_logs = voice_sub.add_parser("logs", help="Show voice channel logs")
-    _add_agent_argument(voice_logs)
-    voice_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    voice_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    voice_logs.set_defaults(handler=runtime.handle_logs, channels=[CHANNEL_VOICE])
-
-    # ------------------------------------------------------------------
-    # Channels
-    # ------------------------------------------------------------------
-
-    api_parser = subparsers.add_parser("api", help="Manage the HTTP/WebSocket API channel")
-    _add_channel_lifecycle_subparsers(api_parser, CHANNEL_API, dest="api_action")
-    _show_help_on_missing_action(api_parser)
-
-    web_parser = subparsers.add_parser("web", help="Manage the browser web client")
-    _add_web_lifecycle_subparsers(web_parser)
-    _show_help_on_missing_action(web_parser)
-
-    feishu_parser = subparsers.add_parser("feishu", help="Manage the Feishu bot")
-    _add_channel_lifecycle_subparsers(feishu_parser, CHANNEL_FEISHU, dest="feishu_action", has_setup=True)
-    _show_help_on_missing_action(feishu_parser)
-
-    weixin_parser = subparsers.add_parser("weixin", help="Manage the Weixin DM channel")
-    _add_channel_lifecycle_subparsers(weixin_parser, CHANNEL_WEIXIN, dest="weixin_action", has_setup=True)
-    _show_help_on_missing_action(weixin_parser)
-
-    status_parser = subparsers.add_parser("status", help="Show running status of all channels")
-    _add_agent_argument(status_parser)
-    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    status_parser.set_defaults(handler=runtime.handle_status_all)
-
-    # ------------------------------------------------------------------
-    # Inspect
-    # ------------------------------------------------------------------
-
-    config_parser = subparsers.add_parser("config", help="View or validate config.yaml")
-    config_sub = config_parser.add_subparsers(dest="config_command", metavar="<action>")
-    config_sub.required = True
-    for command_name in ("show", "validate", "path"):
-        config_cmd = config_sub.add_parser(command_name, help=f"{command_name} config.yaml")
-        _add_agent_argument(config_cmd)
-        config_cmd.set_defaults(handler=runtime.handle_config)
-    _show_help_on_missing_action(config_parser)
-
-    memory_parser = subparsers.add_parser("memory", help="Browse, search, or clear long-term memory")
-    memory_sub = memory_parser.add_subparsers(dest="memory_command", metavar="<action>")
-    memory_sub.required = True
-    for command_name in ("stats", "clear"):
-        memory_cmd = memory_sub.add_parser(command_name, help=f"{command_name} memory")
-        _add_agent_argument(memory_cmd)
-        memory_cmd.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
-        memory_cmd.add_argument("--yes", action="store_true", help="Confirm destructive operations")
-        memory_cmd.set_defaults(handler=runtime.handle_memory)
-    memory_list = memory_sub.add_parser("list", help="Show recent daily journals")
-    _add_agent_argument(memory_list)
-    memory_list.add_argument("--days", type=int, default=setup.DEFAULT_MEMORY_LIST_DAYS, help="Recent natural days to scan")
-    memory_list.set_defaults(handler=runtime.handle_memory)
-    memory_search = memory_sub.add_parser("search", help="Search memory markdown files")
-    _add_agent_argument(memory_search)
-    memory_search.add_argument("query", help="Search query")
-    memory_search.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
-    memory_search.set_defaults(handler=runtime.handle_memory)
-    _show_help_on_missing_action(memory_parser)
-
-    inspect_parser = subparsers.add_parser("inspect", help="Inspect identity, messages, skills, or tasks")
-    inspect_sub = inspect_parser.add_subparsers(dest="inspect_target", metavar="<target>")
-    inspect_sub.required = True
-
-    identity_parser = inspect_sub.add_parser("identity", help="Show identity.md information")
-    identity_sub = identity_parser.add_subparsers(dest="identity_command", metavar="<action>")
-    identity_sub.required = True
-    for command_name in ("show", "path"):
-        identity_cmd = identity_sub.add_parser(command_name, help=f"{command_name} identity.md")
-        _add_agent_argument(identity_cmd)
-        identity_cmd.set_defaults(handler=runtime.handle_identity)
-    _show_help_on_missing_action(identity_parser)
-
-    messages_parser = inspect_sub.add_parser("messages", help="Inspect or clear the message stream")
-    messages_sub = messages_parser.add_subparsers(dest="messages_command", metavar="<action>")
-    messages_sub.required = True
-    messages_stats = messages_sub.add_parser("stats", help="Show message stream statistics")
-    _add_agent_argument(messages_stats)
-    messages_stats.set_defaults(handler=runtime.handle_messages)
-    messages_list = messages_sub.add_parser("list", help="List recent messages")
-    _add_agent_argument(messages_list)
-    messages_list.add_argument("--count", type=int, default=20, help="Number of recent messages")
-    messages_list.add_argument("--offset", type=int, default=0, help="Number of recent messages to skip")
-    messages_list.set_defaults(handler=runtime.handle_messages)
-    messages_clear = messages_sub.add_parser("clear", help="Clear all stored messages")
-    _add_agent_argument(messages_clear)
-    messages_clear.add_argument("--yes", action="store_true", help="Confirm clearing the message stream")
-    messages_clear.set_defaults(handler=runtime.handle_messages)
-    _show_help_on_missing_action(messages_parser)
-    _show_help_on_missing_action(inspect_parser)
-
-    # ------------------------------------------------------------------
-    # Other
-    # ------------------------------------------------------------------
-
-    doctor_parser = subparsers.add_parser("doctor", help="Check local xAgent readiness")
-    _add_agent_argument(doctor_parser)
-    _add_channel_argument(doctor_parser, default_label="enabled channels")
-    doctor_parser.add_argument("--online", action="store_true", help="Include network/model checks")
-    doctor_parser.set_defaults(handler=runtime.handle_doctor)
-
-    processes_parser = subparsers.add_parser(
-        "processes",
-        help="List or restart all managed background processes",
+    web_parser = _command_parser(
+        sub,
+        "web",
+        help="open the desktop browser management UI",
+        description=(
+            "Run the desktop management center in the foreground and open it in "
+            "a browser. Manage Agents, messages, memory, tasks, channels, and "
+            "recovery from one place. It is unauthenticated, so it only listens "
+            "on loopback. Stopping Web does not stop any Agent Runtime."
+        ),
+        examples=(
+            "xagent web",
+            "xagent web --no-open",
+            "xagent web --port 8080 --agent mono",
+        ),
     )
-    processes_sub = processes_parser.add_subparsers(dest="processes_action", metavar="<action>")
-    processes_sub.required = True
-    processes_status_parser = processes_sub.add_parser("status", help="Show status of all managed processes")
-    processes_status_parser.add_argument(
+    web_parser.add_argument(
+        "--agent",
+        metavar="NAME",
+        default=None,
+        help="initial managed Agent; defaults to the active Agent",
+    )
+    web_parser.add_argument(
+        "--host",
+        metavar="HOST",
+        type=web.loopback_host,
+        default=web.DEFAULT_WEB_HOST,
+        help="loopback listen address; default: 127.0.0.1",
+    )
+    web_parser.add_argument(
+        "--port",
+        metavar="PORT",
+        type=web.web_port,
+        default=web.DEFAULT_WEB_PORT,
+        help="listen port; default: 1415",
+    )
+    web_parser.add_argument(
+        "--open",
+        action=argparse.BooleanOptionalAction,
+        dest="open_browser",
+        default=True,
+        help="open the Web UI in the default browser; default: enabled",
+    )
+    web_parser.set_defaults(handler=web.handle_web)
+
+    _add_runtime_command(
+        sub,
+        "run",
+        runtime.handle_runtime_foreground,
+        help="run the Runtime in the foreground",
+        description=(
+            "Run the single Runtime attached to this terminal. Use this for "
+            "service supervisors and debugging; SIGINT/SIGTERM stop it gracefully."
+        ),
+        examples=("xagent run", "xagent run --agent mono"),
+    )
+    _add_runtime_command(
+        sub,
+        "start",
+        runtime.handle_runtime_start,
+        help="start the Runtime in the background",
+        description=(
+            "Idempotently start one background Runtime. If another launcher "
+            "wins the process lease, this command reuses that healthy instance."
+        ),
+        examples=("xagent start", "xagent start --agent mono"),
+    )
+    _add_runtime_command(
+        sub,
+        "stop",
+        runtime.handle_runtime_stop,
+        help="gracefully stop the Runtime",
+        description=(
+            "Stop the whole Runtime through its authenticated control service. "
+            "Persisted channel enabled states are not changed."
+        ),
+        examples=("xagent stop", "xagent stop --agent mono"),
+    )
+    _add_runtime_command(
+        sub,
+        "restart",
+        runtime.handle_runtime_restart,
+        help="gracefully replace the Runtime",
+        description=(
+            "Stop the current Runtime, wait for that exact instance to exit, "
+            "then start a new instance."
+        ),
+        examples=("xagent restart", "xagent restart --agent mono"),
+    )
+    status = _add_runtime_command(
+        sub,
+        "status",
+        runtime.handle_runtime_status,
+        help="show Runtime and channel state",
+        description=(
+            "Read the authenticated local control plane. A stopped Runtime "
+            "is reported normally and does not produce an error."
+        ),
+        examples=("xagent status", "xagent status --json --agent mono"),
+    )
+    status.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
-        help="Print machine-readable JSON",
+        help="emit machine-readable JSON",
     )
-    processes_status_parser.set_defaults(handler=processes_status.handle_processes_status)
-    processes_restart = processes_sub.add_parser("restart", help="Restart all running managed processes")
-    processes_restart.add_argument(
+
+    chat = _command_parser(
+        sub,
+        "chat",
+        help="chat through the single Runtime",
+        description=(
+            "Submit a chat event to the ordered Runtime timeline. Without a "
+            "message, open an interactive terminal chat. The Runtime starts if needed."
+        ),
+        examples=(
+            'xagent chat "What happened today?"',
+            'xagent chat "Hello" --agent mono',
+        ),
+    )
+    _add_target(chat)
+    chat.add_argument(
+        "message",
+        nargs="?",
+        help="one message to send; omit for interactive chat",
+    )
+    chat.set_defaults(handler=runtime.handle_chat)
+
+    channel = _command_parser(
+        sub,
+        "channel",
+        help="configure and control hot-swappable channels",
+        description=(
+            "Manage transport adapters independently from the Runtime. A "
+            "channel failure or stop does not stop the Agent or other channels."
+        ),
+        examples=(
+            "xagent channel list",
+            "xagent channel setup feishu",
+            "xagent channel start feishu",
+            "xagent channel stop feishu",
+        ),
+    )
+    channel_sub = channel.add_subparsers(
+        dest="channel_action",
+        title="channel commands",
+        metavar="{list,setup,start,stop,restart}",
+        required=True,
+    )
+    channel_list = _command_parser(
+        channel_sub,
+        "list",
+        help="list channel configuration and runtime state",
+        description=(
+            "List every channel. When the Runtime is stopped, persisted enabled "
+            "states are read directly from the strict configuration."
+        ),
+        examples=("xagent channel list", "xagent channel list --json --agent mono"),
+    )
+    _add_target(channel_list)
+    channel_list.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
-        help="Print machine-readable JSON",
+        help="emit machine-readable JSON",
     )
-    processes_restart.set_defaults(handler=processes_status.handle_processes_restart)
-    _show_help_on_missing_action(processes_parser)
+    channel_list.set_defaults(handler=runtime.handle_channel)
+    _add_channel_setup_commands(channel_sub)
 
-    observe_parser = subparsers.add_parser("observe", help="Ingest context without generating a reply")
-    observe_parser.add_argument("text", help="Observation text to store")
-    _add_agent_argument(observe_parser)
-    observe_parser.add_argument("--source", default="cli", help="Observation source label")
-    observe_parser.add_argument("--event-type", default="observation", help="Observation event type")
-    observe_parser.add_argument("--metadata", default=None, help="JSON object with observation metadata")
-    observe_parser.set_defaults(handler=runtime.handle_observe)
+    channel_actions = {
+        "start": (
+            "enable and start one channel",
+            "Start the Runtime if necessary, persist enabled=true, then start only this channel.",
+        ),
+        "stop": (
+            "disable and stop one channel",
+            "Persist enabled=false and gracefully stop only this channel. New outbound work for it becomes blocked.",
+        ),
+        "restart": (
+            "restart one channel",
+            "Keep the Runtime and other channels alive while replacing only this channel.",
+        ),
+    }
+    for action, (help_text, description) in channel_actions.items():
+        action_parser = _command_parser(
+            channel_sub,
+            action,
+            help=help_text,
+            description=description,
+            examples=(
+                f"xagent channel {action} feishu",
+                f"xagent channel {action} voice --agent mono",
+            ),
+        )
+        action_parser.add_argument(
+            "name",
+            choices=CHANNEL_NAMES,
+            metavar="{api,feishu,weixin,voice}",
+            help="channel to control",
+        )
+        _add_target(action_parser)
+        action_parser.set_defaults(handler=runtime.handle_channel)
 
-    version_parser = subparsers.add_parser("version", help="Show xAgent version")
-    version_parser.set_defaults(handler=runtime.handle_version)
-
-    update_parser = subparsers.add_parser(
-        "update",
-        help="Update xAgent using its current installation method",
+    delivery = _command_parser(
+        sub,
+        "delivery",
+        help="inspect and retry durable outbound deliveries",
+        description=(
+            "Inspect durable outbound operations. Only blocked deliveries may "
+            "be retried; unknown deliveries require human confirmation."
+        ),
+        examples=(
+            "xagent delivery list --status blocked",
+            "xagent delivery retry DELIVERY_ID",
+        ),
     )
-    update_parser.add_argument(
-        "--restart",
-        action=argparse.BooleanOptionalAction,
+    delivery_sub = delivery.add_subparsers(
+        dest="delivery_action",
+        title="delivery commands",
+        metavar="{list,retry}",
+        required=True,
+    )
+    delivery_list = _command_parser(
+        delivery_sub,
+        "list",
+        help="list durable deliveries",
+        description="List deliveries, optionally filtering by their exact persisted status.",
+        examples=(
+            "xagent delivery list",
+            "xagent delivery list --status blocked --json",
+        ),
+    )
+    _add_target(delivery_list)
+    delivery_list.add_argument(
+        "--status",
+        choices=DELIVERY_STATUSES,
         default=None,
-        help="Restart running background processes after an update",
+        help="filter by persisted delivery status",
     )
-    update_parser.set_defaults(handler=update.handle_update)
-
-    agents_parser = subparsers.add_parser("agents", help="Create, select, and inspect managed agents")
-    agents_sub = agents_parser.add_subparsers(dest="agents_action", metavar="<action>")
-    agents_sub.required = True
-    agents_list = agents_sub.add_parser("list", help="List managed agents")
-    agents_list.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    agents_list.set_defaults(handler=agents.handle_agents)
-    agents_create = agents_sub.add_parser("create", help="Create a managed agent")
-    agents_create.add_argument("name", help="Agent name")
-    agents_create.add_argument(
-        "--yes",
+    delivery_list.add_argument(
+        "--json",
         action="store_true",
-        help="Delete an existing unregistered agent directory without prompting",
+        dest="json_output",
+        help="emit machine-readable JSON",
     )
-    agents_create.set_defaults(handler=agents.handle_agents)
-    agents_select = agents_sub.add_parser("select", help="Set the active agent")
-    agents_select.add_argument("name", help="Agent name")
-    agents_select.set_defaults(handler=agents.handle_agents)
-    agents_remove = agents_sub.add_parser("remove", help="Delete a managed agent and its data")
-    agents_remove.add_argument("name", help="Agent name")
-    agents_remove.add_argument("--yes", action="store_true", help="Confirm deletion without prompting")
-    agents_remove.set_defaults(handler=agents.handle_agents)
-    agents_info = agents_sub.add_parser("info", help="Show managed agent details")
-    agents_info.add_argument("name", help="Agent name")
-    agents_info.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    agents_info.set_defaults(handler=agents.handle_agents)
-    _show_help_on_missing_action(agents_parser)
-
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
-
-    internal_run = subparsers.add_parser("_run-channel", help=argparse.SUPPRESS)
-    internal_run.add_argument("channel", choices=(CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN, CHANNEL_VOICE))
-    _add_agent_argument(internal_run)
-    internal_run.add_argument("--config-dir", dest="config_dir", default=None, help=argparse.SUPPRESS)
-    _add_api_runtime_arguments(internal_run)
-    _add_voice_runtime_arguments(internal_run)
-    internal_run.set_defaults(handler=runtime.handle_run_channel_internal)
-    _hide_subparser_choice(subparsers, "_run-channel")
-
-    internal_web = subparsers.add_parser("_run-web", help=argparse.SUPPRESS)
-    _add_agent_argument(internal_web)
-    internal_web.add_argument("--config-dir", dest="config_dir", default=None, help=argparse.SUPPRESS)
-    _add_web_client_arguments(internal_web)
-    internal_web.set_defaults(handler=runtime.handle_run_web_internal)
-    _hide_subparser_choice(subparsers, "_run-web")
-
-    internal_update = subparsers.add_parser("_update-worker", help=argparse.SUPPRESS)
-    internal_update.add_argument(
-        "--restart",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=argparse.SUPPRESS,
+    delivery_list.set_defaults(handler=runtime.handle_delivery)
+    delivery_retry = _command_parser(
+        delivery_sub,
+        "retry",
+        help="retry one blocked delivery",
+        description=(
+            "Move one blocked delivery back to pending. Restoring its channel "
+            "alone never sends it; this explicit command is required."
+        ),
+        examples=("xagent delivery retry DELIVERY_ID",),
     )
-    internal_update.set_defaults(handler=update.handle_update_worker)
-    _hide_subparser_choice(subparsers, "_update-worker")
+    delivery_retry.add_argument(
+        "delivery_id",
+        metavar="DELIVERY_ID",
+        help="exact blocked delivery ID",
+    )
+    _add_target(delivery_retry)
+    delivery_retry.set_defaults(handler=runtime.handle_delivery)
+
+    person = _command_parser(
+        sub,
+        "person",
+        help="inspect and link cross-channel identities",
+        description=(
+            "Manage explicit person/account links. xAgent never guesses that "
+            "accounts on different channels belong to the same person."
+        ),
+        examples=(
+            "xagent person list",
+            "xagent person link PERSON_ID feishu ACCOUNT_ID",
+        ),
+    )
+    person_sub = person.add_subparsers(
+        dest="person_action",
+        title="person commands",
+        metavar="{list,link}",
+        required=True,
+    )
+    person_list = _command_parser(
+        person_sub,
+        "list",
+        help="list people and their linked accounts",
+        description="List stable person IDs and every explicitly linked channel account.",
+        examples=("xagent person list", "xagent person list --json --agent mono"),
+    )
+    _add_target(person_list)
+    person_list.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="emit machine-readable JSON",
+    )
+    person_list.set_defaults(handler=runtime.handle_person)
+    person_link = _command_parser(
+        person_sub,
+        "link",
+        help="link one channel account to a person",
+        description=(
+            "Explicitly assert that one channel account belongs to an existing "
+            "person ID. This affects identity resolution, not memory isolation."
+        ),
+        examples=(
+            "xagent person link PERSON_ID feishu ou_123",
+            "xagent person link PERSON_ID weixin wxid_123 --agent mono",
+        ),
+    )
+    person_link.add_argument("person_id", metavar="PERSON_ID", help="existing person ID")
+    person_link.add_argument(
+        "channel",
+        choices=CHANNEL_NAMES,
+        metavar="{api,feishu,weixin,voice}",
+        help="channel that owns the account",
+    )
+    person_link.add_argument(
+        "account_id",
+        metavar="ACCOUNT_ID",
+        help="channel-native account ID",
+    )
+    _add_target(person_link)
+    person_link.set_defaults(handler=runtime.handle_person)
 
     return parser

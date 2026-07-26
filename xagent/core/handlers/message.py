@@ -1,10 +1,10 @@
 import logging
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
+from ..prompts import PromptAssembler
 from ...components import MessageStorage
 from ...schemas import Message, RoleType, MessageType
 from ...schemas.attachment import (
@@ -52,8 +52,9 @@ class MessageHandler:
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         room_name: Optional[str] = None,
-        channel: Optional[str] = None,
+        source: Optional[str] = None,
         recipient_id: Optional[str] = None,
+        runtime_event_id: Optional[str] = None,
     ) -> Message:
         """Store a user message, auto-detecting embedded image URLs and attachments."""
         normalized_attachments = dedupe_attachments(list(attachments or []))
@@ -78,12 +79,17 @@ class MessageHandler:
         msg.recipient_id = recipient_id or "agent"
         if room_name:
             msg.room_name = room_name
-        if channel:
-            msg.channel = channel
+        if source:
+            msg.source = source
         if normalized_attachments:
             msg.metadata[ATTACHMENT_METADATA_KEY] = normalized_attachments
         if image_metadata:
             msg.metadata["images"] = image_metadata
+        if runtime_event_id:
+            return await self.message_storage.add_message_once(
+                msg,
+                f"event:{runtime_event_id}:input",
+            )
         await self.message_storage.add_messages(msg)
         return msg
 
@@ -94,7 +100,7 @@ class MessageHandler:
         metadata: Optional[Dict[str, Any]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         room_name: Optional[str] = None,
-        channel: Optional[str] = None,
+        source: Optional[str] = None,
         recipient_id: Optional[str] = None,
     ) -> Message:
         normalized_attachments = dedupe_attachments(list(attachments or []))
@@ -108,8 +114,8 @@ class MessageHandler:
             model_msg.recipient_id = recipient_id
         if room_name:
             model_msg.room_name = room_name
-        if channel:
-            model_msg.channel = channel
+        if source:
+            model_msg.source = source
         if metadata:
             model_msg.metadata.update(metadata)
         if normalized_attachments:
@@ -128,8 +134,9 @@ class MessageHandler:
         metadata: Optional[Dict[str, Any]] = None,
         room_name: Optional[str] = None,
         role: RoleType = RoleType.ENVIRONMENT,
-        channel: Optional[str] = None,
+        event_source: Optional[str] = None,
         recipient_id: Optional[str] = None,
+        runtime_event_id: Optional[str] = None,
     ) -> Message:
         """Store a non-direct observation from the agent's environment."""
         event_msg = Message.create_context_event(
@@ -143,8 +150,13 @@ class MessageHandler:
             event_msg.recipient_id = recipient_id
         if room_name:
             event_msg.room_name = room_name
-        if channel:
-            event_msg.channel = channel
+        if event_source:
+            event_msg.source = event_source
+        if runtime_event_id:
+            return await self.message_storage.add_message_once(
+                event_msg,
+                f"event:{runtime_event_id}:observation",
+            )
         await self.message_storage.add_messages(event_msg)
         return event_msg
 
@@ -153,18 +165,6 @@ class MessageHandler:
         max_history: int,
     ) -> List[Message]:
         return await self.message_storage.get_messages(max_history)
-
-    async def get_input_messages(
-        self,
-        max_history: int,
-    ) -> list:
-        """Retrieve and serialize recent messages for model input."""
-        messages = await self.get_recent_messages(max_history)
-        return [msg.to_model_input() for msg in messages]
-
-    @staticmethod
-    def to_model_input(messages: List[Message]) -> list:
-        return [msg.to_model_input() for msg in messages]
 
     @staticmethod
     def filter_conversation_messages(messages: List[Message]) -> List[Message]:
@@ -181,101 +181,12 @@ class MessageHandler:
         return [msg for msg in messages if msg.type == MessageType.CONTEXT_EVENT]
 
     @staticmethod
-    def build_recent_transcript_message(
-        messages: List[Message],
-        current_user_id: str,
-        memory_context: str = "",
-        context_events: Optional[List[Message]] = None,
-        max_messages: int = AgentConfig.DEFAULT_MAX_HISTORY,
-        max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
-        include_images: bool = True,
-        workspace_dir: Optional[Union[str, Path]] = None,
-    ) -> dict:
-        """Collapse recent conversation history into one user transcript message.
-
-                Includes per-turn dynamic context that changes each call:
-                    - Runtime metadata (date and current speaker)
-          - Recent memory (conditional)
-                    - Recent experience in chronological order
-        """
-        conversation_messages = MessageHandler.filter_conversation_messages(messages)
-        observation_messages = (
-            MessageHandler.filter_context_events(messages)
-            if context_events is None
-            else MessageHandler.filter_context_events(context_events)
-        )
-        budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
-            conversation_messages,
-            max_messages=max_messages,
-        )
-        budgeted_messages = [msg for msg, _ in budgeted_entries]
-        budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
-            observation_messages,
-            max_events=max_context_events,
-        )
-        experience_entries = MessageHandler._merge_experience_entries(
-            budgeted_entries,
-            budgeted_observations,
-        )
-
-        transcript_lines: list[str] = []
-
-        # --- Runtime context ---
-        transcript_lines.append(AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip())
-        transcript_lines.append(f"- Current speaker: {current_user_id}")
-        transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
-        transcript_lines.append("")
-
-        # --- Recent memory (conditional) ---
-        if memory_context:
-            transcript_lines.append(
-            "**Recent Memory** "
-                "(attribution rules per instructions):\n\n"
-                + memory_context
-            )
-            transcript_lines.append("")
-
-        # --- Recent experience ---
-        transcript_lines.append("==========\n")
-        transcript_lines.append("")
-        transcript_lines.append("**Recent Experience** (conversation and observations in chronological order):")
-        transcript_lines.append("")
-
-        if omitted_count or omitted_observation_count:
-            transcript_lines.append(
-                MessageHandler._format_omitted_experience_note(
-                    omitted_messages=omitted_count,
-                    omitted_observations=omitted_observation_count,
-                )
-            )
-            transcript_lines.append("")
-
-        for entry_type, msg, content in experience_entries:
-            transcript_lines.extend(
-                MessageHandler._format_experience_entry(entry_type, msg, content)
-            )
-            transcript_lines.append("")
-
-        transcript_lines.append(AgentConfig.build_turn_reply_prompt(current_user_id))
-
-        transcript_text = "\n".join(transcript_lines).strip()
-
-        # print("=== Built transcript message content ===")
-        # print(transcript_text)
-        # print("=== End transcript message content ===")
-
-        return {"role": RoleType.USER.value, "content": transcript_text}
-
-    @staticmethod
     def build_turn_context_messages(
         messages: List[Message],
         current_user_id: str,
         memory_context: str = "",
-        relationship_context: str = "",
-        workspace_context: str = "",
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
-        current_date: Optional[str] = None,
         max_messages: int = AgentConfig.DEFAULT_MAX_HISTORY,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         include_images: bool = True,
@@ -286,6 +197,12 @@ class MessageHandler:
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
+        if current_message is not None:
+            for index in range(len(conversation_messages) - 1, -1, -1):
+                candidate = conversation_messages[index]
+                if MessageHandler._same_event(candidate, current_message):
+                    del conversation_messages[index]
+                    break
         observation_messages = (
             MessageHandler.filter_context_events(messages)
             if context_events is None
@@ -295,7 +212,6 @@ class MessageHandler:
             conversation_messages,
             max_messages=max_messages,
         )
-        budgeted_messages = [msg for msg, _ in budgeted_entries]
         budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
             observation_messages,
             max_events=max_context_events,
@@ -306,23 +222,6 @@ class MessageHandler:
         )
 
         context_messages: list[dict] = []
-        if relationship_context.strip():
-            if task_mode == "subconscious_json":
-                relationship_layer_name = AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_NAME
-                relationship_layer_content = AgentConfig.build_subconscious_relationships_context(
-                    relationship_context
-                )
-            else:
-                relationship_layer_name = AgentConfig.RELATIONSHIP_CONTEXT_NAME
-                relationship_layer_content = AgentConfig.build_relationship_context(
-                    relationship_context
-                )
-            context_messages.append({
-                "role": RoleType.USER.value,
-                "name": relationship_layer_name,
-                "content": relationship_layer_content,
-            })
-
         if memory_context.strip():
             context_messages.append({
                 "role": RoleType.USER.value,
@@ -345,16 +244,13 @@ class MessageHandler:
 
         resolved_current_time = (
             current_time
-            or current_date
             or datetime.now().strftime("%Y-%m-%d %H:%M")
         )
         if task_mode == "subconscious_json":
-            current_task_text = AgentConfig.build_subconscious_current_task(
-                current_time=resolved_current_time,
-            )
+            current_task_text = PromptAssembler.subconscious_task(resolved_current_time)
         else:
-            current_task_text = AgentConfig.build_current_task(
-                current_user_id=current_user_id,
+            current_task_text = PromptAssembler.current_task(
+                speaker_id=current_user_id,
                 current_time=resolved_current_time,
                 channel_instructions=channel_instructions,
             )
@@ -365,6 +261,18 @@ class MessageHandler:
         }
 
         current_images: List[str] = []
+        if current_message is not None:
+            current_event_content = MessageHandler._current_event_context(
+                current_message,
+                current_user_id=current_user_id,
+            )
+            current_event_message: dict[str, Any] = {
+                "role": RoleType.USER.value,
+                "name": AgentConfig.CURRENT_EVENT_NAME,
+                "content": current_event_content,
+            }
+            context_messages.append(current_event_message)
+
         if include_images:
             image_message = current_message or MessageHandler._latest_current_user_message(
                 conversation_messages,
@@ -376,15 +284,53 @@ class MessageHandler:
                 workspace_dir=workspace_dir,
             )
         if current_images:
-            content = [{"type": "text", "text": current_task_text}]
+            target_message = (
+                context_messages[-1]
+                if current_message is not None
+                else current_task_message
+            )
+            text = str(target_message["content"])
+            content = [{"type": "text", "text": text}]
             content.extend(
                 {"type": "image_url", "image_url": {"url": image_source}}
                 for image_source in current_images
             )
-            current_task_message["content"] = content
+            target_message["content"] = content
 
         context_messages.append(current_task_message)
         return context_messages
+
+    @staticmethod
+    def _same_event(left: Message, right: Message) -> bool:
+        return (
+            left.role == right.role
+            and left.sender_id == right.sender_id
+            and left.content == right.content
+            and abs(float(left.timestamp) - float(right.timestamp)) < 0.001
+        )
+
+    @staticmethod
+    def _current_event_context(
+        message: Message,
+        *,
+        current_user_id: str,
+    ) -> str:
+        speaker = message.sender_id or current_user_id
+        header = (
+            f"[speaker={speaker}]"
+            f"[timestamp={MessageHandler._format_transcript_timestamp(message)}]"
+        )
+        if message.source:
+            header += f"[source={message.source}]"
+        if message.room_name:
+            room = message.room_name.replace("\n", " ").replace("]", "")
+            header += f"[room={room}]"
+        content = message.content.strip() or "[Empty event]"
+        return (
+            "<current_event>\n"
+            f"{header}\n{content}\n"
+            "</current_event>"
+        )
 
     @staticmethod
     def _build_recent_experience_context(
@@ -494,8 +440,8 @@ class MessageHandler:
     @staticmethod
     def _format_context_event_header(message: Message) -> str:
         header = f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
-        if message.channel:
-            header += f"[channel={message.channel}]"
+        if message.source:
+            header += f"[source={message.source}]"
         if message.room_name:
             safe_room = message.room_name.replace("\n", " ").replace("]", "")
             header += f"[room={safe_room}]"
@@ -506,8 +452,8 @@ class MessageHandler:
         speaker = MessageHandler._format_transcript_speaker(message)
         timestamp = MessageHandler._format_transcript_timestamp(message)
         header = f"[speaker={speaker}][timestamp={timestamp}]"
-        if message.channel:
-            header += f"[channel={message.channel}]"
+        if message.source:
+            header += f"[source={message.source}]"
         if message.room_name:
             safe_room = message.room_name.replace("\n", " ").replace("]", "")
             header += f"[room={safe_room}]"
@@ -797,37 +743,6 @@ class MessageHandler:
             return "image/gif"
         return "image/png"
 
-    def build_instructions(
-        self,
-        tool_names: Optional[List[str]] = None,
-        skills_catalog: str = "",
-        workspace_context: str = "",
-    ) -> str:
-        """Build the static instructions string for the model.
-
-        Contains only behavioural rules that do not change per-turn:
-          1. Core Principles — foundational behaviour guidelines
-          2. Tool Instructions — per-tool safety / usage rules
-          3. User System Prompt — developer-supplied customisation
-        """
-        instruction_messages = self.build_instruction_messages(
-            tool_names=tool_names,
-            skills_catalog=skills_catalog,
-            workspace_context=workspace_context,
-        )
-        instructions = "\n\n".join(
-            message["content"] for message in instruction_messages if message.get("content")
-        )
-
-        if len(instructions) > AgentConfig.MAX_SYSTEM_PROMPT_LENGTH:
-            logger.warning(
-                "Instructions length (%d chars) exceeds soft limit (%d). "
-                "Consider shortening the user system prompt.",
-                len(instructions), AgentConfig.MAX_SYSTEM_PROMPT_LENGTH,
-            )
-
-        return instructions
-
     def build_instruction_messages(
         self,
         tool_names: Optional[List[str]] = None,
@@ -837,99 +752,15 @@ class MessageHandler:
         is_subconscious: bool = False,
         memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
     ) -> list[dict]:
-        """Build static named system layers for the model input.
-
-        When *is_subconscious* is True a private-reflection notice is
-        appended to the core prompt so the model knows it cannot execute
-        tasks or use tools during this turn.
-        """
-        core_prompt = AgentConfig.BASE_AGENT_PROMPT.strip()
-        if not supports_vision:
-            core_prompt = core_prompt + AgentConfig.NO_VISION_NOTICE.rstrip()
-        if is_subconscious:
-            core_prompt = core_prompt + AgentConfig.SUBCONSCIOUS_MODE_NOTICE.rstrip()
-        messages = [{
-            "role": "system",
-            "name": AgentConfig.CORE_INTERACTION_RULES_NAME,
-            "content": core_prompt,
-        }]
-
-        tool_policy = self._build_tool_policy(
-            tool_names=tool_names,
-            memory_recent_days=memory_recent_days,
+        # Tool behavior is described exactly once, by the tool schemas.
+        del tool_names, memory_recent_days
+        return PromptAssembler.instruction_messages(
+            identity=self.system_prompt,
+            skills_catalog=skills_catalog,
+            workspace_context=workspace_context,
+            supports_vision=supports_vision,
             is_subconscious=is_subconscious,
         )
-        if tool_policy:
-            messages.append({
-                "role": "system",
-                "name": AgentConfig.TOOL_POLICY_NAME,
-                "content": tool_policy,
-            })
-
-        if self.system_prompt.strip():
-            messages.append({
-                "role": "system",
-                "name": AgentConfig.IDENTITY_CONTEXT_NAME,
-                "content": AgentConfig.build_identity_context(self.system_prompt),
-            })
-
-        if workspace_context.strip():
-            messages.append({
-                "role": "system",
-                "name": AgentConfig.WORKSPACE_CONTEXT_NAME,
-                "content": workspace_context.strip(),
-            })
-
-        if skills_catalog.strip():
-            messages.append({
-                "role": "system",
-                "name": AgentConfig.SKILLS_CATALOG_NAME,
-                "content": skills_catalog.strip(),
-            })
-
-        return messages
-
-    @staticmethod
-    def _build_tool_policy(
-        tool_names: Optional[List[str]] = None,
-        *,
-        memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
-        is_subconscious: bool = False,
-    ) -> str:
-        ordered_names = MessageHandler._ordered_tool_policy_names(tool_names or [])
-        recent_memory_injected = is_subconscious or memory_recent_days > 0
-        sections: list[str] = []
-        for name in ordered_names:
-            if name == "search_memory":
-                sections.append(
-                    AgentConfig.build_search_memory_tool_prompt(
-                        recent_memory_injected=recent_memory_injected,
-                    ).strip()
-                )
-            elif name in AgentConfig.TOOL_SYSTEM_PROMPTS:
-                sections.append(AgentConfig.TOOL_SYSTEM_PROMPTS[name].strip())
-        if not sections:
-            return ""
-        return (
-                "All available tools are defined in this policy. "
-                "Do not assume, invent, or reference any tools outside this list.\n\n"
-                "<tool_policy>\n"
-                + "\n\n".join(sections)
-                + "\n\n</tool_policy>"
-                )
-
-    @staticmethod
-    def _ordered_tool_policy_names(tool_names: List[str]) -> list[str]:
-        active_names = list(dict.fromkeys(tool_names))
-        ordered_names = [
-            name for name in AgentConfig.TOOL_POLICY_ORDER
-            if name in active_names
-        ]
-        ordered_names.extend(
-            name for name in active_names
-            if name not in ordered_names
-        )
-        return ordered_names
 
     @staticmethod
     def sanitize_input_messages(input_messages: list) -> list:
@@ -940,11 +771,3 @@ class MessageHandler:
         ):
             input_messages.pop(0)
         return input_messages
-
-    @staticmethod
-    def filter_non_tool_messages(messages: list) -> list:
-        """Filter messages to only user and assistant roles."""
-        return [
-            msg for msg in messages
-            if msg.get("role") in (RoleType.USER.value, RoleType.ASSISTANT.value)
-        ]

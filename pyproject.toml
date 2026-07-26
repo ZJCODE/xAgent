@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "myxagent"
-version = "0.3.16"
+version = "1.0.0"
 description = "Independent AI Agent with Persistent First-Person Memory and Multi-User Interaction"
 readme = { file = "README.md", content-type = "text/markdown" }
 license-files = ["LICENSE*"]
@@ -15,11 +15,10 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     # Core frameworks
     "fastapi>=0.116.1",
@@ -29,30 +28,33 @@ dependencies = [
     # AI/ML and agents
     "openai>=1.98.0",
     "anthropic>=0.116.0",
-    "langfuse>=3.0.0",
-    "cryptography>=42.0.0",
     
     # HTTP clients
     "httpx>=0.28.0",
-    "websockets>=12.0",
-    "requests>=2.32.0",
-    "trafilatura>=2.0.0",
-    
+    "websockets>=14.0",
     # Utilities
-    "lxml[html-clean]>=5.0.0",
-    "lark-oapi>=1.5.5",
-    "qrcode[pil]>=7.4.2",
-    "pillow>=10.0.0",
-    "posthog>=3.6.0",
     "pyyaml>=6.0.2",
-    "python-multipart>=0.0.20",
     "readchar>=4.2.1",
     "rich>=13.9.4",
+    "tenacity>=9.1.2",
+]
+
+[project.optional-dependencies]
+feishu = ["lark-oapi>=1.5.5"]
+weixin = ["cryptography>=42.0.0", "qrcode[pil]>=7.4.2"]
+voice = ["sounddevice>=0.5.0", "python-socks>=2.4.0"]
+image = ["pillow>=10.0.0"]
+search = []
+observability = ["langfuse>=3.0.0", "posthog>=3.6.0"]
+all = [
+    "lark-oapi>=1.5.5",
+    "qrcode[pil]>=7.4.2",
+    "cryptography>=42.0.0",
     "sounddevice>=0.5.0",
     "python-socks>=2.4.0",
-    "tenacity>=9.1.2",
-    "watchdog>=6.0.0",
-    "websockets>=14.0",
+    "pillow>=10.0.0",
+    "langfuse>=3.0.0",
+    "posthog>=3.6.0",
 ]
 
 [project.scripts]
@@ -68,3 +70,6 @@ packages = {find = {include = ["xagent*"], exclude = ["examples*", "tests*", "do
 
 [tool.setuptools.package-data]
 xagent = ["interfaces/static/**", "components/skills/builtin/**"]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"

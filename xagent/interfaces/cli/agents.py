@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import argparse
-import json
 import re
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 import yaml
 
-from ..base import BaseAgentConfig
+from ...core.agent_factory import AgentPaths
+from ...settings import write_text_atomic
 
 
 REGISTRY_FILENAME = "agents.yaml"
@@ -62,7 +60,7 @@ class AgentRegistry:
 
 
 def management_root() -> Path:
-    return Path(BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
+    return Path(AgentPaths.DEFAULT_CONFIG_DIR).expanduser().resolve()
 
 
 def registry_path(*, root: Optional[Path] = None) -> Path:
@@ -102,7 +100,7 @@ def _expand_entry_path(raw_path: Any, *, root: Path) -> Path:
 def _load_registry_data(path: Path) -> Mapping[str, Any]:
     if not path.is_file():
         raise AgentRegistryError(
-            f"Agent registry not found: {path}. Run `xagent agents create default` or open the launcher setup."
+            f"Agent registry not found: {path}. Run `xagent setup`."
         )
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
@@ -143,7 +141,14 @@ def save_agent_registry(registry: AgentRegistry, *, root: Optional[Path] = None)
     root_path = root or management_root()
     path = registry_path(root=root_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(registry.to_dict(), sort_keys=False, allow_unicode=False), encoding="utf-8")
+    write_text_atomic(
+        path,
+        yaml.safe_dump(
+            registry.to_dict(),
+            sort_keys=False,
+            allow_unicode=False,
+        ),
+    )
 
 
 def empty_agent_registry(*, active_agent: str = "") -> AgentRegistry:
@@ -151,7 +156,7 @@ def empty_agent_registry(*, active_agent: str = "") -> AgentRegistry:
 
 
 def allocate_api_port(*, root: Optional[Path] = None) -> int:
-    """Return the lowest unused API port >= ``BaseAgentConfig.DEFAULT_PORT``.
+    """Return the lowest unused API port at or above the default.
 
     Reads every registered agent's config.yaml and collects existing
     ``channels.api.port`` values, then returns the first port >=
@@ -163,7 +168,7 @@ def allocate_api_port(*, root: Optional[Path] = None) -> int:
     try:
         registry = load_agent_registry(root=root)
     except AgentRegistryError:
-        return BaseAgentConfig.DEFAULT_PORT
+        return AgentPaths.DEFAULT_PORT
 
     for entry in registry.agents.values():
         try:
@@ -174,7 +179,7 @@ def allocate_api_port(*, root: Optional[Path] = None) -> int:
         if isinstance(port_value, int):
             used_ports.add(port_value)
 
-    port = BaseAgentConfig.DEFAULT_PORT
+    port = AgentPaths.DEFAULT_PORT
     while port in used_ports:
         port += 1
     return port
@@ -198,7 +203,7 @@ def resolve_agent_name(agent_name: Optional[str] = None, *, root: Optional[Path]
     if agent_name:
         name = validate_agent_name(agent_name)
         if name not in registry.agents:
-            raise AgentRegistryError(f"Unknown agent {name!r}. Run `xagent agents list` to see available agents.")
+            raise AgentRegistryError(f"Unknown agent {name!r}.")
         return name
     return registry.active_agent
 
@@ -208,7 +213,7 @@ def resolve_agent_runtime_dir(agent_name: Optional[str] = None, *, root: Optiona
     name = validate_agent_name(agent_name) if agent_name else registry.active_agent
     entry = registry.agents.get(name)
     if entry is None:
-        raise AgentRegistryError(f"Unknown agent {name!r}. Run `xagent agents list` to see available agents.")
+        raise AgentRegistryError(f"Unknown agent {name!r}.")
     return entry.path
 
 
@@ -243,7 +248,7 @@ def select_agent(name: str, *, root: Optional[Path] = None) -> AgentRegistry:
     registry = load_agent_registry(root=root_path)
     normalized = validate_agent_name(name)
     if normalized not in registry.agents:
-        raise AgentRegistryError(f"Unknown agent {normalized!r}. Run `xagent agents list` to see available agents.")
+        raise AgentRegistryError(f"Unknown agent {normalized!r}.")
     updated = AgentRegistry(active_agent=normalized, agents=dict(registry.agents))
     save_agent_registry(updated, root=root_path)
     return updated
@@ -254,7 +259,7 @@ def remove_agent(name: str, *, root: Optional[Path] = None) -> tuple[AgentRegist
     registry = load_agent_registry(root=root_path)
     normalized = validate_agent_name(name)
     if normalized not in registry.agents:
-        raise AgentRegistryError(f"Unknown agent {normalized!r}. Run `xagent agents list` to see available agents.")
+        raise AgentRegistryError(f"Unknown agent {normalized!r}.")
     agents = dict(registry.agents)
     removed = agents.pop(normalized)
     active_agent = registry.active_agent
@@ -291,24 +296,6 @@ def delete_agent_directory(path: Path, *, root: Optional[Path] = None) -> bool:
 
 def _directory_has_contents(path: Path) -> bool:
     return path.exists() and path.is_dir() and any(path.iterdir())
-
-
-def _confirm_destructive_action(prompt: str, *, expected: str, assume_yes: bool) -> bool:
-    if assume_yes:
-        return True
-    if not sys.stdin.isatty():
-        print("Refusing to delete without confirmation. Re-run with --yes to confirm.")
-        return False
-    answer = input(f"{prompt}\nType {expected!r} to confirm: ").strip()
-    return answer == expected
-
-
-def _delete_confirmation_text(name: str, path: Path, *, action: str) -> str:
-    return (
-        f"{action} agent {name!r} and delete all data at:\n"
-        f"{path}\n"
-        "This removes config, identity, memory, messages, workspace, skills, tasks, logs, and run state."
-    )
 
 
 def agent_directory_has_contents(path: Path) -> bool:
@@ -370,42 +357,26 @@ def delete_managed_agent(
     name: str,
     *,
     root: Optional[Path] = None,
-    stop_channels: bool = True,
+    stop_runtime: bool = True,
 ) -> tuple[AgentRegistry, AgentEntry]:
     """Remove a managed agent from the registry and delete its data directory."""
-    from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
-    from .processes import managed_paths, running_pid, stop_managed_process
+    from ...core.runtime import RuntimeLaunchError, RuntimeLauncher
 
     root_path = root or management_root()
     registry = load_agent_registry(root=root_path)
     normalized = validate_agent_name(name)
     entry = registry.agents.get(normalized)
     if entry is None:
-        raise AgentRegistryError(f"Unknown agent {normalized!r}. Run `xagent agents list` to see available agents.")
+        raise AgentRegistryError(f"Unknown agent {normalized!r}.")
 
-    if stop_channels:
-        for channel in (CHANNEL_API, CHANNEL_VOICE, CHANNEL_FEISHU, CHANNEL_WEIXIN):
-            pid_path = managed_paths(entry.path, channel).pid_path
-            if running_pid(pid_path) is None:
-                continue
-            stopped, message = stop_managed_process(pid_path)
-            if not stopped:
-                raise AgentRegistryError(f"Failed to stop {channel} channel: {message}")
+    if stop_runtime:
+        try:
+            RuntimeLauncher(entry.path).stop()
+        except RuntimeLaunchError as exc:
+            raise AgentRegistryError(f"Failed to stop the Agent Runtime: {exc}") from exc
 
     delete_agent_directory(entry.path, root=root_path)
     return remove_agent(normalized, root=root_path)
-
-
-def agent_registry_rows(registry: AgentRegistry) -> list[dict[str, Any]]:
-    return [
-        {
-            "name": name,
-            "title": entry.title,
-            "path": str(entry.path),
-            "active": name == registry.active_agent,
-        }
-        for name, entry in sorted(registry.agents.items())
-    ]
 
 
 def ensure_default_agent_for_setup(agent_name: Optional[str] = None) -> Path:
@@ -424,141 +395,3 @@ def ensure_default_agent_for_setup(agent_name: Optional[str] = None) -> Path:
         make_active=True,
     )
     return registry.agents[DEFAULT_AGENT_NAME].path
-
-
-def _agent_summary(entry: AgentEntry, *, active: bool) -> dict[str, Any]:
-    config_file = entry.path / BaseAgentConfig.CONFIG_FILENAME
-    identity_file = entry.path / BaseAgentConfig.IDENTITY_FILENAME
-    initialized = config_file.is_file() and identity_file.is_file() and bool(
-        identity_file.read_text(encoding="utf-8", errors="replace").strip()
-        if identity_file.is_file()
-        else ""
-    )
-    return {
-        "name": entry.name,
-        "title": entry.title,
-        "path": str(entry.path),
-        "active": active,
-        "initialized": initialized,
-        "config": str(config_file),
-        "identity": str(identity_file),
-    }
-
-
-def _print_agent_error(exc: Exception) -> int:
-    print(f"Error: {exc}")
-    return 1
-
-
-def handle_agents(args: argparse.Namespace) -> int:
-    action = getattr(args, "agents_action", "")
-    try:
-        if action == "list":
-            registry = load_agent_registry_or_empty()
-            rows = agent_registry_rows(registry)
-            if getattr(args, "json_output", False):
-                print(json.dumps({"active_agent": registry.active_agent, "agents": rows}, indent=2, sort_keys=True))
-                return 0
-            if not rows:
-                print("No agents are registered yet.")
-                print("Create one with: xagent agents create default")
-                return 0
-            for row in rows:
-                marker = "*" if row["active"] else " "
-                print(f"{marker} {row['name']}")
-                print(f"  path: {row['path']}")
-            return 0
-
-        if action == "info":
-            registry = load_agent_registry()
-            name = validate_agent_name(args.name)
-            entry = registry.agents.get(name)
-            if entry is None:
-                raise AgentRegistryError(f"Unknown agent {name!r}. Run `xagent agents list` to see available agents.")
-            payload = _agent_summary(entry, active=name == registry.active_agent)
-            if getattr(args, "json_output", False):
-                print(json.dumps(payload, indent=2, sort_keys=True))
-                return 0
-            print(f"Agent: {payload['name']}")
-            print(f"Active: {payload['active']}")
-            print(f"Initialized: {payload['initialized']}")
-            print(f"Path: {payload['path']}")
-            print(f"Config: {payload['config']}")
-            print(f"Identity: {payload['identity']}")
-            return 0
-
-        if action == "select":
-            registry = select_agent(args.name)
-            entry = registry.agents[registry.active_agent]
-            print(f"Active agent: {entry.name} ({entry.path})")
-            return 0
-
-        if action == "remove":
-            registry = load_agent_registry()
-            name = validate_agent_name(args.name)
-            entry = registry.agents.get(name)
-            if entry is None:
-                raise AgentRegistryError(f"Unknown agent {name!r}. Run `xagent agents list` to see available agents.")
-            if not _confirm_destructive_action(
-                _delete_confirmation_text(name, entry.path, action="Remove"),
-                expected=name,
-                assume_yes=getattr(args, "yes", False),
-            ):
-                print("Remove cancelled.")
-                return 1
-            _registry, removed = delete_managed_agent(name)
-            deleted = not removed.path.exists()
-            print(f"Removed agent: {removed.name}")
-            if deleted:
-                print(f"Deleted data: {removed.path}")
-            else:
-                print(f"Data directory did not exist: {removed.path}")
-            return 0
-
-        if action == "create":
-            name = validate_agent_name(args.name)
-            path = default_agent_dir(name)
-            registry = load_agent_registry_or_empty()
-            if name in registry.agents:
-                raise AgentRegistryError(f"Agent {name!r} is already registered.")
-            replace_existing = False
-            if _directory_has_contents(path):
-                if not _confirm_destructive_action(
-                    _delete_confirmation_text(name, path, action="Replace existing directory for"),
-                    expected=name,
-                    assume_yes=getattr(args, "yes", False),
-                ):
-                    print("Create cancelled.")
-                    return 1
-                # Defer deletion until the setup wizard has completed.  The
-                # creation helper owns the final directory check and removal,
-                # so it can honor this confirmation even if the directory is
-                # recreated while the user is completing the wizard.
-                replace_existing = True
-            from .setup import collect_init_selection_terminal_ui
-
-            try:
-                selection = collect_init_selection_terminal_ui()
-            except KeyboardInterrupt:
-                # TerminalUI uses this signal when the user presses q/esc at
-                # a setup prompt.  Treat it as a normal cancellation rather
-                # than allowing the interactive launcher to crash.
-                from .setup import SETUP_EXIT_CANCELLED
-
-                print("Create cancelled.")
-                return SETUP_EXIT_CANCELLED
-            create_managed_agent(
-                name,
-                selection=selection,
-                replace_existing=replace_existing,
-                make_active=not registry.agents,
-            )
-            updated = load_agent_registry()
-            active_note = " active" if updated.active_agent == name else ""
-            print(f"Created{active_note} agent {name}: {path}")
-            return 0
-    except (AgentRegistryError, OSError, yaml.YAMLError) as exc:
-        return _print_agent_error(exc)
-
-    print(f"Unknown agents action: {action}")
-    return 1

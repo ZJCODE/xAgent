@@ -5,13 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import HTTPException, WebSocket
 
-from ...core.agent import Agent
-from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context, upsert_contact
+from ...core.runtime import DeliveryContext, delivery_context
 from ...interfaces.server.models import AgentInput, ChatInput, ObserveInput
 from ...interfaces.server.serializers import response_payload
 from .config import ChatLimits
@@ -24,14 +22,12 @@ class ChatService:
 
     def __init__(
         self,
-        agent: Agent,
+        agent: Any,
         *,
-        contacts_file: Path,
         limits: ChatLimits,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.agent = agent
-        self.contacts_file = contacts_file
         self.limits = limits
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self._semaphore = asyncio.Semaphore(max(1, int(limits.max_concurrent_chats)))
@@ -132,16 +128,15 @@ class ChatService:
             if not callable(chat_events):
                 raise RuntimeError("Agent does not support chat_events().")
             attachments = input_attachments(input_data)
-            self._record_contact(input_data.user_id)
-            context = self._scheduled_delivery_context(input_data, client=client)
-            with scheduled_delivery_context(context):
+            context = self._delivery_context(input_data, client=client)
+            with delivery_context(context):
                 response = chat_events(
                     user_message=input_data.user_message,
                     user_id=input_data.user_id,
                     image_source=input_image_sources(input_data, attachments=attachments),
                     attachments=attachments,
                     stream=bool(input_data.stream),
-                    channel=CHANNEL_API,
+                    source=CHANNEL_API,
                 )
                 async for event in self._iterate_before_deadline(response, deadline):
                     if event.get("type") == "done":
@@ -180,15 +175,14 @@ class ChatService:
     async def _call_agent(self, input_data: ChatInput, *, client: str) -> Any:
         attachments = input_attachments(input_data)
         image_sources = input_image_sources(input_data, attachments=attachments)
-        self._record_contact(input_data.user_id)
-        context = self._scheduled_delivery_context(input_data, client=client)
-        with scheduled_delivery_context(context):
+        context = self._delivery_context(input_data, client=client)
+        with delivery_context(context):
             return await self.agent(
                 user_message=input_data.user_message,
                 user_id=input_data.user_id,
                 image_source=image_sources,
                 attachments=attachments,
-                channel=CHANNEL_API,
+                source=CHANNEL_API,
             )
 
     async def _call_observe(self, input_data: ObserveInput) -> Any:
@@ -199,20 +193,10 @@ class ChatService:
             metadata=input_data.metadata,
         )
 
-    def _record_contact(self, user_id: str) -> None:
-        try:
-            upsert_contact(
-                self.contacts_file,
-                channel=CHANNEL_API,
-                user_id=user_id,
-                target={"user_id": user_id},
-            )
-        except Exception:
-            self.logger.debug("Failed to record contact for subconscious", exc_info=True)
-
     @staticmethod
-    def _scheduled_delivery_context(input_data: ChatInput, *, client: str) -> ScheduledDeliveryContext:
-        return ScheduledDeliveryContext(
+    def _delivery_context(input_data: ChatInput, *, client: str) -> DeliveryContext:
+        return DeliveryContext(
+            source=CHANNEL_API,
             channel=CHANNEL_API,
             user_id=input_data.user_id,
             target={"user_id": input_data.user_id},

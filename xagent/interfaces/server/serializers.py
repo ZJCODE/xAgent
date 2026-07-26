@@ -31,7 +31,7 @@ def message_item(message: Message) -> Dict[str, Any]:
         "image_count": len(images),
         "attachments": attachments,
         "attachment_count": len(attachments),
-        "channel": message.channel,
+        "source": message.source,
         "room_name": message.room_name,
     }
     return item

@@ -7,6 +7,19 @@ from xagent.schemas import Message, MessageType, RoleType
 
 
 class MessageStorageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_event_derived_message_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = MessageStorage(path=str(Path(tmpdir) / "messages.sqlite3"))
+            first = Message.create("first", role=RoleType.USER, sender_id="alice")
+            duplicate = Message.create("different retry", role=RoleType.USER, sender_id="alice")
+
+            stored_first = await storage.add_message_once(first, "event:event-1:input")
+            stored_retry = await storage.add_message_once(duplicate, "event:event-1:input")
+
+            self.assertEqual(stored_retry, stored_first)
+            self.assertEqual(await storage.get_message_count(), 1)
+            self.assertEqual((await storage.get_messages(1))[0].content, "first")
+
     async def test_cursor_range_is_stable_when_newer_messages_arrive(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "messages.sqlite3"
@@ -43,19 +56,6 @@ class MessageStorageTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertGreater(await storage.cursor_for_message_count(2), 0)
             self.assertEqual(await storage.cursor_for_message_count(3), 0)
-
-    async def test_clear_messages_resets_stream(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "messages.sqlite3"
-            storage = MessageStorage(path=str(db_path))
-            await storage.add_messages([
-                Message.create("first", role=RoleType.USER, sender_id="alice"),
-                Message.create("second", role=RoleType.USER, sender_id="bob"),
-            ])
-
-            self.assertEqual(await storage.get_message_count(), 2)
-            await storage.clear_messages()
-            self.assertEqual(await storage.get_message_count(), 0)
 
     async def test_context_event_roundtrips_with_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:

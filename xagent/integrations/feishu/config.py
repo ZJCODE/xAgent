@@ -1,31 +1,8 @@
 """Configuration loader for the Feishu adapter."""
 from __future__ import annotations
 
-import os
-import re
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
-
-import yaml
-
-
-_ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
-
-
-def _expand_env(value: Any) -> Any:
-    """Expand ``${ENV_VAR}`` references inside string config values."""
-    if not isinstance(value, str):
-        return value
-
-    def replace(match: re.Match[str]) -> str:
-        name = match.group(1)
-        env_value = os.environ.get(name)
-        if env_value is None:
-            raise ValueError(f"Environment variable {name!r} is not set")
-        return env_value
-
-    return _ENV_PATTERN.sub(replace, value)
 
 
 @dataclass
@@ -56,8 +33,6 @@ class FeishuAdapterConfig:
         group_fetch_timeout: Maximum seconds to wait for Feishu history.
         group_reply_only_when_mentioned: Record unmentioned group/topic
             messages but never reply to them. Defaults to false.
-        advanced: Raw pass-through kwargs for ``FeishuChannel`` (policy,
-            safety, ...). Reserved for power users.
     """
 
     app_id: str
@@ -71,48 +46,18 @@ class FeishuAdapterConfig:
     group_fetch_timeout: float = 5.0
     group_reply_only_when_mentioned: bool = False
 
-    advanced: Dict[str, Any] = field(default_factory=dict)
-
-    # --- factory helpers --------------------------------------------------
-
-    @classmethod
-    def from_file(cls, path: str | os.PathLike[str]) -> "FeishuAdapterConfig":
-        """Load configuration from a YAML file with env-var expansion."""
-        config_path = Path(path).expanduser().resolve()
-        if not config_path.is_file():
-            raise FileNotFoundError(f"Feishu config not found: {config_path}")
-        with config_path.open("r", encoding="utf-8") as handle:
-            raw = yaml.safe_load(handle) or {}
-        if not isinstance(raw, dict):
-            raise ValueError(f"Feishu config must be a YAML mapping: {config_path}")
-        return cls.from_dict(raw)
-
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "FeishuAdapterConfig":
-        expanded = {k: _expand_env(v) for k, v in data.items()}
-
-        app_id = expanded.get("app_id") or os.environ.get("LARK_APP_ID")
-        app_secret = expanded.get("app_secret") or os.environ.get("LARK_APP_SECRET")
-        if not app_id or not app_secret:
-            raise ValueError(
-                "Feishu config requires 'app_id' and 'app_secret' "
-                "(or LARK_APP_ID / LARK_APP_SECRET environment variables)."
-            )
-
-        known_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        kwargs: Dict[str, Any] = {}
-        advanced: Dict[str, Any] = dict(expanded.get("advanced") or {})
-        unsupported_keys = sorted(set(expanded) - known_fields)
+        known_fields = {field.name for field in cls.__dataclass_fields__.values()}
+        unsupported_keys = sorted(set(data) - known_fields)
         if unsupported_keys:
-            joined_keys = ", ".join(unsupported_keys)
-            raise ValueError(f"Unsupported Feishu config key(s): {joined_keys}")
-        for key, value in expanded.items():
-            if key == "advanced":
-                continue
-            if key in known_fields:
-                kwargs[key] = value
-
-        kwargs["app_id"] = app_id
-        kwargs["app_secret"] = app_secret
-        kwargs["advanced"] = advanced
+            raise ValueError(
+                f"Unsupported Feishu config key(s): {', '.join(unsupported_keys)}"
+            )
+        app_id = str(data.get("app_id") or "").strip()
+        app_secret = str(data.get("app_secret") or "").strip()
+        if not app_id or not app_secret:
+            raise ValueError("Feishu config requires app_id and app_secret")
+        kwargs = dict(data)
+        kwargs.update(app_id=app_id, app_secret=app_secret)
         return cls(**kwargs)

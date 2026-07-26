@@ -1,253 +1,310 @@
-"""Tests for the web client server."""
-
 from __future__ import annotations
 
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+import httpx
 import yaml
-from fastapi.testclient import TestClient
 
 from xagent.interfaces.cli.agents import register_agent
 from xagent.interfaces.web import WebClientServer
 
 
-def _write_agent(path: Path, *, model: str, port: int) -> None:
+def _write_agent(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    config = {
-        "provider": {
-            "name": "openai",
-            "api_key": "test-key",
-            "model": model,
-        },
-        "channels": {"api": {"host": "127.0.0.1", "port": port}},
-    }
-    (path / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    (path / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 2,
+                "provider": {
+                    "name": "openai",
+                    "api_key": "test-key",
+                    "model": "gpt-5.4-mini",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     (path / "identity.md").write_text("# Identity\n\nTest agent.\n", encoding="utf-8")
 
 
 class WebClientServerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_web_client_serves_spa_shell(self):
-        server = WebClientServer(
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.agent = self.root / "agents" / "agent"
+        _write_agent(self.agent)
+        register_agent("agent", path=self.agent, make_active=True, root=self.root)
+        self.server = WebClientServer(
             host="127.0.0.1",
             port=1415,
-            api_url="http://127.0.0.1:8010",
+            config_dir=str(self.agent),
+            initial_agent="agent",
+            registry_root=self.root,
         )
-        client = TestClient(server.app)
 
-        for path in ("/", "/memory", "/workspace", "/message", "/agent", "/skills", "/tasks"):
-            response = client.get(path)
-            self.assertEqual(response.status_code, 200, path)
-            self.assertIn("text/html", response.headers.get("content-type", ""))
+    async def client(self):
+        return httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=self.server.app),
+            base_url="http://web",
+        )
 
-    async def test_web_client_requires_ui_assets(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            static_dir = Path(tmp) / "static"
-            static_dir.mkdir()
-            with self.assertRaises(FileNotFoundError):
-                WebClientServer(
-                    host="127.0.0.1",
-                    port=1415,
-                    api_url="http://127.0.0.1:8010",
-                    static_dir=static_dir,
+    async def test_spa_only_exposes_the_new_management_pages(self):
+        async with await self.client() as client:
+            for path in (
+                "/",
+                "/chat",
+                "/messages",
+                "/memory",
+                "/tasks",
+                "/channels",
+                "/deliveries",
+                "/settings",
+            ):
+                response = await client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("text/html", response.headers["content-type"])
+
+    async def test_web_health_reports_runtime_separately(self):
+        with patch(
+            "xagent.interfaces.web.agent_routes.RuntimeClient.status",
+            return_value={"running": True},
+        ):
+            async with await self.client() as client:
+                response = await client.get("/api/health")
+        self.assertEqual(
+            response.json(),
+            {"status": "ok", "web": True, "runtime_running": True},
+        )
+
+    async def test_delivery_review_is_forwarded_to_loopback_control(self):
+        calls: list[tuple[str, str, object]] = []
+
+        def request(method: str, path: str, **kwargs):
+            calls.append((method, path, kwargs.get("json")))
+            if path.endswith("/retry"):
+                return {"delivery": {"delivery_id": "delivery"}}
+            return {"deliveries": []}
+
+        with patch(
+            "xagent.interfaces.web.proxy.RuntimeClient.status",
+            return_value={"running": True},
+        ), patch(
+            "xagent.interfaces.web.proxy.RuntimeClient.request",
+            side_effect=request,
+        ):
+            async with await self.client() as client:
+                self.assertEqual((await client.get("/api/deliveries?status=blocked")).status_code, 200)
+                retried = await client.post("/api/deliveries/delivery/retry")
+                self.assertEqual(retried.status_code, 200)
+                self.assertEqual((await client.get("/api/people")).status_code, 404)
+        self.assertIn(("GET", "/v1/deliveries?status=blocked", None), calls)
+        self.assertIn(("POST", "/v1/deliveries/delivery/retry", None), calls)
+
+    async def test_web_chat_uses_the_implicit_owner_identity(self):
+        payloads: list[dict[str, object]] = []
+
+        def request(method: str, path: str, **kwargs):
+            payloads.append(dict(kwargs.get("json") or {}))
+            return {
+                "result": {
+                    "events": [
+                        {"type": "message_done", "content": "hello owner"},
+                    ]
+                }
+            }
+
+        with patch(
+            "xagent.interfaces.web.proxy.RuntimeClient.status",
+            return_value={"running": True},
+        ), patch(
+            "xagent.interfaces.web.proxy.RuntimeClient.request",
+            side_effect=request,
+        ):
+            async with await self.client() as client:
+                accepted = await client.post("/chat", json={"user_message": "hello"})
+                rejected = await client.post(
+                    "/chat",
+                    json={"user_id": "someone-else", "user_message": "hello"},
                 )
 
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(accepted.json()["reply"], "hello owner")
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(payloads[0]["source"], "web")
+        self.assertEqual(payloads[0]["speaker_id"], "owner")
+        self.assertEqual(payloads[0]["conversation_id"], "web:main")
 
-class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self.root = Path(self._tmp.name)
-        self.agent_a_path = self.root / "agents" / "agent_a"
-        self.agent_b_path = self.root / "agents" / "agent_b"
-        _write_agent(self.agent_a_path, model="agent-a-model", port=8010)
-        _write_agent(self.agent_b_path, model="agent-b-model", port=9010)
-        register_agent("agent_a", path=self.agent_a_path, make_active=True, root=self.root)
-        register_agent("agent_b", path=self.agent_b_path, root=self.root)
+    async def test_web_task_records_creation_source_separately_from_destination(self):
+        payloads: list[dict[str, object]] = []
 
-    def _server(self) -> WebClientServer:
-        return WebClientServer(
-            host="127.0.0.1",
-            port=1415,
-            api_url="http://127.0.0.1:8010",
-            config_dir=str(self.agent_a_path),
-            initial_agent="agent_a",
-            registry_root=self.root,
+        def request(method: str, path: str, **kwargs):
+            payload = dict(kwargs.get("json") or {})
+            payloads.append(payload)
+            return {"task": payload}
+
+        with patch(
+            "xagent.interfaces.web.proxy.RuntimeClient.status",
+            return_value={"running": True},
+        ), patch(
+            "xagent.interfaces.web.proxy.RuntimeClient.request",
+            side_effect=request,
+        ):
+            async with await self.client() as client:
+                response = await client.post(
+                    "/api/tasks",
+                    json={
+                        "instruction": "review today",
+                        "schedule": {
+                            "kind": "once",
+                            "run_at": "2099-01-01T09:00:00+08:00",
+                        },
+                        "destination": None,
+                    },
+                )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(payloads[0]["created_source"], "web")
+        self.assertEqual(payloads[0]["created_by"], "owner")
+        self.assertIsNone(payloads[0]["destination"])
+
+    async def test_settings_api_masks_and_preserves_provider_secret(self):
+        async with await self.client() as client:
+            loaded = await client.get("/api/settings")
+            payload = loaded.json()
+            self.assertEqual(payload["settings"]["provider"]["api_key"], "••••••••")
+            self.assertNotIn("test-key", loaded.text)
+
+            payload["settings"]["agent"]["max_history"] = 19
+            saved = await client.put(
+                "/api/settings",
+                json={"settings": payload["settings"]},
+            )
+
+        self.assertEqual(saved.status_code, 200)
+        config = yaml.safe_load((self.agent / "config.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(config["provider"]["api_key"], "test-key")
+        self.assertEqual(config["agent"]["max_history"], 19)
+
+    async def test_desktop_read_models_are_forwarded_with_bounded_queries(self):
+        calls: list[tuple[str, str]] = []
+
+        def request(method: str, path: str, **kwargs):
+            calls.append((method, path))
+            if path == "/v1/overview":
+                return {"runtime": {"running": True}, "counts": {}, "recent_events": []}
+            if path.startswith("/v1/messages"):
+                return {"messages": [], "total": 0, "has_more": False}
+            if path.startswith("/v1/memory/file"):
+                return {"path": "daily/a b.md", "content": "# A"}
+            return {"entries": [], "total": 0}
+
+        with patch(
+            "xagent.interfaces.web.proxy.RuntimeClient.status",
+            return_value={"running": True},
+        ), patch(
+            "xagent.interfaces.web.proxy.RuntimeClient.request",
+            side_effect=request,
+        ):
+            async with await self.client() as client:
+                self.assertEqual((await client.get("/api/overview")).status_code, 200)
+                self.assertEqual(
+                    (
+                        await client.get(
+                            "/api/messages",
+                            params={"q": "one two", "role": "user", "source": "web"},
+                        )
+                    ).status_code,
+                    200,
+                )
+                self.assertEqual(
+                    (
+                        await client.get(
+                            "/api/memory",
+                            params={"scope": "daily", "q": "project"},
+                        )
+                    ).status_code,
+                    200,
+                )
+                self.assertEqual(
+                    (
+                        await client.get(
+                            "/api/memory/file",
+                            params={"path": "daily/a b.md"},
+                        )
+                    ).status_code,
+                    200,
+                )
+
+        self.assertIn(("GET", "/v1/overview"), calls)
+        self.assertIn(
+            (
+                "GET",
+                "/v1/messages?limit=50&offset=0&q=one+two&role=user&source=web",
+            ),
+            calls,
+        )
+        self.assertIn(
+            ("GET", "/v1/memory?scope=daily&q=project&limit=200"),
+            calls,
+        )
+        self.assertIn(
+            ("GET", "/v1/memory/file?path=daily%2Fa+b.md"),
+            calls,
         )
 
-    async def test_web_client_health_reports_api_reachability(self):
-        client = TestClient(self._server().app)
+    async def test_runtime_status_and_overview_have_useful_stopped_snapshots(self):
+        from xagent.core.runtime import RuntimeUnavailable
 
-        response = client.get("/api/health")
+        with patch(
+            "xagent.interfaces.web.proxy.RuntimeClient.status",
+            side_effect=RuntimeUnavailable("not running"),
+        ):
+            async with await self.client() as client:
+                runtime = await client.get("/api/runtime")
+                overview = await client.get("/api/overview")
 
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertEqual(payload["status"], "ok")
-        self.assertTrue(payload["web"])
-        self.assertIn("api_reachable", payload)
+        self.assertEqual(runtime.status_code, 200)
+        self.assertFalse(runtime.json()["running"])
+        self.assertEqual(overview.status_code, 200)
+        self.assertFalse(overview.json()["runtime"]["running"])
+        self.assertIsNone(overview.json()["counts"])
 
-    async def test_list_agents_endpoint_reports_both_agents(self):
-        client = TestClient(self._server().app)
-
-        response = client.get("/api/agents")
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        names = {row["name"] for row in payload["agents"]}
-        self.assertEqual(names, {"agent_a", "agent_b"})
-        api_urls = {row["name"]: row["api_url"] for row in payload["agents"]}
-        self.assertEqual(api_urls, {
-            "agent_a": "http://127.0.0.1:8010",
-            "agent_b": "http://127.0.0.1:9010",
-        })
-        self.assertEqual(payload["selected_agent"], "agent_a")
-        self.assertEqual(payload["active_agent"], "agent_a")
-
-    async def test_admin_routes_follow_the_selected_agent(self):
-        client = TestClient(self._server().app)
-
-        initial = client.get("/api/agent/info")
-        self.assertEqual(initial.status_code, 200)
-        self.assertEqual(initial.json()["model"], "agent-a-model")
-
-        select_response = client.post("/api/agents/select", json={"name": "agent_b"})
-        self.assertEqual(select_response.status_code, 200)
-        self.assertEqual(select_response.json()["selected_agent"], "agent_b")
-
-        switched = client.get("/api/agent/info")
-        self.assertEqual(switched.status_code, 200)
-        self.assertEqual(switched.json()["model"], "agent-b-model")
-
-    async def test_select_unknown_agent_returns_400(self):
-        client = TestClient(self._server().app)
-
-        response = client.post("/api/agents/select", json={"name": "nope"})
-
-        self.assertEqual(response.status_code, 400)
-
-    async def test_clear_messages_is_served_locally_without_a_channel(self):
-        client = TestClient(self._server().app)
-
-        response = client.post("/clear_messages")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "success")
-
-    async def test_setup_schema_endpoint_returns_providers_and_models(self):
-        client = TestClient(self._server().app)
-
-        response = client.get("/api/agents/setup-schema")
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertIn("openai", {row["id"] for row in payload["providers"]})
-        self.assertIn("gpt-5.4-mini", payload["models"]["openai"])
-        self.assertEqual(
-            ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-            [model for model in payload["models"]["openai"] if model.startswith("gpt-5.6-")],
-        )
-        self.assertTrue(all("Decide later" not in models for models in payload["models"].values()))
-        self.assertIn("identity", payload["defaults"])
-
-    async def test_create_agent_endpoint_registers_and_selects_new_agent(self):
-        client = TestClient(self._server().app)
-        payload = {
-            "name": "agent_c",
-            "title": "Agent C",
-            "replace_existing": False,
-            "selection": {
-                "provider": "openai",
-                "base_url": "https://api.openai.com/v1",
-                "api_key": "test-key",
-                "model": "gpt-5.4-mini",
-                "identity": "# Identity\n\nCreated from web.\n",
-            },
+    async def test_runtime_lifecycle_is_owned_by_the_web_management_process(self):
+        status = {
+            "pid": 42,
+            "instance_id": "runtime",
+            "started_at": 1.0,
+            "running": True,
+            "channels": [],
         }
-
-        response = client.post("/api/agents", json=payload)
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        names = {row["name"] for row in body["agents"]}
-        self.assertIn("agent_c", names)
-        self.assertEqual(body["selected_agent"], "agent_c")
-        self.assertEqual(body["active_agent"], "agent_c")
-
-        info = client.get("/api/agent/info")
-        self.assertEqual(info.status_code, 200)
-        self.assertEqual(info.json()["model"], "gpt-5.4-mini")
-
-    async def test_create_duplicate_agent_returns_400(self):
-        client = TestClient(self._server().app)
-        payload = {
-            "name": "agent_a",
-            "selection": {
-                "provider": "openai",
-                "model": "gpt-5.4-mini",
-                "identity": "# Identity\n\nDuplicate.\n",
-            },
-        }
-
-        response = client.post("/api/agents", json=payload)
-
-        self.assertEqual(response.status_code, 400)
-
-    async def test_delete_agent_requires_matching_confirmation(self):
-        client = TestClient(self._server().app)
-
-        response = client.request(
-            "DELETE",
-            "/api/agents/agent_b",
-            json={"confirm": "wrong"},
-        )
-
-        self.assertEqual(response.status_code, 400)
-
-    async def test_delete_agent_removes_registry_entry_and_switches_selection(self):
-        client = TestClient(self._server().app)
-        client.post("/api/agents/select", json={"name": "agent_b"})
-
-        response = client.request(
-            "DELETE",
-            "/api/agents/agent_b",
-            json={"confirm": "agent_b"},
-        )
+        with patch(
+            "xagent.interfaces.web.proxy.RuntimeLauncher.start",
+            return_value=SimpleNamespace(state="started"),
+        ) as start, patch(
+            "xagent.interfaces.web.proxy.RuntimeLauncher.status",
+            return_value=status,
+        ):
+            async with await self.client() as client:
+                response = await client.post("/api/runtime/start")
 
         self.assertEqual(response.status_code, 200)
-        body = response.json()
-        names = {row["name"] for row in body["agents"]}
-        self.assertEqual(names, {"agent_a"})
-        self.assertEqual(body["selected_agent"], "agent_a")
+        self.assertEqual(response.json()["outcome"], "started")
+        self.assertEqual(response.json()["runtime"]["pid"], 42)
+        start.assert_called_once()
 
+    async def test_web_server_rejects_public_bind_addresses_and_bad_ports(self):
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            WebClientServer(host="0.0.0.0", port=1415)
+        with self.assertRaisesRegex(ValueError, "between 1 and 65535"):
+            WebClientServer(host="127.0.0.1", port=0)
 
-class WebClientEmptyRegistryTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self.root = Path(self._tmp.name)
-
-    async def test_web_client_serves_ui_with_empty_registry(self):
-        server = WebClientServer(
-            host="127.0.0.1",
-            port=1415,
-            api_url="http://127.0.0.1:8010",
-            config_dir=str(self.root),
-            registry_root=self.root,
-        )
-        client = TestClient(server.app)
-
-        agents_response = client.get("/api/agents")
-        self.assertEqual(agents_response.status_code, 200)
-        payload = agents_response.json()
-        self.assertEqual(payload["agents"], [])
-        self.assertEqual(payload["selected_agent"], "")
-
-        schema_response = client.get("/api/agents/setup-schema")
-        self.assertEqual(schema_response.status_code, 200)
-
-        shell_response = client.get("/")
-        self.assertEqual(shell_response.status_code, 200)
-
-        admin_response = client.get("/api/agent/info")
-        self.assertEqual(admin_response.status_code, 404)
+    async def test_missing_ui_assets_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            static = Path(temporary)
+            with self.assertRaises(FileNotFoundError):
+                WebClientServer(host="127.0.0.1", port=1415, static_dir=static)

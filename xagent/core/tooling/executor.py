@@ -1,6 +1,6 @@
-import asyncio
 import json
 import logging
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -33,26 +33,34 @@ class ToolDisplayResult:
 
 
 class ToolExecutor:
-    """Executes tool calls, handles image display results, and manages concurrent execution."""
+    """Executes tool calls in model order and handles display results."""
 
     def __init__(
         self,
         tool_manager: ToolManager,
         message_storage: MessageStorage,
         client: Any,
+        before_execute: Any = None,
+        timeout_seconds: float = 300.0,
+        max_result_chars: int = 65536,
     ):
         self.tool_manager = tool_manager
         self.message_storage = message_storage
         self.client = client
+        self.before_execute = before_execute
+        self.timeout_seconds = max(0.1, min(float(timeout_seconds), 300.0))
+        self.max_result_chars = max(1024, int(max_result_chars))
 
     async def handle_tool_calls(
         self,
         tool_calls: list,
         input_messages: list,
-        max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
     ) -> Optional[ToolDisplayResult]:
         """
-        Handle tool calls by executing them concurrently with concurrency limit.
+        Handle tool calls in the order emitted by the model.
+
+        Tool calls are deliberately serialized, giving one agent turn a
+        deterministic side-effect order.
 
         Returns:
             None if no displayable output, otherwise a ToolDisplayResult.
@@ -82,14 +90,9 @@ class ToolExecutor:
                 assistant_message["content_blocks"] = content_blocks
             input_messages.append(assistant_message)
 
-        semaphore = asyncio.Semaphore(max_concurrent_tools)
-
-        async def execute_with_semaphore(tool_call):
-            async with semaphore:
-                return await self.execute_single(tool_call)
-
-        tasks = [execute_with_semaphore(tc) for tc in function_calls]
-        results = await asyncio.gather(*tasks)
+        results = []
+        for tool_call in function_calls:
+            results.append(await self.execute_single(tool_call))
 
         pending_contents = []
         pending_descriptions = []
@@ -143,7 +146,14 @@ class ToolExecutor:
         logger.info("Calling tool: %s with args: %s", name, args)
 
         try:
-            result = await func(**args)
+            if self.before_execute is not None:
+                callback_result = self.before_execute(name)
+                if hasattr(callback_result, "__await__"):
+                    await callback_result
+            result = await asyncio.wait_for(
+                func(**args),
+                timeout=self.timeout_seconds,
+            )
         except Exception as e:
             logger.error("Tool call error: %s", e)
             result = f"Tool error: {e}"
@@ -169,6 +179,11 @@ class ToolExecutor:
             )
 
         result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+        if len(result_str) > self.max_result_chars:
+            result_str = (
+                result_str[: self.max_result_chars]
+                + "\n[tool result truncated by runtime]"
+            )
 
         image_data = None
         model_output = result_str

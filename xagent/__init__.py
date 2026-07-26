@@ -7,10 +7,6 @@ __all__ = [
     # Core components
     "Agent", 
 
-    # interfaces
-    "AgentHTTPServer",
-    "AgentCLI",
-    
     # Data models
     "Message",
 
@@ -30,8 +26,6 @@ __all__ = [
 
 _EXPORTS = {
     "Agent": (".core", "Agent"),
-    "AgentHTTPServer": (".interfaces", "AgentHTTPServer"),
-    "AgentCLI": (".interfaces", "AgentCLI"),
     "Message": (".schemas", "Message"),
     "function_tool": (".utils", "function_tool"),
     "run_command": (".tools", "run_command"),

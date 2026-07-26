@@ -1,160 +1,175 @@
-import { RefreshCw, Search, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { FileTree } from "../components/FileTree";
+import { Brain, CalendarDays, FileText, RefreshCw, Search, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Markdown } from "../components/Markdown";
-import { BrowserLayout, Button, EmptyState, IconButton, PageShell, PageToolbar, SearchField } from "../components/ui";
-import { getAgentInfo, getMemoryTree, readMemoryFile, searchMemory } from "../lib/api";
+import {
+  EmptyState,
+  IconButton,
+  PageShell,
+  PageToolbar,
+} from "../components/ui";
+import { useAgentSession } from "../context/AgentSessionContext";
+import { getMemory, getMemoryFile } from "../lib/api";
 import { formatTimestamp } from "../lib/format";
-import type { AgentInfo, FileNode, FileReadResult, SearchResult } from "../types";
+import type { MemoryEntry, MemoryFile } from "../types";
 
-const TIME_SCOPES = new Set(["daily", "weekly", "monthly", "yearly"]);
+const scopes = ["all", "daily", "weekly", "monthly", "yearly"] as const;
 
 export function MemoryPage() {
-  const [info, setInfo] = useState<AgentInfo | null>(null);
-  const [tree, setTree] = useState<FileNode[]>([]);
-  const [selected, setSelected] = useState<FileReadResult | null>(null);
+  const { selectedAgent } = useAgentSession();
+  const [entries, setEntries] = useState<MemoryEntry[]>([]);
+  const [selected, setSelected] = useState<MemoryFile | null>(null);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [searchActive, setSearchActive] = useState(false);
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [scope, setScope] = useState<(typeof scopes)[number]>("all");
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
+  const selectedPath = useRef("");
 
-  const load = async () => {
+  const openFile = useCallback(async (entry: MemoryEntry) => {
+    setDetailLoading(true);
+    setError("");
+    try {
+      const file = await getMemoryFile(entry.path);
+      selectedPath.current = file.path;
+      setSelected(file);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
+  const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [agentInfo, memoryTree] = await Promise.all([getAgentInfo(), getMemoryTree()]);
-      setInfo(agentInfo);
-      setTree(memoryTree.tree || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const data = await getMemory({ scope, query: appliedQuery });
+      setEntries(data.entries);
+      setTotal(data.total);
+      if (!data.entries.some((entry) => entry.path === selectedPath.current)) {
+        if (data.entries[0]) await openFile(data.entries[0]);
+        else {
+          selectedPath.current = "";
+          setSelected(null);
+        }
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setEntries([]);
+      selectedPath.current = "";
+      setSelected(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, [appliedQuery, openFile, scope]);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load, selectedAgent]);
 
-  const selectFile = async (node: FileNode) => {
-    setError("");
-    try {
-      setSelected(await readMemoryFile(node.path));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+  const submitSearch = (event?: FormEvent) => {
+    event?.preventDefault();
+    setAppliedQuery(query.trim());
   };
-
-  const runSearch = async () => {
-    const text = query.trim();
-    if (!text) return;
-    setError("");
-    setSearchActive(true);
-    try {
-      const data = await searchMemory(text);
-      setResults(data.results || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const { timeNodes, relNodes } = useMemo(() => {
-    const time: FileNode[] = [];
-    const rel: FileNode[] = [];
-    for (const node of tree) {
-      if (TIME_SCOPES.has(node.name)) {
-        time.push(node);
-      } else {
-        rel.push(node);
-      }
-    }
-    return { timeNodes: time, relNodes: rel };
-  }, [tree]);
 
   return (
-    <PageShell>
+    <PageShell className="memory-page">
       <PageToolbar
+        eyebrow="Long-term memory"
         title="Memory"
-        subtitle={info?.memory_dir || "Time-scoped markdown memory"}
+        subtitle={`${total.toLocaleString()} Markdown diary files · read only`}
         actions={
-          <>
-            <SearchField
-              placeholder="Search memory"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onSubmit={() => void runSearch()}
-            />
-            <Button type="button" onClick={runSearch}>
-              <Search size={15} />
-              Search
-            </Button>
-            <IconButton
-              type="button"
-              onClick={() => {
-                setQuery("");
-                setResults([]);
-                setSearchActive(false);
-              }}
-              title="Clear search"
-            >
-              <X size={16} />
-            </IconButton>
-            <IconButton type="button" onClick={load} title="Refresh">
-              <RefreshCw size={16} />
-            </IconButton>
-          </>
+          <IconButton type="button" aria-label="Refresh memory" title="Refresh memory" onClick={() => void load()}>
+            <RefreshCw size={16} />
+          </IconButton>
         }
       />
 
-      {error ? <div className="error-strip">{error}</div> : null}
-      <BrowserLayout
-        sidebar={
-          searchActive ? (
-            results.length ? (
-              <div className="space-y-2">
-                {results.map((item) => (
-                  <button key={item.path} type="button" className="search-result" onClick={() => void selectFile(item)}>
-                    <strong>{item.path}</strong>
-                    {item.snippet ? <span>{item.snippet}</span> : null}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <EmptyState title="No matching files" />
-            )
-          ) : loading ? (
-            <EmptyState title="Loading..." />
-          ) : (
-            <div className="space-y-3">
-              {timeNodes.length > 0 && (
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 px-1">Time</div>
-                  <FileTree nodes={timeNodes} selectedPath={selected?.path} onSelect={selectFile} />
-                </div>
-              )}
-              {relNodes.length > 0 && (
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 px-1">Relationships</div>
-                  <FileTree nodes={relNodes} selectedPath={selected?.path} onSelect={selectFile} />
-                </div>
-              )}
-            </div>
-          )
-        }
-      >
+      <div className="memory-workbench">
+        <aside className="memory-browser">
+          <form className="memory-search" onSubmit={submitSearch}>
+            <Search size={15} />
+            <input
+              value={query}
+              aria-label="Search memory"
+              placeholder="Search memory"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            {query ? (
+              <IconButton
+                type="button"
+                aria-label="Clear memory search"
+                title="Clear memory search"
+                onClick={() => {
+                  setQuery("");
+                  setAppliedQuery("");
+                }}
+              >
+                <X size={14} />
+              </IconButton>
+            ) : null}
+          </form>
+          <div className="scope-tabs" aria-label="Memory scope">
+            {scopes.map((item) => (
+              <button
+                type="button"
+                key={item}
+                className={scope === item ? "active" : ""}
+                aria-pressed={scope === item}
+                onClick={() => setScope(item)}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+          <div className="memory-file-list">
+            {entries.map((entry) => (
+              <button
+                type="button"
+                className={selected?.path === entry.path ? "memory-file active" : "memory-file"}
+                key={entry.path}
+                onClick={() => void openFile(entry)}
+              >
+                <span className="memory-file-icon">
+                  {entry.scope === "daily" ? <CalendarDays size={16} /> : <FileText size={16} />}
+                </span>
+                <span>
+                  <strong>{entry.title}</strong>
+                  <small>{entry.excerpt || entry.path}</small>
+                  <em>{entry.scope} · {formatTimestamp(entry.modified_at)}</em>
+                </span>
+              </button>
+            ))}
+            {!entries.length ? (
+              <EmptyState icon={<Brain size={20} />} title={loading ? "Loading memory…" : appliedQuery ? "No matching memory" : "No memory yet"} />
+            ) : null}
+          </div>
+        </aside>
+
+        <main className="memory-reader">
+          {error ? <div className="error-strip">{error}</div> : null}
           {selected ? (
             <>
-              <div className="content-heading">
-                <h3>{selected.name || selected.path}</h3>
-                <span>{formatTimestamp(selected.modified)}</span>
-              </div>
-              <Markdown content={selected.content} />
+              <header className="memory-reader-header">
+                <div>
+                  <span>{selected.path}</span>
+                  <h2>{selected.title}</h2>
+                </div>
+                <time>Updated {formatTimestamp(selected.modified_at)}</time>
+              </header>
+              <article className="memory-document">
+                {detailLoading ? <p className="muted-copy">Loading memory…</p> : <Markdown content={selected.content} />}
+              </article>
             </>
           ) : (
-            <EmptyState title="Select a memory file" className="h-full" />
+            <EmptyState icon={<Brain size={24} />} title={loading ? "Loading memory…" : "Select a memory"}>
+              Daily entries and their weekly, monthly, and yearly summaries live here.
+            </EmptyState>
           )}
-      </BrowserLayout>
+        </main>
+      </div>
     </PageShell>
   );
 }

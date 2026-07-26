@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
-import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from ...core.runtime import RuntimeClient, RuntimeUnavailable
 from ..cli.agents import AgentRegistryError
 from .session import WebAgentSession
 
@@ -63,17 +64,23 @@ class DeleteAgentInput(BaseModel):
     confirm: str
 
 
+class SettingsUpdateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    settings: dict[str, Any]
+
+
 def register_agent_session_routes(app: FastAPI, session: WebAgentSession) -> None:
     @app.get("/api/health", tags=["Health"])
     async def web_client_health():
-        api_reachable = False
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), trust_env=False) as client:
-                response = await client.get(f"{session.get_current_api_url().rstrip('/')}/health")
-                api_reachable = response.status_code == 200
-        except Exception:
-            api_reachable = False
-        return {"status": "ok", "web": True, "api_reachable": api_reachable}
+            status = await asyncio.to_thread(
+                RuntimeClient(session.get_current_config_dir()).status
+            )
+            runtime_running = bool(status.get("running"))
+        except (RuntimeUnavailable, HTTPException):
+            runtime_running = False
+        return {"status": "ok", "web": True, "runtime_running": runtime_running}
 
     @app.get("/api/agents", tags=["Agents"])
     async def list_agents():
@@ -118,3 +125,17 @@ def register_agent_session_routes(app: FastAPI, session: WebAgentSession) -> Non
             message = str(exc)
             status_code = 409 if "Failed to stop" in message else 400
             raise HTTPException(status_code=status_code, detail=message) from exc
+
+    @app.get("/api/settings", tags=["Settings"])
+    async def get_settings():
+        try:
+            return session.settings_snapshot()
+        except (AgentRegistryError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/api/settings", tags=["Settings"])
+    async def update_settings(input_data: SettingsUpdateInput):
+        try:
+            return session.update_settings(input_data.settings)
+        except (AgentRegistryError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc

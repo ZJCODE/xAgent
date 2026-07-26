@@ -9,8 +9,9 @@ import sqlite3
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import List, Optional, Union
 
+from ...core.database import initialize_state_database
 from ...schemas import Message
 
 
@@ -23,7 +24,6 @@ class MessageStorageConfig:
     DEFAULT_MESSAGE_COUNT = 100
     CONNECT_TIMEOUT = 5.0
     TABLE_NAME = "messages"
-    CURRENT_COLUMNS = {"id", "timestamp", "message_json"}
 
 
 class MessageStorage:
@@ -44,48 +44,7 @@ class MessageStorage:
         return connection
 
     def _initialize_database(self) -> None:
-        with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            columns = {
-                row["name"]
-                for row in connection.execute(
-                    f"PRAGMA table_info({MessageStorageConfig.TABLE_NAME})"
-                ).fetchall()
-            }
-
-            if not columns:
-                self._create_current_schema(connection)
-            elif columns == MessageStorageConfig.CURRENT_COLUMNS:
-                self._ensure_current_indexes(connection)
-            else:
-                self.logger.warning(
-                    "Unexpected messages schema at %s; recreating storage table.",
-                    self.path,
-                )
-                connection.execute(f"DROP TABLE IF EXISTS {MessageStorageConfig.TABLE_NAME}")
-                self._create_current_schema(connection)
-
-            connection.commit()
-
-    def _create_current_schema(self, connection: sqlite3.Connection) -> None:
-        connection.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {MessageStorageConfig.TABLE_NAME} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp REAL NOT NULL,
-                message_json TEXT NOT NULL
-            )
-            """
-        )
-        self._ensure_current_indexes(connection)
-
-    def _ensure_current_indexes(self, connection: sqlite3.Connection) -> None:
-        connection.execute(
-            f"""
-            CREATE INDEX IF NOT EXISTS idx_{MessageStorageConfig.TABLE_NAME}_id
-            ON {MessageStorageConfig.TABLE_NAME} (id)
-            """
-        )
+        self.path = initialize_state_database(self.path)
 
     async def add_messages(
         self,
@@ -96,6 +55,17 @@ class MessageStorage:
         if not normalized_messages:
             return
         await asyncio.to_thread(self._add_messages_sync, normalized_messages)
+
+    async def add_message_once(self, message: Message, dedupe_key: str) -> Message:
+        """Persist one event-derived message once and return the stored value."""
+        normalized_key = str(dedupe_key or "").strip()
+        if not normalized_key:
+            raise ValueError("dedupe_key is required")
+        return await asyncio.to_thread(
+            self._add_message_once_sync,
+            message,
+            normalized_key,
+        )
 
     def _add_messages_sync(self, messages: List[Message]) -> None:
         rows = [(message.timestamp, message.model_dump_json()) for message in messages]
@@ -108,6 +78,30 @@ class MessageStorage:
                 rows,
             )
             connection.commit()
+
+    def _add_message_once_sync(self, message: Message, dedupe_key: str) -> Message:
+        with self._connect() as connection:
+            connection.execute(
+                f"""
+                INSERT INTO {MessageStorageConfig.TABLE_NAME}
+                    (dedupe_key, timestamp, message_json)
+                VALUES (?, ?, ?)
+                ON CONFLICT(dedupe_key) DO NOTHING
+                """,
+                (dedupe_key, message.timestamp, message.model_dump_json()),
+            )
+            row = connection.execute(
+                f"""
+                SELECT message_json
+                FROM {MessageStorageConfig.TABLE_NAME}
+                WHERE dedupe_key = ?
+                """,
+                (dedupe_key,),
+            ).fetchone()
+            connection.commit()
+        if row is None:
+            raise RuntimeError("failed to persist idempotent message")
+        return Message.model_validate_json(row["message_json"])
 
     async def get_messages(
         self,
@@ -137,45 +131,6 @@ class MessageStorage:
                 self.logger.warning("Skipping invalid local message: %s", exception)
         return messages
 
-    async def clear_messages(self) -> None:
-        await asyncio.to_thread(self._clear_messages_sync)
-
-    def _clear_messages_sync(self) -> None:
-        with self._connect() as connection:
-            connection.execute(f"DELETE FROM {MessageStorageConfig.TABLE_NAME}")
-            connection.commit()
-
-    async def pop_message(self) -> Optional[Message]:
-        return await asyncio.to_thread(self._pop_message_sync)
-
-    def _pop_message_sync(self) -> Optional[Message]:
-        with self._connect() as connection:
-            while True:
-                row = connection.execute(
-                    f"""
-                    SELECT id, message_json
-                    FROM {MessageStorageConfig.TABLE_NAME}
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """
-                ).fetchone()
-                if row is None:
-                    return None
-
-                connection.execute(
-                    f"DELETE FROM {MessageStorageConfig.TABLE_NAME} WHERE id = ?",
-                    (row["id"],),
-                )
-                connection.commit()
-
-                try:
-                    message = Message.model_validate_json(row["message_json"])
-                except Exception as exception:
-                    self.logger.warning("Skipping invalid popped local message: %s", exception)
-                    continue
-
-                return message
-
     async def get_message_count(self) -> int:
         return await asyncio.to_thread(self._get_message_count_sync)
 
@@ -201,6 +156,31 @@ class MessageStorage:
                 """
             ).fetchone()
         return int(row["latest_id"]) if row is not None else 0
+
+    async def get_journal_state(self, key: str, default: str = "") -> str:
+        return await asyncio.to_thread(self.get_journal_state_sync, key, default)
+
+    def get_journal_state_sync(self, key: str, default: str = "") -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM journal_state WHERE key=?",
+                (str(key),),
+            ).fetchone()
+        return str(row["value"]) if row is not None else str(default)
+
+    async def set_journal_state(self, key: str, value: str) -> None:
+        await asyncio.to_thread(self.set_journal_state_sync, key, value)
+
+    def set_journal_state_sync(self, key: str, value: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO journal_state(key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (str(key), str(value)),
+            )
+            connection.commit()
 
     async def get_messages_in_cursor_range(
         self,
@@ -361,23 +341,6 @@ class MessageStorage:
             query = query.replace(char, f"\\{char}")
         return query
 
-    def get_stream_info(self) -> Dict[str, str]:
-        return {
-            "stream": "local",
-            "backend": "local",
-            "path": str(self.path),
-        }
-
-    def __repr__(self) -> str:
-        return f"MessageStorage(path='{self.path}')"
-
-    def __str__(self) -> str:
-        return f"MessageStorage(path='{self.path}')"
-
-    async def has_messages(self) -> bool:
-        """Return whether the stream contains at least one message."""
-        return await self.get_message_count() > 0
-
     @staticmethod
     def normalize_messages(messages: MessageBatch) -> List[Message]:
         """Normalize caller input to a concrete list of ``Message`` objects."""
@@ -407,8 +370,8 @@ class MessageStorage:
         ts = datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d %H:%M:%S")
         sender = message.sender_id or message.role.value
         header = f"[{ts}][speaker={sender}]"
-        if message.channel:
-            header += f"[channel={message.channel}]"
+        if message.source:
+            header += f"[source={message.source}]"
         if message.room_name:
             safe_room = message.room_name.replace("\n", " ").replace("]", "")
             header += f"[room={safe_room}]"

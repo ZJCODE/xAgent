@@ -1,103 +1,67 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentSessionProvider, useAgentSession } from "./context/AgentSessionContext";
 import { ChatProvider } from "./context/ChatContext";
 import { ConnectivityProvider } from "./context/ConnectivityContext";
 import { ThemeProvider } from "./context/ThemeContext";
-import { UnsavedChangesProvider, useUnsavedChanges } from "./context/UnsavedChangesContext";
-import type { RoutePath } from "./types";
-import { AgentPage } from "./pages/AgentPage";
+import { UnsavedChangesProvider } from "./context/UnsavedChangesContext";
+import { AppLayout } from "./components/AppLayout";
 import { ChannelPage } from "./pages/ChannelPage";
 import { ChatPage } from "./pages/ChatPage";
+import { DeliveriesPage } from "./pages/DeliveriesPage";
 import { MemoryPage } from "./pages/MemoryPage";
-import { MessagePage } from "./pages/MessagePage";
-import { SkillsPage } from "./pages/SkillsPage";
+import { MessagesPage } from "./pages/MessagesPage";
+import { OverviewPage } from "./pages/OverviewPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { TasksPage } from "./pages/TasksPage";
 import { WelcomePage } from "./pages/WelcomePage";
-import { WorkspacePage } from "./pages/WorkspacePage";
-import { AppLayout } from "./components/AppLayout";
+import type { RoutePath } from "./types";
 
-const routeSet = new Set<RoutePath>(["/", "/memory", "/message", "/workspace", "/skills", "/tasks", "/channels", "/agent"]);
-
-function normalizeRoute(pathname: string): RoutePath {
-  return routeSet.has(pathname as RoutePath) ? (pathname as RoutePath) : "/";
-}
+const routes = new Set<RoutePath>([
+  "/",
+  "/chat",
+  "/messages",
+  "/memory",
+  "/tasks",
+  "/channels",
+  "/deliveries",
+  "/settings",
+]);
+const route = (path: string): RoutePath => routes.has(path as RoutePath) ? path as RoutePath : "/";
 
 function RoutedApp() {
-  const [route, setRoute] = useState<RoutePath>(() => normalizeRoute(window.location.pathname));
-  const locationRef = useRef(`${window.location.pathname}${window.location.search}${window.location.hash}`);
-  const { agents, loading, refresh: refreshAgents } = useAgentSession();
-  const { confirmDiscard } = useUnsavedChanges();
-  const showWelcome = route === "/" && !loading && agents.length === 0;
+  const [current, setCurrent] = useState<RoutePath>(() => route(window.location.pathname));
+  const { agents, loading, refresh } = useAgentSession();
 
   useEffect(() => {
-    const onPopState = () => {
-      const nextRoute = normalizeRoute(window.location.pathname);
-      if (nextRoute === route) {
-        locationRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-        return;
-      }
-      void confirmDiscard().then((ok) => {
-        if (!ok) {
-          window.history.pushState(null, "", locationRef.current);
-          return;
-        }
-        locationRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-        setRoute(nextRoute);
-      });
-    };
-    const onLocationChange = () => {
-      locationRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    };
-    window.addEventListener("popstate", onPopState);
-    window.addEventListener("xagent:locationchange", onLocationChange);
-    return () => {
-      window.removeEventListener("popstate", onPopState);
-      window.removeEventListener("xagent:locationchange", onLocationChange);
-    };
-  }, [confirmDiscard, route]);
+    const pop = () => setCurrent(route(window.location.pathname));
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
+  }, []);
 
   useEffect(() => {
-    const interval = window.setInterval(() => void refreshAgents(), 5000);
-    return () => window.clearInterval(interval);
-  }, [refreshAgents]);
+    const timer = window.setInterval(() => void refresh(), 10000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
 
-  const navigate = (nextRoute: RoutePath) => {
-    if (nextRoute === route) return;
-    void confirmDiscard().then((ok) => {
-      if (!ok) return;
-      window.history.pushState(null, "", nextRoute);
-      locationRef.current = nextRoute;
-      setRoute(nextRoute);
-    });
-  };
+  const navigate = useCallback((next: RoutePath) => {
+    if (next === current) return;
+    window.history.pushState(null, "", next);
+    setCurrent(next);
+  }, [current]);
 
   const page = useMemo(() => {
-    switch (route) {
-      case "/memory":
-        return <MemoryPage />;
-      case "/message":
-        return <MessagePage />;
-      case "/workspace":
-        return <WorkspacePage />;
-      case "/skills":
-        return <SkillsPage />;
-      case "/tasks":
-        return <TasksPage />;
-      case "/channels":
-        return <ChannelPage />;
-      case "/agent":
-        return <AgentPage />;
-      case "/":
-      default:
-        return showWelcome ? <WelcomePage /> : <ChatPage />;
-    }
-  }, [route, showWelcome]);
+    if (!loading && agents.length === 0) return <WelcomePage />;
+    if (current === "/chat") return <ChatPage />;
+    if (current === "/messages") return <MessagesPage />;
+    if (current === "/memory") return <MemoryPage />;
+    if (current === "/tasks") return <TasksPage />;
+    if (current === "/channels") return <ChannelPage />;
+    if (current === "/deliveries") return <DeliveriesPage />;
+    if (current === "/settings") return <SettingsPage onNavigate={navigate} />;
+    return <OverviewPage onNavigate={navigate} />;
+  }, [agents.length, current, loading, navigate]);
 
-  return (
-    <AppLayout route={route} onNavigate={navigate}>
-      {page}
-    </AppLayout>
-  );
+  return <AppLayout route={current} onNavigate={navigate}>{page}</AppLayout>;
 }
 
 export default function App() {
@@ -106,9 +70,7 @@ export default function App() {
       <ConnectivityProvider>
         <UnsavedChangesProvider>
           <AgentSessionProvider>
-            <ChatProvider>
-              <RoutedApp />
-            </ChatProvider>
+            <ChatProvider><RoutedApp /></ChatProvider>
           </AgentSessionProvider>
         </UnsavedChangesProvider>
       </ConnectivityProvider>

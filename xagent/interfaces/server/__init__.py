@@ -11,14 +11,7 @@ from .models import (
     ChatAttachmentInput,
     ChatImageInput,
     ChatInput,
-    IdentityInput,
     ObserveInput,
-    SkillCreateInput,
-    SkillEntryCreateInput,
-    SkillEntryMoveInput,
-    SkillStateInput,
-    SkillWriteInput,
-    WorkspaceWriteInput,
 )
 
 __all__ = [
@@ -27,12 +20,5 @@ __all__ = [
     "ChatAttachmentInput",
     "ChatImageInput",
     "ChatInput",
-    "IdentityInput",
     "ObserveInput",
-    "SkillCreateInput",
-    "SkillEntryCreateInput",
-    "SkillEntryMoveInput",
-    "SkillStateInput",
-    "SkillWriteInput",
-    "WorkspaceWriteInput",
 ]

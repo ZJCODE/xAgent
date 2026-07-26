@@ -187,8 +187,8 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
             os.unlink(db_path)
 
     async def test_search_memory_no_message_storage_still_works(self):
-        """Without message_storage, search works as before (backward compatible)."""
-        await self.memory.append_daily("Legacy entry: old project notes")
+        """Without message storage, diary search remains independently usable."""
+        await self.memory.append_daily("Historical entry: old project notes")
         tool = create_search_memory_tool(self.memory, is_enabled=True)
         result = await tool(query="project notes")
         self.assertIn("project notes", result["results"])

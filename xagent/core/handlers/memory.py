@@ -7,23 +7,13 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, List, Optional
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows fallback
-    fcntl = None
-
-try:
-    import msvcrt
-except ImportError:  # pragma: no cover - POSIX platforms
-    msvcrt = None
+from typing import TYPE_CHECKING, List, Optional
 
 from ..config import AgentConfig
 from ...schemas import Message, MessageType, RoleType
 
 if TYPE_CHECKING:
-    from ...components.memory import MarkdownMemory, RelationshipStore
+    from ...components.memory import MarkdownMemory
     from ...components.message import MessageStorage
     from ..journal import JournalLLMService
 
@@ -49,12 +39,10 @@ class MemoryHandler:
         recent_days: Optional[int] = None,
         recent_max_chars: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
-        relationship_store: Optional["RelationshipStore"] = None,
     ) -> None:
         self.memory = memory
         self.llm_service = llm_service
         self.message_storage = message_storage
-        self.relationship_store = relationship_store
         self.max_history = self._positive_int(max_history, AgentConfig.DEFAULT_MAX_HISTORY)
         self.recent_days = self._non_negative_int(recent_days, self.RECENT_DAYS)
         self.recent_max_chars = self._non_negative_int(recent_max_chars, self.RECENT_MAX_CHARS)
@@ -67,11 +55,7 @@ class MemoryHandler:
             self.DEFAULT_JOURNAL_SOURCE_CHARS,
         )
         self._maintenance_lock = asyncio.Lock()
-        self._maintenance_task: Optional[asyncio.Task[bool]] = None
-        self._last_processed_message_id = self._non_negative_int(
-            self._read_state_sync(),
-            0,
-        )
+        self._last_processed_message_id = 0
 
     # ------------------------------------------------------------------
     # Context retrieval (injected into system prompt every turn)
@@ -204,16 +188,6 @@ class MemoryHandler:
     # Journal maintenance
     # ------------------------------------------------------------------
 
-    def schedule_experience_write(
-        self,
-        messages: List[Message],
-    ) -> None:
-        """Schedule a journal maintenance check after meaningful new experience."""
-        if not messages:
-            return
-        if any(self._is_memory_worthy_experience(message) for message in messages):
-            self._schedule_maintenance()
-
     async def run_maintenance(
         self, force: bool = False, trigger: str = "count", idle_seconds: float = 0
     ) -> bool:
@@ -226,17 +200,6 @@ class MemoryHandler:
             idle_seconds: Seconds since last interaction (only meaningful when
                           *trigger* is ``"idle"``).
         """
-        current_task = asyncio.current_task()
-        maintenance_task = self._maintenance_task
-        if maintenance_task is not None and maintenance_task is not current_task and not maintenance_task.done():
-            try:
-                existing_result = await maintenance_task
-            except Exception as exc:
-                logger.error("Background memory maintenance failed: %s", exc)
-                existing_result = False
-            if not force:
-                return bool(existing_result)
-
         async with self._maintenance_guard(refresh_state=True):
             return await self._run_maintenance_locked(
                 force=force, trigger=trigger, idle_seconds=idle_seconds
@@ -305,8 +268,6 @@ class MemoryHandler:
             ):
                 return False
 
-        await self._update_relationship_cards(recent_messages, new_records)
-
         if not await self._commit_processed_message_id(end_inclusive):
             logger.warning(
                 "Diary write completed but checkpoint was not advanced; retry will replay pending messages."
@@ -326,151 +287,6 @@ class MemoryHandler:
             "timestamp": message.timestamp,
             "metadata": metadata,
         }
-
-    # ------------------------------------------------------------------
-    # Relationship cards (derived projection over the diary)
-    # ------------------------------------------------------------------
-
-    async def _update_relationship_cards(
-        self,
-        recent_messages: List[Message],
-        new_records: List[dict],
-    ) -> None:
-        """Derive/update per-person relationship cards from this batch.
-
-        A best-effort projection over the diary stream: failures here must
-        never break diary maintenance, so everything is wrapped defensively.
-        """
-        if self.relationship_store is None:
-            return
-        try:
-            participants = self._extract_participants(recent_messages)
-            if not participants:
-                return
-
-            store = self.relationship_store
-            existing_cards: dict[str, str] = {}
-            for participant in participants:
-                card = await store.read_card(participant["key"])
-                if card is not None and not card.is_empty:
-                    existing_cards[participant["key"]] = card.body
-
-            new_cards = await self.llm_service.update_relationship_cards(
-                participants=participants,
-                messages=new_records,
-                existing_cards=existing_cards,
-            )
-            if not new_cards:
-                logger.info(
-                    "Relationship card update: no changes for %d participant(s) — %s",
-                    len(participants),
-                    ", ".join(p["key"] for p in participants),
-                )
-                return
-
-            from ...components.memory import RelationshipCard
-
-            today_str = date.today().isoformat()
-            participant_by_key = {p["key"]: p for p in participants}
-            for key, body in new_cards.items():
-                participant = participant_by_key.get(key, {})
-                await store.write_card(
-                    RelationshipCard(
-                        key=key,
-                        body=body,
-                        display_name=str(participant.get("display_name") or ""),
-                        channel=str(participant.get("channel") or ""),
-                        user_id=str(participant.get("user_id") or ""),
-                        updated=today_str,
-                    )
-                )
-            logger.info(
-                "Updated %d relationship card(s): %s",
-                len(new_cards),
-                ", ".join(f"{k} ({len(v)} chars)" for k, v in new_cards.items()),
-            )
-        except Exception as exc:
-            logger.warning("Relationship card update failed: %s", exc, exc_info=True)
-
-    @staticmethod
-    def _extract_participants(messages: List[Message]) -> List[dict]:
-        """Collect distinct human participants (non-self) from a batch."""
-        from ...components.memory import RelationshipStore
-
-        participants: dict[str, dict] = {}
-        for message in messages:
-            if message.type != MessageType.MESSAGE:
-                continue
-            if message.role != RoleType.USER:
-                continue
-            user_id = (message.sender_id or "").strip()
-            if not user_id:
-                continue
-            channel = (message.channel or "").strip()
-            key = RelationshipStore.make_key(channel, user_id)
-            if key in participants:
-                continue
-            metadata = message.metadata or {}
-            display_name = str(metadata.get("sender_name") or "").strip() or user_id
-            participants[key] = {
-                "key": key,
-                "display_name": display_name,
-                "channel": channel,
-                "user_id": user_id,
-            }
-        return list(participants.values())
-
-    async def get_relationship_context(
-        self,
-        speaker_keys: List[str],
-        participant_keys: Optional[List[str]] = None,
-        max_cards: Optional[int] = None,
-        include_routing_id: bool = False,
-    ) -> str:
-        """Return rendered relationship cards for the given people.
-
-        ``speaker_keys`` (the current speaker) are always included first;
-        ``participant_keys`` (other people in the room) fill remaining budget.
-        ``include_routing_id`` appends each person's ``user_id`` to the header
-        so the subconscious can emit a deterministic ``recipient_hint``; reply
-        turns leave it off so the identifier is never exposed to users.
-        """
-        if self.relationship_store is None:
-            return ""
-
-        ordered_keys: list[str] = []
-        seen: set[str] = set()
-        for key in [*(speaker_keys or []), *(participant_keys or [])]:
-            normalized = (key or "").strip()
-            if normalized and normalized not in seen:
-                seen.add(normalized)
-                ordered_keys.append(normalized)
-
-        resolved_max = max_cards if max_cards is not None else AgentConfig.RELATIONSHIP_MAX_CARDS_PER_TURN
-        resolved_max = max(1, resolved_max)
-        ordered_keys = ordered_keys[:resolved_max]
-        if not ordered_keys:
-            return ""
-
-        try:
-            cards = await self.relationship_store.read_cards(ordered_keys)
-        except Exception as exc:
-            logger.warning("Failed to read relationship cards: %s", exc, exc_info=True)
-            return ""
-
-        if not cards:
-            return ""
-
-        blocks: list[str] = []
-        for card in cards:
-            name = card.display_name or card.user_id or card.key
-            body = card.body.strip()
-            if include_routing_id and card.user_id:
-                header = f"## {name} [user_id: {card.user_id}]"
-            else:
-                header = f"## {name}"
-            blocks.append(f"{header}\n{body}")
-        return "\n\n".join(blocks)
 
     @staticmethod
     def _is_memory_worthy_experience(message: Message) -> bool:
@@ -695,114 +511,29 @@ class MemoryHandler:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _on_maintenance_done(self, task: asyncio.Task[bool]) -> None:
-        if self._maintenance_task is task:
-            self._maintenance_task = None
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            return
-        except Exception as exc:
-            logger.error("Background memory maintenance failed: %s", exc)
-
-    def _schedule_maintenance(self) -> None:
-        task = self._maintenance_task
-        if task is not None and not task.done():
-            return
-
-        maintenance_task = asyncio.create_task(self.run_maintenance())
-        self._maintenance_task = maintenance_task
-        maintenance_task.add_done_callback(self._on_maintenance_done)
-
     @asynccontextmanager
     async def _maintenance_guard(self, refresh_state: bool = False):
         async with self._maintenance_lock:
-            async with self._maintenance_process_lock():
-                if refresh_state:
-                    await self._refresh_state_from_disk()
-                yield
-
-    @asynccontextmanager
-    async def _maintenance_process_lock(self):
-        lock_handle = await asyncio.to_thread(self._acquire_process_lock_sync)
-        try:
+            if refresh_state:
+                await self._refresh_state_from_disk()
             yield
-        finally:
-            await asyncio.to_thread(self._release_process_lock_sync, lock_handle)
 
     async def _refresh_state_from_disk(self) -> None:
-        cursor = await asyncio.to_thread(self._read_state_sync)
+        cursor = await self.message_storage.get_journal_state("diary_cursor", "0")
         self._last_processed_message_id = self._non_negative_int(cursor, 0)
 
     async def _commit_processed_message_id(self, processed_message_id: int) -> bool:
         normalized_id = self._non_negative_int(processed_message_id, 0)
         try:
-            await asyncio.to_thread(self._write_state_sync, normalized_id)
+            await self.message_storage.set_journal_state(
+                "diary_cursor",
+                str(normalized_id),
+            )
         except Exception as exc:
             logger.error("Failed to persist journal state: %s", exc)
             return False
         self._last_processed_message_id = normalized_id
         return True
-
-    def _read_state_sync(self) -> int:
-        path = self._state_path()
-        try:
-            raw = path.read_text(encoding="utf-8").strip()
-            if not raw:
-                return 0
-            return int(raw)
-        except FileNotFoundError:
-            return 0
-        except (ValueError, OSError) as exc:
-            logger.warning("Failed to read journal cursor: %s", exc)
-            return 0
-
-    def _write_state_sync(self, cursor: int) -> None:
-        path = self._state_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(int(cursor)), encoding="utf-8")
-
-    def _acquire_process_lock_sync(self) -> IO[str]:
-        path = self._lock_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lock_file = path.open("a+", encoding="utf-8")
-        try:
-            self._lock_file(lock_file)
-        except Exception:
-            lock_file.close()
-            raise
-        return lock_file
-
-    @staticmethod
-    def _lock_file(lock_file: IO[str]) -> None:
-        if fcntl is not None:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            return
-        if msvcrt is not None:
-            lock_file.seek(0)
-            if not lock_file.read(1):
-                lock_file.write("\0")
-                lock_file.flush()
-            lock_file.seek(0)
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-            return
-        raise RuntimeError("No supported file locking implementation is available")
-
-    def _release_process_lock_sync(self, lock_file: IO[str]) -> None:
-        try:
-            if fcntl is not None:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            elif msvcrt is not None:
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-        finally:
-            lock_file.close()
-
-    def _state_path(self) -> Path:
-        return self.memory.root / ".journal_cursor"
-
-    def _lock_path(self) -> Path:
-        return self.memory.root / ".journal_maintenance.lock"
 
     @staticmethod
     def _positive_int(value: Optional[int], default: int) -> int:

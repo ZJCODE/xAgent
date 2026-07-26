@@ -3,65 +3,30 @@ from unittest.mock import patch
 
 from xagent.core.journal import JournalLLMService
 from xagent.core.config import ReplyType
+from xagent.core.prompts import PromptAssembler
 from xagent.core.providers import MODEL_API_OPENAI_RESPONSES, ReasoningConfig
 from xagent.schemas import Message
 
 
 class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
     def test_diary_system_prompt_preserves_core_behavior_constraints(self):
-        prompt = JournalLLMService.build_diary_system_prompt()
+        prompt = PromptAssembler.DIARY_CONTRACT
 
-        self.assertIn('first-person ("I")', prompt)
-        self.assertIn("something you noticed, overheard, or received", prompt)
-        self.assertIn("your own experience stream", prompt)
-        self.assertIn("not a user-owned log or searchable database", prompt)
-        self.assertIn("[speaker=Name][timestamp=Time]", prompt)
-        self.assertIn("[speaker=ME]", prompt)
-        self.assertIn("[ambient context][timestamp=Time]", prompt)
-        self.assertNotIn("[internal_monologue]", prompt)
-        self.assertIn("write in the language used by the users in the transcript", prompt)
-        self.assertIn("dominant or most relevant user's language", prompt)
-        self.assertIn("Preserve names, quoted text, code", prompt)
-        self.assertIn("synthesize the period's arc", prompt)
-        self.assertIn("Keep people, rooms, preferences, commitments, and experiences separate", prompt)
-        self.assertIn("First-person words in non-ME entries belong to that speaker", prompt)
-        self.assertIn("Use timestamps only for ordering and attribution", prompt)
-        self.assertIn("manually adds a `## YYYY-MM-DD HH:MM` heading", prompt)
-        self.assertIn("Return the diary body only", prompt)
-        self.assertIn("do not include `#` or `##` headings", prompt)
-        self.assertIn("Preserve durable details and uncertainty", prompt)
-        self.assertIn("No advice, JSON, code fences, or explanatory prose", prompt)
-        self.assertIn("Return only the diary entry text", prompt)
-        self.assertNotIn("Return JSON only", prompt)
+        self.assertIn("first-person diary prose", prompt)
+        self.assertIn("ME means me", prompt)
+        self.assertIn("other speakers own their words", prompt)
+        self.assertIn("people, rooms, durable facts and uncertainty", prompt)
+        self.assertIn("100-500 characters", prompt)
+        self.assertLess(len(prompt), 600)
 
     def test_summary_system_prompt_preserves_core_behavior_constraints(self):
-        prompt = JournalLLMService.build_summary_system_prompt(
-            period_type="weekly",
-            period_label="2026-03-16 to 2026-03-22",
-        )
+        prompt = PromptAssembler.SUMMARY_CONTRACT
 
         self.assertIn("in first person", prompt)
-        self.assertIn("my memory as an independent individual", prompt)
-        self.assertIn("not user-owned records", prompt)
-        self.assertIn("write in the language used by the users in the source diary entries", prompt)
-        self.assertIn("dominant or period-relevant user language", prompt)
-        self.assertIn("Preserve names, quoted text, code", prompt)
-        self.assertIn("# YYYY-MM-DD", prompt)
-        self.assertIn("## YYYY-MM-DD HH:MM", prompt)
         self.assertIn("Preserve attribution", prompt)
-        self.assertIn("Keep people, rooms, plans, and experiences attached to the right source", prompt)
-        self.assertIn('generic labels such as "User A" or "User B"', prompt)
-        self.assertIn("# YYYY-MM-DD", prompt)
-        self.assertIn("## YYYY-MM-DD HH:MM", prompt)
-        self.assertIn("manually added", prompt)
-        self.assertIn("do not repeat those headings", prompt)
-        self.assertIn("Keep uncertainty visible", prompt)
-        self.assertIn("Weekly: main arc, key people", prompt)
-        self.assertIn("Monthly: broader themes", prompt)
-        self.assertIn("Yearly: major phases", prompt)
-        self.assertIn("No advice, JSON, code fences, or explanatory prose", prompt)
-        self.assertIn("Return only the summary text", prompt)
-        self.assertNotIn("Return JSON only", prompt)
+        self.assertIn("people, rooms, decisions and chronology", prompt)
+        self.assertIn("Return only body text", prompt)
+        self.assertLess(len(prompt), 500)
 
     def test_format_transcript_distinguishes_context_events(self):
         transcript = JournalLLMService._format_transcript([
@@ -102,13 +67,13 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_build_diary_user_prompt_uses_single_period_transcript(self):
-        prompt = JournalLLMService.build_diary_user_prompt(
+        prompt = PromptAssembler.diary_task(
             transcript="[speaker=ME][timestamp=2026-06-09 09:00:00]\nNew period content.",
             journal_date="2026-06-09",
         )
 
-        self.assertIn("Write a diary entry for 2026-06-09 from this transcript", prompt)
-        self.assertIn("storage layer will add the markdown date/time heading", prompt)
+        self.assertIn("date=2026-06-09", prompt)
+        self.assertIn("storage layer adds headings", prompt)
         self.assertIn("New period content.", prompt)
 
     async def test_format_diary_entry_uses_plain_text_and_forwards_model_api(self):
@@ -159,9 +124,9 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
             "[speaker=alice][timestamp=2026-05-17 09:01:00]\nI'll send the document.",
             instance.calls[0]["messages"][0]["content"],
         )
-        self.assertIn("[speaker=ME]", instance.calls[0]["instructions"])
-        self.assertIn("Return the diary body only", instance.calls[0]["instructions"])
-        self.assertIn("storage layer will add the markdown date/time heading", instance.calls[0]["messages"][0]["content"])
+        self.assertIn("ME means me", instance.calls[0]["instructions"])
+        self.assertIn("100-500 characters", instance.calls[0]["instructions"])
+        self.assertIn("storage layer adds headings", instance.calls[0]["messages"][0]["content"])
         self.assertNotIn("[internal_monologue]", instance.calls[0]["instructions"])
 
     async def test_format_diary_entry_raises_instead_of_returning_raw_transcript_on_model_error(self):

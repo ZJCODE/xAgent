@@ -4,10 +4,9 @@ import logging
 import sys
 import tempfile
 import unittest
-from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 try:
     from lark_oapi import LogLevel
@@ -17,7 +16,7 @@ except ImportError:  # pragma: no cover - optional dependency
 from xagent.integrations.feishu import adapter as feishu_adapter_module
 from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAttachment
 from xagent.integrations.feishu.config import FeishuAdapterConfig
-from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
+from xagent.core.runtime import Delivery
 
 
 class _FakeAgent:
@@ -242,17 +241,6 @@ class FeishuAdapterTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             FeishuAdapter._normalize_log_level("chatty", LogLevel)
 
-    def test_advanced_block_forwards(self):
-        cfg = FeishuAdapterConfig.from_dict(
-            {
-                "app_id": "cli_test",
-                "app_secret": "secret",
-                "advanced": {"policy": "marker"},
-            }
-        )
-
-        self.assertEqual(cfg.advanced, {"policy": "marker"})
-
     def test_unknown_top_level_key_is_rejected(self):
         with self.assertRaisesRegex(ValueError, r"Unsupported Feishu config key\(s\): custom_sdk_kwarg"):
             FeishuAdapterConfig.from_dict(
@@ -302,185 +290,89 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertFalse(channel.kwargs["policy"].require_mention)
 
-    def test_build_channel_preserves_advanced_policy_override(self):
-        channel = self._build_channel_with_fake_sdk(
-            FeishuAdapterConfig(
-                app_id="cli_test",
-                app_secret="secret",
-                advanced={"policy": "marker"},
-            )
-        )
-
-        self.assertEqual(channel.kwargs["policy"], "marker")
-
-    def test_stop_flushes_agent_memory(self):
+    def test_stop_does_not_run_agent_maintenance(self):
         agent = _FakeAgent()
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
 
         asyncio.run(adapter.stop())
 
-        self.assertEqual(agent.flush_count, 1)
+        self.assertEqual(agent.flush_count, 0)
 
-    def test_scheduled_task_dispatch_sends_to_feishu_chat(self):
-        async def run_test():
-            agent = _FakeAgent()
-            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
-            adapter._channel = _FakeChannel()
-            with tempfile.TemporaryDirectory() as tmpdir:
-                enqueue_scheduled_task(
-                    task_type="message",
-                    content="走两步",
-                    run_at="2026-06-01 14:30:00",
-                    tasks_dir=tmpdir,
-                    channel="feishu",
-                    target={"chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
-                    user_id="ou_user",
-                )
-                task = list_task_records(tmpdir)[0]
-                await adapter._dispatch_scheduled_task(task)
-                expected = adapter._message_uuid(f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}")
-                stale = adapter._message_uuid(f"scheduled:{task.task_id}")
+    def test_hot_restart_serializes_sdk_transport_lifecycles(self):
+        active = 0
+        max_active = 0
+        thread_ids = []
 
-            self.assertEqual(adapter._channel.sent[0][0], "oc_group")
-            self.assertEqual(adapter._channel.sent[0][1], {"markdown": "走两步"})
-            self.assertNotIn("reply_to", adapter._channel.sent[0][2])
-            self.assertEqual(adapter._channel.sent[0][2]["uuid"], expected)
-            self.assertNotEqual(adapter._channel.sent[0][2]["uuid"], stale)
+        class BlockingChannel:
+            def __init__(self):
+                self.started = threading.Event()
+                self.release = threading.Event()
 
-        asyncio.run(run_test())
+            def on(self, *_args):
+                return None
 
-    def test_scheduled_task_dispatch_uses_unique_uuid_per_run_at(self):
-        async def run_test():
-            agent = _FakeAgent()
-            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
-            adapter._channel = _FakeChannel()
-            with tempfile.TemporaryDirectory() as tmpdir:
-                enqueue_scheduled_task(
-                    task_type="message",
-                    content="去吃饭了",
-                    run_at="2026-06-01 14:30:00",
-                    tasks_dir=tmpdir,
-                    channel="feishu",
-                    target={"chat_id": "oc_chat", "message_id": "om_anchor", "is_group": False},
-                    user_id="ou_user",
-                    recurrence=[{"kind": "interval", "every_seconds": 60, "end_at": "2026-06-01 14:35:00"}],
-                )
-                first = list_task_records(tmpdir)[0]
-                from dataclasses import replace
+            def start(self):
+                nonlocal active, max_active
+                active += 1
+                max_active = max(max_active, active)
+                thread_ids.append(threading.get_ident())
+                self.started.set()
+                self.release.wait(timeout=2)
+                active -= 1
 
-                second = replace(first, run_at=datetime(2026, 6, 1, 14, 31, 0))
-                await adapter._dispatch_scheduled_task(first)
-                await adapter._dispatch_scheduled_task(second)
-                expected_first = adapter._message_uuid(
-                    f"scheduled:{first.task_id}:{first.run_at.isoformat(sep=' ')}"
-                )
-                expected_second = adapter._message_uuid(
-                    f"scheduled:{first.task_id}:{second.run_at.isoformat(sep=' ')}"
-                )
+            def stop(self):
+                self.release.set()
 
-            uuids = [item[2]["uuid"] for item in adapter._channel.sent]
-            self.assertEqual(len(uuids), 2)
-            self.assertNotEqual(uuids[0], uuids[1])
-            self.assertEqual(uuids[0], expected_first)
-            self.assertEqual(uuids[1], expected_second)
-
-        asyncio.run(run_test())
-
-    def test_deliver_subconscious_message_sends_markdown_and_persists(self):
-        async def run_test():
-            agent = _FakeAgent()
-            agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
-            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
-            adapter._channel = _FakeChannel()
-            delivery = SubconsciousDelivery(
-                content="A direct thought",
-                recipient=ContactEntry(
-                    channel="feishu",
-                    user_id="ou_user",
-                    target={"chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
-                    last_seen="2026-06-25 09:00:00",
-                ),
-                internal_content="inner",
-                created_at=datetime(2026, 6, 25, 9, 0, 0),
+        async def scenario():
+            first_channel = BlockingChannel()
+            second_channel = BlockingChannel()
+            first = FeishuAdapter(
+                agent=_FakeAgent(),
+                config=FeishuAdapterConfig(app_id="cli_first", app_secret="secret"),
             )
+            second = FeishuAdapter(
+                agent=_FakeAgent(),
+                config=FeishuAdapterConfig(app_id="cli_second", app_secret="secret"),
+            )
+            first._build_channel = lambda: first_channel
+            second._build_channel = lambda: second_channel
 
-            await adapter.deliver_subconscious_message(delivery)
+            first_task = asyncio.create_task(first.run())
+            self.assertTrue(await asyncio.to_thread(first_channel.started.wait, 1))
+            await first.stop()
+            second_task = asyncio.create_task(second.run())
+            await asyncio.wait_for(first_task, timeout=2)
+            self.assertTrue(await asyncio.to_thread(second_channel.started.wait, 1))
+            await second.stop()
+            await asyncio.wait_for(second_task, timeout=2)
 
-            return agent, adapter
+        import threading
 
-        agent, adapter = asyncio.run(run_test())
+        asyncio.run(scenario())
 
-        self.assertEqual(adapter._channel.sent[0][0], "oc_group")
-        self.assertEqual(adapter._channel.sent[0][1], {"markdown": "A direct thought"})
-        self.assertEqual(adapter._channel.sent[0][2]["reply_to"], "om_anchor")
-        agent.message_handler.store_model_reply.assert_awaited_once()
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.args[0], "A direct thought")
-        metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
-        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
+        self.assertEqual(max_active, 1)
+        self.assertEqual(len(set(thread_ids)), 1)
 
-    def test_scheduled_agent_task_dispatch_sends_agent_reply_to_feishu_chat(self):
+    def test_send_delivers_durable_runtime_delivery(self):
         async def run_test():
-            agent = _FakeAgent()
-            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter = FeishuAdapter(
+                agent=_FakeAgent(),
+                config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"),
+            )
             adapter._channel = _FakeChannel()
-            with tempfile.TemporaryDirectory() as tmpdir:
-                enqueue_scheduled_task(
-                    task_type="agent",
-                    content="Check system temperature",
-                    run_at="2026-06-01 14:30:00",
-                    tasks_dir=tmpdir,
-                    channel="feishu",
-                    target={"chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
-                    user_id="ou_user",
-                )
-                task = list_task_records(tmpdir)[0]
-                await adapter._dispatch_scheduled_task(task)
+            delivery = Delivery.create(
+                event_id="event-1",
+                channel="feishu",
+                target={"chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
+                payload={"content": "走两步"},
+            )
+            await adapter.send(delivery)
+            return adapter, delivery
 
-            self.assertEqual(adapter._channel.sent[0][0], "oc_group")
-            self.assertEqual(adapter._channel.sent[0][1], {"markdown": "agent reply"})
-            self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
-            self.assertIn("Check system temperature", agent.chat_calls[0]["user_message"])
-
-        asyncio.run(run_test())
-
-    def test_scheduled_agent_task_dispatch_sends_image_only_event_to_feishu_chat(self):
-        async def run_test():
-            with tempfile.TemporaryDirectory() as tmpdir:
-                workspace_dir = Path(tmpdir).resolve()
-                image_path = workspace_dir / "assets" / "generated" / "images" / "result.png"
-                image_path.parent.mkdir(parents=True)
-                image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
-                agent = _AttachmentEventAgent(
-                    content="",
-                    attachments=[{
-                        "kind": "image",
-                        "path": "assets/generated/images/result.png",
-                        "blob_url": "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fresult.png",
-                        "mime_type": "image/png",
-                        "file_name": "result.png",
-                    }],
-                )
-                agent.workspace_dir = workspace_dir
-                adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
-                adapter._channel = _FakeChannel()
-                enqueue_scheduled_task(
-                    task_type="agent",
-                    content="Generate image",
-                    run_at="2026-06-01 18:00:00",
-                    tasks_dir=tmpdir,
-                    channel="feishu",
-                    target={"chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
-                    user_id="ou_user",
-                )
-                task = list_task_records(tmpdir)[0]
-                await adapter._dispatch_scheduled_task(task)
-
-            self.assertEqual(len(adapter._channel.sent), 1)
-            self.assertEqual(adapter._channel.sent[0][0], "oc_group")
-            self.assertEqual(adapter._channel.sent[0][1]["image"]["source"], str(image_path))
-            self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
-
-        asyncio.run(run_test())
+        adapter, delivery = asyncio.run(run_test())
+        self.assertEqual(adapter._channel.sent[0][0], "oc_group")
+        self.assertEqual(adapter._channel.sent[0][1], {"markdown": "走两步"})
+        self.assertEqual(adapter._channel.sent[0][2]["uuid"], delivery.delivery_id)
 
     def test_on_message_routes_to_owner_event_loop(self):
         async def run_test():
@@ -539,7 +431,21 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertNotIn("access_key=abc", message)
         self.assertNotIn("ticket=def", message)
 
-    def test_direct_chat_reply_does_not_quote_source_message_or_forward_legacy_flags(self):
+    def test_log_filter_treats_normal_websocket_close_as_info(self):
+        record = logging.LogRecord(
+            name="Lark",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="receive message loop exit, err: sent 1000 (OK); then received 1000 (OK) bye",
+            args=(),
+            exc_info=None,
+        )
+
+        self.assertTrue(feishu_adapter_module._LOG_REDACTION_FILTER.filter(record))
+        self.assertEqual(record.levelno, logging.INFO)
+
+    def test_direct_chat_reply_does_not_quote_source_message_or_forward_transport_flags(self):
         agent = _FakeAgent()
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
         adapter._channel = _FakeChannel()
@@ -558,7 +464,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertNotIn("private", agent.chat_calls[0])
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user"})
 
-    def test_direct_chat_uses_resolved_name_for_agent_identity(self):
+    def test_direct_chat_uses_stable_channel_account_for_identity(self):
         agent = _FakeAgent()
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
         adapter._channel = _FakeChannel()
@@ -573,8 +479,10 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Alice")
-        self.assertNotIn("ou_57abefd441c9b068703fa7b18543047e", repr(agent.chat_calls[0]))
+        self.assertEqual(
+            agent.chat_calls[0]["user_id"],
+            "ou_57abefd441c9b068703fa7b18543047e",
+        )
 
     def test_direct_image_message_downloads_resource_for_vision_chat(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -847,7 +755,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(SimpleNamespace(**msg)))
 
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Alice")
+        self.assertEqual(agent.chat_calls[0]["user_id"], "user_123")
         self.assertEqual(resolver.calls[0], ("user_123", None, "user_id", "user"))
 
     def test_group_mention_reads_receive_v1_nested_sender_and_mention_ids(self):
@@ -948,8 +856,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Feishu User")
-        self.assertNotIn("ou_user", repr(agent.chat_calls[0]))
+        self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
 
     def test_group_mention_detects_mentions_matching_bot_identity(self):
         agent = _FakeAgent()
@@ -968,7 +875,7 @@ class FeishuAdapterTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertEqual(len(agent.chat_calls), 1)
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Feishu User")
+        self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_group_msg"})
         self.assertNotIn("reply_to", adapter._channel.sent[0][2])
         self.assertNotIn("reply_in_thread", adapter._channel.sent[0][2])
@@ -2013,6 +1920,37 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
         )
 
         self.assertEqual(text, f"ME {format_feishu_timestamp(1)}: where")
+
+    def test_runtime_mode_persists_reply_instead_of_sending_directly(self):
+        async def run_test():
+            queued = []
+
+            async def sink(delivery):
+                queued.append(delivery)
+
+            adapter = FeishuAdapter(
+                agent=_FakeAgent(),
+                config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"),
+                delivery_sink=sink,
+            )
+            await adapter._send_event_replies(
+                chat_id="oc_room",
+                message_id="om_source",
+                is_group=False,
+                chat_kwargs={
+                    "user_message": "hello",
+                    "user_id": "ou_user",
+                    "source": "feishu",
+                    "event_id": "feishu:om_source",
+                },
+            )
+            return queued
+
+        queued = asyncio.run(run_test())
+
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0].event_id, "feishu:om_source")
+        self.assertEqual(queued[0].payload["content"], "agent reply")
 
 
 if __name__ == "__main__":

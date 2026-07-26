@@ -441,7 +441,7 @@ def _resolve_preferred_device(
         raise RuntimeError(f"Configured audio device name {preference!r} is ambiguous: {matches}")
     raise RuntimeError(
         f"Configured audio device {preference!r} was not found. "
-        "Run `xagent voice --list-devices` to see available devices."
+        "Check the operating system's audio devices, then update the voice channel setup."
     )
 
 

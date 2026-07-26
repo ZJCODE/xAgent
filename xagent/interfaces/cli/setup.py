@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import getpass
 import shlex
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
@@ -36,7 +35,8 @@ from ...core.providers import (
     reasoning_capability,
 )
 from ...tools.search_tool import is_placeholder_api_key
-from ..base import BaseAgentConfig
+from ...core.agent_factory import AgentPaths
+from ...settings import XAgentSettings, write_text_atomic
 from .agents import allocate_api_port
 from .paths import config_path as _config_path, runtime_dir as _runtime_dir, setup_runtime_dir as _setup_runtime_dir
 from .terminal_ui import MenuOption, ReturnToLauncherHome, SetupCancelled, TerminalUI
@@ -52,10 +52,8 @@ class InitResult:
     config_path: Path
     identity_path: Path
     memory_dir: Path
-    messages_dir: Path
     workspace_dir: Path
     skills_dir: Path
-    tasks_dir: Path
     wrote_files: bool
     conflicts: Tuple[Path, ...]
 
@@ -331,6 +329,7 @@ def init_selection_from_mapping(data: Mapping[str, Any]) -> InitSelection:
 def build_setup_schema() -> dict[str, Any]:
     """Return wizard metadata for the web client."""
     return {
+        "config_schema": XAgentSettings.json_schema(),
         "providers": [
             {
                 "id": provider,
@@ -519,12 +518,15 @@ def build_channel_setup_schema(channel: str, config: dict[str, Any]) -> dict[str
     """Return wizard metadata for a specific channel setup flow."""
     normalized = str(channel or "").strip().lower()
     if normalized == "voice":
-        return build_voice_setup_schema(config)
-    if normalized == "feishu":
-        return build_feishu_setup_schema(config)
-    if normalized == "weixin":
-        return build_weixin_setup_schema(config)
-    raise ChannelSetupError(f"Unknown channel: {channel}")
+        result = build_voice_setup_schema(config)
+    elif normalized == "feishu":
+        result = build_feishu_setup_schema(config)
+    elif normalized == "weixin":
+        result = build_weixin_setup_schema(config)
+    else:
+        raise ChannelSetupError(f"Unknown channel: {channel}")
+    result["config_schema"] = XAgentSettings.json_schema()
+    return result
 
 
 def _resolve_voice_api_key(
@@ -659,19 +661,16 @@ def weixin_init_selection_from_mapping(data: Mapping[str, Any]) -> WeixinInitSel
 
 
 def _load_agent_config_file(config_dir: Path) -> tuple[Path, dict[str, Any]]:
-    config_file = config_dir / BaseAgentConfig.CONFIG_FILENAME
+    config_file = config_dir / AgentPaths.CONFIG_FILENAME
     if not config_file.is_file():
         raise ChannelSetupError(
             f"Config not found: {config_file}. Create an agent first, then return to channel setup."
         )
     try:
-        with config_file.open("r", encoding="utf-8") as handle:
-            config = yaml.safe_load(handle) or {}
-    except yaml.YAMLError as exc:
-        raise ChannelSetupError(f"Invalid YAML in {config_file}: {exc}") from exc
-    if not isinstance(config, dict):
-        raise ChannelSetupError(f"Configuration must be a mapping: {config_file}")
-    return config_file, config
+        settings = XAgentSettings.load(config_file)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise ChannelSetupError(f"Invalid schema-version 2 config: {exc}") from exc
+    return config_file, settings.model_dump(mode="python", exclude_none=True)
 
 
 def apply_channel_setup(
@@ -688,22 +687,26 @@ def apply_channel_setup(
 
     config_dir = config_dir.expanduser().resolve()
     config_file, config = _load_agent_config_file(config_dir)
-    channels_cfg = config.setdefault("channels", {})
-    if not isinstance(channels_cfg, dict):
-        raise ChannelSetupError("channels must be a dictionary")
+    channels_cfg = config["channels"]
 
-    if normalized in channels_cfg and not force:
+    if _channel_configured(config, normalized) and not force:
         raise ChannelSetupError(
             f"channels.{normalized} already exists. Set force=true to overwrite."
         )
 
     if normalized == "voice":
         selection = voice_init_selection_from_mapping(selection_data, config=config)
-        channels_cfg["voice"] = _voice_channel_config(selection)
+        channels_cfg["voice"] = {
+            "enabled": False,
+            **_voice_channel_config(selection),
+        }
     elif normalized == "feishu":
         selection = feishu_init_selection_from_mapping(selection_data)
         _ensure_api_port(channels_cfg)
-        channels_cfg["feishu"] = _feishu_channel_config(selection)
+        channels_cfg["feishu"] = {
+            "enabled": False,
+            **_feishu_channel_config(selection),
+        }
     else:
         selection = weixin_init_selection_from_mapping(selection_data)
         credentials_data = selection_data.get("credentials")
@@ -713,9 +716,12 @@ def apply_channel_setup(
             store = WeixinStateStore(config_dir)
             store.save_credentials(WeixinCredentials.from_dict(credentials_data))
         _ensure_api_port(channels_cfg)
-        channels_cfg["weixin"] = _weixin_channel_config(selection)
+        channels_cfg["weixin"] = {
+            "enabled": False,
+            **_weixin_channel_config(selection),
+        }
 
-    config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
+    XAgentSettings.model_validate(config).write_atomic(config_file)
     return {
         "channel": normalized,
         "config_path": str(config_file),
@@ -851,7 +857,7 @@ def _voice_channel_config(selection: InitSelection | VoiceInitSelection) -> dict
     return voice_config
 
 
-def _config_yaml(selection: InitSelection, port: int) -> str:
+def _config_data(selection: InitSelection, port: int) -> dict[str, Any]:
     provider_config = {
         "name": selection.provider,
         "base_url": selection.base_url,
@@ -865,22 +871,25 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
         provider_config["reasoning"] = selection.reasoning.to_dict()
 
     config = {
+        "schema_version": 2,
         "provider": provider_config,
         "agent": {
             "max_history": AgentConfig.DEFAULT_MAX_HISTORY,
             "max_iter": AgentConfig.DEFAULT_MAX_ITER,
-            "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
             "memory_recent_days": AgentConfig.MEMORY_RECENT_DAYS,
         },
         "channels": {
             "api": {
-                "host": BaseAgentConfig.DEFAULT_HOST,
+                "enabled": True,
+                "host": AgentPaths.DEFAULT_HOST,
                 "port": port,
             }
         },
-        "web": {
-            "api_url": f"http://127.0.0.1:{port}",
+        "tools": {
+            "shell": {
+                "enabled": True,
+            },
         },
     }
     if selection.voice_enabled:
@@ -914,17 +923,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "secret_key": selection.langfuse_secret_key or LANGFUSE_SECRET_KEY_PLACEHOLDER,
             "base_url": selection.langfuse_base_url or LANGFUSE_BASE_URL,
         }
-    yaml_str = yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
-    # Inline comment for subconscious_activity
-    yaml_str = yaml_str.replace(
-        "subconscious_activity: 0.02\n",
-        "subconscious_activity: 0.02  # 0=off, 1=very active. Suggested: 0.01~0.1\n",
-    )
-    yaml_str = yaml_str.replace(
-        "memory_recent_days: 2\n",
-        "memory_recent_days: 2  # Days of diary injected each turn; 0 disables injection.\n",
-    )
-    return yaml_str
+    return config
 
 
 def _default_identity_markdown() -> str:
@@ -1737,21 +1736,17 @@ def init_agent_directory(
     *,
     force: bool = False,
     selection: Optional[InitSelection] = None,
-    clear_runtime_data: bool = False,
     quiet: bool = False,
     registry_root: Optional[Path] = None,
 ) -> InitResult:
-    resolved_dir = Path(config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
+    resolved_dir = Path(config_dir or AgentPaths.DEFAULT_CONFIG_DIR).expanduser().resolve()
     resolved_dir.mkdir(parents=True, exist_ok=True)
-    config_file = resolved_dir / BaseAgentConfig.CONFIG_FILENAME
-    identity_file = resolved_dir / BaseAgentConfig.IDENTITY_FILENAME
-    memory_dir = resolved_dir / BaseAgentConfig.MEMORY_DIRNAME
-    messages_dir = resolved_dir / BaseAgentConfig.MESSAGE_DIRNAME
-    workspace_dir = resolved_dir / BaseAgentConfig.WORKSPACE_DIRNAME
-    skills_dir = resolved_dir / BaseAgentConfig.SKILLS_DIRNAME
-    tasks_dir = resolved_dir / BaseAgentConfig.TASKS_DIRNAME
+    config_file = resolved_dir / AgentPaths.CONFIG_FILENAME
+    identity_file = resolved_dir / AgentPaths.IDENTITY_FILENAME
+    memory_dir = resolved_dir / AgentPaths.MEMORY_DIRNAME
+    workspace_dir = resolved_dir / AgentPaths.WORKSPACE_DIRNAME
+    skills_dir = resolved_dir / AgentPaths.SKILLS_DIRNAME
     managed_paths = (config_file, identity_file)
-    runtime_dirs = (memory_dir, messages_dir, workspace_dir, skills_dir, tasks_dir)
     conflicts = tuple(path for path in managed_paths if path.exists())
 
     if conflicts and not force:
@@ -1768,27 +1763,22 @@ def init_agent_directory(
             config_path=config_file,
             identity_path=identity_file,
             memory_dir=memory_dir,
-            messages_dir=messages_dir,
             workspace_dir=workspace_dir,
             skills_dir=skills_dir,
-            tasks_dir=tasks_dir,
             wrote_files=False,
             conflicts=conflicts,
         )
 
-    if clear_runtime_data:
-        for runtime_dir in runtime_dirs:
-            _clear_runtime_directory(runtime_dir)
     memory_dir.mkdir(parents=True, exist_ok=True)
-    messages_dir.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     skills_dir.mkdir(parents=True, exist_ok=True)
-    tasks_dir.mkdir(parents=True, exist_ok=True)
 
     selection = selection or _default_init_selection()
     port = allocate_api_port(root=registry_root)
-    config_file.write_text(_config_yaml(selection, port=port), encoding="utf-8")
-    identity_file.write_text(selection.identity, encoding="utf-8")
+    XAgentSettings.model_validate(
+        _config_data(selection, port=port)
+    ).write_atomic(config_file)
+    write_text_atomic(identity_file, selection.identity)
 
     if not quiet:
         TerminalUI().print_panel(
@@ -1797,10 +1787,9 @@ def init_agent_directory(
                 f"Config: {config_file}",
                 f"Identity: {identity_file}",
                 f"Memory: {memory_dir}",
-                f"Messages: {messages_dir}",
+                f"State: {resolved_dir / AgentPaths.STATE_DB_FILENAME}",
                 f"Workspace: {workspace_dir}",
                 f"Skills: {skills_dir}",
-                f"Tasks: {tasks_dir}",
             ]),
             title="xAgent Ready",
             leading_blank_line=True,
@@ -1809,20 +1798,11 @@ def init_agent_directory(
         config_path=config_file,
         identity_path=identity_file,
         memory_dir=memory_dir,
-        messages_dir=messages_dir,
         workspace_dir=workspace_dir,
         skills_dir=skills_dir,
-        tasks_dir=tasks_dir,
         wrote_files=True,
         conflicts=(),
     )
-
-
-def _clear_runtime_directory(path: Path) -> None:
-    if path.is_dir() and not path.is_symlink():
-        shutil.rmtree(path)
-    elif path.exists():
-        path.unlink()
 
 
 def _format_init_command(command: str, *, config_dir: Path | None = None, agent_name: str | None = None) -> str:
@@ -1840,14 +1820,9 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection, agent_
             "Talk to the agent in your terminal.",
         ),
         (
-            "web",
-            _format_init_command("xagent web start", config_dir=config_dir, agent_name=agent_name),
-            "Start the browser web client (requires a running api channel).",
-        ),
-        (
             "api",
-            _format_init_command("xagent api start", config_dir=config_dir, agent_name=agent_name),
-            "Run the HTTP / SSE / WebSocket channel in the background.",
+            _format_init_command("xagent channel start api", config_dir=config_dir, agent_name=agent_name),
+            "Enable the public HTTP / SSE / WebSocket channel.",
         ),
     ]
     if selection.voice_enabled:
@@ -1855,15 +1830,15 @@ def _print_init_next_steps(*, config_dir: Path, selection: InitSelection, agent_
             2,
             (
                 "voice",
-                _format_init_command("xagent voice start", config_dir=config_dir, agent_name=agent_name),
-                "Run the microphone/speaker channel in the background.",
+                _format_init_command("xagent channel start voice", config_dir=config_dir, agent_name=agent_name),
+                "Enable the microphone/speaker channel.",
             ),
         )
 
-    feishu_init = _format_init_command("xagent feishu setup", config_dir=config_dir, agent_name=agent_name)
-    feishu_start = _format_init_command("xagent feishu start", config_dir=config_dir, agent_name=agent_name)
-    weixin_init = _format_init_command("xagent weixin setup", config_dir=config_dir, agent_name=agent_name)
-    weixin_start = _format_init_command("xagent weixin start", config_dir=config_dir, agent_name=agent_name)
+    feishu_init = _format_init_command("xagent channel setup feishu", config_dir=config_dir, agent_name=agent_name)
+    feishu_start = _format_init_command("xagent channel start feishu", config_dir=config_dir, agent_name=agent_name)
+    weixin_init = _format_init_command("xagent channel setup weixin", config_dir=config_dir, agent_name=agent_name)
+    weixin_start = _format_init_command("xagent channel start weixin", config_dir=config_dir, agent_name=agent_name)
 
     content = Text()
     content.append("Pick how you want to use it next.\n\n")
@@ -1903,8 +1878,8 @@ def handle_init(args: argparse.Namespace) -> int:
     resolved_dir = _setup_runtime_dir(args)
     conflicts = tuple(
         path for path in (
-            resolved_dir / BaseAgentConfig.CONFIG_FILENAME,
-            resolved_dir / BaseAgentConfig.IDENTITY_FILENAME,
+            resolved_dir / AgentPaths.CONFIG_FILENAME,
+            resolved_dir / AgentPaths.IDENTITY_FILENAME,
         )
         if path.exists()
     )
@@ -1915,16 +1890,8 @@ def handle_init(args: argparse.Namespace) -> int:
         )
         return 0 if result.wrote_files else 1
 
-    clear_runtime_data = False
     ui = TerminalUI()
     try:
-        if args.force:
-            clear_runtime_data = _terminal_prompt_yes_no(
-                ui,
-                "Clear existing memory/, messages/, workspace/, tasks/, and skills/ data as part of init --force?",
-                default=False,
-            )
-
         selection = collect_init_selection_terminal_ui(ui=ui)
     except KeyboardInterrupt:
         ui.print_panel("Init cancelled before writing files.", title="Init Cancelled")
@@ -1934,7 +1901,6 @@ def handle_init(args: argparse.Namespace) -> int:
         str(resolved_dir),
         force=args.force,
         selection=selection,
-        clear_runtime_data=clear_runtime_data,
     )
     if result.wrote_files:
         _print_init_next_steps(
@@ -2118,9 +2084,9 @@ def _print_voice_post_setup(
     summary.append(f"- Interruptions: {'Enabled' if selection.voice_enable_interruptions else 'Disabled'}\n")
     ui.print_panel(summary, title="Voice Ready", leading_blank_line=True)
 
-    start = _format_init_command("xagent voice start", config_dir=config_dir, agent_name=agent_name)
-    status = _format_init_command("xagent voice status", config_dir=config_dir, agent_name=agent_name)
-    logs = _format_init_command("xagent voice logs -f", config_dir=config_dir, agent_name=agent_name)
+    start = _format_init_command("xagent channel start voice", config_dir=config_dir, agent_name=agent_name)
+    status = _format_init_command("xagent status", config_dir=config_dir, agent_name=agent_name)
+    channels = _format_init_command("xagent channel list", config_dir=config_dir, agent_name=agent_name)
     next_steps = Text()
     next_steps.append("Run next:\n")
     next_steps.append("start   ")
@@ -2128,10 +2094,10 @@ def _print_voice_post_setup(
     next_steps.append("\n        Start only the voice channel.\n")
     next_steps.append("status  ")
     next_steps.append(status, style="cyan")
-    next_steps.append("\n        Check PID, logs, and whether the channel is running.\n")
-    next_steps.append("logs    ")
-    next_steps.append(logs, style="cyan")
-    next_steps.append("\n        Follow the voice channel log live.\n")
+    next_steps.append("\n        Check whether the Runtime is running.\n")
+    next_steps.append("channel ")
+    next_steps.append(channels, style="cyan")
+    next_steps.append("\n        Check the voice channel state.\n")
     ui.print_panel(next_steps, title="Next Steps")
 
 
@@ -2178,22 +2144,15 @@ def handle_init_voice(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        with config_file.open("r", encoding="utf-8") as handle:
-            config = yaml.safe_load(handle) or {}
-    except yaml.YAMLError as exc:
-        ui.print_panel(f"Invalid YAML in {config_file}: {exc}", title="Voice Setup Stopped", border_style="red")
-        return 1
-    if not isinstance(config, dict):
-        ui.print_panel(f"Configuration must be a mapping: {config_file}", title="Voice Setup Stopped", border_style="red")
+        _, config = _load_agent_config_file(config_file.parent)
+    except ChannelSetupError as exc:
+        ui.print_panel(str(exc), title="Voice Setup Stopped", border_style="red")
         return 1
 
-    channels_cfg = config.setdefault("channels", {})
-    if not isinstance(channels_cfg, dict):
-        ui.print_panel("channels must be a dictionary", title="Voice Setup Stopped", border_style="red")
-        return 1
-    if "voice" in channels_cfg and not getattr(args, "force", False):
+    voice_configured = _channel_configured(config, "voice")
+    if voice_configured and not getattr(args, "force", False):
         force_command = _format_init_command(
-            "xagent voice setup --force",
+            "xagent channel setup voice --force",
             config_dir=config_file.parent,
             agent_name=agent_name,
         )
@@ -2207,7 +2166,7 @@ def handle_init_voice(args: argparse.Namespace) -> int:
         ui,
         channel="voice",
         config_file=config_file,
-        replacing="voice" in channels_cfg,
+        replacing=voice_configured,
     )
 
     try:
@@ -2445,9 +2404,8 @@ def _print_feishu_post_setup(
     ui.print_panel(summary, title="Feishu Ready", leading_blank_line=True)
 
     if show_next_steps:
-        feishu_start = _format_init_command("xagent feishu start", config_dir=config_dir, agent_name=agent_name)
-        status = _format_init_command("xagent feishu status", config_dir=config_dir, agent_name=agent_name)
-        logs = _format_init_command("xagent feishu logs -f", config_dir=config_dir, agent_name=agent_name)
+        feishu_start = _format_init_command("xagent channel start feishu", config_dir=config_dir, agent_name=agent_name)
+        status = _format_init_command("xagent status", config_dir=config_dir, agent_name=agent_name)
 
         next_steps = Text()
         next_steps.append("Run next:\n")
@@ -2456,10 +2414,7 @@ def _print_feishu_post_setup(
         next_steps.append("\n        Start only the Feishu channel.\n")
         next_steps.append("status  ")
         next_steps.append(status, style="cyan")
-        next_steps.append("\n        Check PID, logs, and whether the bot is already running.\n")
-        next_steps.append("logs    ")
-        next_steps.append(logs, style="cyan")
-        next_steps.append("\n        Follow the Feishu channel log live.\n")
+        next_steps.append("\n        Check the Runtime and Feishu channel state.\n")
 
         ui.print_panel(next_steps, title="Next Steps")
 
@@ -2504,7 +2459,7 @@ def _register_feishu_app_via_qr(
 
         if not url:
             print("\nFeishu returned an authorization step, but no browser link was included.")
-            print("Please retry `xagent feishu setup`, or use `--manual` if the problem persists.")
+            print("Please retry `xagent channel setup feishu`, or use `--manual` if the problem persists.")
             print("\nWaiting for authorization... (press Ctrl+C to cancel)\n")
             return
 
@@ -2550,7 +2505,7 @@ def _register_feishu_app_via_qr(
         if on_status is not None:
             on_status("expired")
         else:
-            print("\nThe authorization request expired. Rerun `xagent feishu setup` to try again.")
+            print("\nThe authorization request expired. Rerun `xagent channel setup feishu` to try again.")
         return None
     except RegisterAppError as exc:
         error, description = (exc.args + ("", ""))[:2]
@@ -2587,7 +2542,7 @@ def _ensure_api_port(channels_cfg: dict) -> None:
     api_cfg = channels_cfg.setdefault("api", {})
     if not isinstance(api_cfg, dict):
         return
-    api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
+    api_cfg.setdefault("host", AgentPaths.DEFAULT_HOST)
     if "port" not in api_cfg:
         api_cfg["port"] = allocate_api_port()
 
@@ -2605,22 +2560,14 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        with config_file.open("r", encoding="utf-8") as handle:
-            config = yaml.safe_load(handle) or {}
-    except yaml.YAMLError as exc:
-        ui.print_panel(f"Invalid YAML in {config_file}: {exc}", title="Feishu Setup Stopped", border_style="red")
+        _, config = _load_agent_config_file(config_file.parent)
+    except ChannelSetupError as exc:
+        ui.print_panel(str(exc), title="Feishu Setup Stopped", border_style="red")
         return 1
-    if not isinstance(config, dict):
-        ui.print_panel(f"Configuration must be a mapping: {config_file}", title="Feishu Setup Stopped", border_style="red")
-        return 1
-
-    channels_cfg = config.setdefault("channels", {})
-    if not isinstance(channels_cfg, dict):
-        ui.print_panel("channels must be a dictionary", title="Feishu Setup Stopped", border_style="red")
-        return 1
-    if "feishu" in channels_cfg and not args.force:
+    feishu_configured = _channel_configured(config, "feishu")
+    if feishu_configured and not args.force:
         force_command = _format_init_command(
-            "xagent feishu setup --force",
+            "xagent channel setup feishu --force",
             config_dir=config_file.parent,
             agent_name=agent_name,
         )
@@ -2635,7 +2582,7 @@ def handle_init_feishu(args: argparse.Namespace) -> int:
             ui,
             channel="feishu",
             config_file=config_file,
-            replacing="feishu" in channels_cfg,
+            replacing=feishu_configured,
         )
 
     try:
@@ -2782,9 +2729,8 @@ def _print_weixin_post_setup(
     ui.print_panel(summary, title="Weixin Ready", leading_blank_line=True)
 
     if show_next_steps:
-        start = _format_init_command("xagent weixin start", config_dir=config_dir, agent_name=agent_name)
-        status = _format_init_command("xagent weixin status", config_dir=config_dir, agent_name=agent_name)
-        logs = _format_init_command("xagent weixin logs -f", config_dir=config_dir, agent_name=agent_name)
+        start = _format_init_command("xagent channel start weixin", config_dir=config_dir, agent_name=agent_name)
+        status = _format_init_command("xagent status", config_dir=config_dir, agent_name=agent_name)
         next_steps = Text()
         next_steps.append("Run next:\n")
         next_steps.append("start   ")
@@ -2792,10 +2738,7 @@ def _print_weixin_post_setup(
         next_steps.append("\n        Start only the Weixin DM channel.\n")
         next_steps.append("status  ")
         next_steps.append(status, style="cyan")
-        next_steps.append("\n        Check PID, logs, and whether the channel is running.\n")
-        next_steps.append("logs    ")
-        next_steps.append(logs, style="cyan")
-        next_steps.append("\n        Follow the Weixin channel log live.\n")
+        next_steps.append("\n        Check the Runtime and Weixin channel state.\n")
         next_steps.append("\nOnly direct messages are supported. Group messages are ignored.")
         ui.print_panel(next_steps, title="Next Steps")
 
@@ -2813,22 +2756,14 @@ def handle_init_weixin(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        with config_file.open("r", encoding="utf-8") as handle:
-            config = yaml.safe_load(handle) or {}
-    except yaml.YAMLError as exc:
-        ui.print_panel(f"Invalid YAML in {config_file}: {exc}", title="Weixin Setup Stopped", border_style="red")
+        _, config = _load_agent_config_file(config_file.parent)
+    except ChannelSetupError as exc:
+        ui.print_panel(str(exc), title="Weixin Setup Stopped", border_style="red")
         return 1
-    if not isinstance(config, dict):
-        ui.print_panel(f"Configuration must be a mapping: {config_file}", title="Weixin Setup Stopped", border_style="red")
-        return 1
-
-    channels_cfg = config.setdefault("channels", {})
-    if not isinstance(channels_cfg, dict):
-        ui.print_panel("channels must be a dictionary", title="Weixin Setup Stopped", border_style="red")
-        return 1
-    if "weixin" in channels_cfg and not getattr(args, "force", False):
+    weixin_configured = _channel_configured(config, "weixin")
+    if weixin_configured and not getattr(args, "force", False):
         force_command = _format_init_command(
-            "xagent weixin setup --force",
+            "xagent channel setup weixin --force",
             config_dir=config_file.parent,
             agent_name=agent_name,
         )
@@ -2843,7 +2778,7 @@ def handle_init_weixin(args: argparse.Namespace) -> int:
             ui,
             channel="weixin",
             config_file=config_file,
-            replacing="weixin" in channels_cfg,
+            replacing=weixin_configured,
             extra_lines=("This will open a Weixin iLink QR login.",),
         )
     try:

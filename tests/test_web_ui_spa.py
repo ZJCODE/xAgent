@@ -28,7 +28,7 @@ class ApiServerRouteTests(unittest.IsolatedAsyncioTestCase):
         return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
     async def test_api_server_does_not_serve_spa_routes(self):
-        server = AgentHTTPServer(agent=FakeAgent())
+        server = AgentHTTPServer(config_dir=".", agent=FakeAgent())
 
         async with await self._client(server) as client:
             response = await client.get("/")

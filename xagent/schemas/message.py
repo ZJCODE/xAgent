@@ -56,7 +56,7 @@ class Message(BaseModel):
     role: RoleType = Field(RoleType.USER, description="The role of the sender")
     sender_id: Optional[str] = Field(None, description="Stable identifier for the speaker in the agent message stream")
     recipient_id: Optional[str] = Field(None, description="Identifier of the intended recipient (user_id for P2P, chat_id for groups, 'agent' for user messages, null for context events)")
-    channel: Optional[str] = Field(None, description="Channel the message originated from (feishu, cli, web, weixin, voice)")
+    source: Optional[str] = Field(None, description="Source that produced the message or observation")
     room_name: Optional[str] = Field(None, description="Room or group name; only set for group conversations, null for p2p")
     content: str = Field(..., description="The content of the message")
     timestamp: float = Field(default_factory=time.time, description="The timestamp of when the message was sent")
