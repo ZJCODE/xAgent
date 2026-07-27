@@ -318,15 +318,19 @@ def _voice_is_configured(config: dict[str, Any]) -> bool:
 
 def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
     voice_enabled = _voice_is_configured(config)
-    options: list[MenuOption] = []
-    if not voice_enabled:
-        options.append(MenuOption("setup", "Setup", "Configure voice mode."))
     start_description = (
         "Start the voice channel."
         if voice_enabled
         else "Set up voice first."
     )
-    options.extend([
+    return [
+        MenuOption(
+            "configure",
+            "Configure" if voice_enabled else "Set up",
+            "Update voice providers, interruptions, and wake settings."
+            if voice_enabled
+            else "Configure voice providers and enable the channel.",
+        ),
         MenuOption("start", "Start", start_description, disabled=not voice_enabled),
         MenuOption("stop", "Stop", "Stop the voice channel."),
         MenuOption(
@@ -338,8 +342,7 @@ def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
         MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
         MenuOption("devices", "List Devices", "Print available local audio input/output devices."),
         MenuOption("back", "Back", "Return to Channel."),
-    ])
-    return options
+    ]
 
 
 def _voice_resetup_options(config: dict[str, Any]) -> list[MenuOption]:
@@ -368,7 +371,7 @@ def _voice_resetup_options(config: dict[str, Any]) -> list[MenuOption]:
         MenuOption("interruptions", "Interruptions", interruptions_description, disabled=not voice_enabled),
         MenuOption("wake", "Wake", wake_description, disabled=not voice_enabled),
         MenuOption("disable", "Disable", disable_description, disabled=not voice_enabled),
-        MenuOption("back", "Back", "Return to Edit Setup."),
+        MenuOption("back", "Back", "Return to Voice."),
     ]
 
 
@@ -401,17 +404,14 @@ def _partial_update_options(config_dir: Path) -> list[MenuOption]:
     return [
         MenuOption("model", "Model", "Update the main model provider, model, API key, or custom endpoint."),
         MenuOption("search", "Search", "Change provider-native web search."),
-        MenuOption("voice", "Voice", "Enable or update STT/TTS, interruptions, and wake settings."),
         MenuOption("image", "Image", "Enable or update image generation provider settings."),
-        MenuOption("feishu", "Feishu", "Re-run Feishu setup and replace channels.feishu."),
-        MenuOption("weixin", "Weixin", "Re-run Weixin QR setup and replace channels.weixin."),
         MenuOption(
             "observability",
             "Observability",
             observability_description,
             disabled=not observability_available,
         ),
-        MenuOption("back", "Back", "Return to Setup."),
+        MenuOption("back", "Back", "Return to Setup. Channels live under Channel."),
     ]
 
 
@@ -431,24 +431,28 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
     unavailable_description = "Complete setup before starting this channel."
     if channel == CHANNEL_API:
         channel_ready = _api_channel_is_enabled(config_dir)
-    if channel == CHANNEL_FEISHU and not _feishu_channel_is_configured(config_dir):
-        channel_ready = False
+    if channel == CHANNEL_FEISHU:
+        channel_ready = _feishu_channel_is_configured(config_dir)
         unavailable_description = "Configure channels.feishu before starting this channel."
         actions.append(
             MenuOption(
                 "setup",
-                "Setup",
-                "Configure channels.feishu before starting this channel.",
+                "Configure" if channel_ready else "Set up",
+                "Replace channels.feishu credentials."
+                if channel_ready
+                else "Configure channels.feishu before starting this channel.",
             )
         )
-    if channel == CHANNEL_WEIXIN and not _weixin_channel_is_configured(config_dir):
-        channel_ready = False
+    if channel == CHANNEL_WEIXIN:
+        channel_ready = _weixin_channel_is_configured(config_dir)
         unavailable_description = "Configure channels.weixin before starting this channel."
         actions.append(
             MenuOption(
                 "setup",
-                "Setup",
-                "Configure channels.weixin before starting this channel.",
+                "Configure" if channel_ready else "Set up",
+                "Replace channels.weixin credentials."
+                if channel_ready
+                else "Configure channels.weixin before starting this channel.",
             )
         )
     actions.extend([
@@ -577,6 +581,7 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
     channels = [channel]
     if action == "setup":
         if channel == CHANNEL_WEIXIN:
+            already_configured = _weixin_channel_is_configured(config_dir)
             return handle_init_weixin(
                 _launcher_args(
                     config_dir=str(config_dir),
@@ -586,18 +591,19 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                     owner_only=True,
                     allow_users=None,
                     media_enabled=True,
-                    force=False,
+                    force=already_configured,
                     show_intro=False,
                     show_next_steps=False,
                 )
             )
+        already_configured = _feishu_channel_is_configured(config_dir)
         return handle_init_feishu(
             _launcher_args(
                 config_dir=str(config_dir),
                 app_id=None,
                 app_secret=None,
                 manual=False,
-                force=False,
+                force=already_configured,
                 stream=None,
                 group_fetch_limit=None,
                 group_reply_only_when_mentioned=None,
@@ -823,7 +829,7 @@ def _launcher_weixin_setup_args(config_dir: Path):
 def _run_feishu_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
     while True:
         option = ui.select_menu(
-            title="xAgent Setup / Feishu",
+            title="xAgent Channel / Feishu / Configure",
             subtitle=_feishu_config_subtitle(config_dir),
             options=[
                 MenuOption(
@@ -831,7 +837,7 @@ def _run_feishu_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     "Configure",
                     "Create or replace the Feishu bot credentials.",
                 ),
-                MenuOption("back", "Back", "Return to Edit Setup."),
+                MenuOption("back", "Back", "Return to Feishu."),
             ],
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
@@ -849,7 +855,7 @@ def _run_feishu_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
 def _run_weixin_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
     while True:
         option = ui.select_menu(
-            title="xAgent Setup / Weixin",
+            title="xAgent Channel / Weixin / Configure",
             subtitle=_weixin_config_subtitle(config_dir),
             options=[
                 MenuOption(
@@ -857,7 +863,7 @@ def _run_weixin_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     "Configure",
                     "Scan WeChat to create or refresh the Weixin DM channel.",
                 ),
-                MenuOption("back", "Back", "Return to Edit Setup."),
+                MenuOption("back", "Back", "Return to Weixin."),
             ],
             footer="↑/↓ Move • Enter Select  •  q Back",
         )
@@ -890,6 +896,12 @@ def _run_managed_channel_launcher(
             ui.clear()
             return
         ui.clear()
+        if option.key == "setup" and channel == CHANNEL_FEISHU:
+            _run_feishu_config_launcher(ui, config_dir)
+            continue
+        if option.key == "setup" and channel == CHANNEL_WEIXIN:
+            _run_weixin_config_launcher(ui, config_dir)
+            continue
         exit_code = _run_managed_channel_action(config_dir, channel, str(option.key))
         if exit_code == SETUP_EXIT_CANCELLED:
             continue
@@ -1647,12 +1659,6 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
             should_pause = _run_observability_config_launcher(ui, config_dir)
         elif option.key == "search":
             should_pause = _run_search_config_launcher(ui, config_dir)
-        elif option.key == "feishu":
-            _run_feishu_config_launcher(ui, config_dir)
-        elif option.key == "weixin":
-            _run_weixin_config_launcher(ui, config_dir)
-        elif option.key == "voice":
-            _run_voice_config_launcher(ui, config_dir)
         elif option.key == "image":
             should_pause = _run_image_generation_config_launcher(ui, config_dir)
         if should_pause is True:
@@ -1668,7 +1674,11 @@ def _run_resetup_launcher(config_dir: Path) -> int:
                 title="xAgent Setup",
                 subtitle=_launcher_overview_subtitle(overview),
                 options=[
-                    MenuOption("partial", "Edit Setup", "Update one configured feature without editing YAML."),
+                    MenuOption(
+                        "partial",
+                        "Edit Setup",
+                        "Update model, search, image, or observability. Channels live under Channel.",
+                    ),
                     MenuOption("full", "Full Setup", "Run the full setup flow again."),
                     MenuOption("back", "Back", "Return to the main launcher."),
                 ],
@@ -2276,8 +2286,8 @@ def _run_voice_channel_launcher(ui: TerminalUI, config_dir: Path) -> None:
             ui.clear()
             return
         ui.clear()
-        if option.key == "setup":
-            _run_voice_provider_mode_launcher(ui, config_dir, config)
+        if option.key == "configure":
+            _run_voice_config_launcher(ui, config_dir)
             continue
         if option.key in {"start", "stop", "restart", "status", "logs"}:
             exit_code = _run_managed_channel_action(config_dir, CHANNEL_VOICE, str(option.key))

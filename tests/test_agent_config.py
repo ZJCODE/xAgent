@@ -768,8 +768,6 @@ provider:
                 if label == "DeepSeek Model":
                     self.model_options = [option.key for option in options]
                     return SimpleNamespace(key="Custom")
-                if label == "Reasoning mode":
-                    return SimpleNamespace(key="automatic")
                 raise AssertionError(f"Unexpected select prompt: {label}")
 
             def confirm(self, label, *, default=False):
@@ -795,6 +793,7 @@ provider:
         self.assertEqual(selection.provider, "deepseek")
         self.assertEqual(selection.model, "deepseek-v4-lab")
         self.assertEqual(selection.api_key, "your_api_key_here")
+        self.assertIsNone(selection.reasoning)
 
     def test_collect_init_selection_supports_qwen_models(self):
         answers = iter([
@@ -838,7 +837,6 @@ provider:
             "5",
             "2",
             "",
-            "y",
             ".",
         ])
 
@@ -852,7 +850,8 @@ provider:
         self.assertEqual(selection.base_url, "https://api.example.com/v1")
         self.assertEqual(selection.api_key, "custom-key")
         self.assertEqual(selection.model, "your_model_here")
-        self.assertTrue(selection.supports_vision)
+        self.assertFalse(selection.supports_vision)
+        self.assertIsNone(selection.reasoning)
 
     def test_collect_init_selection_does_not_label_defaults(self):
         answers = iter([

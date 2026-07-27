@@ -7,8 +7,6 @@ import type {
   AgentSetupSchema,
   CreateAgentInput,
   InitSelectionInput,
-  ReasoningCapability,
-  ReasoningConfigInput,
 } from "../types";
 import { WizardField } from "./WizardField";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -78,29 +76,6 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
     return { ...state, selection: { ...state.selection, ...action.patch } };
   }
   return state;
-}
-
-function reasoningCapabilityFor(
-  schema: AgentSetupSchema,
-  selection: InitSelectionInput,
-): ReasoningCapability | null {
-  if (selection.provider === "custom") {
-    return schema.reasoning.custom_model_apis[selection.model_api] || null;
-  }
-  return schema.reasoning.providers[selection.provider] || null;
-}
-
-function defaultEnabledReasoning(capability: ReasoningCapability): ReasoningConfigInput {
-  if (capability.controls.includes("effort")) {
-    const effort = capability.effort_values.includes("medium")
-      ? "medium"
-      : capability.effort_values[0];
-    return { enabled: true, effort };
-  }
-  return {
-    enabled: true,
-    budget_tokens: Math.max(capability.min_budget_tokens || 1, 4096),
-  };
 }
 
 export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
@@ -175,18 +150,6 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
     () => schema?.models[state.selection.provider] || [],
     [schema, state.selection.provider],
   );
-  const reasoningCapability = useMemo(
-    () => (schema ? reasoningCapabilityFor(schema, state.selection) : null),
-    [schema, state.selection],
-  );
-  const reasoningMode = state.selection.reasoning
-    ? state.selection.reasoning.enabled
-      ? "enabled"
-      : "disabled"
-    : "automatic";
-  const reasoningControl = state.selection.reasoning?.budget_tokens !== undefined
-    ? "budget_tokens"
-    : "effort";
 
   const requestClose = () => {
     if (submitting) return;
@@ -223,12 +186,6 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
       if (!state.selection.model.trim()) return "Choose a model.";
       if (state.selection.provider === "custom" && !state.selection.base_url.trim()) {
         return "Enter a custom provider base URL.";
-      }
-      if (state.selection.reasoning?.enabled && reasoningCapability) {
-        const budget = state.selection.reasoning.budget_tokens;
-        if (budget !== undefined && budget < (reasoningCapability.min_budget_tokens || 1)) {
-          return `Reasoning token budget must be at least ${reasoningCapability.min_budget_tokens || 1}.`;
-        }
       }
     }
     if (stepId === "identity") {
@@ -272,6 +229,8 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
         selection: {
           ...state.selection,
           api_key: state.selection.api_key.trim() || schema.placeholders.api_key,
+          supports_vision: false,
+          reasoning: null,
         },
       };
       await createAgent(payload);
@@ -293,49 +252,16 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
         base_url: schema.provider_base_urls[provider] || "",
         model: nextModels[1] || nextModels[0] || schema.placeholders.model,
         model_api: nextModelApi,
+        supports_vision: false,
         reasoning: null,
       },
     });
   };
 
   const onModelApiChange = (modelApi: string) => {
-    dispatch({ type: "patch-selection", patch: { model_api: modelApi, reasoning: null } });
-  };
-
-  const onReasoningModeChange = (mode: string) => {
-    if (mode === "automatic") {
-      dispatch({ type: "patch-selection", patch: { reasoning: null } });
-      return;
-    }
-    if (mode === "disabled") {
-      dispatch({ type: "patch-selection", patch: { reasoning: { enabled: false } } });
-      return;
-    }
-    if (reasoningCapability) {
-      dispatch({
-        type: "patch-selection",
-        patch: { reasoning: defaultEnabledReasoning(reasoningCapability) },
-      });
-    }
-  };
-
-  const onReasoningControlChange = (control: string) => {
-    if (!reasoningCapability) return;
-    if (control === "budget_tokens") {
-      dispatch({
-        type: "patch-selection",
-        patch: {
-          reasoning: {
-            enabled: true,
-            budget_tokens: Math.max(reasoningCapability.min_budget_tokens || 1, 4096),
-          },
-        },
-      });
-      return;
-    }
     dispatch({
       type: "patch-selection",
-      patch: { reasoning: defaultEnabledReasoning(reasoningCapability) },
+      patch: { model_api: modelApi, supports_vision: false, reasoning: null },
     });
   };
 
@@ -402,7 +328,10 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
 
           {!loadingSchema && currentStepId === "provider" && schema ? (
             <div className="wizard-grid">
-              <WizardField label="Provider">
+              <WizardField
+                label="Provider"
+                hint="Reasoning and vision controls are available later in Agent Setup → Model."
+              >
                 <select
                   value={state.selection.provider}
                   onChange={(event) => onProviderChange(event.target.value)}
@@ -457,19 +386,6 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                       }
                     />
                   </WizardField>
-                  <label className="wizard-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={state.selection.supports_vision}
-                      onChange={(event) =>
-                        dispatch({
-                          type: "patch-selection",
-                          patch: { supports_vision: event.target.checked },
-                        })
-                      }
-                    />
-                    <span>Provider supports image URL input</span>
-                  </label>
                 </>
               )}
               <WizardField label="API key" hint="Leave blank to fill in later on the Agent page.">
@@ -482,76 +398,6 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                   }
                 />
               </WizardField>
-              {reasoningCapability?.supported ? (
-                <>
-                  <WizardField
-                    label="Reasoning mode"
-                    hint="Automatic follows the model's own default without sending reasoning controls. Best compatibility."
-                  >
-                    <select value={reasoningMode} onChange={(event) => onReasoningModeChange(event.target.value)}>
-                      <option value="automatic">Automatic (follow model)</option>
-                      <option value="enabled">Enabled</option>
-                      <option value="disabled">Disabled</option>
-                    </select>
-                  </WizardField>
-                  {reasoningMode === "enabled" && reasoningCapability.controls.length > 1 ? (
-                    <WizardField label="Reasoning strength control">
-                      <select
-                        value={reasoningControl}
-                        onChange={(event) => onReasoningControlChange(event.target.value)}
-                      >
-                        {reasoningCapability.controls.map((control) => (
-                          <option key={control} value={control}>
-                            {control === "effort" ? "Adaptive effort" : "Token budget"}
-                          </option>
-                        ))}
-                      </select>
-                    </WizardField>
-                  ) : null}
-                  {reasoningMode === "enabled" && reasoningControl === "effort" ? (
-                    <WizardField label="Reasoning effort">
-                      <select
-                        value={state.selection.reasoning?.effort || reasoningCapability.effort_values[0] || ""}
-                        onChange={(event) =>
-                          dispatch({
-                            type: "patch-selection",
-                            patch: { reasoning: { enabled: true, effort: event.target.value } },
-                          })
-                        }
-                      >
-                        {reasoningCapability.effort_values.map((effort) => (
-                          <option key={effort} value={effort}>{effort}</option>
-                        ))}
-                      </select>
-                    </WizardField>
-                  ) : null}
-                  {reasoningMode === "enabled" && reasoningControl === "budget_tokens" ? (
-                    <WizardField
-                      label="Reasoning token budget"
-                      hint={`Minimum ${reasoningCapability.min_budget_tokens || 1}; model-specific maximums are validated by the provider.`}
-                    >
-                      <input
-                        type="number"
-                        min={reasoningCapability.min_budget_tokens || 1}
-                        value={state.selection.reasoning?.budget_tokens || ""}
-                        onChange={(event) =>
-                          dispatch({
-                            type: "patch-selection",
-                            patch: {
-                              reasoning: {
-                                enabled: true,
-                                budget_tokens: Number(event.target.value),
-                              },
-                            },
-                          })
-                        }
-                      />
-                    </WizardField>
-                  ) : null}
-                </>
-              ) : (
-                <p className="wizard-hint">This provider does not expose configurable reasoning controls.</p>
-              )}
             </div>
           ) : null}
 
@@ -577,14 +423,6 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
                   </li>
                   <li>
                     <strong>Model:</strong> {state.selection.model}
-                  </li>
-                  <li>
-                    <strong>Reasoning:</strong>{" "}
-                    {reasoningMode === "automatic"
-                      ? "automatic (follow model)"
-                      : reasoningMode === "disabled"
-                        ? "disabled"
-                        : state.selection.reasoning?.effort || `${state.selection.reasoning?.budget_tokens} tokens`}
                   </li>
                 </ul>
                 {directoryExists ? (

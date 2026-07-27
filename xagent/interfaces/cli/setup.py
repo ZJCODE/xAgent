@@ -1178,13 +1178,10 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
             "Custom provider base URL",
             default=default_base_url,
         )
-        supports_vision = surface.prompt_yes_no(
-            "Does this custom provider support image URL input?",
-            default=False,
-        )
 
     model = selected_model
     api_key = surface.ask_secret("API key (leave blank to fill in later): ").strip() or API_KEY_PLACEHOLDER
+    # Create stays minimal: reasoning / vision knobs live in Edit Setup later.
     reasoning = None
     if surface.reasoning_prompt_enabled:
         reasoning = _collect_reasoning_config(
@@ -1249,7 +1246,7 @@ def collect_init_selection_terminal_ui(
             prompt_yes_no=prompt_yes_no,
             ask_secret=ask_secret,
             prompt_multiline_identity=lambda: _terminal_prompt_multiline_identity(wizard_ui),
-            reasoning_prompt_enabled=True,
+            reasoning_prompt_enabled=False,
         )
     )
 
