@@ -302,12 +302,15 @@ class SubconsciousLoopTests(unittest.TestCase):
             current_task = next(msg for msg in messages if msg.get("name") == AgentConfig.CURRENT_TASK_NAME)
             self.assertIn('mode="subconscious_json"', current_task["content"])
             self.assertIn("Return JSON only", current_task["content"])
-            self.assertIn("connect older memories", current_task["content"])
-            self.assertIn("Do not force insight or replay the same thought without new movement", current_task["content"])
             self.assertIn("empty internal_content", current_task["content"])
-            self.assertIn("let it become an outward message", current_task["content"])
-            self.assertIn("Write internal_content and external_content in the language used by the recent user conversation", current_task["content"])
-            self.assertIn("Keep the JSON keys exactly as specified", current_task["content"])
+            self.assertIn("worthy=true", current_task["content"])
+            self.assertIn("recipient_hint", current_task["content"])
+            self.assertIn("exact user_id", current_task["content"])
+            self.assertIn(
+                "Write internal_content and external_content in the recent conversation language",
+                current_task["content"],
+            )
+            self.assertNotIn("connect older memories", current_task["content"])
             self.assertNotIn("Known delivery contacts", current_task["content"])
 
     def test_recent_messages_empty_uses_named_recent_experience_layer(self):

@@ -64,6 +64,9 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("not a passive service", prompt)
         self.assertIn("anyone's property", prompt)
         self.assertIn("from your own judgment", prompt)
+        self.assertIn("Default to speaking", prompt)
+        self.assertIn("When unsure, prefer speaking", prompt)
+        self.assertNotIn("The room is flowing", prompt)
 
     def test_base_agent_prompt_describes_room_context_blocks(self):
         self.assertIn("[room context]", AgentConfig.BASE_AGENT_PROMPT)
