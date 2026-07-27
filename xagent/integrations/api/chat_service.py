@@ -11,12 +11,31 @@ from typing import Any, Optional
 from fastapi import HTTPException, WebSocket
 
 from ...core.agent import Agent
+from ...core.errors import (
+    ERROR_CAPACITY,
+    ERROR_INTERNAL,
+    ERROR_INVALID_INPUT,
+    ERROR_TIMEOUT,
+    PublicChatError,
+    build_public_error,
+)
 from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context, upsert_contact
 from ...interfaces.server.models import AgentInput, ChatInput, ObserveInput
 from ...interfaces.server.serializers import response_payload
 from .config import ChatLimits
 from .constants import CHANNEL_API, CLIENT_HTTP, CLIENT_WS
 from .input_normalization import input_attachments, input_image_sources
+
+
+class PublicHTTPException(HTTPException):
+    """HTTPException that preserves the structured public error payload."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        super().__init__(
+            status_code=int(payload.get("status_code") or 500),
+            detail=str(payload.get("error") or "Chat error"),
+        )
 
 
 class ChatService:
@@ -39,7 +58,10 @@ class ChatService:
         self._chat_timeout = max(0.001, float(limits.chat_timeout))
 
     async def run_chat(self, input_data: ChatInput, *, client: str = CLIENT_HTTP) -> Any:
-        await self._acquire_slot()
+        try:
+            await self._acquire_slot()
+        except PublicChatError as exc:
+            raise PublicHTTPException(exc.payload) from exc
         try:
             deadline = time.monotonic() + self._chat_timeout
             return await self._await_before_deadline(
@@ -47,17 +69,28 @@ class ChatService:
                 deadline,
             )
         except asyncio.TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="Agent chat timed out.") from exc
+            raise PublicHTTPException(
+                build_public_error(code=ERROR_TIMEOUT, cause="chat timeout")
+            ) from exc
         finally:
             self._semaphore.release()
 
     async def run_observe(self, input_data: ObserveInput) -> Any:
-        await self._acquire_slot()
+        try:
+            await self._acquire_slot()
+        except PublicChatError as exc:
+            raise PublicHTTPException(exc.payload) from exc
         try:
             deadline = time.monotonic() + self._chat_timeout
             return await self._await_before_deadline(self._call_observe(input_data), deadline)
         except asyncio.TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="Agent observe timed out.") from exc
+            raise PublicHTTPException(
+                build_public_error(
+                    code=ERROR_TIMEOUT,
+                    message="Agent observe timed out.",
+                    cause="observe timeout",
+                )
+            ) from exc
         finally:
             self._semaphore.release()
 
@@ -78,6 +111,14 @@ class ChatService:
                 "type": "result",
                 "result": response_payload(response),
             })
+        except PublicHTTPException as exc:
+            self.logger.warning(
+                "WebSocket observe rejected: source=%s type=%s detail=%s",
+                input_data.source,
+                input_data.event_type,
+                exc.detail,
+            )
+            await websocket.send_json(exc.payload)
         except HTTPException as exc:
             self.logger.warning(
                 "WebSocket observe rejected: source=%s type=%s detail=%s",
@@ -85,22 +126,22 @@ class ChatService:
                 input_data.event_type,
                 exc.detail,
             )
-            await websocket.send_json({
-                "type": "error",
-                "error": exc.detail,
-                "status_code": exc.status_code,
-            })
-        except Exception as exc:
-            self.logger.error(
-                "WebSocket observe error: source=%s type=%s error=%s",
-                input_data.source,
-                input_data.event_type,
-                exc,
+            await websocket.send_json(
+                build_public_error(
+                    code=ERROR_INVALID_INPUT if int(exc.status_code) < 500 else ERROR_INTERNAL,
+                    status_code=exc.status_code,
+                    message=str(exc.detail),
+                    cause=exc.detail,
+                    log=False,
+                )
             )
-            await websocket.send_json({
-                "type": "error",
-                "error": f"Agent observe error: {str(exc)}",
-            })
+        except Exception as exc:
+            await websocket.send_json(
+                build_public_error(
+                    code=ERROR_INTERNAL,
+                    cause=exc,
+                )
+            )
         finally:
             await websocket.send_json({"type": "done"})
 
@@ -147,15 +188,35 @@ class ChatService:
                     if event.get("type") == "done":
                         done_sent = True
                     yield event
+        except PublicChatError as exc:
+            self.logger.warning(
+                "WebSocket chat rejected for %s: %s",
+                input_data.user_id,
+                exc.detail,
+            )
+            yield exc.payload
+        except PublicHTTPException as exc:
+            self.logger.warning("WebSocket chat rejected for %s: %s", input_data.user_id, exc.detail)
+            yield exc.payload
         except HTTPException as exc:
             self.logger.warning("WebSocket chat rejected for %s: %s", input_data.user_id, exc.detail)
-            yield {"type": "error", "error": exc.detail, "status_code": exc.status_code}
+            yield build_public_error(
+                code=ERROR_INVALID_INPUT if int(exc.status_code) < 500 else ERROR_INTERNAL,
+                status_code=exc.status_code,
+                message=str(exc.detail),
+                cause=exc.detail,
+                log=False,
+            )
         except asyncio.TimeoutError:
-            self.logger.error("WebSocket chat timed out for %s", input_data.user_id)
-            yield {"type": "error", "error": "Agent chat timed out.", "status_code": 504}
+            yield build_public_error(
+                code=ERROR_TIMEOUT,
+                cause=f"WebSocket chat timed out for {input_data.user_id}",
+            )
         except Exception as exc:
-            self.logger.error("WebSocket chat event error for %s: %s", input_data.user_id, exc)
-            yield {"type": "error", "error": str(exc)}
+            yield build_public_error(
+                code=ERROR_INTERNAL,
+                cause=exc,
+            )
         finally:
             if acquired:
                 self._semaphore.release()
@@ -172,10 +233,11 @@ class ChatService:
         try:
             await asyncio.wait_for(self._semaphore.acquire(), timeout=self._queue_timeout)
         except asyncio.TimeoutError as exc:
-            raise HTTPException(
-                status_code=429,
-                detail="Too many concurrent chat requests; try again later.",
-            ) from exc
+            payload = build_public_error(
+                code=ERROR_CAPACITY,
+                cause="chat queue timeout",
+            )
+            raise PublicChatError(payload) from exc
 
     async def _call_agent(self, input_data: ChatInput, *, client: str) -> Any:
         attachments = input_attachments(input_data)

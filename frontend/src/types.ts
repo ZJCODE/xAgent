@@ -70,6 +70,8 @@ export interface ChatEvent {
   message_id?: string;
   phase?: string;
   error?: string;
+  error_code?: string;
+  error_id?: string;
   status_code?: number;
   task?: ScheduledTaskItem;
 }

@@ -83,12 +83,16 @@ class FakeTurnObservation:
     def __init__(self):
         self.input = None
         self.output = None
+        self.error = None
 
     def set_input(self, messages):
         self.input = messages
 
     def set_output(self, content):
         self.output = content
+
+    def set_error(self, *, error_id, code, message):
+        self.error = {"error_id": error_id, "code": code, "message": message}
 
 
 class _FakeAgentTurnCtx:
@@ -1684,30 +1688,49 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_chat_hides_model_error_event_from_user(self):
         storage = InMemoryMessageStorage()
+        error_payload = ModelErrorEvent(
+            code="model_call_failed",
+            message="Model call failed.",
+            details="provider rejected messages",
+        )
         model_client = CapturingModelClient([
-            (
-                ReplyType.ERROR,
-                ModelErrorEvent(
-                    code="model_call_failed",
-                    message="Model call failed.",
-                    details="provider rejected messages",
-                ),
-            ),
+            (ReplyType.ERROR, error_payload),
+            (ReplyType.ERROR, error_payload),
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
         agent.max_iter = 1
 
-        result = await Agent.chat(
+        events = []
+        async for event in Agent.chat_events(
             agent,
             user_message="hello",
             user_id="alice",
-        )
+        ):
+            events.append(event)
 
-        self.assertEqual(result, "Sorry, I encountered an error while processing your request.")
+        error_events = [event for event in events if event.get("type") == "error"]
+        self.assertEqual(len(error_events), 1)
+        error_event = error_events[0]
+        self.assertEqual(error_event["error_code"], "model_unavailable")
+        self.assertIn("error_id=", error_event["error"])
+        self.assertEqual(error_event["error_id"], error_event["error"].rsplit("error_id=", 1)[-1].rstrip(")"))
+        self.assertNotIn("provider rejected messages", error_event["error"])
+        self.assertNotIn("details", error_event)
+
+        result = await Agent.chat(
+            agent,
+            user_message="hello again",
+            user_id="alice",
+        )
+        self.assertIn("error_id=", result)
+        self.assertIn("Model request failed", result)
+        self.assertNotIn("provider rejected messages", result)
+
         stored_messages = await storage.get_messages(10)
-        self.assertEqual(len(stored_messages), 1)
+        self.assertEqual(len(stored_messages), 2)
         self.assertEqual(stored_messages[0].content, "hello")
+        self.assertEqual(stored_messages[1].content, "hello again")
 
     async def test_transcript_history_window_omits_older_messages_without_truncation(self):
         messages = [

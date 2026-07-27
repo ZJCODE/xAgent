@@ -39,6 +39,30 @@ class _TurnObservation:
             except Exception:
                 pass
 
+    def set_error(
+        self,
+        *,
+        error_id: str,
+        code: str,
+        message: str,
+    ) -> None:
+        if self.span is not None:
+            try:
+                self.span.update(
+                    level="ERROR",
+                    output={
+                        "error_id": error_id,
+                        "error_code": code,
+                        "error": message,
+                    },
+                    metadata={
+                        "error_id": error_id,
+                        "error_code": code,
+                    },
+                )
+            except Exception:
+                pass
+
 
 # ---------------------------------------------------------------------------
 # Helpers

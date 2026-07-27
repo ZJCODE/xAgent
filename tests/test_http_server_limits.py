@@ -171,7 +171,9 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
             })
 
         self.assertEqual(response.status_code, 504)
-        self.assertEqual(response.json()["detail"], "Agent chat timed out.")
+        detail = response.json()["detail"]
+        self.assertIn("Agent chat timed out.", detail)
+        self.assertIn("error_id=", detail)
         self.assertTrue(agent.cancelled)
 
     async def test_chat_rejects_stream_field(self):
@@ -394,11 +396,16 @@ class AgentWebSocketServerTests(unittest.TestCase):
                     "message_id": "m1",
                     "phase": "final",
                 })
-                self.assertEqual(websocket.receive_json(), {
-                    "type": "error",
-                    "error": "Agent chat timed out.",
-                    "status_code": 504,
-                })
+                error_event = websocket.receive_json()
+                self.assertEqual(error_event["type"], "error")
+                self.assertEqual(error_event["status_code"], 504)
+                self.assertEqual(error_event["error_code"], "timeout")
+                self.assertIn("Agent chat timed out.", error_event["error"])
+                self.assertIn("error_id=", error_event["error"])
+                self.assertEqual(
+                    error_event["error_id"],
+                    error_event["error"].rsplit("error_id=", 1)[-1].rstrip(")"),
+                )
                 self.assertEqual(websocket.receive_json(), {"type": "done"})
 
     def test_websocket_observe_returns_result_and_done(self):

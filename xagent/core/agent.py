@@ -13,6 +13,13 @@ from ..components import (
 from .journal import JournalLLMService
 from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
 from .config import AgentConfig, ReplyType
+from .errors import (
+    ERROR_EMPTY_RESPONSE,
+    ERROR_INVALID_INPUT,
+    ERROR_TURN_EXHAUSTED,
+    build_public_error,
+    map_model_error,
+)
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .providers import (
     MODEL_API_OPENAI_RESPONSES,
@@ -432,8 +439,17 @@ class Agent:
                     channel=channel,
                 )
             except ValueError as exc:
-                logger.warning("Invalid image input from %s: %s", user_id, exc)
-                yield {"type": "error", "error": str(exc), "status_code": 400}
+                payload = build_public_error(
+                    code=ERROR_INVALID_INPUT,
+                    message=str(exc),
+                    cause=exc,
+                )
+                turn_obs.set_error(
+                    error_id=payload["error_id"],
+                    code=payload["error_code"],
+                    message=payload["error"],
+                )
+                yield payload
                 yield {"type": "done"}
                 return
 
@@ -479,11 +495,16 @@ class Agent:
                         continue
 
                     if model_event.type == "error":
-                        logger.error("Model stream returned error event: %s", model_event.error)
-                        yield {
-                            "type": "error",
-                            "error": "Sorry, I encountered an error while processing your request.",
-                        }
+                        payload = build_public_error(
+                            code=map_model_error(model_event.error),
+                            cause=model_event.error,
+                        )
+                        turn_obs.set_error(
+                            error_id=payload["error_id"],
+                            code=payload["error_code"],
+                            message=payload["error"],
+                        )
+                        yield payload
                         yield {"type": "done"}
                         return
 
@@ -578,19 +599,29 @@ class Agent:
                     yield {"type": "done"}
                     return
 
-                logger.error("Model stream ended without text or tool calls")
-                yield {
-                    "type": "error",
-                    "error": "Sorry, I encountered an error while processing your request.",
-                }
+                payload = build_public_error(
+                    code=ERROR_EMPTY_RESPONSE,
+                    cause="Model stream ended without text or tool calls",
+                )
+                turn_obs.set_error(
+                    error_id=payload["error_id"],
+                    code=payload["error_code"],
+                    message=payload["error"],
+                )
+                yield payload
                 yield {"type": "done"}
                 return
 
-            logger.error("Failed to generate response after %d attempts", self.max_iter)
-            yield {
-                "type": "error",
-                "error": "Sorry, I could not generate a response after multiple attempts.",
-            }
+            payload = build_public_error(
+                code=ERROR_TURN_EXHAUSTED,
+                cause=f"Failed to generate response after {self.max_iter} attempts",
+            )
+            turn_obs.set_error(
+                error_id=payload["error_id"],
+                code=payload["error_code"],
+                message=payload["error"],
+            )
+            yield payload
             yield {"type": "done"}
 
         # Flush after turn context exits
