@@ -64,16 +64,16 @@ def _write_agent(root: Path, *, anthropic: bool = False) -> Path:
 
 
 class AgentEditSetupHelperTests(unittest.TestCase):
-    def test_schema_feature_order_matches_cli_edit_setup(self):
+    def test_schema_features_exclude_channel_setup(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent_dir = _write_agent(Path(tmpdir))
             schema = build_agent_edit_setup_schema(load_config(agent_dir))
 
         self.assertEqual(
             [row["id"] for row in schema["features"]],
-            ["model", "search", "voice", "image", "feishu", "weixin", "observability"],
+            ["model", "search", "image", "observability"],
         )
-        self.assertFalse(schema["features"][6]["disabled"])
+        self.assertFalse(schema["features"][3]["disabled"])
 
     def test_observability_disabled_for_anthropic_model_api(self):
         with tempfile.TemporaryDirectory() as tmpdir:

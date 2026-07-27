@@ -1,6 +1,5 @@
-import { RefreshCw, Save, RotateCcw, Trash2, Wrench } from "lucide-react";
+import { RefreshCw, Save, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChannelSetupWizard } from "../components/ChannelSetupWizard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FeatureSetupModal } from "../components/FeatureSetupModal";
 import { Button, EmptyState, IconButton, PageShell, PageToolbar, Panel, PanelHeader } from "../components/ui";
@@ -20,16 +19,13 @@ import {
 } from "../lib/api";
 import type {
   AgentConfig,
+  AgentEditSetupFeature,
   AgentEditSetupFeatureId,
   AgentEditSetupResponse,
   AgentEditSetupSchema,
   AgentIdentity,
   AgentInfo,
-  SetupChannelId,
 } from "../types";
-
-const AGENT_FEATURE_IDS = new Set(["model", "search", "image", "observability"]);
-const CHANNEL_FEATURE_IDS = new Set(["voice", "feishu", "weixin"]);
 
 function stringValue(value: unknown): string {
   return typeof value === "string" && value.trim() ? value : "";
@@ -37,6 +33,33 @@ function stringValue(value: unknown): string {
 
 function RuntimeValue({ value, fallback = "Unavailable" }: { value?: unknown; fallback?: string }) {
   return <span className="data-chip path-chip">{stringValue(value) || fallback}</span>;
+}
+
+function SetupFeatureTile({
+  feature,
+  onEdit,
+}: {
+  feature: AgentEditSetupFeature;
+  onEdit: (featureId: AgentEditSetupFeatureId) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`setup-tile${feature.disabled ? " is-disabled" : ""}`}
+      disabled={feature.disabled}
+      title={feature.disabled ? feature.disabled_reason || undefined : `Edit ${feature.label}`}
+      onClick={() => onEdit(feature.id)}
+    >
+      <span className="setup-tile-top">
+        <span className="setup-tile-label">{feature.label}</span>
+        <span className="setup-tile-action">Edit</span>
+      </span>
+      <span className="setup-tile-value">{feature.status}</span>
+      {feature.disabled && feature.disabled_reason ? (
+        <span className="setup-tile-reason">{feature.disabled_reason}</span>
+      ) : null}
+    </button>
+  );
 }
 
 function MaintenanceRow({
@@ -118,11 +141,7 @@ export function AgentPage() {
   const [maintenanceAcknowledged, setMaintenanceAcknowledged] = useState(false);
   const [maintenanceClearing, setMaintenanceClearing] = useState(false);
   const [setupSchema, setSetupSchema] = useState<AgentEditSetupSchema | null>(null);
-  const [setupFeature, setSetupFeature] = useState<Extract<
-    AgentEditSetupFeatureId,
-    "model" | "search" | "image" | "observability"
-  > | null>(null);
-  const [channelSetupId, setChannelSetupId] = useState<SetupChannelId | null>(null);
+  const [setupFeature, setSetupFeature] = useState<AgentEditSetupFeatureId | null>(null);
   const [setupNotice, setSetupNotice] = useState("");
   const [restartingApi, setRestartingApi] = useState(false);
 
@@ -246,13 +265,7 @@ export function AgentPage() {
   };
 
   const openSetupFeature = (featureId: AgentEditSetupFeatureId) => {
-    if (AGENT_FEATURE_IDS.has(featureId)) {
-      setSetupFeature(featureId as "model" | "search" | "image" | "observability");
-      return;
-    }
-    if (CHANNEL_FEATURE_IDS.has(featureId)) {
-      setChannelSetupId(featureId as SetupChannelId);
-    }
+    setSetupFeature(featureId);
   };
 
   const onSetupSaved = async (result: AgentEditSetupResponse) => {
@@ -331,7 +344,7 @@ export function AgentPage() {
     <PageShell className="agent-page">
       <PageToolbar
         title="Agent"
-        subtitle="Runtime identity, Edit Setup, and local maintenance"
+        subtitle="Runtime snapshot, setup, identity, and local maintenance"
       />
       {error ? <div className="error-strip">{error}</div> : null}
       {setupNotice ? (
@@ -363,37 +376,6 @@ export function AgentPage() {
               {info?.tools?.length ? info.tools.map((tool) => <span key={tool} className="data-chip">{tool}</span>) : "None"}
             </dd>
           </dl>
-        </Panel>
-
-        <Panel className="setup-panel">
-          <PanelHeader
-            title="Edit Setup"
-            meta="Same capabilities as CLI Setup → Edit Setup"
-          />
-          <div className="setup-feature-list">
-            {(setupSchema?.features || []).map((feature) => (
-              <div key={feature.id} className="setup-feature-row">
-                <div>
-                  <h4>{feature.label}</h4>
-                  <p>{feature.description}</p>
-                  <span className="setup-feature-status">{feature.status}</span>
-                  {feature.disabled && feature.disabled_reason ? (
-                    <span className="setup-feature-disabled">{feature.disabled_reason}</span>
-                  ) : null}
-                </div>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={feature.disabled}
-                  onClick={() => openSetupFeature(feature.id)}
-                >
-                  <Wrench size={14} />
-                  {feature.kind === "channel" && !feature.configured ? "Set up" : "Configure"}
-                </Button>
-              </div>
-            ))}
-            {!setupSchema ? <p className="wizard-hint">Loading setup options...</p> : null}
-          </div>
         </Panel>
 
         <Panel className="identity-panel">
@@ -476,6 +458,16 @@ export function AgentPage() {
               />
             </>
           )}
+        </Panel>
+
+        <Panel className="setup-panel">
+          <PanelHeader title="Setup" meta="Channels manage voice / Feishu / Weixin" />
+          <div className="setup-tile-grid">
+            {(setupSchema?.features || []).map((feature) => (
+              <SetupFeatureTile key={feature.id} feature={feature} onEdit={openSetupFeature} />
+            ))}
+          </div>
+          {!setupSchema ? <p className="wizard-hint">Loading setup options...</p> : null}
         </Panel>
 
         <Panel className="danger-panel">
@@ -595,19 +587,6 @@ export function AgentPage() {
           schema={setupSchema}
           onClose={() => setSetupFeature(null)}
           onSaved={(result) => void onSetupSaved(result)}
-        />
-      ) : null}
-
-      {channelSetupId ? (
-        <ChannelSetupWizard
-          channel={channelSetupId}
-          open={Boolean(channelSetupId)}
-          onClose={() => setChannelSetupId(null)}
-          onComplete={() => {
-            setSetupNotice(`${channelSetupId} setup saved.`);
-            setChannelSetupId(null);
-            void load();
-          }}
         />
       ) : null}
     </PageShell>

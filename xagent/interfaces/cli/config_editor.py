@@ -767,48 +767,11 @@ def _has_usable_secret(value: Any) -> bool:
     return bool(raw) and not is_placeholder_api_key(raw)
 
 
-def _channel_status(config: dict[str, Any], channel: str) -> dict[str, Any]:
-    channels = config.get("channels") if isinstance(config.get("channels"), dict) else {}
-    data = channels.get(channel) if isinstance(channels.get(channel), dict) else {}
-    if channel == "voice":
-        configured = bool(data) and data.get("enabled") is not False
-        provider = str(data.get("provider") or "none").strip() or "none"
-        return {
-            "id": "voice",
-            "kind": "channel",
-            "label": "Voice",
-            "description": "Enable or update STT/TTS, interruptions, and wake settings.",
-            "configured": configured,
-            "status": provider if configured else "not configured",
-            "disabled": False,
-        }
-    if channel == "feishu":
-        configured = bool(data.get("app_id") and data.get("app_secret"))
-        return {
-            "id": "feishu",
-            "kind": "channel",
-            "label": "Feishu",
-            "description": "Re-run Feishu setup and replace channels.feishu.",
-            "configured": configured,
-            "status": "configured" if configured else "not configured",
-            "disabled": False,
-        }
-    if channel == "weixin":
-        configured = bool(data.get("account_id"))
-        return {
-            "id": "weixin",
-            "kind": "channel",
-            "label": "Weixin",
-            "description": "Re-run Weixin QR setup and replace channels.weixin.",
-            "configured": configured,
-            "status": "configured" if configured else "not configured",
-            "disabled": False,
-        }
-    raise ValueError(f"Unknown channel: {channel}")
-
-
 def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
-    """Return Edit Setup metadata for the web client, aligned with CLI menus."""
+    """Return Edit Setup metadata for the web Agent tab (model/search/image/observability).
+
+    Channel setup (voice/feishu/weixin) lives on the Channels tab, not here.
+    """
     from .setup import (
         ANTHROPIC_MODELS,
         DEEPSEEK_MODELS,
@@ -858,7 +821,6 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             "disabled": False,
             "disabled_reason": "",
         },
-        _channel_status(config, "voice"),
         {
             "id": "image",
             "kind": "agent",
@@ -868,8 +830,6 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             "disabled": False,
             "disabled_reason": "",
         },
-        _channel_status(config, "feishu"),
-        _channel_status(config, "weixin"),
         {
             "id": "observability",
             "kind": "agent",

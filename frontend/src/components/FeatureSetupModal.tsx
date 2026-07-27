@@ -12,7 +12,7 @@ import { WizardField } from "./WizardField";
 
 interface FeatureSetupModalProps {
   open: boolean;
-  feature: Extract<AgentEditSetupFeatureId, "model" | "search" | "image" | "observability">;
+  feature: AgentEditSetupFeatureId;
   schema: AgentEditSetupSchema;
   onClose: () => void;
   onSaved: (result: AgentEditSetupResponse) => void;

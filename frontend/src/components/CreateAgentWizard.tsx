@@ -342,7 +342,7 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
   if (!open) return null;
 
   return (
-    <div className="modal-backdrop" onMouseDown={requestClose}>
+    <div className="modal-overlay" role="presentation" onMouseDown={requestClose}>
       <div
         className="modal-card wizard-modal"
         role="dialog"

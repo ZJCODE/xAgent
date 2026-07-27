@@ -374,24 +374,16 @@ export interface CreateAgentInput {
   selection: InitSelectionInput;
 }
 
-export type AgentEditSetupFeatureId =
-  | "model"
-  | "search"
-  | "voice"
-  | "image"
-  | "feishu"
-  | "weixin"
-  | "observability";
+export type AgentEditSetupFeatureId = "model" | "search" | "image" | "observability";
 
 export interface AgentEditSetupFeature {
   id: AgentEditSetupFeatureId;
-  kind: "agent" | "channel";
+  kind: "agent";
   label: string;
   description: string;
   status: string;
   disabled: boolean;
   disabled_reason?: string;
-  configured?: boolean;
 }
 
 export interface AgentEditSetupSchema {
