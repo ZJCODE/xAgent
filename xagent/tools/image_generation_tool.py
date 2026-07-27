@@ -628,7 +628,8 @@ def create_image_generation_tool(
     @function_tool(
         name="generate_image",
         description=(
-            "Generate a visual asset from a text prompt using the configured image provider."
+            "Generate a visual asset from a text prompt using the configured image provider. "
+            "Claim success only after the tool result confirms it."
         ),
         param_descriptions={
             "prompt": "Image prompt: subject, style, composition, text, and constraints.",

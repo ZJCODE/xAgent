@@ -807,7 +807,7 @@ class MessageHandler:
 
         Contains only behavioural rules that do not change per-turn:
           1. Core Principles — foundational behaviour guidelines
-          2. Tool Instructions — per-tool safety / usage rules
+          2. Tool Policy — short cross-tool floor rules when tools are active
           3. User System Prompt — developer-supplied customisation
         """
         instruction_messages = self.build_instruction_messages(
@@ -835,7 +835,6 @@ class MessageHandler:
         supports_vision: bool = True,
         workspace_context: str = "",
         is_subconscious: bool = False,
-        memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
     ) -> list[dict]:
         """Build static named system layers for the model input.
 
@@ -854,11 +853,7 @@ class MessageHandler:
             "content": core_prompt,
         }]
 
-        tool_policy = self._build_tool_policy(
-            tool_names=tool_names,
-            memory_recent_days=memory_recent_days,
-            is_subconscious=is_subconscious,
-        )
+        tool_policy = self._build_tool_policy(tool_names=tool_names)
         if tool_policy:
             messages.append({
                 "role": "system",
@@ -890,46 +885,10 @@ class MessageHandler:
         return messages
 
     @staticmethod
-    def _build_tool_policy(
-        tool_names: Optional[List[str]] = None,
-        *,
-        memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
-        is_subconscious: bool = False,
-    ) -> str:
-        ordered_names = MessageHandler._ordered_tool_policy_names(tool_names or [])
-        recent_memory_injected = is_subconscious or memory_recent_days > 0
-        sections: list[str] = []
-        for name in ordered_names:
-            if name == "search_memory":
-                sections.append(
-                    AgentConfig.build_search_memory_tool_prompt(
-                        recent_memory_injected=recent_memory_injected,
-                    ).strip()
-                )
-            elif name in AgentConfig.TOOL_SYSTEM_PROMPTS:
-                sections.append(AgentConfig.TOOL_SYSTEM_PROMPTS[name].strip())
-        if not sections:
+    def _build_tool_policy(tool_names: Optional[List[str]] = None) -> str:
+        if not tool_names:
             return ""
-        return (
-                "All available tools are defined in this policy. "
-                "Do not assume, invent, or reference any tools outside this list.\n\n"
-                "<tool_policy>\n"
-                + "\n\n".join(sections)
-                + "\n\n</tool_policy>"
-                )
-
-    @staticmethod
-    def _ordered_tool_policy_names(tool_names: List[str]) -> list[str]:
-        active_names = list(dict.fromkeys(tool_names))
-        ordered_names = [
-            name for name in AgentConfig.TOOL_POLICY_ORDER
-            if name in active_names
-        ]
-        ordered_names.extend(
-            name for name in active_names
-            if name not in ordered_names
-        )
-        return ordered_names
+        return AgentConfig.TOOL_POLICY_BASELINE
 
     @staticmethod
     def sanitize_input_messages(input_messages: list) -> list:

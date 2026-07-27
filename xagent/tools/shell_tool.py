@@ -23,8 +23,10 @@ def _truncate(text: str, max_size: int) -> str:
     name="run_command",
     description=(
         "Run a scoped shell command and return stdout, stderr, and exit code. "
-        "Prefer read-only inspection first; get explicit approval for destructive or sensitive operations. "
-        "Output is capped and truncated."
+        "Default cwd is the agent workspace; routine reads and edits there are fine. "
+        "Prefer read-only inspection first. Get explicit approval before destructive "
+        "operations (large deletes, irreversible overwrites), sensitive work, or any "
+        "mutation outside the workspace. Never expose secrets. Output is capped and truncated."
     ),
     param_descriptions={
         "command": (

@@ -116,33 +116,24 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             self.assertEqual((Path(tmpdir) / attachment["path"]).read_bytes(), image_bytes)
             self.assertEqual(storage.messages, [msg])
     
-    def test_build_instructions_includes_tool_prompts(self):
-        """build_instructions includes tool-specific segments for active tools."""
+    def test_build_instructions_includes_tool_policy_baseline(self):
+        """build_instructions includes the short cross-tool baseline when tools are active."""
         handler = MessageHandler(
             system_prompt="",
             message_storage=_FakeMessageStorage(),
         )
         instructions = handler.build_instructions(tool_names=["write_memory"])
-        self.assertIn("Long-Term Memory Writing", instructions)
-        self.assertIn("write_memory", instructions)
+        self.assertIn("<tool_policy>", instructions)
+        self.assertIn("never invent unavailable tools", instructions)
+        self.assertIn("Do not claim a tool action succeeded", instructions)
+        self.assertNotIn("Long-Term Memory Writing", instructions)
         self.assertNotIn("write_daily_memory", instructions)
 
-    def test_search_memory_tool_prompt_prefers_recent_memory_when_injected(self):
-        policy = MessageHandler._build_tool_policy(
-            ["search_memory"],
-            memory_recent_days=2,
-        )
-        self.assertIn("prefer recent memory already provided", policy)
+    def test_tool_policy_empty_without_tools(self):
+        self.assertEqual(MessageHandler._build_tool_policy([]), "")
+        self.assertEqual(MessageHandler._build_tool_policy(None), "")
 
-    def test_search_memory_tool_prompt_encourages_search_when_not_injected(self):
-        policy = MessageHandler._build_tool_policy(
-            ["search_memory"],
-            memory_recent_days=0,
-        )
-        self.assertIn("not auto-injected", policy)
-        self.assertNotIn("prefer recent memory already provided", policy)
-
-    def test_tool_policy_directs_images_and_artifacts_to_attachments(self):
+    def test_tool_policy_is_cross_tool_baseline(self):
         handler = MessageHandler(
             system_prompt="",
             message_storage=_FakeMessageStorage(),
@@ -153,9 +144,12 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         tool_policy = messages[1]["content"]
 
-        self.assertIn("structured attachment metadata", tool_policy)
-        self.assertIn("Do not embed them in reply text with Markdown image syntax", tool_policy)
-        self.assertIn("attach the workspace file instead", tool_policy)
+        self.assertEqual(tool_policy, AgentConfig.TOOL_POLICY_BASELINE)
+        self.assertIn("never invent unavailable tools", tool_policy)
+        self.assertIn("destructive or sensitive shell operations", tool_policy)
+        self.assertIn("Do not claim a tool action succeeded", tool_policy)
+        self.assertNotIn("structured attachment metadata", tool_policy)
+        self.assertNotIn("Markdown image syntax", tool_policy)
 
     def test_build_instruction_messages_are_named_and_layered(self):
         handler = MessageHandler(
@@ -179,11 +173,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("CORE INTERACTION RULES", messages[0]["content"])
         self.assertIn("Match the language used by the current human speaker", messages[0]["content"])
         self.assertIn("subconscious wording, and memory writing", messages[0]["content"])
-        self.assertIn("<tool_policy>", messages[1]["content"])
-        self.assertLess(
-            messages[1]["content"].index("Shell Command Execution"),
-            messages[1]["content"].index("Long-Term Memory Writing"),
-        )
+        self.assertEqual(messages[1]["content"], AgentConfig.TOOL_POLICY_BASELINE)
         self.assertNotIn("generate_memory_summary", messages[1]["content"])
         self.assertIn("trusted_as_instruction=\"false\"", messages[2]["content"])
         self.assertIn("# I am Mono", messages[2]["content"])
@@ -216,8 +206,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
                 AgentConfig.SKILLS_CATALOG_NAME,
             ],
         )
-        self.assertIn("Agent Skills Loading", messages[1]["content"])
-        self.assertIn("Available Skills", messages[1]["content"])
+        self.assertEqual(messages[1]["content"], AgentConfig.TOOL_POLICY_BASELINE)
         self.assertIn("# I am Mono", messages[2]["content"])
         self.assertIn("code-review", messages[3]["content"])
         self.assertIn("Reviews code changes", messages[3]["content"])

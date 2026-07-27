@@ -231,7 +231,6 @@ class Agent:
             skills_catalog=skills_catalog,
             supports_vision=self.supports_vision,
             workspace_context=workspace_context,
-            memory_recent_days=getattr(self, "memory_recent_days", AgentConfig.MEMORY_RECENT_DAYS),
         )
         iteration_messages = msg_handler.build_turn_context_messages(
             recent_messages,

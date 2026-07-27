@@ -20,7 +20,8 @@ def create_write_memory_tool(
     @function_tool(
         name="write_memory",
         description=(
-            "Record a concise, attributable diary-memory note for durable preferences, facts, decisions, commitments, or context."
+            "Record a concise, attributable diary-memory note for durable preferences, "
+            "facts, decisions, commitments, or context. Skip trivial or temporary notes."
         ),
         param_descriptions={
             "content": "Memory note to record. Keep it concise, grounded, and attributed when needed.",
@@ -51,7 +52,9 @@ def create_search_memory_tool(
     @function_tool(
         name="search_memory",
         description=(
-            "Search older diary memory or raw messages by keyword, date, or date range when recent context is not enough."
+            "Search older diary memory or raw messages by keyword, date, or date range. "
+            "Prefer recent memory already in context when present; search when older "
+            "continuity or facts are needed."
         ),
         param_descriptions={
             "query": "Keyword to search. Leave empty for date-only reads.",

@@ -146,84 +146,17 @@ class AgentConfig:
     SUBCONSCIOUS_QUIET_HOURS_END = 8    # 8 AM – resume immediate sends
 
     # ============================================================
-    # 11. Tool System Prompts
-    # Instruction segments injected into the system prompt when the
-    # corresponding tool is active. Each key matches a tool name.
+    # 11. Tool Policy Baseline
+    # Cross-tool floor rules injected when any tool is active.
+    # Per-tool usage lives in tool descriptions / schemas.
     # ============================================================
-    TOOL_SYSTEM_PROMPTS = {
-        "write_memory": (
-            "\n**Long-Term Memory Writing:**\n"
-            "- Use `write_memory` for durable, attributable experience: stable preferences, decisions, commitments, personal details, or context worth remembering.\n"
-            "- Skip trivial or temporary notes. Keep entries concise, grounded, and clear about who said or did what.\n"
-        ),
-        "search_memory": (
-            "\n**Memory Search:**\n"
-            "- Use `search_memory` only when older context is needed; prefer recent memory already provided.\n"
-            "- Search by keyword, date, or date range. Keep results tied to the correct speaker, room, and date.\n"
-        ),
-        "run_command": (
-            "\n**Shell Command Execution:**\n"
-            "- Default cwd is the agent workspace, your self-managed work area. Work there freely when useful.\n"
-            "- Outside the workspace, get explicit approval before write, delete, install, network, or git-mutation commands.\n"
-            "- Prefer read-only inspection first. Never run destructive commands or expose secrets.\n"
-            "- Keep commands scoped and bounded. On failure, use return code/stderr to explain the cause and next fix.\n"
-        ),
-        "manage_scheduled_tasks": (
-            "\n**Scheduled Tasks and Reminders:**\n"
-            "- Use `manage_scheduled_tasks` for reminders, later messages, future work, or task management.\n"
-            "- `message` sends fixed text later; `agent` performs a due-time agent turn that may use tools.\n"
-            "- Use `create`, `list`, `duplicate`, `update`, `pause`, `resume`, or `delete`; use structured recurrence for repeating daily, weekly, or interval tasks.\n"
-            "- Completed tasks are immutable archives. List with `scope=archive`, or duplicate one with a fresh future schedule while preserving its delivery target.\n"
-            "- Use `interval_seconds` plus `duration_seconds` or `end_at` for bounded requests like every 10 minutes for the next 5 hours.\n"
-            "- For requests like from 10:00 to 12:00 every 10 minutes, use `start_at`, `end_at`, and `interval_seconds` together. Do not simulate future starts with a huge `delay_seconds`.\n"
-            "- Interval end time is mandatory: if the user does not state a duration or end time, you MUST ask before creating. NEVER invent, assume, or default a window.\n"
-            "- Prefer `pause` over `delete` for temporary stops; use `update` to change content or extend `end_at` instead of recreating.\n"
-            "- Interval tasks first run after the first interval by default; use `delay_seconds=0` only when the user asks to start immediately.\n"
-            "- Schedule only future content, then briefly confirm. Never use schedules to bypass required approval.\n"
-        ),
-        "web_search": (
-            "\n**Web Search:**\n"
-            "- Use `web_search` for current, external, local, or source-backed facts.\n"
-            "- Query with concrete names, dates, locations, and constraints. Cite only returned URLs.\n"
-            "- If search is weak or empty, say so and answer only from reliable context.\n"
-        ),
-        "generate_image": (
-            "\n**Image Generation:**\n"
-            "- Use `generate_image` to create visual assets. Prompt with subject, composition, style, text, and constraints.\n"
-            "- Claim success only after the tool succeeds. Generated images are delivered through structured attachment metadata.\n"
-            "- Do not embed them in reply text with Markdown image syntax such as `![alt](url)`.\n"
-        ),
-        "attach_artifact": (
-            "\n**Artifact Delivery:**\n"
-            "- Use `attach_artifact` to deliver workspace files the user should receive or inspect.\n"
-            "- Pass a workspace-relative path, blob URL, or absolute path inside the workspace.\n"
-            "- Do not only describe the file path; do not use Markdown embeds or links; attach the workspace file instead.\n"
-        ),
-        "web_fetch": (
-            "\n**Web Page Fetching:**\n"
-            "- Use `web_fetch` to read a known URL in depth after search or when the URL is provided.\n"
-            "- It extracts readable page text and may return little content for JavaScript-heavy pages.\n"
-            "- Cite the source URL when using fetched information.\n"
-        ),
-        "read_skill": (
-            "\n**Agent Skills Loading:**\n"
-            "- Use the Available Skills layer for discovery. When a skill matches, load `SKILL.md` with `read_skill` before applying it.\n"
-            "- Read referenced files only when the skill or task needs them. Run skill scripts only through `run_command`.\n"
-        ),
-    }
-
-    # Tool policy order: determines the sequence in which tool
-    # instructions appear in the assembled system prompt.
-    TOOL_POLICY_ORDER = (
-        "run_command",
-        "manage_scheduled_tasks",
-        "write_memory",
-        "search_memory",
-        "web_search",
-        "web_fetch",
-        "generate_image",
-        "attach_artifact",
-        "read_skill",
+    TOOL_POLICY_BASELINE = (
+        "<tool_policy>\n"
+        "- Only use tools declared for the current turn; never invent unavailable tools.\n"
+        "- Obtain explicit approval before destructive or sensitive shell operations, "
+        "or mutations outside the workspace. Never expose secrets.\n"
+        "- Do not claim a tool action succeeded unless its result confirms success.\n"
+        "</tool_policy>"
     )
 
     # ============================================================
@@ -258,7 +191,8 @@ class AgentConfig:
         "<workspace_context>\n"
         "Workspace directory: {workspace_dir}\n"
         "This is your self-managed work area for notes, project files, scripts, images, and artifacts.\n"
-        "`run_command` defaults here. You may edit inside it when useful; destructive work outside it requires explicit approval.\n"
+        "`run_command` defaults here. Routine reads and edits inside the workspace are fine; "
+        "get explicit approval before destructive operations or any mutation outside the workspace.\n"
         "</workspace_context>"
     )
 
@@ -426,24 +360,6 @@ class AgentConfig:
     @staticmethod
     def build_workspace_context(workspace_dir: str) -> str:
         return AgentConfig.WORKSPACE_CONTEXT_TEMPLATE.format(workspace_dir=workspace_dir)
-
-    @staticmethod
-    def build_search_memory_tool_prompt(*, recent_memory_injected: bool) -> str:
-        if recent_memory_injected:
-            return (
-                "\n**Memory Search:**\n"
-                "- Use `search_memory` only when older context is needed; "
-                "prefer recent memory already provided.\n"
-                "- Search by keyword, date, or date range. "
-                "Keep results tied to the correct speaker, room, and date.\n"
-            )
-        return (
-            "\n**Memory Search:**\n"
-            "- Recent diary is not auto-injected this turn. "
-            "Use `search_memory` when you need prior context, continuity, or older facts.\n"
-            "- Search by keyword, date, or date range. "
-            "Keep results tied to the correct speaker, room, and date.\n"
-        )
 
     @staticmethod
     def build_relationship_context(relationships: str) -> str:

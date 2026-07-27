@@ -14,7 +14,9 @@ def create_read_skill_tool(skills_storage: SkillsStorageBase):
     @function_tool(
         name="read_skill",
         description=(
-            "Read SKILL.md or a referenced UTF-8 file from an enabled Agent Skill package."
+            "Read SKILL.md or a referenced UTF-8 file from an enabled Agent Skill package. "
+            "Discover skills via the Available Skills layer; when one matches, read SKILL.md "
+            "before applying it. Run skill scripts only through run_command."
         ),
         param_descriptions={
             "skill_name": "Exact skill name from Available Skills.",

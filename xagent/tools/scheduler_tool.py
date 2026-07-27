@@ -31,6 +31,10 @@ def create_schedule_task_tool(*, tasks_dir: str):
             "and interval schedules for bounded repeated reminders. "
             "Interval tasks require an explicit user-provided duration_seconds or end_at; "
             "if missing, ask the user and do not invent a default. "
+            "For a window like 10:00–12:00 every 10 minutes, use start_at, end_at, and interval_seconds together; "
+            "do not fake a future start with a huge delay_seconds. "
+            "Interval tasks first run after the first interval by default; use delay_seconds=0 only when asked to start immediately. "
+            "Completed tasks are immutable archives: list with scope=archive, or duplicate with a fresh future schedule. "
             "Prefer pause over delete for temporary stops; use update to extend end_at or change content."
         ),
         param_descriptions={

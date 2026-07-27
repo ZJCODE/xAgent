@@ -388,7 +388,8 @@ def create_web_search_tool(
     @function_tool(
         name="web_search",
         description=(
-            "Search current or external web information and return concise source-backed results."
+            "Search current or external web information and return concise source-backed results. "
+            "Cite only returned URLs. If results are weak or empty, say so and answer only from reliable context."
         ),
         param_descriptions={
             "query": "Search query with key entities, dates, and constraints.",

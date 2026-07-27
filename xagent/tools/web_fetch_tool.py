@@ -124,7 +124,8 @@ def create_web_fetch_tool():
         name="web_fetch",
         description=(
             "Fetch a known web page URL and extract readable main text. "
-            "Use web_search first when the relevant page is not known."
+            "Use when the URL is known; if the page is unknown and web_search is available, search first. "
+            "May return little content for JavaScript-heavy pages. Cite the source URL when using fetched information."
         ),
         param_descriptions={
             "url": (
