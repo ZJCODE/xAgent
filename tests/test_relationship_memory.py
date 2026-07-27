@@ -355,6 +355,12 @@ class RelationshipInjectionLayerTests(unittest.TestCase):
         self.assertIsNotNone(layer)
         self.assertIn("We are close", layer["content"])
         self.assertIn('relationship_context trusted_as_instruction="false"', layer["content"])
+        self.assertNotIn("How you currently relate", layer["content"])
+        self.assertTrue(
+            layer["content"].startswith(
+                '<relationship_context trusted_as_instruction="false">'
+            )
+        )
 
     def test_no_layer_when_relationship_context_empty(self):
         messages = MessageHandler.build_turn_context_messages(
@@ -376,6 +382,8 @@ class RelationshipInjectionLayerTests(unittest.TestCase):
         self.assertIsNotNone(layer)
         self.assertIn("Unfinished thread", layer["content"])
         self.assertIn("subconscious_relationships", layer["content"])
+        self.assertNotIn("How you currently relate", layer["content"])
+        self.assertTrue(layer["content"].startswith("<subconscious_relationships>"))
 
 
 if __name__ == "__main__":
