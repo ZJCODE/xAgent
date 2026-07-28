@@ -372,7 +372,12 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_feishu_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
-    """Return wizard metadata for the web Feishu channel setup client."""
+    """Return wizard metadata for the web Feishu channel setup client.
+
+    Interactive setup is credentials-only. Behavior knobs
+    (``stream``, ``group_fetch_limit``, ``group_reply_only_when_mentioned``)
+    ship as recommended silent defaults — matching CLI Feishu setup.
+    """
     return {
         "credential_modes": [
             {

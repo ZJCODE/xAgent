@@ -183,6 +183,28 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config["channels"]["feishu"]["app_secret"], "web_secret")
         self.assertIs(config["channels"]["feishu"]["stream"], True)
 
+    async def test_feishu_manual_setup_applies_silent_behavior_defaults(self):
+        async with await self._client() as client:
+            response = await client.post(
+                "/api/channels/feishu/setup",
+                json={
+                    "force": False,
+                    "selection": {
+                        "credential_mode": "manual",
+                        "app_id": "web_app_defaults",
+                        "app_secret": "web_secret_defaults",
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        config = yaml.safe_load((self.agent_a_path / "config.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(config["channels"]["feishu"]["app_id"], "web_app_defaults")
+        self.assertEqual(config["channels"]["feishu"]["app_secret"], "web_secret_defaults")
+        self.assertIs(config["channels"]["feishu"]["stream"], False)
+        self.assertEqual(config["channels"]["feishu"]["group_fetch_limit"], 10)
+        self.assertIs(config["channels"]["feishu"]["group_reply_only_when_mentioned"], False)
+
     async def test_voice_setup_conflict_without_force_returns_409(self):
         async with await self._client() as client:
             first = await client.post(

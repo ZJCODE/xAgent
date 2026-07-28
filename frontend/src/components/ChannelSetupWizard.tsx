@@ -53,9 +53,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
     credential_mode: "one_click",
     app_id: "",
     app_secret: "",
-    stream: false,
-    group_fetch_limit: 10,
-    group_reply_only_when_mentioned: false,
   });
   const [weixinSelection, setWeixinSelection] = useState({
     owner_only: true,
@@ -74,17 +71,14 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
       return [{ id: "voice", label: "Voice" }];
     }
     if (channel === "feishu") {
+      // Credentials-only, matching CLI: behavior knobs use recommended silent defaults.
       if (feishuSelection.credential_mode === "one_click") {
         return [
           { id: "access", label: "App access" },
           { id: "qr", label: "Authorize" },
-          { id: "behavior", label: "Behavior" },
         ];
       }
-      return [
-        { id: "access", label: "App access" },
-        { id: "behavior", label: "Behavior" },
-      ];
+      return [{ id: "access", label: "App access" }];
     }
     return [
       { id: "qr", label: "QR login" },
@@ -103,10 +97,7 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
       return (
         feishuSelection.credential_mode !== defaults.credential_mode ||
         feishuSelection.app_id !== "" ||
-        feishuSelection.app_secret !== "" ||
-        feishuSelection.stream !== defaults.stream ||
-        feishuSelection.group_fetch_limit !== defaults.group_fetch_limit ||
-        feishuSelection.group_reply_only_when_mentioned !== defaults.group_reply_only_when_mentioned
+        feishuSelection.app_secret !== ""
       );
     }
     const defaults = (schema as WeixinSetupSchema).defaults;
@@ -149,9 +140,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
             credential_mode: feishuSchema.defaults.credential_mode,
             app_id: "",
             app_secret: "",
-            stream: feishuSchema.defaults.stream,
-            group_fetch_limit: feishuSchema.defaults.group_fetch_limit,
-            group_reply_only_when_mentioned: feishuSchema.defaults.group_reply_only_when_mentioned,
           });
         } else {
           const weixinSchema = data as WeixinSetupSchema;
@@ -189,7 +177,7 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
         if (!feishuSelection.app_secret.trim()) return "Feishu App Secret is required.";
       }
       if (currentStepId === "qr" && !qrReady) {
-        return "Complete Feishu authorization before continuing.";
+        return "Complete Feishu authorization before saving.";
       }
     }
     if (channel === "weixin") {
@@ -223,13 +211,15 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
       return { ...voiceSelection };
     }
     if (channel === "feishu") {
+      const defaults = (schema as FeishuSetupSchema | null)?.defaults;
       return {
         credential_mode: feishuSelection.credential_mode,
         app_id: feishuSelection.app_id.trim(),
         app_secret: feishuSelection.app_secret.trim(),
-        stream: feishuSelection.stream,
-        group_fetch_limit: feishuSelection.group_fetch_limit,
-        group_reply_only_when_mentioned: feishuSelection.group_reply_only_when_mentioned,
+        // Silent recommended defaults (same as CLI interactive setup).
+        stream: defaults?.stream ?? false,
+        group_fetch_limit: defaults?.group_fetch_limit ?? 10,
+        group_reply_only_when_mentioned: defaults?.group_reply_only_when_mentioned ?? false,
       };
     }
     return {
@@ -359,54 +349,16 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
               </WizardField>
             </>
           ) : (
-            <p className="wizard-hint">On the next step, authorize a new Feishu app via QR or browser link.</p>
+            <p className="wizard-hint">
+              On the next step, authorize a new Feishu app via QR or browser link. Recommended
+              delivery defaults are applied automatically after save.
+            </p>
           )}
         </div>
       ) : null}
 
       {channel === "feishu" && currentStepId === "qr" ? (
         <QrAuthPanel channel="feishu" onConfirmed={handleFeishuQrConfirmed} onError={setError} />
-      ) : null}
-
-      {channel === "feishu" && currentStepId === "behavior" ? (
-        <div className="wizard-grid">
-          <label className="wizard-checkbox">
-            <input
-              type="checkbox"
-              checked={feishuSelection.stream}
-              onChange={(event) =>
-                setFeishuSelection((current) => ({ ...current, stream: event.target.checked }))
-              }
-            />
-            <span>Enable stream mode</span>
-          </label>
-          <WizardField label="Group fetch limit">
-            <input
-              type="number"
-              min={0}
-              value={feishuSelection.group_fetch_limit}
-              onChange={(event) =>
-                setFeishuSelection((current) => ({
-                  ...current,
-                  group_fetch_limit: Number(event.target.value) || 0,
-                }))
-              }
-            />
-          </WizardField>
-          <label className="wizard-checkbox">
-            <input
-              type="checkbox"
-              checked={feishuSelection.group_reply_only_when_mentioned}
-              onChange={(event) =>
-                setFeishuSelection((current) => ({
-                  ...current,
-                  group_reply_only_when_mentioned: event.target.checked,
-                }))
-              }
-            />
-            <span>Reply in groups only when mentioned</span>
-          </label>
-        </div>
       ) : null}
 
       {channel === "weixin" && currentStepId === "qr" ? (
