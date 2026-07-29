@@ -17,7 +17,13 @@ except ImportError:  # pragma: no cover - optional dependency
 from xagent.integrations.feishu import adapter as feishu_adapter_module
 from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAttachment
 from xagent.integrations.feishu.config import FeishuAdapterConfig
-from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
+from xagent.core.runtime import (
+    ContactEntry,
+    SubconsciousDelivery,
+    enqueue_scheduled_task,
+    list_task_records,
+    load_contacts,
+)
 
 
 class _FakeAgent:
@@ -1112,6 +1118,36 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(agent.chat_calls, [])
         self.assertEqual(len(agent.observe_calls), 1)
         self.assertEqual(adapter._channel.sent, [])
+
+    def test_unmentioned_group_message_registers_room_as_subconscious_contact(self):
+        """Ambient group messages the agent only observes still register the room itself,
+        so a later subconscious thought about that room can be delivered back into it
+        instead of always drifting toward the most recently seen person."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = _DecidingFakeAgent(should_reply=False, reason="room is flowing")
+            agent.workspace = tmpdir
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel(bot_open_id="ou_bot")
+            msg = SimpleNamespace(
+                chat_type="group",
+                chat_id="oc_group",
+                message_id="om_ambient",
+                sender_id="ou_user",
+                sender_name="Alice",
+                content_text="ambient group message",
+                mentioned_bot=False,
+                mentions=[],
+            )
+
+            asyncio.run(adapter._dispatch(msg))
+
+            contacts = load_contacts(adapter._contacts_file)
+            room_contacts = [c for c in contacts if c.kind == "room"]
+            self.assertEqual(len(room_contacts), 1)
+            self.assertEqual(room_contacts[0].channel, "feishu")
+            self.assertEqual(room_contacts[0].user_id, "room:oc_group")
+            self.assertEqual(room_contacts[0].target["chat_id"], "oc_group")
+            self.assertTrue(room_contacts[0].target["is_group"])
 
     def test_unmentioned_topic_message_is_observed(self):
         agent = _DecidingFakeAgent(should_reply=False, reason="ambient topic")

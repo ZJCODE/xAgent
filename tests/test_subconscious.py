@@ -99,6 +99,59 @@ class ContactManagementTests(unittest.TestCase):
         result = resolve_contacts_path(workspace)
         self.assertEqual(result, workspace / "contacts.json")
 
+    def test_upsert_contact_defaults_to_person_kind(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            contacts_file = Path(tmpdir) / "contacts.json"
+            upsert_contact(contacts_file, channel="feishu", user_id="ou_123", target={})
+            loaded = load_contacts(contacts_file)
+            self.assertEqual(loaded[0].kind, "person")
+
+    def test_upsert_contact_room_kind_round_trips(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            contacts_file = Path(tmpdir) / "contacts.json"
+            upsert_contact(
+                contacts_file,
+                channel="feishu",
+                user_id="room:oc_xxx",
+                target={"chat_id": "oc_xxx", "is_group": True, "room_name": "蘑菇机器人"},
+                kind="room",
+            )
+            loaded = load_contacts(contacts_file)
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].kind, "room")
+            self.assertEqual(loaded[0].target["room_name"], "蘑菇机器人")
+
+            # Re-upserting the same room preserves its kind and bumps the count.
+            upsert_contact(
+                contacts_file,
+                channel="feishu",
+                user_id="room:oc_xxx",
+                target={"chat_id": "oc_xxx", "is_group": True, "room_name": "蘑菇机器人"},
+                kind="room",
+            )
+            loaded_again = load_contacts(contacts_file)
+            self.assertEqual(loaded_again[0].kind, "room")
+            self.assertEqual(loaded_again[0].interaction_count, 2)
+
+    def test_load_contacts_defaults_missing_kind_to_person(self):
+        """Contacts persisted before the ``kind`` field existed still load cleanly."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            contacts_file = Path(tmpdir) / "contacts.json"
+            contacts_file.write_text(
+                json.dumps({
+                    "contacts": [{
+                        "channel": "feishu",
+                        "user_id": "ou_legacy",
+                        "target": {},
+                        "last_seen": "2026-06-22 15:30:00",
+                        "interaction_count": 3,
+                    }]
+                }),
+                encoding="utf-8",
+            )
+            loaded = load_contacts(contacts_file)
+            self.assertEqual(loaded[0].kind, "person")
+
 
 class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
     async def test_record_subconscious_thought_appends_diary_without_message(self):
@@ -828,6 +881,106 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.record_subconscious_thought.assert_called_once()
             call_args = agent.record_subconscious_thought.call_args
             self.assertEqual(call_args[0][0], "This is for someone, but I do not know who yet.")
+
+    def test_recipient_hint_matching_room_name_routes_into_that_room(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "Something in the group deserves a reply.",
+            "worthy": True,
+            "recipient_hint": "蘑菇机器人",
+            "external_content": "About the binding-code format...",
+        })
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
+            save_contacts(loop.contacts_file, [
+                ContactEntry(
+                    channel="feishu",
+                    user_id="ou_123",
+                    target={"chat_id": "oc_dm", "sender_name": "张三"},
+                    last_seen="2026-06-25 11:00:00",
+                    kind="person",
+                ),
+                ContactEntry(
+                    channel="feishu",
+                    user_id="room:oc_group",
+                    target={"chat_id": "oc_group", "is_group": True, "room_name": "蘑菇机器人"},
+                    last_seen="2026-06-25 10:00:00",
+                    kind="room",
+                ),
+            ])
+            loop._probability = 1.0
+
+            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
+                asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_awaited_once()
+            delivery = delivery_sink.await_args.args[0]
+            self.assertEqual(delivery.recipient.user_id, "room:oc_group")
+            self.assertEqual(delivery.recipient.kind, "room")
+            self.assertTrue(delivery.recipient.target["is_group"])
+
+    def test_empty_hint_never_defaults_to_a_room_contact(self):
+        """With no recipient_hint, an active room must never absorb the thought by
+        default — only an explicit hint can route into a room."""
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "This has nowhere specific to go.",
+            "worthy": True,
+            "recipient_hint": None,
+            "external_content": "A stray note.",
+        })
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
+            save_contacts(loop.contacts_file, [
+                ContactEntry(
+                    channel="feishu",
+                    user_id="room:oc_group",
+                    target={"chat_id": "oc_group", "is_group": True, "room_name": "蘑菇机器人"},
+                    last_seen="2026-06-25 23:00:00",
+                    kind="room",
+                ),
+            ])
+            loop._probability = 1.0
+
+            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
+                asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_not_awaited()
+            agent.record_subconscious_thought.assert_called_once()
+
+    def test_collect_relationship_context_excludes_room_contacts(self):
+        """Rooms have no relationship card of their own, so they must not consume
+        a relationship-card slot or produce a bogus lookup key."""
+        agent = self._make_agent_mock()
+        memory_handler = MagicMock()
+        memory_handler.relationship_store.list_keys = AsyncMock(return_value=[])
+        memory_handler.get_relationship_context = AsyncMock(return_value="")
+        agent.memory_handler = memory_handler
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"feishu"})
+            loop.record_interaction(
+                channel="feishu",
+                user_id="room:oc_group",
+                target={"chat_id": "oc_group", "is_group": True, "room_name": "蘑菇机器人"},
+                kind="room",
+            )
+
+            asyncio.run(loop._collect_relationship_context())
+
+            memory_handler.get_relationship_context.assert_not_awaited()
 
     def test_worthy_without_external_content_writes_subconscious_thought(self):
         """A worthy decision without outward wording does not deliver an empty message."""

@@ -36,13 +36,21 @@ SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS = 0.5
 
 @dataclass(frozen=True)
 class ContactEntry:
-    """A single contact entry in the persistent contacts registry."""
+    """A single contact entry in the persistent contacts registry.
+
+    ``kind`` distinguishes an individual person (default, matches historical
+    behavior) from a group/room the agent can also address directly. Room
+    entries let a subconscious thought that responds to something happening
+    in a group land back in that group instead of always drifting toward the
+    most recently seen person.
+    """
 
     channel: str
     user_id: str
     target: Dict[str, Any]
     last_seen: str  # ISO-format timestamp
     interaction_count: int = 0
+    kind: str = "person"
 
 
 @dataclass(frozen=True)
@@ -79,6 +87,7 @@ def load_contacts(contacts_file: Path) -> List[ContactEntry]:
                 target=dict(item.get("target") or {}),
                 last_seen=str(item.get("last_seen", "")),
                 interaction_count=int(item.get("interaction_count", 0)),
+                kind=str(item.get("kind") or "person").strip().lower() or "person",
             ))
         except (TypeError, ValueError):
             continue
@@ -98,6 +107,7 @@ def save_contacts(contacts_file: Path, contacts: List[ContactEntry]) -> None:
                 "target": c.target,
                 "last_seen": c.last_seen,
                 "interaction_count": c.interaction_count,
+                "kind": c.kind,
             }
             for c in trimmed
         ]
@@ -147,8 +157,15 @@ def upsert_contact(
     channel: str,
     user_id: str,
     target: Dict[str, Any],
+    kind: str = "person",
 ) -> None:
-    """Record or update a contact after a user interaction."""
+    """Record or update a contact after a user interaction.
+
+    ``kind`` is ``"person"`` (default) for an individual, or ``"room"`` for a
+    group/room the agent can also address directly during subconscious
+    delivery.
+    """
+    normalized_kind = str(kind or "person").strip().lower() or "person"
     with _contacts_process_lock(contacts_file):
         contacts = load_contacts(contacts_file)
         now_iso = datetime.now().replace(microsecond=0).isoformat(sep=" ")
@@ -166,6 +183,7 @@ def upsert_contact(
                     target=dict(target),
                     last_seen=now_iso,
                     interaction_count=c.interaction_count + 1,
+                    kind=normalized_kind,
                 )
                 if c.channel == channel and c.user_id == user_id
                 else c
@@ -178,6 +196,7 @@ def upsert_contact(
                 target=dict(target),
                 last_seen=now_iso,
                 interaction_count=1,
+                kind=normalized_kind,
             ))
         save_contacts(contacts_file, contacts)
 
@@ -235,6 +254,7 @@ class SubconsciousLoop:
         channel: str,
         user_id: str,
         target: Dict[str, Any],
+        kind: str = "person",
     ) -> None:
         """Record a user interaction for future subconscious routing.
 
@@ -246,6 +266,7 @@ class SubconsciousLoop:
                 channel=channel,
                 user_id=user_id,
                 target=target,
+                kind=kind,
             )
         except Exception:
             self._logger.warning(
@@ -442,6 +463,9 @@ class SubconsciousLoop:
 
         keys: list[str] = []
         for contact in contacts:
+            if contact.kind != "person":
+                # Rooms have no relationship card of their own; only people do.
+                continue
             self._append_unique_key(keys, RelationshipStore.make_key(contact.channel, contact.user_id))
 
         relationship_store = getattr(memory_handler, "relationship_store", None)
@@ -571,35 +595,56 @@ class SubconsciousLoop:
             raise last_error
 
     @staticmethod
+    def _contact_display_names(contact: ContactEntry) -> List[str]:
+        """Return the names a recipient_hint may plausibly refer to."""
+        names = [
+            str(contact.target.get("sender_name") or "").lower(),
+            str(contact.target.get("room_name") or "").lower(),
+        ]
+        return [name for name in names if name]
+
+    @staticmethod
     def _pick_recipient(
         contacts: List[ContactEntry],
         recipient_hint: Any,
     ) -> Optional[ContactEntry]:
-        """Pick the most relevant contact for the thought."""
+        """Pick the most relevant contact for the thought.
+
+        A hint may name a person (matched against ``sender_name``/``user_id``,
+        as before) or a room/group (matched against ``room_name``), so a
+        thought that responds to something happening in a room can be routed
+        back into that room instead of only to a person. With no hint, the
+        default still falls back to the most recently seen *person* contact
+        only — room contacts (which can update frequently just from ambient
+        group traffic) never silently absorb an unaddressed thought.
+        """
         if not contacts:
             return None
-        # If hint matches a contact, prefer that
         hint = str(recipient_hint or "").strip().lower()
         if hint:
-            # -- pass 1: exact match on name or user_id --
+            # -- pass 1: exact match on name(s) or user_id --
             for c in contacts:
-                name = str(c.target.get("sender_name") or "").lower()
-                if hint == name or hint == c.user_id.lower():
+                user_id_lower = c.user_id.lower()
+                if hint == user_id_lower or hint in SubconsciousLoop._contact_display_names(c):
                     return c
             # -- pass 2: partial match (hint contains name, or name contains
             #    hint).  The hint may carry channel annotations such as
-            #    "Telos (feishu)", and user / sender names may be prefixes.
+            #    "Telos (feishu)", and user / sender / room names may be
+            #    prefixes.
             for c in contacts:
-                name = str(c.target.get("sender_name") or "").lower()
                 user_id_lower = c.user_id.lower()
+                names = SubconsciousLoop._contact_display_names(c)
                 if (
-                    (name and (hint in name or name in hint))
+                    any(hint in name or name in hint for name in names)
                     or (user_id_lower and (hint in user_id_lower or user_id_lower in hint))
                 ):
                     return c
             return None
-        # Default: most recently seen contact
-        return max(contacts, key=lambda c: c.last_seen)
+        # Default with no hint: most recently seen *person* contact only.
+        person_contacts = [c for c in contacts if c.kind == "person"]
+        if not person_contacts:
+            return None
+        return max(person_contacts, key=lambda c: c.last_seen)
 
     @staticmethod
     def _normalize_deliverable_channels(channels: Optional[Iterable[str]]) -> set[str]:

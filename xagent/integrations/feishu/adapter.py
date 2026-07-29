@@ -743,6 +743,7 @@ class FeishuAdapter:
         room_name = await self._resolve_room_name(chat_id, raw_msg)
         if room_name:
             metadata["room_name"] = room_name
+        self._record_room_contact(chat_id=chat_id, room_name=room_name)
         await observer(
             context=context,
             source="feishu",
@@ -750,6 +751,33 @@ class FeishuAdapter:
             metadata=metadata,
             room_name=room_name,
         )
+
+    def _record_room_contact(self, *, chat_id: str, room_name: Optional[str]) -> None:
+        """Register the room itself as a subconscious delivery target.
+
+        Ambient group messages the agent only observes (never replied to)
+        would otherwise leave the room invisible to subconscious routing,
+        which only ever learns about people it has actually replied to. This
+        lets a pent-up thought about something happening in the room be
+        delivered back into that room instead of always drifting toward the
+        most recently seen person in a private chat.
+        """
+        if not chat_id:
+            return
+        try:
+            upsert_contact(
+                self._contacts_file,
+                channel="feishu",
+                user_id=f"room:{chat_id}",
+                target={
+                    "chat_id": chat_id,
+                    "is_group": True,
+                    "room_name": room_name or "",
+                },
+                kind="room",
+            )
+        except Exception:
+            self.logger.debug("Failed to record Feishu room contact", exc_info=True)
 
     async def _decide_group_participation(
         self,
