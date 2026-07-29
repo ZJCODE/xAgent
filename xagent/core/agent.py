@@ -686,9 +686,11 @@ class Agent:
     ) -> ParticipationDecision:
         """Decide whether an observed event deserves an outward reply.
 
-        Uses only the provided room context (which should include recent group
-        history) and the agent's identity. Does not pull from message storage
-        or memory — the decision is scoped to the current room's conversation.
+        Uses the provided room context (which should include recent group
+        history) plus the agent's identity, recent diary memory, and any
+        relationship card for the current speaker — so a judgment the agent
+        already formed and wrote down can count as a reason to speak, not
+        just the raw text of the current thread.
         """
         try:
             instructions = [{
@@ -703,7 +705,28 @@ class Agent:
                     "content": AgentConfig.build_identity_context(self.system_prompt),
                 })
 
-            input_messages = [{
+            input_messages: List[Dict[str, Any]] = []
+
+            relationship_context = await self._participation_relationship_context(metadata or {})
+            if relationship_context.strip():
+                input_messages.append({
+                    "role": "user",
+                    "name": AgentConfig.RELATIONSHIP_CONTEXT_NAME,
+                    "content": AgentConfig.build_relationship_context(relationship_context),
+                })
+
+            memory_context = await self.memory_handler.get_recent_context()
+            if memory_context.strip():
+                input_messages.append({
+                    "role": "user",
+                    "name": AgentConfig.RECENT_MEMORY_NAME,
+                    "content": MessageHandler._wrap_untrusted_context(
+                        AgentConfig.RECENT_MEMORY_NAME,
+                        memory_context,
+                    ),
+                })
+
+            input_messages.append({
                 "role": "user",
                 "name": "participation_decision",
                 "content": self._build_participation_decision_prompt(
@@ -711,7 +734,7 @@ class Agent:
                     source=source,
                     event_type=event_type,
                 ),
-            }]
+            })
 
             reply_type, payload = await self.model_client.call(
                 messages=input_messages,
@@ -720,11 +743,91 @@ class Agent:
                 stream=False,
             )
             if reply_type == ReplyType.SIMPLE_REPLY:
-                return self._parse_participation_decision(str(payload))
+                decision = self._parse_participation_decision(str(payload))
+                if decision.reason == AgentConfig.PARTICIPATION_DECISION_PARSE_FAILURE_REASON:
+                    decision = await self._retry_participation_decision(
+                        input_messages=input_messages,
+                        instructions=instructions,
+                    )
+                return decision
             logger.warning("Participation decision returned non-text result: %s", reply_type)
         except Exception as exc:
             logger.warning("Participation decision failed: %s", exc, exc_info=True)
         return ParticipationDecision(should_reply=False, reason="participation decision failed")
+
+    async def _participation_relationship_context(self, metadata: Dict[str, Any]) -> str:
+        """Look up the relationship card for the current speaker, if any.
+
+        Relationship cards are keyed by the same display-name-style
+        ``user_id`` used when the person actually converses with the agent
+        (see ``_relationship_context_for_turn``), not by a raw channel
+        internal id, so prefer ``sender_name`` and only fall back to
+        ``sender_id`` when no resolved name is available.
+        """
+        memory_handler = getattr(self, "memory_handler", None)
+        if memory_handler is None or not callable(
+            getattr(memory_handler, "get_relationship_context", None)
+        ):
+            return ""
+
+        speaker_id = str(metadata.get("sender_name") or metadata.get("sender_id") or "").strip()
+        if not speaker_id:
+            return ""
+        channel = str(metadata.get("source") or "").strip()
+        speaker_key = RelationshipStore.make_key(channel, speaker_id)
+
+        try:
+            return await memory_handler.get_relationship_context(speaker_keys=[speaker_key])
+        except Exception:
+            logger.warning(
+                "Failed to collect relationship context for participation decision",
+                exc_info=True,
+            )
+            return ""
+
+    async def _retry_participation_decision(
+        self,
+        *,
+        input_messages: List[Dict[str, Any]],
+        instructions: List[Dict[str, Any]],
+    ) -> ParticipationDecision:
+        """Retry once when the model's first decision output was not valid JSON.
+
+        A garbled response is a formatting failure, not a genuine choice to
+        stay silent, so it deserves one more attempt before falling back.
+        """
+        logger.info("Participation decision output was not valid JSON; retrying once")
+        retry_messages = [
+            *input_messages,
+            {
+                "role": "user",
+                "name": "participation_decision_retry",
+                "content": (
+                    "Your previous reply was not valid JSON. Reply with JSON only, "
+                    "no prose, no code fences:\n"
+                    '{"should_reply": true|false, "reason": "brief reason"}'
+                ),
+            },
+        ]
+        try:
+            retry_reply_type, retry_payload = await self.model_client.call(
+                messages=retry_messages,
+                tool_specs=None,
+                instructions=instructions,
+                stream=False,
+            )
+        except Exception as exc:
+            logger.warning("Participation decision retry failed: %s", exc, exc_info=True)
+            return ParticipationDecision(
+                should_reply=False,
+                reason=AgentConfig.PARTICIPATION_DECISION_PARSE_FAILURE_REASON,
+            )
+        if retry_reply_type != ReplyType.SIMPLE_REPLY:
+            return ParticipationDecision(
+                should_reply=False,
+                reason=AgentConfig.PARTICIPATION_DECISION_PARSE_FAILURE_REASON,
+            )
+        return self._parse_participation_decision(str(retry_payload))
 
     @staticmethod
     def _build_participation_decision_prompt(
@@ -756,6 +859,7 @@ class Agent:
                 lines = lines[:-1]
             text = "\n".join(lines).strip()
 
+        parsed_ok = True
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
@@ -766,14 +870,24 @@ class Agent:
                     data = json.loads(text[start : end + 1])
                 except json.JSONDecodeError:
                     data = {}
+                    parsed_ok = False
             else:
                 data = {}
+                parsed_ok = False
 
         if not isinstance(data, dict):
             data = {}
+            parsed_ok = False
+
+        reason = str(data.get("reason") or "").strip() or None
+        if not parsed_ok and reason is None:
+            # Distinguish "the model's output was garbled" from a genuine
+            # should_reply=false with no stated reason.
+            reason = AgentConfig.PARTICIPATION_DECISION_PARSE_FAILURE_REASON
+
         return ParticipationDecision(
             should_reply=bool(data.get("should_reply")),
-            reason=str(data.get("reason") or "").strip() or None,
+            reason=reason,
         )
 
     def _observability_runtime(self) -> ObservabilityRuntime:

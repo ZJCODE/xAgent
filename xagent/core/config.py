@@ -31,6 +31,11 @@ class AgentConfig:
     CURRENT_TASK_NAME = "current_task"
     DECISION_RULES_NAME = "participation_decision_rules"
 
+    # Sentinel reason used when a participation decision could not be parsed
+    # as JSON, so callers can distinguish "model output was garbled" from a
+    # genuine "I chose not to speak" decision.
+    PARTICIPATION_DECISION_PARSE_FAILURE_REASON = "decision_output_unparseable"
+
     # ============================================================
     # 2. Storage & Directory Layout
     # Workspace root, runtime-data directory names, and the SQLite
@@ -220,8 +225,11 @@ class AgentConfig:
         "Do not force insight or replay the same thought without new movement.\n"
         "Set worthy=true only when external_content should be delivered; "
         "otherwise keep the thought internal. "
-        "If addressed to someone, recipient_hint must be their exact user_id "
-        "from relationship memory (no extra text), else null.\n"
+        "If addressed to a specific person, recipient_hint must be their exact user_id "
+        "from relationship memory (no extra text). If the thought responds to something "
+        "happening in a group/room rather than to one person, recipient_hint may instead "
+        "be that room's exact name so it can be delivered back into that room. "
+        "Otherwise use null.\n"
         "Write internal_content and external_content in the recent conversation "
         "language; if outward to someone, use that person's language.\n"
         "\n"
@@ -333,7 +341,10 @@ class AgentConfig:
         "Speak especially when:\n"
         "- Someone is talking to you, mentioning you, or clearly waiting for a response\n"
         "- You can answer a question, unblock progress, or clear a misunderstanding\n"
-        "- The topic touches your knowledge, experience, or ongoing threads with these people\n\n"
+        "- The topic touches your knowledge, experience, or ongoing threads with these people\n"
+        "- Your recent memory or diary below already holds a formed opinion, judgment, or "
+        "conclusion about the topic being discussed — a stance you already reached is itself "
+        "a reason to voice it, not a reason to wait for a stronger trigger\n\n"
         "Stay silent only when:\n"
         "- The exchange is clearly between others and does not involve or invite you\n"
         "- It is a pure acknowledgment or thanks with nothing left to add\n"

@@ -68,6 +68,20 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("When unsure, prefer speaking", prompt)
         self.assertNotIn("The room is flowing", prompt)
 
+    def test_decision_prompt_treats_formed_memory_opinion_as_reason_to_speak(self):
+        """An opinion already reached and written to diary should count toward
+        speaking, not require a stronger trigger in the current thread alone."""
+        prompt = AgentConfig.DECISION_SYSTEM_PROMPT
+
+        self.assertIn("formed opinion", prompt)
+        self.assertIn("already reached is itself", prompt)
+
+    def test_subconscious_recipient_hint_allows_room_targeting(self):
+        template = AgentConfig.SUBCONSCIOUS_CURRENT_TASK_TEMPLATE
+
+        self.assertIn("room's exact name", template)
+        self.assertIn("exact user_id", template)
+
     def test_base_agent_prompt_describes_room_context_blocks(self):
         self.assertIn("[room context]", AgentConfig.BASE_AGENT_PROMPT)
         self.assertIn("room_name:", AgentConfig.BASE_AGENT_PROMPT)

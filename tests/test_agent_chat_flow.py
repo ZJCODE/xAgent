@@ -1206,6 +1206,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([
             (ReplyType.SIMPLE_REPLY, "I would probably wait."),
+            (ReplyType.SIMPLE_REPLY, "Still not JSON."),
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
@@ -1217,7 +1218,74 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(decision.should_reply)
-        self.assertIsNone(decision.reason)
+        self.assertEqual(decision.reason, AgentConfig.PARTICIPATION_DECISION_PARSE_FAILURE_REASON)
+        # Garbled output is retried once before falling back to silence.
+        self.assertEqual(len(model_client.calls), 2)
+        self.assertEqual(
+            model_client.calls[1][-1]["name"],
+            "participation_decision_retry",
+        )
+
+    async def test_decide_participation_retry_recovers_valid_json(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "not json at all"),
+            (ReplyType.SIMPLE_REPLY, '{"should_reply": true, "reason": "recovered on retry"}'),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        decision = await Agent.decide_participation(
+            agent,
+            context="ambient group message",
+            source="feishu",
+            event_type="group_message",
+        )
+
+        self.assertTrue(decision.should_reply)
+        self.assertEqual(decision.reason, "recovered on retry")
+        self.assertEqual(len(model_client.calls), 2)
+
+    async def test_decide_participation_injects_memory_and_relationship_context(self):
+        """An already-formed diary opinion and relationship card reach the decision prompt."""
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, '{"should_reply": true, "reason": "already have a take"}'),
+        ])
+        memory_handler = FakeMemoryHandler()
+        memory_handler.get_recent_context = AsyncMock(
+            return_value="I already think cat-hello codes are unfriendly."
+        )
+        memory_handler.get_relationship_context = AsyncMock(
+            return_value="## Alice\nLongtime collaborator on the binding-code project."
+        )
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            memory_handler=memory_handler,
+        )
+
+        decision = await Agent.decide_participation(
+            agent,
+            context="[room context]\nAlice: what about cat-hello binding codes?\n[/room context]",
+            source="feishu",
+            event_type="group_message",
+            metadata={"source": "feishu", "chat_id": "oc_group", "sender_id": "ou_alice", "sender_name": "Alice"},
+        )
+
+        self.assertTrue(decision.should_reply)
+        sent_messages = model_client.calls[0]
+        names = [message.get("name") for message in sent_messages]
+        self.assertIn(AgentConfig.RELATIONSHIP_CONTEXT_NAME, names)
+        self.assertIn(AgentConfig.RECENT_MEMORY_NAME, names)
+        memory_message = next(m for m in sent_messages if m.get("name") == AgentConfig.RECENT_MEMORY_NAME)
+        self.assertIn("cat-hello codes are unfriendly", memory_message["content"])
+        relationship_message = next(
+            m for m in sent_messages if m.get("name") == AgentConfig.RELATIONSHIP_CONTEXT_NAME
+        )
+        self.assertIn("Longtime collaborator", relationship_message["content"])
+        memory_handler.get_relationship_context.assert_awaited_once()
+        kwargs = memory_handler.get_relationship_context.await_args.kwargs
+        self.assertEqual(kwargs["speaker_keys"], ["feishu:Alice"])
 
     async def test_chat_keeps_tool_messages_transient_inside_loop(self):
         storage = InMemoryMessageStorage()
