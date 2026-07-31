@@ -18,20 +18,23 @@ export function QrAuthPanel({ channel, onConfirmed, onError }: QrAuthPanelProps)
   const confirmedRef = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
   const cancelRequestedRef = useRef(false);
+  const onConfirmedRef = useRef(onConfirmed);
+  const onErrorRef = useRef(onError);
 
-  const cancelActiveSession = (activeChannel: typeof channel) => {
-    const sessionId = sessionIdRef.current;
-    if (!sessionId || cancelRequestedRef.current) return;
-    cancelRequestedRef.current = true;
-    sessionIdRef.current = null;
-    void cancelChannelQr(activeChannel, sessionId);
-  };
+  useEffect(() => {
+    onConfirmedRef.current = onConfirmed;
+  }, [onConfirmed]);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
 
   useEffect(() => {
     confirmedRef.current = false;
     cancelRequestedRef.current = false;
     sessionIdRef.current = null;
     setSession(null);
+    setStatusText("Starting QR session...");
     let cancelled = false;
 
     const begin = async () => {
@@ -48,7 +51,7 @@ export function QrAuthPanel({ channel, onConfirmed, onError }: QrAuthPanelProps)
         setStatusText("Waiting for scan...");
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        onError?.(message);
+        onErrorRef.current?.(message);
         setStatusText(message);
       }
     };
@@ -57,9 +60,13 @@ export function QrAuthPanel({ channel, onConfirmed, onError }: QrAuthPanelProps)
 
     return () => {
       cancelled = true;
-      cancelActiveSession(channel);
+      const sessionId = sessionIdRef.current;
+      if (!sessionId || cancelRequestedRef.current) return;
+      cancelRequestedRef.current = true;
+      sessionIdRef.current = null;
+      void cancelChannelQr(channel, sessionId);
     };
-  }, [channel, onError]);
+  }, [channel]);
 
   useEffect(() => {
     if (!session?.session_id) return undefined;
@@ -76,20 +83,20 @@ export function QrAuthPanel({ channel, onConfirmed, onError }: QrAuthPanelProps)
         } else if (next.status === "confirmed" && next.result && !confirmedRef.current) {
           confirmedRef.current = true;
           setStatusText("Authorization confirmed.");
-          onConfirmed(next.result);
+          onConfirmedRef.current(next.result);
         } else if (next.status === "expired") {
           setStatusText("QR expired. A new code should appear shortly.");
         } else if (next.status === "error") {
           const message = next.error || "QR authorization failed.";
           setStatusText(message);
-          onError?.(message);
+          onErrorRef.current?.(message);
         } else if (next.status === "cancelled") {
           setStatusText("Authorization cancelled.");
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setStatusText(message);
-        onError?.(message);
+        onErrorRef.current?.(message);
       }
     };
 
@@ -100,9 +107,8 @@ export function QrAuthPanel({ channel, onConfirmed, onError }: QrAuthPanelProps)
 
     return () => {
       window.clearInterval(interval);
-      cancelActiveSession(channel);
     };
-  }, [channel, onConfirmed, onError, session?.session_id]);
+  }, [channel, session?.session_id]);
 
   return (
     <div className="qr-auth-panel">
