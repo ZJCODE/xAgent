@@ -506,6 +506,16 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["max_output_tokens"], 12000)
         self.assertEqual(call["reasoning"], {"effort": "high"})
 
+        max_client = FakeOpenAIClient(response_api_responses=[_responses_response(output_text="ok")])
+        max_model = ModelClient(
+            client=max_client,
+            model="gpt-5.6-sol",
+            model_api=MODEL_API_OPENAI_RESPONSES,
+            reasoning=ReasoningConfig(enabled=True, effort="max"),
+        )
+        await max_model.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
+        self.assertEqual(max_client.responses_api.calls[0]["reasoning"], {"effort": "max"})
+
     async def test_responses_tool_call_preserves_replay_items(self):
         response_items = [
             {"type": "reasoning", "encrypted_content": "encrypted"},

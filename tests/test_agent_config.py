@@ -21,6 +21,7 @@ from xagent.core.providers import (
     normalize_reasoning_config,
     provider_supports_vision,
     provider_model_api,
+    reasoning_capability,
 )
 from xagent.interfaces.cli.channels import enabled_channels_from_config
 from xagent.interfaces.cli import (
@@ -95,6 +96,17 @@ class ProviderConfigTests(unittest.TestCase):
                 "reasoning": {"enabled": True, "effort": "HIGH"},
             }),
             ReasoningConfig(enabled=True, effort="high"),
+        )
+        self.assertEqual(
+            normalize_reasoning_config({
+                "name": "openai",
+                "reasoning": {"enabled": True, "effort": "MAX"},
+            }),
+            ReasoningConfig(enabled=True, effort="max"),
+        )
+        self.assertEqual(
+            reasoning_capability("openai").effort_values,
+            ("minimal", "low", "medium", "high", "xhigh", "max"),
         )
         self.assertEqual(
             normalize_reasoning_config({
@@ -485,7 +497,7 @@ provider:
             self.assertEqual(config["agent"], {"max_history": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2})
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
-            self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
+            self.assertEqual(config["provider"]["model"], "gpt-5.6-terra")
             self.assertEqual(config["provider"]["name"], "openai")
             self.assertNotIn("backend", config["provider"])
             self.assertNotIn("model_api", config["provider"])
@@ -867,7 +879,7 @@ provider:
             )
 
         self.assertEqual(selection.provider, "openai")
-        self.assertEqual(selection.model, "gpt-5.4-mini")
+        self.assertEqual(selection.model, "gpt-5.6-terra")
         self.assertIn("Describe this agent's role", selection.identity)
         self.assertNotIn("(default)", stdout.getvalue())
         self.assertNotIn("Search provider", stdout.getvalue())

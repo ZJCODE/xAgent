@@ -50,7 +50,7 @@ class AgentConfig:
     # LLM selection, generation caps, user identity, and tool-call
     # parallelism. These are the most frequently tuned knobs.
     # ============================================================
-    DEFAULT_MODEL = "gpt-5.4-mini"
+    DEFAULT_MODEL = "gpt-5.6-terra"
     DEFAULT_MAX_TOKENS = 8192
     DEFAULT_USER_ID = "default_user"
     DEFAULT_MAX_CONCURRENT_TOOLS = 4  # Maximum concurrent tool calls

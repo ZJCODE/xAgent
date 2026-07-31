@@ -131,13 +131,13 @@ DEFAULT_MEMORY_LIST_DAYS = 7
 MEMORY_LIST_DAY_CHOICES = (1, 3, 7)
 
 OPENAI_MODELS = (
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
     "gpt-5.4-nano",
-    "gpt-5.5",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
 )
 ANTHROPIC_MODELS = (
     "claude-sonnet-4-20250514",
@@ -661,7 +661,7 @@ def _default_init_selection() -> InitSelection:
         provider="openai",
         base_url=OPENAI_BASE_URL,
         api_key=API_KEY_PLACEHOLDER,
-        model="gpt-5.4-mini",
+        model="gpt-5.6-terra",
         identity=_default_identity_markdown(),
     )
 
@@ -1139,15 +1139,15 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
             "OpenAI Model",
             OPENAI_MODELS,
             descriptions={
-                "gpt-5.4": "Highest capability general model.",
-                "gpt-5.4-mini": "Balanced default for speed and quality.",
-                "gpt-5.4-nano": "Lowest latency and cost.",
-                "gpt-5.5": "Newest OpenAI release.",
-                "gpt-5.6-sol": "OpenAI GPT-5.6 Sol model.",
-                "gpt-5.6-terra": "OpenAI GPT-5.6 Terra model.",
-                "gpt-5.6-luna": "OpenAI GPT-5.6 Luna model.",
+                "gpt-5.6-terra": "Recommended everyday default — balance of quality and cost.",
+                "gpt-5.6-luna": "Cost-sensitive / high-volume (heartbeat, diary, light chat).",
+                "gpt-5.6-sol": "Frontier capability for complex reasoning and coding.",
+                "gpt-5.5": "Previous flagship generation.",
+                "gpt-5.4": "High capability GPT-5.4.",
+                "gpt-5.4-mini": "Smaller GPT-5.4 option.",
+                "gpt-5.4-nano": "Lowest latency and cost in the 5.4 line.",
             },
-            default_index=1,
+            default_index=0,
         )
         base_url = OPENAI_BASE_URL
     elif provider == PROVIDER_ANTHROPIC:
