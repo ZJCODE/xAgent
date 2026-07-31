@@ -21,6 +21,7 @@ from xagent.core.providers import (
     normalize_reasoning_config,
     provider_supports_vision,
     provider_model_api,
+    reasoning_capability,
 )
 from xagent.interfaces.cli.channels import enabled_channels_from_config
 from xagent.interfaces.cli import (
@@ -98,6 +99,20 @@ class ProviderConfigTests(unittest.TestCase):
         )
         self.assertEqual(
             normalize_reasoning_config({
+                "name": "deepseek",
+                "reasoning": {"enabled": True, "effort": "LOW"},
+            }),
+            ReasoningConfig(enabled=True, effort="low"),
+        )
+        self.assertEqual(
+            normalize_reasoning_config({
+                "name": "deepseek",
+                "reasoning": {"enabled": True, "effort": "xhigh"},
+            }),
+            ReasoningConfig(enabled=True, effort="xhigh"),
+        )
+        self.assertEqual(
+            normalize_reasoning_config({
                 "name": "qwen",
                 "reasoning": {"enabled": True, "budget_tokens": 4096},
             }),
@@ -110,6 +125,10 @@ class ProviderConfigTests(unittest.TestCase):
                 "reasoning": {"enabled": True, "budget_tokens": 8000},
             }),
             ReasoningConfig(enabled=True, budget_tokens=8000),
+        )
+        self.assertEqual(
+            reasoning_capability("deepseek").effort_values,
+            ("low", "high", "xhigh", "max"),
         )
 
     def test_reasoning_config_rejects_invalid_or_unsupported_combinations(self):
@@ -126,6 +145,10 @@ class ProviderConfigTests(unittest.TestCase):
             ({
                 "name": "deepseek",
                 "reasoning": {"enabled": True, "effort": "medium"},
+            }, "must be one of"),
+            ({
+                "name": "deepseek",
+                "reasoning": {"enabled": True, "effort": "minimal"},
             }, "must be one of"),
             ({
                 "name": "qwen",

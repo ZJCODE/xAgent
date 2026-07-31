@@ -419,6 +419,18 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(deepseek_call["extra_body"], {"thinking": {"type": "enabled"}})
         self.assertNotIn("max_completion_tokens", deepseek_call)
 
+        deepseek_low_client = FakeOpenAIClient([_chat_response(content="ok")])
+        deepseek_low = ModelClient(
+            client=deepseek_low_client,
+            model="deepseek-v4-flash",
+            provider_name=PROVIDER_DEEPSEEK,
+            reasoning=ReasoningConfig(enabled=True, effort="low"),
+        )
+        await deepseek_low.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
+        deepseek_low_call = deepseek_low_client.chat_completions.calls[0]
+        self.assertEqual(deepseek_low_call["reasoning_effort"], "low")
+        self.assertEqual(deepseek_low_call["extra_body"], {"thinking": {"type": "enabled"}})
+
         qwen_client = FakeOpenAIClient([_chat_response(content="ok")])
         qwen = ModelClient(
             client=qwen_client,
