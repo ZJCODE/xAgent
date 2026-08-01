@@ -91,5 +91,8 @@ def _create_tts_adapter(config: VoiceChannelConfig) -> Any:
             websocket_base_url=websocket_base_url,
         )
     if config.tts.provider == VOICE_PROVIDER_SONIOX:
-        return SonioxRealtimeTTS(api_key=config.resolved_tts_api_key(), config=config.tts)
+        tts_config = config.tts
+        if config.enable_interruptions and not tts_config.return_timestamps:
+            tts_config = tts_config.model_copy(update={"return_timestamps": True})
+        return SonioxRealtimeTTS(api_key=config.resolved_tts_api_key(), config=tts_config)
     raise ValueError(f"Unsupported TTS provider: {config.tts.provider}")

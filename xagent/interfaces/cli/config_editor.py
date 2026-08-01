@@ -504,7 +504,15 @@ def _voice_stt(provider: str, api_key: str | None = None) -> dict[str, Any]:
             }
         )
     else:
-        config.update({"model": "stt-rt-v4", "audio_format": "pcm_s16le"})
+        config.update(
+            {
+                "model": "stt-rt-v5",
+                "audio_format": "pcm_s16le",
+                "max_endpoint_delay_ms": 1500,
+                "endpoint_sensitivity": 0.3,
+                "endpoint_latency_adjustment_level": 2,
+            }
+        )
     return config
 
 
