@@ -64,6 +64,14 @@ class WorkingContextState:
         )
 
 
+@dataclass(frozen=True)
+class WorkingContextView:
+    """Prompt-facing snapshot after optional compaction."""
+
+    summary: str = ""
+    covers_through_cursor: int = 0
+
+
 class WorkingContextStore:
     """File-backed single-slot working summary under the messages directory."""
 
@@ -237,8 +245,8 @@ class WorkingContextCompactor:
         self.roll_slack = max(0, int(roll_slack))
         self._lock = asyncio.Lock()
 
-    async def ensure_fresh(self) -> str:
-        """Roll summary if needed; return current summary text (may be empty)."""
+    async def ensure_fresh(self) -> WorkingContextView:
+        """Roll summary if needed; return prompt-facing summary + coverage."""
         async with self._lock:
             lock_file = await asyncio.to_thread(self.store.acquire_lock)
             try:
@@ -246,28 +254,43 @@ class WorkingContextCompactor:
             finally:
                 await asyncio.to_thread(self.store.release_lock, lock_file)
 
-    async def current_summary(self) -> str:
+    async def current_view(self) -> WorkingContextView:
         state = await asyncio.to_thread(self.store.read)
-        return state.summary.strip()
+        return WorkingContextView(
+            summary=state.summary.strip(),
+            covers_through_cursor=max(0, int(state.covers_through_cursor)),
+        )
 
-    async def _ensure_fresh_locked(self) -> str:
+    async def current_summary(self) -> str:
+        return (await self.current_view()).summary
+
+    async def _ensure_fresh_locked(self) -> WorkingContextView:
         state = await asyncio.to_thread(self.store.read)
         try:
             latest = int(await self.message_storage.get_latest_message_cursor())
         except Exception as exc:
             logger.warning("Working context cursor read failed: %s", exc)
-            return state.summary.strip()
+            return WorkingContextView(
+                summary=state.summary.strip(),
+                covers_through_cursor=max(0, int(state.covers_through_cursor)),
+            )
 
         latest = max(0, latest)
         covers = max(0, int(state.covers_through_cursor))
         pending = latest - covers
         threshold = self.hot_window + self.roll_slack
         if pending <= threshold:
-            return state.summary.strip()
+            return WorkingContextView(
+                summary=state.summary.strip(),
+                covers_through_cursor=covers,
+            )
 
         roll_end = latest - self.hot_window
         if roll_end <= covers:
-            return state.summary.strip()
+            return WorkingContextView(
+                summary=state.summary.strip(),
+                covers_through_cursor=covers,
+            )
 
         try:
             messages = await self.message_storage.get_messages_in_cursor_range(
@@ -276,7 +299,10 @@ class WorkingContextCompactor:
             )
         except Exception as exc:
             logger.warning("Working context message load failed: %s", exc)
-            return state.summary.strip()
+            return WorkingContextView(
+                summary=state.summary.strip(),
+                covers_through_cursor=covers,
+            )
 
         records = [
             self._experience_record(message)
@@ -292,7 +318,7 @@ class WorkingContextCompactor:
                 summary=state.summary,
             )
             await asyncio.to_thread(self.store.write, new_state)
-            return ""
+            return WorkingContextView(summary="", covers_through_cursor=roll_end)
 
         try:
             summary = await self.summarizer.summarize(
@@ -301,7 +327,10 @@ class WorkingContextCompactor:
             )
         except Exception as exc:
             logger.warning("Working context summarize failed: %s", exc)
-            return state.summary.strip()
+            return WorkingContextView(
+                summary=state.summary.strip(),
+                covers_through_cursor=covers,
+            )
 
         new_state = WorkingContextState(
             covers_through_cursor=roll_end,
@@ -309,7 +338,10 @@ class WorkingContextCompactor:
             summary=summary.strip(),
         )
         await asyncio.to_thread(self.store.write, new_state)
-        return new_state.summary
+        return WorkingContextView(
+            summary=new_state.summary,
+            covers_through_cursor=roll_end,
+        )
 
     @staticmethod
     def _experience_record(message: Message) -> dict:

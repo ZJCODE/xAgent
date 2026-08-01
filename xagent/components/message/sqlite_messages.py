@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+from ...core.config import AgentConfig
 from ...schemas import Message
 
 
@@ -24,6 +25,13 @@ class MessageStorageConfig:
     CONNECT_TIMEOUT = 5.0
     TABLE_NAME = "messages"
     CURRENT_COLUMNS = {"id", "timestamp", "message_json"}
+
+
+def _message_with_storage_cursor(message: Message, cursor: int) -> Message:
+    """Return a copy of *message* tagged with its SQLite row id."""
+    metadata = dict(message.metadata or {})
+    metadata[AgentConfig.MESSAGE_STORAGE_CURSOR_KEY] = int(cursor)
+    return message.model_copy(update={"metadata": metadata})
 
 
 class MessageStorage:
@@ -121,7 +129,7 @@ class MessageStorage:
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT message_json
+                SELECT id, message_json
                 FROM {MessageStorageConfig.TABLE_NAME}
                 ORDER BY id DESC
                 LIMIT ? OFFSET ?
@@ -132,9 +140,11 @@ class MessageStorage:
         messages: List[Message] = []
         for row in reversed(rows):
             try:
-                messages.append(Message.model_validate_json(row["message_json"]))
+                message = Message.model_validate_json(row["message_json"])
             except Exception as exception:
                 self.logger.warning("Skipping invalid local message: %s", exception)
+                continue
+            messages.append(_message_with_storage_cursor(message, int(row["id"])))
         return messages
 
     async def clear_messages(self) -> None:
@@ -237,7 +247,7 @@ class MessageStorage:
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT message_json
+                SELECT id, message_json
                 FROM {MessageStorageConfig.TABLE_NAME}
                 WHERE id > ? AND id <= ?
                 ORDER BY id ASC
@@ -248,9 +258,11 @@ class MessageStorage:
         messages: List[Message] = []
         for row in rows:
             try:
-                messages.append(Message.model_validate_json(row["message_json"]))
+                message = Message.model_validate_json(row["message_json"])
             except Exception as exception:
                 self.logger.warning("Skipping invalid local message: %s", exception)
+                continue
+            messages.append(_message_with_storage_cursor(message, int(row["id"])))
         return messages
 
     async def cursor_for_message_count(self, message_count: int) -> int:

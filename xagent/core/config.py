@@ -46,6 +46,9 @@ class AgentConfig:
     MESSAGE_DB_FILENAME = "messages.sqlite3"
     WORKING_CONTEXT_FILENAME = ".working_context.json"
     WORKING_CONTEXT_LOCK_FILENAME = ".working_context.lock"
+    # Attached by MessageStorage when loading rows; used so prompt budgeting
+    # never drops messages that the working summary has not covered yet.
+    MESSAGE_STORAGE_CURSOR_KEY = "storage_cursor"
 
     # ============================================================
     # 3. Model & Agent Defaults

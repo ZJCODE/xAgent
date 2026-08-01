@@ -91,8 +91,9 @@ class WorkingContextCompactorTests(unittest.IsolatedAsyncioTestCase):
                 hot_window=12,
                 roll_slack=8,
             )
-            summary = await compactor.ensure_fresh()
-            self.assertEqual(summary, "")
+            view = await compactor.ensure_fresh()
+            self.assertEqual(view.summary, "")
+            self.assertEqual(view.covers_through_cursor, 0)
             self.assertEqual(summarizer.calls, [])
 
     async def test_rolls_and_preserves_summary_across_restart(self):
@@ -112,8 +113,9 @@ class WorkingContextCompactorTests(unittest.IsolatedAsyncioTestCase):
                 hot_window=12,
                 roll_slack=8,
             )
-            summary = await compactor.ensure_fresh()
-            self.assertTrue(summary.startswith("rolled:"))
+            view = await compactor.ensure_fresh()
+            self.assertTrue(view.summary.startswith("rolled:"))
+            self.assertEqual(view.covers_through_cursor, 18)
             self.assertEqual(len(summarizer.calls), 1)
             # Hot window keeps the newest 12; rolled window is 1..18.
             self.assertEqual(len(summarizer.calls[0]["records"]), 18)
@@ -126,7 +128,7 @@ class WorkingContextCompactorTests(unittest.IsolatedAsyncioTestCase):
                 hot_window=12,
                 roll_slack=8,
             )
-            self.assertEqual(await restarted.current_summary(), summary)
+            self.assertEqual(await restarted.current_summary(), view.summary)
 
     async def test_summarizer_failure_falls_back_to_existing_summary(self):
         messages = [
@@ -154,8 +156,9 @@ class WorkingContextCompactorTests(unittest.IsolatedAsyncioTestCase):
                 hot_window=12,
                 roll_slack=8,
             )
-            summary = await compactor.ensure_fresh()
-            self.assertEqual(summary, "keep me")
+            view = await compactor.ensure_fresh()
+            self.assertEqual(view.summary, "keep me")
+            self.assertEqual(view.covers_through_cursor, 0)
             self.assertEqual(store.read().covers_through_cursor, 0)
 
 
@@ -190,6 +193,56 @@ class WorkingContextPromptInjectionTests(unittest.TestCase):
             working_summary="",
         )
         self.assertIn("Earlier experience omitted", context)
+
+    def test_budget_keeps_uncovered_messages_even_beyond_hot_window(self):
+        messages = []
+        for index in range(1, 16):
+            messages.append(
+                Message.create(
+                    f"m-{index:02d}",
+                    role=RoleType.USER,
+                    sender_id="alice",
+                ).model_copy(
+                    update={
+                        "metadata": {
+                            AgentConfig.MESSAGE_STORAGE_CURSOR_KEY: index,
+                        }
+                    }
+                )
+            )
+        selected, omitted = MessageHandler._budget_transcript_entries(
+            messages,
+            max_messages=12,
+            covers_through_cursor=0,
+        )
+        self.assertEqual(omitted, 0)
+        self.assertEqual(len(selected), 15)
+        self.assertEqual(selected[0][1], "m-01")
+        self.assertEqual(selected[-1][1], "m-15")
+
+    def test_budget_drops_only_messages_already_covered_by_summary(self):
+        messages = []
+        for index in range(1, 21):
+            messages.append(
+                Message.create(
+                    f"m-{index:02d}",
+                    role=RoleType.USER,
+                    sender_id="alice",
+                ).model_copy(
+                    update={
+                        "metadata": {
+                            AgentConfig.MESSAGE_STORAGE_CURSOR_KEY: index,
+                        }
+                    }
+                )
+            )
+        selected, omitted = MessageHandler._budget_transcript_entries(
+            messages,
+            max_messages=12,
+            covers_through_cursor=8,
+        )
+        self.assertEqual(omitted, 0)
+        self.assertEqual([content for _, content in selected], [f"m-{i:02d}" for i in range(9, 21)])
 
     def test_summarizer_prompt_is_not_diary(self):
         system_prompt = WorkingContextSummarizer.build_system_prompt()

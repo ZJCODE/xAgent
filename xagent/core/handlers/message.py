@@ -284,6 +284,7 @@ class MessageHandler:
         channel_instructions: str = "",
         task_mode: str = "reply",
         working_summary: str = "",
+        covers_through_cursor: int = 0,
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -295,11 +296,13 @@ class MessageHandler:
         budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
             conversation_messages,
             max_messages=max_messages,
+            covers_through_cursor=covers_through_cursor,
         )
         budgeted_messages = [msg for msg, _ in budgeted_entries]
         budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
             observation_messages,
             max_events=max_context_events,
+            covers_through_cursor=covers_through_cursor,
         )
         experience_entries = MessageHandler._merge_experience_entries(
             budgeted_entries,
@@ -481,16 +484,29 @@ class MessageHandler:
         return lines
 
     @staticmethod
+    def _storage_cursor(message: Message) -> Optional[int]:
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        raw = metadata.get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
+        try:
+            cursor = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return cursor if cursor > 0 else None
+
+    @staticmethod
     def _budget_context_events(
         messages: List[Message],
         max_events: int,
+        covers_through_cursor: int = 0,
     ) -> tuple[List[tuple[Message, str]], int]:
         if not messages:
             return [], 0
 
-        event_limit = max(1, int(max_events or AgentConfig.MAX_CONTEXT_EVENTS))
-        omitted_count = max(0, len(messages) - event_limit)
-        selected = messages[-event_limit:]
+        selected, omitted_count = MessageHandler._budget_by_coverage(
+            messages,
+            max_keep=max(1, int(max_events or AgentConfig.MAX_CONTEXT_EVENTS)),
+            covers_through_cursor=covers_through_cursor,
+        )
         return [
             (
                 msg,
@@ -526,19 +542,64 @@ class MessageHandler:
         return datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
+    def _budget_by_coverage(
+        messages: List[Message],
+        *,
+        max_keep: int,
+        covers_through_cursor: int = 0,
+    ) -> tuple[List[Message], int]:
+        """Keep uncovered messages; never drop rows the summary has not covered.
+
+        When storage cursors are present:
+        - ``cursor > covers`` is always kept (may temporarily exceed ``max_keep``
+          while roll_slack defers compaction)
+        - ``cursor <= covers`` is omitted from the raw prompt (owned by summary)
+
+        Without cursors, keep the newest ``max_keep`` rows, except when nothing
+        is covered yet — then keep everything to avoid the pre-summary gap.
+        """
+        if not messages:
+            return [], 0
+
+        keep_limit = max(1, int(max_keep or 1))
+        covers = max(0, int(covers_through_cursor or 0))
+        cursors = [MessageHandler._storage_cursor(message) for message in messages]
+        if any(cursor is not None for cursor in cursors):
+            selected = [
+                message
+                for message, cursor in zip(messages, cursors)
+                if cursor is None or cursor > covers
+            ]
+            # Hard safety valve only; normal path relies on the compactor.
+            safety_cap = max(
+                keep_limit + AgentConfig.WORKING_CONTEXT_ROLL_SLACK,
+                keep_limit * 3,
+            )
+            if len(selected) > safety_cap:
+                return selected[-safety_cap:], len(selected) - safety_cap
+            return selected, 0
+
+        # No storage cursors (tests / legacy): classic newest-N budget.
+        omitted_count = max(0, len(messages) - keep_limit)
+        return messages[-keep_limit:], omitted_count
+
+    @staticmethod
     def _budget_transcript_entries(
         messages: List[Message],
         max_messages: int,
+        covers_through_cursor: int = 0,
     ) -> tuple[List[tuple[Message, str]], int]:
         if not messages:
             return [], 0
 
-        message_limit = max(1, int(max_messages or AgentConfig.DEFAULT_MAX_HISTORY))
-        omitted_count = max(0, len(messages) - message_limit)
-        candidates = messages[-message_limit:]
+        selected, omitted_count = MessageHandler._budget_by_coverage(
+            messages,
+            max_keep=max(1, int(max_messages or AgentConfig.DEFAULT_MAX_HISTORY)),
+            covers_through_cursor=covers_through_cursor,
+        )
         return [
             (msg, msg.content.strip() or "[Empty message]")
-            for msg in candidates
+            for msg in selected
         ], omitted_count
 
     @staticmethod

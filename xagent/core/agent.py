@@ -34,6 +34,7 @@ from .working_context import (
     WorkingContextCompactor,
     WorkingContextStore,
     WorkingContextSummarizer,
+    WorkingContextView,
 )
 from ..schemas import AgentTurnResult, Message, MessageType, ParticipationDecision, RoleType
 from ..tools import create_write_memory_tool, create_search_memory_tool
@@ -239,18 +240,25 @@ class Agent:
             hot_window=self.max_history,
         )
 
-    async def _working_summary_for_turn(self) -> str:
+    async def _working_context_for_turn(self) -> WorkingContextView:
         compactor = getattr(self, "working_context_compactor", None)
         if compactor is None:
-            return ""
+            return WorkingContextView()
         try:
-            return await compactor.ensure_fresh()
+            view = await compactor.ensure_fresh()
+            if isinstance(view, WorkingContextView):
+                return view
+            # Older fakes may still return a bare summary string.
+            return WorkingContextView(summary=str(view or ""))
         except Exception as exc:
             logger.warning("Working context compaction failed; falling back: %s", exc)
             try:
-                return await compactor.current_summary()
+                return await compactor.current_view()
             except Exception:
-                return ""
+                try:
+                    return WorkingContextView(summary=await compactor.current_summary())
+                except Exception:
+                    return WorkingContextView()
 
     async def _build_turn_context(
         self,
@@ -260,7 +268,7 @@ class Agent:
         channel_instructions: str = "",
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
-        working_summary = await self._working_summary_for_turn()
+        working_context = await self._working_context_for_turn()
         recent_messages = await msg_handler.get_recent_messages(
             max_history=AgentConfig.history_fetch_depth(self.max_history),
         )
@@ -290,7 +298,8 @@ class Agent:
             workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
             channel_instructions=channel_instructions,
-            working_summary=working_summary,
+            working_summary=working_context.summary,
+            covers_through_cursor=working_context.covers_through_cursor,
         )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
