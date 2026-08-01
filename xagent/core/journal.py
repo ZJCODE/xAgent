@@ -21,7 +21,7 @@ class JournalLLMService:
     def __init__(
         self,
         client: Optional[Any] = None,
-        model: str = "gpt-5.4-mini",
+        model: str = "gpt-5.6-terra",
         model_api: str = DEFAULT_OPENAI_CHAT_MODEL_API,
         max_tokens: Optional[int] = 4096,
         provider_name: str = PROVIDER_OPENAI,

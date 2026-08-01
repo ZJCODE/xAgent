@@ -44,7 +44,7 @@ type WizardAction =
 function defaultSelection(schema: AgentSetupSchema): InitSelectionInput {
   const provider = schema.providers[0]?.id || "openai";
   const models = schema.models[provider] || [];
-  const model = models[1] || models[0] || schema.placeholders.model;
+  const model = models[0] || schema.placeholders.model;
   return {
     provider,
     base_url: schema.provider_base_urls[provider] || "",
@@ -92,7 +92,7 @@ export function CreateAgentWizard({ open, onClose }: CreateAgentWizardProps) {
     replaceExisting: false,
     selection: defaultSelection({
       providers: [{ id: "openai" }],
-      models: { openai: ["gpt-5.4-mini", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] },
+      models: { openai: ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.4-mini"] },
       provider_base_urls: { openai: "" },
       custom_model_apis: [],
       reasoning: { providers: {}, custom_model_apis: {} },
