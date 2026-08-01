@@ -72,7 +72,11 @@ class AgentConfig:
     DEFAULT_MAX_ITER = 50
     DEFAULT_MAX_HISTORY = 12
     MAX_CONTEXT_EVENTS = 12
-    WORKING_CONTEXT_ROLL_SLACK = 8
+    # Working-summary roll slack is derived from the hot window:
+    # round(0.5 * hot_window), clamped to [MIN, MAX]. Not a user config key.
+    WORKING_CONTEXT_ROLL_SLACK_RATIO = 0.5
+    WORKING_CONTEXT_ROLL_SLACK_MIN = 4
+    WORKING_CONTEXT_ROLL_SLACK_MAX = 16
     WORKING_CONTEXT_SUMMARY_MAX_CHARS = 1500
     WORKING_CONTEXT_SUMMARY_MAX_TOKENS = 512
 
@@ -97,6 +101,20 @@ class AgentConfig:
             ),
         )
         return (window + events) * 2
+
+    @staticmethod
+    def working_context_roll_slack(hot_window: int) -> int:
+        """Derive compaction slack from the prompt hot window.
+
+        ``threshold = hot_window + slack``. Slack batches LLM rolls without
+        being a separate user-facing knob.
+        """
+        window = max(1, int(hot_window or AgentConfig.DEFAULT_MAX_HISTORY))
+        raw = int(round(window * AgentConfig.WORKING_CONTEXT_ROLL_SLACK_RATIO))
+        return max(
+            AgentConfig.WORKING_CONTEXT_ROLL_SLACK_MIN,
+            min(AgentConfig.WORKING_CONTEXT_ROLL_SLACK_MAX, raw),
+        )
 
     # ============================================================
     # 5. Safety & Resource Limits

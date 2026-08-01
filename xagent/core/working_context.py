@@ -236,13 +236,16 @@ class WorkingContextCompactor:
         message_storage: _MessageStorage,
         summarizer: WorkingContextSummarizer,
         hot_window: int,
-        roll_slack: int = AgentConfig.WORKING_CONTEXT_ROLL_SLACK,
+        roll_slack: int | None = None,
     ) -> None:
         self.store = store
         self.message_storage = message_storage
         self.summarizer = summarizer
         self.hot_window = max(1, int(hot_window))
-        self.roll_slack = max(0, int(roll_slack))
+        if roll_slack is None:
+            self.roll_slack = AgentConfig.working_context_roll_slack(self.hot_window)
+        else:
+            self.roll_slack = max(0, int(roll_slack))
         self._lock = asyncio.Lock()
 
     async def ensure_fresh(self) -> WorkingContextView:

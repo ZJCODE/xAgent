@@ -572,7 +572,7 @@ class MessageHandler:
             ]
             # Hard safety valve only; normal path relies on the compactor.
             safety_cap = max(
-                keep_limit + AgentConfig.WORKING_CONTEXT_ROLL_SLACK,
+                keep_limit + AgentConfig.working_context_roll_slack(keep_limit),
                 keep_limit * 3,
             )
             if len(selected) > safety_cap:

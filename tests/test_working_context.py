@@ -56,6 +56,14 @@ class _FakeSummarizer:
         return f"rolled:{joined}"
 
 
+class WorkingContextRollSlackTests(unittest.TestCase):
+    def test_roll_slack_is_half_hot_window_clamped(self):
+        self.assertEqual(AgentConfig.working_context_roll_slack(12), 6)
+        self.assertEqual(AgentConfig.working_context_roll_slack(6), 4)   # floor
+        self.assertEqual(AgentConfig.working_context_roll_slack(40), 16)  # ceil
+        self.assertEqual(AgentConfig.working_context_roll_slack(15), 8)
+
+
 class WorkingContextStoreTests(unittest.TestCase):
     def test_read_write_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -89,7 +97,10 @@ class WorkingContextCompactorTests(unittest.IsolatedAsyncioTestCase):
                 message_storage=storage,
                 summarizer=summarizer,
                 hot_window=12,
-                roll_slack=8,
+            )
+            self.assertEqual(
+                compactor.roll_slack,
+                AgentConfig.working_context_roll_slack(12),
             )
             view = await compactor.ensure_fresh()
             self.assertEqual(view.summary, "")
@@ -111,7 +122,6 @@ class WorkingContextCompactorTests(unittest.IsolatedAsyncioTestCase):
                 message_storage=storage,
                 summarizer=summarizer,
                 hot_window=12,
-                roll_slack=8,
             )
             view = await compactor.ensure_fresh()
             self.assertTrue(view.summary.startswith("rolled:"))
@@ -126,7 +136,6 @@ class WorkingContextCompactorTests(unittest.IsolatedAsyncioTestCase):
                 message_storage=storage,
                 summarizer=_FakeSummarizer(),
                 hot_window=12,
-                roll_slack=8,
             )
             self.assertEqual(await restarted.current_summary(), view.summary)
 
@@ -154,7 +163,6 @@ class WorkingContextCompactorTests(unittest.IsolatedAsyncioTestCase):
                 message_storage=storage,
                 summarizer=BoomSummarizer(),
                 hot_window=12,
-                roll_slack=8,
             )
             view = await compactor.ensure_fresh()
             self.assertEqual(view.summary, "keep me")
