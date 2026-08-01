@@ -20,10 +20,49 @@ SONIOX_TTS_WEBSOCKET_URL = "wss://tts-rt.soniox.com/tts-websocket"
 KEEPALIVE_INTERVAL_SECONDS = 10.0
 TTS_IDLE_FLUSH_SECONDS = 0.25
 TEXT_BOUNDARY_SUFFIXES = (".", "!", "?", "\n", "。", "！", "？")
+_RETRYABLE_ERROR_TYPES = frozenset({
+    "service_unavailable",
+    "request_timeout",
+    "limit_exceeded",
+    "internal_error",
+})
+_SONIOX_STT_PAYLOAD_KEYS = (
+    "model",
+    "audio_format",
+    "sample_rate",
+    "num_channels",
+    "language_hints",
+    "language_hints_strict",
+    "enable_endpoint_detection",
+    "max_endpoint_delay_ms",
+    "endpoint_sensitivity",
+    "endpoint_latency_adjustment_level",
+    "enable_language_identification",
+    "enable_speaker_diarization",
+    "client_reference_id",
+    "translation",
+)
 
 
 class SonioxVoiceError(RuntimeError):
     """Raised for Soniox realtime voice errors."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str | None = None,
+        error_code: Any = None,
+        request_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+        self.error_code = error_code
+        self.request_id = request_id
+
+    @property
+    def retryable(self) -> bool:
+        return bool(self.error_type and self.error_type in _RETRYABLE_ERROR_TYPES)
 
 
 def _connect_websocket(url: str):
@@ -63,6 +102,24 @@ def _iter_json_messages(ws) -> Iterator[dict[str, Any]]:  # noqa: ANN001
         if not isinstance(data, dict):
             continue
         yield data
+
+
+def _raise_soniox_error(message: dict[str, Any], *, kind: str) -> None:
+    error_code = message.get("error_code")
+    if not error_code:
+        return
+    error_type = str(message.get("error_type") or "unknown_error")
+    error_message = message.get("error_message") or f"Soniox realtime {kind} error"
+    request_id = message.get("request_id")
+    parts = [f"Soniox {kind} error {error_code} ({error_type}): {error_message}"]
+    if request_id:
+        parts.append(f"request_id={request_id}")
+    raise SonioxVoiceError(
+        " ".join(parts),
+        error_type=error_type,
+        error_code=error_code,
+        request_id=str(request_id) if request_id else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -132,11 +189,21 @@ class SonioxRealtimeSTT:
                 sender.join(timeout=1.0)
 
     def _config_payload(self) -> dict[str, Any]:
-        payload = self.config.model_dump(
-            exclude={"provider", "language", "turn_detection", "silence_duration_ms"},
-            exclude_none=True,
-        )
-        payload["api_key"] = self.api_key
+        payload: dict[str, Any] = {"api_key": self.api_key}
+        raw = self.config.model_dump(exclude_none=True)
+        for key in _SONIOX_STT_PAYLOAD_KEYS:
+            if key not in raw:
+                continue
+            value = raw[key]
+            if key == "language_hints_strict" and not value:
+                continue
+            if key == "enable_speaker_diarization" and not value:
+                continue
+            payload[key] = value
+        if self.config.context is not None:
+            context_payload = self.config.context.to_soniox_payload()
+            if context_payload:
+                payload["context"] = context_payload
         return payload
 
     def _send_audio_loop(
@@ -175,10 +242,7 @@ class SonioxRealtimeSTT:
 
     @staticmethod
     def _raise_if_error(message: dict[str, Any]) -> None:
-        error_code = message.get("error_code")
-        if error_code:
-            error_message = message.get("error_message") or "Soniox realtime STT error"
-            raise SonioxVoiceError(f"Soniox STT error {error_code}: {error_message}")
+        _raise_soniox_error(message, kind="STT")
 
     @staticmethod
     def _utterance_from(tokens: list[_FinalToken]) -> VoiceUtterance:
@@ -214,6 +278,46 @@ class SonioxRealtimeTTS:
         stop_event: threading.Event,
     ) -> Iterator[bytes]:
         self._cancel_event.clear()
+        # Streaming sources with next_item cannot be rewound safely.
+        if callable(getattr(text_chunks, "next_item", None)):
+            yield from self._synthesize_once(
+                text_chunks,
+                language=language,
+                stop_event=stop_event,
+            )
+            return
+
+        buffered_chunks = list(text_chunks)
+        attempts = 2
+        for attempt in range(attempts):
+            produced_audio = False
+            try:
+                for audio in self._synthesize_once(
+                    buffered_chunks,
+                    language=language,
+                    stop_event=stop_event,
+                ):
+                    produced_audio = True
+                    yield audio
+                return
+            except SonioxVoiceError as exc:
+                if (
+                    produced_audio
+                    or attempt + 1 >= attempts
+                    or not exc.retryable
+                    or self._cancel_event.is_set()
+                    or stop_event.is_set()
+                ):
+                    raise
+                time.sleep(0.35 * (attempt + 1))
+
+    def _synthesize_once(
+        self,
+        text_chunks: Iterable[str],
+        *,
+        language: str,
+        stop_event: threading.Event,
+    ) -> Iterator[bytes]:
         stream_id = f"xagent-tts-{uuid.uuid4().hex}"
         send_errors: "queue.Queue[BaseException]" = queue.Queue()
         with _connect_websocket(self.websocket_url) as ws:
@@ -240,7 +344,7 @@ class SonioxRealtimeTTS:
                 sender.join(timeout=1.0)
 
     def _config_payload(self, *, stream_id: str, language: str) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "api_key": self.api_key,
             "stream_id": stream_id,
             "model": self.config.model,
@@ -250,6 +354,12 @@ class SonioxRealtimeTTS:
         }
         if self.config.sample_rate:
             payload["sample_rate"] = self.config.sample_rate
+        if abs(self.config.speed - 1.0) > 1e-9:
+            payload["speed"] = self.config.speed
+        if self.config.return_timestamps:
+            payload["return_timestamps"] = True
+        if self.config.client_reference_id:
+            payload["client_reference_id"] = self.config.client_reference_id
         return payload
 
     def _send_text_loop(
@@ -344,18 +454,16 @@ class SonioxRealtimeTTS:
 
     @staticmethod
     def _raise_if_error(message: dict[str, Any]) -> None:
-        error_code = message.get("error_code")
-        if error_code:
-            error_message = message.get("error_message") or "Soniox realtime TTS error"
-            request_id = message.get("request_id")
-            suffix = f" request_id={request_id}" if request_id else ""
-            raise SonioxVoiceError(f"Soniox TTS error {error_code}: {error_message}{suffix}")
+        _raise_soniox_error(message, kind="TTS")
 
 
 def create_soniox_adapters(config: VoiceChannelConfig) -> tuple[SonioxRealtimeSTT, SonioxRealtimeTTS]:
+    tts_config = config.tts
+    if config.enable_interruptions and not tts_config.return_timestamps:
+        tts_config = tts_config.model_copy(update={"return_timestamps": True})
     return (
         SonioxRealtimeSTT(api_key=config.resolved_stt_api_key(), config=config.stt),
-        SonioxRealtimeTTS(api_key=config.resolved_tts_api_key(), config=config.tts),
+        SonioxRealtimeTTS(api_key=config.resolved_tts_api_key(), config=tts_config),
     )
 
 

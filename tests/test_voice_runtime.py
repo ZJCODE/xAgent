@@ -15,7 +15,7 @@ from xagent.core.runtime import (
     enqueue_scheduled_task,
     list_active_task_records,
 )
-from xagent.interfaces.voice.config import VoiceChannelConfig, VoiceTTSConfig
+from xagent.interfaces.voice.config import VoiceChannelConfig, VoiceSTTConfig, VoiceTTSConfig
 from xagent.interfaces.voice.factory import create_local_voice_runtime
 from xagent.interfaces.voice.qwen import (
     QwenRealtimeSTT,
@@ -25,7 +25,14 @@ from xagent.interfaces.voice.qwen import (
     _qwen_realtime_url,
 )
 from xagent.interfaces.voice.runtime import VoiceRuntime, VoiceRuntimeOptions, VoiceUtterance
-from xagent.interfaces.voice.soniox import SonioxRealtimeTTS, SonioxVoiceError, _batch_text_chunks, _connect_websocket
+from xagent.interfaces.voice.soniox import (
+    SonioxRealtimeSTT,
+    SonioxRealtimeTTS,
+    SonioxVoiceError,
+    _batch_text_chunks,
+    _connect_websocket,
+    create_soniox_adapters,
+)
 
 
 class FakeMicrophone:
@@ -893,6 +900,89 @@ class VoiceRuntimeTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(SonioxVoiceError, "python-socks"):
                 _connect_websocket("wss://example.invalid/realtime")
+
+    def test_soniox_stt_config_payload_uses_v5_whitelist(self):
+        config = VoiceSTTConfig(
+            api_key="ignored",
+            vad_threshold=0.9,
+            silence_duration_ms=900,
+            language="zh",
+            session_options={"custom": True},
+            language_hints_strict=True,
+            context={
+                "general": [{"key": "domain", "value": "assistant"}],
+                "terms": ["xAgent"],
+            },
+        )
+        stt = SonioxRealtimeSTT(api_key="test-key", config=config)
+
+        payload = stt._config_payload()
+
+        self.assertEqual(payload["api_key"], "test-key")
+        self.assertEqual(payload["model"], "stt-rt-v5")
+        self.assertEqual(payload["max_endpoint_delay_ms"], 1500)
+        self.assertEqual(payload["endpoint_sensitivity"], 0.3)
+        self.assertEqual(payload["endpoint_latency_adjustment_level"], 2)
+        self.assertTrue(payload["language_hints_strict"])
+        self.assertEqual(payload["context"]["terms"], ["xAgent"])
+        self.assertNotIn("vad_threshold", payload)
+        self.assertNotIn("silence_duration_ms", payload)
+        self.assertNotIn("language", payload)
+        self.assertNotIn("session_options", payload)
+        self.assertNotIn("provider", payload)
+        self.assertNotIn("enable_speaker_diarization", payload)
+
+    def test_soniox_error_includes_type_and_request_id(self):
+        with self.assertRaises(SonioxVoiceError) as ctx:
+            SonioxRealtimeSTT._raise_if_error(
+                {
+                    "error_code": 503,
+                    "error_type": "service_unavailable",
+                    "error_message": "Cannot continue request",
+                    "request_id": "req-123",
+                }
+            )
+
+        error = ctx.exception
+        self.assertEqual(error.error_type, "service_unavailable")
+        self.assertEqual(error.error_code, 503)
+        self.assertEqual(error.request_id, "req-123")
+        self.assertTrue(error.retryable)
+        self.assertIn("service_unavailable", str(error))
+        self.assertIn("request_id=req-123", str(error))
+
+    def test_soniox_tts_config_includes_speed_and_timestamps(self):
+        tts = SonioxRealtimeTTS(
+            api_key="test-key",
+            config=VoiceTTSConfig(speed=1.2, return_timestamps=True, client_reference_id="voice-1"),
+        )
+
+        payload = tts._config_payload(stream_id="stream-1", language="zh")
+
+        self.assertEqual(payload["speed"], 1.2)
+        self.assertTrue(payload["return_timestamps"])
+        self.assertEqual(payload["client_reference_id"], "voice-1")
+        self.assertEqual(payload["model"], "tts-rt-v1")
+
+    def test_soniox_tts_config_omits_default_speed(self):
+        tts = SonioxRealtimeTTS(api_key="test-key", config=VoiceTTSConfig())
+
+        payload = tts._config_payload(stream_id="stream-1", language="en")
+
+        self.assertNotIn("speed", payload)
+        self.assertNotIn("return_timestamps", payload)
+
+    def test_soniox_adapters_enable_timestamps_when_interruptions_on(self):
+        config = voice_channel_config({
+            "provider": "soniox",
+            "api_key": "soniox-key",
+            "enable_interruptions": True,
+        })
+
+        _, synthesizer = create_soniox_adapters(config)
+
+        self.assertIsInstance(synthesizer, SonioxRealtimeTTS)
+        self.assertTrue(synthesizer.config.return_timestamps)
 
 
 if __name__ == "__main__":

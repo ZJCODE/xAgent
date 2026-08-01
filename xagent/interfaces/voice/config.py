@@ -34,7 +34,7 @@ def _validate_optional_key(value: str | None) -> str | None:
 
 
 _DEFAULT_STT_MODELS = {
-    VOICE_PROVIDER_SONIOX: "stt-rt-v4",
+    VOICE_PROVIDER_SONIOX: "stt-rt-v5",
     VOICE_PROVIDER_QWEN: "qwen3-asr-flash-realtime",
 }
 _DEFAULT_TTS_MODELS = {
@@ -45,6 +45,13 @@ _DEFAULT_TTS_VOICES = {
     VOICE_PROVIDER_SONIOX: "Owen",
     VOICE_PROVIDER_QWEN: "Cherry",
 }
+_SONIOX_STT_MODEL_ALIASES = {
+    "stt-rt-v3": "stt-rt-v5",
+    "stt-rt-v4": "stt-rt-v5",
+}
+_SONIOX_ENDPOINT_DELAY_MS_DEFAULT = 1500
+_SONIOX_ENDPOINT_SENSITIVITY_DEFAULT = 0.3
+_SONIOX_ENDPOINT_LATENCY_LEVEL_DEFAULT = 2
 
 
 def _resolve_voice_provider(value: str | None, *, allow_custom: bool = True) -> str | None:
@@ -75,6 +82,68 @@ def _normalize_provider_audio_format(provider: str, value: str) -> str:
     return normalized
 
 
+class SonioxSTTContextConfig(BaseModel):
+    """Structured context accepted by Soniox realtime STT."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    general: list[dict[str, str]] = Field(default_factory=list)
+    text: str | None = None
+    terms: list[str] = Field(default_factory=list)
+    translation_terms: list[dict[str, str]] = Field(default_factory=list)
+
+    @field_validator("text")
+    @classmethod
+    def _validate_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("general")
+    @classmethod
+    def _validate_general(cls, value: list[dict[str, str]]) -> list[dict[str, str]]:
+        cleaned: list[dict[str, str]] = []
+        for item in value:
+            key = str(item.get("key") or "").strip()
+            item_value = str(item.get("value") or "").strip()
+            if not key or not item_value:
+                raise ValueError("voice.stt.context.general entries require non-empty key and value")
+            cleaned.append({"key": key, "value": item_value})
+        return cleaned
+
+    @field_validator("terms")
+    @classmethod
+    def _validate_terms(cls, value: list[str]) -> list[str]:
+        return [item.strip() for item in value if item.strip()]
+
+    @field_validator("translation_terms")
+    @classmethod
+    def _validate_translation_terms(cls, value: list[dict[str, str]]) -> list[dict[str, str]]:
+        cleaned: list[dict[str, str]] = []
+        for item in value:
+            source = str(item.get("source") or "").strip()
+            target = str(item.get("target") or "").strip()
+            if not source or not target:
+                raise ValueError(
+                    "voice.stt.context.translation_terms entries require non-empty source and target"
+                )
+            cleaned.append({"source": source, "target": target})
+        return cleaned
+
+    def to_soniox_payload(self) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {}
+        if self.general:
+            payload["general"] = list(self.general)
+        if self.text:
+            payload["text"] = self.text
+        if self.terms:
+            payload["terms"] = list(self.terms)
+        if self.translation_terms:
+            payload["translation_terms"] = list(self.translation_terms)
+        return payload or None
+
+
 class VoiceSTTConfig(BaseModel):
     """Realtime speech-to-text configuration."""
 
@@ -82,15 +151,24 @@ class VoiceSTTConfig(BaseModel):
 
     provider: str = VOICE_PROVIDER_SONIOX
     api_key: str | None = None
-    model: str = "stt-rt-v4"
+    model: str = "stt-rt-v5"
     audio_format: str = "pcm_s16le"
     sample_rate: int = 16000
     num_channels: int = 1
     enable_endpoint_detection: bool = True
-    max_endpoint_delay_ms: int = Field(default=700, ge=500, le=3000)
+    max_endpoint_delay_ms: int = Field(default=_SONIOX_ENDPOINT_DELAY_MS_DEFAULT, ge=500, le=3000)
+    endpoint_sensitivity: float = Field(
+        default=_SONIOX_ENDPOINT_SENSITIVITY_DEFAULT, ge=-1.0, le=1.0
+    )
+    endpoint_latency_adjustment_level: int = Field(
+        default=_SONIOX_ENDPOINT_LATENCY_LEVEL_DEFAULT, ge=0, le=3
+    )
     language_hints: list[str] = Field(default_factory=lambda: ["zh", "en"])
+    language_hints_strict: bool = False
     enable_language_identification: bool = True
     enable_speaker_diarization: bool = False
+    context: SonioxSTTContextConfig | None = None
+    client_reference_id: str | None = None
     language: str = "zh"
     turn_detection: Literal["server_vad"] = "server_vad"
     silence_duration_ms: int = Field(default=_QWEN_SILENCE_DURATION_MS_DEFAULT, ge=200, le=3000)
@@ -150,11 +228,25 @@ class VoiceSTTConfig(BaseModel):
     def _validate_session_options(cls, value: dict[str, Any]) -> dict[str, Any]:
         return dict(value)
 
+    @field_validator("client_reference_id")
+    @classmethod
+    def _validate_client_reference_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 256:
+            raise ValueError("voice.stt.client_reference_id must be at most 256 characters")
+        return normalized
+
     @model_validator(mode="after")
     def _validate_endpointing(self) -> "VoiceSTTConfig":
         self.audio_format = _normalize_provider_audio_format(self.provider, self.audio_format)
-        if self.provider == VOICE_PROVIDER_SONIOX and not self.enable_endpoint_detection:
-            raise ValueError("voice.stt.enable_endpoint_detection must be true")
+        if self.provider == VOICE_PROVIDER_SONIOX:
+            self.model = _SONIOX_STT_MODEL_ALIASES.get(self.model, self.model)
+            if not self.enable_endpoint_detection:
+                raise ValueError("voice.stt.enable_endpoint_detection must be true")
         return self
 
 
@@ -169,6 +261,9 @@ class VoiceTTSConfig(BaseModel):
     voice: str = "Owen"
     audio_format: str = "pcm_s16le"
     sample_rate: int = 24000
+    speed: float = Field(default=1.0, ge=0.7, le=1.3)
+    return_timestamps: bool = False
+    client_reference_id: str | None = None
     language_policy: Literal["from_stt_dominant", "fallback"] = "from_stt_dominant"
     fallback_language: str = "zh"
     max_buffer_chars: int = Field(default=80, ge=1, le=500)
@@ -208,6 +303,18 @@ class VoiceTTSConfig(BaseModel):
     @classmethod
     def _validate_session_options(cls, value: dict[str, Any]) -> dict[str, Any]:
         return dict(value)
+
+    @field_validator("client_reference_id")
+    @classmethod
+    def _validate_client_reference_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 256:
+            raise ValueError("voice.tts.client_reference_id must be at most 256 characters")
+        return normalized
 
     @field_validator("audio_format")
     @classmethod
@@ -412,6 +519,17 @@ def _normalize_voice_config(data: dict[str, Any]) -> dict[str, Any]:
         if stt_default_provider == VOICE_PROVIDER_QWEN:
             stt.setdefault("vad_threshold", _QWEN_VAD_THRESHOLD_DEFAULT)
             stt.setdefault("silence_duration_ms", _QWEN_SILENCE_DURATION_MS_DEFAULT)
+        elif stt_default_provider == VOICE_PROVIDER_SONIOX:
+            stt["model"] = _SONIOX_STT_MODEL_ALIASES.get(
+                str(stt.get("model") or "").strip(),
+                stt.get("model"),
+            )
+            stt.setdefault("max_endpoint_delay_ms", _SONIOX_ENDPOINT_DELAY_MS_DEFAULT)
+            stt.setdefault("endpoint_sensitivity", _SONIOX_ENDPOINT_SENSITIVITY_DEFAULT)
+            stt.setdefault(
+                "endpoint_latency_adjustment_level",
+                _SONIOX_ENDPOINT_LATENCY_LEVEL_DEFAULT,
+            )
 
         tts.setdefault("provider", tts_default_provider)
         tts.setdefault("model", _DEFAULT_TTS_MODELS[tts_default_provider])

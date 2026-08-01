@@ -1469,8 +1469,10 @@ channels:
         provider: soniox
         stt:
             api_key: test-soniox-key
-            model: stt-rt-v4
-            max_endpoint_delay_ms: 700
+            model: stt-rt-v5
+            max_endpoint_delay_ms: 1500
+            endpoint_sensitivity: 0.3
+            endpoint_latency_adjustment_level: 2
         tts:
             api_key: test-soniox-key
             model: tts-rt-v1
@@ -1482,7 +1484,7 @@ channels:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertEqual(runner.config["channels"]["voice"]["stt"]["model"], "stt-rt-v4")
+            self.assertEqual(runner.config["channels"]["voice"]["stt"]["model"], "stt-rt-v5")
             self.assertEqual(enabled_channels_from_config(runner.config), ["api", "voice"])
 
     def test_voice_config_requires_provider_before_api_key(self):
@@ -1582,6 +1584,60 @@ channels:
         self.assertEqual(config.tts.model, "qwen3-tts-flash-realtime")
         self.assertEqual(config.tts.voice, "Cherry")
         self.assertEqual(config.tts.audio_format, "pcm")
+
+    def test_voice_config_uses_soniox_v5_endpoint_defaults(self):
+        from xagent.interfaces.voice.config import VoiceChannelConfig
+
+        config = VoiceChannelConfig.from_dict({
+            "provider": "soniox",
+            "stt": {"api_key": "soniox-key"},
+            "tts": {"api_key": "soniox-key"},
+        })
+
+        self.assertEqual(config.stt.model, "stt-rt-v5")
+        self.assertEqual(config.stt.max_endpoint_delay_ms, 1500)
+        self.assertEqual(config.stt.endpoint_sensitivity, 0.3)
+        self.assertEqual(config.stt.endpoint_latency_adjustment_level, 2)
+        self.assertFalse(config.stt.language_hints_strict)
+        self.assertEqual(config.tts.speed, 1.0)
+        self.assertFalse(config.tts.return_timestamps)
+
+    def test_voice_config_upgrades_legacy_soniox_stt_model_alias(self):
+        from xagent.interfaces.voice.config import VoiceChannelConfig
+
+        config = VoiceChannelConfig.from_dict({
+            "provider": "soniox",
+            "stt": {"api_key": "soniox-key", "model": "stt-rt-v4"},
+            "tts": {"api_key": "soniox-key"},
+        })
+
+        self.assertEqual(config.stt.model, "stt-rt-v5")
+
+    def test_voice_config_accepts_soniox_context_and_tts_speed(self):
+        from xagent.interfaces.voice.config import VoiceChannelConfig
+
+        config = VoiceChannelConfig.from_dict({
+            "provider": "soniox",
+            "stt": {
+                "api_key": "soniox-key",
+                "language_hints_strict": True,
+                "context": {
+                    "general": [{"key": "domain", "value": "assistant"}],
+                    "terms": ["xAgent"],
+                },
+            },
+            "tts": {
+                "api_key": "soniox-key",
+                "speed": 1.1,
+                "return_timestamps": True,
+            },
+        })
+
+        self.assertTrue(config.stt.language_hints_strict)
+        self.assertIsNotNone(config.stt.context)
+        self.assertEqual(config.stt.context.terms, ["xAgent"])
+        self.assertEqual(config.tts.speed, 1.1)
+        self.assertTrue(config.tts.return_timestamps)
 
     def test_voice_config_accepts_custom_stt_tts_providers(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig

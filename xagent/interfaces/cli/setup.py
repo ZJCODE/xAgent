@@ -630,7 +630,7 @@ def _voice_api_key_placeholder(provider: str) -> str:
 
 
 
-def _voice_defaults_for_provider(provider: str) -> dict[str, dict[str, str]]:
+def _voice_defaults_for_provider(provider: str) -> dict[str, dict[str, Any]]:
     if provider == "qwen":
         return {
             "stt": {
@@ -643,7 +643,10 @@ def _voice_defaults_for_provider(provider: str) -> dict[str, dict[str, str]]:
         }
     return {
         "stt": {
-            "model": "stt-rt-v4",
+            "model": "stt-rt-v5",
+            "max_endpoint_delay_ms": 1500,
+            "endpoint_sensitivity": 0.3,
+            "endpoint_latency_adjustment_level": 2,
         },
         "tts": {
             "model": "tts-rt-v1",
