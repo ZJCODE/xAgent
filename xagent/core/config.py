@@ -88,9 +88,14 @@ class AgentConfig:
     # Tune the size and overlap of the recent-memory window.
     # Override per agent via config.yaml: agent.memory_recent_days (0 disables injection).
     # MEMORY_RECENT_MAX_CHARS is an internal prompt-budget guard, not user config.
+    # JOURNAL_BATCH_SIZE is the diary maintenance commit cadence (threshold/batch
+    # cap). It is intentionally separate from DEFAULT_MAX_HISTORY, which budgets
+    # how many raw conversation messages enter the prompt.
+    # MEMORY_WINDOW_OVERLAP_RATIO applies to JOURNAL_BATCH_SIZE only.
     # ============================================================
     MEMORY_RECENT_DAYS = 2
     MEMORY_RECENT_MAX_CHARS = 8000
+    JOURNAL_BATCH_SIZE = 32
     MEMORY_WINDOW_OVERLAP_RATIO = 0.2
 
     # ------------------------------------------------------------------

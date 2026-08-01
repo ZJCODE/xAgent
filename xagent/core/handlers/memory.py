@@ -45,7 +45,7 @@ class MemoryHandler:
         llm_service: JournalLLMService,
         message_storage: MessageStorage,
         *,
-        max_history: int,
+        journal_batch_size: int,
         recent_days: Optional[int] = None,
         recent_max_chars: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
@@ -55,12 +55,15 @@ class MemoryHandler:
         self.llm_service = llm_service
         self.message_storage = message_storage
         self.relationship_store = relationship_store
-        self.max_history = self._positive_int(max_history, AgentConfig.DEFAULT_MAX_HISTORY)
+        self.journal_batch_size = self._positive_int(
+            journal_batch_size,
+            AgentConfig.JOURNAL_BATCH_SIZE,
+        )
         self.recent_days = self._non_negative_int(recent_days, self.RECENT_DAYS)
         self.recent_max_chars = self._non_negative_int(recent_max_chars, self.RECENT_MAX_CHARS)
         self.window_overlap = min(
-            max(1, int(self.max_history * AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO)),
-            self.max_history - 1,
+            max(1, int(self.journal_batch_size * AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO)),
+            self.journal_batch_size - 1,
         )
         self.max_journal_source_chars = self._positive_int(
             max_journal_source_chars,
@@ -256,17 +259,17 @@ class MemoryHandler:
         # the persisted cursor so it is safe across multiple processes.
         if not force:
             unprocessed_count = latest_message_id - self._last_processed_message_id
-            if unprocessed_count < self.max_history - self.window_overlap:
+            if unprocessed_count < self.journal_batch_size - self.window_overlap:
                 return False
 
         # Build a cursor-bounded window that starts window_overlap entries
         # before the last checkpoint (for diary continuity between adjacent
-        # batches) and is capped at max_history (to bound the LLM budget
+        # batches) and is capped at journal_batch_size (to bound the LLM budget
         # even when many messages accumulate between maintenance cycles).
         # Advancing the checkpoint to the batch end rather than to
         # latest_message_id ensures overflow messages are not dropped.
         start_exclusive = max(0, self._last_processed_message_id - self.window_overlap)
-        end_inclusive = min(latest_message_id, start_exclusive + self.max_history)
+        end_inclusive = min(latest_message_id, start_exclusive + self.journal_batch_size)
         if end_inclusive <= 0:
             return False
 
@@ -278,7 +281,7 @@ class MemoryHandler:
             # Jump checkpoint forward.  If messages were deleted (id gap),
             # leap to just before latest so the next cycle catches real data
             # instead of inching forward one window at a time.
-            jump_to = max(end_inclusive, latest_message_id - self.max_history)
+            jump_to = max(end_inclusive, latest_message_id - self.journal_batch_size)
             await self._commit_processed_message_id(jump_to)
             return False
 

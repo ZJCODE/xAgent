@@ -52,6 +52,7 @@ class Agent:
         observability: Optional[ObservabilityRuntime] = None,
         supports_vision: bool = True,
         max_history: int = AgentConfig.DEFAULT_MAX_HISTORY,
+        journal_batch_size: int = AgentConfig.JOURNAL_BATCH_SIZE,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
@@ -66,6 +67,7 @@ class Agent:
         self.reasoning = reasoning
         self.supports_vision = bool(supports_vision)
         self.max_history = max_history
+        self.journal_batch_size = journal_batch_size
         self.max_iter = max_iter
         self.max_concurrent_tools = max_concurrent_tools
         self.subconscious_activity = subconscious_activity
@@ -128,7 +130,7 @@ class Agent:
             memory=self.markdown_memory,
             llm_service=self.llm_service,
             message_storage=self.message_storage,
-            max_history=self.max_history,
+            journal_batch_size=self.journal_batch_size,
             relationship_store=self.relationship_store,
             recent_days=self.memory_recent_days,
         )

@@ -239,6 +239,7 @@ class BaseAgentRunner:
                 raise ValueError("agent must be a dictionary")
             allowed_agent_keys = {
                 "max_history",
+                "journal_batch_size",
                 "max_iter",
                 "max_concurrent_tools",
                 "subconscious_activity",
@@ -248,7 +249,7 @@ class BaseAgentRunner:
             if unsupported_agent_keys:
                 joined_keys = ", ".join(unsupported_agent_keys)
                 raise ValueError(f"Unsupported agent key(s): {joined_keys}")
-            for key in ("max_history", "max_iter", "max_concurrent_tools"):
+            for key in ("max_history", "journal_batch_size", "max_iter", "max_concurrent_tools"):
                 if key in agent_cfg:
                     self._validate_positive_int(agent_cfg[key], f"agent.{key}")
             if "subconscious_activity" in agent_cfg:
@@ -599,6 +600,7 @@ class BaseAgentRunner:
             observability=self.observability,
             supports_vision=self._provider_supports_vision(agent_cfg),
             max_history=agent_section.get("max_history", AgentConfig.DEFAULT_MAX_HISTORY),
+            journal_batch_size=agent_section.get("journal_batch_size", AgentConfig.JOURNAL_BATCH_SIZE),
             max_iter=agent_section.get("max_iter", AgentConfig.DEFAULT_MAX_ITER),
             max_concurrent_tools=agent_section.get("max_concurrent_tools", AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
