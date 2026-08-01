@@ -499,7 +499,7 @@ def _voice_stt(provider: str, api_key: str | None = None) -> dict[str, Any]:
             {
                 "model": "qwen3-asr-flash-realtime",
                 "audio_format": "pcm",
-                "vad_threshold": 0.2,
+                "vad_threshold": 0.0,
                 "silence_duration_ms": 400,
             }
         )

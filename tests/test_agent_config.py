@@ -1576,12 +1576,57 @@ channels:
         self.assertEqual(config.stt.provider, "qwen")
         self.assertEqual(config.stt.model, "qwen3-asr-flash-realtime")
         self.assertEqual(config.stt.audio_format, "pcm")
-        self.assertEqual(config.stt.vad_threshold, 0.2)
+        self.assertEqual(config.stt.vad_threshold, 0.0)
         self.assertEqual(config.stt.silence_duration_ms, 400)
+        self.assertIsNone(config.stt.corpus_text)
         self.assertEqual(config.tts.provider, "qwen")
         self.assertEqual(config.tts.model, "qwen3-tts-flash-realtime")
         self.assertEqual(config.tts.voice, "Cherry")
         self.assertEqual(config.tts.audio_format, "pcm")
+        self.assertEqual(config.tts.speech_rate, 1.0)
+        self.assertEqual(config.tts.volume, 50)
+        self.assertEqual(config.tts.pitch_rate, 1.0)
+
+    def test_voice_config_accepts_qwen_corpus_and_negative_vad_threshold(self):
+        from xagent.interfaces.voice.config import VoiceChannelConfig
+
+        config = VoiceChannelConfig.from_dict({
+            "provider": "qwen",
+            "stt": {
+                "api_key": "qwen-key",
+                "vad_threshold": -0.3,
+                "silence_duration_ms": 1200,
+                "corpus_text": "xAgent",
+            },
+            "tts": {
+                "api_key": "qwen-key",
+                "speech_rate": 1.1,
+                "volume": 60,
+                "pitch_rate": 0.95,
+            },
+        })
+
+        self.assertEqual(config.stt.vad_threshold, -0.3)
+        self.assertEqual(config.stt.silence_duration_ms, 1200)
+        self.assertEqual(config.stt.corpus_text, "xAgent")
+        self.assertEqual(config.tts.speech_rate, 1.1)
+        self.assertEqual(config.tts.volume, 60)
+        self.assertEqual(config.tts.pitch_rate, 0.95)
+
+    def test_voice_config_switches_qwen_flash_to_instruct_when_instructions_set(self):
+        from xagent.interfaces.voice.config import VoiceChannelConfig
+
+        config = VoiceChannelConfig.from_dict({
+            "provider": "qwen",
+            "stt": {"api_key": "qwen-key"},
+            "tts": {
+                "api_key": "qwen-key",
+                "model": "qwen3-tts-flash-realtime",
+                "instructions": "语气友好。",
+            },
+        })
+
+        self.assertEqual(config.tts.model, "qwen3-tts-instruct-flash-realtime")
 
     def test_voice_config_accepts_custom_stt_tts_providers(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig

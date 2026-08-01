@@ -17,8 +17,14 @@ GENERIC_KEY_PLACEHOLDER = "your_api_key_here"
 _VALID_TTS_SAMPLE_RATES = {8000, 16000, 24000, 44100, 48000}
 _VALID_STT_AUDIO_FORMATS = {"pcm", "pcm_s16le"}
 _VALID_TTS_AUDIO_FORMATS = {"pcm", "pcm_s16le"}
-_QWEN_VAD_THRESHOLD_DEFAULT = 0.2
+_QWEN_VAD_THRESHOLD_DEFAULT = 0.0
 _QWEN_SILENCE_DURATION_MS_DEFAULT = 400
+_QWEN_TTS_INSTRUCT_MODEL = "qwen3-tts-instruct-flash-realtime"
+_QWEN_TTS_FLASH_MODELS = frozenset({
+    "qwen3-tts-flash-realtime",
+    "qwen3-tts-flash-realtime-2025-11-27",
+    "qwen3-tts-flash-realtime-2025-09-18",
+})
 _VOICE_KEY_PLACEHOLDERS = {
     SONIOX_KEY_PLACEHOLDER,
     QWEN_KEY_PLACEHOLDER,
@@ -93,8 +99,9 @@ class VoiceSTTConfig(BaseModel):
     enable_speaker_diarization: bool = False
     language: str = "zh"
     turn_detection: Literal["server_vad"] = "server_vad"
-    silence_duration_ms: int = Field(default=_QWEN_SILENCE_DURATION_MS_DEFAULT, ge=200, le=3000)
-    vad_threshold: float = Field(default=_QWEN_VAD_THRESHOLD_DEFAULT, ge=0.0, le=1.0)
+    silence_duration_ms: int = Field(default=_QWEN_SILENCE_DURATION_MS_DEFAULT, ge=200, le=6000)
+    vad_threshold: float = Field(default=_QWEN_VAD_THRESHOLD_DEFAULT, ge=-1.0, le=1.0)
+    corpus_text: str | None = None
     session_options: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider")
@@ -150,6 +157,14 @@ class VoiceSTTConfig(BaseModel):
     def _validate_session_options(cls, value: dict[str, Any]) -> dict[str, Any]:
         return dict(value)
 
+    @field_validator("corpus_text")
+    @classmethod
+    def _validate_corpus_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
     @model_validator(mode="after")
     def _validate_endpointing(self) -> "VoiceSTTConfig":
         self.audio_format = _normalize_provider_audio_format(self.provider, self.audio_format)
@@ -169,6 +184,9 @@ class VoiceTTSConfig(BaseModel):
     voice: str = "Owen"
     audio_format: str = "pcm_s16le"
     sample_rate: int = 24000
+    speech_rate: float = Field(default=1.0, ge=0.5, le=2.0)
+    volume: int = Field(default=50, ge=0, le=100)
+    pitch_rate: float = Field(default=1.0, ge=0.5, le=2.0)
     language_policy: Literal["from_stt_dominant", "fallback"] = "from_stt_dominant"
     fallback_language: str = "zh"
     max_buffer_chars: int = Field(default=80, ge=1, le=500)
@@ -230,6 +248,13 @@ class VoiceTTSConfig(BaseModel):
         self.audio_format = _normalize_provider_audio_format(self.provider, self.audio_format)
         if self.optimize_instructions and not self.instructions:
             raise ValueError("voice.tts.optimize_instructions requires voice.tts.instructions")
+        if self.provider == VOICE_PROVIDER_QWEN and self.instructions:
+            model_name = self.model.strip().lower()
+            if model_name in _QWEN_TTS_FLASH_MODELS or (
+                model_name.startswith("qwen3-tts-flash-realtime")
+                and "instruct" not in model_name
+            ):
+                self.model = _QWEN_TTS_INSTRUCT_MODEL
         return self
 
 
