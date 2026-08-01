@@ -134,10 +134,6 @@ OPENAI_MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.6-sol",
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.4-nano",
 )
 ANTHROPIC_MODELS = (
     "claude-sonnet-4-20250514",
@@ -1142,10 +1138,6 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
                 "gpt-5.6-terra": "Recommended everyday default — balance of quality and cost.",
                 "gpt-5.6-luna": "Cost-sensitive / high-volume (heartbeat, diary, light chat).",
                 "gpt-5.6-sol": "Frontier capability for complex reasoning and coding.",
-                "gpt-5.5": "Previous flagship generation.",
-                "gpt-5.4": "High capability GPT-5.4.",
-                "gpt-5.4-mini": "Smaller GPT-5.4 option.",
-                "gpt-5.4-nano": "Lowest latency and cost in the 5.4 line.",
             },
             default_index=0,
         )

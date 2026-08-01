@@ -734,7 +734,7 @@ provider:
     def test_collect_init_selection_supports_custom_identity(self):
         answers = iter([
             "1",
-            "4",
+            "1",
             "You investigate codebases.",
             ".",
         ])
@@ -748,7 +748,7 @@ provider:
         self.assertEqual(selection.model_api, "")
         self.assertEqual(selection.base_url, "https://api.openai.com/v1")
         self.assertEqual(selection.api_key, "openai-key")
-        self.assertEqual(selection.model, "gpt-5.5")
+        self.assertEqual(selection.model, "gpt-5.6-terra")
         self.assertEqual(selection.identity, "# Identity\n\nYou investigate codebases.\n")
 
     def test_collect_init_selection_deepseek_empty_custom_model_uses_model_placeholder(self):
@@ -774,7 +774,7 @@ provider:
     def test_collect_init_selection_supports_custom_model_name(self):
         answers = iter([
             "1",
-            "8",
+            "4",
             "gpt-5.4-lab",
             ".",
         ])
