@@ -635,6 +635,8 @@ def _voice_defaults_for_provider(provider: str) -> dict[str, dict[str, Any]]:
         return {
             "stt": {
                 "model": "qwen3-asr-flash-realtime",
+                "vad_threshold": 0.0,
+                "silence_duration_ms": 400,
             },
             "tts": {
                 "model": "qwen3-tts-flash-realtime",

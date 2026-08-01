@@ -15,6 +15,7 @@ from .runtime import VoiceUtterance
 
 
 QWEN_REALTIME_WEBSOCKET_BASE_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+QWEN_REALTIME_WEBSOCKET_INTL_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
 TTS_IDLE_FLUSH_SECONDS = 0.25
 TEXT_BOUNDARY_SUFFIXES = (".", "!", "?", "\n", "。", "！", "？")
 QWEN_LANGUAGE_TYPES_BY_CODE = {
@@ -29,10 +30,42 @@ QWEN_LANGUAGE_TYPES_BY_CODE = {
     "fr": "French",
     "ru": "Russian",
 }
+_QWEN_STT_SESSION_OPTION_KEYS = frozenset({
+    "input_audio_format",
+    "sample_rate",
+    "input_audio_transcription",
+    "turn_detection",
+})
+_QWEN_TTS_SESSION_OPTION_KEYS = frozenset({
+    "mode",
+    "voice",
+    "language_type",
+    "response_format",
+    "sample_rate",
+    "speech_rate",
+    "volume",
+    "pitch_rate",
+    "bit_rate",
+    "instructions",
+    "optimize_instructions",
+})
 
 
 class QwenVoiceError(RuntimeError):
     """Raised for Qwen realtime voice errors."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str | None = None,
+        error_code: Any = None,
+        request_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+        self.error_code = error_code
+        self.request_id = request_id
 
 
 def _connect_qwen_websocket(url: str, *, api_key: str):
@@ -101,6 +134,42 @@ def _qwen_language_type(language: str, *, fallback: str) -> str:
     return QWEN_LANGUAGE_TYPES_BY_CODE.get(primary_tag, fallback)
 
 
+def _raise_qwen_error(message: dict[str, Any], *, kind: str) -> None:
+    if message.get("type") != "error":
+        return
+    error = message.get("error")
+    error_type: str | None = None
+    error_code: Any = None
+    error_message: str | None = None
+    request_id = message.get("request_id") or message.get("event_id")
+    if isinstance(error, dict):
+        error_type = str(error.get("type") or error.get("code") or "") or None
+        error_code = error.get("code") if error.get("code") is not None else error.get("type")
+        error_message = str(error.get("message") or error.get("msg") or "").strip() or None
+        request_id = error.get("request_id") or error.get("param") or request_id
+    elif error is not None:
+        error_message = str(error)
+    parts = [f"Qwen {kind} error"]
+    if error_code is not None:
+        parts.append(str(error_code))
+    if error_type and str(error_type) != str(error_code):
+        parts.append(f"({error_type})")
+    detail = error_message or str(error or message)
+    text = f"{' '.join(parts)}: {detail}"
+    if request_id:
+        text = f"{text} request_id={request_id}"
+    raise QwenVoiceError(
+        text,
+        error_type=error_type,
+        error_code=error_code,
+        request_id=str(request_id) if request_id else None,
+    )
+
+
+def _filter_session_options(options: dict[str, Any], allowed: frozenset[str]) -> dict[str, Any]:
+    return {key: value for key, value in options.items() if key in allowed}
+
+
 class QwenRealtimeSTT:
     """Stream local audio to Qwen-ASR Realtime and yield completed transcripts."""
 
@@ -154,9 +223,17 @@ class QwenRealtimeSTT:
                 sender.join(timeout=1.0)
 
     def _session_update_event(self) -> dict[str, Any]:
-        session = dict(self.config.session_options)
+        transcription: dict[str, Any] = {}
+        if self.config.language:
+            transcription["language"] = self.config.language
+        if self.config.corpus_text:
+            transcription["corpus"] = {"text": self.config.corpus_text}
+
+        session = _filter_session_options(
+            dict(self.config.session_options),
+            _QWEN_STT_SESSION_OPTION_KEYS,
+        )
         session.update({
-            "modalities": ["text"],
             "input_audio_format": self.config.audio_format,
             "sample_rate": self.config.sample_rate,
             "turn_detection": {
@@ -165,14 +242,15 @@ class QwenRealtimeSTT:
                 "silence_duration_ms": self.config.silence_duration_ms,
             },
         })
-        if self.config.language:
-            session["input_audio_transcription"] = {
-                "language": self.config.language,
-            }
-        return _event(
-            "session.update",
-            session=session,
-        )
+        if transcription:
+            existing = session.get("input_audio_transcription")
+            if isinstance(existing, dict):
+                merged = dict(existing)
+                merged.update(transcription)
+                session["input_audio_transcription"] = merged
+            else:
+                session["input_audio_transcription"] = transcription
+        return _event("session.update", session=session)
 
     def _send_audio_loop(
         self,
@@ -202,8 +280,7 @@ class QwenRealtimeSTT:
 
     @staticmethod
     def _raise_if_error(message: dict[str, Any]) -> None:
-        if message.get("type") == "error":
-            raise QwenVoiceError(f"Qwen STT error: {message.get('error') or message}")
+        _raise_qwen_error(message, kind="STT")
 
 
 class QwenRealtimeTTS:
@@ -262,7 +339,10 @@ class QwenRealtimeTTS:
                 sender.join(timeout=1.0)
 
     def _session_update_event(self, *, language: str) -> dict[str, Any]:
-        session = dict(self.config.session_options)
+        session = _filter_session_options(
+            dict(self.config.session_options),
+            _QWEN_TTS_SESSION_OPTION_KEYS,
+        )
         session.update({
             "mode": self.config.mode,
             "voice": self.config.voice,
@@ -270,14 +350,17 @@ class QwenRealtimeTTS:
             "response_format": self.config.audio_format,
             "sample_rate": self.config.sample_rate,
         })
+        if abs(self.config.speech_rate - 1.0) > 1e-9:
+            session["speech_rate"] = self.config.speech_rate
+        if self.config.volume != 50:
+            session["volume"] = self.config.volume
+        if abs(self.config.pitch_rate - 1.0) > 1e-9:
+            session["pitch_rate"] = self.config.pitch_rate
         if self.config.instructions:
             session["instructions"] = self.config.instructions
             if self.config.optimize_instructions:
                 session["optimize_instructions"] = True
-        return _event(
-            "session.update",
-            session=session,
-        )
+        return _event("session.update", session=session)
 
     def _send_text_loop(
         self,
@@ -350,8 +433,7 @@ class QwenRealtimeTTS:
 
     @staticmethod
     def _raise_if_error(message: dict[str, Any]) -> None:
-        if message.get("type") == "error":
-            raise QwenVoiceError(f"Qwen TTS error: {message.get('error') or message}")
+        _raise_qwen_error(message, kind="TTS")
 
 
 def create_qwen_adapters(config: VoiceChannelConfig) -> tuple[QwenRealtimeSTT, QwenRealtimeTTS]:

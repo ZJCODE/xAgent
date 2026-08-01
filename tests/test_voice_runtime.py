@@ -23,6 +23,7 @@ from xagent.interfaces.voice.qwen import (
     QwenVoiceError,
     _connect_qwen_websocket,
     _qwen_realtime_url,
+    _raise_qwen_error,
 )
 from xagent.interfaces.voice.runtime import VoiceRuntime, VoiceRuntimeOptions, VoiceUtterance
 from xagent.interfaces.voice.soniox import (
@@ -737,17 +738,20 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(event["session"]["sample_rate"], 16000)
         self.assertEqual(event["session"]["input_audio_transcription"]["language"], "zh")
         self.assertEqual(event["session"]["turn_detection"]["type"], "server_vad")
-        self.assertEqual(event["session"]["turn_detection"]["threshold"], 0.2)
+        self.assertEqual(event["session"]["turn_detection"]["threshold"], 0.0)
         self.assertEqual(event["session"]["turn_detection"]["silence_duration_ms"], 400)
+        self.assertNotIn("modalities", event["session"])
 
-    def test_qwen_stt_session_update_includes_session_options(self):
+    def test_qwen_stt_session_update_includes_corpus_and_filters_unknown_options(self):
         config = voice_channel_config(
             {
                 "provider": "qwen",
                 "api_key": "qwen-key",
                 "stt": {
+                    "corpus_text": "xAgent, calendar, reminder",
                     "session_options": {
                         "custom_stt_option": True,
+                        "sample_rate": 8000,
                     },
                 },
             }
@@ -756,7 +760,13 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         event = stt._session_update_event()
 
-        self.assertTrue(event["session"]["custom_stt_option"])
+        self.assertEqual(
+            event["session"]["input_audio_transcription"]["corpus"]["text"],
+            "xAgent, calendar, reminder",
+        )
+        self.assertNotIn("custom_stt_option", event["session"])
+        # Config sample_rate wins over session_options.
+        self.assertEqual(event["session"]["sample_rate"], 16000)
 
     def test_qwen_stt_audio_loop_sends_base64_append_events(self):
         config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
@@ -803,16 +813,20 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         event = tts._session_update_event(language="zh")
 
+        self.assertEqual(config.tts.model, "qwen3-tts-instruct-flash-realtime")
         self.assertEqual(event["session"]["language_type"], "Chinese")
         self.assertEqual(event["session"]["instructions"], "语速较快，适合介绍产品。")
         self.assertTrue(event["session"]["optimize_instructions"])
 
-    def test_qwen_tts_session_update_includes_session_options(self):
+    def test_qwen_tts_session_update_includes_speech_controls_and_filters_unknown_options(self):
         config = voice_channel_config(
             {
                 "provider": "qwen",
                 "api_key": "qwen-key",
                 "tts": {
+                    "speech_rate": 1.2,
+                    "volume": 70,
+                    "pitch_rate": 0.9,
                     "session_options": {
                         "custom_tts_option": "value",
                     },
@@ -823,7 +837,10 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         event = tts._session_update_event(language="")
 
-        self.assertEqual(event["session"]["custom_tts_option"], "value")
+        self.assertEqual(event["session"]["speech_rate"], 1.2)
+        self.assertEqual(event["session"]["volume"], 70)
+        self.assertEqual(event["session"]["pitch_rate"], 0.9)
+        self.assertNotIn("custom_tts_option", event["session"])
 
     def test_qwen_tts_timeout_loop_flushes_text_and_finishes_session(self):
         config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
@@ -983,6 +1000,28 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         self.assertIsInstance(synthesizer, SonioxRealtimeTTS)
         self.assertTrue(synthesizer.config.return_timestamps)
+
+    def test_qwen_error_includes_type_and_request_id(self):
+        with self.assertRaises(QwenVoiceError) as ctx:
+            _raise_qwen_error(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "invalid_value",
+                        "message": "bad threshold",
+                        "request_id": "req-qwen-1",
+                    },
+                },
+                kind="STT",
+            )
+
+        error = ctx.exception
+        self.assertEqual(error.error_type, "invalid_request_error")
+        self.assertEqual(error.error_code, "invalid_value")
+        self.assertEqual(error.request_id, "req-qwen-1")
+        self.assertIn("bad threshold", str(error))
+        self.assertIn("request_id=req-qwen-1", str(error))
 
 
 if __name__ == "__main__":
