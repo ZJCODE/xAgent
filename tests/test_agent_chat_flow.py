@@ -1668,7 +1668,10 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, "Final answer")
-        self.assertEqual(storage.last_count, AgentConfig.DEFAULT_MAX_HISTORY)
+        self.assertEqual(
+            storage.last_count,
+            AgentConfig.history_fetch_depth(AgentConfig.DEFAULT_MAX_HISTORY),
+        )
         transcript = next(
             message for message in model_client.calls[0]
             if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
@@ -1698,7 +1701,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, "Final answer")
-        self.assertEqual(storage.last_count, 15)
+        self.assertEqual(storage.last_count, AgentConfig.history_fetch_depth(15))
         transcript = next(
             message for message in model_client.calls[0]
             if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
@@ -1706,6 +1709,49 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("old-36", transcript)
         self.assertNotIn("old-35", transcript)
         self.assertIn("old-49", transcript)
+        self.assertIn("latest request", transcript)
+
+    async def test_chat_fills_hot_window_when_observations_are_dense(self):
+        """Fetch depth must exceed the hot window so observations cannot starve it."""
+        messages = []
+        for index in range(40):
+            messages.append(
+                Message(
+                    role=RoleType.ENVIRONMENT,
+                    type=MessageType.CONTEXT_EVENT,
+                    content=f"ambient-{index:02d}",
+                    sender_id="sensor",
+                    metadata={"event_type": "observation"},
+                )
+            )
+            messages.append(
+                Message.create(f"talk-{index:02d}", role=RoleType.USER, sender_id="alice")
+            )
+        storage = InMemoryMessageStorage(messages)
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "Final answer"),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+        agent.max_history = 10
+        agent.max_iter = 2
+
+        result = await Agent.chat(
+            agent,
+            user_message="latest request",
+            user_id="alice",
+        )
+
+        self.assertEqual(result, "Final answer")
+        self.assertEqual(storage.last_count, AgentConfig.history_fetch_depth(10))
+        transcript = next(
+            message for message in model_client.calls[0]
+            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
+        )["content"]
+        # Hot window keeps 10 conversation messages; denser observations must not
+        # collapse that to a handful of ambient-only rows.
+        self.assertIn("talk-31", transcript)
+        self.assertNotIn("talk-30", transcript)
+        self.assertIn("talk-39", transcript)
         self.assertIn("latest request", transcript)
 
     async def test_chat_hides_model_error_event_from_user(self):

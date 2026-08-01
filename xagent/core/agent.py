@@ -216,7 +216,7 @@ class Agent:
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
         recent_messages = await msg_handler.get_recent_messages(
-            max_history=self.max_history,
+            max_history=AgentConfig.history_fetch_depth(self.max_history),
         )
         memory_context = await self.memory_handler.get_recent_context()
         relationship_context = await self._relationship_context_for_turn(

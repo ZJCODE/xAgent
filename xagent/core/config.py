@@ -60,10 +60,35 @@ class AgentConfig:
     # 4. Agent Runtime Bounds
     # Iteration cap, conversation history window, and context-event
     # limit. Prevent infinite loops and unbounded prompt growth.
+    # DEFAULT_MAX_HISTORY is the prompt hot window (raw conversation
+    # messages kept verbatim). SQLite fetch depth is derived from it so
+    # observation-heavy streams can still fill the hot window.
     # ============================================================
     DEFAULT_MAX_ITER = 50
     DEFAULT_MAX_HISTORY = 32
     MAX_CONTEXT_EVENTS = 12
+
+    @staticmethod
+    def history_fetch_depth(
+        hot_window: int,
+        max_context_events: int | None = None,
+    ) -> int:
+        """Return how many recent rows to load from message storage.
+
+        The prompt budgets conversation messages and context events separately.
+        Fetch depth must therefore exceed the hot window so observation-heavy
+        streams can still fill ``hot_window`` conversation entries.
+        """
+        window = max(1, int(hot_window or AgentConfig.DEFAULT_MAX_HISTORY))
+        events = max(
+            1,
+            int(
+                AgentConfig.MAX_CONTEXT_EVENTS
+                if max_context_events is None
+                else max_context_events or AgentConfig.MAX_CONTEXT_EVENTS
+            ),
+        )
+        return (window + events) * 2
 
     # ============================================================
     # 5. Safety & Resource Limits
