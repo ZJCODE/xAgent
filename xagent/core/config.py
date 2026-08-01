@@ -44,6 +44,8 @@ class AgentConfig:
     SKILLS_DIRNAME = "skills"
     TASKS_DIRNAME = "tasks"
     MESSAGE_DB_FILENAME = "messages.sqlite3"
+    WORKING_CONTEXT_FILENAME = ".working_context.json"
+    WORKING_CONTEXT_LOCK_FILENAME = ".working_context.lock"
 
     # ============================================================
     # 3. Model & Agent Defaults
@@ -65,8 +67,11 @@ class AgentConfig:
     # observation-heavy streams can still fill the hot window.
     # ============================================================
     DEFAULT_MAX_ITER = 50
-    DEFAULT_MAX_HISTORY = 32
+    DEFAULT_MAX_HISTORY = 12
     MAX_CONTEXT_EVENTS = 12
+    WORKING_CONTEXT_ROLL_SLACK = 8
+    WORKING_CONTEXT_SUMMARY_MAX_CHARS = 1500
+    WORKING_CONTEXT_SUMMARY_MAX_TOKENS = 512
 
     @staticmethod
     def history_fetch_depth(
@@ -120,6 +125,8 @@ class AgentConfig:
     # ============================================================
     MEMORY_RECENT_DAYS = 2
     MEMORY_RECENT_MAX_CHARS = 8000
+    # Diary commit cadence. Keep independent from DEFAULT_MAX_HISTORY so prompt
+    # hot-window tuning cannot fragment journal entries.
     JOURNAL_BATCH_SIZE = 32
     MEMORY_WINDOW_OVERLAP_RATIO = 0.2
 

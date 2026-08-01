@@ -283,6 +283,7 @@ class MessageHandler:
         current_message: Optional[Message] = None,
         channel_instructions: str = "",
         task_mode: str = "reply",
+        working_summary: str = "",
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -340,6 +341,7 @@ class MessageHandler:
                 experience_entries=experience_entries,
                 omitted_messages=omitted_count,
                 omitted_observations=omitted_observation_count,
+                working_summary=working_summary,
             ),
         })
 
@@ -391,9 +393,15 @@ class MessageHandler:
         experience_entries: List[tuple[str, Message, str]],
         omitted_messages: int,
         omitted_observations: int,
+        working_summary: str = "",
     ) -> str:
         lines: list[str] = []
-        if omitted_messages or omitted_observations:
+        summary = (working_summary or "").strip()
+        if summary:
+            lines.append("[Earlier working context]")
+            lines.append(summary)
+            lines.append("")
+        elif omitted_messages or omitted_observations:
             lines.append(
                 MessageHandler._format_omitted_experience_note(
                     omitted_messages=omitted_messages,

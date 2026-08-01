@@ -30,6 +30,11 @@ from .providers import (
     normalize_provider_name,
 )
 from .tooling import ToolExecutor, ToolManager
+from .working_context import (
+    WorkingContextCompactor,
+    WorkingContextStore,
+    WorkingContextSummarizer,
+)
 from ..schemas import AgentTurnResult, Message, MessageType, ParticipationDecision, RoleType
 from ..tools import create_write_memory_tool, create_search_memory_tool
 logger = logging.getLogger(__name__)
@@ -134,6 +139,10 @@ class Agent:
             relationship_store=self.relationship_store,
             recent_days=self.memory_recent_days,
         )
+        self.working_context_compactor = self._build_working_context_compactor(
+            runtime_root=runtime_root,
+            workspace_path=workspace_path,
+        )
 
         bound_tools = list(tools or [])
         bound_tools.extend([
@@ -207,6 +216,42 @@ class Agent:
             return ""
         return AgentConfig.build_workspace_context(str(self.workspace_dir))
 
+    def _build_working_context_compactor(
+        self,
+        *,
+        runtime_root: Path,
+        workspace_path: Optional[Path],
+    ) -> Optional[WorkingContextCompactor]:
+        root = workspace_path or runtime_root
+        store_path = root / AgentConfig.MESSAGE_DIRNAME / AgentConfig.WORKING_CONTEXT_FILENAME
+        store = WorkingContextStore(store_path)
+        summarizer = WorkingContextSummarizer(
+            client=self.client,
+            model=self.model,
+            provider_name=self.provider_name,
+            model_api=self.model_api,
+            reasoning=self.reasoning,
+        )
+        return WorkingContextCompactor(
+            store=store,
+            message_storage=self.message_storage,
+            summarizer=summarizer,
+            hot_window=self.max_history,
+        )
+
+    async def _working_summary_for_turn(self) -> str:
+        compactor = getattr(self, "working_context_compactor", None)
+        if compactor is None:
+            return ""
+        try:
+            return await compactor.ensure_fresh()
+        except Exception as exc:
+            logger.warning("Working context compaction failed; falling back: %s", exc)
+            try:
+                return await compactor.current_summary()
+            except Exception:
+                return ""
+
     async def _build_turn_context(
         self,
         msg_handler: MessageHandler,
@@ -215,6 +260,7 @@ class Agent:
         channel_instructions: str = "",
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
+        working_summary = await self._working_summary_for_turn()
         recent_messages = await msg_handler.get_recent_messages(
             max_history=AgentConfig.history_fetch_depth(self.max_history),
         )
@@ -244,6 +290,7 @@ class Agent:
             workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
             channel_instructions=channel_instructions,
+            working_summary=working_summary,
         )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
