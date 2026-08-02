@@ -258,6 +258,28 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         keys = {p["key"] for p in participants}
         self.assertEqual(keys, {"feishu:alice", "feishu:bob"})
 
+    def test_extract_participants_skips_empty_channel(self):
+        with_channel = Message.create(content="hi", role=RoleType.USER, sender_id="web_user")
+        with_channel.channel = "api"
+        missing_channel = Message.create(content="later", role=RoleType.USER, sender_id="web_user")
+
+        participants = MemoryHandler._extract_participants([with_channel, missing_channel])
+        self.assertEqual([p["key"] for p in participants], ["api:web_user"])
+
+    def test_extract_participants_skips_scheduled_task_source(self):
+        human = Message.create(content="hi", role=RoleType.USER, sender_id="web_user")
+        human.channel = "api"
+        work_order = Message.create(
+            content="This scheduled task is now due.",
+            role=RoleType.USER,
+            sender_id="web_user",
+        )
+        work_order.channel = "api"
+        work_order.metadata = {"source": "scheduled_task"}
+
+        participants = MemoryHandler._extract_participants([human, work_order])
+        self.assertEqual([p["key"] for p in participants], ["api:web_user"])
+
     async def test_get_relationship_context_respects_card_budget(self):
         for index in range(6):
             await self.store.write_card(

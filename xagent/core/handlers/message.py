@@ -54,6 +54,7 @@ class MessageHandler:
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
         recipient_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Message:
         """Store a user message, auto-detecting embedded image URLs and attachments."""
         normalized_attachments = dedupe_attachments(list(attachments or []))
@@ -80,6 +81,8 @@ class MessageHandler:
             msg.room_name = room_name
         if channel:
             msg.channel = channel
+        if metadata:
+            msg.metadata.update(metadata)
         if normalized_attachments:
             msg.metadata[ATTACHMENT_METADATA_KEY] = normalized_attachments
         if image_metadata:

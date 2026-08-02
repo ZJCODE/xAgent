@@ -109,6 +109,7 @@ class TaskDispatchService:
                     chat_events,
                     prompt=prompt,
                     user_id=user_id,
+                    channel=task.delivery_channel or CHANNEL_API,
                     deadline=deadline,
                 )
         finally:
@@ -120,6 +121,7 @@ class TaskDispatchService:
         *,
         prompt: str,
         user_id: str,
+        channel: str,
         deadline: float,
     ) -> ScheduledTaskResult:
         final_content = ""
@@ -130,6 +132,7 @@ class TaskDispatchService:
                 user_message=prompt,
                 user_id=user_id,
                 stream=False,
+                channel=channel,
             ),
             deadline,
         ):

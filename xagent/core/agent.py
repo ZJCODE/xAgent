@@ -38,6 +38,7 @@ from .working_context import (
 )
 from ..schemas import AgentTurnResult, Message, MessageType, ParticipationDecision, RoleType
 from ..tools import create_write_memory_tool, create_search_memory_tool
+
 logger = logging.getLogger(__name__)
 
 
@@ -477,6 +478,18 @@ class Agent:
             room_name: Optional room/group name for multi-participant conversations.
         """
         self._record_last_interaction()
+        from .runtime import current_delivery_context
+
+        delivery_context = current_delivery_context()
+        resolved_channel = (channel or "").strip()
+        if not resolved_channel and delivery_context is not None:
+            resolved_channel = str(delivery_context.channel or "").strip()
+        channel = resolved_channel or None
+        user_metadata: Optional[Dict[str, Any]] = None
+        if delivery_context is not None:
+            source = str((delivery_context.metadata or {}).get("source") or "").strip()
+            if source == "scheduled_task":
+                user_metadata = {"source": "scheduled_task"}
         msg_handler = self.message_handler
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         turn_ctx = self._observability_runtime().agent_turn(
@@ -494,6 +507,7 @@ class Agent:
                     attachments=attachments,
                     room_name=room_name,
                     channel=channel,
+                    metadata=user_metadata,
                 )
             except ValueError as exc:
                 payload = build_public_error(
