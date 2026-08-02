@@ -10,7 +10,7 @@ from xagent.components.memory import MarkdownMemory
 from xagent.core.handlers.memory import MemoryHandler
 from xagent.schemas import Message, MessageType, RoleType
 
-_TEST_MAX_HISTORY = 20
+_TEST_JOURNAL_BATCH_SIZE = 20
 
 
 class _FakeLLMService:
@@ -82,7 +82,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
     async def asyncTearDown(self):
@@ -109,7 +109,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
             recent_days=0,
         )
 
@@ -128,7 +128,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
             recent_days=2,
             recent_max_chars=6000,
         )
@@ -188,7 +188,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=1,
+            journal_batch_size=1,
         )
 
         handler.schedule_experience_write([message])
@@ -224,7 +224,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
         # Cursor gap is 0 (last_processed=0, latest=1), below threshold of 14 → no write
         wrote = await handler.run_maintenance(force=False)
@@ -233,7 +233,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.llm.diary_calls, [])
 
     async def test_run_maintenance_writes_when_cursor_gap_meets_threshold(self):
-        # Add 20 messages so cursor gap = 20 >= threshold (max_history - window_overlap = 14)
+        # Add 20 messages so cursor gap = 20 >= threshold (journal_batch_size - window_overlap = 14)
         for i in range(20):
             self.storage.append(Message(
                 role=RoleType.USER,
@@ -245,7 +245,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         wrote = await handler.run_maintenance(force=False)
@@ -287,7 +287,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         wrote = await handler.run_maintenance(force=False)
@@ -297,7 +297,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("older reflection", diary_contents)
         self.assertNotIn("heartbeat tick", diary_contents)
 
-    async def test_run_maintenance_compresses_last_max_history_messages(self):
+    async def test_run_maintenance_compresses_last_journal_batch_messages(self):
         stored_messages = [
             Message(
                 role=RoleType.USER,
@@ -312,7 +312,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -340,7 +340,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -365,7 +365,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -390,7 +390,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=failing_llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
             max_journal_source_chars=150,
         )
 
@@ -404,7 +404,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=retry_llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
             max_journal_source_chars=150,
         )
 
@@ -432,7 +432,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -458,7 +458,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
             max_journal_source_chars=150,
         )
 
@@ -486,14 +486,14 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=first_llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
         stale_llm = _FakeLLMService()
         stale_handler = MemoryHandler(
             memory=self.memory,
             llm_service=stale_llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         first_wrote = await first_handler.run_maintenance(force=True)
@@ -517,7 +517,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         first_wrote = await handler.run_maintenance(
@@ -552,13 +552,13 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=blocking_llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
         second_handler = MemoryHandler(
             memory=self.memory,
             llm_service=waiting_llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         first_task = asyncio.create_task(first_handler.run_maintenance(force=True))
@@ -590,7 +590,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         first_wrote = await first_handler.run_maintenance(force=True)
@@ -610,7 +610,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=second_llm,
             message_storage=storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         second_wrote = await second_handler.run_maintenance(force=True)
@@ -623,7 +623,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_cursor_gap_triggers_maintenance(self):
-        # Add exactly max_history (20) messages so cursor gap = 20 >= 14
+        # Add exactly journal_batch_size (20) messages so cursor gap = 20 >= 14
         for i in range(20):
             self.storage.append(Message(
                 role=RoleType.USER,
@@ -635,7 +635,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
         # _last_processed_message_id = 0, latest cursor = 20, unprocessed = 20 >= 14
 
@@ -658,7 +658,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            max_history=_TEST_MAX_HISTORY,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
         )
 
         # First compression: cursor-range (0, 20] = msgs 0-19

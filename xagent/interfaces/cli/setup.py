@@ -732,6 +732,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
         "provider": provider_config,
         "agent": {
             "max_history": AgentConfig.DEFAULT_MAX_HISTORY,
+            "journal_batch_size": AgentConfig.JOURNAL_BATCH_SIZE,
             "max_iter": AgentConfig.DEFAULT_MAX_ITER,
             "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
@@ -750,6 +751,14 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     config["search"] = {"provider": "none"}
     config["image_generation"] = {"provider": "none"}
     yaml_str = yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
+    yaml_str = yaml_str.replace(
+        f"max_history: {AgentConfig.DEFAULT_MAX_HISTORY}\n",
+        f"max_history: {AgentConfig.DEFAULT_MAX_HISTORY}  # Prompt hot window (raw conversation messages).\n",
+    )
+    yaml_str = yaml_str.replace(
+        f"journal_batch_size: {AgentConfig.JOURNAL_BATCH_SIZE}\n",
+        f"journal_batch_size: {AgentConfig.JOURNAL_BATCH_SIZE}  # Diary maintenance batch size; independent of max_history.\n",
+    )
     # Inline comment for subconscious_activity
     yaml_str = yaml_str.replace(
         "subconscious_activity: 0.02\n",

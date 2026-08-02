@@ -358,8 +358,9 @@ class SubconsciousLoop:
         if message_handler is None:
             raise RuntimeError("Agent has no message_handler")
 
+        hot_window = getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY)
         recent_messages = await message_handler.get_recent_messages(
-            max_history=getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY)
+            max_history=AgentConfig.history_fetch_depth(hot_window)
         )
         memory_context = await self._collect_memory_context()
         relationship_context = await self._collect_relationship_context()
@@ -376,7 +377,7 @@ class SubconsciousLoop:
             current_user_id=getattr(self._agent, "_assistant_sender_id", "agent"),
             memory_context=memory_context,
             relationship_context=relationship_context,
-            max_messages=getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY),
+            max_messages=hot_window,
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
             task_mode="subconscious_json",

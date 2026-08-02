@@ -78,3 +78,4 @@ class MessageStorageTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(messages[0].metadata["source"], "camera")
             self.assertEqual(messages[0].metadata["event_type"], "presence")
             self.assertEqual(messages[0].metadata["memory_policy"], "always")
+            self.assertEqual(messages[0].metadata["storage_cursor"], 1)

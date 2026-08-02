@@ -30,6 +30,12 @@ from .providers import (
     normalize_provider_name,
 )
 from .tooling import ToolExecutor, ToolManager
+from .working_context import (
+    WorkingContextCompactor,
+    WorkingContextStore,
+    WorkingContextSummarizer,
+    WorkingContextView,
+)
 from ..schemas import AgentTurnResult, Message, MessageType, ParticipationDecision, RoleType
 from ..tools import create_write_memory_tool, create_search_memory_tool
 
@@ -53,6 +59,7 @@ class Agent:
         observability: Optional[ObservabilityRuntime] = None,
         supports_vision: bool = True,
         max_history: int = AgentConfig.DEFAULT_MAX_HISTORY,
+        journal_batch_size: int = AgentConfig.JOURNAL_BATCH_SIZE,
         max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
@@ -67,6 +74,7 @@ class Agent:
         self.reasoning = reasoning
         self.supports_vision = bool(supports_vision)
         self.max_history = max_history
+        self.journal_batch_size = journal_batch_size
         self.max_iter = max_iter
         self.max_concurrent_tools = max_concurrent_tools
         self.subconscious_activity = subconscious_activity
@@ -129,9 +137,13 @@ class Agent:
             memory=self.markdown_memory,
             llm_service=self.llm_service,
             message_storage=self.message_storage,
-            max_history=self.max_history,
+            journal_batch_size=self.journal_batch_size,
             relationship_store=self.relationship_store,
             recent_days=self.memory_recent_days,
+        )
+        self.working_context_compactor = self._build_working_context_compactor(
+            runtime_root=runtime_root,
+            workspace_path=workspace_path,
         )
 
         bound_tools = list(tools or [])
@@ -206,6 +218,49 @@ class Agent:
             return ""
         return AgentConfig.build_workspace_context(str(self.workspace_dir))
 
+    def _build_working_context_compactor(
+        self,
+        *,
+        runtime_root: Path,
+        workspace_path: Optional[Path],
+    ) -> Optional[WorkingContextCompactor]:
+        root = workspace_path or runtime_root
+        store_path = root / AgentConfig.MESSAGE_DIRNAME / AgentConfig.WORKING_CONTEXT_FILENAME
+        store = WorkingContextStore(store_path)
+        summarizer = WorkingContextSummarizer(
+            client=self.client,
+            model=self.model,
+            provider_name=self.provider_name,
+            model_api=self.model_api,
+            reasoning=self.reasoning,
+        )
+        return WorkingContextCompactor(
+            store=store,
+            message_storage=self.message_storage,
+            summarizer=summarizer,
+            hot_window=self.max_history,
+        )
+
+    async def _working_context_for_turn(self) -> WorkingContextView:
+        compactor = getattr(self, "working_context_compactor", None)
+        if compactor is None:
+            return WorkingContextView()
+        try:
+            view = await compactor.ensure_fresh()
+            if isinstance(view, WorkingContextView):
+                return view
+            # Older fakes may still return a bare summary string.
+            return WorkingContextView(summary=str(view or ""))
+        except Exception as exc:
+            logger.warning("Working context compaction failed; falling back: %s", exc)
+            try:
+                return await compactor.current_view()
+            except Exception:
+                try:
+                    return WorkingContextView(summary=await compactor.current_summary())
+                except Exception:
+                    return WorkingContextView()
+
     async def _build_turn_context(
         self,
         msg_handler: MessageHandler,
@@ -214,8 +269,9 @@ class Agent:
         channel_instructions: str = "",
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
+        working_context = await self._working_context_for_turn()
         recent_messages = await msg_handler.get_recent_messages(
-            max_history=self.max_history,
+            max_history=AgentConfig.history_fetch_depth(self.max_history),
         )
         memory_context = await self.memory_handler.get_recent_context()
         relationship_context = await self._relationship_context_for_turn(
@@ -243,6 +299,8 @@ class Agent:
             workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
             channel_instructions=channel_instructions,
+            working_summary=working_context.summary,
+            covers_through_cursor=working_context.covers_through_cursor,
         )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages

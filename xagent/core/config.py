@@ -44,6 +44,11 @@ class AgentConfig:
     SKILLS_DIRNAME = "skills"
     TASKS_DIRNAME = "tasks"
     MESSAGE_DB_FILENAME = "messages.sqlite3"
+    WORKING_CONTEXT_FILENAME = ".working_context.json"
+    WORKING_CONTEXT_LOCK_FILENAME = ".working_context.lock"
+    # Attached by MessageStorage when loading rows; used so prompt budgeting
+    # never drops messages that the working summary has not covered yet.
+    MESSAGE_STORAGE_CURSOR_KEY = "storage_cursor"
 
     # ============================================================
     # 3. Model & Agent Defaults
@@ -60,10 +65,56 @@ class AgentConfig:
     # 4. Agent Runtime Bounds
     # Iteration cap, conversation history window, and context-event
     # limit. Prevent infinite loops and unbounded prompt growth.
+    # DEFAULT_MAX_HISTORY is the prompt hot window (raw conversation
+    # messages kept verbatim). SQLite fetch depth is derived from it so
+    # observation-heavy streams can still fill the hot window.
     # ============================================================
     DEFAULT_MAX_ITER = 50
-    DEFAULT_MAX_HISTORY = 32
+    DEFAULT_MAX_HISTORY = 12
     MAX_CONTEXT_EVENTS = 12
+    # Working-summary roll slack is derived from the hot window:
+    # round(0.5 * hot_window), clamped to [MIN, MAX]. Not a user config key.
+    WORKING_CONTEXT_ROLL_SLACK_RATIO = 0.5
+    WORKING_CONTEXT_ROLL_SLACK_MIN = 4
+    WORKING_CONTEXT_ROLL_SLACK_MAX = 16
+    WORKING_CONTEXT_SUMMARY_MAX_CHARS = 1500
+    WORKING_CONTEXT_SUMMARY_MAX_TOKENS = 512
+
+    @staticmethod
+    def history_fetch_depth(
+        hot_window: int,
+        max_context_events: int | None = None,
+    ) -> int:
+        """Return how many recent rows to load from message storage.
+
+        The prompt budgets conversation messages and context events separately.
+        Fetch depth must therefore exceed the hot window so observation-heavy
+        streams can still fill ``hot_window`` conversation entries.
+        """
+        window = max(1, int(hot_window or AgentConfig.DEFAULT_MAX_HISTORY))
+        events = max(
+            1,
+            int(
+                AgentConfig.MAX_CONTEXT_EVENTS
+                if max_context_events is None
+                else max_context_events or AgentConfig.MAX_CONTEXT_EVENTS
+            ),
+        )
+        return (window + events) * 2
+
+    @staticmethod
+    def working_context_roll_slack(hot_window: int) -> int:
+        """Derive compaction slack from the prompt hot window.
+
+        ``threshold = hot_window + slack``. Slack batches LLM rolls without
+        being a separate user-facing knob.
+        """
+        window = max(1, int(hot_window or AgentConfig.DEFAULT_MAX_HISTORY))
+        raw = int(round(window * AgentConfig.WORKING_CONTEXT_ROLL_SLACK_RATIO))
+        return max(
+            AgentConfig.WORKING_CONTEXT_ROLL_SLACK_MIN,
+            min(AgentConfig.WORKING_CONTEXT_ROLL_SLACK_MAX, raw),
+        )
 
     # ============================================================
     # 5. Safety & Resource Limits
@@ -88,9 +139,16 @@ class AgentConfig:
     # Tune the size and overlap of the recent-memory window.
     # Override per agent via config.yaml: agent.memory_recent_days (0 disables injection).
     # MEMORY_RECENT_MAX_CHARS is an internal prompt-budget guard, not user config.
+    # JOURNAL_BATCH_SIZE is the diary maintenance commit cadence (threshold/batch
+    # cap). It is intentionally separate from DEFAULT_MAX_HISTORY, which budgets
+    # how many raw conversation messages enter the prompt.
+    # MEMORY_WINDOW_OVERLAP_RATIO applies to JOURNAL_BATCH_SIZE only.
     # ============================================================
     MEMORY_RECENT_DAYS = 2
     MEMORY_RECENT_MAX_CHARS = 8000
+    # Diary commit cadence. Keep independent from DEFAULT_MAX_HISTORY so prompt
+    # hot-window tuning cannot fragment journal entries.
+    JOURNAL_BATCH_SIZE = 32
     MEMORY_WINDOW_OVERLAP_RATIO = 0.2
 
     # ------------------------------------------------------------------
