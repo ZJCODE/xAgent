@@ -439,6 +439,7 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertEqual(adapter._channel.sent[0][0], "oc_group")
             self.assertEqual(adapter._channel.sent[0][1], {"markdown": "agent reply"})
             self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
+            self.assertEqual(agent.chat_calls[0]["channel"], "feishu")
             self.assertIn("Check system temperature", agent.chat_calls[0]["user_message"])
 
         asyncio.run(run_test())

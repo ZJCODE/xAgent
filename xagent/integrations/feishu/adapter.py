@@ -2393,6 +2393,7 @@ class FeishuAdapter:
             user_message=prompt,
             user_id=user_id,
             stream=False,
+            channel="feishu",
         ):
             event_type = event.get("type")
             if event_type == "message_done" and str(event.get("phase") or "final") == "final":

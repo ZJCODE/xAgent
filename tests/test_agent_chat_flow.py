@@ -19,6 +19,7 @@ from xagent.core.providers import (
     PROVIDER_QWEN,
     ReasoningConfig,
 )
+from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from xagent.core.tooling.executor import ToolDisplayResult, ToolExecutor
 from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
@@ -1583,6 +1584,38 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         await Agent.run_memory_maintenance(agent)
 
         self.assertTrue(observability.flushed)
+
+    async def test_chat_events_inherits_channel_and_source_from_delivery_context(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "done")])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+        context = ScheduledDeliveryContext(
+            channel="api",
+            user_id="web_user",
+            target={"user_id": "web_user"},
+            metadata={"source": "scheduled_task", "task_id": "task-1"},
+        )
+
+        with scheduled_delivery_context(context):
+            events = [
+                event
+                async for event in Agent.chat_events(
+                    agent,
+                    user_message="This scheduled task is now due.",
+                    user_id="web_user",
+                    stream=False,
+                )
+            ]
+
+        self.assertTrue(any(event.get("type") == "done" for event in events))
+        self.assertEqual(len(storage.messages), 2)
+        user_msg = storage.messages[0]
+        assistant_msg = storage.messages[1]
+        self.assertEqual(user_msg.role, RoleType.USER)
+        self.assertEqual(user_msg.channel, "api")
+        self.assertEqual(user_msg.metadata.get("source"), "scheduled_task")
+        self.assertEqual(assistant_msg.role, RoleType.ASSISTANT)
+        self.assertEqual(assistant_msg.channel, "api")
 
     async def test_chat_updates_last_interaction_file(self):
         storage = InMemoryMessageStorage()

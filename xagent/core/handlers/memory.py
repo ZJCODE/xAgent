@@ -407,10 +407,16 @@ class MemoryHandler:
             if not user_id:
                 continue
             channel = (message.channel or "").strip()
+            if not channel:
+                # Incomplete identity must not mint unknown:* parallel keys.
+                continue
+            metadata = message.metadata or {}
+            if str(metadata.get("source") or "").strip() == "scheduled_task":
+                # Synthetic work-order prompts are not human speech.
+                continue
             key = RelationshipStore.make_key(channel, user_id)
             if key in participants:
                 continue
-            metadata = message.metadata or {}
             display_name = str(metadata.get("sender_name") or "").strip() or user_id
             participants[key] = {
                 "key": key,

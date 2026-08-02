@@ -410,6 +410,7 @@ class TaskApiTests(unittest.TestCase):
 
             self.assertEqual(delivered, [("agent", "agent scheduled result", None, [])])
             self.assertEqual(agent.chat_calls[0]["user_id"], "web_user")
+            self.assertEqual(agent.chat_calls[0]["channel"], "api")
             self.assertIn("Check system temperature", agent.chat_calls[0]["user_message"])
 
         import asyncio
@@ -442,6 +443,7 @@ class TaskApiTests(unittest.TestCase):
 
             self.assertEqual(delivered, [("agent", "", None, [agent.attachment])])
             self.assertEqual(agent.chat_event_calls[0]["user_id"], "web_user")
+            self.assertEqual(agent.chat_event_calls[0]["channel"], "api")
             self.assertFalse(agent.chat_event_calls[0]["stream"])
 
         import asyncio
