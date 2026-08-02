@@ -2096,6 +2096,32 @@ observability:
             with self.assertRaisesRegex(ValueError, "observability.sample_rate"):
                 BaseAgentRunner(config_dir=tmpdir)
 
+    def test_config_accepts_observability_environment_and_release(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    model: "gpt-5.4-mini"
+    api_key: "test-key"
+observability:
+    enabled: true
+    provider: langfuse
+    public_key: pk-lf-test
+    secret_key: sk-lf-test
+    environment: staging
+    release: "0.3.21"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = RunnerWithoutAgent(config_dir=tmpdir)
+
+            self.assertTrue(runner.observability.enabled)
+            self.assertEqual(runner.config["observability"]["environment"], "staging")
+            self.assertEqual(runner.config["observability"]["release"], "0.3.21")
+
     def test_config_rejects_invalid_runtime_heartbeat_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"

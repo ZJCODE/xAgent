@@ -114,6 +114,7 @@ class FakeObservabilityRuntime:
 
     def __init__(self):
         self.turn_kwargs = None
+        self.tool_calls = []
         self.entered = False
         self.exited = False
         self.flushed = False
@@ -126,6 +127,25 @@ class FakeObservabilityRuntime:
         self.turn_kwargs = kwargs
         self.turn_obs = FakeTurnObservation()
         return _FakeAgentTurnCtx(self)
+
+    def tool_call(self, **kwargs):
+        self.tool_calls.append(kwargs)
+
+        class _ToolObs:
+            def set_output(self, content):
+                return None
+
+            def set_error(self, message):
+                return None
+
+        class _Ctx:
+            def __enter__(self_inner):
+                return _ToolObs()
+
+            def __exit__(self_inner, exc_type, exc, tb):
+                return False
+
+        return _Ctx()
 
     async def flush(self):
         self.flushed = True
@@ -1568,9 +1588,33 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(observability.entered)
         self.assertTrue(observability.exited)
         self.assertEqual(observability.turn_kwargs["user_id"], "alice")
+        self.assertEqual(observability.turn_kwargs["session_id"], "local:alice")
+        self.assertEqual(observability.turn_kwargs["channel"], "local")
         self.assertEqual(observability.turn_kwargs["model"], AgentConfig.DEFAULT_MODEL)
-        self.assertEqual(observability.turn_kwargs["memory_mode"], "full")
         self.assertFalse(observability.turn_kwargs["stream"])
+
+    async def test_chat_observability_session_uses_channel_and_room(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "ok"),
+        ])
+        observability = FakeObservabilityRuntime()
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            observability=observability,
+        )
+
+        await Agent.chat(
+            agent,
+            user_message="hello",
+            user_id="alice",
+            channel="feishu",
+            room_name="group-1",
+        )
+
+        self.assertEqual(observability.turn_kwargs["channel"], "feishu")
+        self.assertEqual(observability.turn_kwargs["session_id"], "feishu:group-1")
 
     async def test_run_memory_maintenance_flushes_observability(self):
         storage = InMemoryMessageStorage()
@@ -1967,6 +2011,27 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_message["content"], '{"value": "ok"}')
         self.assertIsNone(display_result)
         self.assertEqual(storage.messages, [])
+
+    async def test_execute_single_records_tool_observation(self):
+        async def lookup(value: str) -> dict:
+            return {"value": value}
+
+        observability = FakeObservabilityRuntime()
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"lookup": lookup}),
+            message_storage=InMemoryMessageStorage(),
+            client=None,
+            observability=observability,
+        )
+
+        await executor.execute_single(
+            FakeToolCall(name="lookup", arguments='{"value": "ok"}')
+        )
+
+        self.assertEqual(len(observability.tool_calls), 1)
+        self.assertEqual(observability.tool_calls[0]["name"], "lookup")
+        self.assertEqual(observability.tool_calls[0]["call_id"], "call-1")
+        self.assertEqual(observability.tool_calls[0]["arguments"], {"value": "ok"})
 
     async def test_generated_image_tool_result_exposes_structured_attachment(self):
         async def draw() -> dict:

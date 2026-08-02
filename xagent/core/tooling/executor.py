@@ -40,10 +40,12 @@ class ToolExecutor:
         tool_manager: ToolManager,
         message_storage: MessageStorage,
         client: Any,
+        observability: Any = None,
     ):
         self.tool_manager = tool_manager
         self.message_storage = message_storage
         self.client = client
+        self.observability = observability
 
     async def handle_tool_calls(
         self,
@@ -141,49 +143,75 @@ class ToolExecutor:
             return self._tool_result_message(call_id, f"Tool `{name}` not found."), None
 
         logger.info("Calling tool: %s with args: %s", name, args)
+        tool_ctx = self._tool_observation(name=name, call_id=call_id, arguments=args)
+        with tool_ctx as tool_obs:
+            try:
+                result = await func(**args)
+            except Exception as e:
+                logger.error("Tool call error: %s", e)
+                result = f"Tool error: {e}"
+                tool_obs.set_error(str(e))
 
-        try:
-            result = await func(**args)
-        except Exception as e:
-            logger.error("Tool call error: %s", e)
-            result = f"Tool error: {e}"
+            if is_generated_image_result(result):
+                result_str = json.dumps(result, ensure_ascii=False)
+                model_output = generated_image_description(name, result)
+                logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
+                tool_obs.set_output(model_output)
+                return self._tool_result_message(call_id, model_output), ToolDisplayResult(
+                    content="",
+                    description=model_output,
+                    attachments=generated_image_attachments(result),
+                )
 
-        if is_generated_image_result(result):
-            result_str = json.dumps(result, ensure_ascii=False)
-            model_output = generated_image_description(name, result)
+            if is_artifact_attachment_result(result):
+                result_str = json.dumps(result, ensure_ascii=False)
+                model_output = artifact_attachment_description(name, result)
+                logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
+                tool_obs.set_output(model_output)
+                return self._tool_result_message(call_id, model_output), ToolDisplayResult(
+                    content="",
+                    description=model_output,
+                    attachments=artifact_attachments(result),
+                )
+
+            result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+
+            image_data = None
+            model_output = result_str
+            if is_image_output(result_str):
+                image_data = result_str
+                prompt_hint = args.get("prompt", "")
+                model_output = self._image_result_description(name, prompt_hint)
+
             logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
-            return self._tool_result_message(call_id, model_output), ToolDisplayResult(
-                content="",
+            tool_obs.set_output(model_output)
+            display_result = ToolDisplayResult(
+                content=image_data,
                 description=model_output,
-                attachments=generated_image_attachments(result),
-            )
+                attachments=[],
+            ) if image_data else None
+            return self._tool_result_message(call_id, model_output), display_result
 
-        if is_artifact_attachment_result(result):
-            result_str = json.dumps(result, ensure_ascii=False)
-            model_output = artifact_attachment_description(name, result)
-            logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
-            return self._tool_result_message(call_id, model_output), ToolDisplayResult(
-                content="",
-                description=model_output,
-                attachments=artifact_attachments(result),
-            )
+    def _tool_observation(self, *, name: str, call_id: str, arguments: Any):
+        runtime = self.observability
+        tool_call = getattr(runtime, "tool_call", None) if runtime is not None else None
+        if callable(tool_call):
+            return tool_call(name=name, call_id=call_id, arguments=arguments)
 
-        result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+        from contextlib import contextmanager
 
-        image_data = None
-        model_output = result_str
-        if is_image_output(result_str):
-            image_data = result_str
-            prompt_hint = args.get("prompt", "")
-            model_output = self._image_result_description(name, prompt_hint)
+        @contextmanager
+        def _noop():
+            class _Obs:
+                def set_output(self, content: Any) -> None:
+                    return None
 
-        logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
-        display_result = ToolDisplayResult(
-            content=image_data,
-            description=model_output,
-            attachments=[],
-        ) if image_data else None
-        return self._tool_result_message(call_id, model_output), display_result
+                def set_error(self, message: str) -> None:
+                    return None
+
+            yield _Obs()
+
+        return _noop()
 
     @staticmethod
     def _dedupe_attachments(attachments: list[dict]) -> list[dict]:

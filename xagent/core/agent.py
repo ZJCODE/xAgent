@@ -11,7 +11,11 @@ from ..components import (
     SkillsStorageBase,
 )
 from .journal import JournalLLMService
-from ..integrations.langfuse import NoopObservabilityRuntime, ObservabilityRuntime
+from ..integrations.langfuse import (
+    NoopObservabilityRuntime,
+    ObservabilityRuntime,
+    build_session_id,
+)
 from .config import AgentConfig, ReplyType
 from .errors import (
     ERROR_EMPTY_RESPONSE,
@@ -176,6 +180,7 @@ class Agent:
             tool_manager=self.tool_manager,
             message_storage=self.message_storage,
             client=self.client,
+            observability=self.observability,
         )
 
     @property
@@ -492,10 +497,17 @@ class Agent:
                 user_metadata = {"source": "scheduled_task"}
         msg_handler = self.message_handler
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
+        channel_name = str(channel or "local")
+        session_id = build_session_id(
+            channel=channel_name,
+            room_name=room_name,
+            user_id=user_id,
+        )
         turn_ctx = self._observability_runtime().agent_turn(
             user_id=user_id,
+            session_id=session_id,
             model=model_name,
-            memory_mode="full",
+            channel=channel_name,
             stream=stream,
         )
         with turn_ctx as turn_obs:

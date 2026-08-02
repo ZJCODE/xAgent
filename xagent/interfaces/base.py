@@ -294,6 +294,8 @@ class BaseAgentRunner:
             "sample_rate",
             "debug",
             "tracing_enabled",
+            "environment",
+            "release",
         }
         unsupported_observability_keys = sorted(set(observability_cfg) - allowed_observability_keys)
         if unsupported_observability_keys:
@@ -330,6 +332,12 @@ class BaseAgentRunner:
         for key in ("debug", "tracing_enabled"):
             if key in observability_cfg and not isinstance(observability_cfg[key], bool):
                 raise ValueError(f"observability.{key} must be a boolean")
+        for key in ("environment", "release"):
+            if key not in observability_cfg:
+                continue
+            value = observability_cfg.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"observability.{key} must be a non-empty string")
 
     @staticmethod
     def _validate_non_negative_int(value: Any, name: str) -> None:

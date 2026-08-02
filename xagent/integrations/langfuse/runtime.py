@@ -1,43 +1,47 @@
-"""Optional Langfuse runtime wiring for OpenAI-compatible clients."""
+"""Langfuse v4 observability runtime for OpenAI-compatible clients."""
 
 from __future__ import annotations
 
 import inspect
+import json
 import logging
-import os
 from contextlib import contextmanager
-from typing import Any, ContextManager, Optional, Protocol
+from typing import Any, ContextManager, Iterator, Optional, Protocol
 
 from openai import AsyncOpenAI
 
 
 logger = logging.getLogger(__name__)
 
+_MAX_PROPAGATED_CHARS = 200
+_MAX_IO_CHARS = 4000
+
 
 # ---------------------------------------------------------------------------
-# Observation object — yielded by agent_turn() so the agent can record
-# input / output on the span after it is created.
+# Observation helpers
 # ---------------------------------------------------------------------------
 
 class _TurnObservation:
-    """Lightweight holder for the active span reference."""
+    """Active agent-turn observation handle."""
 
     def __init__(self) -> None:
         self.span: Any = None
 
     def set_input(self, messages: list) -> None:
-        if self.span is not None:
-            try:
-                self.span.update(input=_summarize_messages(messages))
-            except Exception:
-                pass
+        if self.span is None:
+            return
+        try:
+            self.span.update(input=_turn_input_payload(messages))
+        except Exception:
+            pass
 
     def set_output(self, content: str) -> None:
-        if self.span is not None:
-            try:
-                self.span.update(output={"content": content})
-            except Exception:
-                pass
+        if self.span is None:
+            return
+        try:
+            self.span.update(output={"content": _truncate(content, _MAX_IO_CHARS)})
+        except Exception:
+            pass
 
     def set_error(
         self,
@@ -46,38 +50,144 @@ class _TurnObservation:
         code: str,
         message: str,
     ) -> None:
-        if self.span is not None:
-            try:
-                self.span.update(
-                    level="ERROR",
-                    output={
+        if self.span is None:
+            return
+        try:
+            self.span.update(
+                level="ERROR",
+                status_message=_truncate(message, _MAX_PROPAGATED_CHARS),
+                output={
+                    "error_id": error_id,
+                    "error_code": code,
+                    "error": _truncate(message, _MAX_IO_CHARS),
+                },
+                metadata=_string_metadata(
+                    {
                         "error_id": error_id,
                         "error_code": code,
-                        "error": message,
-                    },
-                    metadata={
-                        "error_id": error_id,
-                        "error_code": code,
-                    },
-                )
-            except Exception:
-                pass
+                    }
+                ),
+            )
+        except Exception:
+            pass
+
+
+class _ToolObservation:
+    """Active tool-call observation handle."""
+
+    def __init__(self) -> None:
+        self.span: Any = None
+
+    def set_output(self, content: Any) -> None:
+        if self.span is None:
+            return
+        try:
+            self.span.update(output=_tool_payload(content))
+        except Exception:
+            pass
+
+    def set_error(self, message: str) -> None:
+        if self.span is None:
+            return
+        try:
+            self.span.update(
+                level="ERROR",
+                status_message=_truncate(message, _MAX_PROPAGATED_CHARS),
+                output={"error": _truncate(message, _MAX_IO_CHARS)},
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _summarize_messages(messages: list) -> dict:
-    """Return a compact summary of a message list for trace input metadata."""
+def build_session_id(
+    *,
+    channel: str = "",
+    room_name: Optional[str] = None,
+    user_id: str = "",
+) -> str:
+    """Build a stable Langfuse session id for one conversation thread."""
+    channel_part = str(channel or "local").strip() or "local"
+    peer = str(room_name or user_id or "anonymous").strip() or "anonymous"
+    return _truncate(f"{channel_part}:{peer}", _MAX_PROPAGATED_CHARS)
+
+
+def _truncate(value: Any, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return text[: limit - 3] + "..."
+
+
+def _string_metadata(values: dict[str, Any]) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for key, raw in values.items():
+        key_text = "".join(ch for ch in str(key) if ch.isalnum() or ch == "_")
+        if not key_text:
+            continue
+        value = _truncate(raw, _MAX_PROPAGATED_CHARS)
+        if value:
+            metadata[key_text] = value
+    return metadata
+
+
+def _message_text(message: Any) -> str:
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text")
+                if text:
+                    parts.append(str(text))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return ""
+
+
+def _turn_input_payload(messages: list) -> dict[str, Any]:
     if not messages:
         return {"total": 0}
+
     roles: dict[str, int] = {}
-    for m in messages:
-        if isinstance(m, dict):
-            role = str(m.get("role") or "unknown")
-            roles[role] = roles.get(role, 0) + 1
-    return {"total": len(messages), "roles": roles}
+    latest_user = ""
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "unknown")
+        roles[role] = roles.get(role, 0) + 1
+        if role == "user":
+            text = _message_text(message).strip()
+            if text:
+                latest_user = text
+
+    payload: dict[str, Any] = {
+        "total": len(messages),
+        "roles": roles,
+    }
+    if latest_user:
+        payload["user"] = _truncate(latest_user, _MAX_IO_CHARS)
+    return payload
+
+
+def _tool_payload(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            text = str(value)
+        return {"preview": _truncate(text, _MAX_IO_CHARS)}
+    return {"content": _truncate(value, _MAX_IO_CHARS)}
 
 
 # ---------------------------------------------------------------------------
@@ -96,18 +206,28 @@ class ObservabilityRuntime(Protocol):
         self,
         *,
         user_id: str,
+        session_id: str,
         model: str,
-        memory_mode: str,
+        channel: str,
         stream: bool,
     ) -> ContextManager[_TurnObservation]:
         """Return a context manager that wraps one agent chat turn."""
+
+    def tool_call(
+        self,
+        *,
+        name: str,
+        call_id: str,
+        arguments: Any,
+    ) -> ContextManager[_ToolObservation]:
+        """Return a context manager that wraps one tool execution."""
 
     async def flush(self) -> None:
         """Flush queued observability events."""
 
 
 # ---------------------------------------------------------------------------
-# Noop runtime — preserves existing behaviour when observability is off.
+# Noop runtime
 # ---------------------------------------------------------------------------
 
 class NoopObservabilityRuntime:
@@ -125,11 +245,22 @@ class NoopObservabilityRuntime:
         self,
         *,
         user_id: str = "",
+        session_id: str = "",
         model: str = "",
-        memory_mode: str = "",
+        channel: str = "",
         stream: bool = False,
-    ):
+    ) -> Iterator[_TurnObservation]:
         yield _TurnObservation()
+
+    @contextmanager
+    def tool_call(
+        self,
+        *,
+        name: str = "",
+        call_id: str = "",
+        arguments: Any = None,
+    ) -> Iterator[_ToolObservation]:
+        yield _ToolObservation()
 
     async def flush(self) -> None:
         return None
@@ -140,17 +271,15 @@ class NoopObservabilityRuntime:
 # ---------------------------------------------------------------------------
 
 class LangfuseObservabilityRuntime:
-    """Langfuse-backed observability runtime."""
+    """Langfuse-backed observability runtime (Python SDK v4)."""
 
     enabled = True
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = dict(config)
         self._client: Any = None
-        self._propagate_attributes: Any = None
 
     def create_client(self, client_kwargs: dict[str, Any]) -> AsyncOpenAI:
-        self._configure_environment()
         self._ensure_langfuse_client()
         from langfuse.openai import AsyncOpenAI as LangfuseAsyncOpenAI
 
@@ -161,40 +290,71 @@ class LangfuseObservabilityRuntime:
         self,
         *,
         user_id: str,
+        session_id: str,
         model: str,
-        memory_mode: str,
+        channel: str,
         stream: bool,
-    ):
-        """Create a span for the agent turn and yield an observation object."""
+    ) -> Iterator[_TurnObservation]:
         observation = _TurnObservation()
         try:
+            from langfuse import propagate_attributes
+
             langfuse_client = self._ensure_langfuse_client()
-
-            with langfuse_client.start_as_current_observation(
-                as_type="span",
-                name="xagent.chat",
-            ) as span:
-                observation.span = span
-
-                # Apply tags via propagate_attributes
-                propagate_attrs = self._get_propagate_attributes()
-                if propagate_attrs is not None:
-                    tags = [
-                        "xagent",
-                        "chat",
-                        f"model:{model}",
-                        f"memory:{memory_mode}",
-                        "stream" if stream else "non-stream",
-                    ]
-                    try:
-                        with propagate_attrs(user_id=user_id, tags=tags):
-                            yield observation
-                    except Exception:
-                        yield observation
-                else:
-                    yield observation
+            tags = [
+                "xagent",
+                "chat",
+                f"model:{model}" if model else "model:unknown",
+                f"channel:{channel}" if channel else "channel:local",
+                "stream" if stream else "non-stream",
+            ]
+            metadata = _string_metadata(
+                {
+                    "channel": channel or "local",
+                    "model": model,
+                }
+            )
         except Exception as exc:
             logger.warning("Failed to initialize Langfuse observation: %s", exc)
+            yield observation
+            return
+
+        with langfuse_client.start_as_current_observation(
+            as_type="agent",
+            name="xagent.chat",
+        ) as span:
+            observation.span = span
+            with propagate_attributes(
+                user_id=_truncate(user_id, _MAX_PROPAGATED_CHARS) or None,
+                session_id=_truncate(session_id, _MAX_PROPAGATED_CHARS) or None,
+                tags=tags,
+                metadata=metadata or None,
+            ):
+                yield observation
+
+    @contextmanager
+    def tool_call(
+        self,
+        *,
+        name: str,
+        call_id: str,
+        arguments: Any,
+    ) -> Iterator[_ToolObservation]:
+        observation = _ToolObservation()
+        try:
+            langfuse_client = self._ensure_langfuse_client()
+            tool_name = str(name or "tool").strip() or "tool"
+        except Exception as exc:
+            logger.warning("Failed to initialize Langfuse tool observation: %s", exc)
+            yield observation
+            return
+
+        with langfuse_client.start_as_current_observation(
+            as_type="tool",
+            name=tool_name,
+            input=_tool_payload(arguments),
+            metadata=_string_metadata({"call_id": call_id}),
+        ) as span:
+            observation.span = span
             yield observation
 
     async def flush(self) -> None:
@@ -211,38 +371,36 @@ class LangfuseObservabilityRuntime:
         except Exception as exc:
             logger.warning("Failed to flush Langfuse events: %s", exc)
 
-    def _configure_environment(self) -> None:
-        _set_env("LANGFUSE_PUBLIC_KEY", self.config.get("public_key"))
-        _set_env("LANGFUSE_SECRET_KEY", self.config.get("secret_key"))
-
-        base_url = self.config.get("base_url")
-        if base_url:
-            _set_env("LANGFUSE_BASE_URL", base_url)
-            _set_env("LANGFUSE_HOST", base_url)
-
-        if "sample_rate" in self.config:
-            _set_env("LANGFUSE_SAMPLE_RATE", str(self.config["sample_rate"]))
-        if "debug" in self.config:
-            _set_env("LANGFUSE_DEBUG", _bool_env(self.config["debug"]))
-        if "tracing_enabled" in self.config:
-            _set_env("LANGFUSE_TRACING_ENABLED", _bool_env(self.config["tracing_enabled"]))
-
     def _ensure_langfuse_client(self) -> Any:
-        if self._client is None:
-            self._configure_environment()
-            from langfuse import get_client
+        if self._client is not None:
+            return self._client
 
-            self._client = get_client()
+        from langfuse import Langfuse
+
+        kwargs: dict[str, Any] = {
+            "public_key": str(self.config.get("public_key") or "").strip() or None,
+            "secret_key": str(self.config.get("secret_key") or "").strip() or None,
+        }
+        base_url = self.config.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            kwargs["base_url"] = base_url.strip()
+        if "sample_rate" in self.config:
+            kwargs["sample_rate"] = float(self.config["sample_rate"])
+        if "debug" in self.config:
+            kwargs["debug"] = bool(self.config["debug"])
+        if "tracing_enabled" in self.config:
+            kwargs["tracing_enabled"] = bool(self.config["tracing_enabled"])
+        if "environment" in self.config:
+            environment = str(self.config.get("environment") or "").strip()
+            if environment:
+                kwargs["environment"] = environment
+        if "release" in self.config:
+            release = str(self.config.get("release") or "").strip()
+            if release:
+                kwargs["release"] = release
+
+        self._client = Langfuse(**{key: value for key, value in kwargs.items() if value is not None})
         return self._client
-
-    def _get_propagate_attributes(self) -> Any:
-        if self._propagate_attributes is None:
-            try:
-                from langfuse import propagate_attributes
-            except ImportError:
-                return None
-            self._propagate_attributes = propagate_attributes
-        return self._propagate_attributes
 
 
 # ---------------------------------------------------------------------------
@@ -256,13 +414,9 @@ def create_observability_runtime(config: Optional[dict[str, Any]]) -> Observabil
     provider = str(config.get("provider") or "").strip().lower()
     if provider != "langfuse":
         return NoopObservabilityRuntime()
-    return LangfuseObservabilityRuntime(config)
 
-
-def _set_env(name: str, value: Any) -> None:
-    if value is not None and str(value).strip():
-        os.environ[name] = str(value).strip()
-
-
-def _bool_env(value: bool) -> str:
-    return "true" if value else "false"
+    try:
+        return LangfuseObservabilityRuntime(config)
+    except Exception as exc:
+        logger.warning("Failed to initialize Langfuse observability runtime: %s", exc)
+        return NoopObservabilityRuntime()
