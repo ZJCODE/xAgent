@@ -6,12 +6,15 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, cast
 
+from xagent.utils.search_terms import normalize_terms, score_text
+
 logger = logging.getLogger(__name__)
 
 MemoryScope = Literal["daily", "weekly", "monthly", "yearly", "all"]
 
 _TIME_SCOPES: tuple[str, ...] = ("daily", "weekly", "monthly", "yearly")
 _VALID_SCOPES: set[str] = {*_TIME_SCOPES, "all"}
+_DEFAULT_SEARCH_MAX_RESULTS = 50
 
 
 class MarkdownMemory:
@@ -123,29 +126,35 @@ class MarkdownMemory:
 
     async def search_keyword(
         self,
-        query: str,
+        terms: list[str],
         scope: MemoryScope | str = "all",
         context_lines: int = 3,
+        max_results: int = _DEFAULT_SEARCH_MAX_RESULTS,
     ) -> str:
-        """Search markdown files via ``grep -rni`` with context lines.
+        """Search markdown files for verbatim terms (OR + hit-count ranking).
 
-        Returns the raw grep output as a string (file paths + matches).
+        Single-term scoped searches may use ``grep -F``. Multi-term and
+        ``scope=all`` use the Python scorer so co-occurrence can rank results.
         """
+        terms = normalize_terms(terms)
         scope = self._normalize_scope(scope)
         context_lines = max(0, min(int(context_lines), 20))
+        max_results = max(1, int(max_results))
 
-        if not query:
+        if not terms:
             return ""
 
-        if scope == "all":
+        if scope == "all" or len(terms) > 1:
             return await asyncio.to_thread(
                 self._search_keyword_many_sync,
-                query,
+                terms,
                 self._scope_roots(scope),
                 context_lines,
+                max_results,
             )
 
         search_dir = self._scope_root(scope)
+        needle = terms[0]
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -153,7 +162,7 @@ class MarkdownMemory:
                 "--include=*.md",
                 f"-C{context_lines}",
                 "--",
-                query,
+                needle,
                 str(search_dir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -166,9 +175,10 @@ class MarkdownMemory:
 
         return await asyncio.to_thread(
             self._search_keyword_sync,
-            query,
+            terms,
             search_dir,
             context_lines,
+            max_results,
         )
 
     # ------------------------------------------------------------------
@@ -300,12 +310,15 @@ class MarkdownMemory:
         return sorted(files)
 
     @staticmethod
-    def _search_keyword_sync(query: str, search_dir: Path, context_lines: int) -> str:
-        if not search_dir.exists():
-            return ""
+    def _collect_scored_blocks(
+        terms: list[str],
+        search_dir: Path,
+        context_lines: int,
+    ) -> list[tuple[int, str, int, int, list[str]]]:
+        if not search_dir.exists() or not terms:
+            return []
 
-        needle = query.casefold()
-        blocks: list[str] = []
+        scored_blocks: list[tuple[int, str, int, int, list[str]]] = []
         for path in sorted(search_dir.rglob("*.md")):
             if not path.is_file():
                 continue
@@ -313,26 +326,67 @@ class MarkdownMemory:
                 lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
             except OSError:
                 continue
+
+            path_key = str(path)
             for index, line in enumerate(lines):
-                if needle not in line.casefold():
+                if score_text(line, terms) <= 0:
                     continue
                 start = max(0, index - context_lines)
                 end = min(len(lines), index + context_lines + 1)
-                blocks.extend(
+                window = "\n".join(lines[start:end])
+                block_lines = [
                     f"{path}:{line_number + 1}:{lines[line_number]}"
                     for line_number in range(start, end)
+                ]
+                scored_blocks.append(
+                    (score_text(window, terms), path_key, start, end, block_lines)
                 )
-                blocks.append("--")
-
-        if blocks and blocks[-1] == "--":
-            blocks.pop()
-        return "\n".join(blocks)
+        return scored_blocks
 
     @staticmethod
-    def _search_keyword_many_sync(query: str, search_dirs: List[Path], context_lines: int) -> str:
-        blocks: list[str] = []
+    def _format_scored_blocks(
+        scored_blocks: list[tuple[int, str, int, int, list[str]]],
+        max_results: int,
+    ) -> str:
+        scored_blocks.sort(key=lambda item: (-item[0], item[1], -item[2]))
+        covered_by_path: dict[str, set[int]] = {}
+        output: list[str] = []
+        kept = 0
+        for score, path_key, start, end, block_lines in scored_blocks:
+            covered = covered_by_path.setdefault(path_key, set())
+            if any(line_number in covered for line_number in range(start, end)):
+                continue
+            covered.update(range(start, end))
+            if output:
+                output.append("--")
+            output.extend(block_lines)
+            kept += 1
+            if kept >= max_results:
+                break
+        return "\n".join(output)
+
+    @staticmethod
+    def _search_keyword_sync(
+        terms: list[str],
+        search_dir: Path,
+        context_lines: int,
+        max_results: int = _DEFAULT_SEARCH_MAX_RESULTS,
+    ) -> str:
+        return MarkdownMemory._format_scored_blocks(
+            MarkdownMemory._collect_scored_blocks(terms, search_dir, context_lines),
+            max_results,
+        )
+
+    @staticmethod
+    def _search_keyword_many_sync(
+        terms: list[str],
+        search_dirs: List[Path],
+        context_lines: int,
+        max_results: int = _DEFAULT_SEARCH_MAX_RESULTS,
+    ) -> str:
+        scored_blocks: list[tuple[int, str, int, int, list[str]]] = []
         for search_dir in search_dirs:
-            text = MarkdownMemory._search_keyword_sync(query, search_dir, context_lines)
-            if text.strip():
-                blocks.append(text)
-        return "\n--\n".join(blocks)
+            scored_blocks.extend(
+                MarkdownMemory._collect_scored_blocks(terms, search_dir, context_lines)
+            )
+        return MarkdownMemory._format_scored_blocks(scored_blocks, max_results)

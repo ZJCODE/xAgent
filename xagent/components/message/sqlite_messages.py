@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Union
 
 from ...core.config import AgentConfig
 from ...schemas import Message
+from ...utils.search_terms import normalize_terms, score_text
 
 
 MessageBatch = Union[Message, Sequence[Message]]
@@ -290,17 +291,18 @@ class MessageStorage:
 
     async def search_messages(
         self,
-        query: str,
+        terms: list[str],
         date_start: Optional[str] = None,
         date_end: Optional[str] = None,
         max_results: int = 500,
     ) -> str:
-        """Search messages by keyword using SQLite json_extract + LIKE."""
-        if not query:
+        """Search messages by verbatim terms using SQLite LIKE OR + hit scoring."""
+        terms = normalize_terms(terms)
+        if not terms:
             return ""
         return await asyncio.to_thread(
             self._search_messages_sync,
-            query,
+            terms,
             date_start,
             date_end,
             max_results,
@@ -308,17 +310,19 @@ class MessageStorage:
 
     def _search_messages_sync(
         self,
-        query: str,
+        terms: list[str],
         date_start: Optional[str],
         date_end: Optional[str],
         max_results: int,
     ) -> str:
         from datetime import datetime, timezone
 
-        conditions = [
+        like_clauses = [
             f"json_extract(message_json, '$.content') LIKE ? ESCAPE '\\'"
+            for _ in terms
         ]
-        params: list = [f"%{self._escape_like(query)}%"]  # noqa: RUF015
+        params: list = [f"%{self._escape_like(term)}%" for term in terms]
+        conditions = [f"({' OR '.join(like_clauses)})"]
 
         if date_start:
             try:
@@ -340,6 +344,7 @@ class MessageStorage:
 
         where = " AND ".join(conditions)
         table = MessageStorageConfig.TABLE_NAME
+        fetch_limit = max(max_results * 4, max_results) if len(terms) > 1 else max_results
 
         with self._connect() as connection:
             rows = connection.execute(
@@ -350,20 +355,29 @@ class MessageStorage:
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (*params, max_results),
+                (*params, fetch_limit),
             ).fetchall()
 
         if not rows:
             return ""
 
-        matched: list[str] = []
-        for row in reversed(rows):
+        scored: list[tuple[int, int, Message]] = []
+        for row in rows:
             try:
                 msg = Message.model_validate_json(row["message_json"])
             except Exception:
                 continue
-            matched.append(self._format_search_match(msg))
+            hit_score = score_text(msg.content or "", terms)
+            if hit_score <= 0:
+                continue
+            scored.append((hit_score, int(row["id"]), msg))
 
+        scored.sort(key=lambda item: (-item[0], -item[1]))
+        matched = [
+            self._format_search_match(msg)
+            for _, _, msg in scored[:max_results]
+        ]
+        matched.reverse()
         return "\n---\n".join(matched)
 
     @staticmethod

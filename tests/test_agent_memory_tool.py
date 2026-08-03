@@ -1,6 +1,6 @@
 """Tests for memory tool factories (write_memory, search_memory)."""
 
-import asyncio
+import os
 import tempfile
 import unittest
 from datetime import date
@@ -12,11 +12,6 @@ from xagent.tools.memory_tool import (
     create_write_memory_tool,
     create_search_memory_tool,
 )
-
-
-class _FakeLLMService:
-    async def generate_summary(self, source_content, period_type, period_label):
-        return f"[Summary: {period_type} {period_label}]"
 
 
 class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
@@ -50,12 +45,12 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_search_memory_keyword(self):
         await self.memory.append_daily("Meeting with Alice about project X")
         tool = create_search_memory_tool(self.memory, is_enabled=True)
-        result = await tool(query="Alice")
+        result = await tool(query=["Alice"])
         self.assertIn("Alice", result["results"])
 
     async def test_search_memory_disabled(self):
         tool = create_search_memory_tool(self.memory, is_enabled=False)
-        result = await tool(query="anything")
+        result = await tool(query=["anything"])
         self.assertFalse(result["enabled"])
 
     async def test_search_memory_date_range(self):
@@ -64,6 +59,33 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         tool = create_search_memory_tool(self.memory, is_enabled=True)
         result = await tool(date=today.isoformat())
         self.assertIn("Entry for today", result["results"])
+
+    async def test_search_memory_multi_terms_or_match(self):
+        await self.memory.append_daily("Jun 推荐了几本关于阅读的书，周末一起讨论")
+        await self.memory.append_daily("完全无关的天气记录")
+        tool = create_search_memory_tool(self.memory, is_enabled=True)
+        result = await tool(query=["Jun", "书", "阅读", "推荐"])
+        self.assertIn("Jun", result["results"])
+        self.assertIn("书", result["results"])
+        self.assertNotIn("天气记录", result["results"])
+
+    async def test_search_memory_multi_terms_partial_hits(self):
+        await self.memory.append_daily("Jun 喜欢爬山和摄影")
+        tool = create_search_memory_tool(self.memory, is_enabled=True)
+        result = await tool(query=["Jun", "喜欢", "爱好", "兴趣"])
+        self.assertIn("Jun", result["results"])
+        self.assertIn("喜欢", result["results"])
+
+    async def test_search_memory_ranks_higher_cooccurrence_first(self):
+        await self.memory.append_daily("书架上落了灰")
+        await self.memory.append_daily("Jun 推荐阅读《三体》这本书")
+        tool = create_search_memory_tool(self.memory, is_enabled=True)
+        result = await tool(query=["Jun", "书", "阅读", "推荐"], context_lines=0)
+        jun_pos = result["results"].find("Jun")
+        shelf_pos = result["results"].find("书架")
+        self.assertGreaterEqual(jun_pos, 0)
+        self.assertGreaterEqual(shelf_pos, 0)
+        self.assertLess(jun_pos, shelf_pos)
 
     async def test_search_memory_keyword_finds_sqlite_messages(self):
         """Keyword search returns results from SQLite messages when diary is empty."""
@@ -83,14 +105,13 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
                 is_enabled=True,
                 message_storage=msg_storage,
             )
-            result = await tool(query="deployment")
+            result = await tool(query=["deployment"])
 
             self.assertIn("deployment", result["results"])
             self.assertIn("Q3 deployment plan", result["results"])
             self.assertIn("speaker=alice", result["results"])
             self.assertTrue(result["enabled"])
         finally:
-            import os
             os.unlink(db_path)
 
     async def test_search_memory_keyword_merges_diary_and_sqlite(self):
@@ -113,14 +134,13 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
                 is_enabled=True,
                 message_storage=msg_storage,
             )
-            result = await tool(query="refactor")
+            result = await tool(query=["refactor"])
 
             self.assertIn("refactor", result["results"])
             self.assertIn("Morning standup", result["results"])
             self.assertIn("Message Store", result["results"])
             self.assertIn("JWT validation", result["results"])
         finally:
-            import os
             os.unlink(db_path)
 
     async def test_search_memory_keyword_sqlite_only_when_no_diary_match(self):
@@ -143,14 +163,11 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
                 is_enabled=True,
                 message_storage=msg_storage,
             )
-            # "SSL" only appears in SQLite, not diary
-            result = await tool(query="SSL")
+            result = await tool(query=["SSL"])
 
             self.assertIn("SSL certificate", result["results"])
-            # Diary has no SSL match, so SQLite result is the entire output (no separator)
             self.assertIn("speaker=assistant", result["results"])
         finally:
-            import os
             os.unlink(db_path)
 
     async def test_search_memory_keyword_with_date_filters_sqlite(self):
@@ -167,9 +184,8 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
             )
             await msg_storage.add_messages(msg)
 
-            # Verify message storage search works directly
             raw_results = await msg_storage.search_messages(
-                query="API documentation",
+                terms=["API documentation"],
                 date_start=today_str,
             )
             self.assertIn("API documentation", raw_results)
@@ -179,18 +195,17 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
                 is_enabled=True,
                 message_storage=msg_storage,
             )
-            result = await tool(query="API documentation", date=today_str)
+            result = await tool(query=["API documentation"], date=today_str)
 
             self.assertIn("API documentation", result["results"])
         finally:
-            import os
             os.unlink(db_path)
 
-    async def test_search_memory_no_message_storage_still_works(self):
-        """Without message_storage, search works as before (backward compatible)."""
+    async def test_search_memory_phrase_term_still_works(self):
+        """A single list element may be a multi-word phrase needle."""
         await self.memory.append_daily("Legacy entry: old project notes")
         tool = create_search_memory_tool(self.memory, is_enabled=True)
-        result = await tool(query="project notes")
+        result = await tool(query=["project notes"])
         self.assertIn("project notes", result["results"])
         self.assertNotIn("Message Store", result["results"])
 

@@ -80,13 +80,19 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         await self.memory.append_daily("Important meeting with Alice")
         await self.memory.append_daily("Lunch with Bob")
 
-        result = await self.memory.search_keyword("Alice")
+        result = await self.memory.search_keyword(["Alice"])
         self.assertIn("Alice", result)
 
     async def test_search_keyword_no_matches(self):
         await self.memory.append_daily("Something unrelated")
-        result = await self.memory.search_keyword("nonexistent_xyz_term")
+        result = await self.memory.search_keyword(["nonexistent_xyz_term"])
         self.assertEqual(result.strip(), "")
+
+    async def test_search_keyword_multi_terms(self):
+        await self.memory.append_daily("Jun 推荐阅读几本书")
+        result = await self.memory.search_keyword(["Jun", "书", "阅读", "推荐"])
+        self.assertIn("Jun", result)
+        self.assertIn("书", result)
 
     async def test_search_date_range(self):
         today = date.today()
