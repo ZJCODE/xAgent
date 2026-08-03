@@ -948,6 +948,44 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             collected.append(chunk)
         self.assertEqual(collected, ["Hel", "lo"])
         self.assertEqual(stored, ["Hello"])
+        self.assertEqual(
+            client.chat_completions.calls[0]["stream_options"],
+            {"include_usage": True},
+        )
+
+    async def test_chat_stream_requests_include_usage(self):
+        chunks = [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="ok", tool_calls=None))]),
+            SimpleNamespace(choices=[], usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1)),
+        ]
+        client = FakeOpenAIClient([AsyncChunkStream(chunks)])
+        model = ModelClient(client=client, model="test-model")
+
+        events = [
+            event async for event in model.model_turn_events(
+                messages=[{"role": "user", "content": "hello"}],
+                tool_specs=None,
+                stream=True,
+            )
+        ]
+
+        self.assertEqual([event.type for event in events], ["delta"])
+        self.assertEqual(events[0].delta, "ok")
+        call = client.chat_completions.calls[0]
+        self.assertTrue(call["stream"])
+        self.assertEqual(call["stream_options"], {"include_usage": True})
+
+    async def test_chat_non_stream_omits_stream_options(self):
+        client = FakeOpenAIClient([_chat_response(content="ok")])
+        model = ModelClient(client=client, model="test-model")
+
+        await model.call(
+            messages=[{"role": "user", "content": "hello"}],
+            tool_specs=None,
+            stream=False,
+        )
+
+        self.assertNotIn("stream_options", client.chat_completions.calls[0])
 
     async def test_responses_stream_text_yields_chunks_and_stores_final_text(self):
         events = [

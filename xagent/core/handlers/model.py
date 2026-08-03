@@ -338,6 +338,10 @@ class ModelClient:
             "messages": self._build_chat_messages(messages, instructions),
             "stream": stream,
         }
+        if stream:
+            # Required for OpenAI to return usage on the final stream chunk so
+            # Langfuse can record token/cost details for streamed generations.
+            params["stream_options"] = {"include_usage": True}
         if tool_specs:
             params["tools"] = tool_specs
             params["tool_choice"] = "auto"
