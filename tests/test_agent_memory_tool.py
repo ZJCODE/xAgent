@@ -47,6 +47,9 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         tool = create_search_memory_tool(self.memory, is_enabled=True)
         result = await tool(query=["Alice"])
         self.assertIn("Alice", result["results"])
+        self.assertIn(f"[daily {date.today().isoformat()}]", result["results"])
+        self.assertNotIn(str(self.memory.root), result["results"])
+        self.assertNotIn(".md:", result["results"])
 
     async def test_search_memory_disabled(self):
         tool = create_search_memory_tool(self.memory, is_enabled=False)
@@ -59,6 +62,8 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         tool = create_search_memory_tool(self.memory, is_enabled=True)
         result = await tool(date=today.isoformat())
         self.assertIn("Entry for today", result["results"])
+        self.assertIn(f"[daily {today.isoformat()}]", result["results"])
+        self.assertNotIn(str(self.memory.root), result["results"])
 
     async def test_search_memory_multi_terms_or_match(self):
         await self.memory.append_daily("Jun 推荐了几本关于阅读的书，周末一起讨论")
@@ -68,6 +73,7 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Jun", result["results"])
         self.assertIn("书", result["results"])
         self.assertNotIn("天气记录", result["results"])
+        self.assertNotIn(str(self.memory.root), result["results"])
 
     async def test_search_memory_multi_terms_partial_hits(self):
         await self.memory.append_daily("Jun 喜欢爬山和摄影")

@@ -82,6 +82,10 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
 
         result = await self.memory.search_keyword(["Alice"])
         self.assertIn("Alice", result)
+        today = date.today().isoformat()
+        self.assertIn(f"[daily {today}]", result)
+        self.assertNotIn(str(self.memory.root), result)
+        self.assertNotIn(".md:", result)
 
     async def test_search_keyword_no_matches(self):
         await self.memory.append_daily("Something unrelated")
@@ -93,6 +97,8 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         result = await self.memory.search_keyword(["Jun", "书", "阅读", "推荐"])
         self.assertIn("Jun", result)
         self.assertIn("书", result)
+        self.assertIn(f"[daily {date.today().isoformat()}]", result)
+        self.assertNotIn(str(self.memory.root), result)
 
     async def test_search_date_range(self):
         today = date.today()
@@ -106,12 +112,33 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Today stuff", result)
         self.assertIn("Yesterday stuff", result)
+        self.assertIn(f"[daily {today.isoformat()}]", result)
+        self.assertIn(f"[daily {yesterday.isoformat()}]", result)
+        self.assertNotIn(str(self.memory.root), result)
 
     async def test_list_files(self):
         await self.memory.append_daily("entry 1")
         files = await self.memory.list_files("daily")
         self.assertTrue(len(files) >= 1)
-        self.assertTrue(all(f.endswith(".md") for f in files))
+        self.assertTrue(all(f.startswith("[daily ") and f.endswith("]") for f in files))
+        self.assertTrue(all(str(self.memory.root) not in f for f in files))
+        self.assertTrue(all(".md" not in f for f in files))
+
+    async def test_label_for_path_variants(self):
+        daily = self.memory.daily_path(date(2026, 8, 3))
+        self.assertEqual(self.memory._label_for_path(daily), "[daily 2026-08-03]")
+
+        weekly = self.memory.weekly_path(date(2026, 7, 28), date(2026, 8, 3))
+        self.assertEqual(
+            self.memory._label_for_path(weekly),
+            "[weekly 2026-07-28 to 2026-08-03]",
+        )
+
+        monthly = self.memory.monthly_path(2026, 8)
+        self.assertEqual(self.memory._label_for_path(monthly), "[monthly 2026-08]")
+
+        yearly = self.memory.yearly_path(2026)
+        self.assertEqual(self.memory._label_for_path(yearly), "[yearly 2026]")
 
     async def test_week_range_for(self):
         d = date(2025, 7, 9)  # Wednesday
@@ -138,7 +165,8 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
             files = await self.memory.list_files("all")
 
         self.assertIn("Native append", text)
-        self.assertIn(str(summary_path), files)
+        self.assertIn(f"[weekly {start.isoformat()} to {end.isoformat()}]", files)
+        self.assertIn(f"[daily {d.isoformat()}]", files)
 
 
 if __name__ == "__main__":
