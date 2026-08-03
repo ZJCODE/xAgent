@@ -259,6 +259,42 @@ class MarkdownMemory:
             return f"[yearly {stem}]"
         return "[memory]"
 
+    def _event_time_for_path(self, path: Path) -> float:
+        """Return epoch seconds for ranking; newer memory sorts higher on ties."""
+        try:
+            relative = path.resolve().relative_to(self.root.resolve())
+        except ValueError:
+            return 0.0
+
+        parts = relative.parts
+        if not parts:
+            return 0.0
+
+        scope = parts[0]
+        stem = relative.stem
+        try:
+            if scope == "daily":
+                event_date = date.fromisoformat(stem)
+            elif scope == "weekly" and "_to_" in stem:
+                _, end = stem.split("_to_", 1)
+                event_date = date.fromisoformat(end)
+            elif scope == "monthly" and "-" in stem:
+                year_text, month_text = stem.split("-", 1)
+                year = int(year_text)
+                month = int(month_text)
+                if month == 12:
+                    event_date = date(year, 12, 31)
+                else:
+                    event_date = date(year, month + 1, 1) - timedelta(days=1)
+            elif scope == "yearly":
+                event_date = date(int(stem), 12, 31)
+            else:
+                return 0.0
+        except ValueError:
+            return 0.0
+
+        return datetime.combine(event_date, datetime.min.time()).timestamp()
+
     # ------------------------------------------------------------------
     # Internal I/O primitives (stdin-pipe based for safety)
     # ------------------------------------------------------------------
@@ -316,11 +352,11 @@ class MarkdownMemory:
         terms: list[str],
         search_dir: Path,
         context_lines: int,
-    ) -> list[tuple[int, str, str, int, int, list[str]]]:
+    ) -> list[tuple[int, float, str, str, int, int, list[str]]]:
         if not search_dir.exists() or not terms:
             return []
 
-        scored_blocks: list[tuple[int, str, str, int, int, list[str]]] = []
+        scored_blocks: list[tuple[int, float, str, str, int, int, list[str]]] = []
         for path in sorted(search_dir.rglob("*.md")):
             if not path.is_file():
                 continue
@@ -330,6 +366,7 @@ class MarkdownMemory:
                 continue
 
             label = self._label_for_path(path)
+            event_time = self._event_time_for_path(path)
             path_key = str(path)
             for index, line in enumerate(lines):
                 if score_text(line, terms) <= 0:
@@ -341,6 +378,7 @@ class MarkdownMemory:
                 scored_blocks.append(
                     (
                         score_text(window, terms),
+                        event_time,
                         label,
                         path_key,
                         start,
@@ -352,15 +390,15 @@ class MarkdownMemory:
 
     @staticmethod
     def _format_scored_blocks(
-        scored_blocks: list[tuple[int, str, str, int, int, list[str]]],
+        scored_blocks: list[tuple[int, float, str, str, int, int, list[str]]],
         max_results: int,
         max_chars: int = _DEFAULT_SEARCH_MAX_CHARS,
     ) -> str:
-        scored_blocks.sort(key=lambda item: (-item[0], item[1], -item[3]))
+        scored_blocks.sort(key=lambda item: (-item[0], -item[1], -item[4]))
         covered_by_path: dict[str, set[int]] = {}
         blocks: list[str] = []
         used_chars = 0
-        for _score, label, path_key, start, end, plain_lines in scored_blocks:
+        for _score, _event_time, label, path_key, start, end, plain_lines in scored_blocks:
             covered = covered_by_path.setdefault(path_key, set())
             if any(line_number in covered for line_number in range(start, end)):
                 continue
@@ -401,7 +439,7 @@ class MarkdownMemory:
         max_results: int = _DEFAULT_SEARCH_MAX_RESULTS,
         max_chars: int = _DEFAULT_SEARCH_MAX_CHARS,
     ) -> str:
-        scored_blocks: list[tuple[int, str, str, int, int, list[str]]] = []
+        scored_blocks: list[tuple[int, float, str, str, int, int, list[str]]] = []
         for search_dir in search_dirs:
             scored_blocks.extend(
                 self._collect_scored_blocks(terms, search_dir, context_lines)

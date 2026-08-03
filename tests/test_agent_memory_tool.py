@@ -301,6 +301,60 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(blocks), 20)
         self.assertIn("[daily ", result)
 
+    async def test_search_messages_same_score_prefers_newer_timestamp(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            msg_storage = MessageStorage(path=db_path)
+            older = Message.create(
+                content="same-score marker old",
+                role=RoleType.USER,
+                sender_id="alice",
+            ).model_copy(update={"timestamp": 1_700_000_000.0})
+            newer = Message.create(
+                content="same-score marker new",
+                role=RoleType.USER,
+                sender_id="alice",
+            ).model_copy(update={"timestamp": 1_800_000_000.0})
+            await msg_storage.add_messages(older)
+            await msg_storage.add_messages(newer)
+            raw = await msg_storage.search_messages(
+                terms=["same-score"],
+                max_results=1,
+                max_chars=100_000,
+            )
+            self.assertIn("marker new", raw)
+            self.assertNotIn("marker old", raw)
+        finally:
+            os.unlink(db_path)
+
+    async def test_search_messages_higher_score_beats_newer_lower_score(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            msg_storage = MessageStorage(path=db_path)
+            older_rich = Message.create(
+                content="Alpha Beta Gamma trio",
+                role=RoleType.USER,
+                sender_id="alice",
+            ).model_copy(update={"timestamp": 1_700_000_000.0})
+            newer_thin = Message.create(
+                content="Alpha alone",
+                role=RoleType.USER,
+                sender_id="alice",
+            ).model_copy(update={"timestamp": 1_800_000_000.0})
+            await msg_storage.add_messages(older_rich)
+            await msg_storage.add_messages(newer_thin)
+            raw = await msg_storage.search_messages(
+                terms=["Alpha", "Beta", "Gamma"],
+                max_results=1,
+                max_chars=100_000,
+            )
+            self.assertIn("trio", raw)
+            self.assertNotIn("alone", raw)
+        finally:
+            os.unlink(db_path)
+
 
 if __name__ == "__main__":
     unittest.main()

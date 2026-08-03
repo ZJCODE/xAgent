@@ -369,7 +369,7 @@ class MessageStorage:
         if not rows:
             return ""
 
-        scored: list[tuple[int, int, Message]] = []
+        scored: list[tuple[int, float, int, Message]] = []
         for row in rows:
             try:
                 msg = Message.model_validate_json(row["message_json"])
@@ -378,12 +378,12 @@ class MessageStorage:
             hit_score = score_text(msg.content or "", terms)
             if hit_score <= 0:
                 continue
-            scored.append((hit_score, int(row["id"]), msg))
+            scored.append((hit_score, float(msg.timestamp), int(row["id"]), msg))
 
-        scored.sort(key=lambda item: (-item[0], -item[1]))
+        scored.sort(key=lambda item: (-item[0], -item[1], -item[2]))
         matched: list[str] = []
         used_chars = 0
-        for _, _, msg in scored:
+        for _, _, _, msg in scored:
             if len(matched) >= max_results:
                 break
             formatted = self._format_search_match(msg)

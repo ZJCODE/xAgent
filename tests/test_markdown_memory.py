@@ -140,6 +140,62 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         yearly = self.memory.yearly_path(2026)
         self.assertEqual(self.memory._label_for_path(yearly), "[yearly 2026]")
 
+    async def test_search_same_score_prefers_newer_daily(self):
+        older = date(2026, 1, 1)
+        newer = date(2026, 8, 1)
+        await self.memory.append_daily("shared-token note", target_date=older)
+        await self.memory.append_daily("shared-token note", target_date=newer)
+        result = await self.memory.search_keyword(
+            ["shared-token"],
+            context_lines=0,
+            max_results=2,
+            max_chars=100_000,
+        )
+        newer_pos = result.find("[daily 2026-08-01]")
+        older_pos = result.find("[daily 2026-01-01]")
+        self.assertGreaterEqual(newer_pos, 0)
+        self.assertGreaterEqual(older_pos, 0)
+        self.assertLess(newer_pos, older_pos)
+
+    async def test_search_higher_score_beats_newer_lower_score(self):
+        older = date(2026, 1, 1)
+        newer = date(2026, 8, 1)
+        await self.memory.append_daily("Alpha Beta Gamma all three", target_date=older)
+        await self.memory.append_daily("Alpha only", target_date=newer)
+        result = await self.memory.search_keyword(
+            ["Alpha", "Beta", "Gamma"],
+            context_lines=0,
+            max_results=2,
+            max_chars=100_000,
+        )
+        old_pos = result.find("Alpha Beta Gamma")
+        new_pos = result.find("Alpha only")
+        self.assertGreaterEqual(old_pos, 0)
+        self.assertGreaterEqual(new_pos, 0)
+        self.assertLess(old_pos, new_pos)
+
+    async def test_event_time_for_path_variants(self):
+        daily = self.memory.daily_path(date(2026, 8, 3))
+        weekly = self.memory.weekly_path(date(2026, 7, 28), date(2026, 8, 3))
+        monthly = self.memory.monthly_path(2026, 8)
+        yearly = self.memory.yearly_path(2026)
+        self.assertGreater(
+            self.memory._event_time_for_path(daily),
+            0.0,
+        )
+        self.assertEqual(
+            self.memory._event_time_for_path(daily),
+            self.memory._event_time_for_path(weekly),
+        )
+        self.assertGreater(
+            self.memory._event_time_for_path(monthly),
+            self.memory._event_time_for_path(daily),
+        )
+        self.assertGreater(
+            self.memory._event_time_for_path(yearly),
+            self.memory._event_time_for_path(monthly),
+        )
+
     async def test_week_range_for(self):
         d = date(2025, 7, 9)  # Wednesday
         monday, sunday = MarkdownMemory.week_range_for(d)
