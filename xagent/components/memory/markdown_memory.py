@@ -14,7 +14,8 @@ MemoryScope = Literal["daily", "weekly", "monthly", "yearly", "all"]
 
 _TIME_SCOPES: tuple[str, ...] = ("daily", "weekly", "monthly", "yearly")
 _VALID_SCOPES: set[str] = {*_TIME_SCOPES, "all"}
-_DEFAULT_SEARCH_MAX_RESULTS = 50
+_DEFAULT_SEARCH_MAX_RESULTS = 20
+_DEFAULT_SEARCH_MAX_CHARS = 6000
 
 
 class MarkdownMemory:
@@ -130,6 +131,7 @@ class MarkdownMemory:
         scope: MemoryScope | str = "all",
         context_lines: int = 3,
         max_results: int = _DEFAULT_SEARCH_MAX_RESULTS,
+        max_chars: int = _DEFAULT_SEARCH_MAX_CHARS,
     ) -> str:
         """Search markdown files for verbatim terms (OR + hit-count ranking).
 
@@ -139,6 +141,7 @@ class MarkdownMemory:
         scope = self._normalize_scope(scope)
         context_lines = max(0, min(int(context_lines), 20))
         max_results = max(1, int(max_results))
+        max_chars = max(1, int(max_chars))
 
         if not terms:
             return ""
@@ -149,6 +152,7 @@ class MarkdownMemory:
             self._scope_roots(scope),
             context_lines,
             max_results,
+            max_chars,
         )
 
     # ------------------------------------------------------------------
@@ -350,24 +354,30 @@ class MarkdownMemory:
     def _format_scored_blocks(
         scored_blocks: list[tuple[int, str, str, int, int, list[str]]],
         max_results: int,
+        max_chars: int = _DEFAULT_SEARCH_MAX_CHARS,
     ) -> str:
         scored_blocks.sort(key=lambda item: (-item[0], item[1], -item[3]))
         covered_by_path: dict[str, set[int]] = {}
-        output: list[str] = []
-        kept = 0
+        blocks: list[str] = []
+        used_chars = 0
         for _score, label, path_key, start, end, plain_lines in scored_blocks:
             covered = covered_by_path.setdefault(path_key, set())
             if any(line_number in covered for line_number in range(start, end)):
                 continue
             covered.update(range(start, end))
-            if output:
-                output.append("---")
-            output.append(label)
-            output.extend(plain_lines)
-            kept += 1
-            if kept >= max_results:
+            block_text = "\n".join([label, *plain_lines])
+            separator_len = len("\n---\n") if blocks else 0
+            addition = separator_len + len(block_text)
+            if blocks and used_chars + addition > max_chars:
                 break
-        return "\n".join(output)
+            if not blocks and len(block_text) > max_chars:
+                blocks.append(block_text[:max_chars])
+                break
+            blocks.append(block_text)
+            used_chars += addition
+            if len(blocks) >= max_results:
+                break
+        return "\n---\n".join(blocks)
 
     def _search_keyword_sync(
         self,
@@ -375,10 +385,12 @@ class MarkdownMemory:
         search_dir: Path,
         context_lines: int,
         max_results: int = _DEFAULT_SEARCH_MAX_RESULTS,
+        max_chars: int = _DEFAULT_SEARCH_MAX_CHARS,
     ) -> str:
         return self._format_scored_blocks(
             self._collect_scored_blocks(terms, search_dir, context_lines),
             max_results,
+            max_chars,
         )
 
     def _search_keyword_many_sync(
@@ -387,10 +399,11 @@ class MarkdownMemory:
         search_dirs: List[Path],
         context_lines: int,
         max_results: int = _DEFAULT_SEARCH_MAX_RESULTS,
+        max_chars: int = _DEFAULT_SEARCH_MAX_CHARS,
     ) -> str:
         scored_blocks: list[tuple[int, str, str, int, int, list[str]]] = []
         for search_dir in search_dirs:
             scored_blocks.extend(
                 self._collect_scored_blocks(terms, search_dir, context_lines)
             )
-        return self._format_scored_blocks(scored_blocks, max_results)
+        return self._format_scored_blocks(scored_blocks, max_results, max_chars)

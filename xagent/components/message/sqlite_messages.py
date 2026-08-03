@@ -26,6 +26,9 @@ class MessageStorageConfig:
     CONNECT_TIMEOUT = 5.0
     TABLE_NAME = "messages"
     CURRENT_COLUMNS = {"id", "timestamp", "message_json"}
+    DEFAULT_SEARCH_MAX_RESULTS = 20
+    DEFAULT_SEARCH_MAX_CHARS = 6000
+    SEARCH_FETCH_LIMIT_CAP = 150
 
 
 def _message_with_storage_cursor(message: Message, cursor: int) -> Message:
@@ -294,18 +297,22 @@ class MessageStorage:
         terms: list[str],
         date_start: Optional[str] = None,
         date_end: Optional[str] = None,
-        max_results: int = 500,
+        max_results: int = MessageStorageConfig.DEFAULT_SEARCH_MAX_RESULTS,
+        max_chars: int = MessageStorageConfig.DEFAULT_SEARCH_MAX_CHARS,
     ) -> str:
         """Search messages by verbatim terms using SQLite LIKE OR + hit scoring."""
         terms = normalize_terms(terms)
         if not terms:
             return ""
+        max_results = max(1, int(max_results))
+        max_chars = max(1, int(max_chars))
         return await asyncio.to_thread(
             self._search_messages_sync,
             terms,
             date_start,
             date_end,
             max_results,
+            max_chars,
         )
 
     def _search_messages_sync(
@@ -314,6 +321,7 @@ class MessageStorage:
         date_start: Optional[str],
         date_end: Optional[str],
         max_results: int,
+        max_chars: int,
     ) -> str:
         from datetime import datetime, timezone
 
@@ -344,7 +352,7 @@ class MessageStorage:
 
         where = " AND ".join(conditions)
         table = MessageStorageConfig.TABLE_NAME
-        fetch_limit = max(max_results * 4, max_results) if len(terms) > 1 else max_results
+        fetch_limit = min(max_results * 5, MessageStorageConfig.SEARCH_FETCH_LIMIT_CAP)
 
         with self._connect() as connection:
             rows = connection.execute(
@@ -373,10 +381,22 @@ class MessageStorage:
             scored.append((hit_score, int(row["id"]), msg))
 
         scored.sort(key=lambda item: (-item[0], -item[1]))
-        matched = [
-            self._format_search_match(msg)
-            for _, _, msg in scored[:max_results]
-        ]
+        matched: list[str] = []
+        used_chars = 0
+        for _, _, msg in scored:
+            if len(matched) >= max_results:
+                break
+            formatted = self._format_search_match(msg)
+            separator_len = len("\n---\n") if matched else 0
+            addition = separator_len + len(formatted)
+            if matched and used_chars + addition > max_chars:
+                break
+            if not matched and len(formatted) > max_chars:
+                matched.append(formatted[:max_chars])
+                break
+            matched.append(formatted)
+            used_chars += addition
+
         matched.reverse()
         return "\n---\n".join(matched)
 

@@ -11,6 +11,10 @@ if TYPE_CHECKING:
     from xagent.components.memory import MarkdownMemory
     from xagent.components.message import MessageStorage
 
+_SEARCH_MAX_RESULTS = 20
+_SEARCH_MAX_RESULTS_WITH_DATE = 30
+_SEARCH_MAX_CHARS = 6000
+
 
 def create_write_memory_tool(
     memory: MarkdownMemory,
@@ -81,6 +85,8 @@ def create_search_memory_tool(
 
         terms = normalize_terms(query)
         context_lines = max(0, min(int(context_lines), 10))
+        max_results = _SEARCH_MAX_RESULTS_WITH_DATE if date else _SEARCH_MAX_RESULTS
+        max_chars = _SEARCH_MAX_CHARS
         results = ""
 
         if terms and not date:
@@ -88,9 +94,15 @@ def create_search_memory_tool(
                 terms=terms,
                 scope=scope,
                 context_lines=context_lines,
+                max_results=max_results,
+                max_chars=max_chars,
             )
             if message_storage is not None:
-                msg_results = await message_storage.search_messages(terms=terms)
+                msg_results = await message_storage.search_messages(
+                    terms=terms,
+                    max_results=max_results,
+                    max_chars=max_chars,
+                )
                 if msg_results:
                     prefix = "\n\n--- Message Store ---\n" if results else ""
                     results = results + prefix + msg_results
@@ -125,11 +137,22 @@ def create_search_memory_tool(
                 candidates.sort(key=lambda item: (-item[0], -item[1]))
                 covered: set[int] = set()
                 matched_blocks: list[str] = []
+                used_chars = 0
                 for _, start_idx, end_idx, block in candidates:
                     if any(idx in covered for idx in range(start_idx, end_idx)):
                         continue
                     covered.update(range(start_idx, end_idx))
+                    separator_len = len("\n---\n") if matched_blocks else 0
+                    addition = separator_len + len(block)
+                    if matched_blocks and used_chars + addition > max_chars:
+                        break
+                    if not matched_blocks and len(block) > max_chars:
+                        matched_blocks.append(block[:max_chars])
+                        break
                     matched_blocks.append(block)
+                    used_chars += addition
+                    if len(matched_blocks) >= max_results:
+                        break
                 results = "\n---\n".join(matched_blocks)
             if message_storage is not None:
                 if " to " in date:
@@ -138,11 +161,15 @@ def create_search_memory_tool(
                         terms=terms,
                         date_start=parts[0].strip(),
                         date_end=parts[1].strip(),
+                        max_results=max_results,
+                        max_chars=max_chars,
                     )
                 else:
                     msg_results = await message_storage.search_messages(
                         terms=terms,
                         date_start=date.strip(),
+                        max_results=max_results,
+                        max_chars=max_chars,
                     )
                 if msg_results:
                     prefix = "\n\n--- Message Store ---\n" if results else ""

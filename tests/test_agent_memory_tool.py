@@ -215,6 +215,92 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("project notes", result["results"])
         self.assertNotIn("Message Store", result["results"])
 
+    async def test_search_messages_caps_result_count(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            msg_storage = MessageStorage(path=db_path)
+            for index in range(35):
+                await msg_storage.add_messages(
+                    Message.create(
+                        content=f"unique-token hit number {index}",
+                        role=RoleType.USER,
+                        sender_id="alice",
+                    )
+                )
+            raw = await msg_storage.search_messages(terms=["unique-token"], max_results=20)
+            # Each match is one block separated by ---
+            blocks = [block for block in raw.split("\n---\n") if block.strip()]
+            self.assertLessEqual(len(blocks), 20)
+            self.assertGreaterEqual(len(blocks), 1)
+        finally:
+            os.unlink(db_path)
+
+    async def test_search_messages_caps_char_budget(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            msg_storage = MessageStorage(path=db_path)
+            long_body = "TOKEN " + ("x" * 3000)
+            for _ in range(5):
+                await msg_storage.add_messages(
+                    Message.create(
+                        content=long_body,
+                        role=RoleType.USER,
+                        sender_id="alice",
+                    )
+                )
+            raw = await msg_storage.search_messages(
+                terms=["TOKEN"],
+                max_results=20,
+                max_chars=6000,
+            )
+            self.assertLessEqual(len(raw), 6000 + 16)  # small slack for separators
+            self.assertIn("TOKEN", raw)
+        finally:
+            os.unlink(db_path)
+
+    async def test_search_memory_tool_applies_message_count_cap(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            msg_storage = MessageStorage(path=db_path)
+            for index in range(30):
+                await msg_storage.add_messages(
+                    Message.create(
+                        content=f"budget-cap-{index} marker",
+                        role=RoleType.USER,
+                        sender_id="bob",
+                    )
+                )
+            tool = create_search_memory_tool(
+                self.memory,
+                is_enabled=True,
+                message_storage=msg_storage,
+            )
+            result = await tool(query=["budget-cap"])
+            blocks = [
+                block
+                for block in result["results"].split("\n---\n")
+                if "budget-cap" in block
+            ]
+            self.assertLessEqual(len(blocks), 20)
+        finally:
+            os.unlink(db_path)
+
+    async def test_diary_search_caps_result_count(self):
+        for index in range(25):
+            await self.memory.append_daily(f"diary-cap marker {index}")
+        result = await self.memory.search_keyword(
+            ["diary-cap"],
+            context_lines=0,
+            max_results=20,
+            max_chars=100_000,
+        )
+        blocks = [block for block in result.split("\n---\n") if block.strip()]
+        self.assertLessEqual(len(blocks), 20)
+        self.assertIn("[daily ", result)
+
 
 if __name__ == "__main__":
     unittest.main()
