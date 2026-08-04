@@ -302,8 +302,8 @@ def _run_feishu_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
             runner.agent,
             config.get("runtime") if isinstance(config, dict) else None,
             logger_=logging.getLogger(__name__),
-            subconscious_delivery_sink=getattr(adapter, "deliver_subconscious_message", None),
-            subconscious_deliverable_channels={"feishu"},
+            outbound_delivery_sink=getattr(adapter, "deliver_outbound_message", None),
+            outbound_channels={"feishu"},
         )
         stop_requested = False
         loop = asyncio.get_running_loop()
@@ -394,8 +394,8 @@ def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
             runner.agent,
             config.get("runtime") if isinstance(config, dict) else None,
             logger_=logging.getLogger(__name__),
-            subconscious_delivery_sink=getattr(adapter, "deliver_subconscious_message", None),
-            subconscious_deliverable_channels={"weixin"},
+            outbound_delivery_sink=getattr(adapter, "deliver_outbound_message", None),
+            outbound_channels={"weixin"},
         )
         stop_requested = False
         loop = asyncio.get_running_loop()
@@ -489,8 +489,8 @@ def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
             runner.agent,
             config.get("runtime") if isinstance(config, dict) else None,
             logger_=logging.getLogger(__name__),
-            subconscious_delivery_sink=getattr(runtime, "deliver_subconscious_message", None),
-            subconscious_deliverable_channels={"voice"},
+            outbound_delivery_sink=getattr(runtime, "deliver_outbound_message", None),
+            outbound_channels={"voice"},
         )
         stop_requested = False
         loop = asyncio.get_running_loop()

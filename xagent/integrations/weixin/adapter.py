@@ -16,6 +16,7 @@ from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
     AsyncTaskScheduler,
+    OutboundIntent,
     ScheduledDeliveryContext,
     SubconsciousDelivery,
     resolve_contacts_path,
@@ -669,37 +670,39 @@ class WeixinAdapter:
             stable_key=f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}",
         )
 
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        if delivery.recipient.channel != "weixin":
-            raise ValueError(f"Weixin runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        user_id = str(delivery.recipient.target.get("user_id") or delivery.recipient.user_id or "").strip()
+    async def deliver_outbound_message(self, intent: OutboundIntent) -> None:
+        if intent.recipient.channel != "weixin":
+            raise ValueError(f"Weixin runtime cannot deliver outbound channel {intent.recipient.channel!r}")
+        user_id = str(intent.recipient.target.get("user_id") or intent.recipient.user_id or "").strip()
         if not user_id:
-            raise ValueError("subconscious Weixin delivery is missing user_id")
+            raise ValueError("outbound Weixin delivery is missing user_id")
         context_token = self._context_tokens.get(user_id)
         if not context_token:
-            raise ValueError(f"subconscious Weixin delivery cannot send to {user_id}: no cached context_token")
+            raise ValueError(f"outbound Weixin delivery cannot send to {user_id}: no cached context_token")
         await self._send_text_and_attachments(
             user_id=user_id,
             context_token=context_token,
-            content=delivery.content,
+            content=intent.content,
             attachments=[],
-            stable_key=f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{user_id}",
+            stable_key=f"outbound:{intent.intent_id}:{user_id}",
         )
         message_handler = getattr(self.agent, "message_handler", None)
         store_model_reply = getattr(message_handler, "store_model_reply", None)
         if callable(store_model_reply):
             try:
                 await store_model_reply(
-                    delivery.content,
+                    intent.content,
                     getattr(self.agent, "_assistant_sender_id", "agent"),
                     metadata={
-                        "subconscious": {
-                            "source": "subconscious",
-                            "created_at": delivery.created_at.isoformat(sep=" "),
+                        "outbound": {
+                            "intent_id": intent.intent_id,
+                            "source": intent.source,
+                            "motive": intent.motive,
+                            "created_at": intent.created_at.isoformat(sep=" "),
                             "recipient": {
-                                "channel": delivery.recipient.channel,
-                                "user_id": delivery.recipient.user_id,
-                                "target": delivery.recipient.target,
+                                "channel": intent.recipient.channel,
+                                "user_id": intent.recipient.user_id,
+                                "target": intent.recipient.target,
                             },
                         }
                     },
@@ -707,7 +710,20 @@ class WeixinAdapter:
                     recipient_id=user_id,
                 )
             except Exception:
-                self.logger.debug("Failed to persist Weixin subconscious delivery", exc_info=True)
+                self.logger.debug("Failed to persist Weixin outbound delivery", exc_info=True)
+
+    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        await self.deliver_outbound_message(
+            OutboundIntent(
+                intent_id=f"legacy-subconscious-{delivery.created_at.timestamp()}",
+                content=delivery.content,
+                recipient=delivery.recipient,
+                source="subconscious",
+                created_at=delivery.created_at,
+                motive="self",
+                internal_content=delivery.internal_content,
+            )
+        )
 
     async def _scheduled_task_result(self, task, *, user_id: str) -> _WeixinScheduledTaskResult:
         if task.task_type == "message":

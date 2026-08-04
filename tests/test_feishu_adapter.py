@@ -416,7 +416,7 @@ class FeishuAdapterTests(unittest.TestCase):
         agent.message_handler.store_model_reply.assert_awaited_once()
         self.assertEqual(agent.message_handler.store_model_reply.await_args.args[0], "A direct thought")
         metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
-        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
+        self.assertEqual(metadata["outbound"]["source"], "subconscious")
 
     def test_scheduled_agent_task_dispatch_sends_agent_reply_to_feishu_chat(self):
         async def run_test():

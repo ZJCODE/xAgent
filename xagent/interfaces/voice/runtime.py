@@ -15,6 +15,7 @@ from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Protocol
 from xagent.core.config import AgentConfig
 from xagent.core.runtime import (
     AsyncTaskScheduler,
+    OutboundIntent,
     ScheduledDeliveryContext,
     ScheduledTaskRecord,
     SubconsciousDelivery,
@@ -522,13 +523,14 @@ class VoiceRuntime:
             playback_stop_event.set()
             self.pause_event.clear()
 
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        if delivery.recipient.channel != "voice":
-            raise ValueError(f"Voice runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        text = str(delivery.content or "").strip()
+    async def deliver_outbound_message(self, intent: OutboundIntent) -> None:
+        if intent.recipient.channel != "voice":
+            raise ValueError(f"Voice runtime cannot deliver outbound channel {intent.recipient.channel!r}")
+        text = str(intent.content or "").strip()
         if not text:
-            raise ValueError("subconscious voice delivery produced no content")
-        self.output("\nSubconscious message")
+            raise ValueError("outbound voice delivery produced no content")
+        label = "Subconscious message" if intent.source == "subconscious" else "Outbound message"
+        self.output(f"\n{label}")
         async with self._playback_lock:
             await self._play_scheduled_text(text)
         message_handler = getattr(self.agent, "message_handler", None)
@@ -536,21 +538,23 @@ class VoiceRuntime:
         if callable(store_model_reply):
             try:
                 recipient_id = str(
-                    delivery.recipient.target.get("user_id")
-                    or delivery.recipient.user_id
+                    intent.recipient.target.get("user_id")
+                    or intent.recipient.user_id
                     or self.options.user_id
                 )
                 await store_model_reply(
                     text,
                     getattr(self.agent, "_assistant_sender_id", "agent"),
                     metadata={
-                        "subconscious": {
-                            "source": "subconscious",
-                            "created_at": delivery.created_at.isoformat(sep=" "),
+                        "outbound": {
+                            "intent_id": intent.intent_id,
+                            "source": intent.source,
+                            "motive": intent.motive,
+                            "created_at": intent.created_at.isoformat(sep=" "),
                             "recipient": {
-                                "channel": delivery.recipient.channel,
-                                "user_id": delivery.recipient.user_id,
-                                "target": delivery.recipient.target,
+                                "channel": intent.recipient.channel,
+                                "user_id": intent.recipient.user_id,
+                                "target": intent.recipient.target,
                             },
                         }
                     },
@@ -558,7 +562,20 @@ class VoiceRuntime:
                     recipient_id=recipient_id,
                 )
             except Exception:
-                self.logger.debug("Failed to persist voice subconscious delivery", exc_info=True)
+                self.logger.debug("Failed to persist voice outbound delivery", exc_info=True)
+
+    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        await self.deliver_outbound_message(
+            OutboundIntent(
+                intent_id=f"legacy-subconscious-{delivery.created_at.timestamp()}",
+                content=delivery.content,
+                recipient=delivery.recipient,
+                source="subconscious",
+                created_at=delivery.created_at,
+                motive="self",
+                internal_content=delivery.internal_content,
+            )
+        )
 
     async def _scheduled_task_text(self, task: ScheduledTaskRecord) -> str:
         if task.task_type == "message":

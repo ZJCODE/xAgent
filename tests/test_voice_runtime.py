@@ -585,7 +585,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["channel"], "voice")
         self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["recipient_id"], "alice")
         metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
-        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
+        self.assertEqual(metadata["outbound"]["source"], "subconscious")
 
     def test_runtime_default_keeps_microphone_paused_during_playback(self):
         config = voice_channel_config({"api_key": "test-key"})

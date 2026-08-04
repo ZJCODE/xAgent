@@ -9,14 +9,14 @@ from typing import Any, Dict, Optional
 from fastapi import WebSocket
 
 from ...core.agent import Agent
-from ...core.runtime import SubconsciousDelivery
+from ...core.runtime import OutboundIntent, SubconsciousDelivery
 from ...interfaces.server.serializers import message_item
 from ...schemas.attachment import dedupe_attachments
 from .constants import CHANNEL_API
 
 
 class DeliveryBus:
-    """Broadcast scheduled and subconscious messages to WebSocket subscribers."""
+    """Broadcast scheduled and outbound messages to WebSocket subscribers."""
 
     def __init__(self, *, logger: Optional[logging.Logger] = None) -> None:
         self.logger = logger or logging.getLogger(self.__class__.__name__)
@@ -78,43 +78,65 @@ class DeliveryBus:
             payload["message"] = message_item(stored_message)
         await self.push(user_id, payload)
 
-    async def deliver_subconscious(self, delivery: SubconsciousDelivery, *, agent: Agent) -> None:
-        if delivery.recipient.channel != CHANNEL_API:
-            raise ValueError(f"api runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        target = delivery.recipient.target
-        user_id = str(target.get("user_id") or delivery.recipient.user_id or "").strip()
+    async def deliver_outbound(self, intent: OutboundIntent, *, agent: Agent) -> None:
+        if intent.recipient.channel != CHANNEL_API:
+            raise ValueError(f"api runtime cannot deliver outbound channel {intent.recipient.channel!r}")
+        target = intent.recipient.target
+        user_id = str(target.get("user_id") or intent.recipient.user_id or "").strip()
         if not user_id:
-            raise ValueError("subconscious delivery is missing user_id")
+            raise ValueError("outbound delivery is missing user_id")
 
         message_handler = getattr(agent, "message_handler", None)
         store_model_reply = getattr(message_handler, "store_model_reply", None)
         stored_message = None
         if callable(store_model_reply):
             stored_message = await store_model_reply(
-                delivery.content,
+                intent.content,
                 getattr(agent, "_assistant_sender_id", "agent"),
                 metadata={
-                    "subconscious": {
-                        "source": "subconscious",
-                        "created_at": delivery.created_at.isoformat(sep=" "),
+                    "outbound": {
+                        "intent_id": intent.intent_id,
+                        "source": intent.source,
+                        "motive": intent.motive,
+                        "created_at": intent.created_at.isoformat(sep=" "),
                         "recipient": {
-                            "channel": delivery.recipient.channel,
-                            "user_id": delivery.recipient.user_id,
-                            "target": delivery.recipient.target,
+                            "channel": intent.recipient.channel,
+                            "user_id": intent.recipient.user_id,
+                            "target": intent.recipient.target,
                         },
                     }
                 },
-                channel=delivery.recipient.channel,
+                channel=intent.recipient.channel,
                 recipient_id=user_id,
             )
 
+        event_type = "subconscious_message" if intent.source == "subconscious" else "outbound_message"
         payload: Dict[str, Any] = {
-            "type": "subconscious_message",
-            "content": delivery.content,
-            "subconscious": {
-                "created_at": delivery.created_at.isoformat(sep=" "),
+            "type": event_type,
+            "content": intent.content,
+            "outbound": {
+                "intent_id": intent.intent_id,
+                "source": intent.source,
+                "motive": intent.motive,
+                "created_at": intent.created_at.isoformat(sep=" "),
             },
         }
+        if intent.source == "subconscious":
+            payload["subconscious"] = {
+                "created_at": intent.created_at.isoformat(sep=" "),
+            }
         if stored_message is not None:
             payload["message"] = message_item(stored_message)
         await self.push(user_id, payload)
+
+    async def deliver_subconscious(self, delivery: SubconsciousDelivery, *, agent: Agent) -> None:
+        intent = OutboundIntent(
+            intent_id=f"legacy-subconscious-{delivery.created_at.timestamp()}",
+            content=delivery.content,
+            recipient=delivery.recipient,
+            source="subconscious",
+            created_at=delivery.created_at,
+            motive="self",
+            internal_content=delivery.internal_content,
+        )
+        await self.deliver_outbound(intent, agent=agent)

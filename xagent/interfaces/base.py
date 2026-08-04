@@ -28,6 +28,7 @@ from ..integrations.langfuse import ObservabilityRuntime, create_observability_r
 from ..tools import (
     create_attach_artifact_tool,
     create_image_generation_tool,
+    create_reach_out_tool,
     create_read_skill_tool,
     create_schedule_task_tool,
     create_web_fetch_tool,
@@ -791,6 +792,9 @@ class BaseAgentRunner:
             ),
             create_schedule_task_tool(
                 tasks_dir=str(self.tasks_dir),
+            ),
+            create_reach_out_tool(
+                workspace=str(self.workspace),
             ),
             create_attach_artifact_tool(
                 workspace_dir=str(self.workspace_dir),

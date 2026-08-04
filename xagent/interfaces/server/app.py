@@ -13,6 +13,7 @@ from .models import ChatInput
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
+    OutboundIntent,
     SubconsciousDelivery,
     create_runtime_heartbeat,
     resolve_contacts_path,
@@ -54,6 +55,9 @@ class AgentHTTPServer(AdminService):
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    async def deliver_outbound_message(self, intent: OutboundIntent) -> None:
+        await self.api.deliver_outbound_message(intent)
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         await self.api.deliver_subconscious_message(delivery)
@@ -106,8 +110,8 @@ class AgentHTTPServer(AdminService):
             self.agent,
             self.config.get("runtime") if isinstance(self.config, dict) else None,
             logger_=self.logger,
-            subconscious_delivery_sink=self.api.deliver_subconscious_message,
-            subconscious_deliverable_channels={"api"},
+            outbound_delivery_sink=self.api.deliver_outbound_message,
+            outbound_channels={"api"},
         )
         try:
             if heartbeat is not None:

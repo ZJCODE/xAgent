@@ -220,7 +220,7 @@ class WeixinAdapterTests(unittest.TestCase):
         self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["channel"], "weixin")
         self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["recipient_id"], "owner@im.wechat")
         metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
-        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
+        self.assertEqual(metadata["outbound"]["source"], "subconscious")
 
 
 if __name__ == "__main__":

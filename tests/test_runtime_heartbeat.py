@@ -76,14 +76,14 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
 
         self.assertIsNone(heartbeat)
 
-    def test_factory_passes_subconscious_delivery_sink(self):
+    def test_factory_passes_outbound_delivery_sink(self):
         class _Agent:
             subconscious_activity = 0.02
 
             def __init__(self, workspace):
                 self.workspace_dir = Path(workspace) / "workspace"
 
-        async def sink(_delivery):
+        async def sink(_intent):
             return None
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -91,10 +91,13 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
                 _Agent(tmpdir),
                 {"heartbeat_enabled": True, "heartbeat_interval_seconds": 1},
                 subconscious_delivery_sink=sink,
+                subconscious_deliverable_channels={"api"},
             )
 
         self.assertIsNotNone(heartbeat)
-        self.assertIs(heartbeat._subconscious_loop._delivery_sink, sink)
+        self.assertIs(heartbeat._outbound_delivery_sink, sink)
+        self.assertEqual(heartbeat._outbound_channels, {"api"})
+        self.assertIsNone(getattr(heartbeat._subconscious_loop, "_delivery_sink", None))
 
     def test_factory_passes_subconscious_deliverable_channels(self):
         class _Agent:
@@ -112,6 +115,7 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
 
         self.assertIsNotNone(heartbeat)
         self.assertEqual(heartbeat._subconscious_loop._deliverable_channels, {"api"})
+        self.assertEqual(heartbeat._outbound_channels, {"api"})
 
 
 class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):

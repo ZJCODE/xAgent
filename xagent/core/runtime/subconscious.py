@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 import logging
@@ -30,8 +29,6 @@ from .scheduler import _fsync_directory
 logger = logging.getLogger(__name__)
 
 CONTACTS_FILENAME = "contacts.json"
-SUBCONSCIOUS_DELIVERY_RETRIES = 2
-SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -47,7 +44,7 @@ class ContactEntry:
 
 @dataclass(frozen=True)
 class SubconsciousDelivery:
-    """A direct outbound message chosen by the subconscious loop."""
+    """Deprecated transitional shape; prefer OutboundIntent."""
 
     content: str
     recipient: ContactEntry
@@ -193,8 +190,8 @@ class SubconsciousLoop:
     Each heartbeat tick has a small probability of triggering an
     subconscious event.  The agent generates a spontaneous thought and
     decides whether it is worth sharing. Raw inner thoughts are written
-    directly to the diary, and thoughts worth sharing are handed to the
-    runtime's direct delivery sink.
+    directly to the diary, and thoughts worth sharing are enqueued as
+    OutboundIntent for channel transport to drain.
     """
 
     def __init__(
@@ -203,14 +200,13 @@ class SubconsciousLoop:
         *,
         workspace: Path,
         probability: Optional[float] = None,
-        delivery_sink: Optional[Callable[[SubconsciousDelivery], Awaitable[None] | None]] = None,
         deliverable_channels: Optional[Iterable[str]] = None,
         logger_: Optional[logging.Logger] = None,
+        delivery_sink: Optional[Callable[[SubconsciousDelivery], Awaitable[None] | None]] = None,
     ) -> None:
         self._agent = agent
         self._workspace = Path(workspace).expanduser().resolve()
         self._contacts_file = resolve_contacts_path(self._workspace)
-        self._delivery_sink = delivery_sink
         self._deliverable_channels = self._normalize_deliverable_channels(deliverable_channels)
         self._logger = logger_ or logger
         self._enabled = AgentConfig.SUBCONSCIOUS_ENABLED
@@ -219,8 +215,10 @@ class SubconsciousLoop:
             if probability is not None
             else float(AgentConfig.SUBCONSCIOUS_ACTIVITY)
         )
-        self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
-        self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
+        if delivery_sink is not None:
+            self._logger.debug(
+                "SubconsciousLoop delivery_sink is deprecated; outbound intents are queued"
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -502,9 +500,9 @@ class SubconsciousLoop:
         internal_content: str,
         recipient_hint: Any,
     ) -> None:
-        """Route a worthy thought for direct delivery when possible.
+        """Enqueue a worthy thought as an OutboundIntent when possible.
 
-        During quiet hours (22:00-8:00), delivery is skipped to avoid
+        During quiet hours (22:00-8:00), enqueue is skipped to avoid
         disturbing the user. The inner thought has already been written
         to the diary by the caller.
         """
@@ -517,59 +515,30 @@ class SubconsciousLoop:
 
         now = datetime.now()
         if not self._is_appropriate_time(now):
-            self._logger.info("Quiet hours – skipping subconscious delivery")
+            self._logger.info("Quiet hours – skipping subconscious outbound enqueue")
             return
 
-        if self._delivery_sink is None:
-            self._logger.info("No subconscious delivery sink configured")
-            return
+        from .outbound import OUTBOUND_SOURCE_SUBCONSCIOUS, enqueue_outbound
 
-        delivery = SubconsciousDelivery(
-            content=external_content,
-            recipient=recipient,
-            internal_content=internal_content,
-            created_at=now,
-        )
         try:
-            await self._deliver_with_retries(delivery)
+            intent = enqueue_outbound(
+                self._workspace,
+                content=external_content,
+                recipient=recipient,
+                source=OUTBOUND_SOURCE_SUBCONSCIOUS,
+                motive="self",
+                internal_content=internal_content,
+                created_at=now,
+            )
             self._logger.info(
-                "Subconscious thought delivered: channel=%s user_id=%s created_at=%s",
+                "Subconscious outbound enqueued: id=%s channel=%s user_id=%s created_at=%s",
+                intent.intent_id,
                 recipient.channel,
                 recipient.user_id,
                 now.isoformat(sep=" "),
             )
         except Exception:
-            self._logger.warning("Subconscious delivery failed", exc_info=True)
-
-    async def _deliver_with_retries(self, delivery: SubconsciousDelivery) -> None:
-        """Deliver a subconscious thought, retrying transient sink failures."""
-        if self._delivery_sink is None:
-            raise RuntimeError("Subconscious delivery sink is not configured")
-
-        attempts = max(1, int(self._delivery_retries) + 1)
-        last_error: Exception | None = None
-        for attempt in range(1, attempts + 1):
-            try:
-                result = self._delivery_sink(delivery)
-                if inspect.isawaitable(result):
-                    await result
-                return
-            except Exception as exc:
-                last_error = exc
-                if attempt >= attempts:
-                    break
-                self._logger.warning(
-                    "Subconscious delivery attempt %s/%s failed; retrying",
-                    attempt,
-                    attempts,
-                    exc_info=True,
-                )
-                delay = max(0.0, float(self._delivery_retry_delay_seconds))
-                if delay:
-                    await asyncio.sleep(delay * attempt)
-
-        if last_error is not None:
-            raise last_error
+            self._logger.warning("Subconscious outbound enqueue failed", exc_info=True)
 
     @staticmethod
     def _pick_recipient(

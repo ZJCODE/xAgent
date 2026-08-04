@@ -51,6 +51,9 @@ class RuntimeHeartbeat:
         today_provider: Callable[[], date] = date.today,
         logger_: Optional[logging.Logger] = None,
         subconscious_loop: Any = None,
+        outbound_workspace: Optional[Path] = None,
+        outbound_delivery_sink: Optional[Callable[..., Any]] = None,
+        outbound_channels: Optional[Iterable[str]] = None,
     ) -> None:
         self.agent = agent
         self.interval_seconds = max(0.001, float(interval_seconds))
@@ -58,6 +61,13 @@ class RuntimeHeartbeat:
         self._logger = logger_ or logger
         self._task: Optional[asyncio.Task[None]] = None
         self._subconscious_loop = subconscious_loop
+        self._outbound_workspace = Path(outbound_workspace).expanduser().resolve() if outbound_workspace else None
+        self._outbound_delivery_sink = outbound_delivery_sink
+        self._outbound_channels = {
+            str(channel).strip().lower()
+            for channel in (outbound_channels or [])
+            if str(channel).strip()
+        }
 
     @property
     def is_running(self) -> bool:
@@ -86,8 +96,26 @@ class RuntimeHeartbeat:
         await self._run_memory_maintenance()
         today = self._today_provider()
         await self._run_periodic_summaries(today)
+        await self._drain_outbound()
         if self._subconscious_loop is not None:
             await self._subconscious_loop.maybe_think()
+
+    async def _drain_outbound(self) -> None:
+        if self._outbound_workspace is None or self._outbound_delivery_sink is None:
+            return
+        if not self._outbound_channels:
+            return
+        from .outbound import drain_outbound_once
+
+        try:
+            await drain_outbound_once(
+                self._outbound_workspace,
+                channels=self._outbound_channels,
+                deliver=self._outbound_delivery_sink,
+                logger_=self._logger,
+            )
+        except Exception as exc:
+            self._logger.warning("Runtime heartbeat outbound drain failed: %s", exc)
 
     async def _run_loop(self) -> None:
         while True:
@@ -155,6 +183,9 @@ def create_runtime_heartbeat(
     runtime_config: Optional[Mapping[str, Any]],
     *,
     logger_: Optional[logging.Logger] = None,
+    outbound_delivery_sink: Optional[Callable[..., Any]] = None,
+    outbound_channels: Optional[Iterable[str]] = None,
+    # Backward-compatible aliases used by older call sites.
     subconscious_delivery_sink: Optional[Callable[..., Any]] = None,
     subconscious_deliverable_channels: Optional[Iterable[str]] = None,
 ) -> Optional[RuntimeHeartbeat]:
@@ -162,8 +193,10 @@ def create_runtime_heartbeat(
     if not config.enabled:
         return None
 
-    # Resolve workspace path for the subconscious loop
     workspace = _resolve_agent_workspace(agent)
+    channels = outbound_channels if outbound_channels is not None else subconscious_deliverable_channels
+    sink = outbound_delivery_sink if outbound_delivery_sink is not None else subconscious_delivery_sink
+
     subconscious_loop = None
     if workspace is not None and AgentConfig.SUBCONSCIOUS_ENABLED:
         from .subconscious import SubconsciousLoop
@@ -172,8 +205,7 @@ def create_runtime_heartbeat(
             agent,
             workspace=workspace,
             probability=getattr(agent, "subconscious_activity", None),
-            delivery_sink=subconscious_delivery_sink,
-            deliverable_channels=subconscious_deliverable_channels,
+            deliverable_channels=channels,
             logger_=logger_,
         )
 
@@ -182,6 +214,9 @@ def create_runtime_heartbeat(
         interval_seconds=config.interval_seconds,
         logger_=logger_,
         subconscious_loop=subconscious_loop,
+        outbound_workspace=workspace,
+        outbound_delivery_sink=sink,
+        outbound_channels=channels,
     )
 
 

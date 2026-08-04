@@ -45,6 +45,7 @@ from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
     AsyncTaskScheduler,
+    OutboundIntent,
     ScheduledDeliveryContext,
     SubconsciousDelivery,
     resolve_contacts_path,
@@ -2310,21 +2311,21 @@ class FeishuAdapter:
             except Exception:
                 self.logger.debug("Failed to persist Feishu scheduled task result", exc_info=True)
 
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        if delivery.recipient.channel != "feishu":
-            raise ValueError(f"Feishu runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        target = delivery.recipient.target
+    async def deliver_outbound_message(self, intent: OutboundIntent) -> None:
+        if intent.recipient.channel != "feishu":
+            raise ValueError(f"Feishu runtime cannot deliver outbound channel {intent.recipient.channel!r}")
+        target = intent.recipient.target
         chat_id = str(target.get("chat_id") or "").strip()
         if not chat_id:
-            raise ValueError("subconscious Feishu delivery is missing chat_id")
+            raise ValueError("outbound Feishu delivery is missing chat_id")
         message_id = str(target.get("message_id") or "").strip() or None
         is_group = bool(target.get("is_group"))
-        uuid_message_id = f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{delivery.recipient.user_id}"
+        uuid_message_id = f"outbound:{intent.intent_id}:{intent.recipient.user_id}"
         await self._send_markdown(
             chat_id=chat_id,
             message_id=message_id,
             uuid_message_id=uuid_message_id,
-            text=delivery.content,
+            text=intent.content,
             is_group=is_group,
         )
         message_handler = getattr(self.agent, "message_handler", None)
@@ -2332,23 +2333,39 @@ class FeishuAdapter:
         if callable(store_model_reply):
             try:
                 await store_model_reply(
-                    delivery.content,
+                    intent.content,
                     getattr(self.agent, "_assistant_sender_id", "agent"),
                     metadata={
-                        "subconscious": {
-                            "source": "subconscious",
-                            "created_at": delivery.created_at.isoformat(sep=" "),
+                        "outbound": {
+                            "intent_id": intent.intent_id,
+                            "source": intent.source,
+                            "motive": intent.motive,
+                            "created_at": intent.created_at.isoformat(sep=" "),
                             "recipient": {
-                                "channel": delivery.recipient.channel,
-                                "user_id": delivery.recipient.user_id,
+                                "channel": intent.recipient.channel,
+                                "user_id": intent.recipient.user_id,
                                 "target": target,
                             },
                         }
                     },
-                    recipient_id=chat_id if is_group else delivery.recipient.user_id,
+                    channel="feishu",
+                    recipient_id=chat_id if is_group else intent.recipient.user_id,
                 )
             except Exception:
-                self.logger.debug("Failed to persist Feishu subconscious delivery", exc_info=True)
+                self.logger.debug("Failed to persist Feishu outbound delivery", exc_info=True)
+
+    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+        await self.deliver_outbound_message(
+            OutboundIntent(
+                intent_id=f"legacy-subconscious-{delivery.created_at.timestamp()}",
+                content=delivery.content,
+                recipient=delivery.recipient,
+                source="subconscious",
+                created_at=delivery.created_at,
+                motive="self",
+                internal_content=delivery.internal_content,
+            )
+        )
 
     async def _scheduled_task_result(self, task) -> _FeishuScheduledTaskResult:
         task_type = task.task_type
