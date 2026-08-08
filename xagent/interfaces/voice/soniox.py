@@ -13,6 +13,13 @@ from typing import Any, Iterable, Iterator
 
 from .config import VoiceChannelConfig, VoiceSTTConfig, VoiceTTSConfig
 from .runtime import VoiceUtterance
+from .ws_util import (
+    WS_PING_INTERVAL_SECONDS,
+    WS_PING_TIMEOUT_SECONDS,
+    is_transport_error,
+    reraise_send_error,
+    wait_for_first_text,
+)
 
 
 SONIOX_STT_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
@@ -74,7 +81,11 @@ def _connect_websocket(url: str):
             "Reinstall or upgrade myxagent, then try again."
         ) from exc
     try:
-        return connect(url)
+        return connect(
+            url,
+            ping_interval=WS_PING_INTERVAL_SECONDS,
+            ping_timeout=WS_PING_TIMEOUT_SECONDS,
+        )
     except ImportError as exc:
         raise SonioxVoiceError(
             "Soniox realtime voice WebSocket needs python-socks when a SOCKS proxy is configured. "
@@ -278,38 +289,46 @@ class SonioxRealtimeTTS:
         stop_event: threading.Event,
     ) -> Iterator[bytes]:
         self._cancel_event.clear()
-        # Streaming sources with next_item cannot be rewound safely.
-        if callable(getattr(text_chunks, "next_item", None)):
-            yield from self._synthesize_once(
-                text_chunks,
-                language=language,
-                stop_event=stop_event,
-            )
+        # Delay connect until first text so idle LLM/tool waits do not hold the socket.
+        source = wait_for_first_text(
+            text_chunks,
+            stop_event=stop_event,
+            cancel_event=self._cancel_event,
+        )
+        if source is None:
             return
 
-        buffered_chunks = list(text_chunks)
         attempts = 2
         for attempt in range(attempts):
             produced_audio = False
             try:
                 for audio in self._synthesize_once(
-                    buffered_chunks,
+                    source,
                     language=language,
                     stop_event=stop_event,
                 ):
-                    produced_audio = True
+                    if not produced_audio:
+                        produced_audio = True
+                        source.commit()
                     yield audio
                 return
-            except SonioxVoiceError as exc:
+            except Exception as exc:
                 if (
                     produced_audio
                     or attempt + 1 >= attempts
-                    or not exc.retryable
+                    or not self._is_retryable(exc)
                     or self._cancel_event.is_set()
                     or stop_event.is_set()
                 ):
                     raise
+                source.rewind()
                 time.sleep(0.35 * (attempt + 1))
+
+    @staticmethod
+    def _is_retryable(exc: BaseException) -> bool:
+        if is_transport_error(exc):
+            return True
+        return isinstance(exc, SonioxVoiceError) and exc.retryable
 
     def _synthesize_once(
         self,
@@ -332,7 +351,7 @@ class SonioxRealtimeTTS:
                 for message in _iter_json_messages(ws):
                     self._raise_if_error(message)
                     if not send_errors.empty():
-                        raise SonioxVoiceError(str(send_errors.get()))
+                        reraise_send_error(send_errors.get(), error_cls=SonioxVoiceError)
                     if self._cancel_event.is_set() or stop_event.is_set():
                         self._send_cancel(ws, stream_id)
                     audio = message.get("audio")

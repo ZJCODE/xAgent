@@ -12,6 +12,13 @@ from urllib.parse import urlencode
 
 from .config import VoiceChannelConfig, VoiceSTTConfig, VoiceTTSConfig
 from .runtime import VoiceUtterance
+from .ws_util import (
+    WS_PING_INTERVAL_SECONDS,
+    WS_PING_TIMEOUT_SECONDS,
+    is_transport_error,
+    reraise_send_error,
+    wait_for_first_text,
+)
 
 
 QWEN_REALTIME_WEBSOCKET_BASE_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
@@ -83,6 +90,8 @@ def _connect_qwen_websocket(url: str, *, api_key: str):
                 "Authorization": f"Bearer {api_key}",
                 "OpenAI-Beta": "realtime=v1",
             },
+            ping_interval=WS_PING_INTERVAL_SECONDS,
+            ping_timeout=WS_PING_TIMEOUT_SECONDS,
         )
     except ImportError as exc:
         raise QwenVoiceError(
@@ -309,6 +318,48 @@ class QwenRealtimeTTS:
         stop_event: threading.Event,
     ) -> Iterator[bytes]:
         self._cancel_event.clear()
+        # Qwen has no app keepalive and idle-disconnects; wait for text before connecting.
+        source = wait_for_first_text(
+            text_chunks,
+            stop_event=stop_event,
+            cancel_event=self._cancel_event,
+        )
+        if source is None:
+            return
+
+        attempts = 2
+        for attempt in range(attempts):
+            produced_audio = False
+            try:
+                for audio in self._synthesize_once(
+                    source,
+                    language=language,
+                    stop_event=stop_event,
+                ):
+                    if not produced_audio:
+                        produced_audio = True
+                        source.commit()
+                    yield audio
+                return
+            except Exception as exc:
+                if (
+                    produced_audio
+                    or attempt + 1 >= attempts
+                    or not is_transport_error(exc)
+                    or self._cancel_event.is_set()
+                    or stop_event.is_set()
+                ):
+                    raise
+                source.rewind()
+                time.sleep(0.35 * (attempt + 1))
+
+    def _synthesize_once(
+        self,
+        text_chunks: Iterable[str],
+        *,
+        language: str,
+        stop_event: threading.Event,
+    ) -> Iterator[bytes]:
         send_errors: "queue.Queue[BaseException]" = queue.Queue()
         url = _qwen_realtime_url(model=self.config.model, base_url=self.websocket_base_url)
         with _connect_qwen_websocket(url, api_key=self.api_key) as ws:
@@ -324,7 +375,7 @@ class QwenRealtimeTTS:
                 for message in _iter_json_messages(ws):
                     self._raise_if_error(message)
                     if not send_errors.empty():
-                        raise QwenVoiceError(str(send_errors.get()))
+                        reraise_send_error(send_errors.get(), error_cls=QwenVoiceError)
                     event_type = str(message.get("type") or "")
                     if (self._cancel_event.is_set() or stop_event.is_set()) and not cancel_sent:
                         self._send_cancel(ws)

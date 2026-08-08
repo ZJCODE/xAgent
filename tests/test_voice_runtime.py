@@ -34,6 +34,13 @@ from xagent.interfaces.voice.soniox import (
     _connect_websocket,
     create_soniox_adapters,
 )
+from xagent.interfaces.voice.ws_util import (
+    WS_PING_INTERVAL_SECONDS,
+    WS_PING_TIMEOUT_SECONDS,
+    ReplayableTextSource,
+    is_transport_error,
+    wait_for_first_text,
+)
 
 
 class FakeMicrophone:
@@ -1022,6 +1029,197 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(error.request_id, "req-qwen-1")
         self.assertIn("bad threshold", str(error))
         self.assertIn("request_id=req-qwen-1", str(error))
+
+    def test_connect_helpers_pass_relaxed_ping_timeout(self):
+        captured = []
+
+        class _Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_connect(url, **kwargs):
+            captured.append({"url": url, "kwargs": kwargs})
+            return _Conn()
+
+        with patch("websockets.sync.client.connect", side_effect=fake_connect):
+            with _connect_websocket("wss://example.invalid/soniox"):
+                pass
+            with _connect_qwen_websocket("wss://example.invalid/qwen", api_key="k"):
+                pass
+
+        self.assertEqual(len(captured), 2)
+        for item in captured:
+            self.assertEqual(item["kwargs"]["ping_interval"], WS_PING_INTERVAL_SECONDS)
+            self.assertEqual(item["kwargs"]["ping_timeout"], WS_PING_TIMEOUT_SECONDS)
+
+    def test_wait_for_first_text_returns_none_for_empty_stream(self):
+        source = wait_for_first_text(
+            [],
+            stop_event=threading.Event(),
+            cancel_event=threading.Event(),
+        )
+        self.assertIsNone(source)
+
+    def test_wait_for_first_text_rewinds_first_chunk(self):
+        source = wait_for_first_text(
+            ["hello", " world"],
+            stop_event=threading.Event(),
+            cancel_event=threading.Event(),
+        )
+        self.assertIsNotNone(source)
+        self.assertEqual(list(source), ["hello", " world"])
+
+    def test_is_transport_error_detects_keepalive_ping_timeout(self):
+        self.assertTrue(
+            is_transport_error(
+                ConnectionError("sent 1011 (internal error) keepalive ping timeout; no close frame received")
+            )
+        )
+        self.assertFalse(is_transport_error(ValueError("bad payload")))
+
+    def test_soniox_tts_skips_connect_when_text_stream_empty(self):
+        tts = SonioxRealtimeTTS(api_key="test-key", config=VoiceTTSConfig())
+        with patch("xagent.interfaces.voice.soniox._connect_websocket") as connect:
+            audio = list(tts.synthesize_chunks([], language="en", stop_event=threading.Event()))
+        self.assertEqual(audio, [])
+        connect.assert_not_called()
+
+    def test_qwen_tts_skips_connect_when_text_stream_empty(self):
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
+        tts = QwenRealtimeTTS(api_key="qwen-key", config=config.tts)
+        with patch("xagent.interfaces.voice.qwen._connect_qwen_websocket") as connect:
+            audio = list(tts.synthesize_chunks([], language="en", stop_event=threading.Event()))
+        self.assertEqual(audio, [])
+        connect.assert_not_called()
+
+    def test_soniox_tts_retries_transport_error_before_audio(self):
+        tts = SonioxRealtimeTTS(api_key="test-key", config=VoiceTTSConfig())
+        stream_ids = []
+        attempts = {"n": 0}
+
+        class _WS:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def send(self, payload):
+                data = json.loads(payload)
+                if "api_key" in data:
+                    stream_ids.append(data["stream_id"])
+
+            def recv(self):
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    raise ConnectionError(
+                        "sent 1011 (internal error) keepalive ping timeout; no close frame received"
+                    )
+                if attempts["n"] == 2:
+                    return json.dumps({
+                        "audio": "YQ==",
+                        "stream_id": stream_ids[-1],
+                    })
+                return json.dumps({"terminated": True, "stream_id": stream_ids[-1]})
+
+        with patch("xagent.interfaces.voice.soniox._connect_websocket", return_value=_WS()):
+            with patch("xagent.interfaces.voice.soniox.time.sleep", return_value=None):
+                audio = list(
+                    tts.synthesize_chunks(["hello."], language="en", stop_event=threading.Event())
+                )
+
+        self.assertEqual(audio, [b"a"])
+        self.assertEqual(len(stream_ids), 2)
+        self.assertNotEqual(stream_ids[0], stream_ids[1])
+
+    def test_qwen_tts_retries_transport_error_before_audio(self):
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
+        tts = QwenRealtimeTTS(api_key="qwen-key", config=config.tts)
+        attempts = {"n": 0}
+
+        class _WS:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def send(self, payload):
+                del payload
+
+            def recv(self):
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    raise ConnectionError(
+                        "sent 1011 (internal error) keepalive ping timeout; no close frame received"
+                    )
+                if attempts["n"] == 2:
+                    return json.dumps({"type": "response.audio.delta", "delta": "YQ=="})
+                return json.dumps({"type": "session.finished"})
+
+        with patch("xagent.interfaces.voice.qwen._connect_qwen_websocket", return_value=_WS()):
+            with patch("xagent.interfaces.voice.qwen.time.sleep", return_value=None):
+                audio = list(
+                    tts.synthesize_chunks(["hello."], language="en", stop_event=threading.Event())
+                )
+
+        self.assertEqual(audio, [b"a"])
+        self.assertEqual(attempts["n"], 3)
+
+    def test_soniox_tts_does_not_retry_after_audio_starts(self):
+        tts = SonioxRealtimeTTS(api_key="test-key", config=VoiceTTSConfig())
+        attempts = {"n": 0}
+
+        class _WS:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def send(self, payload):
+                del payload
+
+            def recv(self):
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    return json.dumps({"audio": "YQ==", "stream_id": "s1"})
+                raise ConnectionError(
+                    "sent 1011 (internal error) keepalive ping timeout; no close frame received"
+                )
+
+        with patch("xagent.interfaces.voice.soniox._connect_websocket", return_value=_WS()):
+            with self.assertRaises(ConnectionError):
+                list(tts.synthesize_chunks(["hello."], language="en", stop_event=threading.Event()))
+        self.assertEqual(attempts["n"], 2)
+
+    def test_replayable_text_source_supports_streaming_next_item_retry(self):
+        class _Queue:
+            def __init__(self):
+                self.items = ["hello", " world", None]
+
+            def next_item(self, timeout):
+                del timeout
+                if not self.items:
+                    raise StopIteration
+                return self.items.pop(0)
+
+        source = wait_for_first_text(
+            _Queue(),
+            stop_event=threading.Event(),
+            cancel_event=threading.Event(),
+        )
+        self.assertIsInstance(source, ReplayableTextSource)
+        first = source.next_item(0.1)
+        second = source.next_item(0.1)
+        self.assertEqual(first, "hello")
+        self.assertEqual(second, " world")
+        source.rewind()
+        self.assertEqual(source.next_item(0.1), "hello")
+        self.assertEqual(source.next_item(0.1), " world")
 
 
 if __name__ == "__main__":
