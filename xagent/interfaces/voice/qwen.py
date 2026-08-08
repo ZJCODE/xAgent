@@ -29,6 +29,10 @@ _logger = logging.getLogger(__name__)
 QWEN_REALTIME_WEBSOCKET_BASE_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
 QWEN_REALTIME_WEBSOCKET_INTL_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
 TTS_IDLE_FLUSH_SECONDS = 0.25
+# Keep Qwen-ASR warm during mic pause with documented append traffic only.
+STT_PAUSE_SILENCE_MS = 100
+STT_PAUSE_SEND_INTERVAL_SECONDS = 0.2
+STT_SESSION_FINISH_WAIT_SECONDS = 2.0
 TEXT_BOUNDARY_SUFFIXES = (".", "!", "?", "\n", "。", "！", "？")
 QWEN_LANGUAGE_TYPES_BY_CODE = {
     "zh": "Chinese",
@@ -184,6 +188,49 @@ def _filter_session_options(options: dict[str, Any], allowed: frozenset[str]) ->
     return {key: value for key, value in options.items() if key in allowed}
 
 
+def _silence_pcm_chunk(*, sample_rate: int, duration_ms: int = STT_PAUSE_SILENCE_MS) -> bytes:
+    """Return int16 mono PCM silence for Qwen pause keepalive appends."""
+    frames = max(1, int(sample_rate * duration_ms / 1000))
+    return b"\x00\x00" * frames
+
+
+def _finish_qwen_stt_session(
+    ws,  # noqa: ANN001
+    send_lock: threading.Lock,
+    *,
+    wait_seconds: float = STT_SESSION_FINISH_WAIT_SECONDS,
+) -> bool:
+    """Send session.finish and wait briefly for session.finished per Qwen docs."""
+    with send_lock:
+        try:
+            ws.send(_compact_json(_event("session.finish")))
+        except Exception:
+            return False
+
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            raw_message = ws.recv(timeout=remaining)
+        except Exception:
+            break
+        if raw_message is None:
+            break
+        if isinstance(raw_message, bytes):
+            raw_message = raw_message.decode("utf-8")
+        if not raw_message:
+            continue
+        try:
+            data = json.loads(raw_message)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("type") == "session.finished":
+            return True
+    return False
+
+
 class QwenRealtimeSTT:
     """Stream local audio to Qwen-ASR Realtime and yield completed transcripts."""
 
@@ -258,6 +305,7 @@ class QwenRealtimeSTT:
                 daemon=True,
             )
             sender.start()
+            session_finished = False
             try:
                 for message in _iter_json_messages(ws):
                     if stop_event.is_set() or session_stop.is_set():
@@ -269,15 +317,16 @@ class QwenRealtimeSTT:
                         if transcript:
                             yield VoiceUtterance(text=transcript, language=self.config.language)
                     if event_type == "session.finished":
+                        session_finished = True
                         break
             finally:
                 session_stop.set()
-                with send_lock:
-                    try:
-                        ws.send(_compact_json(_event("session.finish")))
-                    except Exception:
-                        pass
                 sender.join(timeout=1.0)
+                if not session_finished:
+                    wait_seconds = (
+                        0.2 if stop_event.is_set() else STT_SESSION_FINISH_WAIT_SECONDS
+                    )
+                    _finish_qwen_stt_session(ws, send_lock, wait_seconds=wait_seconds)
 
     def _session_update_event(self) -> dict[str, Any]:
         transcription: dict[str, Any] = {}
@@ -318,11 +367,24 @@ class QwenRealtimeSTT:
         stop_event: threading.Event,
         session_stop: threading.Event,
     ) -> None:
+        silence = _silence_pcm_chunk(
+            sample_rate=self.config.sample_rate,
+            duration_ms=STT_PAUSE_SILENCE_MS,
+        )
+        silence_b64 = base64.b64encode(silence).decode("ascii")
+        last_silence_at = 0.0
         try:
             for chunk in audio_chunks:
                 if stop_event.is_set() or session_stop.is_set():
                     break
                 if pause_event.is_set():
+                    # Mic is paused to avoid echo; keep the documented uplink warm.
+                    now = time.monotonic()
+                    if now - last_silence_at >= STT_PAUSE_SEND_INTERVAL_SECONDS:
+                        payload = _event("input_audio_buffer.append", audio=silence_b64)
+                        with send_lock:
+                            ws.send(_compact_json(payload))
+                        last_silence_at = now
                     time.sleep(0.05)
                     continue
                 if not chunk:

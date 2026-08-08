@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import tempfile
 import threading
@@ -21,9 +22,12 @@ from xagent.interfaces.voice.qwen import (
     QwenRealtimeSTT,
     QwenRealtimeTTS,
     QwenVoiceError,
+    STT_PAUSE_SILENCE_MS,
     _connect_qwen_websocket,
+    _finish_qwen_stt_session,
     _qwen_realtime_url,
     _raise_qwen_error,
+    _silence_pcm_chunk,
 )
 from xagent.interfaces.voice.runtime import VoiceRuntime, VoiceRuntimeOptions, VoiceUtterance
 from xagent.interfaces.voice.soniox import (
@@ -794,6 +798,76 @@ class VoiceRuntimeTests(unittest.TestCase):
         payload = json.loads(ws.sent[0])
         self.assertEqual(payload["type"], "input_audio_buffer.append")
         self.assertEqual(payload["audio"], "YXVkaW8=")
+
+    def test_silence_pcm_chunk_is_zero_int16_mono(self):
+        silence = _silence_pcm_chunk(sample_rate=16000, duration_ms=STT_PAUSE_SILENCE_MS)
+
+        self.assertEqual(len(silence), 3200)
+        self.assertTrue(all(byte == 0 for byte in silence))
+
+    def test_qwen_stt_audio_loop_sends_silence_while_paused(self):
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
+        stt = QwenRealtimeSTT(api_key="qwen-key", config=config.stt)
+        ws = FakeWebSocket()
+        pause_event = threading.Event()
+        stop_event = threading.Event()
+        session_stop = threading.Event()
+        pause_event.set()
+        clock = {"t": 0.0}
+
+        def audio_chunks():
+            for _ in range(6):
+                if session_stop.is_set() or stop_event.is_set():
+                    break
+                yield b""
+            session_stop.set()
+
+        def fake_monotonic():
+            clock["t"] += 0.25
+            return clock["t"]
+
+        with patch("xagent.interfaces.voice.qwen.time.sleep", return_value=None):
+            with patch("xagent.interfaces.voice.qwen.time.monotonic", side_effect=fake_monotonic):
+                stt._send_audio_loop(
+                    ws,
+                    audio_chunks(),
+                    threading.Lock(),
+                    pause_event,
+                    stop_event,
+                    session_stop,
+                )
+
+        self.assertGreaterEqual(len(ws.sent), 2)
+        expected_audio = base64.b64encode(
+            _silence_pcm_chunk(sample_rate=16000, duration_ms=STT_PAUSE_SILENCE_MS)
+        ).decode("ascii")
+        for raw in ws.sent:
+            payload = json.loads(raw)
+            self.assertEqual(payload["type"], "input_audio_buffer.append")
+            self.assertEqual(payload["audio"], expected_audio)
+            self.assertEqual(base64.b64decode(payload["audio"]), b"\x00" * 3200)
+
+    def test_finish_qwen_stt_session_waits_for_session_finished(self):
+        class _WS:
+            def __init__(self):
+                self.sent = []
+                self._step = 0
+
+            def send(self, payload):
+                self.sent.append(payload)
+
+            def recv(self, timeout=None):
+                del timeout
+                self._step += 1
+                if self._step == 1:
+                    return json.dumps({"type": "response.created"})
+                return json.dumps({"type": "session.finished"})
+
+        ws = _WS()
+        finished = _finish_qwen_stt_session(ws, threading.Lock(), wait_seconds=1.0)
+
+        self.assertTrue(finished)
+        self.assertEqual(json.loads(ws.sent[0])["type"], "session.finish")
 
     def test_qwen_tts_session_update_uses_pcm_server_commit_defaults(self):
         config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
