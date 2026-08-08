@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import queue
 import threading
 import time
@@ -14,12 +15,16 @@ from typing import Any, Iterable, Iterator
 from .config import VoiceChannelConfig, VoiceSTTConfig, VoiceTTSConfig
 from .runtime import VoiceUtterance
 from .ws_util import (
+    STT_RECONNECT_BASE_SECONDS,
     WS_PING_INTERVAL_SECONDS,
     WS_PING_TIMEOUT_SECONDS,
     is_transport_error,
+    next_stt_reconnect_delay,
     reraise_send_error,
     wait_for_first_text,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 SONIOX_STT_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
@@ -160,19 +165,65 @@ class SonioxRealtimeSTT:
         pause_event: threading.Event,
         stop_event: threading.Event,
     ) -> Iterator[VoiceUtterance]:
+        """Yield utterances across STT reconnects until the runtime stop_event is set."""
+        backoff = STT_RECONNECT_BASE_SECONDS
+        while not stop_event.is_set():
+            session_stop = threading.Event()
+            produced_utterance = False
+            try:
+                for utterance in self._iter_utterances_session(
+                    audio_chunks,
+                    pause_event=pause_event,
+                    stop_event=stop_event,
+                    session_stop=session_stop,
+                ):
+                    produced_utterance = True
+                    backoff = STT_RECONNECT_BASE_SECONDS
+                    yield utterance
+            except Exception as exc:
+                if stop_event.is_set():
+                    return
+                reconnectable = is_transport_error(exc) or (
+                    isinstance(exc, SonioxVoiceError) and exc.retryable
+                )
+                if not reconnectable:
+                    raise
+                _logger.warning("Soniox STT session failed (%s); reconnecting in %.1fs", exc, backoff)
+            else:
+                if stop_event.is_set():
+                    return
+                _logger.warning("Soniox STT session ended; reconnecting in %.1fs", backoff)
+            finally:
+                session_stop.set()
+
+            if stop_event.is_set():
+                return
+            if produced_utterance:
+                backoff = STT_RECONNECT_BASE_SECONDS
+            time.sleep(backoff)
+            backoff = next_stt_reconnect_delay(backoff)
+
+    def _iter_utterances_session(
+        self,
+        audio_chunks: Iterable[bytes],
+        *,
+        pause_event: threading.Event,
+        stop_event: threading.Event,
+        session_stop: threading.Event,
+    ) -> Iterator[VoiceUtterance]:
         send_lock = threading.Lock()
         with _connect_websocket(self.websocket_url) as ws:
             ws.send(_compact_json(self._config_payload()))
             sender = threading.Thread(
                 target=self._send_audio_loop,
-                args=(ws, audio_chunks, send_lock, pause_event, stop_event),
+                args=(ws, audio_chunks, send_lock, pause_event, stop_event, session_stop),
                 daemon=True,
             )
             sender.start()
             final_tokens: list[_FinalToken] = []
             try:
                 for message in _iter_json_messages(ws):
-                    if stop_event.is_set():
+                    if stop_event.is_set() or session_stop.is_set():
                         break
                     self._raise_if_error(message)
                     for token in self._tokens(message):
@@ -191,7 +242,7 @@ class SonioxRealtimeSTT:
                     if message.get("finished"):
                         break
             finally:
-                stop_event.set()
+                session_stop.set()
                 with send_lock:
                     try:
                         ws.send("")
@@ -224,11 +275,12 @@ class SonioxRealtimeSTT:
         send_lock: threading.Lock,
         pause_event: threading.Event,
         stop_event: threading.Event,
+        session_stop: threading.Event,
     ) -> None:
         last_keepalive_at = time.monotonic()
         try:
             for chunk in audio_chunks:
-                if stop_event.is_set():
+                if stop_event.is_set() or session_stop.is_set():
                     break
                 if pause_event.is_set():
                     now = time.monotonic()
@@ -244,7 +296,7 @@ class SonioxRealtimeSTT:
                     ws.send(chunk)
                 last_keepalive_at = time.monotonic()
         except Exception:
-            stop_event.set()
+            session_stop.set()
 
     @staticmethod
     def _tokens(message: dict[str, Any]) -> list[dict[str, Any]]:

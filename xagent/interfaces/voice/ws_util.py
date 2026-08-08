@@ -8,6 +8,8 @@ from typing import Callable, Iterable, Iterator
 WS_PING_INTERVAL_SECONDS = 20.0
 WS_PING_TIMEOUT_SECONDS = 60.0
 TTS_FIRST_TEXT_POLL_SECONDS = 0.25
+STT_RECONNECT_BASE_SECONDS = 0.5
+STT_RECONNECT_MAX_SECONDS = 30.0
 
 
 def is_transport_error(exc: BaseException) -> bool:
@@ -20,6 +22,13 @@ def is_transport_error(exc: BaseException) -> bool:
         return True
     message = str(exc).lower()
     return "keepalive ping timeout" in message or "no close frame received" in message
+
+
+def next_stt_reconnect_delay(current: float) -> float:
+    """Exponential backoff for STT reconnects, capped at STT_RECONNECT_MAX_SECONDS."""
+    if current <= 0:
+        return STT_RECONNECT_BASE_SECONDS
+    return min(max(current, STT_RECONNECT_BASE_SECONDS) * 2.0, STT_RECONNECT_MAX_SECONDS)
 
 
 class ReplayableTextSource:

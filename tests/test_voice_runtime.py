@@ -35,10 +35,12 @@ from xagent.interfaces.voice.soniox import (
     create_soniox_adapters,
 )
 from xagent.interfaces.voice.ws_util import (
+    STT_RECONNECT_BASE_SECONDS,
     WS_PING_INTERVAL_SECONDS,
     WS_PING_TIMEOUT_SECONDS,
     ReplayableTextSource,
     is_transport_error,
+    next_stt_reconnect_delay,
     wait_for_first_text,
 )
 
@@ -786,6 +788,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             threading.Lock(),
             threading.Event(),
             threading.Event(),
+            threading.Event(),
         )
 
         payload = json.loads(ws.sent[0])
@@ -1220,6 +1223,170 @@ class VoiceRuntimeTests(unittest.TestCase):
         source.rewind()
         self.assertEqual(source.next_item(0.1), "hello")
         self.assertEqual(source.next_item(0.1), " world")
+
+    def test_next_stt_reconnect_delay_caps_backoff(self):
+        self.assertEqual(next_stt_reconnect_delay(0), STT_RECONNECT_BASE_SECONDS)
+        self.assertEqual(next_stt_reconnect_delay(0.5), 1.0)
+        self.assertEqual(next_stt_reconnect_delay(20.0), 30.0)
+
+    def test_soniox_stt_reconnects_after_transport_error_without_setting_stop(self):
+        stt = SonioxRealtimeSTT(api_key="test-key", config=VoiceSTTConfig())
+        stop_event = threading.Event()
+        pause_event = threading.Event()
+        connects = {"n": 0}
+        stop_after_first_failure = []
+
+        class _WS:
+            def __init__(self):
+                self.step = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def send(self, payload):
+                del payload
+
+            def recv(self):
+                if connects["n"] == 1:
+                    stop_after_first_failure.append(stop_event.is_set())
+                    raise ConnectionError(
+                        "sent 1011 (internal error) keepalive ping timeout; no close frame received"
+                    )
+                self.step += 1
+                if self.step == 1:
+                    return json.dumps(
+                        {"tokens": [{"text": "hi", "is_final": True, "language": "en"}]}
+                    )
+                if self.step == 2:
+                    return json.dumps({"tokens": [{"text": "<end>", "is_final": True}]})
+                stop_event.set()
+                return json.dumps({"finished": True})
+
+        def fake_connect(url, **kwargs):
+            del url, kwargs
+            connects["n"] += 1
+            return _WS()
+
+        def audio_chunks():
+            while not stop_event.is_set():
+                yield b"\x00\x00"
+                time.sleep(0.001)
+
+        with patch("xagent.interfaces.voice.soniox._connect_websocket", side_effect=fake_connect):
+            with patch("xagent.interfaces.voice.soniox.time.sleep", return_value=None):
+                utterances = list(
+                    stt.iter_utterances(
+                        audio_chunks(),
+                        pause_event=pause_event,
+                        stop_event=stop_event,
+                    )
+                )
+
+        self.assertEqual([item.text for item in utterances], ["hi"])
+        self.assertEqual(connects["n"], 2)
+        self.assertEqual(stop_after_first_failure, [False])
+
+    def test_qwen_stt_reconnects_after_transport_error_without_setting_stop(self):
+        config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
+        stt = QwenRealtimeSTT(api_key="qwen-key", config=config.stt)
+        stop_event = threading.Event()
+        pause_event = threading.Event()
+        connects = {"n": 0}
+        stop_after_first_failure = []
+
+        class _WS:
+            def __init__(self):
+                self.step = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def send(self, payload):
+                del payload
+
+            def recv(self):
+                if connects["n"] == 1:
+                    stop_after_first_failure.append(stop_event.is_set())
+                    raise ConnectionError(
+                        "sent 1011 (internal error) keepalive ping timeout; no close frame received"
+                    )
+                self.step += 1
+                if self.step == 1:
+                    return json.dumps(
+                        {
+                            "type": "conversation.item.input_audio_transcription.completed",
+                            "transcript": "hello",
+                        }
+                    )
+                stop_event.set()
+                return json.dumps({"type": "session.finished"})
+
+        def fake_connect(url, **kwargs):
+            del url, kwargs
+            connects["n"] += 1
+            return _WS()
+
+        def audio_chunks():
+            while not stop_event.is_set():
+                yield b"\x00\x00"
+                time.sleep(0.001)
+
+        with patch("xagent.interfaces.voice.qwen._connect_qwen_websocket", side_effect=fake_connect):
+            with patch("xagent.interfaces.voice.qwen.time.sleep", return_value=None):
+                utterances = list(
+                    stt.iter_utterances(
+                        audio_chunks(),
+                        pause_event=pause_event,
+                        stop_event=stop_event,
+                    )
+                )
+
+        self.assertEqual([item.text for item in utterances], ["hello"])
+        self.assertEqual(connects["n"], 2)
+        self.assertEqual(stop_after_first_failure, [False])
+
+    def test_soniox_stt_stops_reconnect_when_runtime_stop_event_set(self):
+        stt = SonioxRealtimeSTT(api_key="test-key", config=VoiceSTTConfig())
+        stop_event = threading.Event()
+        connects = {"n": 0}
+
+        class _WS:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def send(self, payload):
+                del payload
+
+            def recv(self):
+                stop_event.set()
+                raise ConnectionError("keepalive ping timeout")
+
+        def fake_connect(url, **kwargs):
+            del url, kwargs
+            connects["n"] += 1
+            return _WS()
+
+        with patch("xagent.interfaces.voice.soniox._connect_websocket", side_effect=fake_connect):
+            with patch("xagent.interfaces.voice.soniox.time.sleep", return_value=None):
+                utterances = list(
+                    stt.iter_utterances(
+                        iter([b"\x00\x00"]),
+                        pause_event=threading.Event(),
+                        stop_event=stop_event,
+                    )
+                )
+
+        self.assertEqual(utterances, [])
+        self.assertEqual(connects["n"], 1)
 
 
 if __name__ == "__main__":

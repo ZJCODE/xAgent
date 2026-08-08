@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import queue
 import threading
 import time
@@ -13,12 +14,16 @@ from urllib.parse import urlencode
 from .config import VoiceChannelConfig, VoiceSTTConfig, VoiceTTSConfig
 from .runtime import VoiceUtterance
 from .ws_util import (
+    STT_RECONNECT_BASE_SECONDS,
     WS_PING_INTERVAL_SECONDS,
     WS_PING_TIMEOUT_SECONDS,
     is_transport_error,
+    next_stt_reconnect_delay,
     reraise_send_error,
     wait_for_first_text,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 QWEN_REALTIME_WEBSOCKET_BASE_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
@@ -200,19 +205,62 @@ class QwenRealtimeSTT:
         pause_event: threading.Event,
         stop_event: threading.Event,
     ) -> Iterator[VoiceUtterance]:
+        """Yield utterances across STT reconnects until the runtime stop_event is set."""
+        backoff = STT_RECONNECT_BASE_SECONDS
+        while not stop_event.is_set():
+            session_stop = threading.Event()
+            produced_utterance = False
+            try:
+                for utterance in self._iter_utterances_session(
+                    audio_chunks,
+                    pause_event=pause_event,
+                    stop_event=stop_event,
+                    session_stop=session_stop,
+                ):
+                    produced_utterance = True
+                    backoff = STT_RECONNECT_BASE_SECONDS
+                    yield utterance
+            except Exception as exc:
+                if stop_event.is_set():
+                    return
+                if not is_transport_error(exc):
+                    raise
+                _logger.warning("Qwen STT session failed (%s); reconnecting in %.1fs", exc, backoff)
+            else:
+                if stop_event.is_set():
+                    return
+                _logger.warning("Qwen STT session ended; reconnecting in %.1fs", backoff)
+            finally:
+                session_stop.set()
+
+            if stop_event.is_set():
+                return
+            if produced_utterance:
+                backoff = STT_RECONNECT_BASE_SECONDS
+            time.sleep(backoff)
+            backoff = next_stt_reconnect_delay(backoff)
+
+    def _iter_utterances_session(
+        self,
+        audio_chunks: Iterable[bytes],
+        *,
+        pause_event: threading.Event,
+        stop_event: threading.Event,
+        session_stop: threading.Event,
+    ) -> Iterator[VoiceUtterance]:
         send_lock = threading.Lock()
         url = _qwen_realtime_url(model=self.config.model, base_url=self.websocket_base_url)
         with _connect_qwen_websocket(url, api_key=self.api_key) as ws:
             ws.send(_compact_json(self._session_update_event()))
             sender = threading.Thread(
                 target=self._send_audio_loop,
-                args=(ws, audio_chunks, send_lock, pause_event, stop_event),
+                args=(ws, audio_chunks, send_lock, pause_event, stop_event, session_stop),
                 daemon=True,
             )
             sender.start()
             try:
                 for message in _iter_json_messages(ws):
-                    if stop_event.is_set():
+                    if stop_event.is_set() or session_stop.is_set():
                         break
                     self._raise_if_error(message)
                     event_type = str(message.get("type") or "")
@@ -223,7 +271,7 @@ class QwenRealtimeSTT:
                     if event_type == "session.finished":
                         break
             finally:
-                stop_event.set()
+                session_stop.set()
                 with send_lock:
                     try:
                         ws.send(_compact_json(_event("session.finish")))
@@ -268,10 +316,11 @@ class QwenRealtimeSTT:
         send_lock: threading.Lock,
         pause_event: threading.Event,
         stop_event: threading.Event,
+        session_stop: threading.Event,
     ) -> None:
         try:
             for chunk in audio_chunks:
-                if stop_event.is_set():
+                if stop_event.is_set() or session_stop.is_set():
                     break
                 if pause_event.is_set():
                     time.sleep(0.05)
@@ -285,7 +334,7 @@ class QwenRealtimeSTT:
                 with send_lock:
                     ws.send(_compact_json(payload))
         except Exception:
-            stop_event.set()
+            session_stop.set()
 
     @staticmethod
     def _raise_if_error(message: dict[str, Any]) -> None:

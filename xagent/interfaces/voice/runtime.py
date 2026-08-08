@@ -133,6 +133,8 @@ class VoiceRuntime:
             pause_event=self.pause_event,
             stop_event=self.stop_event,
         )
+        # Soniox/Qwen STT adapters reconnect internally on transport drops; this
+        # iterator therefore only ends when stop_event is set (or a non-retryable error).
         utterances = self.recognizer.iter_utterances(
             audio_chunks,
             pause_event=self.pause_event,
