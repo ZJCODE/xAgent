@@ -27,6 +27,7 @@ from .config import VoiceChannelConfig
 
 
 _WAKE_IDLE_TIMEOUT = object()
+_PLAYBACK_MICROPHONE_COOLDOWN_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -288,6 +289,7 @@ class VoiceRuntime:
         player_errors: list[BaseException] = []
         playback_task: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         returned_utterance_task: asyncio.Future[VoiceUtterance | None] | None = None
+        apply_microphone_cooldown = True
 
         def play_worker() -> None:
             try:
@@ -344,6 +346,7 @@ class VoiceRuntime:
             returned_utterance_task = interrupt_task
             return returned_utterance_task
         except asyncio.CancelledError:
+            apply_microphone_cooldown = False
             await self._cancel_reply(reply_task, playback_task, text_queue, playback_stop_event)
             raise
         except Exception:
@@ -356,6 +359,18 @@ class VoiceRuntime:
                 and not interrupt_task.done()
             ):
                 interrupt_task.cancel()
+            if apply_microphone_cooldown:
+                await self._release_microphone_after_playback()
+            else:
+                self.pause_event.clear()
+
+    async def _release_microphone_after_playback(self) -> None:
+        """Keep capture paused briefly so speaker tail audio cannot reach STT."""
+        self.pause_event.set()
+        try:
+            if not self.stop_event.is_set():
+                await asyncio.sleep(_PLAYBACK_MICROPHONE_COOLDOWN_SECONDS)
+        finally:
             self.pause_event.clear()
 
     async def _feed_reply_text(self, transcript: str, text_queue: "_TextChunkQueue") -> None:
@@ -497,6 +512,7 @@ class VoiceRuntime:
         playback_stop_event = threading.Event()
         playback_task: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         player_errors: list[BaseException] = []
+        apply_microphone_cooldown = True
 
         def play_worker() -> None:
             text_queue = _TextChunkQueue()
@@ -520,9 +536,15 @@ class VoiceRuntime:
             await playback_task
             if player_errors:
                 raise RuntimeError(f"Voice scheduled playback failed: {player_errors[0]}") from player_errors[0]
+        except asyncio.CancelledError:
+            apply_microphone_cooldown = False
+            raise
         finally:
             playback_stop_event.set()
-            self.pause_event.clear()
+            if apply_microphone_cooldown:
+                await self._release_microphone_after_playback()
+            else:
+                self.pause_event.clear()
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         if delivery.recipient.channel != "voice":

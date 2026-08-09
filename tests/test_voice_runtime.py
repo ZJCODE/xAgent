@@ -247,6 +247,14 @@ def voice_channel_config(data):
 
 
 class VoiceRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        cooldown = patch(
+            "xagent.interfaces.voice.runtime._PLAYBACK_MICROPHONE_COOLDOWN_SECONDS",
+            0.0,
+        )
+        cooldown.start()
+        self.addCleanup(cooldown.stop)
+
     def test_voice_config_disables_interruptions_by_default(self):
         config = voice_channel_config({"provider": "qwen", "api_key": "qwen-key"})
 
@@ -646,6 +654,57 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         self.assertTrue(player.pause_was_set)
         self.assertTrue(player.pause_was_cleared)
+
+    def test_runtime_holds_microphone_during_post_playback_cooldown(self):
+        config = voice_channel_config({"api_key": "test-key"})
+        runtime = VoiceRuntime(
+            agent=FakeAgent(),
+            config=config,
+            microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([VoiceUtterance(text="你好", language="zh")]),
+            synthesizer=FakeSynthesizer(),
+            player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice"),
+            output=lambda *args, **kwargs: None,
+        )
+        observed = []
+
+        async def observe_cooldown(delay):
+            observed.append((delay, runtime.pause_event.is_set()))
+
+        with patch(
+            "xagent.interfaces.voice.runtime._PLAYBACK_MICROPHONE_COOLDOWN_SECONDS",
+            0.5,
+        ):
+            with patch(
+                "xagent.interfaces.voice.runtime.asyncio.sleep",
+                side_effect=observe_cooldown,
+            ):
+                asyncio.run(runtime.run_forever())
+
+        self.assertEqual(observed, [(0.5, True)])
+        self.assertFalse(runtime.pause_event.is_set())
+
+    def test_scheduled_playback_releases_microphone_through_cooldown(self):
+        runtime = VoiceRuntime(
+            agent=FakeAgent(),
+            config=voice_channel_config({"api_key": "test-key"}),
+            microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([]),
+            synthesizer=FakeSynthesizer(),
+            player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice"),
+            output=lambda *args, **kwargs: None,
+        )
+
+        with patch.object(
+            runtime,
+            "_release_microphone_after_playback",
+            new=AsyncMock(),
+        ) as release:
+            asyncio.run(runtime._play_scheduled_text("reminder"))
+
+        release.assert_awaited_once_with()
 
     def test_runtime_interrupt_cancels_current_reply_and_processes_new_utterance(self):
         config = voice_channel_config({
